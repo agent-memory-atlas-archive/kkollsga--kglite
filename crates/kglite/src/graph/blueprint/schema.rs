@@ -83,6 +83,11 @@ pub struct Settings {
     /// `on_missing_endpoint` of its own. Unset means `auto`.
     #[serde(default)]
     pub on_missing_endpoint: Option<OnMissingEndpoint>,
+    /// The graph's stored valid-time default — `all`, `today` or a
+    /// `YYYY-MM-DD` date — saved in the `.kgl` file and read back on load.
+    /// Unset leaves the built-in `today`.
+    #[serde(default)]
+    pub valid_time_default: Option<String>,
     /// Keys under `settings` that this struct does not read.
     #[serde(flatten)]
     pub extra: IndexMap<String, serde_json::Value>,
@@ -146,6 +151,7 @@ pub const ACCEPTED_SETTINGS_KEYS: &[&str] = &[
     "manifest",
     "strict",
     "on_missing_endpoint",
+    "valid_time_default",
 ];
 
 /// Keys a node spec (and a `sub_nodes` entry) reads.

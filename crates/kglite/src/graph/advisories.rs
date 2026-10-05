@@ -38,21 +38,6 @@ pub fn data_advisories(graph: &DirGraph) -> Vec<DataAdvisory> {
     graph.advisories.clone()
 }
 
-/// One `<data-advisory>` line per advisory the load raised, for the top of
-/// `describe()`: an agent reading the overview learns the data may carry an
-/// older build's defect before it trusts a count. Nothing for a graph with none.
-pub(crate) fn write_xml_lines(xml: &mut String, graph: &DirGraph) {
-    use crate::graph::introspection::describe::xml_escape;
-    for advisory in &graph.advisories {
-        xml.push_str(&format!(
-            "  <data-advisory code=\"{}\" writer=\"{}\">{}</data-advisory>\n",
-            xml_escape(&advisory.code),
-            xml_escape(&advisory.writer),
-            xml_escape(&advisory.message)
-        ));
-    }
-}
-
 /// `major.minor.patch` of a version string, ignoring a pre-release or build
 /// suffix; `None` for anything else (empty, unknown).
 pub(crate) fn parse_version(version: &str) -> Option<(u32, u32, u32)> {

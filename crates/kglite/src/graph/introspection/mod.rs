@@ -16,6 +16,7 @@
 pub mod bug_report;
 pub mod capabilities;
 pub mod connectivity;
+mod data_notices;
 pub mod debugging;
 pub mod describe;
 pub(crate) mod embeddings_view;

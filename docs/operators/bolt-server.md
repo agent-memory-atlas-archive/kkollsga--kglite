@@ -96,7 +96,8 @@ On a graph that declares validity intervals, a statement with no
 `FOR VALID_TIME` prefix reads as of today (UTC), and `FOR VALID_TIME ALL` reads
 every version. `--valid-time-default {today|all|YYYY-MM-DD}` sets the instant an
 unprefixed statement reads; a statement's own prefix wins, and the setting is
-never written into the `.kgl` file. Each result's `kglite.temporal` summary key
+never written into the `.kgl` file (without the flag, a default the graph
+stored in its file applies, else today). Each result's `kglite.temporal` summary key
 reports the `source` (`default`, `explicit`, `all` or `skipped:<reason>`), the
 instant and the rows the context hid.
 

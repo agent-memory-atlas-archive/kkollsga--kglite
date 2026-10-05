@@ -306,6 +306,11 @@ pub(crate) struct FileMetadata {
     /// existed and the golden digests hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     build_info: Option<crate::graph::diagnostics::BuildInfo>,
+    /// The graph's stored valid-time default (`all` or a `YYYY-MM-DD` date),
+    /// absent for the built-in `today`, so a graph that never set one writes
+    /// the bytes it wrote before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    valid_time_default: Option<String>,
     /// Where this graph was built from, what that directory looked like, and
     /// which dialect it was read with — `DirGraph::{source_root,
     /// source_fingerprint, source_dialect}`, the vault-provenance set
@@ -516,6 +521,11 @@ impl FileMetadata {
             property_shapes: graph.property_shapes.clone(),
             graph_instructions: graph.graph_instructions.clone(),
             build_info: graph.build_info.clone(),
+            valid_time_default: Some(graph.stored_valid_time_default)
+                .filter(|stored| {
+                    *stored != crate::graph::features::temporal::ValidTimeDefault::Today
+                })
+                .map(|stored| stored.to_string()),
             source_root: graph.source_root.clone(),
             source_fingerprint: graph.source_fingerprint,
             source_dialect: graph.source_dialect.clone(),
@@ -614,6 +624,13 @@ impl FileMetadata {
         graph.rebuild_ontology_closures();
         graph.graph_instructions = self.graph_instructions;
         graph.build_info = self.build_info;
+        // An unreadable value (hand-edited file) reads as the built-in default.
+        let stored = self
+            .valid_time_default
+            .and_then(|text| crate::graph::features::temporal::ValidTimeDefault::parse(&text).ok())
+            .unwrap_or_default();
+        graph.stored_valid_time_default = stored;
+        graph.valid_time_default = stored;
         graph.source_root = self.source_root;
         graph.source_fingerprint = self.source_fingerprint;
         graph.source_dialect = self.source_dialect;

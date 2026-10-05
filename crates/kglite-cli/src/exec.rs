@@ -35,8 +35,9 @@ pub struct QueryOptions {
     /// `None`.
     pub timeout_ms: Option<u64>,
     /// The valid-time instant a statement reads when it names none
-    /// (`--valid-time-default`); `None` leaves the graph's own `today`.
-    /// Runtime only — never written into the `.kgl` file.
+    /// (`--valid-time-default`); `None` leaves the graph's own default (its
+    /// stored one, else `today`). Runtime only — never written into the
+    /// `.kgl` file.
     pub valid_time_default: Option<ValidTimeDefault>,
 }
 

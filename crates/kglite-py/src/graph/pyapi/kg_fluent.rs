@@ -87,7 +87,8 @@ impl KnowledgeGraph {
     }
 
     /// Set the instant unprefixed statements and fluent cursors read on a graph with validity declarations.
-    fn set_valid_time_default(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    #[pyo3(signature = (value, persist=false))]
+    fn set_valid_time_default(&mut self, value: &Bound<'_, PyAny>, persist: bool) -> PyResult<()> {
         use crate::datatypes::py_in::query_date;
         use kglite_core::api::temporal::ValidTimeDefault;
         let text = value.extract::<String>().ok();
@@ -112,7 +113,7 @@ impl KnowledgeGraph {
             }
         };
         kglite_core::api::make_dir_graph_mut_preserving_lineage(&mut self.inner)
-            .valid_time_default = default;
+            .set_valid_time_default(default, persist);
         Ok(())
     }
 

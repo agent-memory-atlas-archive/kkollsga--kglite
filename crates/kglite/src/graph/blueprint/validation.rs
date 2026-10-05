@@ -1267,6 +1267,7 @@ mod accepted_key_tests {
                 ("manifest", json!("manifest.json")),
                 ("strict", json!(true)),
                 ("on_missing_endpoint", json!("auto")),
+                ("valid_time_default", json!("all")),
             ],
             "node" => vec![
                 ("csv", json!("p.csv")),

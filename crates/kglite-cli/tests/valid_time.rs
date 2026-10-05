@@ -107,3 +107,35 @@ fn the_default_flag_governs_write_reads_and_the_session() {
     let rows = reply["rows"].as_array().expect(&first);
     assert_eq!(rows.len(), 1, "only well 1 is valid on 2003-01-01: {first}");
 }
+
+/// The wells graph again, with `all` stored as the graph's own default.
+fn wells_storing_all(dir: &Path) -> String {
+    let path = wells(dir);
+    let mut graph = kglite::api::io::load_file(&path).unwrap();
+    kglite::api::make_dir_graph_mut(&mut graph)
+        .set_valid_time_default(kglite::api::temporal::ValidTimeDefault::All, true);
+    kglite::api::io::save_graph(&mut graph, &path).unwrap();
+    path
+}
+
+/// A stored default governs an unprefixed read; the flag overrides it for the
+/// run, and an explicit prefix beats both.
+#[test]
+fn the_flag_overrides_a_stored_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let graph = wells_storing_all(temp.path());
+    let query = |text: &str, extra: &[&str]| {
+        let mut args = vec!["query", graph.as_str(), text, "--format", "json"];
+        args.extend_from_slice(extra);
+        ids(&args)
+    };
+    assert_eq!(query(LIST, &[]), [1, 2], "the stored default is all");
+    assert_eq!(query(LIST, &["--valid-time-default", "today"]), [2]);
+    assert_eq!(query(LIST, &["--valid-time-default", "2003-01-01"]), [1]);
+    let prefixed = format!("FOR VALID_TIME AS OF date('2003-01-01') {LIST}");
+    assert_eq!(
+        query(&prefixed, &[]),
+        [1],
+        "a prefix beats the stored default"
+    );
+}

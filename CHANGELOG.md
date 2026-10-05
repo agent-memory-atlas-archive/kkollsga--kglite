@@ -11,6 +11,21 @@ before upgrading.
 
 ### Added
 
+- A graph can store its own valid-time default. A blueprint's
+  `settings.valid_time_default` (`all`, `today` or a `YYYY-MM-DD` date) and
+  `set_valid_time_default(value, persist=True)` write it into the `.kgl` file;
+  the plain setter stays session-only and a graph that never stored one saves
+  byte-identical files. A load starts from the stored value; a session setter,
+  the MCP manifest key or the CLI/Bolt `--valid-time-default` flag overwrite it
+  for that process (precedence: explicit prefix or `valid_at=`, setter or flag
+  as last applied, stored default, `today`). `graph_info()
+  ['valid_time_default']` reports `effective` and `stored`, and `describe()`
+  shows a `<valid-time-default>` line when either is not `today`. Rust API:
+  `DirGraph::stored_valid_time_default`, `DirGraph::set_valid_time_default`.
+  A blueprint build that declares validity with no stored default raises one
+  informational `declarations` note (`default_today`: undated reads default to
+  valid-today); `strict` never fails on it, and storing a default silences it.
+
 - Load-time data advisories: a `.kgl` written by a build with a known
   data-shape bug (history versions folded into one relationship before 0.19.0;
   per-row parent-edge copies on time-series types in 0.19.0-0.19.1; 0.19.2's

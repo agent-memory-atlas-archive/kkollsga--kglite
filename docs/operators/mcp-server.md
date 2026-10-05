@@ -546,8 +546,10 @@ and the `temporal:` line says so (`default`). An agent that needs history sends
 `valid_at: "all"` or starts the query with `FOR VALID_TIME ALL`; a recipe that
 means history starts with the prefix, which does nothing on a graph with no
 declaration. The operator moves the default with `--valid-time-default
-{today|all|YYYY-MM-DD}` or `extensions.valid_time.default`; the flag wins. See
-{doc}`/python/guides/valid-time`.
+{today|all|YYYY-MM-DD}` or `extensions.valid_time.default`; the flag wins. With
+neither, the served graph's own stored default (saved in its `.kgl`) applies,
+else today; `graph_overview` shows a `<valid-time-default>` line when it is not
+today. See {doc}`/python/guides/valid-time`.
 
 ### Pinning the write scope
 

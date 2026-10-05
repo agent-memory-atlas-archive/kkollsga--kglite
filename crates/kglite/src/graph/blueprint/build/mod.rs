@@ -193,6 +193,11 @@ impl BuildReport {
     }
 }
 
+/// What a build that declares validity says about undated reads.
+const DEFAULT_TODAY_NOTE: &str = "Undated reads on this graph default to valid-today; scripts \
+     that need history should set the default to all (settings.valid_time_default or \
+     set_valid_time_default)";
+
 pub fn build(
     graph: &mut DirGraph,
     blueprint: Blueprint,
@@ -202,6 +207,13 @@ pub fn build(
     let strict = match &blueprint.settings.strict {
         Some(setting) => setting.groups()?,
         None => Vec::new(),
+    };
+    let stored_default = match &blueprint.settings.valid_time_default {
+        Some(text) => Some(
+            crate::graph::features::temporal::ValidTimeDefault::parse(text)
+                .map_err(|e| format!("settings.valid_time_default: {e}"))?,
+        ),
+        None => None,
     };
     let declared = temporal::declared_node_labels(&blueprint);
     // The build's duplicate-id warnings ride its report instead of stderr,
@@ -216,6 +228,19 @@ pub fn build(
         )
     });
     let mut report = result?;
+    if let Some(default) = stored_default {
+        graph.set_valid_time_default(default, true);
+    }
+    if !graph.temporal.is_empty()
+        && graph.stored_valid_time_default
+            == crate::graph::features::temporal::ValidTimeDefault::Today
+    {
+        report.add(Diagnostic::new(
+            DiagnosticGroup::Declarations,
+            crate::graph::diagnostics::KIND_DEFAULT_TODAY,
+            DEFAULT_TODAY_NOTE,
+        ));
+    }
     for (node_type, message) in duplicate_ids {
         if !declared.contains(&node_type) && !report.warnings.contains(&message) {
             report.add(Diagnostic::new(

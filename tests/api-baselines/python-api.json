@@ -1274,7 +1274,7 @@
         },
         "set_valid_time_default": {
           "kind": "method",
-          "signature": "(self, /, value)"
+          "signature": "(self, /, value, persist=False)"
         },
         "shape": {
           "kind": "attribute",

@@ -167,6 +167,34 @@ fn the_configured_default_governs_unprefixed_recipe_runs() {
     assert_eq!(own["result"]["rows"], json!([[1], [2]]));
 }
 
+/// A graph file that stores `all` as its own default: served without a flag it
+/// reads every version; `--valid-time-default today` overrides it.
+#[test]
+fn a_stored_default_applies_without_a_flag_and_the_flag_overrides_it() {
+    use kglite::api::temporal::ValidTimeDefault;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("wells.kgl");
+    let source = wells_state(temp.path());
+    source
+        .with_active_mut(|active| {
+            kglite::api::make_dir_graph_mut(active.kg.dir_mut())
+                .set_valid_time_default(ValidTimeDefault::All, true);
+            kglite::api::io::save_graph(active.kg.dir_mut(), &path.to_string_lossy())
+                .expect("save");
+        })
+        .expect("active graph");
+
+    let unflagged = GraphState::new(None);
+    unflagged.open_or_create(&path, None).expect("open");
+    let rows = run(&unflagged, args("list", None));
+    assert_eq!(rows["result"]["rows"], json!([[1], [2]]), "stored all");
+
+    let flagged = GraphState::new(None).with_valid_time_default(Some(ValidTimeDefault::Today));
+    flagged.open_or_create(&path, None).expect("open");
+    let rows = run(&flagged, args("list", None));
+    assert_eq!(rows["result"]["rows"], json!([[2]]), "the flag wins");
+}
+
 #[test]
 fn a_doubled_or_unreadable_instant_is_a_query_failure() {
     let temp = tempfile::tempdir().expect("tempdir");

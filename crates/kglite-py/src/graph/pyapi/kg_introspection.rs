@@ -399,6 +399,10 @@ impl KnowledgeGraph {
             dict.set_item("columnar_live_rows", info.columnar_live_rows)?;
             dict.set_item("auto_vacuum_threshold", self.inner.auto_vacuum_threshold)?;
             dict.set_item("auto_vacuums_run", self.inner.auto_vacuums_run)?;
+            let default_dict = PyDict::new(py);
+            default_dict.set_item("effective", self.inner.valid_time_default.to_string())?;
+            default_dict.set_item("stored", self.inner.stored_valid_time_default.to_string())?;
+            dict.set_item("valid_time_default", default_dict)?;
             if let Some(build) = &self.inner.build_info {
                 dict.set_item("build", build_info_dict(py, build)?)?;
             }

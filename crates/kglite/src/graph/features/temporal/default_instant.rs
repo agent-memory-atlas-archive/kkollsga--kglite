@@ -1,6 +1,11 @@
-//! The graph's runtime valid-time default: the instant a statement or fluent
-//! step reads when it names none. Runtime and manifest state only — never
-//! written into a `.kgl` file, so a loaded graph starts at `Today`.
+//! The graph's valid-time default: the instant a statement or fluent step
+//! reads when it names none. `DirGraph::valid_time_default` is the value in
+//! force; `DirGraph::stored_valid_time_default` is the part saved in the
+//! `.kgl` file (absent = `Today`), which a load copies into the value in force.
+//! A session setter or a server flag overwrites only the value in force, so
+//! the precedence is: explicit prefix or `valid_at=`, then session setter,
+//! then server/manifest flag (whichever ran last), then the stored default,
+//! then `Today`.
 
 use std::fmt;
 
@@ -55,6 +60,18 @@ impl fmt::Display for ValidTimeDefault {
             Self::Today => f.write_str("today"),
             Self::All => f.write_str("all"),
             Self::Date(day) => write!(f, "{}", day.format("%Y-%m-%d")),
+        }
+    }
+}
+
+impl crate::graph::schema::DirGraph {
+    /// Set the default in force. With `persist`, also record it as the graph's
+    /// stored default, which the next save writes into the file and a later
+    /// load reads back; without it the setting lasts for this graph object.
+    pub fn set_valid_time_default(&mut self, default: ValidTimeDefault, persist: bool) {
+        self.valid_time_default = default;
+        if persist {
+            self.stored_valid_time_default = default;
         }
     }
 }

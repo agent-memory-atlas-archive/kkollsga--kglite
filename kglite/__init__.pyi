@@ -3862,6 +3862,10 @@ class KnowledgeGraph:
                   clean build; ``diagnostics`` holds at most the 100 most
                   severe while ``summary`` counts all. Saved with the graph and
                   restored on load
+                - ``valid_time_default``: ``{"effective": ..., "stored": ...}``
+                  — the default an undated statement reads (``'today'``,
+                  ``'all'`` or a date) and the part of it saved in the file
+                  (see :meth:`set_valid_time_default`)
                 - ``advisories``: present only on a graph loaded from a file
                   an older build wrote whose data shows that build's known
                   defect — a list of ``{"code", "writer", "message",
@@ -8177,7 +8181,7 @@ class KnowledgeGraph:
         """
         ...
 
-    def set_valid_time_default(self, value: Union[str, _dt.date, _dt.datetime]) -> None:
+    def set_valid_time_default(self, value: Union[str, _dt.date, _dt.datetime], persist: bool = False) -> None:
         """Set the instant unprefixed statements and fluent cursors read.
 
         On a graph with validity declarations, a statement that names no
@@ -8191,8 +8195,16 @@ class KnowledgeGraph:
         statement is reported as having skipped the default. A graph with no
         declaration is unaffected.
 
-        Runtime state only: it is never written into a ``.kgl`` file, so a
-        saved graph loads with ``'today'``. Frozen views, sessions and
+        The plain setter is session state: it lasts for this graph object and
+        is never written into a ``.kgl`` file. With ``persist=True`` it also
+        becomes the graph's *stored* default, which the next :meth:`save`
+        writes into the file and every later load starts from. A graph that
+        never stored one saves byte-identical files and loads with
+        ``'today'``. Precedence, highest first: a statement's own prefix or
+        ``valid_at=``, this setter (the call that ran last wins over a server
+        flag set at boot), the MCP manifest, CLI or Bolt ``--valid-time-default``
+        setting, the stored default, ``'today'``. A blueprint stores one with
+        ``settings.valid_time_default``. Frozen views, sessions and
         transactions taken from the graph afterwards carry the value current
         when they were taken.
 
@@ -8201,6 +8213,9 @@ class KnowledgeGraph:
                 ``YYYY-MM-DD`` string (any form :meth:`date` reads), a
                 ``datetime.date`` or a ``datetime.datetime`` (taken at its
                 UTC date).
+            persist: Also store the value as the graph's default in the file
+                the next :meth:`save` writes. ``False`` (the default) leaves
+                the stored default untouched.
 
         Raises:
             ArgumentError: *value* is a string that is none of those.

@@ -81,6 +81,8 @@ mod query_warnings_tests;
 #[cfg(test)]
 mod row_limit_tests;
 #[cfg(test)]
+mod stored_default_tests;
+#[cfg(test)]
 mod stored_property_admission_tests;
 #[cfg(test)]
 mod strict_reads_tests;

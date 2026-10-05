@@ -1082,6 +1082,13 @@ saved in the `.kgl` file and comes back on `load()`. The C ABI's
 `kglite_blueprint_build` report carries the same lists under `diagnostics` and
 `summary`.
 
+A blueprint that declares validity and sets no `settings.valid_time_default`
+raises one informational `declarations` note (`default_today`) saying undated
+reads on the graph default to valid-today. `"valid_time_default": "all"` (or
+`"today"`, or a `YYYY-MM-DD` date) stores the default in the saved file and
+silences the note; see [Valid time](valid-time.md) section 2.1. `strict` never
+fails on the note.
+
 ### Strict Mode
 
 `from_blueprint(..., strict=True)`, or `"strict": true` under the blueprint's

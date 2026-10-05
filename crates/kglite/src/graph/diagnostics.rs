@@ -68,6 +68,13 @@ impl DiagnosticGroup {
 pub const STRICT_DEFAULT_GROUPS: [DiagnosticGroup; 2] =
     [DiagnosticGroup::Declarations, DiagnosticGroup::Stubs];
 
+/// Kinds that inform rather than flag a fault: strict mode never fails on them,
+/// whatever groups it was given, because a build that raises one is not wrong.
+pub const INFORMATIONAL_KINDS: [&str; 1] = [KIND_DEFAULT_TODAY];
+
+/// The note that a graph declaring validity reads valid-today by default.
+pub const KIND_DEFAULT_TODAY: &str = "default_today";
+
 /// Items per failing group a strict-mode error message lists.
 const STRICT_ITEMS_SHOWN: usize = 5;
 
@@ -114,7 +121,10 @@ pub fn strict_failure(groups: &[DiagnosticGroup], diagnostics: &[Diagnostic]) ->
         if !groups.contains(&group) {
             continue;
         }
-        let items: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.group == group).collect();
+        let items: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| d.group == group && !INFORMATIONAL_KINDS.contains(&d.kind))
+            .collect();
         if items.is_empty() {
             continue;
         }
@@ -275,6 +285,18 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("data_quality"), "{text}");
+    }
+
+    #[test]
+    fn strict_failure_ignores_informational_kinds_in_any_group_list() {
+        let note = Diagnostic::new(DiagnosticGroup::Declarations, KIND_DEFAULT_TODAY, "note");
+        let real = d(DiagnosticGroup::Declarations, "real");
+        assert!(strict_failure(&DiagnosticGroup::ALL, std::slice::from_ref(&note)).is_none());
+        let text = strict_failure(&STRICT_DEFAULT_GROUPS, &[note, real]).unwrap();
+        assert!(
+            text.contains("[declarations] 1") && !text.contains("note"),
+            "{text}"
+        );
     }
 
     #[test]

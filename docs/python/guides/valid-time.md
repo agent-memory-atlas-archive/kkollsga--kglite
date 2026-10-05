@@ -273,9 +273,33 @@ date)` sets the instant an unprefixed statement reads on that graph (and the
 fluent default, section 3); `get_valid_time_default()` reads it. The MCP server
 takes `--valid-time-default {today|all|YYYY-MM-DD}` or the manifest key
 `extensions.valid_time.default` (the flag wins), `kglite-bolt-server` the same
-flag, and `kglite query` / `write` / `session` take it too. The setting is
-runtime state, never written into a `.kgl` file; a loaded graph starts at
-`today`.
+flag, and `kglite query` / `write` / `session` take it too.
+
+**A stored default.** A graph can carry its own default in the `.kgl` file:
+`graph.set_valid_time_default('all', persist=True)` (the plain call stays
+session-only) or, for a built graph, `"settings": {"valid_time_default":
+"all"}` in the blueprint (`all`, `today` or a `YYYY-MM-DD` date). A load starts
+from the stored value, and `graph_info()['valid_time_default']` shows both
+`effective` (what an undated statement reads now) and `stored` (what the file
+holds); `describe()` carries a `<valid-time-default>` line when either is not
+`today`. A graph that never stored one writes the same bytes as before and
+loads with `today`. The echo's `source` stays `default` whichever level set it.
+
+The precedence, highest first:
+
+1. an explicit `FOR VALID_TIME` prefix or `valid_at=`;
+2. `set_valid_time_default(...)` on the graph object;
+3. the server's `--valid-time-default` flag or manifest key, applied when the
+   graph is opened (whichever of 2 and 3 runs last decides; a flag is applied
+   at boot, so a later setter call wins);
+4. the graph's stored default;
+5. `today`.
+
+A blueprint that declares validity and stores no default says so in its build
+summary (`declarations` group, kind `default_today`): *"Undated reads on this
+graph default to valid-today; scripts that need history should set the default
+to all"*. The note is informational: `strict=True` and `strict=["declarations"]`
+never fail on it. Storing a default (`all`, or a date) silences it.
 
 ### 2.2 What changed: the default as of today
 

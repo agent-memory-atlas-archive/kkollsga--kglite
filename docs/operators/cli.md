@@ -68,6 +68,7 @@ On a graph that declares validity intervals, a statement with no
 `FOR VALID_TIME ALL` to read every version. `--valid-time-default
 {today|all|YYYY-MM-DD}` on `query`, `write` and `session` changes what an
 unprefixed statement reads for that run; a statement's own prefix still wins.
+Without it, a default the graph stored in its file applies, else today.
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

@@ -607,10 +607,16 @@ pub struct DirGraph {
     #[serde(default)]
     pub(crate) temporal: crate::graph::features::temporal::declarations::TemporalDeclarations,
     /// The instant a statement or fluent step reads when it names none, on a
-    /// graph with validity declarations. Runtime and manifest state: never
-    /// serialized, so a loaded graph starts at `Today`.
+    /// graph with validity declarations. Starts at the stored default on a
+    /// load; a session setter or server flag overwrites it. Rides the `.kgl`
+    /// metadata only through `stored_valid_time_default`.
     #[serde(skip)]
     pub valid_time_default: crate::graph::features::temporal::ValidTimeDefault,
+    /// The default the `.kgl` file records (`Today` when it records none): set
+    /// by a blueprint's `settings.valid_time_default` or
+    /// `set_valid_time_default(.., persist=True)`.
+    #[serde(skip)]
+    pub stored_valid_time_default: crate::graph::features::temporal::ValidTimeDefault,
     /// Memory limit for columnar heap storage. If Some(n), `enable_columnar()`
     /// will spill columns to temp files when total heap_bytes exceeds n.
     #[serde(skip)]
@@ -1006,6 +1012,7 @@ impl DirGraph {
             timeseries_store: HashMap::new(),
             temporal: Default::default(),
             valid_time_default: Default::default(),
+            stored_valid_time_default: Default::default(),
             memory_limit: None,
             spill_dir: None,
             temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),

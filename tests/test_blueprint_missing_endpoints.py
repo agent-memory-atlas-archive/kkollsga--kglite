@@ -176,7 +176,9 @@ def test_a_declared_type_with_no_stray_endpoints_is_silent(tmp_path):
             (tmp_path / name).write_text(text, encoding="utf-8")
     nodes = {"Department": DEPARTMENT, "Team": TEAM, "Person": _person()}
     path = tmp_path / "bp.json"
-    path.write_text(json.dumps({"settings": {"root": str(tmp_path)}, "nodes": nodes}), encoding="utf-8")
+    # A stored default keeps the informational "reads valid-today" note out.
+    settings = {"root": str(tmp_path), "valid_time_default": "all"}
+    path.write_text(json.dumps({"settings": settings, "nodes": nodes}), encoding="utf-8")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         graph = from_blueprint(path, save=False, strict=True)
