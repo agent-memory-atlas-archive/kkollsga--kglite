@@ -122,13 +122,15 @@ pub struct ForkedGraph {
 /// The condition is exactly the slot-identity precondition from the module
 /// doc: the free lists must be provably empty, so appended indices are
 /// contiguous from the bounds and a sequential replay reproduces them. A graph
-/// that has ever deleted a node or edge and not been vacuumed fails this and
-/// keeps the deep clone.
+/// that has deleted a node or edge since its last vacuum, save/load or bulk
+/// rebuild fails this and keeps the deep clone.
+///
+/// Comparing the next prediction with the bound is not enough: petgraph's
+/// `node_bound()` is the highest *occupied* slot + 1, so a delete order can
+/// leave the free-list head equal to the bound with older slots behind it.
+/// The overlay's second append then disagrees with the fold-back (issue #195).
 pub(crate) fn can_fork(base: &MemoryGraph) -> bool {
-    let node_bound = base.inner().node_bound();
-    let edge_bound = petgraph::visit::EdgeIndexable::edge_bound(base.inner());
-    base.slot_mirror.predict_next_node(node_bound) == Some(NodeIndex::new(node_bound))
-        && base.slot_mirror.predict_next_edge(edge_bound) == Some(EdgeIndex::new(edge_bound))
+    base.slot_mirror.free_lists_empty()
 }
 
 impl ForkedGraph {

@@ -115,6 +115,16 @@ impl SlotMirror {
         }
     }
 
+    /// Whether both free lists are provably empty: synced, and no vacated
+    /// slot recorded. Then `add_node`/`add_edge` append at the bounds, which is
+    /// the precondition `forked::can_fork` needs. Checking only the next
+    /// prediction is weaker — a free-list head can equal the bound while older
+    /// vacated slots sit behind it (issue #195).
+    #[inline]
+    pub(crate) fn free_lists_empty(&self) -> bool {
+        self.synced && self.free_nodes.is_empty() && self.free_edges.is_empty()
+    }
+
     /// The index `add_node` will return next, or `None` when unsynced.
     ///
     /// `bound` is the caller's `node_bound()`; the mirror deliberately does not
@@ -164,8 +174,9 @@ impl SlotMirror {
         debug_assert_eq!(
             self.predict_next_node(bound_before),
             Some(actual),
-            "slot mirror mispredicted a node slot; the free-list mirror has \
-             drifted from petgraph (see storage/slot_mirror.rs)"
+            "petgraph allocated a different node slot than the mirror predicted: \
+             either the mirror missed a free-list change, or the caller handed out \
+             an index without consulting the prediction (see storage/slot_mirror.rs)"
         );
         self.free_nodes.pop();
     }
@@ -181,8 +192,9 @@ impl SlotMirror {
         debug_assert_eq!(
             self.predict_next_edge(bound_before),
             Some(actual),
-            "slot mirror mispredicted an edge slot; the free-list mirror has \
-             drifted from petgraph (see storage/slot_mirror.rs)"
+            "petgraph allocated a different edge slot than the mirror predicted: \
+             either the mirror missed a free-list change, or the caller handed out \
+             an index without consulting the prediction (see storage/slot_mirror.rs)"
         );
         self.free_edges.pop();
     }
