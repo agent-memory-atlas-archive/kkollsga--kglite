@@ -28,6 +28,9 @@ before upgrading.
 
 ### Fixed
 
+- A node created without a title is now titled `<Label>_<id>`. The title came
+  from the storage slot count, so after deletes two nodes could share a
+  title, and memory, mapped and disk graphs titled the same nodes differently.
 - `add_nodes` warns (`UserWarning`) when a column named `id` or `title` cannot
   be read back because the identity field comes from another column.
 - Creating nodes while a read view is held, after deleting nodes, no longer

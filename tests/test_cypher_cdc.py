@@ -167,7 +167,7 @@ def test_cdc_rollback_restores_capture_mode_used_by_later_events():
     assert len(changed) == 1
     assert changed[0]["state"] == {
         "before": None,
-        "after": {"title": "P_0", "labels": [], "properties": {"value": "after"}},
+        "after": {"title": "P_1", "labels": [], "properties": {"value": "after"}},
     }
 
 

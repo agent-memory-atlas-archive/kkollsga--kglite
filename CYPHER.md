@@ -5162,6 +5162,7 @@ stored property can shadow them). Use `labels(n)` for the label set and `id(n)` 
   values for the id and its declared spelling are.
 - Otherwise `title`, then `name`. A pattern carrying both keeps both: `n.title`
   reads the title and `n.name` reads the stored `name`.
+- With no title in the pattern, `<Label>_<id>`, for example `Person_12`.
 
 ### Identity (`id`) and prefixed-id datasets (`nid`)
 

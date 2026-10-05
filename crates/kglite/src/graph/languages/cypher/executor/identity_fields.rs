@@ -22,11 +22,10 @@
 use std::collections::HashMap;
 
 use super::CypherExecutor;
-use crate::datatypes::values::Value;
+use crate::datatypes::values::{raw_string, Value};
 use crate::graph::languages::cypher::ast::CreateNodePattern;
 use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::schema::DirGraph;
-use crate::graph::storage::GraphRead;
 
 /// The property spellings a node type uses for its two identity fields.
 ///
@@ -89,7 +88,7 @@ impl IdentityAliases {
 pub(super) struct CreatedIdentity {
     pub(super) id: Value,
     pub(super) title: Value,
-    /// The title came from the pattern rather than from the `<Label>_<n>`
+    /// The title came from the pattern rather than from the `<Label>_<id>`
     /// fallback. Declared constraints read it: a `REQUIRE p.name IS NOT NULL`
     /// on a type whose title column *is* `name` asks the caller for a value,
     /// and an engine-minted fallback is not one.
@@ -107,8 +106,8 @@ pub(super) struct CreatedIdentity {
 /// does not already carry, so a stored copy shadows the identity in
 /// `properties(n)` while `n.<alias>` still resolves to the identity.
 ///
-/// Absent → the title is fabricated from the label (unchanged), and the id is
-/// *allocated*; an allocator must never hand out a live id — see
+/// Absent → the title is `<Label>_<id>`, and the id is *allocated*; an
+/// allocator must never hand out a live id — see
 /// `DirGraph::next_auto_node_id` for the `node_bound()` reuse bug that replaced.
 /// A caller-supplied id is taken as given: uniqueness is opt-in (see the gates
 /// in `create_node`).
@@ -147,16 +146,15 @@ pub(super) fn create_identity(
         None => graph.next_auto_node_id(),
     };
 
-    // Title: the type's declared title field first, then the `name`/`title`
-    // spellings every type accepts, then a fabricated `<Label>_<n>`. The
-    // fabrication is the last resort it always was — what changed is that it no
-    // longer overrides a value the caller actually supplied under the type's own
-    // column name.
+    // Title: what the pattern supplies (see `supplied_title`), else
+    // `<Label>_<id>`. Built from the id rather than a storage slot, which every
+    // backend reuses differently after a delete: the slot gave repeated titles
+    // and titles that differed between memory, mapped and disk.
     let supplied_title = supplied_title(label, aliases, properties)?;
     let title_supplied = supplied_title.is_some();
     let title = supplied_title.unwrap_or_else(|| {
         let label = node_pat.label.as_deref().unwrap_or("Node");
-        Value::String(format!("{}_{}", label, graph.graph.node_bound()))
+        Value::String(format!("{label}_{}", raw_string(&id)))
     });
 
     Ok(CreatedIdentity {
