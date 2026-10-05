@@ -8,14 +8,16 @@
 //! deadline that ran past 120 s and took 7.29 GB before the process was
 //! OOM-killed.
 //!
-//! The hook tests below are timing-free: `interrupt_after_periodic_polls` is a
-//! thread-local that fires on the Nth poll, so each one asserts that a named
-//! loop *reaches* a poll, and is red on the unfixed tree for the only possible
-//! reason — the loop never polled. The wall-clock test then asserts the thing
-//! the downstream report is actually about: that the abort happens early in
-//! the loop rather than after it.
+//! Every test below is timing-free. `interrupt_after_periodic_polls` is a
+//! thread-local that fires on the Nth poll, so each hook test asserts that a
+//! named loop *reaches* a poll, and is red on the unfixed tree for the only
+//! possible reason — the loop never polled. The deadline test then asserts the
+//! thing the downstream report is actually about — that the abort happens at
+//! the first poll after the deadline passes, early in the loop rather than
+//! after it — with the deadline passing at a chosen poll (`test_clock`).
 
 use super::*;
+use crate::graph::languages::cypher::executor::test_clock;
 use crate::graph::session::execute::{execute_mut, execute_read, ExecuteOptions};
 
 fn run(graph: &mut DirGraph, query: &str) {
@@ -119,14 +121,18 @@ fn path_binding_loop_polls_the_interrupt() {
     assert_hook_fired_and_query_is_otherwise_fine(&graph, query, err);
 }
 
-/// The report itself, in miniature: a deadline set a quarter of the way into a
-/// query whose time is dominated by the row loop must abort near the deadline,
-/// not after the loop finishes.
+/// The report itself, in miniature: a deadline that passes a quarter of the
+/// way into a query whose work is dominated by the row loop aborts at the
+/// first poll after it, not after the loop finishes.
 ///
-/// Self-calibrating rather than absolute — the budget is a fraction of this
-/// machine's own uncapped runtime, so a slow machine moves both numbers
-/// together. The unfixed tree fails it by running the whole loop out
-/// (measured: a 500 ms deadline detected 1.52 s late on a 2.1 s query).
+/// Pinned by poll position, not wall-clock: [`test_clock`]
+/// makes the deadline pass at a chosen periodic poll, and the deadline check
+/// that poll runs is the production one. The wall-clock version (a deadline a
+/// quarter of the uncapped runtime in, asserted aborted before half of it)
+/// failed under load, because both durations it compared were measured on a
+/// machine whose other work stretched one run and not the other. The unfixed
+/// tree fails this one as it failed that one: the loop never polled, so it
+/// ran every poll's worth of rows out.
 #[test]
 fn a_deadline_inside_the_row_loop_aborts_without_finishing_it() {
     let graph = fan_in_graph(60, 100);
@@ -137,29 +143,44 @@ fn a_deadline_inside_the_row_loop_aborts_without_finishing_it() {
                  WHERE n0.aid + n1.bid + n2.cid > -1 AND toString(n0.aid) <> 'zzz' \
                  RETURN n0.aid";
     let params = HashMap::new();
+    let mut opts = ExecuteOptions::eager(&params);
+    // A deadline no run reaches by the clock: only the armed poll passes it.
+    opts.deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(3600));
 
-    let started = std::time::Instant::now();
-    let rows = read(&graph, query).expect("uncapped run succeeds");
-    let uncapped = started.elapsed();
+    test_clock::arm(None);
+    let rows = execute_read(&graph, query, &opts)
+        .expect("uncapped run succeeds")
+        .result
+        .rows
+        .len();
+    let polls = test_clock::polls();
     assert_eq!(
         rows, 600_000,
         "the fixture must produce the row count it sizes for"
     );
+    assert!(polls > 100, "the row loop must poll many times: {polls}");
 
-    let mut opts = ExecuteOptions::eager(&params);
-    opts.deadline = Some(std::time::Instant::now() + uncapped / 4);
-    let started = std::time::Instant::now();
+    let passes_at = polls / 4;
+    test_clock::arm(Some(passes_at));
     let err = match execute_read(&graph, query, &opts) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("the deadline must fire"),
     };
-    let elapsed = started.elapsed();
-
+    let polled = test_clock::polls();
+    test_clock::arm(None);
     assert!(err.contains("timed out"), "unexpected error: {err}");
-    assert!(
-        elapsed < uncapped / 2,
-        "deadline at {:?} of a {uncapped:?} query aborted only after {elapsed:?} — \
-         the row loop ran past it",
-        uncapped / 4
+    assert_eq!(
+        polled,
+        passes_at + 1,
+        "the deadline passed at poll {passes_at} of {polls}; the abort came {} polls later",
+        polled - passes_at - 1
     );
+
+    // Non-vacuity: the armed poll fakes nothing on a statement with no
+    // deadline — the production check has none to read.
+    test_clock::arm(Some(passes_at));
+    let no_deadline = ExecuteOptions::eager(&params);
+    let finished = execute_read(&graph, query, &no_deadline).map(|o| o.result.rows.len());
+    test_clock::arm(None);
+    assert_eq!(finished.ok(), Some(600_000));
 }

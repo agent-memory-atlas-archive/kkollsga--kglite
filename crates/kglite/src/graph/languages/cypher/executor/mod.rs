@@ -550,6 +550,13 @@ impl<'a> CypherExecutor<'a> {
 
     #[inline]
     pub(super) fn check_deadline(&self) -> Result<(), String> {
+        #[cfg(test)]
+        if self.deadline.is_some() && test_clock::deadline_passed() {
+            let past = Instant::now().checked_sub(std::time::Duration::from_millis(1));
+            let mut interrupt = self.interrupt();
+            interrupt.deadline = past.or(interrupt.deadline);
+            return check_interrupt(&interrupt);
+        }
         check_interrupt(&self.interrupt())
     }
 
@@ -571,6 +578,8 @@ impl<'a> CypherExecutor<'a> {
                 }
                 Ok(())
             })?;
+            #[cfg(test)]
+            test_clock::note_poll();
             self.check_deadline()?;
         }
         Ok(())
@@ -1100,6 +1109,8 @@ pub(crate) mod ordering;
 mod path_binding;
 mod procedure_params;
 mod procedure_registry;
+#[cfg(test)]
+mod test_clock;
 pub(crate) use procedure_registry::{
     is_context_free_procedure, is_mask_routed_procedure, is_view_routed_procedure,
 };
