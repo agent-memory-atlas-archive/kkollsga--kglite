@@ -1,6 +1,6 @@
 # Blueprints
 
-Build a complete knowledge graph from CSV files using a declarative JSON blueprint. Instead of writing `add_nodes` / `add_relationships` calls, describe your data in JSON — `from_blueprint()` handles the rest.
+Build a complete knowledge graph from CSV files using a declarative JSON blueprint. Instead of writing `add_nodes` / `add_relationships` calls, describe your data in JSON. `from_blueprint()` handles the rest.
 
 ```python
 import kglite
@@ -39,9 +39,11 @@ The blueprint to load this is:
 
 That's it. Three decisions:
 
-1. **`root`** — where the CSV files live (relative paths in the blueprint resolve from here)
-2. **`pk`** — which column uniquely identifies each row (becomes the node's `id`)
-3. **`title`** — which column is the display name
+| Key | Meaning |
+|---|---|
+| `root` | Where the CSV files live. Relative paths in the blueprint resolve from here. |
+| `pk` | Which column uniquely identifies each row. It becomes the node's `id`. |
+| `title` | Which column is the display name. |
 
 All other columns (`department`, `salary`) are auto-detected and stored as properties.
 
@@ -52,7 +54,7 @@ graph.cypher("MATCH (e:Employee) RETURN e.name, e.salary ORDER BY e.salary DESC"
 
 ## Property Types
 
-By default, column types are auto-detected from the CSV. Use `properties` to override when auto-detection isn't enough:
+Column types are auto-detected from the CSV by default. To override when auto-detection isn't enough, use `properties`:
 
 ```json
 {
@@ -88,9 +90,14 @@ Available types:
 | `"geometry"` | WKT string | Uses existing WKT or converts `_geometry` GeoJSON in Rust |
 | `"location.lat"` / `"location.lon"` | float | Coordinates; may receive GeoJSON centroids |
 
-A blueprint's `settings.manifest` names an export manifest (`manifest.json`, format `kglite-export/1`, written beside the blueprint by `export_csv`); after the build, every valid-time declaration it lists is applied. Declarations a spec's `temporal` key already made are unchanged, so the manifest carries the ones no spec can say: a secondary label's, or a relationship's declaration that names no source type.
+A blueprint's `settings.manifest` names an export manifest. It is `manifest.json`, format `kglite-export/1`, written beside the blueprint by `export_csv`. After the build, every valid-time declaration it lists is applied.
 
-Columns not listed in `properties` are still loaded — they just use auto-detection. You only need to specify types when auto-detection gets it wrong.
+Declarations a spec's `temporal` key already made are unchanged. The manifest therefore carries the ones no spec can say:
+
+- a secondary label's declaration
+- a relationship's declaration that names no source type
+
+Columns not listed in `properties` are still loaded. They just use auto-detection. You only need to specify types when auto-detection gets it wrong.
 
 ### List Columns
 
@@ -111,15 +118,19 @@ gene_id,name,synonyms
 MATCH (g:Gene) WHERE 'ADHE' IN g.synonyms RETURN g.name
 ```
 
-There is deliberately no delimiter option — no `"list:|"`, no `sep` key. A
+There is deliberately no delimiter option: no `"list:|"`, no `sep` key. A
 delimited column is ambiguous the moment a value contains the delimiter, and the
 blueprint has no way to say which values were escaped. Split the column into a
 JSON array in your export step instead.
 
 A cell that is not a JSON array becomes a **one-element** list holding the cell
-whole. That is right for a lone value and wrong for `adhC|ADHE`, so the build
-report warns when a non-array cell contains `|`, `;` or `,`, naming the column,
-how many cells are affected, and the first offending row and its text:
+whole. That is right for a lone value and wrong for `adhC|ADHE`. The build
+report therefore warns when a non-array cell contains `|`, `;` or `,`. The
+warning names:
+
+- the column
+- how many cells are affected
+- the first offending row and its text
 
 ```
 node 'Gene': column 'synonyms' is declared list but 1 cell(s) are not a JSON
@@ -156,10 +167,10 @@ The rules:
 - The node type is the primary label and is stamped for you. Listing it in
   `labels` is a no-op, not a duplicate.
 - **A blueprint owns every node of the types it declares.** Labels are stamped
-  after all node *and* edge phases, so a provisional stub — an endpoint some
-  edge referenced and no CSV supplied — carries them too. Without that,
-  `MATCH (:Condition)` would silently miss exactly the nodes that arrived via
-  an edge rather than a row.
+  after all node *and* edge phases. A provisional stub therefore carries them
+  too. A stub is an endpoint some edge referenced and no CSV supplied. Without
+  that, `MATCH (:Condition)` would silently miss exactly the nodes that arrived
+  via an edge rather than a row.
 - `sub_nodes` entries take the key on the same terms.
 - If you merge blueprints with a deep-merge helper, note that arrays are
   replaced wholesale rather than concatenated: the last `labels` array wins.
@@ -197,7 +208,7 @@ Use `filter` to load only a subset of rows from the CSV:
 }
 ```
 
-Simple values mean equality (`"status": "Active"` keeps only rows where status equals "Active"). Operator dicts support: `=`, `!=`, `>`, `<`, `>=`, `<=`.
+Simple values mean equality: `"status": "Active"` keeps only rows where status equals "Active". Operator dicts support `=`, `!=`, `>`, `<`, `>=`, `<=`.
 
 ## Adding Connections
 
@@ -247,14 +258,14 @@ And you have `companies.csv`:
 
 This creates `(Employee)-[:WORKS_AT]->(Company)` edges. The `fk` column in the source CSV must match the `pk` values of the target node type.
 
-Ids that look like numbers are read as integers unless you say otherwise, so a
-zero-padded code such as `0001` becomes `1`. To keep codes as written, declare
-the `pk` column `"string"` in the node's `properties`
+Ids that look like numbers are read as integers unless you say otherwise. A
+zero-padded code such as `0001` therefore becomes `1`. To keep codes as written,
+declare the `pk` column `"string"` in the node's `properties`
 (`"properties": {"code": "string"}`). Every `fk`, `source_fk` and `target_fk`
-column that refers to a string-keyed node type is then read as text too, so
-`0001` in an edge row finds the node `0001`.
+column that refers to a string-keyed node type is then read as text too. `0001`
+in an edge row then finds the node `0001`.
 
-> **Tip:** Add FK columns to `skipped` if you don't want them stored as node properties — the edge already captures the relationship.
+> **Tip:** Add FK columns to `skipped` if you don't want them stored as node properties. The edge already captures the relationship.
 
 ### Properties on an FK Edge
 
@@ -285,11 +296,14 @@ value — so the edge can record *how* the two are related:
 ```
 
 That builds `(Employee)-[:WORKS_AT {role: "Lead", validFrom: "2023-01-01"}]->(Company)`.
-The rules are the junction ones: `property_types` stays keyed by the **CSV**
-spelling, `rename` keys must be listed in `properties`, and neither the `fk`
-nor the `pk` column is renamable or declarable as a property — both are build
-errors that skip the edge. A property column the CSV does not have is reported
-and the edge is built without it.
+The rules are the junction ones:
+
+- `property_types` stays keyed by the **CSV** spelling.
+- `rename` keys must be listed in `properties`.
+- Neither the `fk` nor the `pk` column is renamable or declarable as a property.
+  Both are build errors that skip the edge.
+- A property column the CSV does not have is reported, and the edge is built
+  without it.
 
 ```{note}
 Declaring a column as an edge property never implicitly skips it from the
@@ -299,11 +313,11 @@ you want it only on the edge.
 ```
 
 Rows whose FK cell is empty produce no edge, and their property values go with
-them — an edge's properties always come from the row that created it.
+them. An edge's properties always come from the row that created it.
 
 ### Manual Nodes (No CSV)
 
-If you don't have a separate CSV for the target type, omit the `csv` field. The loader will automatically create nodes from the distinct FK values it finds:
+If you don't have a separate CSV for the target type, omit the `csv` field. The loader creates nodes from the distinct FK values it finds:
 
 ```json
 {
@@ -365,22 +379,29 @@ For many-to-many relationships, use a separate lookup CSV. Suppose `project_assi
 }
 ```
 
-Junction edges can carry properties — list them in `properties` and use `property_types` for type hints. This creates `(Employee)-[:ASSIGNED_TO {role: "Lead", assigned_date: ...}]->(Project)` edges.
+Junction edges can carry properties. List them in `properties` and use `property_types` for type hints. This creates `(Employee)-[:ASSIGNED_TO {role: "Lead", assigned_date: ...}]->(Project)` edges.
 
 ### Repeated Junction Rows
 
-A junction writes one relationship per CSV row. A history file — one row per
-employee per week on a project — read with `"properties": []` therefore stores
-the same `ASSIGNED_TO` relationship once for every row, and each count over it
-multiplies. The build does not change this by default; it adds one warning per
-relationship type naming the number of relationships, the number of distinct
-`(source, target)` pairs and the largest copy count. Two ways out:
+A junction writes one relationship per CSV row. Take a history file with one row
+per employee per week on a project, read with `"properties": []`. It stores the
+same `ASSIGNED_TO` relationship once for every row, and each count over it
+multiplies.
 
-- list the column that tells the rows apart (`"properties": ["week"]`) when each
-  row is a real fact, or
-- set `"distinct": true` on the junction to keep one relationship per distinct
-  row — same source, same target and equal `properties` values. The first row
-  of each group is kept with its properties; rows that differ in any listed
+The build does not change this by default. It adds one warning per relationship
+type. The warning names:
+
+- the number of relationships
+- the number of distinct `(source, target)` pairs
+- the largest copy count
+
+Two ways out:
+
+- If each row is a real fact, list the column that tells the rows apart
+  (`"properties": ["week"]`).
+- Otherwise, set `"distinct": true` on the junction. It keeps one relationship per
+  distinct row: same source, same target and equal `properties` values. The first
+  row of each group is kept with its properties. Rows that differ in any listed
   property are never collapsed, and the warning is not raised.
 
 ```json
@@ -395,22 +416,27 @@ relationship type naming the number of relationships, the number of distinct
 }
 ```
 
-The warning check keeps up to 4 million distinct rows in memory; past that the
-remaining rows go unchecked and the warning says so. `distinct: true` has no
-limit and holds one small key (a few tens of bytes) per distinct row of the
-junction; rows without property columns are matched exactly on their endpoint
-pair, rows with properties on the pair plus a 128-bit hash of their values. A junction whose
-relationship type already has relationships from the same source type merges
-rows on the endpoint pair instead, and a relationship type with a declared
-validity interval already drops a row identical to an earlier one, so neither
-needs the option. Only `junction_edges` take it; `fk_edges` write one
-relationship per node row.
+Limits and scope:
+
+- The warning check keeps up to 4 million distinct rows in memory. Past that, the
+  remaining rows go unchecked and the warning says so.
+- `distinct: true` has no limit. It holds one small key (a few tens of bytes) per
+  distinct row of the junction. Rows without property columns are matched exactly
+  on their endpoint pair. Rows with properties are matched on the pair plus a
+  128-bit hash of their values.
+- A junction whose relationship type already has relationships from the same
+  source type merges rows on the endpoint pair instead.
+- A relationship type with a declared validity interval already drops a row
+  identical to an earlier one.
+- Neither of those last two needs the option.
+- Only `junction_edges` take `distinct`. `fk_edges` write one relationship per
+  node row.
 
 ### A Junction Over a Union of Target Types
 
-When a relationship's range is an abstract class — `ASSOCIATED_WITH` pointing
-at a `Disease`, a `Phenotype` **or** an `Exposure` — `target` takes a list
-instead of a string:
+When a relationship's range is an abstract class, `target` takes a list instead
+of a string. An example is `ASSOCIATED_WITH` pointing at a `Disease`, a
+`Phenotype` **or** an `Exposure`:
 
 ```json
 {
@@ -431,13 +457,13 @@ ontology `range` declaration can put back together.
 Each row picks its target type one of two ways:
 
 - **`target_type_column`** names a CSV column holding the type per row. Its
-  values must be among the declared `target` types; a row naming anything else
-  builds no edge and the build report says how many rows named which value.
-  The column is routing only — it becomes an edge property the same way any
+  values must be among the declared `target` types. A row naming anything else
+  builds no edge, and the build report says how many rows named which value.
+  The column is routing only. It becomes an edge property the same way any
   other column does, by being listed in `properties`.
-- **Without it**, the declared types are probed in order and the first that
+- **Without it**, the declared types are probed in order. The first that
   already has a node with the row's target id wins. An id no declared type has
-  takes the *first* declared type, where the edge's `on_missing_endpoint`
+  takes the *first* declared type. There the edge's `on_missing_endpoint`
   policy (below) decides between a stub and a dropped row.
 
 Declare the union in the ontology as one relationship whose `range` is the
@@ -458,9 +484,11 @@ relationship.
 ### Renaming Junction Properties
 
 To store a column under a different property name, add a `rename` map. All
-three keys can appear on one edge — `properties` selects the columns,
-`property_types` declares their types, `rename` decides the property name
-each one lands under:
+three keys can appear on one edge:
+
+- `properties` selects the columns.
+- `property_types` declares their types.
+- `rename` decides the property name each one lands under.
 
 ```json
 {
@@ -476,9 +504,9 @@ each one lands under:
 }
 ```
 
-That builds `(Employee)-[:ASSIGNED_TO {role: "Lead", validFrom: "2023-01-01"}]->(Project)`:
-the column is *typed* as `assigned_date` and *stored* as `validFrom`. The old
-name is gone — `r.assigned_date` is null afterwards.
+That builds `(Employee)-[:ASSIGNED_TO {role: "Lead", validFrom: "2023-01-01"}]->(Project)`.
+The column is *typed* as `assigned_date` and *stored* as `validFrom`. The old
+name is gone: `r.assigned_date` is null afterwards.
 
 ```{warning}
 `property_types` stays keyed by the **CSV spelling**, never the renamed one.
@@ -491,15 +519,14 @@ made twice in production loaders; check the keys against the CSV header, not
 against the property names you expect to query.
 ```
 
-`rename` keys must be columns listed in `properties`, and the fk columns are
-not renamable — both are build errors that skip the junction. And note that
-`property_types` itself never renames anything: it declares column types,
-and an unrecognized *value* there (`"property_types": {"from": "renamedTo"}`)
-is ignored with a build warning.
+Two build errors skip the junction: a `rename` key that is not a column listed in
+`properties`, and a rename of an fk column. `property_types` itself never renames
+anything. It declares column types, and an unrecognized *value* there
+(`"property_types": {"from": "renamedTo"}`) is ignored with a build warning.
 
 ## Sub-Nodes
 
-Sub-nodes are hierarchical children of a parent node type. They live in a separate CSV and link to the parent via a foreign key.
+Sub-nodes are hierarchical children of a parent node type. They live in a separate CSV and link to the parent through a foreign key.
 
 Suppose each employee has performance reviews in `reviews.csv`:
 
@@ -532,11 +559,20 @@ Suppose each employee has performance reviews in `reviews.csv`:
 }
 ```
 
-This creates `Review` nodes linked to their parent `Employee` via an `OF_EMPLOYEE` edge, named `OF_` plus the parent type split into words in upper snake case (`ProjectPhase` gives `OF_PROJECT_PHASE`, `TeamHQ` gives `OF_TEAM_HQ`). The `parent_fk` column must hold the parent's `pk` values: a row whose value matches no parent gets no edge and no stub parent, and the build warns once per spec with the row count and an example value.
+This creates `Review` nodes linked to their parent `Employee` via an `OF_EMPLOYEE` edge. The edge is named `OF_` plus the parent type split into words in upper snake case (`ProjectPhase` gives `OF_PROJECT_PHASE`, `TeamHQ` gives `OF_TEAM_HQ`).
 
-A `fk_edges` entry on the sub-node that targets the parent type, whatever its name, replaces the generated edge: only your declared edge is written (a `junction_edges` entry does not count). With several, the one on the `parent_fk` column is the parent link, else the first declared. Validity grouping of the sub-node's versions follows that edge. When the parent declares `pk: "auto"`, its ids are row numbers no column can name, so no edge is generated and the build warns; declare an `fk_edges` entry on a column holding those numbers, or drop `parent_fk`. There is no switch to turn the generated edge off: leave `parent_fk` out of the spec (and list the column under `skipped`) to load the sub-node with only the edges you declare.
+The `parent_fk` column must hold the parent's `pk` values. A row whose value matches no parent gets no edge and no stub parent. The build warns once per spec with the row count and an example value.
 
-> Use `"pk": "auto"` if your sub-node CSV doesn't have a natural primary key — the loader generates sequential IDs (1, 2, 3, ...).
+### Replacing the generated parent edge
+
+A `fk_edges` entry on the sub-node that targets the parent type, whatever its name, replaces the generated edge. Only your declared edge is written. A `junction_edges` entry does not count.
+
+- With several such entries, the one on the `parent_fk` column is the parent link. Otherwise the first declared is.
+- Validity grouping of the sub-node's versions follows that edge.
+- When the parent declares `pk: "auto"`, its ids are row numbers no column can name. No edge is generated and the build warns. Declare an `fk_edges` entry on a column holding those numbers, or drop `parent_fk`.
+- There is no switch to turn the generated edge off. Leave `parent_fk` out of the spec (and list the column under `skipped`) to load the sub-node with only the edges you declare.
+
+> Use `"pk": "auto"` if your sub-node CSV doesn't have a natural primary key. The loader generates sequential IDs (1, 2, 3, ...).
 
 Sub-nodes can also have their own `connections` (FK edges and junction edges), using the same syntax as core nodes.
 
@@ -576,13 +612,18 @@ Suppose `monthly_sales.csv` contains per-employee sales data:
 
 Key points:
 
-- **`time_key`** — a single column name (`"date_col"`) or a composite dict (`{"year": "yr", "month": "mo"}`). Composite keys support `year`, `month`, `day`, `hour`.
-- **`resolution`** — `"year"`, `"month"`, or `"day"`.
-- **`channels`** — maps channel names (what you want to call them) to CSV column names (what they're called in the file). Format: `{"channel_name": "csv_column_name"}`.
-- **`units`** — optional per-channel units.
+- **`time_key`:** a single column name (`"date_col"`) or a composite dict (`{"year": "yr", "month": "mo"}`). Composite keys support `year`, `month`, `day`, `hour`.
+- **`resolution`:** `"year"`, `"month"`, or `"day"`.
+- **`channels`:** maps channel names (what you want to call them) to CSV column names (what they're called in the file). Format: `{"channel_name": "csv_column_name"}`.
+- **`units`:** optional per-channel units.
 
-Rows where a time component below `year` is zero (e.g., `month=0` for annual totals) are aggregate rows and are dropped. The build warns once per node type with the count, and names any channel whose only values sat on those rows (it loads empty). Time components may be written as floats (`2020.0`, `1.0` — pandas does this when a column holds a NaN); whole values are read as integers.
-A row whose time component is not a whole number (`2020.5`, `abc`, an empty year) is dropped from the series, with one warning giving the count, the columns and example values.
+### Rows the series drops
+
+Rows where a time component below `year` is zero (e.g., `month=0` for annual totals) are aggregate rows and are dropped. The build warns once per node type with the count. It names any channel whose only values sat on those rows, because that channel loads empty.
+
+A row whose time component is not a whole number (`2020.5`, `abc`, an empty year) is also dropped from the series. One warning gives the count, the columns and example values.
+
+Time components may be written as floats (`2020.0`, `1.0`). Pandas does this when a column holds a NaN. Whole values are read as integers.
 
 To keep the aggregates, load them as a yearly series with a sibling sub-node that selects them and uses a year-only `time_key`:
 
@@ -599,9 +640,11 @@ To keep the aggregates, load them as a yearly series with a sibling sub-node tha
 }
 ```
 
+### Other timeseries rules
+
 Keys inside `timeseries` other than `time_key`, `channels`, `resolution` and `units` produce an unknown-key warning.
 
-After loading, query timeseries with Cypher `ts_*()` functions — see the [Timeseries guide](timeseries.md) for details.
+After loading, query timeseries with Cypher `ts_*()` functions. See the [Timeseries guide](timeseries.md) for details.
 
 ## Spatial Data
 
@@ -632,13 +675,13 @@ If `_geometry` contains GeoJSON, the Rust loader converts it to WKT and can
 populate centroid latitude/longitude. Existing WKT passes through unchanged.
 Plain lat/lon needs no `_geometry`, and blueprint conversion needs no Shapely.
 
-After loading, use spatial queries like `distance()`, `near_point_m()`, and `contains()` — see the [Spatial guide](spatial.md) for details.
+After loading, use spatial queries like `distance()`, `near_point_m()`, and `contains()`. See the [Spatial guide](spatial.md) for details.
 
 ## Temporal Properties
 
 A `temporal` key declares which two properties bound each row's validity
 interval. It goes on a node spec, an `fk_edges` entry or a `junction_edges`
-entry, and it must name the convention:
+entry. It must name the convention:
 
 ```json
 {
@@ -652,19 +695,19 @@ entry, and it must name the convention:
 }
 ```
 
-- `"closed"` — the `to` day is the last valid day (`[from, to]`).
-- `"half_open"` — the `to` day is the first day no longer valid
-  (`[from, to)`), the usual shape when one period's end is the next one's
+- `"closed"`: the `to` day is the last valid day (`[from, to]`).
+- `"half_open"`: the `to` day is the first day no longer valid
+  (`[from, to)`). This is the usual shape when one period's end is the next one's
   start.
 
-An optional `"empty_when": "to_before_from"` beside `"convention": "closed"`
-keeps a row whose date `to` is exactly the day before its date `from` as an
-empty interval (valid on no day, counted in `empty_rows`, one build warning)
-instead of failing the build; it is refused with `"half_open"` and for any
-other spelling.
+An optional `"empty_when": "to_before_from"` goes beside `"convention": "closed"`.
+It keeps a row whose date `to` is exactly the day before its date `from` as an
+empty interval. The interval is valid on no day, is counted in `empty_rows`, and
+raises one build warning. Without the option, such a row fails the build. The
+option is refused with `"half_open"` and for any other spelling.
 
 An empty `to` is an open period, valid from `from` onwards. Once the rows are
-loaded, the build checks every bound; an unreadable bound or an inverted
+loaded, the build checks every bound. An unreadable bound or an inverted
 interval fails the build and names the row.
 
 After loading, the declared bounds apply without naming them:
@@ -680,15 +723,14 @@ graph.cypher("CALL db.temporal.declarations()")        # what is declared
 ```
 
 `select()` on a declared type already keeps only today's rows, and so does a
-Cypher statement with no `FOR VALID_TIME` prefix. `temporal=False` comes first
-when an explicit fluent filter should see every version, and `FOR VALID_TIME
-ALL` does the same for Cypher.
-See the {doc}`valid-time` guide.
+Cypher statement with no `FOR VALID_TIME` prefix. To let an explicit fluent filter
+see every version, put `temporal=False` first. `FOR VALID_TIME ALL` does the same
+for Cypher. See the {doc}`valid-time` guide.
 
-On an edge, `from` and `to` name the **stored** property, after `rename`, and
-both must be listed in the edge's `properties`. The declaration is made for the
-spec's node type as the relationship's source type, so two node types writing
-one relationship type can keep their bounds under different names:
+On an edge, `from` and `to` name the **stored** property, after `rename`. Both
+must be listed in the edge's `properties`. The declaration is made for the
+spec's node type as the relationship's source type. Two node types writing
+one relationship type can therefore keep their bounds under different names:
 
 ```json
 {
@@ -713,19 +755,23 @@ one relationship type can keep their bounds under different names:
 }
 ```
 
-Nothing is declared from column types alone. `"validFrom"` / `"validTo"` in
-`properties` or `property_types` type the column as a date, and a `temporal`
-key without `convention` declares nothing; either way the build warns and says
-what to add, and `describe()` shows no validity interval for that type.
+Nothing is declared from column types alone. Two cases declare nothing:
+
+- `"validFrom"` / `"validTo"` in `properties` or `property_types` type the column
+  as a date.
+- A `temporal` key without `convention`.
+
+Either way the build warns and says what to add, and `describe()` shows no
+validity interval for that type.
 
 ## Declaring Inputs
 
 `"csv": "diseases.csv"` on a node spec or a junction edge names an input
-inline. When several specs read the same file — a node type and the junction
-that links it, or two node types carved out of one table — the path is repeated
-at every one of them, and moving the file means editing each.
+inline. Several specs may read the same file: a node type and the junction
+that links it, or two node types carved out of one table. The path is then
+repeated at every one of them, and moving the file means editing each.
 
-A `files` section declares each input once by name; specs then reference it
+A `files` section declares each input once by name. Specs then reference it
 with `"file"`:
 
 ```json
@@ -759,22 +805,22 @@ with `"file"`:
 | `path` | The file this input reads, resolved against `settings.root`. Required for a file-backed format. |
 | `format` | How to read it: `"csv"` (the default), `"delimited"` (below), `"xlsx"` (below), or `"frame"` — an in-memory table passed to `from_blueprint(..., frames={...})`, which takes no `path`. Each format brings its own keys. |
 
-`"csv": "x.csv"` remains valid and is exactly shorthand for a `files` entry
-`{ "path": "x.csv", "format": "csv" }` named `x.csv`, so the two spellings
-build the same graph and the two styles mix freely in one blueprint. Two specs
-naming the same input — by `file` or by the same `csv` string — read one input,
+`"csv": "x.csv"` remains valid. It is exactly shorthand for a `files` entry
+`{ "path": "x.csv", "format": "csv" }` named `x.csv`. The two spellings
+build the same graph, and the two styles mix freely in one blueprint. Two specs
+naming the same input, by `file` or by the same `csv` string, read one input,
 not two.
 
 The build refuses, rather than guessing, when:
 
-- a spec sets both `csv` and `file`;
-- `file` names an entry `files` does not declare (the error lists the ones it
-  does);
-- a `files` entry has no `path`;
-- a `files` entry's `format` is not one this build reads (the error lists
-  those);
-- a `files` entry is named after a `csv` shorthand that means a different file
-  — both would claim the same input name.
+- a spec sets both `csv` and `file`.
+- `file` names an entry `files` does not declare. The error lists the ones it
+  does.
+- a `files` entry has no `path`.
+- a `files` entry's `format` is not one this build reads. The error lists
+  those.
+- a `files` entry is named after a `csv` shorthand that means a different file.
+  Both would claim the same input name.
 
 A stray key inside a `files` entry is a warning, like stray keys elsewhere in a
 blueprint, and names the accepted keys for that entry's format.
@@ -785,10 +831,10 @@ whose source type reads a non-CSV input is refused at load time.
 ### `format: "delimited"` — separators, preambles and headerless files
 
 Public bulk data is full of tables a CSV reader cannot open. A `delimited`
-entry names the separator itself, so those files are read where they land
+entry names the separator itself. Those files are then read where they land,
 instead of being pre-processed into CSV first.
 
-NCBI's taxonomy dump separates fields with `\t|\t` and closes every line with
+NCBI's taxonomy dump separates fields with `\t|\t`, closes every line with
 `\t|`, and has no header row:
 
 ```json
@@ -839,32 +885,43 @@ BugSigDB's export puts a licence line above the header. Count it, or mark it:
 | `encoding` | `"utf-8"` (default) or `"latin-1"`. Any other name is refused rather than mojibaked. |
 | `prefix_strip` | `{ "column": "prefix" }` — removed from the start of that column's cells, before typing. `cpd:C00022` becomes `C00022`. A cell without the prefix keeps its value, and a column the file does not have is ignored. |
 
-**One knob picks the engine.** A single-character `delimiter` is read by the
-same reader the `csv` format uses, so quoting, escapes and newlines inside
-quoted fields behave exactly as they do there. A longer one is read line by
-line with **no quoting at all** — no such convention exists for those files —
-and a `quote` declared beside it is refused rather than silently ignored.
-Everything else is shared: a UTF-8 BOM is stripped either way, and rows land
-rectangular exactly as a CSV's do — a short row is null-padded, fields past the
-header's width are dropped, and an empty cell is null.
+**One knob picks the engine.** The length of `delimiter` decides the reader.
+
+- A single-character `delimiter` is read by the same reader the `csv` format
+  uses. Quoting, escapes and newlines inside quoted fields behave exactly as
+  they do there.
+- A longer one is read line by line with **no quoting at all**, because no such
+  convention exists for those files. A `quote` declared beside it is refused
+  rather than silently ignored.
+
+Everything else is shared:
+
+- A UTF-8 BOM is stripped either way.
+- Rows land rectangular exactly as a CSV's do. A short row is null-padded, and
+  fields past the header's width are dropped.
+- An empty cell is null.
 
 `skip_lines`, `comment_prefix` and `line_suffix` are applied line by line,
 before quoting, so a value spanning several lines inside quotes is not exempt
 from them.
 
-**Row numbers count data rows.** A warning saying "row 12" means the twelfth
-row of data — after `skip_lines`, comment lines, blank lines and the header are
-gone — the same thing it counts for a CSV, not the physical line number. Read
-errors, which have no data row to attribute yet, name the physical line
-instead.
+**Row numbers count data rows.** A warning saying "row 12" means the twelfth row
+of data. It is counted after `skip_lines`, comment lines, blank lines and the
+header are gone. It is the same thing it counts for a CSV, not the physical line
+number. Read errors have no data row to attribute yet, so they name the physical
+line instead.
 
 ### `format: "xlsx"` — worksheets, title blocks and wide matrices
 
-Published supplementary data arrives as Excel workbooks, and three of their
-habits break a reader that treats a sheet as a CSV in a different envelope: a
-title block above the header row, one numeric type for everything, and results
-laid out as a matrix rather than a table. An `xlsx` entry names the sheet and
-the header row, and `unpivot` reshapes the matrix.
+Published supplementary data arrives as Excel workbooks. Three of their habits
+break a reader that treats a sheet as a CSV in a different envelope:
+
+- a title block above the header row
+- one numeric type for everything
+- results laid out as a matrix rather than a table
+
+An `xlsx` entry names the sheet and the header row, and `unpivot` reshapes the
+matrix.
 
 ```json
 {
@@ -915,42 +972,51 @@ A column whose header cell is blank is dropped: nothing can reference it by
 name. Header names are trimmed, so `pk: "id"` resolves against a header cell
 someone left a trailing space in.
 
-**`unpivot` turns columns into rows.** The `id_columns` stay columns; every
-other named column becomes one output row per input row, carrying that
+**`unpivot` turns columns into rows.** The `id_columns` stay columns. Every
+other named column becomes one output row per input row. Each row carries that
 column's header under `name_to` and its cell under `value_to`. The example
 above turns a 4-drug × 3-isolate matrix into the measured `(drug, isolate,
-p)` triples — which is exactly a junction table, so a junction edge reads it
+p)` triples. That is exactly a junction table, so a junction edge reads it
 like any other.
 
 **An empty cell produces no unpivoted row.** A published screen matrix is
-sparse by construction: the pairs nobody measured are blank, and emitting a
+sparse by construction: the pairs nobody measured are blank. Emitting a
 null-valued row for each of them would turn "not measured" into an edge. Only
 the cells that carry a value become rows.
 
-An `unpivot` naming an `id_columns` entry the header row does not have is
-refused, as is one whose `name_to` or `value_to` collides with an id column,
-and a misspelled key inside the `unpivot` object is an error rather than a
-warning — a dropped `id_columns` would unpivot the identifiers too and produce
-a table of the right shape and the wrong content.
+Three `unpivot` mistakes are refused:
+
+- an `id_columns` entry the header row does not have
+- a `name_to` or `value_to` that collides with an id column
+- a misspelled key inside the `unpivot` object
+
+The last is an error rather than a warning. A dropped `id_columns` would unpivot
+the identifiers too and produce a table of the right shape and the wrong content.
 
 **Every number in a spreadsheet is a float.** Excel has one numeric type, so an
 id column reading `260, 261, …` is stored as `260.0, 261.0, …`. A cell whose
-value is a whole number is therefore written as an integer — `260`, not
-`260.0` — which is what keeps `source_fk`/`target_fk` joins matching (the
-Troubleshooting entry below is this trap arriving through a CSV instead). Above
-2^53 an `f64` can no longer tell consecutive integers apart, so a whole-number
-cell that large keeps its float spelling. Dates land as `2024-03-01`, or
-`2024-03-01T09:30:00` when the cell carries a time; booleans as `true` / `false`;
-a blank cell, and a cell the spreadsheet itself could not compute (`#DIV/0!`),
-are null — the second with one warning per column naming the sheet and the cell.
+value is a whole number is therefore written as an integer: `260`, not `260.0`.
+That keeps `source_fk`/`target_fk` joins matching. (The Troubleshooting entry
+below is this trap arriving through a CSV instead.) Above 2^53 an `f64` can no
+longer tell consecutive integers apart, so a whole-number cell that large keeps
+its float spelling.
+
+Other cell types land like this:
+
+- **Dates** land as `2024-03-01`, or `2024-03-01T09:30:00` when the cell carries
+  a time.
+- **Booleans** land as `true` / `false`.
+- **A blank cell** is null.
+- **A cell the spreadsheet itself could not compute** (`#DIV/0!`) is null, with
+  one warning per column naming the sheet and the cell.
 
 Row numbers count **data rows** below the header, so a warning saying "row 12"
 means the twelfth row under `header_row`, not the twelfth row of the sheet.
 Every row an unpivot produced from one sheet row carries that row's number.
 
 **For Rust embedders: `xlsx` is a Cargo feature.** It pulls a zip reader and an
-XML parser, so the `kglite` crate leaves it off by default and a build without
-it refuses `"format": "xlsx"` by name. The Python wheel always has it; a Rust
+XML parser, so the `kglite` crate leaves it off by default. A build without
+it refuses `"format": "xlsx"` by name. The Python wheel always has it. A Rust
 embedder adds `features = ["xlsx"]`.
 
 ## Settings Reference
@@ -991,10 +1057,10 @@ A build has a **save destination** when either of these is true:
 - the blueprint declares `output` (or `output_path` + `output_file`), or
 - `storage="disk"` was given a `path`.
 
-The disk case matters because in disk mode the directory *is* the graph, and
-building alone leaves it unpublished — a directory that looks like a graph but
-that `kglite.load()` refuses with *"missing disk_graph_meta.json"*. Saving is
-what publishes it:
+The disk case matters because in disk mode the directory *is* the graph. Building
+alone leaves it unpublished: a directory that looks like a graph but that
+`kglite.load()` refuses with *"missing disk_graph_meta.json"*. Saving is what
+publishes it:
 
 ```python
 kglite.from_blueprint("blueprint.json", storage="disk", path="graph/")
@@ -1010,8 +1076,8 @@ The `save` argument then selects the policy:
 | `False` | Never save. |
 
 Passing `save=True` on a blueprint with no `output` and no disk `path` is an
-error rather than a silent no-op, so a pipeline that believes it is persisting
-its output finds out at the first run.
+error rather than a silent no-op. A pipeline that believes it is persisting its
+output finds out at the first run.
 
 ### Missing Endpoints
 
@@ -1027,17 +1093,19 @@ target `pk`, or a junction row whose id is in neither node input.
 | `"drop"` | Skip the row, no edge and no stub. |
 | `"error"` | Fail the build on the first such row. |
 
-`auto` exists because a stub carries no validity bounds: a stub of a declared
+`auto` exists because a stub carries no validity bounds. A stub of a declared
 type is valid at every instant, so it appears in every default-today read and
-every `FOR VALID_TIME ALL` read. The declared set is computed before any row
-loads, from the specs' `temporal` keys, the manifest and the graph. A type the
-build does not declare keeps its stubs, as before. A dropped row vivifies
-nothing for its other endpoint, and every dropped endpoint is counted per edge
-and type as a `stubs` advisory (`endpoints_dropped_declared`, or
-`endpoints_dropped` when `drop` was asked for an undeclared type), so
-`strict=["stubs"]` fails a build that dropped any. Stubs that are vivified
-stay `stubs_vivified` / `stubs_on_declared_label`. `add_relationships` and
-`from_records` keep their own defaults.
+every `FOR VALID_TIME ALL` read.
+
+- The declared set is computed before any row loads, from the specs' `temporal`
+  keys, the manifest and the graph.
+- A type the build does not declare keeps its stubs, as before.
+- A dropped row vivifies nothing for its other endpoint.
+- Every dropped endpoint is counted per edge and type as a `stubs` advisory:
+  `endpoints_dropped_declared`, or `endpoints_dropped` when `drop` was asked for
+  an undeclared type. `strict=["stubs"]` therefore fails a build that dropped any.
+- Stubs that are vivified stay `stubs_vivified` / `stubs_on_declared_label`.
+- `add_relationships` and `from_records` keep their own defaults.
 
 ```json
 {"settings": {"on_missing_endpoint": "error"},
@@ -1048,9 +1116,9 @@ stay `stubs_vivified` / `stubs_on_declared_label`. `add_relationships` and
 
 ## Build Warnings
 
-A build reports what it noticed about the input as warnings, and sorts them by
-how much they matter. `from_blueprint` raises **one `UserWarning` per
-non-empty group**, most severe first:
+A build reports what it noticed about the input as warnings, sorted by how much
+they matter. `from_blueprint` raises **one `UserWarning` per non-empty group**,
+most severe first:
 
 | Group | What it holds |
 |---|---|
@@ -1069,31 +1137,38 @@ from_blueprint [declarations] 1 warning(s):
 ```
 
 Because they are ordinary `UserWarning` objects, `warnings.simplefilter`,
-`warnings.catch_warnings` and `logging.captureWarnings` route them, and a
-filter on the `from_blueprint [data_quality]` prefix silences one group.
+`warnings.catch_warnings` and `logging.captureWarnings` route them. A filter on
+the `from_blueprint [data_quality]` prefix silences one group.
 
-The full record stays on the graph: after a build,
-`graph.graph_info()['build']` holds `{"summary": {group: count}, "diagnostics":
-[{"group", "kind", "message"}, ...]}`. `kind` is a short stable code
-(`typed_only_no_validity`, `duplicate_id`, `stubs_vivified`, ...) to match on;
-messages may be reworded. `diagnostics` keeps the 100 most severe, `summary`
-counts all of them, and a clean build records an empty summary. The record is
-saved in the `.kgl` file and comes back on `load()`. The C ABI's
-`kglite_blueprint_build` report carries the same lists under `diagnostics` and
-`summary`.
+### The build record
+
+The full record stays on the graph. After a build, `graph.graph_info()['build']`
+holds `{"summary": {group: count}, "diagnostics": [{"group", "kind", "message"},
+...]}`.
+
+- `kind` is a short stable code (`typed_only_no_validity`, `duplicate_id`,
+  `stubs_vivified`, ...) to match on. Messages may be reworded.
+- `diagnostics` keeps the 100 most severe. `summary` counts all of them.
+- A clean build records an empty summary.
+- The record is saved in the `.kgl` file and comes back on `load()`.
+- The C ABI's `kglite_blueprint_build` report carries the same lists under
+  `diagnostics` and `summary`.
+
+### The default-today note
 
 A blueprint that declares validity and sets no `settings.valid_time_default`
-raises one informational `declarations` note (`default_today`) saying undated
-reads on the graph default to valid-today. `"valid_time_default": "all"` (or
-`"today"`, or a `YYYY-MM-DD` date) stores the default in the saved file and
-silences the note; see [Valid time](valid-time.md) section 2.1. `strict` never
-fails on the note.
+raises one informational `declarations` note (`default_today`). It says undated
+reads on the graph default to valid-today.
+
+`"valid_time_default": "all"` (or `"today"`, or a `YYYY-MM-DD` date) stores the
+default in the saved file and silences the note. See
+[Valid time](valid-time.md) section 2.1. `strict` never fails on the note.
 
 ### Strict Mode
 
 `from_blueprint(..., strict=True)`, or `"strict": true` under the blueprint's
 `settings`, makes the `declarations` and `stubs` groups fail the build. The
-build runs to the end first, so the error carries every failing group's count
+build runs to the end first. The error then carries every failing group's count
 and its first five items, and nothing is saved:
 
 ```python
@@ -1102,49 +1177,103 @@ kglite.from_blueprint("bp.json", strict=["data_quality"]) # named groups only
 kglite.from_blueprint("bp.json", strict=False)           # override the setting
 ```
 
-`strict=None` (the default) defers to `settings.strict`; any other value
+`strict=None` (the default) defers to `settings.strict`. Any other value
 overrides it. `settings.strict` takes the same values (`true`, `false` or a
-list of group names), and an unknown group name is an error listing the valid
+list of group names). An unknown group name is an error listing the valid
 ones.
 
 ## How Loading Works
 
-`from_blueprint()` first applies the ordered top-level `compute` pipeline, then
-processes graph construction in dependency order. Compute operations are
-`derive` (row properties), `filter` (in-place or into a new type), `chain`
-(ordered group edges), `calendar` (Date hierarchy/linking), and `aggregate`
-(summary nodes/edges). Later operations can consume earlier outputs.
+`from_blueprint()` first applies the ordered top-level `compute` pipeline. It then
+processes graph construction in dependency order.
+
+Compute operations are:
+
+- `derive`: row properties
+- `filter`: in-place or into a new type
+- `chain`: ordered group edges
+- `calendar`: Date hierarchy/linking
+- `aggregate`: summary nodes/edges
+
+Later operations can consume earlier outputs.
+
+### Aggregate ids
 
 Aggregate node IDs are `group:` followed by a compact JSON array of the raw
-`group_by` strings, for example `group:["a_b","c"]`. Each distinct tuple has a
-stable ID independent of row order and other groups. Raw group properties and
-foreign-key columns keep their original values. This replaces the former
-underscore-joined IDs for **every newly computed aggregate**, including a single
-column; existing saved graphs are not rewritten. Use the group properties to
-map older generated IDs when rebuilding graphs.
+`group_by` strings, for example `group:["a_b","c"]`.
 
-Derived and aggregate property types reconcile all expression results. Nulls
-carry no type evidence; integer and float results widen to float. This uses
-normal floating-point conversion, which may round integers above 2^53. Strings
-remain strings (including `"001"`), while incompatible kinds such as boolean
-plus numeric values use text. An all-null result column also uses text. Computed
-lists retain their existing text representation.
+- Each distinct tuple has a stable ID independent of row order and other groups.
+- Raw group properties and foreign-key columns keep their original values.
+- This replaces the former underscore-joined IDs for **every newly computed
+  aggregate**, including a single column.
+- Existing saved graphs are not rewritten. Use the group properties to map older
+  generated IDs when rebuilding graphs.
 
-A derive writes a temporary sibling CSV and replaces its generated destination
+### Computed property types
+
+Derived and aggregate property types reconcile all expression results.
+
+- Nulls carry no type evidence.
+- Integer and float results widen to float. This uses normal floating-point
+  conversion, which may round integers above 2^53.
+- Strings remain strings (including `"001"`).
+- Incompatible kinds, such as boolean plus numeric values, use text.
+- An all-null result column also uses text.
+- Computed lists retain their existing text representation.
+
+### Derive writes
+
+A derive writes a temporary sibling CSV. It replaces its generated destination
 only after reading and writing all records successfully. Successive derives on
 the same type can consume that destination safely. An expression, read or write
-failure preserves the previous completed CSV; earlier compute steps are not
+failure preserves the previous completed CSV. Earlier compute steps are not
 rolled back as one transaction.
+
+### Construction phases
 
 Graph construction then has five steps:
 
-1. **Manual nodes** — types without `csv` (created from distinct FK values found across all CSVs)
-2. **Core nodes** — types with CSV files
-3. **Sub-nodes** — hierarchical children, linked to parents via `parent_fk`
-4. **FK edges** — direct foreign key relationships
-5. **Junction edges** — many-to-many via lookup tables
+1. **Manual nodes:** types without `csv` (created from distinct FK values found across all CSVs)
+2. **Core nodes:** types with CSV files
+3. **Sub-nodes:** hierarchical children, linked to parents via `parent_fk`
+4. **FK edges:** direct foreign key relationships
+5. **Junction edges:** many-to-many via lookup tables
 
 Each phase depends on the previous ones completing. For example, FK edges are only created after all nodes exist.
+
+### Computed file paths and calendars
+
+Computed CSV paths are allocated together for the pipeline. Ordinary unique
+names keep their familiar filenames. Sanitized-name collisions, case-only
+collisions, and names already used by inputs or existing files receive distinct
+mapped names. The loader uses those exact paths.
+
+- A later step can replace its own completed output within that invocation.
+- Running a fresh pipeline again may allocate new output filenames so earlier
+  files remain untouched. Logical node and relationship identities do not depend
+  on those filenames.
+- Calling a compute primitive directly uses the same input-preserving rule for
+  that single call.
+
+Calendar `in_month_edge` and `in_quarter_edge` register the generated junction
+files, linking every Date row to its Month and Quarter respectively. The
+unsupported `in_year_edge` option remains an explicit error.
+
+Multiple calendars in one compute pipeline share the union of their generated
+Month/Quarter keys.
+
+- A hierarchy already supplied by your blueprint, or changed by an intervening
+  derive/filter/chain step, cannot be replaced by a later calendar. Such a
+  replacement reports an error before writing its calendar files.
+- Use a separate hierarchy design when the generated one needs custom metadata.
+- The calendar date type also cannot equal its own requested hierarchy type.
+
+Calendar links validate source headers and rows before replacing shared
+hierarchies. Existing linked CSVs are read twice to keep memory bounded. Links
+from same-step generated types are checked against their known columns.
+Completed steps are preserved on these semantic errors. Calendar generation
+is not an atomic transaction across multiple files, and concurrent input-file
+changes are outside this guarantee.
 
 ## Complete Example
 
@@ -1263,15 +1392,15 @@ Rows with NaN in a foreign key column are silently skipped when creating edges. 
 
 Pandas reads integer columns with NaN as `float64`. The loader automatically coerces whole-number floats back to int for ID matching. No action needed.
 
-The same holds for a spreadsheet, where *every* number is a float: an `xlsx` input writes a whole-number cell as `260`, not `260.0`. It is only visible when you declare such a column `string` — then the text is what lands, and it is the integer.
+The same holds for a spreadsheet, where *every* number is a float. An `xlsx` input writes a whole-number cell as `260`, not `260.0`. It is only visible when you declare such a column `string`. Then the text is what lands, and it is the integer.
 
 ### Filter not working
 
-Filters compare values exactly — `{"status": "Active"}` won't match `"active"` or `" Active"` (leading space). Check for case and whitespace in your CSV.
+Filters compare values exactly. `{"status": "Active"}` won't match `"active"` or `" Active"` (leading space). Check for case and whitespace in your CSV.
 
 ### Timeseries aggregate rows
 
-If your CSV has aggregate rows (e.g., `month=0` for annual totals), they are dropped and the build warns with the count and any channel left empty. Only rows with non-zero time components are loaded into the node's series; see [Timeseries](#timeseries) for loading the aggregates as a yearly series.
+If your CSV has aggregate rows (e.g., `month=0` for annual totals), they are dropped and the build warns with the count and any channel left empty. Only rows with non-zero time components are loaded into the node's series. See [Timeseries](#timeseries) for loading the aggregates as a yearly series.
 
 ### Repeated primary keys
 
@@ -1283,31 +1412,3 @@ Blueprint GeoJSON → WKT/centroid conversion runs in Rust and needs no Shapely.
 Supply `_geometry` only for GeoJSON conversion; existing WKT and plain lat/lon
 columns are accepted directly. Shapely remains optional for Python-side
 geometry objects and GeoDataFrame helpers outside the blueprint loader.
-
-
-Computed CSV paths are allocated together for the pipeline. Ordinary unique
-names keep their familiar filenames. Sanitized-name collisions, case-only
-collisions, and names already used by inputs or existing files receive distinct
-mapped names; the loader uses those exact paths. A later step can replace its
-own completed output within that invocation. Running a fresh pipeline again may
-allocate new output filenames so earlier files remain untouched; logical node
-and relationship identities do not depend on those filenames. Calling a compute
-primitive directly uses the same input-preserving rule for that single call.
-
-Calendar `in_month_edge` and `in_quarter_edge` register the generated junction
-files, linking every Date row to its Month and Quarter respectively. The
-unsupported `in_year_edge` option remains an explicit error.
-
-Multiple calendars in one compute pipeline share the union of their generated
-Month/Quarter keys. A hierarchy already supplied by your blueprint, or changed
-by an intervening derive/filter/chain step, cannot be replaced by a later
-calendar. That operation reports an error before writing its calendar files;
-use a separate hierarchy design when the generated one needs custom metadata.
-The calendar date type also cannot equal its own requested hierarchy type.
-
-Calendar links validate source headers and rows before replacing shared
-hierarchies. Existing linked CSVs are read twice to keep memory bounded; links
-from same-step generated types are checked against their known columns.
-Completed steps are preserved on these semantic errors. Calendar generation
-is not an atomic transaction across multiple files, and concurrent input-file
-changes are outside this guarantee.

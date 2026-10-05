@@ -129,13 +129,16 @@ without you needing to inspect the report.
 
 **Ingest the columns you query.** The per-row cost of a scan tracks
 the number of properties *declared* on the scanned type, not the
-number the query reads: a type with 10 declared properties costs
+number the query reads. A type with 10 declared properties costs
 roughly 10–15% more per row on a filter scan than the same type with
-2, even when the extra eight are null on every node, because each
-node's property block is sized to the full declared schema. Use
-`columns=[...]` / `skip_columns=[...]` to keep a hot type narrow, and
-put rarely-used optional properties on their own node type rather
-than widening one you scan constantly.
+2. This holds even when the extra eight are null on every node,
+because each node's property block is sized to the full declared schema.
+
+To keep a hot type narrow:
+
+- Use `columns=[...]` / `skip_columns=[...]`.
+- Put rarely-used optional properties on their own node type rather
+  than widening one you scan constantly.
 
 ## Property Mapping
 
@@ -162,7 +165,7 @@ graph.select('User').where({'id': 1001})                   # Also OK — canonic
 The `connection`-named methods (`add_connections`, `add_connections_bulk`,
 `add_connections_from_source`, `replace_connections`, `create_connections`,
 `connections()`, `connection_types()`) are permanent pointers to their
-`relationship`-named twins — a connection is a relationship, and either
+`relationship`-named twins. A connection is a relationship, and either
 spelling calls the same code.
 
 Past the six required positional arguments
@@ -186,13 +189,17 @@ right move.
 ### `replace_relationships` — atomic edge upsert
 
 `add_relationships` is add-only. To **re-sync** a node's edges of a given type to
-exactly a new set — "the current `MENTIONS` of these documents is now this list"
-— use `replace_relationships`. For every source node present in the input, it
-prunes that source's existing edges *of `connection_type`*, then adds the
-supplied ones, in one call (validate-before-prune, so a malformed input leaves
-the graph intact). Edges from sources not in the input, and edges of other types
-from the same sources, are untouched. It takes the same arguments as
-`add_relationships` (including `query=` mode), except `distinct`.
+exactly a new set, use `replace_relationships`. An example is "the current
+`MENTIONS` of these documents is now this list". For every source node present in
+the input, one call:
+
+1. Prunes that source's existing edges *of `connection_type`*.
+2. Adds the supplied ones.
+
+The call validates before it prunes, so a malformed input leaves the graph intact.
+Edges from sources not in the input, and edges of other types from the same
+sources, are untouched. It takes the same arguments as `add_relationships`
+(including `query=` mode), except `distinct`.
 
 ```python
 # First sync: doc 1 → [A, B]
@@ -294,14 +301,17 @@ graph.cypher("""
 """)
 ```
 
-This is what you want for org charts, threaded comments, taxonomy
-trees with arbitrary depth, geographic containment chains — any
-relationship where the same type points at itself and depth is
-unbounded.
+This is what you want for any relationship where the same type points at itself
+and depth is unbounded:
+
+- org charts
+- threaded comments
+- taxonomy trees with arbitrary depth
+- geographic containment chains
 
 **Use `set_parent_type`** when a *whole node type* is a
-structural child of another type — the child instances exist only
-because their parent does, and an LLM seeing `describe()` is
+structural child of another type. The child instances exist only
+because their parent does. An LLM seeing `describe()` is
 better off thinking of them as "facets of the parent" than as
 peer types:
 
@@ -315,11 +325,11 @@ graph.set_parent_type("ProductionProfile", "Field")
 graph.set_parent_type("FieldReserves",     "Field")
 ```
 
-This affects only `describe()` output: the supporting types drop
-out of the top-level inventory and reappear inside the `<type
-name="Field">` block with their capabilities (timeseries, spatial,
+This affects only `describe()` output. The supporting types drop
+out of the top-level inventory. They reappear inside the `<type
+name="Field">` block, with their capabilities (timeseries, spatial,
 …) bubbled up to the parent. Cypher still treats them as
-ordinary node types — `MATCH (p:ProductionProfile) ...` works
+ordinary node types: `MATCH (p:ProductionProfile) ...` works
 exactly as before.
 
 | Question | Answer |
@@ -385,15 +395,16 @@ an in-memory graph of 50 k nodes with 12 declared properties:
 | One statement, many rows (`UNWIND $rows AS r CREATE …`) | ≈ 1–2 µs |
 | One statement per row | ≈ 3 µs (`CREATE`), ≈ 4–5 µs (`MATCH … SET`) |
 
-**All three rungs are flat in graph size**, and the third does not
-depend on where the graph came from: a graph loaded with
-`kglite.load()`, opened with `kglite.open()`, or saved earlier in the
-same process measures the same as one built in this process — 4.3–5.0 µs
-per single-row `SET` at 50 k nodes, 4.3 µs at 100 k. Earlier releases
-charged a per-statement column-store re-image on any graph that had
-touched a file (≈ 380 µs at 50 k, growing with node count); that cost is
-gone, and with it the reason to treat a reloaded graph as a different
-kind of thing to write to.
+**All three rungs are flat in graph size.** The third does not depend on where
+the graph came from. A graph loaded with `kglite.load()`, opened with
+`kglite.open()`, or saved earlier in the same process measures the same as one
+built in this process: 4.3–5.0 µs per single-row `SET` at 50 k nodes, 4.3 µs at
+100 k.
+
+Earlier releases charged a per-statement column-store re-image on any graph that
+had touched a file (≈ 380 µs at 50 k, growing with node count). That cost is
+gone. So is the reason to treat a reloaded graph as a different kind of thing to
+write to.
 
 Batching is still the lever, because it is the per-*statement* work —
 parse, plan, checkpoint — that the rungs differ in:
@@ -478,13 +489,12 @@ Literals are coerced to native types: `xsd:integer` → int,
 `xsd:dateTime` → datetime, GeoSPARQL `POINT` → point. A predicate that
 repeats on one subject becomes a list.
 
-Predicate and type IRIs are **CURIE-compacted** using the document's
-own `@prefix` declarations plus a well-known prefix table, with a `__`
-(double-underscore) separator so the result is a valid Cypher
-identifier — `http://xmlns.com/foaf/0.1/knows` → `foaf__knows`, matched
-natively as `[:foaf__knows]`. (A colon would clash with Cypher's
-label separator.) Each node keeps its full subject IRI in a `uri`
-property, and `n.id` is a dense integer.
+Predicate and type IRIs are **CURIE-compacted**. The loader uses the document's
+own `@prefix` declarations plus a well-known prefix table. The separator is `__`
+(double-underscore), so the result is a valid Cypher identifier:
+`http://xmlns.com/foaf/0.1/knows` → `foaf__knows`, matched natively as
+`[:foaf__knows]`. (A colon would clash with Cypher's label separator.) Each node
+keeps its full subject IRI in a `uri` property, and `n.id` is a dense integer.
 
 ```python
 # Keep full IRIs instead of compacting; keep only English labels.
@@ -526,7 +536,7 @@ KGLITE_BUILD_DEBUG=1 python build_graph.py
 
 For Wikidata or Sodir specifically, the pre-packaged dataset
 loaders (SEC EDGAR, Sodir, Wikidata) live in the separate
-kglite-datasets project; they handle download, cooldown, and resume
+kglite-datasets project. They handle download, cooldown, and resume
 on top of `load_ntriples`, and kglite loads the graphs they produce.
 To fetch and build the RDF yourself, use `load_ntriples` (above) on
 the dump directly.

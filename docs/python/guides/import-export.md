@@ -8,29 +8,35 @@ graph.save("my_graph.kgl", fsync=False)   # skip the flush for speed (still atom
 loaded_graph = kglite.load("my_graph.kgl")
 ```
 
-`save()` is **atomic and crash-safe**: it writes to a sibling temp file and
-atomically renames it over the target, so a crash mid-save can't leave a torn
-`.kgl` — a reader always sees the old file or the complete new one. With
-`fsync=True` (default) the file + directory are flushed before returning; pass
-`fsync=False` to skip that for speed. `load()` raises a typed
-`kglite.FileFormatError` on a corrupt file (see [Threading](#threading) and the
-{doc}`durable apps guide </python/guides/durable-apps>`).
+`save()` is **atomic and crash-safe**. It writes to a sibling temp file and
+atomically renames it over the target. A crash mid-save can't leave a torn
+`.kgl`: a reader always sees the old file or the complete new one.
 
-Save files (`.kgl`) use an explicitly versioned binary container. Current
-files use RGF v7, an explicit Postcard codec tag, and core-data version 3.
-Current readers accept RGF v7, v6 and v5; a v7 file cannot be read by kglite
-0.19.0 or earlier. RGF v4/bincode and older containers
-are rejected with an explicit migration/rebuild instruction; use kglite 0.13.4
-as the conversion bridge described in the
-[0.13 → 0.14 migration guide](../migrations/0.13-to-0.14.md#convert-persisted-data-before-upgrading).
-A `.kgl` is the only complete KGLite backup because portable exports
+- **`fsync=True` (default):** the file and directory are flushed before returning.
+- **`fsync=False`:** skips that flush for speed.
+- **`load()`** raises a typed `kglite.FileFormatError` on a corrupt file (see
+  [Threading](#threading) and the {doc}`durable apps guide </python/guides/durable-apps>`).
+
+### File format versions
+
+Save files (`.kgl`) use an explicitly versioned binary container.
+
+- Current files use RGF v7, an explicit Postcard codec tag, and core-data version 3.
+- Current readers accept RGF v7, v6 and v5.
+- A v7 file cannot be read by kglite 0.19.0 or earlier.
+- RGF v4/bincode and older containers are rejected with an explicit
+  migration/rebuild instruction. Use kglite 0.13.4 as the conversion bridge
+  described in the
+  [0.13 → 0.14 migration guide](../migrations/0.13-to-0.14.md#convert-persisted-data-before-upgrading).
+
+A `.kgl` is the only complete KGLite backup, because portable exports
 intentionally omit some engine-specific state.
 
 ### `open()` — load-or-create lifecycle
 
 For an app that persists to one file, `kglite.open(path)` is the ergonomic
-entry point: it loads the graph if the file exists and creates a fresh one if
-it doesn't, and the returned graph **remembers the path**.
+entry point. It loads the graph if the file exists and creates a fresh one if
+it doesn't. The returned graph **remembers the path**.
 
 ```python
 g = kglite.open("app.kgl")          # loads if present, else creates
@@ -46,14 +52,15 @@ with kglite.open("app.kgl") as g:
 # snapshotted to app.kgl on block exit
 ```
 
-- `save()` with no argument writes to the remembered path; passing a path
-  (`save("other.kgl")`) updates the remembered target after success ("save as").
-  An owned writer transfers its lease and durable log to that destination;
-  pending source writes remain recoverable from the original file, and failed
-  saves keep the original home. A graph built
-  in memory with no path raises `ValueError` if you call `save()` with no path.
+- `save()` with no argument writes to the remembered path.
+- Passing a path (`save("other.kgl")`) updates the remembered target after success
+  ("save as"). An owned writer transfers its lease and durable log to that
+  destination. Pending source writes remain recoverable from the original file,
+  and failed saves keep the original home.
+- A graph built in memory with no path raises `ValueError` if you call `save()`
+  with no path.
 - `kglite.load(path)` also remembers its path, so bare `save()` works after a load.
-- The context manager **skips the save if the block raised** — the on-disk file
+- The context manager **skips the save if the block raised**. The on-disk file
   keeps its last good state. `close()` persists explicitly.
 
 > **Auto-save-on-close is not what makes this crash-safe.** The clean-exit
@@ -63,8 +70,8 @@ with kglite.open("app.kgl") as g:
 ### Crash-safe writes (write-ahead log, on by default)
 
 `open()` makes every committed mutation survive a hard crash. Each mutation is
-appended to a `<path>-wal` sidecar and `fsync`'d **before the call returns**; on
-open, any WAL frames are replayed onto the loaded checkpoint to recover work
+appended to a `<path>-wal` sidecar and `fsync`'d **before the call returns**. On
+open, any WAL frames are replayed onto the loaded checkpoint. This recovers work
 committed since the last `save()`.
 
 ```python
@@ -84,11 +91,12 @@ g.cypher("MATCH (p:Person) RETURN p.name")   # -> Alice
 - Supported for the in-memory default and `storage="mapped"`.
   `storage="disk"` opens non-durable (its commit boundary is a generation
   publish, not a log) and uses explicit-`save()` checkpoints.
-- **`durable=False` opts out** of logging entirely — the right choice for bulk
-  loading and for graphs rebuildable from source data. If you want to keep the
-  log but not the per-commit barrier, `durable="normal"` costs roughly what an
-  unlogged write costs and still loses nothing to a crashing process. Reads
-  never pay for the capture path at any level.
+- **`durable=False` opts out** of logging entirely. It is the right choice for
+  bulk loading and for graphs rebuildable from source data.
+- **`durable="normal"`** keeps the log but drops the per-commit barrier. It costs
+  roughly what an unlogged write costs and still loses nothing to a crashing
+  process.
+- Reads never pay for the capture path at any level.
 
 ## Export Formats
 
@@ -103,10 +111,10 @@ graphml_string = graph.export_string(format='graphml')
 json_string = graph.export_string()                  # defaults to JSON
 ```
 
-The format is inferred from the extension when you omit it, so
+When you omit the format, it is inferred from the extension, so
 `graph.export('out.sql')` is enough. `export_string()` has no extension to
-read, so it defaults to `'json'` instead — and it cannot produce `'csv'`, which
-writes two files.
+read, so it defaults to `'json'`. It cannot produce `'csv'`, which writes two
+files.
 
 For a lossless CSV tree or RDF 1.2 (N-Quads / TriG) that reads back with its
 valid-time declarations and kinds intact, see {doc}`open-exports`.
@@ -133,10 +141,14 @@ kglite export-sqlite mygraph.kgl dump.sql
 kglite export-sqlite mygraph.kgl | sqlite3 mygraph.db   # or pipe it
 ```
 
-**The mapping.** Each node type becomes a table with `id`, `title`, and one
-column per property the type uses. Each connection type becomes a link table
-with `source_type`, `source_id`, `target_type`, `target_id`, and one column per
-edge property. So the graph is queryable as ordinary SQL joins:
+**The mapping.**
+
+- Each node type becomes a table with `id`, `title`, and one column per property
+  the type uses.
+- Each connection type becomes a link table with `source_type`, `source_id`,
+  `target_type`, `target_id`, and one column per edge property.
+
+So the graph is queryable as ordinary SQL joins:
 
 ```sql
 SELECT p.title, c.title, w.since
@@ -147,12 +159,12 @@ JOIN Company c ON c.id = w.target_id;
 
 **Why a script and not a `.db` file.** Writing a `.db` directly would mean
 linking a SQLite C library into KGLite. A text dump reaches the same
-destination with **zero added dependencies**, and it is also diffable,
-greppable, and ingestible by Postgres/DuckDB/MySQL after minor edits. Keeping
-the dependency out is worth one extra `sqlite3` invocation.
+destination with **zero added dependencies**. It is also diffable and greppable.
+Postgres, DuckDB and MySQL can ingest it after minor edits. Keeping the
+dependency out is worth one extra `sqlite3` invocation.
 
 **What to expect from the translation.** Graphs and relational tables do not
-model everything the same way, so a few choices are worth knowing:
+model everything the same way. These choices are worth knowing:
 
 | Aspect | Behaviour | Why |
 |---|---|---|
@@ -166,17 +178,18 @@ model everything the same way, so a few choices are worth knowing:
 | Points, durations, lists, maps | JSON text | No relational counterpart; JSON keeps them readable rather than pretending they are native columns. |
 | `updated_at` / `git_sha` / `modified_by` | Omitted | Engine write-provenance metadata, not your data. |
 
-Output is deterministic — the same graph always produces byte-identical SQL —
-so a dump can be committed and diffed.
+Output is deterministic. The same graph always produces byte-identical SQL, so a
+dump can be committed and diffed.
 
 ### Parquet
 
-KGLite does **not** export Parquet directly, and this is a deliberate scope
+KGLite does **not** export Parquet directly. This is a deliberate scope
 decision rather than a gap. Doing it in Rust means taking on the
-`arrow` + `parquet` dependency tree — measured at **+35 crates** on top of the
-CLI's 143 for a minimal Arrow-backed writer, and +336 lines of `Cargo.lock`.
-KGLite has been steadily *shedding* dependencies (309 → 171 across 0.14.x), and
-`arrow` in particular is a library this project already keeps at arm's length:
+`arrow` + `parquet` dependency tree. That is measured at **+35 crates** on top of
+the CLI's 143 for a minimal Arrow-backed writer, and +336 lines of `Cargo.lock`.
+
+KGLite has been steadily *shedding* dependencies (309 → 171 across 0.14.x).
+`arrow` in particular is a library this project already keeps at arm's length.
 kglite pins its bundled allocator to mimalloc v2 specifically to survive being
 imported alongside `pyarrow`.
 
@@ -191,7 +204,7 @@ graph.cypher("MATCH (p:Person) RETURN p.id, p.title, p.age").to_df().to_parquet(
 ```
 
 **The whole graph, no Python at all.** The SQLite dump above already turns
-every node type and connection type into a table, and DuckDB writes Parquet
+every node type and connection type into a table. DuckDB writes Parquet
 from those tables directly:
 
 ```bash
@@ -230,50 +243,73 @@ def export_parquet(graph, out_dir):
         pd.concat([df, props], axis=1).to_parquet(out / 'edges' / f'{ct}.parquet')
 ```
 
-This produces `nodes/Person.parquet` with columns `type, title, id, age, city`
-and `edges/WORKS_AT.parquet` with `source_type, source_id, target_type,
-target_id, salary, since` — the same mapping the SQLite table/link-table export
-uses. Properties absent on a given node or edge become nulls, and integers,
-floats, booleans and datetimes keep their types through the round-trip.
+This produces two kinds of file:
+
+- `nodes/Person.parquet` with columns `type, title, id, age, city`.
+- `edges/WORKS_AT.parquet` with `source_type, source_id, target_type,
+  target_id, salary, since`. This is the same mapping the SQLite table/link-table
+  export uses.
+
+Properties absent on a given node or edge become nulls. Integers, floats,
+booleans and datetimes keep their types through the round-trip.
 
 Two things to know when you write your own variant:
 
-- **`properties(r)` includes the connection type under a `type` key**; drop it
+- **`properties(r)` includes the connection type under a `type` key.** Drop it
   (as above) or it becomes a redundant column.
 - **A node's `id`, `title` and `type` come from its canonical identity**, not
   from its property bag. If a node also stores a property under one of those
-  names, the canonical value wins and the column is not repeated — a
+  names, the canonical value wins and the column is not repeated. A
   duplicated column name would make `to_parquet()` fail outright.
+
+### Whole-graph CSV
 
 For a whole-graph dump without a DataFrame,
 {meth}`~kglite.KnowledgeGraph.export_csv` writes one CSV per node and
-connection type plus a `blueprint.json` for re-import, and SQLite (above)
+connection type plus a `blueprint.json` for re-import. SQLite (above)
 covers the "give me a real database" case.
 
-`export_csv` is lossless: the directory also holds a `manifest.json`
+`export_csv` is lossless. The directory also holds a `manifest.json`
 (`kglite-export/1`), and `from_blueprint('dir/blueprint.json')` rebuilds the
-graph with its valid-time declarations, secondary labels, id and title kinds,
-and every property's type (timestamps, lists, maps, durations, points; the empty
-string stays distinct from null). A relationship leaving several source types
-gets one CSV per source (`WORKS_IN.Person.csv`), and one reaching several target
-types is routed by a `target_type` column. The rows stream through a bounded
-buffer (`KGLITE_EXPORT_BATCH_ROWS`, default 8192), so the export's memory does
-not grow with the graph. Limits: an edge attached to an earlier version of a
-node whose id repeats re-attaches to the latest version, a list element that is
-itself a list or map comes back as JSON text, a relationship property holding a
-point comes back as text, a secondary label carried by only some nodes of a type
-is not restored (it is listed in the manifest's `partial_labels`), and a column
-mixing value kinds is written as text. The older
-`export(path, format='csv')` nodes-and-edges pair is a lossy flat dump.
+graph with:
+
+- its valid-time declarations
+- secondary labels
+- id and title kinds
+- every property's type (timestamps, lists, maps, durations, points; the empty
+  string stays distinct from null)
+
+File layout:
+
+- A relationship leaving several source types gets one CSV per source
+  (`WORKS_IN.Person.csv`).
+- A relationship reaching several target types is routed by a `target_type`
+  column.
+- Rows stream through a bounded buffer (`KGLITE_EXPORT_BATCH_ROWS`, default 8192),
+  so the export's memory does not grow with the graph.
+
+Limits:
+
+- An edge attached to an earlier version of a node whose id repeats re-attaches to
+  the latest version.
+- A list element that is itself a list or map comes back as JSON text.
+- A relationship property holding a point comes back as text.
+- A secondary label carried by only some nodes of a type is not restored. It is
+  listed in the manifest's `partial_labels`.
+- A column mixing value kinds is written as text.
+
+The older `export(path, format='csv')` nodes-and-edges pair is a lossy flat dump.
 
 ## Back up before upgrading
 
 The `.kgl` file (and `to_bytes()`) is a **versioned binary cache**, not a
 forever-stable archive. KGLite occasionally hard-breaks the on-disk format
-across pre-1.0 minor versions, and a newer
-binary will **refuse** an older file rather than silently misread it. If you
-still have the original source (CSV, DataFrame, dataset loader), you just
-rebuild. If you *don't*, you want a portable copy made **before** you upgrade.
+across pre-1.0 minor versions. A newer binary will **refuse** an older file
+rather than silently misread it.
+
+- If you still have the original source (CSV, DataFrame, dataset loader), you
+  just rebuild.
+- If you *don't*, make a portable copy **before** you upgrade.
 
 Keep the original source/build recipe whenever possible, and copy the `.kgl`
 before upgrading. For node/edge/property recovery, also make a portable CSV
@@ -288,43 +324,55 @@ import kglite
 graph = kglite.from_blueprint('backup/blueprint.json')
 ```
 
-CSV/blueprint preserves ordinary nodes, edges, and scalar properties, but it is
-**not a full-graph backup**: secondary labels, embeddings/vector indexes,
-timeseries stores, configured indexes/schema, and some structured value types
-are omitted or degraded. Recreate those from their source after import. If the
-current fluent selection is intentional, omit `selection_only=False` and treat
-the result as a subgraph export.
+CSV/blueprint preserves ordinary nodes, edges, and scalar properties. It is
+**not a full-graph backup**. These are omitted or degraded:
+
+- secondary labels
+- embeddings/vector indexes
+- timeseries stores
+- configured indexes/schema
+- some structured value types
+
+Recreate those from their source after import. If the current fluent selection is
+intentional, omit `selection_only=False` and treat the result as a subgraph
+export.
 
 (files-written-by-older-versions)=
 ## Files written by older versions
 
-A few past releases wrote a data shape that was later fixed: history versions
-folded into one relationship (before 0.19.0), a parent edge repeated once per
-time-series row (0.19.0 and 0.19.1), and a duplicated, mis-spelled implicit
-parent edge (0.19.2). The `.kgl` loads either way. When the file's data shows
-the shape, `kglite.load()` and `kglite.open_session()` raise one `UserWarning`
-per finding, `graph_info()['advisories']` lists them (`code`, `writer`,
-`message`, `affected`), `describe()` carries a `<data-advisory>` line, and the
-MCP server names the codes on its boot line.
+A few past releases wrote a data shape that was later fixed:
 
-Each finding needs two things at once: a writer version in the affected range
-and data matching the defect, so a clean file by an affected version is
-silent. The writer is the **oldest** version that wrote the data — it is kept
-through every load and re-save, so saving an old file with a newer version
-does not hide it. Rebuild the graph from its source with the current version to
-clear a finding.
+- history versions folded into one relationship (before 0.19.0)
+- a parent edge repeated once per time-series row (0.19.0 and 0.19.1)
+- a duplicated, mis-spelled implicit parent edge (0.19.2)
+
+The `.kgl` loads either way. When the file's data shows the shape:
+
+- `kglite.load()` and `kglite.open_session()` raise one `UserWarning` per finding.
+- `graph_info()['advisories']` lists them (`code`, `writer`, `message`, `affected`).
+- `describe()` carries a `<data-advisory>` line.
+- The MCP server names the codes on its boot line.
+
+Each finding needs two things at once: a writer version in the affected range and
+data matching the defect. A clean file by an affected version is silent.
+
+The writer is the **oldest** version that wrote the data. It is kept through every
+load and re-save, so saving an old file with a newer version does not hide it.
+Rebuild the graph from its source with the current version to clear a finding.
 
 ## NetworkX Interop
 
 Round-trip with [NetworkX](https://networkx.org/) for graph algorithms.
 KGLite is a directed multigraph with typed nodes/edges, so the lossless
-target is `networkx.MultiDiGraph`: each node's `id` is the networkx node
-key (with `node_type`, `title`, and every property as node attributes),
-and the first edge's `connection_type` is its edge key. Additional parallel
-edges with the same endpoints and type receive collision-safe composite keys,
-while every edge retains a `connection_type` attribute. `node_type` and
-`title` are identity attributes: a property of the same name does not shadow
-them.
+target is `networkx.MultiDiGraph`.
+
+- **Node key:** each node's `id` is the networkx node key. `node_type`, `title`
+  and every property are node attributes.
+- **Edge key:** the first edge's `connection_type` is its edge key. Additional
+  parallel edges with the same endpoints and type receive collision-safe composite
+  keys. Every edge retains a `connection_type` attribute.
+- **Identity attributes:** `node_type` and `title` are identity attributes. A
+  property of the same name does not shadow them.
 
 `to_networkx()` preserves same-type parallel edges. The inverse bulk importer
 uses KGLite's endpoint-plus-type DataFrame identity, so importing such a
@@ -332,10 +380,10 @@ NetworkX graph collapses duplicates with identical endpoints and type.
 
 ### Choosing the node key
 
-Ids are unique *within* a node type, not across types, so two types that both
+Ids are unique *within* a node type, not across types. Two types that both
 number from 1 would merge into one networkx node under a bare-id key. The
 default `node_key='id'` refuses that export with an `ArgumentError` rather
-than silently merging; pass `node_key='type_id'` to key each node by its
+than silently merging. Pass `node_key='type_id'` to key each node by its
 `(node_type, id)` 2-tuple instead, which is unique by construction.
 
 Requires the `networkx` extra: `pip install kglite[networkx]`.
@@ -383,7 +431,7 @@ in v1).
 
 ### Round-tripping a tuple-keyed export
 
-A `node_key='type_id'` export imports back with no extra argument — the
+A `node_key='type_id'` export imports back with no extra argument. The
 `(node_type, id)` keys are detected and unwrapped, so a graph whose types
 share ids survives the round trip intact:
 
@@ -393,11 +441,12 @@ same = kglite.from_networkx(nxg)      # types, titles, properties, edges preserv
 ```
 
 Detection requires each key's first element to equal that node's own
-`node_type` attribute, which only the export writes — a foreign
+`node_type` attribute, which only the export writes. A foreign
 tuple-labelled graph (`nx.grid_2d_graph` coordinates, say) can never be
-mistaken for one. The decision is per graph and all-or-nothing: a graph
-that mixes tuple keys with plain ones raises an `ArgumentError` rather
-than importing the half it recognises.
+mistaken for one.
+
+The decision is per graph and all-or-nothing. A graph that mixes tuple keys with
+plain ones raises an `ArgumentError` rather than importing the half it recognises.
 
 Node keys must be storable as ids — integers or strings. A key that is not
 raises before anything is loaded:
@@ -416,9 +465,9 @@ g = kglite.from_networkx(nx.convert_node_labels_to_integers(nx.grid_2d_graph(3, 
 ```
 
 Within a single node type the keys must also share a shape. Each type is
-bulk-loaded as one DataFrame, so its ids land in one column — mixing integers
-and strings there stores them all as text, and the edge endpoints that kept
-their original type no longer match, vivifying stub nodes:
+bulk-loaded as one DataFrame, so its ids land in one column. Mixing integers
+and strings there stores them all as text. The edge endpoints that kept
+their original type then no longer match, vivifying stub nodes:
 
 ```python
 nxg = nx.MultiDiGraph()
@@ -429,22 +478,27 @@ kglite.from_networkx(nxg)
 # nodes to one id type before importing ...
 ```
 
-Booleans count as their own shape (a `bool` does not share a column with an
-`int` any more than a string does); whole floats count as integers and byte
-strings as strings. Different node *types* may use different id shapes freely
-— int-keyed `Person` nodes beside string-keyed `City` nodes never share a
-column and import exactly as given.
+Key shapes are counted like this:
+
+- Booleans count as their own shape. A `bool` does not share a column with an
+  `int` any more than a string does.
+- Whole floats count as integers.
+- Byte strings count as strings.
+
+Different node *types* may use different id shapes freely. Int-keyed `Person`
+nodes beside string-keyed `City` nodes never share a column and import exactly as
+given.
 
 Property columns are constructed without letting pandas convert nullable
 integers through `float64`. A property such as `9007199254740993` beside a
-missing value therefore remains the exact integer; older releases imported it
+missing value therefore remains the exact integer. Older releases imported it
 as `9007199254740992.0`. This applies to node and edge properties. Canonical
 node ids, titles, and edge endpoints keep their existing coercion rules.
 
 Intentionally heterogeneous object properties keep the usual DataFrame import
 policy: KGLite warns and stores their original scalar spellings as text. For
-example, a mixed integer/float property may now become exact strings rather
-than strings produced after an intermediate float rounded the integer. This is
+example, a mixed integer/float property may now become exact strings. Before, it
+became strings produced after an intermediate float rounded the integer. This is
 not a typed round-trip for heterogeneous columns. Optional `pandas` and
 `networkx` imports remain lazy until `from_networkx()` is called.
 
@@ -475,26 +529,31 @@ documents. Their exports load through three routes:
   refused with a count before anything loads, unless `default_node_type` /
   `default_edge_type` is also given. The attribute becomes the label or
   relationship type and is not also stored as a property, as with `node_type`.
-- **knwler document JSON** — per-document files (`chunks` plus a `graph` of
-  `entities` and `relations`) or the merged `consolidated_graph.json`
-  (`documents`, `chunks`, and a `graph` with `clusters`). The runnable,
-  network-free
+- **knwler document JSON.** Two shapes are accepted:
+  - per-document files: `chunks` plus a `graph` of `entities` and `relations`
+  - the merged `consolidated_graph.json`: `documents`, `chunks`, and a `graph`
+    with `clusters`
+
+  The runnable, network-free
   [`examples/knwler_import.py`](https://github.com/kkollsga/kglite/blob/main/examples/knwler_import.py)
-  turns either shape into a `from_records` spec. An `Entity` node's id is `name::type`,
-  as knwler's own `create_network` builds them. Relations are grouped into one
-  connection per relation type, with endpoint types taken from each relation's
-  `source_type` / `target_type`; `Document-[:CONTAINS]->Chunk`,
-  `Chunk-[:HAS_ENTITY]->Entity` and, for a consolidated export,
-  `Entity-[:BELONGS_TO]->Cluster` are added, and
-  `on_missing_endpoint='error'` refuses a relation whose endpoint names no
-  `Entity` node. It then embeds every relation type in one
-  `db.relationship_embeddings.embed({types: …})` call and ranks across all of
-  them with one `db.relationship_embeddings.query` that names no `type` (see
-  [relationship retrieval across types](semantic-search.md)). knwler's own
-  Neo4j importer Cypher (`MERGE … SET e.type = …`) also runs against a
-  `KnowledgeGraph` unchanged, apart from its `CREATE CONSTRAINT … REQUIRE d.id
-  IS UNIQUE` statements, which KGLite refuses in favour of a declared primary
-  key.
+  turns either shape into a `from_records` spec.
+
+  - An `Entity` node's id is `name::type`, as knwler's own `create_network`
+    builds them.
+  - Relations are grouped into one connection per relation type, with endpoint
+    types taken from each relation's `source_type` / `target_type`.
+  - `Document-[:CONTAINS]->Chunk` and `Chunk-[:HAS_ENTITY]->Entity` are added. A
+    consolidated export also gets `Entity-[:BELONGS_TO]->Cluster`.
+  - `on_missing_endpoint='error'` refuses a relation whose endpoint names no
+    `Entity` node.
+  - The example then embeds every relation type in one
+    `db.relationship_embeddings.embed({types: …})` call. It ranks across all of
+    them with one `db.relationship_embeddings.query` that names no `type` (see
+    [relationship retrieval across types](semantic-search.md)).
+  - knwler's own Neo4j importer Cypher (`MERGE … SET e.type = …`) also runs
+    against a `KnowledgeGraph` unchanged. The exception is its `CREATE CONSTRAINT
+    … REQUIRE d.id IS UNIQUE` statements, which KGLite refuses in favour of a
+    declared primary key.
 
 One limitation shapes all three routes. A relationship type cannot come from a
 row value inside a single statement: `CREATE (a)-[:$(row.type)]->(b)` is
@@ -522,13 +581,14 @@ report = kglite.to_neo4j(
 # {'nodes_created': ..., 'relationships_created': ..., 'elapsed': ..., 'database': 'neo4j'}
 ```
 
-Pass `selection_only=True` to export just the current selection (otherwise
-the full graph is written). Use `merge=True` for idempotent re-runs against
-an existing dataset; `clear=True` for a clean reload.
+- `selection_only=True` exports just the current selection. Otherwise the full
+  graph is written.
+- `merge=True` gives idempotent re-runs against an existing dataset.
+- `clear=True` gives a clean reload.
 
 ## Merging Graphs (multi-source ingest)
 
-`extend()` folds one in-memory graph into another in place — the native
+`extend()` folds one in-memory graph into another in place. It is the native
 alternative to round-tripping through CSV when you build a graph
 incrementally from several sources or merge two loaded `.kgl` files.
 
@@ -541,12 +601,23 @@ report = g1.extend(g2, "preserve")  # on conflict, existing g1 values win
 ```
 
 Node identity is `(node_type, id)`. The `conflict_handling` argument shares
-the `add_nodes` vocabulary — `'update'` (default, *other* wins), `'replace'`,
-`'skip'`, `'preserve'` (existing wins), `'sum'` (adds numeric **edge**
-properties). Secondary labels are unioned (never removed); edges dedup on
-`(connection_type, source, target)` so a merge never silently doubles shared
-edges. Scope limits (v1): **in-memory storage only**, and **embeddings are
-not merged** — re-run `set_embeddings` / `add_embeddings` after the merge.
+the `add_nodes` vocabulary:
+
+- `'update'` (default): the *other* graph wins.
+- `'replace'`
+- `'skip'`
+- `'preserve'`: existing wins.
+- `'sum'`: adds numeric **edge** properties.
+
+Secondary labels are unioned (never removed). Edges dedup on
+`(connection_type, source, target)`, so a merge never silently doubles shared
+edges.
+
+Scope limits (v1):
+
+- **In-memory storage only.**
+- **Embeddings are not merged.** Re-run `set_embeddings` / `add_embeddings` after
+  the merge.
 
 ## Subgraph Extraction
 
@@ -562,7 +633,7 @@ subgraph.export('acme_network.graphml', format='graphml')
 
 ## Embedding Snapshots
 
-Export embeddings to a standalone `.kgle` file so they survive graph rebuilds. Node embeddings are keyed by node ID — import resolves IDs against the current graph, skipping any that no longer exist.
+Export embeddings to a standalone `.kgle` file so they survive graph rebuilds. Node embeddings are keyed by node ID. Import resolves IDs against the current graph and skips any that no longer exist.
 
 ```python
 # Export all embeddings (node and relationship stores)
@@ -587,11 +658,13 @@ result = graph2.import_embeddings("embeddings.kgle")
 ```
 
 **Relationship embeddings** travel in the same file. Each vector is matched by
-relationship type and the `(type, id)` of both endpoints, so it lands on the
-relationship of that type between the same two nodes. A *parallel group* —
-two or more relationships of one type between the same endpoints — is carried
-only under a key property you name, whose value is unique within every group.
-The file records the key, so the import does not repeat it:
+relationship type and the `(type, id)` of both endpoints. It lands on the
+relationship of that type between the same two nodes.
+
+A *parallel group* is two or more relationships of one type between the same
+endpoints. It is carried only under a key property you name, whose value is
+unique within every group. The file records the key, so the import does not
+repeat it:
 
 ```python
 graph.export_embeddings("embeddings.kgle", relationship_keys={"SUPPORTS": "uid"})
@@ -606,10 +679,13 @@ relationship the target graph lacks counts as skipped.
 `copy_embeddings_from(other, relationship_keys=…)` applies the same rules
 graph-to-graph.
 
-A file with only node stores is `.kgle` version 3, readable by every release
-since 0.14. A file carrying relationship stores is version 4, and released
-versions up to 0.17.12 refuse it by version ("Embedding file version 4 is newer
-than supported version 3. Please upgrade kglite.").
+File versions:
+
+- A file with only node stores is `.kgle` version 3, readable by every release
+  since 0.14.
+- A file carrying relationship stores is version 4. Released versions up to
+  0.17.12 refuse it by version ("Embedding file version 4 is newer than supported
+  version 3. Please upgrade kglite.").
 
 ## Schema and Indexes
 
@@ -646,10 +722,10 @@ Both also accelerate Cypher `WHERE` clauses. Composite indexes support multi-pro
 
 `create_index()` reports `serves_lookups` beside `created`, because the two are
 not the same question. An index on `name`, `type`, `node_type` or `label` is
-built but never read: those names resolve *structurally* — a node with no such
-stored property answers with its title or its node type — so the index holds a
-subset of what a `MATCH` compares against, and the matcher scans instead — in
-every storage mode, a disk graph's persistent bundle included.
+built but never read. Those names resolve *structurally*: a node with no such
+stored property answers with its title or its node type. The index therefore
+holds a subset of what a `MATCH` compares against, and the matcher scans instead.
+This holds in every storage mode, a disk graph's persistent bundle included.
 `not_serving` carries the explanation, and `list_indexes()` repeats the answer
 next to each entry's `state`.
 
@@ -666,12 +742,12 @@ Indexes are maintained automatically by all mutation operations.
 
 ## Performance Tips
 
-1. **Batch operations** — add nodes/connections in batches, not individually
-2. **Specify columns** — only include columns you need to reduce memory
-3. **Filter by type first** — `select()` before `where()` for narrower scans
-4. **Create indexes** — on frequently filtered equality conditions (~3x on 100k+ nodes)
-5. **Use lightweight methods** — `len()`, `indices()`, `node()` skip property materialization
-6. **Cypher LIMIT** — use `LIMIT` to avoid scanning entire result sets
+1. **Batch operations.** Add nodes/connections in batches, not individually.
+2. **Specify columns.** Include only the columns you need, to reduce memory.
+3. **Filter by type first.** Use `select()` before `where()` for narrower scans.
+4. **Create indexes.** Use them on frequently filtered equality conditions (~3x on 100k+ nodes).
+5. **Use lightweight methods.** `len()`, `indices()` and `node()` skip property materialization.
+6. **Cypher LIMIT.** Use `LIMIT` to avoid scanning entire result sets.
 
 ## Threading
 
@@ -707,11 +783,11 @@ In-memory / mapped graphs only (a disk-mode graph is a directory, not a stream).
 
 ## Human-readable diffs (`to_text` + git `textconv`)
 
-A `.kgl` is a compressed binary blob, so `git diff` shows `Binary files differ`
-— useless for reviewing a change to a graph (e.g. an agent-built planning
+A `.kgl` is a compressed binary blob, so `git diff` shows `Binary files differ`.
+That is useless for reviewing a change to a graph (e.g. an agent-built planning
 graph). `to_text()` projects the whole graph to a **deterministic, readable**
-form (nodes grouped by type + sorted by id, edges sorted by endpoints), stable
-across insert order *and* across save/load:
+form. Nodes are grouped by type and sorted by id, and edges are sorted by
+endpoints. The output is stable across insert order *and* across save/load:
 
 ```python
 print(graph.to_text())
@@ -762,14 +838,16 @@ if info['fragmentation_ratio'] > 0.3 or info['edge_tombstones'] > 0:
 
 `vacuum()` rebuilds the graph with contiguous indices and rebuilds the property
 indexes. A vacuum that compacts (`tombstones_removed > 0`) drops every HNSW
-vector index and BM25 text index instead, node and relationship alike, because
-each addresses the old slots — rebuild those afterwards. The current selection is **carried through** it: surviving nodes keep their
-place at their new indices, deleted ones drop out, and after a traversal a
+vector index and BM25 text index instead, node and relationship alike. Each
+addresses the old slots, so rebuild those afterwards.
+
+The current selection is **carried through** a vacuum. Surviving nodes keep their
+place at their new indices, and deleted ones drop out. After a traversal, a
 group whose parent was deleted is dropped whole.
 
 `fragmentation_ratio` is node-shaped. A workload that deletes only
-relationships leaves it at `0.0` and shows up in `edge_tombstones` instead —
-auto-vacuum takes the worst of node slots, edge slots and dead property-column
+relationships leaves it at `0.0` and shows up in `edge_tombstones` instead.
+Auto-vacuum takes the worst of node slots, edge slots and dead property-column
 rows, so it fires on any of the three.
 
 ## Common Gotchas
