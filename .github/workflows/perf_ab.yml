@@ -1,7 +1,9 @@
 name: Linux perf A/B
-# One-off diagnostic, run by hand (Actions -> "Linux perf A/B" -> Run
-# workflow, or `gh workflow run perf_ab.yml --ref <branch>`). It never gates
-# anything and never runs on push.
+# One-off diagnostic. Run it by adding the label `perf-ab` to a pull request
+# (runs on the PR head with the defaults below), or by hand (Actions ->
+# "Linux perf A/B" -> Run workflow, or `gh workflow run perf_ab.yml --ref
+# <branch>` once the file is on the default branch). It never gates anything
+# and never runs on push or on any other label.
 #
 # Question it answers: why do the relationship text-filter cells run 11-17%
 # slower against 0.13.2 on Linux CI only? The CI candidate and the published
@@ -22,6 +24,8 @@ name: Linux perf A/B
 # the manylinux builds should agree; the runner build's gap to them is the
 # build environment's share of the Linux-only offset.
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       source_ref:
@@ -37,7 +41,7 @@ on:
         default: 1.99.0
         type: string
       cells:
-        description: pytest -k expression over test_bench_core.py (empty = every core cell)
+        description: pytest -k expression over test_bench_core.py (`all` = every core cell)
         default: two_edge_relationship_text_filter or two_edge_distinct_filtered_path
         type: string
 
@@ -51,7 +55,16 @@ env:
 jobs:
   ab:
     name: Linux build-environment A/B
+    # Only the `perf-ab` label; every other label event on a PR skips.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'perf-ab'
     runs-on: ubuntu-latest
+    # A label-triggered run has no `inputs`, so each falls back to the same
+    # default the dispatch form shows.
+    env:
+      SOURCE_REF: ${{ inputs.source_ref || 'v0.19.3' }}
+      PUBLISHED_VERSION: ${{ inputs.published_version || '0.19.3' }}
+      ALT_TOOLCHAIN: ${{ inputs.alt_toolchain || '1.99.0' }}
+      CELLS: ${{ inputs.cells || 'two_edge_relationship_text_filter or two_edge_distinct_filtered_path' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -59,7 +72,7 @@ jobs:
       - name: Check out the source under test
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ env.SOURCE_REF }}
           path: src
 
       - name: Install Rust (runner-host build)
@@ -94,13 +107,11 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
           manylinux: '2014'
-          rust-toolchain: ${{ inputs.alt_toolchain }}
+          rust-toolchain: ${{ env.ALT_TOOLCHAIN }}
           working-directory: src
           args: --release --out dist-manylinux-alt --target-dir target-manylinux-alt
 
       - name: Create one environment per variant
-        env:
-          PUBLISHED_VERSION: ${{ inputs.published_version }}
         run: |
           set -euo pipefail
           envs="$RUNNER_TEMP/ab-envs"
@@ -127,9 +138,9 @@ jobs:
         env:
           PYTHONNOUSERSITE: "1"
           PYTHONPATH: ""
-          CELLS: ${{ inputs.cells }}
         run: |
           set -euo pipefail
+          if [ "$CELLS" = all ]; then CELLS=; fi
           for round in 1 2; do
             for variant in ref-0.13.2 published runner manylinux-pin manylinux-alt; do
               "$RUNNER_TEMP/ab-envs/$variant/bin/python" -m pytest test_bench_core.py -m benchmark \

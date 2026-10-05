@@ -2232,14 +2232,30 @@ def test_perf_candidate_builds_like_the_published_linux_wheel() -> None:
     )
 
 
-def test_perf_ab_diagnostic_runs_only_by_hand() -> None:
-    """The build-environment A/B is a one-off diagnostic: dispatch only, five
-    variants on one runner, each build in its own target dir so the container
-    builds cannot reuse the host's compiled objects."""
+def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
+    """The build-environment A/B is a one-off diagnostic: by dispatch, or by
+    the `perf-ab` label on a PR (so it can run from the PR head before a
+    release). Without the label guard it would run on every labelled PR
+    event. Five variants on one runner, each build in its own target dir so
+    the container builds cannot reuse the host's compiled objects."""
     workflow = _load_workflow(WORKFLOWS / "perf_ab.yml")
     triggers = workflow.get("on", workflow.get(True))
-    assert set(triggers) == {"workflow_dispatch"}, triggers
+    assert set(triggers) == {"workflow_dispatch", "pull_request"}, triggers
+    assert triggers["pull_request"] == {"types": ["labeled"]}, triggers["pull_request"]
     (job,) = workflow["jobs"].values()
+    assert job.get("if") == "github.event_name == 'workflow_dispatch' || github.event.label.name == 'perf-ab'", job.get(
+        "if"
+    )
+    # A label-triggered run has no inputs; each must fall back to the dispatch default.
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    env = job["env"]
+    for name, var in (
+        ("source_ref", "SOURCE_REF"),
+        ("published_version", "PUBLISHED_VERSION"),
+        ("alt_toolchain", "ALT_TOOLCHAIN"),
+        ("cells", "CELLS"),
+    ):
+        assert env[var] == f"${{{{ inputs.{name} || '{inputs[name]['default']}' }}}}", env[var]
     builds = _steps_using(job, "PyO3/maturin-action@")
     assert len(builds) == 2
     target_dirs = [step["with"]["args"].split("--target-dir ")[1] for step in builds]
