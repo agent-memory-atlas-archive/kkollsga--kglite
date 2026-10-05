@@ -368,7 +368,7 @@ def _graph_with_scattered_deletes(size: int = 1_000_000, deletes: int = 2_000) -
 
 
 @pytest.mark.benchmark
-def test_bench_write_tx_after_deletes(benchmark):
+def test_bench_commit_tx_after_deletes(benchmark):
     """One ``begin()`` / ``CREATE`` / ``commit()`` on a 1M-node graph with scattered deletes.
 
     Every transaction forks the graph it began on. A fork that cannot share a
