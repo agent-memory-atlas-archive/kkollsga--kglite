@@ -794,10 +794,12 @@ impl KnowledgeGraph {
             slf.check_durable_owner()?;
             let graph = get_graph_mut(&mut slf.inner);
 
-            kglite_core::api::mutation::update_node_properties(graph, &nodes, target_property)
-                .map_err(|e: String| -> PyErr {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+            let written =
+                kglite_core::api::mutation::update_node_properties(graph, &nodes, target_property)
+                    .map_err(|e: String| -> PyErr {
+                        crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                    })?;
+            Python::attach(|py| crate::graph::warn_all(py, &written.warnings))?;
 
             if !keep_selection.unwrap_or(false) {
                 slf.cursor.selection.clear();
@@ -1297,6 +1299,7 @@ impl KnowledgeGraph {
         // can express — so it has to reach the log like every other logged
         // mutation. It never did.
         self.commit_wal()?;
+        Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
@@ -1387,6 +1390,7 @@ impl KnowledgeGraph {
                     // Same as `collect_children`: the stored calculation is a
                     // node-property write and belongs in the log.
                     self.commit_wal()?;
+                    crate::graph::warn_all(py, &report.warnings)?;
                     let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
                     new_kg.add_report(OperationReport::CalculationOperation(report));
@@ -1543,6 +1547,7 @@ impl KnowledgeGraph {
             // Same as `collect_children`: the stored count is a node-property
             // write and belongs in the log.
             self.commit_wal()?;
+            Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
             let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 

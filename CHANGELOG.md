@@ -45,6 +45,9 @@ before upgrading.
 
 ### Fixed
 
+- The `store_as=` writers (`calculate`, `count`, `unique_values`,
+  `collect_children`) raise a `UserWarning` when they leave a row with an
+  empty validity interval, as `update()` and the loaders do.
 - A blueprint with `"valid_time_default": "today"` no longer raises the
   `default_today` note; storing any default silences it, as documented.
 - `set_temporal` and the loaders raise one `UserWarning` per advisory a

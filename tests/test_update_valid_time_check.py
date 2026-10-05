@@ -83,3 +83,34 @@ def test_an_empty_interval_is_written_and_warned_about() -> None:
         out = g.select("S", temporal=False).update({"vt": dt.date(2010, 1, 1)})["graph"]
     assert any("empty" in str(w.message) for w in caught), [str(w.message) for w in caught]
     assert out.cypher("FOR VALID_TIME ALL MATCH (s:S) RETURN s.vt AS vt").to_list() == [{"vt": dt.date(2010, 1, 1)}]
+
+
+def _parent_graph():
+    g = kglite.KnowledgeGraph()
+    g.cypher(
+        "CREATE (p:P {id: 1, title: 'p', n: 1, vf: '2010-01-01', vt: '2011-01-01'})"
+        "-[:HAS]->(:C {id: 2, title: '2010-01-01', d: '2010-01-01'})"
+    )
+    g.cypher("CALL db.temporal.declare({node: 'P', from: 'vf', to: 'vt', convention: 'half_open'})")
+    return g
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        lambda g: g.select("P", temporal=False).calculate("vf", store_as="vt"),
+        lambda g: g.select("P", temporal=False).traverse("HAS").unique_values("d", store_as="vt"),
+        lambda g: g.select("P", temporal=False).traverse("HAS").collect_children(store_as="vt"),
+    ],
+    ids=["calculate", "unique_values", "collect_children"],
+)
+def test_store_as_writers_warn_about_an_empty_interval(write) -> None:
+    """`vt` set to the `from` day under half-open: valid at no instant,
+    written, and warned about as `update()` and the loaders warn."""
+    g = _parent_graph()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = write(g)
+    messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("empty interval" in m for m in messages), messages
+    assert out.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN p.vt AS vt").to_list() == [{"vt": "2010-01-01"}]

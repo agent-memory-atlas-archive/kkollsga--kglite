@@ -281,6 +281,7 @@ pub fn process_equation(
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
+    report.warn_all(update_result.diagnostics);
 
     Ok(EvaluationResult::Stored(report))
 }
@@ -734,6 +735,7 @@ pub fn store_count_results(
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
+    report.warn_all(update_result.diagnostics);
 
     Ok(report)
 }

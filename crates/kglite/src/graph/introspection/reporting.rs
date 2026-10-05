@@ -24,6 +24,11 @@ pub struct CalculationOperationReport {
     pub is_aggregation: bool,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub errors: Vec<String>,
+    /// Advisories about the rows the stored result wrote, such as a validity
+    /// interval left empty. Not errors: the rows are stored.
+    pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl CalculationOperationReport {
@@ -46,6 +51,16 @@ impl CalculationOperationReport {
             is_aggregation,
             timestamp: chrono::Utc::now(),
             errors: Vec::new(),
+            warnings: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Record each advisory in both `warnings` and `diagnostics`.
+    pub fn warn_all(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
+        for diagnostic in diagnostics {
+            self.warnings.push(diagnostic.message.clone());
+            self.diagnostics.push(diagnostic);
         }
     }
 
