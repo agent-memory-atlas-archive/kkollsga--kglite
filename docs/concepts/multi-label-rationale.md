@@ -13,9 +13,9 @@ MATCH (a:Agent:Reviewer) RETURN a        -- AND-intersect
 MATCH (n) WHERE 'Reviewer' IN labels(n)  -- equivalent
 ```
 
-The trigger condition this document was originally written for —
+This document was originally written around a trigger condition:
 *"If a future consumer materializes that genuinely needs
-multi-label, re-open this decision"* — was met by `kglite-docs`
+multi-label, re-open this decision"*. `kglite-docs` met it
 2026-05-28 (agent role taxonomies, `:Chunk:NeedsOcr` status
 labels, cross-type predicates).
 
@@ -89,24 +89,26 @@ preferred for **hierarchical** classifications:
 | Per-application provenance (which agent tagged it, when) | Reify the relationship as a `(:Tagging)` node (see the `Cypher` guide). |
 | Truly multi-label (agent role, status enum, lifecycle stage) | Multi-label, now native. |
 
-The choice is between "labels as classification tags" (multi-label,
-new in 0.10.5) and "labels as type hierarchy" (subtype edges, still
-preferred when the taxonomy is hierarchical or when label-specific
-properties matter).
+The choice is between two readings of a label:
+
+- "Labels as classification tags": multi-label, new in 0.10.5.
+- "Labels as type hierarchy": subtype edges, still preferred when the taxonomy is hierarchical or when label-specific properties matter.
 
 **Caveat (2026-08-25):** the subtype-edge pattern currently has no engine
-support beyond ordinary `*1..` path traversal — no declared transitivity, no
-`describe()` awareness, no validator defaults. Until a declared semantic
+support beyond ordinary `*1..` path traversal. It has no declared transitivity,
+no `describe()` awareness and no validator defaults. Until a declared semantic
 layer exists, the recommendation above trades hierarchy modelling for that
-tooling gap; a large flat taxonomy (Wikidata-scale) still belongs in edges
+tooling gap. A large flat taxonomy (Wikidata-scale) still belongs in edges
 regardless.
 
 ## History
 
 This document was originally written to defer Track C until a
-real consumer materialised — single-label was a deliberate design
-choice, not a TODO. `kglite-docs` 2026-05-28 (agent role
-taxonomies + status-as-label) was that trigger; the work shipped
+real consumer materialised. Single-label was a deliberate design
+choice, not a TODO.
+
+`kglite-docs` 2026-05-28 (agent role
+taxonomies + status-as-label) was that trigger. The work shipped
 in 0.10.5 across six commits (storage foundation → read-side
 Cypher → mutation surface → `add_nodes` kwarg → docs → release).
 

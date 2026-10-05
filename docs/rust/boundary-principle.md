@@ -28,7 +28,7 @@ Concrete examples:
   → core (`kglite::api::*`). Every binding asks the same questions
   the same way. (The pre-packaged dataset loaders — SEC form-string
   → bucket mapping, ticker JSON parser, and the rest — were the
-  original worked example of this rule; they have since been
+  original worked example of this rule. They have since been
   extracted wholesale into the separate kglite-datasets project and
   are no longer part of the kglite core API.)
 
@@ -47,10 +47,13 @@ have to reinvent this from the wheel" on day one.
 
 **But "generic" isn't enough — test the use case.** Before lifting
 any helper or proposing any new Cypher function/procedure, ask:
-*who would actually call this, and in what query / workflow?* If
-the only honest answers are "validation that should happen at load
-time anyway" or "type introspection that fights a data-modeling
-smell" or "syntactic sugar over an existing function" — drop it.
+*who would actually call this, and in what query / workflow?* Drop it
+if the only honest answers are:
+
+- "validation that should happen at load time anyway"
+- "type introspection that fights a data-modeling smell"
+- "syntactic sugar over an existing function"
+
 Generic-and-pointless adds api surface to maintain without
 delivering value.
 
@@ -141,10 +144,13 @@ checked against all four:
    JVM's HashMap), but the *concepts* match across wrappers.
 
 3. **Centrally maintained** — When we add a feature in core, every
-   binding gets it without per-wrapper code changes — either
-   automatically (a new Cypher function reaches all bindings via
-   `cypher_query`) or via a single pin-bump (a new api function
-   becomes available after the binding's next dependency update).
+   binding gets it without per-wrapper code changes. It arrives in one of
+   two ways:
+   - automatically: a new Cypher function reaches all bindings via
+     `cypher_query`; or
+   - via a single pin-bump: a new api function
+     becomes available after the binding's next dependency update.
+
    We don't have to ship N PRs across N bindings for one feature.
 
 4. **Flexible** — The interface shape doesn't restrict us from
@@ -168,7 +174,7 @@ Different binding types reach kglite through different layers:
 
 **A "framework helper" in `kglite::api::*` is reachable only by
 Rust-side wrappers.** Non-Rust wrappers won't see a `ParamUnmarshaller`
-trait or a `GraphHandle` struct directly — they see a C function
+trait or a `GraphHandle` struct directly. They see a C function
 signature in `kglite.h`. For *those* bindings, the standardization
 is the C ABI shape itself.
 

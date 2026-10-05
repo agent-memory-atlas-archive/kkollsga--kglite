@@ -105,12 +105,12 @@ duplicates.
 
 ## Registering a deliberate divergence
 
-When investigation concludes that KGLite's behaviour is intentionally
-different from Neo4j — and spec-defensible (e.g. integer division
-returns int per the 0.9.0 §5 fix; division by zero returns NULL
-rather than NaN/Inf per the 0.9.52 numeric-boundaries pin) — add an
-entry to `INTENTIONAL_DIVERGENCES` in
-`scripts/cypher_conformance.py`:
+Add an entry to `INTENTIONAL_DIVERGENCES` in
+`scripts/cypher_conformance.py` when investigation concludes that KGLite's
+behaviour is intentionally different from Neo4j and spec-defensible. Examples
+are integer division returning int per the 0.9.0 §5 fix, and division by zero
+returning NULL rather than NaN/Inf per the 0.9.52 numeric-boundaries pin.
+An entry looks like:
 
 ```python
 INTENTIONAL_DIVERGENCES: dict[str, str] = {
@@ -120,7 +120,7 @@ INTENTIONAL_DIVERGENCES: dict[str, str] = {
 
 Entries should be the exception, not the rule. **Most "Neo4j differs"
 findings are bugs to fix, not divergences to register.** The point
-of the divergence registry is to keep the gate honest — it stops
+of the divergence registry is to keep the gate honest. It stops
 flagging the cases that are deliberate, so the cases that aren't
 stand out.
 
@@ -132,9 +132,9 @@ it compares the **Bolt wire path against direct in-process
 `cypher()`**. Both sides run the same engine, so any divergence is a
 PackStream / wire round-trip bug in `kglite-bolt-server`, not a semantic
 one. Because the oracle is KGLite-in-process, **no Neo4j or Docker is
-needed** — the runner spawns its own `kglite-bolt-server` on an ephemeral
-port (reusing the launch helpers in `tests/conftest.py`), runs each corpus
-query over the `neo4j` Python driver, and compares against
+needed**. The runner spawns its own `kglite-bolt-server` on an ephemeral
+port (reusing the launch helpers in `tests/conftest.py`). It runs each corpus
+query over the `neo4j` Python driver and compares against
 `KnowledgeGraph.cypher()`.
 
 ```bash
@@ -147,14 +147,14 @@ extra (for the driver) on first run. Flags mirror the Neo4j runner:
 identically; 1 on any divergence.
 
 This is the on-demand companion to `tests/test_bolt_server_differential.py`,
-which runs the same corpus over the wire as part of the `-m bolt` suite —
-the script is for ad-hoc investigation when a wire-encoding bug is
+which runs the same corpus over the wire as part of the `-m bolt` suite.
+Use the script for ad-hoc investigation when a wire-encoding bug is
 suspected.
 
 ## Why this isn't in the test suite
 
 Per the test-suite-fortification design (see
-`docs/concepts/design-decisions.md` — Test gates section, *if added*):
+`docs/concepts/design-decisions.md` — Test gates section, *if added*),
 the project's stated principle is that the regular test run depends
 only on what `pip install -e .` provides. Wiring Neo4j into the
 suite would mean:

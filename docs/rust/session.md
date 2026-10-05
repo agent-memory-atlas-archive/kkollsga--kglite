@@ -76,9 +76,12 @@ variants that existed when you wrote the binding.
 
 `Session::open_durable(graph, checkpoint_path, level)` builds a session that
 appends every commit to the path's write-ahead sidecar. It performs the whole
-open ordering, so a binding does not re-derive it: recover the sidecar, replay
-the frames the loaded checkpoint does not already contain, *then* wrap the
-backend for write capture, then open the log for append.
+open ordering, so a binding does not re-derive it:
+
+1. Recover the sidecar.
+2. Replay the frames the loaded checkpoint does not already contain.
+3. *Then* wrap the backend for write capture.
+4. Open the log for append.
 
 ```rust
 use kglite::api::durable::DurabilityLevel;
@@ -114,13 +117,15 @@ Contract points a binding has to honour:
   `Session::check_direct_write_allowed` first; bindings should route mutations
   through `begin`/`commit` instead.
 - **One durable owner per path.** A durable `Session` and a durable
-  `KnowledgeGraph` over the same path are not a supported pair — the split
+  `KnowledgeGraph` over the same path are not a supported pair. The split
   checkpoint/next-LSN state is what the replay gate reads.
-- **Refusals are explicit**, not silent degradation: disk-mode graphs at any
-  logging level, a path another durable owner already wrapped, and — the
-  data-safety one — level `Off` over a sidecar holding commits the checkpoint
-  does not contain. Recovery on open is unconditional; a non-durable open of
-  such a path is an error rather than a graph quietly missing acknowledged
+- **Refusals are explicit**, not silent degradation. Three cases are refused:
+  - disk-mode graphs at any logging level;
+  - a path another durable owner already wrapped;
+  - level `Off` over a sidecar holding commits the checkpoint does not contain. This is the data-safety one.
+
+  Recovery on open is unconditional. A non-durable open of a
+  path with such a sidecar is an error rather than a graph quietly missing acknowledged
   writes.
 
 `Session::durability()` reports the level (`None` when the session logs

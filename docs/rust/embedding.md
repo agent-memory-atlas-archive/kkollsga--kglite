@@ -112,11 +112,11 @@ Two gotchas, both measured rather than inferred:
 
 If you build the same workspace through several entry points (e.g.
 `cargo build --workspace`, `cargo test --workspace`, and a
-`cargo test -p <one-crate> --test <name>`), note that each distinct
-*package selection* can re-unify features and flags differently and leave
-an additional full-size kglite rlib in `target/` per shape. Preferring
-`--workspace` (with `--all-targets` on the build step, or `--test <name>`
-to scope a test run) keeps every invocation on one shared dependency
+`cargo test -p <one-crate> --test <name>`), each distinct
+*package selection* can re-unify features and flags differently. That leaves
+an additional full-size kglite rlib in `target/` per shape. Prefer
+`--workspace`, with `--all-targets` on the build step or `--test <name>`
+to scope a test run. That keeps every invocation on one shared dependency
 build.
 
 ## The stable API surface
@@ -189,7 +189,7 @@ snapshot/working CoW + OCC live here exactly once.
   true)` — the snapshot/working CoW transaction model. OCC is
   opt-in per commit; pass `true` for production semantics.
 - `Session::open_durable(dir, path, level)` — the same session with a
-  write-ahead log under it: the sidecar is recovered before the session
+  write-ahead log under it. The sidecar is recovered before the session
   serves anyone, and each commit's frame is appended before the publish.
 - `CommitOutcome::{NoWritesNoOp, Committed { new_version },
   ConflictDetected { current_version, base_version },
@@ -203,10 +203,11 @@ abstraction guide, including the durable-session contract.
 ### Dataset loaders
 
 The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) are no
-longer part of the kglite core — they live in the separate
-kglite-datasets project, and the `sec` / `sodir` / `wikidata` Cargo
-features and `kglite::datasets::*` modules have been removed. kglite
-loads the graphs those loaders produce via the ordinary lifecycle
+longer part of the kglite core. They live in the separate
+kglite-datasets project. The `sec` / `sodir` / `wikidata` Cargo
+features and `kglite::datasets::*` modules have been removed.
+
+kglite loads the graphs those loaders produce via the ordinary lifecycle
 API (`kglite::api::io::load_file`, etc.). To ingest RDF directly, use the
 kept RDF/N-Triples loaders instead.
 

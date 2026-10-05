@@ -12,8 +12,8 @@ that *produces* kglite graphs, see [Building on kglite](building-on-kglite.md).
 
 ## Stability policy
 
-`kglite::api::*` — and the `kglite-mcp-server` library surface — are
-**exact-baseline-locked in CI** (cargo-public-api, pinned nightly): accidental
+`kglite::api::*` and the `kglite-mcp-server` library surface are
+**exact-baseline-locked in CI** (cargo-public-api, pinned nightly). Accidental
 drift cannot merge, because the generated public-API listing is diffed against a
 committed baseline on every PR. The `include/kglite.h` C header is drift-checked
 the same way (cbindgen vs the committed header).
@@ -22,22 +22,22 @@ Pre-1.0, the policy is:
 
 - **Any release, including a PATCH, may ship a documented breaking change.**
   KGLite's crates ship in lockstep and deliberately ship breaking engine
-  changes in patch bumps; the version number is not a compatibility signal.
-  Every intentional break ships with a `CHANGELOG.md` entry naming the
-  removed items and their replacements — the changelog, not the bump size, is
-  the migration contract. Embedders should pin an exact version
-  (`kglite = "=X.Y.Z"`) and upgrade against the changelog. *(This paragraph
-  previously promised "patch releases never break the API"; 0.15.9 removed
-  public items in a patch, per the actual policy, and this page was the
-  outlier.)*
+  changes in patch bumps. The version number is not a compatibility signal.
+  - Every intentional break ships with a `CHANGELOG.md` entry naming the removed items and their replacements.
+  - The changelog, not the bump size, is the migration contract.
+  - Embedders should pin an exact version (`kglite = "=X.Y.Z"`) and upgrade against the changelog.
+
+  *(This paragraph previously promised "patch releases never break the API".
+  Release 0.15.9 removed public items in a patch, per the actual policy, and this page
+  was the outlier.)*
 - New options land under **0.14's options-struct convention** (`*Options`
   structs, `#[non_exhaustive]` + `Default`), so adding an option is a
   non-breaking change rather than a signature break.
 
-**1.0 criterion:** the 0.14 surface — after the options-struct pass on
-`api::algorithms` — soaks across releases without needing a breaking correction.
-When the curated facade proves stable in the field, we cut 1.0 and the pre-1.0
-"any release may break" latitude ends.
+**1.0 criterion:** the 0.14 surface, after the options-struct pass on
+`api::algorithms`, soaks across releases without needing a breaking correction.
+When the curated facade proves stable in the field, we cut 1.0. The pre-1.0
+"any release may break" latitude then ends.
 
 ## Engine types
 
@@ -144,9 +144,10 @@ The canonical query and transaction pipeline for Rust-side bindings.
 ## Dataset loaders
 
 The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) are no
-longer part of the kglite core API surface — they live in the
-separate kglite-datasets project, and `kglite::api::datasets::*` (and
-the `sec` / `sodir` / `wikidata` Cargo features) have been removed.
+longer part of the kglite core API surface. They live in the
+separate kglite-datasets project. `kglite::api::datasets::*` and
+the `sec` / `sodir` / `wikidata` Cargo features have been removed.
+
 kglite loads the graphs those loaders produce via the ordinary
 lifecycle API. To ingest RDF directly, use the kept RDF/N-Triples
 loaders.
@@ -160,15 +161,16 @@ use `RelValue::new(id, start_id, end_id, rel_type, properties)`; the constructor
 sets the internal identity to absent. Its five arguments match the former
 public fields.
 
-The identity is invisible to every comparison: `PartialEq`, `Eq`, `Hash`,
-`PartialOrd` and `Ord` are hand-written over the five public fields only, so two
-`RelValue`s describing the same edge are one key in a `HashSet`, one group under
-`DISTINCT` and one position under `ORDER BY` whatever identity they carry. Serde
-omits the field, and public result publication clears it. What the identity does
-gate is the small set of operations that write through a relationship value —
-the `db.relationship_embeddings.*` procedures and `DELETE` — which compare the token
-explicitly and refuse a value this statement did not bind or whose slot it has
-since retired.
+The identity is invisible to every comparison. `PartialEq`, `Eq`, `Hash`,
+`PartialOrd` and `Ord` are hand-written over the five public fields only. Two
+`RelValue`s describing the same edge are therefore one key in a `HashSet`, one
+group under `DISTINCT` and one position under `ORDER BY`, whatever identity they
+carry. Serde omits the field, and public result publication clears it.
+
+The identity does gate the small set of operations that write through a
+relationship value: the `db.relationship_embeddings.*` procedures and `DELETE`.
+They compare the token explicitly and refuse a value this statement did not
+bind or whose slot it has since retired.
 
 Low-level callers constructing `api::cypher::EdgeBinding` directly must add
 `incarnation: None` to the literal. Match execution supplies a statement token

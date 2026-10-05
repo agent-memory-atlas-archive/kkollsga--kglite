@@ -112,17 +112,17 @@ Both examples are pyo3-free; `cargo tree -p kglite | rg pyo3` returns empty.
 
 ## Where to go next
 
-- **[Embedding kglite](embedding.md)** — full embedder guide:
-  workspace layout, the `kglite::api::*` surface tour, the
-  `.kgl` portability story, sketches for cgo / napi / JNI
+- **[Embedding kglite](embedding.md)** — full embedder guide.
+  It covers workspace layout, the `kglite::api::*` surface tour and the
+  `.kgl` portability story. It also sketches cgo / napi / JNI
   wrappers if you're building a binding in another language.
 - **[Session abstraction](session.md)** — binding-implementer
   reference for the canonical Cypher pipeline + CoW transaction
   model.
 - **[Building on kglite](building-on-kglite.md)** — the producer
-  playbook: connect a library that *builds* kglite graphs (SEC
+  playbook. It connects a library that *builds* kglite graphs (SEC
   filings, a codebase, a PDF) via the engine-free (P3) or
-  embedded-engine (P1) path, plus the seam contract you build against.
+  embedded-engine (P1) path. It also gives the seam contract you build against.
 - **[Implementing a binding](implementing-a-binding.md)** —
   deep-dive companion to `embedding.md` for anyone publishing a
   new-language binding: bridge-layer choice, full `KgErrorCode`

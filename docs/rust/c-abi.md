@@ -77,9 +77,9 @@ The header exposes:
   in *right now* as an owned `"memory"` / `"mapped"` / `"disk"` string. It
   borrows the handle, so call it before `kglite_session_new` consumes it.
   `out_converted_from` above answers "what was it before?" and is null whenever
-  nothing changed; this answers "what is it now?" unconditionally — the question
-  after a creation, after an unspecified-mode open, or when asserting the mode
-  you asked for is the mode you got;
+  nothing changed. This answers "what is it now?" unconditionally. That is the
+  question after a creation, after an unspecified-mode open, or when asserting
+  the mode you asked for is the mode you got;
 - `kglite_writer_lease_acquire` / `kglite_writer_lease_free`. **Any caller that
   may save to a path must hold the lease across the whole read-modify-save
   interval; readers take none.** Two processes that both open, mutate, and save
@@ -97,7 +97,7 @@ The header exposes:
   the entry point for a graph that was never moved into one. The save writes
   through the session's own graph — it never copies the graph to checkpoint it
   — and is serialized against concurrent mutations on that session. The graph
-  handle is consumed **only on `KGLITE_STATUS_CODE_OK`**: a failed
+  handle is consumed **only on `KGLITE_STATUS_CODE_OK`**. A failed
   `kglite_session_new` leaves ownership with the caller, who must still
   `kglite_graph_free` it;
 - session construction plus read/mutation execution with timeout/row budgets;
@@ -134,7 +134,7 @@ object: `{"$date": "2020-01-01"}` binds a date (parsed as `date()` parses),
 `datetime()` parses; an offset is applied, normalising to UTC), and
 `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` binds a duration. The
 payloads are the shapes result rows render those types as, so a cell read back
-and wrapped in its tag matches the stored value; a bare string stays a string.
+and wrapped in its tag matches the stored value. A bare string stays a string.
 An object with any other key, or with a tag key beside other keys, is an
 ordinary map. A malformed payload is refused like an unrepresentable number.
 

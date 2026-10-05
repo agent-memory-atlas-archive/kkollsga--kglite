@@ -15,7 +15,7 @@ wrapped by bundled MCP and Bolt servers, and non-Rust bindings can use the C
 ABI. Those adapters are useful integration boundaries, but they do not turn
 KGLite into a replicated, horizontally scaled database service. The shape that
 scales an application instead is an embedded traversal component behind the
-application's own API — that API owns authentication, authorization, and write
+application's own API. That API owns authentication, authorization, and write
 policy, while KGLite serves traversal from a refreshed snapshot; see
 [Derived index](../python/guides/derived-index.md#an-embedded-traversal-component-behind-your-api).
 
@@ -92,9 +92,12 @@ model directly for readers. A mutable `KnowledgeGraph` stays a single-owner
 handle; copying on mutation preserves existing snapshots.
 
 Servers need composable writes as well as parallel reads, so `Session` adds a
-small synchronization boundary: reads clone the current `Arc` and release the
-lock, while writes serialize through a writer lock and atomically publish the
-next state. This avoids lost updates without putting a global lock around
+small synchronization boundary:
+
+- Reads clone the current `Arc` and release the lock.
+- Writes serialize through a writer lock and atomically publish the next state.
+
+This avoids lost updates without putting a global lock around
 query execution.
 
 ## Per-query R-tree for spatial joins

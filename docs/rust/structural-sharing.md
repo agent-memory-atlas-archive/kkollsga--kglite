@@ -6,10 +6,11 @@ and a write needs `&mut DirGraph` — so the writer forks.
 
 That fork used to be a deep copy of the whole graph: every node, every edge,
 every index. On a 1M-node graph it cost **36.3 ms and a second 668.8 MB of
-resident memory**, against a 3 µs write with nothing held, and it fired on
-`rows = g.cypher(...)` followed by `g.cypher("… SET …")` — no threads, no
-snapshot API, no explicit copy. This page is the durable record of what
-replaced it.
+resident memory**. A write with nothing held cost 3 µs.
+
+The copy fired on `rows = g.cypher(...)` followed by `g.cypher("… SET …")`.
+It needed no threads, no snapshot API and no explicit copy. This page is the
+durable record of what replaced it.
 
 **The fork is now O(changes).** Held-view first write, 1M nodes, mean of the
 timed write with the reference re-acquired untimed every round:
@@ -21,13 +22,14 @@ timed write with the reference re-acquired untimed every round:
 | 2 property + 1 composite + 1 range index | ~180,000 µs | **~97 µs** (all of it the range index — see [Limits](#limits)) |
 | resident growth, 20 writes under a held view, 1M | +668.8 MB | **+0.0 MB** |
 
-The first two rows are a snapshot of a distinction that no longer exists. When
-this was measured, a graph held its properties in node weights until `save()`
-converted it to per-type column stores, so "plain" and "saved / columnar" were
-two different objects with two different fork costs. Construction is columnar
-from the first node now, and every graph is the second row's shape; the
-measurements are kept as the record of what the overlay replaced, not as a menu
-of shapes to expect. See [The rollback pre-image, since](#the-rollback-pre-image-since).
+The first two rows are a snapshot of a distinction that no longer exists.
+
+- When this was measured, a graph held its properties in node weights until `save()` converted it to per-type column stores.
+- So "plain" and "saved / columnar" were two different objects with two different fork costs.
+- Construction is columnar from the first node now, and every graph is the second row's shape.
+- The measurements are kept as the record of what the overlay replaced, not as a menu of shapes to expect.
+
+See [The rollback pre-image, since](#the-rollback-pre-image-since).
 
 ---
 
@@ -39,14 +41,14 @@ captures exactly the pre-images such a read would need.
 
 **It is not expressible in safe Rust.** The snapshot holds `Arc<DirGraph>` and
 reads it as `&DirGraph` while the writer needs `&mut DirGraph` to the same
-allocation. That is aliasing UB. The only escapes are a lock on the read path —
-categorically over the in-memory budget in the `MATCH` loop — or a query-duration
-read guard, which makes writes *block* on a held Python object: a deadlock
-hazard traded for a latency cliff.
+allocation. That is aliasing UB. There are two escapes, and both fail:
 
-**Rust's aliasing rules force copy-on-write to be writer-side.** That is the
-structural fact behind everything below, and it is the answer to "why not just
-version the reads".
+- A lock on the read path is categorically over the in-memory budget in the `MATCH` loop.
+- A query-duration read guard makes writes *block* on a held Python object. That trades a deadlock hazard for a latency cliff.
+
+**Rust's aliasing rules force copy-on-write to be writer-side.** This is the
+structural fact behind everything below. It answers "why not just version the
+reads".
 
 ---
 
@@ -65,8 +67,8 @@ Four fields carry the graph-sized state, and each is layered:
 | `type_indices` | `storage/disk/type_index_layer.rs` | per type: `Vec<Arc<Vec<NodeIndex>>>`, **append-only**, last level writable |
 | `property_indices`, `composite_indices` | `dir_graph/index_layer.rs` | per index: `Vec<Arc<HashMap<K, Option<Vec<NodeIndex>>>>>`, `None` = tombstone, bucket-granular copy-on-write |
 
-Three of the four are the same idea — a stack of shared immutable levels whose
-tail is writable — and the differences are dictated by each field's access
+Three of the four are the same idea: a stack of shared immutable levels whose
+tail is writable. The differences are dictated by each field's access
 pattern, not by taste:
 
 * **`type_indices` is append-only** because a `CREATE`'s only edit is a push, and
@@ -78,27 +80,25 @@ pattern, not by taste:
   copy of the merged bucket*, which is what keeps the journal's reversals
   correct unchanged (see [Invariants](#invariants)).
 * **`id_indices` splits inside `Clone`** through its existing `RwLock`, because
-  it can: it hands out values, not borrowed slices. The other layers cannot take
-  a lock — their reads return `&[NodeIndex]` — so they keep *every* level behind
-  an `Arc`, including the one being written, and the writer discovers the fork
-  lazily at its next write through `Arc::get_mut`.
+  it can: it hands out values, not borrowed slices.
+* **The layers other than `id_indices` cannot take a lock**, because their reads return `&[NodeIndex]`. They keep *every* level behind an `Arc`, including the one being written. The writer discovers the fork lazily at its next write through `Arc::get_mut`.
 
 ### The one thing that must not be done
 
 **A `share()` that merges before it can hand back one immutable value is
-O(N), and it fires on every fork that follows a write** — which is the founding
+O(N), and it fires on every fork that follows a write.** That is the founding
 defect's own shape, since a read-then-write loop re-takes a view every
 iteration. This was measured, not reasoned about: it held the 1M cell at 4.1 ms
 with every other part of the design correct and every test green.
 
 Its twin: **compaction written as "materialise into a fresh structure" is also
-O(N)**, because materialising clones the base first. It reads as a fold and
+O(N)**, because materialising clones the base first. It reads as a fold. It
 behaves as the deep clone the design removes, moved one write later. It showed
 up as a +289% regression on the *dropped-view control*, not on the cell under
 test.
 
-Both are avoided the same way — the base is moved out of its `Arc`
-(`Arc::try_unwrap` under a `get_mut` guard), never copied — and both are pinned
+Both are avoided the same way: the base is moved out of its `Arc`
+(`Arc::try_unwrap` under a `get_mut` guard), never copied. Both are pinned
 by tests that assert on pointer identity rather than on content.
 
 ---
@@ -106,25 +106,26 @@ by tests that assert on pointer identity rather than on content.
 ## Invariants
 
 **Slot identity.** Statement rollback guarantees a node or edge returns on the
-exact `NodeIndex`/`EdgeIndex` it vacated, and those indices are the keys of every
+exact `NodeIndex`/`EdgeIndex` it vacated. Those indices are the keys of every
 index structure. `StableGraph` reuses free-list slots and offers no
 index-controlled insertion, so the overlay must *predict* what `add_node` will
-return and reproduce it at fold-back. `storage/slot_mirror.rs` mirrors petgraph's
-two free lists as LIFO stacks and refuses to predict — rather than guessing —
-for a graph whose free-list order is not observable (one adopted by `from_graph`
-or restored by serde, unless it provably has no holes). Unsynced means *slower*,
-never wrong. A `debug_assert` validates the prediction on every insert the test
-suites perform.
+return and reproduce it at fold-back.
+
+`storage/slot_mirror.rs` mirrors petgraph's two free lists as LIFO stacks. It
+refuses to predict, rather than guessing, for a graph whose free-list order is
+not observable. That means a graph adopted by `from_graph` or restored by serde,
+unless it provably has no holes. Unsynced means *slower*, never wrong. A
+`debug_assert` validates the prediction on every insert the test suites perform.
 
 **The journal reverses into the delta, never the base.** Every `UndoEntry` is
-keyed on an index and replayed through the write path; on a forked graph that
+keyed on an index and replayed through the write path. On a forked graph that
 replay must land in the overlay. If any of it reached the shared base, the
-reader's snapshot would silently acquire a rolled-back write — no error, no
-crash. Two specific re-pointings:
+reader's snapshot would silently acquire a rolled-back write, with no error and
+no crash. Two specific re-pointings:
 
 * `BucketAppended` on a node-type bucket is reversed by editing the **writable
-  tail**, and *refuses* rather than guessing when the entry is not there (the
-  caller falls back to a flattening retain: slower, still correct). A statement's
+  tail**. It *refuses* rather than guessing when the entry is not there; the
+  caller then falls back to a flattening retain, which is slower and still correct. A statement's
   appends are all in the tail because a fork needs `&DirGraph` while the writer
   holds `&mut DirGraph`, so no fork can interleave with a statement.
 * `BucketRemoved` re-inserts at a recorded **position**, and
@@ -135,16 +136,19 @@ crash. Two specific re-pointings:
 
 **`supports_undo_journal()` must stay true on the forked backend.** If it were
 false, every statement taken while a view is held would fall back to a
-whole-graph clone checkpoint — an O(V+E) copy *per statement* instead of one
-per fork, i.e. the fix introducing a worse cliff than the defect.
+whole-graph clone checkpoint. That is an O(V+E) copy *per statement* instead of
+one per fork: the fix would introduce a worse cliff than the defect.
 
 **Depth caps.** Every layer bounds its stack at **32** levels and flattens once
 at the cap. A stack only grows while a reader is held *continuously across
 writes*; any write with nothing shared folds it back. The cap is not removable:
 it is what bounds memory (one retained delta per level) and read-miss depth. Its
-value is measured, not chosen — at 8 the flatten put a ~5x-median spike into one
-round in eight and dominated the *mean* of the held-view cell; at 32 the worst
-case is ~2x the median. Raising it further tunes against one benchmark's hold
+value is measured, not chosen:
+
+- At 8 the flatten put a ~5x-median spike into one round in eight and dominated the *mean* of the held-view cell.
+- At 32 the worst case is ~2x the median.
+
+Raising it further tunes against one benchmark's hold
 window rather than against a mechanism.
 
 **Fork-private caches.** `edge_type_counts_cache` and `type_connectivity_cache`
@@ -165,10 +169,10 @@ while any other holder is alive; the `Arc::get_mut` gate is the whole
 enforcement.
 
 **`g.copy()` forks *from* the source.** The source's own backend and the copy's
-base then become the same allocation while the source is still uniquely owned,
-so writing through it would edit a backend the copy is reading.
-`ensure_writable()` at write entry turns the source into an overlay too — one
-`Arc::get_mut` probe in the steady state.
+base then become the same allocation while the source is still uniquely owned.
+Writing through it would edit a backend the copy is reading.
+`ensure_writable()` at write entry turns the source into an overlay too. In the
+steady state that costs one `Arc::get_mut` probe.
 
 ---
 
@@ -187,92 +191,97 @@ is a well-defined follow-up.
 
 **A continuously held reader pays an amortised flatten.** In a loop that
 re-takes a view before every write, compaction never fires and the depth cap
-does. On a graph with large user indexes that is ~`|index| / 32` per fork —
-measured at ~4.3 ms per write on a 1M indexed graph, against a 97 µs median
-round. Read plainly: the median improves ~1,500x and the mean ~32x. The flatten
+does. On a graph with large user indexes that costs ~`|index| / 32` per fork.
+It measured ~4.3 ms per write on a 1M indexed graph, against a 97 µs median
+round. Read plainly, the median improves ~1,500x and the mean ~32x. The flatten
 cannot be made cheaper, because it must copy a base that a reader holds.
 
 **`range_indices` is not layered.** It is a `BTreeMap` per index, and
-`lookup_range` needs ordered iteration, which a level stack can only serve by
-k-way merging across levels — a different mechanism, not an incidental
+`lookup_range` needs ordered iteration. A level stack can only serve that by
+k-way merging across levels, which is a different mechanism, not an incidental
 extension. It is therefore the whole remaining fork cost on an indexed graph:
-~90 µs for an index over ~1,000 distinct values, and **O(distinct values)**, so
-a range index over a high-cardinality property costs proportionally more.
+~90 µs for an index over ~1,000 distinct values. The cost is **O(distinct
+values)**, so a range index over a high-cardinality property costs proportionally more.
 
 **`unique_indices`, `embeddings` and `timeseries_store` are not layered
 either.** `unique_indices` holds one entry per node of every constrained type;
-`embeddings` is linear in dimension (6.9 ms at d=64 on 1M nodes, so ≈41 ms at
+`embeddings` is linear in dimension: 6.9 ms at d=64 on 1M nodes, so ≈41 ms at
 d=384, and more once an HNSW index exists, whose `links` allocate per node per
-layer). A graph carrying those still pays them on every fork.
+layer. A graph carrying those still pays them on every fork.
 
 **`Mapped` stays on the deep-clone path**, explicitly.
 
 **The rollback pre-image clone is a different cost and is unchanged by this
 work.** It is not the fork: it fires once per write *statement* on a columnar
-type, with no reader held. Measured at
-**≈ (N / 100,000) × (368 + 41 × columns) µs** — linear in both axes, ≈8.6 ms per
-statement at 1M × 12 columns, and ≥97% of the write above N = 25,000. On a
-never-saved graph the term is exactly zero. The overlay neither improves nor
+type, with no reader held. It measured
+**≈ (N / 100,000) × (368 + 41 × columns) µs**. That is linear in both axes:
+≈8.6 ms per statement at 1M × 12 columns, and ≥97% of the write above N = 25,000.
+
+On a never-saved graph the term is exactly zero. The overlay neither improves nor
 worsens it: it is the statement checkpoint capturing a pre-image, not the fork
-copying a graph, and the two are independent. Anyone reading a slow write on a
-saved graph should check this term before suspecting the fork.
+copying a graph, and the two are independent. If a write on a saved graph is
+slow, check this term before suspecting the fork.
 
 ---
 
 ## The rollback pre-image, since
 
-The paragraph above is D2's record, and its conclusion — *the fork and the
-statement checkpoint are independent costs* — still holds. Its **numbers do
-not**: the pre-image it describes was a second `Arc` handle on the type's whole
-master `ColumnStore`, so the `Arc::make_mut` at the write site deep-copied every
-column of the type to change one cell. The shape-convergence work replaced it
-with **cell-grained pre-images**, and the section is left standing because
-"unchanged by this work" was true of D2 and the two mechanisms are easiest to
-tell apart side by side.
+The paragraph above is D2's record. Its conclusion still holds: *the fork and the
+statement checkpoint are independent costs*. Its **numbers do not**. The
+pre-image it describes was a second `Arc` handle on the type's whole master
+`ColumnStore`, so the `Arc::make_mut` at the write site deep-copied every
+column of the type to change one cell.
+
+The shape-convergence work replaced it with **cell-grained pre-images**. The
+section is left standing because "unchanged by this work" was true of D2, and
+the two mechanisms are easiest to tell apart side by side.
 
 **The journal now records one entry per changed cell.** `UndoEntry::ColumnarCell`
 carries `{node_type, row_id, key, prior: Option<Value>}` — the value the cell
 held before the statement overwrote it — and rollback writes it straight back
 into the live store. The prior value was already being read on the hot path, so
 capture costs a move rather than a copy. Companion entries cover the non-cell
-edits a statement can make to a store: `ColumnarSchemaGrown` (a `SET` that
-introduced a property the type lacked, which appends a null-backfilled column),
-`ColumnarRowsAppended` and `ColumnarTombstone` (the `CREATE` and `DELETE` halves,
-which reach a master store now that construction is columnar), and
-`ColumnarTitle`.
+edits a statement can make to a store:
+
+* `ColumnarSchemaGrown`: a `SET` that introduced a property the type lacked, which appends a null-backfilled column.
+* `ColumnarRowsAppended` and `ColumnarTombstone`: the `CREATE` and `DELETE` halves, which reach a master store now that construction is columnar.
+* `ColumnarTitle`.
 
 **The mechanism is the inversion, not the size.** Because the journal holds no
 handle on the store, the master stays *uniquely owned* for the whole statement,
-so `Arc::make_mut` at the write site mutates one cell in place. That direction is
-asserted at the write site (`columnar_write::write_column_master`) rather than
-left to a benchmark to notice — the old code asserted the opposite, that the
-clone *had* happened, which is how a documented invariant hid a 76–162× tax. Two
-things fall out of the same change: an mmap-backed column is no longer
-materialised into the heap by the journal, so `set_memory_limit` survives writes;
-and the "on a never-saved graph the term is exactly zero" escape hatch stops
-mattering, because there is nothing left to escape.
+so `Arc::make_mut` at the write site mutates one cell in place.
 
-Cost, release build, A/B against the published 0.15.14 wheel: a single-row `SET`
-on a saved graph went **327.9 → 4.3–5.0 µs at 50 k × 12 columns and 683.5 → 4.3 µs
-at 100 k** — parity with a never-saved graph (ratio 0.8–1.0× at every N and
-column count), and flat in N rather than linear. Inside a transaction, 355 →
-14–45 µs per statement. On a spilled graph, 4,961 → 4.4 µs with the spill intact.
+That direction is asserted at the write site (`columnar_write::write_column_master`)
+rather than left to a benchmark to notice. The old code asserted the opposite,
+that the clone *had* happened, which is how a documented invariant hid a 76–162× tax.
 
-**What the fork still copies.** One store copy per *fork*, not per statement:
-the first write under a held view is 587.6 µs at 100 k × 12 (mean of first
-writes; the second write is 8.2 µs, and flattening after the reader drops is
-137.7 µs). That is `ForkedGraph` sharing its stores with the base a reader holds,
-so its first write per type must copy — the one legitimate exception to the
+Two things fall out of the same change:
+
+* An mmap-backed column is no longer materialised into the heap by the journal, so `set_memory_limit` survives writes.
+* The "on a never-saved graph the term is exactly zero" escape hatch stops mattering, because there is nothing left to escape.
+
+Cost, release build, A/B against the published 0.15.14 wheel:
+
+* A single-row `SET` on a saved graph went **327.9 → 4.3–5.0 µs at 50 k × 12 columns and 683.5 → 4.3 µs at 100 k**.
+* That is parity with a never-saved graph (ratio 0.8–1.0× at every N and column count), and flat in N rather than linear.
+* Inside a transaction, 355 → 14–45 µs per statement.
+* On a spilled graph, 4,961 → 4.4 µs with the spill intact.
+
+**What the fork still copies.** One store copy per *fork*, not per statement.
+The first write under a held view is 587.6 µs at 100 k × 12 (mean of first
+writes). The second write is 8.2 µs, and flattening after the reader drops is
+137.7 µs.
+
+That copy is `ForkedGraph` sharing its stores with the base a reader holds: its first write
+per type must copy. This is the one legitimate exception to the
 uniquely-owned invariant, and the reason the write-site assertion names it.
 Per-column `Arc` would narrow it to the touched column; it is a filed follow-on
 with those numbers attached, not a gap.
 
-Two residues, both observational no-ops. A cell that was *absent* before the
-statement is restored by writing `Value::Null`, which `ColumnStore::get` and
-`row_properties` cannot distinguish from absent. And a rolled-back write whose
-value did not fit the column's type leaves the column demoted to `Mixed`; values
-and reads are identical, only the storage tag differs, until the next
-consolidation re-derives it.
+Two residues remain, both observational no-ops:
+
+* A cell that was *absent* before the statement is restored by writing `Value::Null`. `ColumnStore::get` and `row_properties` cannot distinguish that from absent.
+* A rolled-back write whose value did not fit the column's type leaves the column demoted to `Mixed`. Values and reads are identical; only the storage tag differs, until the next consolidation re-derives it.
 
 ---
 

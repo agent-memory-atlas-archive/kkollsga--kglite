@@ -1,10 +1,13 @@
 # Building on kglite
 
-The out-of-the-box playbook for a **producer** — a library that computes domain
-data (SEC filings, a parsed codebase, an audio analysis, a distilled PDF) and
-turns it into a queryable kglite graph. This page tells a third party how to
-connect their library to kglite, what contract they're building against, and how
-to test it.
+This page is the out-of-the-box playbook for a **producer**: a library that
+computes domain data (SEC filings, a parsed codebase, an audio analysis, a
+distilled PDF) and turns it into a queryable kglite graph. It tells a third
+party three things:
+
+- How to connect their library to kglite.
+- What contract they're building against.
+- How to test it.
 
 If you're *querying* an existing graph rather than producing one, the
 [Rust guide](index.md) and the [Python guide](../python/index.md) are your
@@ -20,10 +23,10 @@ There is a single question that picks your tier:
   (engine-free).** You compute nodes and edges and hand kglite a structured
   description; kglite builds the graph. This is the default, and where most
   producers land.
-- **Yes** — a build pass has to read back what earlier passes wrote (resolving
-  references, deduping against existing nodes, cross-linking) → **P1
-  (embedded engine).** You link the `kglite` crate, build the graph natively,
-  and hand it off as a `.kgl` file.
+- **Yes** — a build pass has to read back what earlier passes wrote → **P1
+  (embedded engine).** Examples are resolving references, deduping against
+  existing nodes and cross-linking. You link the `kglite` crate, build the graph
+  natively, and hand it off as a `.kgl` file.
 
 | | P3 — engine-free | P1 — embedded engine |
 |---|---|---|
@@ -51,11 +54,12 @@ stability posture; kglite's CI locks against accidental drift on all of them.
 | **Python top-level** — `kglite.*` | `kglite.load`, `kglite.from_blueprint`, `kglite.from_records`, `KnowledgeGraph` methods. The P3 entry points and the P1 handoff target. | Contract-tested + stubtest against `kglite/__init__.pyi`. |
 | **C ABI** — `include/kglite.h` | The `extern "C"` surface for non-Rust bindings. | cbindgen header-drift check in CI; see the [C ABI guide](c-abi.md). |
 
-One caveat CI cannot lock for you: **version pins across repos.** Your producer
-pins `kglite` (and, for an MCP producer, `kglite-mcp-server`) to a minor line,
-and a P1 producer must keep transitive pins — notably `rmcp` / `rmcp-macros` —
-in lockstep with kglite's. Re-check these at every kglite bump; nothing
-machine-enforces them from a single repo.
+One caveat CI cannot lock for you: **version pins across repos.**
+
+- Your producer pins `kglite` (and, for an MCP producer, `kglite-mcp-server`) to a minor line.
+- A P1 producer must keep transitive pins, notably `rmcp` / `rmcp-macros`, in lockstep with kglite's.
+
+Re-check these at every kglite bump; nothing machine-enforces them from a single repo.
 
 ## P3 recipe — engine-free
 
@@ -124,23 +128,27 @@ save_graph(&mut graph, "out.kgl")           // → the handoff artifact
     .map_err(anyhow::Error::msg)?;
 ```
 
-The Python handoff pattern (see codingest for the reference): run the pure-Rust
-builder with the GIL released, `save_graph` to a `.kgl` (a temp file when the
-caller gave no path, deleted once the load completes), then `py.import("kglite")`
-and call its top-level `load(path)` — the returned object is a real
-`kglite.KnowledgeGraph`, so every downstream kglite API works unchanged.
+The Python handoff pattern (see codingest for the reference) has three steps:
+
+1. Run the pure-Rust builder with the GIL released.
+2. `save_graph` to a `.kgl`. This is a temp file when the caller gave no path, deleted once the load completes.
+3. Call `py.import("kglite")`, then its top-level `load(path)`.
+
+The returned object is a real `kglite.KnowledgeGraph`, so every downstream
+kglite API works unchanged.
 
 **The format-floor rule.** Your declared floor `kglite>=X` must name a version
 whose *reader* understands the format your linked engine *writes*. If your crate
 links an engine that writes `.kgl` v5, `kglite>=X` must be a version that reads
-v5 — otherwise the handoff `load()` fails at runtime for exactly the users who
+v5. Otherwise the handoff `load()` fails at runtime for exactly the users who
 took the floor literally.
 
 **Pin hygiene.** Re-check your kglite pin — and transitive pins that must move in
-lockstep with it (`rmcp` / `rmcp-macros`) — at every kglite bump. There is a
-measured cost to the round-trip P1 pays and P3 avoids: roughly 12% on
-parse-heavy builds, up to ~50% on very fast builds (serialization is fixed-cost
-against graph size, so it dominates a cheap build).
+lockstep with it (`rmcp` / `rmcp-macros`) — at every kglite bump.
+
+P1 pays a round-trip that P3 avoids, and the cost is measured: roughly 12% on
+parse-heavy builds, up to ~50% on very fast builds. Serialization is fixed-cost
+against graph size, so it dominates a cheap build.
 
 The reference is **codingest** (`cargo add codingest` / `pip install
 codingest`) — its resolution passes query the half-built graph, which is exactly
@@ -196,16 +204,18 @@ activation, and file watching; you inject only the builder. **Drop-in property:*
 your server takes the *same flags* as the kglite MCP server — operators switch
 the binary, not their config. codingest-mcp is the ~40-line reference `main`.
 
-That includes the engine-level knobs, which are deliberately **operator**
-surfaces rather than `ServerExtensions` builder methods: an operator pair
+That includes the engine-level knobs. They are deliberately **operator**
+surfaces rather than `ServerExtensions` builder methods. An operator pair
 reaches the binary, the wheel-bundled server, and your composed `main`
 identically, while a builder knob would only reach binaries whose author
-recompiled. `--parallel` / `extensions.parallel` is the current example — it
-lets the server's Cypher *reads* use the engine's parallel runtime (off by
-default; mutations stay sequential; `KGLITE_QUERY_THREADS` sets the pool
-width). It is applied at the one read seam every route funnels through, so
-built-in `cypher_query`, manifest `tools[].cypher` templates, recipe routes,
-and a domain tool's `run_cypher` all inherit it without wiring of their own.
+recompiled.
+
+`--parallel` / `extensions.parallel` is the current example. It
+lets the server's Cypher *reads* use the engine's parallel runtime. It is off by
+default, mutations stay sequential, and `KGLITE_QUERY_THREADS` sets the pool
+width. It is applied at the one read seam every route funnels through. Built-in
+`cypher_query`, manifest `tools[].cypher` templates, recipe routes, and a domain
+tool's `run_cypher` all inherit it without wiring of their own.
 
 ### Pinning the server read-only
 
@@ -219,14 +229,15 @@ let extensions = ServerExtensions::new()
     .read_only();
 ```
 
-Write access is normally opted into by an operator, through either `--writable`
-or `extensions.writable: true` — an OR, so a wrapper that owns the manifest and
-a bare binary launched with no manifest each have a way to say yes. An embedder
-that owns argv but not the manifest therefore has no way to guarantee a
-read-only surface: an operator editing the sibling manifest can open
+An operator normally opts into write access through either `--writable` or
+`extensions.writable: true`. It is an OR, so a wrapper that owns the manifest and
+a bare binary launched with no manifest each have a way to say yes.
+
+That leaves an embedder that owns argv but not the manifest with no way to
+guarantee a read-only surface. An operator editing the sibling manifest can open
 `cypher_query` to mutations against a graph the embedder regenerates from its
 own source of truth. `read_only()` is that guarantee. Both opt-in surfaces stay
-inert for the life of the process, and a server booted with one of them set
+inert for the life of the process. A server booted with one of them set
 logs a single warning naming the spelling it overrode, so the operator who
 typed it learns why it did nothing.
 
@@ -236,12 +247,14 @@ graph to be immutable — not merely to avoid setting the flag.
 
 ### Registering the producer's own methodology
 
-A producer that builds its graphs emits the same shapes every time, so the
-methodology for querying them — and the named queries that answer with it — is
-a property of the binary, not of each artefact. Graph-carried `KgliteSkill`
-records cannot carry it: they are read in `--graph` / `--watch` modes only,
-because a workspace mode has no graph when the prompt plane freezes. Two
-builders register it once per server, and both apply in **every** mode:
+A producer that builds its graphs emits the same shapes every time. The
+methodology for querying them, and the named queries that answer with it, is
+therefore a property of the binary, not of each artefact.
+
+Graph-carried `KgliteSkill` records cannot carry it. They are read in
+`--graph` / `--watch` modes only, because a workspace mode has no graph when the
+prompt plane freezes. Two builders register it once per server, and both apply
+in **every** mode:
 
 ```rust
 use kglite_mcp_server::{
@@ -294,17 +307,17 @@ describe its methodology — the same reason the workspace-graph types are.
   operator wins.
 - **`with_skills` is its own opt-in.** Owned layers surface only when skills
   are enabled and the server enables none without a manifest, which is the
-  shape a producer binary ships in. With no manifest, or one that never
-  mentions `skills:`, the server serves the bundled set plus this layer; an
-  **explicit** `skills: false`/`null` silences everything including it, and an
-  explicit list is used exactly as written.
+  shape a producer binary ships in.
+  - With no manifest, or one that never mentions `skills:`, the server serves the bundled set plus this layer.
+  - An **explicit** `skills: false`/`null` silences everything including it.
+  - An explicit list is used exactly as written.
 - **Producer records are code, so a bad one fails the boot** naming itself,
   where a malformed graph record is skipped with a warning.
 - **`SkillRecord` carries no `applies_when:`**, so a producer skill is always
-  active and needs no re-resolution. The *bundled* predicate-gated skills do:
-  in a workspace mode they are suppressed at boot (no graph yet) and revived
-  by the first `set_root_dir` / `repo_management` that publishes one, which
-  also sends `tools/list_changed`.
+  active and needs no re-resolution. The *bundled* predicate-gated skills do
+  need it. In a workspace mode they are suppressed at boot (no graph yet) and
+  revived by the first `set_root_dir` / `repo_management` that publishes one,
+  which also sends `tools/list_changed`.
 
 See {doc}`/python/guides/mcp-skills` for the authoring rules and
 {doc}`/python/guides/mcp-servers` for the recipe document shape.
@@ -348,9 +361,9 @@ binary needs them together.
 - **Golden-digest parity, frozen.** While a reference producer exists, freeze a
   golden `.kgl` digest of a fixture graph and assert it in CI. A build change
   that shifts the digest is either a bug or an intended graph-shape change that
-  must re-bless the golden in the same commit. (kglite's own writer side is
-  pinned by `test_phase4_parity.py::GOLDEN_V3_DIGEST`, refreshed per release;
-  your producer freezes its own goldens the same way.)
+  must re-bless the golden in the same commit. kglite's own writer side is
+  pinned by `test_phase4_parity.py::GOLDEN_V3_DIGEST`, refreshed per release.
+  Your producer freezes its own goldens the same way.
 - **Offline-first gates.** A producer's default test suite must run with no
   network — fetchers hit cached fixtures, not live registries. Gate any
   network-touching test behind an explicit marker so the common `make test` path
@@ -359,16 +372,17 @@ binary needs them together.
 ## Domain math at build time
 
 **Bake domain computation into node properties and edges at build time; keep the
-Cypher layer generic.** Bucket mappings, edge kinds, segment structure, block
-hierarchy — compute them in your producer and store them as graph data. Do not
+Cypher layer generic.** Compute bucket mappings, edge kinds, segment structure
+and block hierarchy in your producer and store them as graph data. Do not
 push domain logic into kglite.
 
-A helper graduates *into* kglite Cypher only when it is **domain-independent**
-(sequence/array math, date helpers, graph algorithms, statistics) **and a second
-domain wants it** — the same use-case test the
-[boundary principle](boundary-principle.md) applies to lifts. There is no UDF
-plugin mechanism: producers do not register custom Cypher functions. Compute at
-build time, store, and let generic Cypher read it back.
+A helper graduates *into* kglite Cypher only when both conditions hold:
+
+- It is **domain-independent** (sequence/array math, date helpers, graph algorithms, statistics).
+- **A second domain wants it.** This is the same use-case test the [boundary principle](boundary-principle.md) applies to lifts.
+
+There is no UDF plugin mechanism: producers do not register custom Cypher
+functions. Compute at build time, store, and let generic Cypher read it back.
 
 ## Where to go next
 
