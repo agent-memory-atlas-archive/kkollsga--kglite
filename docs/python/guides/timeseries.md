@@ -1,6 +1,6 @@
 # Timeseries
 
-Attach time-indexed numeric data directly to nodes — no need to create separate nodes per data point. Data is stored as compact columnar arrays with resolution-aware date-string queries through Cypher `ts_*()` functions.
+Attach time-indexed numeric data directly to nodes. You do not create separate nodes per data point. Data is stored as compact columnar arrays. You query it with date strings, through the Cypher `ts_*()` functions, at the resolution the data has.
 
 ## Configuration
 
@@ -19,7 +19,7 @@ graph.timeseries_config("Field")
 #  'units': {'oil': 'MSm3', 'gas': 'BSm3'}, 'bin_type': 'total'}
 ```
 
-## Loading Data
+## Loading data
 
 ```python
 # Bulk load from a DataFrame (most common)
@@ -41,9 +41,9 @@ graph.add_ts_channel(node_id, "gas", [0.45, 0.42, 0.48])
 
 **Validation:** `time_key` column count must match resolution depth (1 for year, 2 for month, 3 for day).
 
-## Inline Loading via `add_nodes`
+## Inline loading via `add_nodes`
 
-When your DataFrame has one row per time step per entity, use the `timeseries` parameter on `add_nodes` to load nodes and timeseries in a single call:
+If your DataFrame has one row per time step per entity, use the `timeseries` parameter on `add_nodes`. It loads nodes and timeseries in a single call:
 
 ```python
 prod_df = pd.DataFrame({
@@ -72,7 +72,7 @@ The `timeseries` dict accepts:
 | `resolution` | `str` | No | `"year"`, `"month"`, `"day"` — auto-detected if omitted |
 | `units` | `dict[str, str]` | No | Per-channel unit labels |
 
-**Separate time columns** — when time is split across multiple columns:
+**Separate time columns.** If time is split across multiple columns, map each resolution level to its column:
 
 ```python
 graph.add_nodes(df, 'Production', 'field_id', 'field_name',
@@ -85,7 +85,7 @@ graph.add_nodes(df, 'Production', 'field_id', 'field_name',
 
 ## Querying via Cypher
 
-All `ts_*()` functions use **date strings** (`'2020'`, `'2020-2'`, `'2020-2-15'`, etc.). Precision is validated against the data resolution.
+All `ts_*()` functions take **date strings** (`'2020'`, `'2020-2'`, `'2020-2-15'`, etc.). The precision of a date string is validated against the data resolution.
 
 ```python
 # Aggregate monthly data by year
@@ -132,14 +132,17 @@ graph.timeseries(node_id, channel="oil")
 graph.timeseries(node_id, start='2020', end='2020')
 ```
 
-**Available functions:** `ts_at`, `ts_sum`, `ts_avg`, `ts_min`, `ts_max`, `ts_count`, `ts_first`, `ts_last`, `ts_series`, `ts_delta`. See the [Cypher reference](../../reference/cypher-reference.md) for the full documentation.
+**Available functions:** `ts_at`, `ts_sum`, `ts_avg`, `ts_min`, `ts_max`, `ts_count`, `ts_first`, `ts_last`, `ts_series`, `ts_delta`.
+
+See the [Cypher reference](../../reference/cypher-reference.md) for the full documentation.
 
 ---
 
 ## Validity intervals
 
-Timeseries attaches numeric channels to a node. *Validity* is a different
-axis: nodes and relationships that each hold a period — a role from its start
-to its end date, a team membership from one transfer to the next — asked as of
-an instant with `FOR VALID_TIME AS OF`, `cypher(valid_at=…)` or the fluent
-`date()` context. See {doc}`valid-time`.
+Timeseries attaches numeric channels to a node. *Validity* is a different axis.
+Nodes and relationships each hold a period, such as a role from its start to its
+end date, or a team membership from one transfer to the next.
+
+You ask a validity question as of an instant, with `FOR VALID_TIME AS OF`,
+`cypher(valid_at=…)` or the fluent `date()` context. See {doc}`valid-time`.

@@ -1,36 +1,44 @@
 # Bitemporal data
 
 A history that is corrected after the fact answers two questions about every
-fact: when was it true in the world, and when did the system know it. An HR
-system learns of a transfer late and backdates it; payroll and last week's
-org-chart export saw the old answer, and an audit needs to reproduce exactly
-that. This page is for the architect of such a store, with a Java or Python
-ingest, who knows valid time and transaction time already and wants to know
-three things: what KGLite gives natively, what you model yourself, and what it
-costs.
+fact: when was it true in the world, and when did the system know it.
+
+An HR system learns of a transfer late and backdates it. Payroll and last
+week's org-chart export saw the old answer, and an audit needs to reproduce
+exactly that.
+
+This page is for the architect of such a store, with a Java or Python ingest,
+who knows valid time and transaction time already. It answers three questions:
+
+- what KGLite gives natively;
+- what you model yourself;
+- what it costs.
 
 The examples build one small synthetic org chart: two employees, their team
 assignments, and the departments the teams belong to. The code blocks run in
 order as one script. The same steps, and every output shown here, come from
 the runnable
 [`examples/bitemporal_org_chart.py`](https://github.com/kkollsga/kglite/blob/main/examples/bitemporal_org_chart.py).
-Valid time itself, with its declarations, conventions and fluent API, is
-covered in depth in {doc}`valid-time`, which this page builds on.
+
+Valid time itself is covered in depth in {doc}`valid-time`, which this page
+builds on. That page covers its declarations, conventions and fluent API.
 
 ## 1. Two axes: one native, one modelled
 
 **Valid time is native.** A node label or relationship type declares the two
 properties that bound its validity interval. A statement asked
 `FOR VALID_TIME AS OF` an instant (or with `valid_at=`) then answers as if the
-graph held only the elements valid then, on every hop, path, subquery and
-algorithm, and every binding writes the same prefix. A statement with no
-prefix is asked as of today; `FOR VALID_TIME ALL` reads every version.
-**Recording time is
-modelled.** KGLite keeps no recording time of its own: when your source (or
-your ingest) knew a fact is a second pair of bounds, such as `recorded_from` /
-`recorded_to`, that you store on records you never overwrite and test by hand
-in the query. The engine checks nothing about that pair. The rest of this page
-is about doing that well.
+graph held only the elements valid then. That holds on every hop, path,
+subquery and algorithm, and every binding writes the same prefix. A statement
+with no prefix is asked as of today. `FOR VALID_TIME ALL` reads every version.
+
+**Recording time is modelled.** KGLite keeps no recording time of its own. When
+your source (or your ingest) knew a fact is a second pair of bounds, such as
+`recorded_from` / `recorded_to`. You store that pair on records you never
+overwrite, and test it by hand in the query. The engine checks nothing about
+that pair.
+
+The rest of this page is about doing that well.
 
 ## 2. The feature surface
 
@@ -57,50 +65,61 @@ is about doing that well.
 ### Declare valid time
 
 Declare valid time on every type that carries it, in any of the four ways
-{doc}`valid-time` describes. **Choose the convention from the source.** An HR
-change feed is half-open: a transfer ends the old assignment on the day the new
-one begins. Declare it `half_open`, so the transfer day belongs to the new
-assignment alone. Declared `closed`, the same rows count both sides of every
-boundary day, put the employee on two teams on the day of each transfer, and
-the load warns that rows end on the day another begins.
+{doc}`valid-time` describes.
+
+**Choose the convention from the source.** An HR change feed is half-open: a
+transfer ends the old assignment on the day the new one begins. Declare it
+`half_open`, so the transfer day belongs to the new assignment alone.
+
+Declared `closed`, the same rows:
+
+- count both sides of every boundary day;
+- put the employee on two teams on the day of each transfer;
+- make the load warn that rows end on the day another begins.
 
 ### Model recording time
 
 Give each record the pair `recorded_from` / `recorded_to` and follow three
 rules.
 
-**Keep every superseded image as its own record.** When HR records a change,
-it also closes the previous assignment. Until then the system knew that
-assignment as open-ended; from then on it knows it as closed. Keep both images:
-the open-ended one, recorded until the change was recorded, and the closed
-one, recorded from then on. The record count is therefore higher than the
-assignment count. Do not copy the recording date of the change onto the old
-image as its `valid_to`: the assignment ended on the transfer date, not on the
-day HR typed it in.
+**Rule 1: keep every superseded image as its own record.** When HR records a
+change, it also closes the previous assignment. Until then the system knew that
+assignment as open-ended. From then on it knows it as closed.
 
-**Give each record its own id, and keep the entity key in a separate,
-non-unique property.** The example names a record
-`<employee>.<assignment>:<r|e>`, for the image *as recorded* and *as ended*.
-Records that share an id shadow each other: `MATCH (a {id: …})` finds one node
-per id and can land on an image recorded at another time, a node load onto a
-stored id updates that node instead of adding one, and the only hint is a
-duplicate-id warning in the writing statement's `result.warnings`.
+- Keep both images: the open-ended one, recorded until the change was recorded,
+  and the closed one, recorded from then on.
+- The record count is therefore higher than the assignment count.
+- Do not copy the recording date of the change onto the old image as its
+  `valid_to`. The assignment ended on the transfer date, not on the day HR typed
+  it in.
 
-**Link records to timeless anchors.** Employees, teams and departments are
-anchor nodes, and each assignment record links to its employee (`OF`) and its
+**Rule 2: give each record its own id, and keep the entity key in a separate,
+non-unique property.** The example names a record `<employee>.<assignment>:<r|e>`,
+for the image *as recorded* and *as ended*.
+
+Records that share an id shadow each other:
+
+- `MATCH (a {id: …})` finds one node per id, and can land on an image recorded
+  at another time.
+- A node load onto a stored id updates that node instead of adding one.
+- The only hint is a duplicate-id warning in the writing statement's
+  `result.warnings`.
+
+**Rule 3: link records to timeless anchors.** Employees, teams and departments
+are anchor nodes. Each assignment record links to its employee (`OF`) and its
 team (`TO`), so a new record never rewrites the anchors or the links between
 them.
 
-Load the recording columns with the first load, even when every value is
-still NULL. A column a loader writes is a known property of the type from
-then on. A property that no write has named yet is refused by a later
-`CREATE` as a probable typo.
+Load the recording columns with the first load, even when every value is still
+NULL. A column a loader writes is a known property of the type from then on. A
+property that no write has named yet is refused by a later `CREATE` as a
+probable typo.
 
 ### Load the extract
 
-The extract holds three assignment records and two department links. `ben.1`
-is a zero-length assignment: HR put Ben on the Data team and moved him to
-Platform the same day, so its `valid_from` equals its `valid_to`:
+The extract holds three assignment records and two department links. `ben.1` is
+a zero-length assignment: HR put Ben on the Data team and moved him to Platform
+the same day, so its `valid_from` equals its `valid_to`:
 
 ```python
 import warnings
@@ -144,14 +163,19 @@ graph.add_relationships(part_of, "PART_OF", "Team", "team", "Department", "depar
                         column_types=DECLARED, convention="half_open")
 ```
 
+### Zero-length versions
+
 **A zero-length version is valid at no instant under `half_open`.** Such rows
-are legitimate (an assignment created and cancelled on the same day), so the
-load keeps them, warns once with their count and the first of them, and
-`db.temporal.declarations()` counts them in `empty_rows`. Every later load or
-Cypher `CREATE`, `MERGE` or `SET` onto the declared type does the same, while
-an inverted interval, whose `valid_to` precedes its `valid_from`, is refused.
-No as-of question returns a zero-length version. On the day of `ben.1`, only
-its successor is valid:
+are legitimate (an assignment created and cancelled on the same day). The load
+therefore keeps them, warns once with their count and the first of them, and
+`db.temporal.declarations()` counts them in `empty_rows`.
+
+- Every later load or Cypher `CREATE`, `MERGE` or `SET` onto the declared type
+  does the same.
+- An inverted interval, whose `valid_to` precedes its `valid_from`, is refused.
+- No as-of question returns a zero-length version.
+
+On the day of `ben.1`, only its successor is valid:
 
 ```python
 graph.cypher("MATCH (a:Assignment {employee: 'ben'}) RETURN a.id AS id",
@@ -162,13 +186,17 @@ graph.cypher("MATCH (a:Assignment {employee: 'ben'}) RETURN a.id AS id",
 Lineage and audit queries, which read every version under
 `FOR VALID_TIME ALL`, still read it (section 5).
 
+### Versions on a declared relationship type
+
 **On a declared relationship type, a load writes versions.** `add_relationships`
 (and `replace_relationships`, `create_relationships()`, `extend()` and
-blueprints) never updates a stored relationship. A row identical to one
-already between its endpoints is dropped, so a redelivered file is harmless.
-A row that differs in anything, whether its `valid_to`, its `recorded_from` or
-another property, becomes a new, parallel relationship.
-`connections_updated` stays 0:
+blueprints) never updates a stored relationship.
+
+- A row identical to one already between its endpoints is dropped, so a
+  redelivered file is harmless.
+- A row that differs in anything becomes a new, parallel relationship. That
+  includes a different `valid_to`, `recorded_from` or other property.
+- `connections_updated` stays 0.
 
 ```python
 redelivered = graph.add_relationships(part_of, "PART_OF", "Team", "team", "Department", "department",
@@ -178,12 +206,15 @@ redelivered = graph.add_relationships(part_of, "PART_OF", "Team", "team", "Depar
 ```
 
 Close or correct a stored relationship period with Cypher `SET` when that is
-what you mean. `db.temporal.declarations()` lists what is declared. Its
-`abutting_rows` counts the rows whose `valid_to` is another row's
-`valid_from` within one entity, which is a transfer chain showing through (here
-only a relationship's, since every `Assignment` has its own id), and its
-`empty_rows` counts the rows valid at no instant, here the zero-length
-assignment:
+what you mean.
+
+`db.temporal.declarations()` lists what is declared:
+
+- `abutting_rows` counts the rows whose `valid_to` is another row's
+  `valid_from` within one entity. That is a transfer chain showing through. Here
+  it shows only a relationship's, since every `Assignment` has its own id.
+- `empty_rows` counts the rows valid at no instant. Here that is the
+  zero-length assignment.
 
 ```python
 graph.cypher("""
@@ -196,13 +227,18 @@ graph.cypher("""
 
 ## 4. Apply a day's delivery
 
-HR's daily change feed closes the recording period of the images it
-supersedes and adds the new ones. Apply it in one transaction, so that no
-reader sees the day half applied and a failure anywhere rolls the whole day
-back. The function below checks that each superseded image is still current
-(the *was* check), closes those images, adds new teams with their department
-links, and adds the new images. Every step is written so that applying the
-same delivery twice changes nothing:
+HR's daily change feed closes the recording period of the images it supersedes
+and adds the new ones. Apply it in one transaction. No reader then sees the day
+half applied, and a failure anywhere rolls the whole day back.
+
+The function below:
+
+1. checks that each superseded image is still current (the *was* check);
+2. closes those images;
+3. adds new teams with their department links;
+4. adds the new images.
+
+Every step is written so that applying the same delivery twice changes nothing:
 
 ```python
 def apply_delivery(graph, t, supersedes, new_links, new_assignments):
@@ -244,8 +280,8 @@ def apply_delivery(graph, t, supersedes, new_links, new_assignments):
 ```
 
 On 2024-06-15 HR records that Ada moved from Data to a new Machine Learning
-team, part of Engineering, on 2024-06-01. The delivery supersedes `ada.1:r`
-and adds its closed image `ada.1:e` beside the new assignment `ada.2:r`:
+team, part of Engineering, on 2024-06-01. The delivery supersedes `ada.1:r` and
+adds its closed image `ada.1:e` beside the new assignment `ada.2:r`:
 
 ```python
 delivery = dict(
@@ -263,10 +299,12 @@ graph.cypher(COUNTS).to_list()
 # [{'nodes': 12, 'relationships': 13}]
 ```
 
-A redelivery of the same day is a no-op. A delivery whose *was* check fails
-raises before writing anything. A delivery that fails part-way, here on an
-assignment whose `valid_to` precedes its `valid_from`, rolls back the images
-it had already closed:
+Three outcomes follow:
+
+- A redelivery of the same day is a no-op.
+- A delivery whose *was* check fails raises before writing anything.
+- A delivery that fails part-way rolls back the images it had already closed.
+  Here it fails on an assignment whose `valid_to` precedes its `valid_from`.
 
 ```python
 apply_delivery(graph, **delivery)          # the same day, delivered again
@@ -287,18 +325,20 @@ graph.cypher("FOR VALID_TIME ALL MATCH (a:Assignment {id: 'ben.2:r'}) RETURN a.r
 ```
 
 Apply deliveries in the order the source recorded them, not the order a file
-lists them. The check-and-raise above is Python control flow inside the
-transaction. Cypher has no `ASSERT`. A binding whose transaction is staged
-and cannot branch between statements, such as Java's, has to make the check
-fail inside a statement. An integer division by zero (`1 / 0`) raises and
-rolls the transaction back, and that is the available idiom today.
+lists them.
+
+The check-and-raise above is Python control flow inside the transaction. Cypher
+has no `ASSERT`. A binding whose transaction is staged and cannot branch
+between statements, such as Java's, has to make the check fail inside a
+statement. An integer division by zero (`1 / 0`) raises and rolls the
+transaction back. That is the available idiom today.
 
 ### From successive snapshots
 
 Some sources deliver their whole table each period and say nothing about what
-changed. The recording history is then the difference between each snapshot
-and the images currently on record. Compare by key and by a digest of the
-content columns:
+changed. The recording history is then the difference between each snapshot and
+the images currently on record. Compare by key and by a digest of the content
+columns:
 
 - a key that is **new** gets an image added;
 - a key whose content **changed** has its current image closed (its
@@ -336,10 +376,16 @@ with graph.begin() as tx:
 ```
 
 `incoming` maps each snapshot key to its digest and `rows` holds the snapshot's
-images; [`examples/bitemporal_snapshots.py`](https://github.com/kkollsga/kglite/blob/main/examples/bitemporal_snapshots.py)
-is the complete, runnable version. Run on three month-end snapshots (the second
-ends `m1`'s validity, changes `m2`'s role and adds `m3`; the third drops `m1`),
-with the second and third delivered twice, it prints:
+images. [`examples/bitemporal_snapshots.py`](https://github.com/kkollsga/kglite/blob/main/examples/bitemporal_snapshots.py)
+is the complete, runnable version.
+
+The example runs on three month-end snapshots:
+
+- the second ends `m1`'s validity, changes `m2`'s role and adds `m3`;
+- the third drops `m1`;
+- the second and third are each delivered twice.
+
+It prints:
 
 ```text
 2024-01-31 {'added': 2, 'closed': 0}
@@ -350,11 +396,11 @@ with the second and third delivered twice, it prints:
 refused: snapshot 2024-02-29 is older than the latest applied (2024-03-31)
 ```
 
-**Read the current images under `FOR VALID_TIME ALL`.** Under the default
-(valid today) a membership whose validity has ended is hidden, so a
-current-image query without the prefix does not see it. Every snapshot would
-then find that key "new" and add another image of it. In the example, `m2`'s
-validity ended in 2023:
+**Read the current images under `FOR VALID_TIME ALL`.** Under the default (valid
+today), a membership whose validity has ended is hidden. A current-image query
+without the prefix does not see it. Every snapshot would then find that key
+"new" and add another image of it. In the example, `m2`'s validity ended in
+2023:
 
 ```text
 on record, valid today: ['m3']
@@ -362,7 +408,7 @@ on record, all validity: ['m2', 'm3']
 ```
 
 **Bootstrap with `add_nodes`.** The first snapshot goes through `add_nodes` with
-`column_types` (and `convention`) as in the set-up above: that is where the
+`column_types` (and `convention`) as in the set-up above. That is where the
 validity pair and the recording columns get their types, and a `MERGE` cannot
 declare them. Later snapshots only add images with the declared columns.
 
@@ -371,9 +417,11 @@ declare them. Later snapshots only add images with the declared columns.
 ### As of an instant
 
 The valid-time context filters every declared element, but it does not know
-about images: an open-ended image superseded on the recording axis is still
-valid on the valid axis. **As known now** is the recording test
-`recorded_to IS NULL`, and it belongs on every image the query reads:
+about images. An open-ended image superseded on the recording axis is still
+valid on the valid axis.
+
+**As known now** is the recording test `recorded_to IS NULL`. It belongs on
+every image the query reads:
 
 ```python
 CURRENT = """
@@ -404,17 +452,21 @@ sorted(current.ids())
 
 A statement without a prefix runs as of today (UTC), as the fluent API does
 ({doc}`valid-time`, section 2.1). A question about the images themselves, such
-as the audits and lineage below, reads every version: begin it with
+as the audits and lineage below, reads every version. Begin it with
 `FOR VALID_TIME ALL`.
 
 ### As known at an instant
 
 **As known at** `tt` is the half-open test on the recording pair:
-`recorded_from <= tt < recorded_to`, with a NULL `recorded_to` open. A
-recording chain is half-open by definition, because the new image's
-`recorded_from` is the old image's `recorded_to`. Compare against `date($tt)`,
-not `$tt`: the stored bounds are dates, and a date never equals a string. What
-a payroll run on 14 June saw for July, and what an export on 15 June saw:
+`recorded_from <= tt < recorded_to`, with a NULL `recorded_to` open. A recording
+chain is half-open by definition, because the new image's `recorded_from` is the
+old image's `recorded_to`.
+
+Compare against `date($tt)`, not `$tt`. The stored bounds are dates, and a date
+never equals a string.
+
+Below, what a payroll run on 14 June saw for July, and what an export on 15
+June saw:
 
 ```python
 AS_KNOWN = """
@@ -435,8 +487,8 @@ stored as datetimes (load them with the `'timestamp'` column type), compare
 against `datetime($tt)` instead.
 
 **The named form is the wrong tool for this axis.**
-`valid_at(a, $tt, 'recorded_from', 'recorded_to')` reads a property pair that
-no declaration names as **closed**, so at the instant of a recording it
+`valid_at(a, $tt, 'recorded_from', 'recorded_to')` reads a property pair that no
+declaration names as **closed**. At the instant of a recording it therefore
 matches both the image that ended and the one that began:
 
 ```python
@@ -452,10 +504,11 @@ graph.cypher("""
 ### Both axes, on every hop
 
 The context filters the valid axis on every hop by itself. The recording test
-filters only the element it names, so a hop without it reads every image. The
-employee-to-department question below crosses an assignment record and the
-declared `PART_OF` link, and needs the test on both. Generate the predicate
-from one template rather than typing it on each hop:
+filters only the element it names, so a hop without it reads every image.
+
+The employee-to-department question below crosses an assignment record and the
+declared `PART_OF` link, and needs the test on both. Generate the predicate from
+one template rather than typing it on each hop:
 
 ```python
 KNOWN = "{x}.recorded_from <= date($tt) AND ({x}.recorded_to IS NULL OR {x}.recorded_to > date($tt))"
@@ -472,8 +525,8 @@ graph.cypher(BOTH_HOPS, params={"tt": "2024-06-15"}, valid_at="2024-07-01").to_l
 #  {'employee': 'Ben', 'team': 'Platform', 'department': 'Engineering'}]
 ```
 
-Leave the test off the assignment hop and Ada comes back once per image valid
-on 1 July, whatever the system knew:
+Leave the test off the assignment hop and Ada comes back once per image valid on
+1 July, whatever the system knew:
 
 ```python
 ONE_HOP = f"""
@@ -492,9 +545,9 @@ axis, back again for the modelled one.
 
 ### Lineage
 
-An employee's assignment history joins records that never coexist, so ask it
-under `FOR VALID_TIME ALL`, with only the recording test. With every version in
-view the zero-length assignment is there too:
+An employee's assignment history joins records that never coexist. Ask it under
+`FOR VALID_TIME ALL`, with only the recording test. With every version in view,
+the zero-length assignment is there too:
 
 ```python
 LINEAGE = f"""
@@ -514,19 +567,21 @@ graph.cypher(LINEAGE, params={"employee": "ben", "tt": "2024-06-15"}).to_list()
 #  {'team': 'platform', 'valid_from': '2022-01-01', 'valid_to': None}]
 ```
 
-A successor relationship between anchors (a team replaced by another) is
-walked the same way: under a context, the default one included, a hop is
-visible only when both its ends are valid at the one instant, so the context
-truncates the chain. The pattern
-is in {doc}`valid-time`, section 6.
+A successor relationship between anchors (a team replaced by another) is walked
+the same way. Under a context, the default one included, a hop is visible only
+when both its ends are valid at the one instant. The context therefore truncates
+the chain. The pattern is in {doc}`valid-time`, section 6.
 
 ### Changed since, a day's delivery, and late recordings
 
 What changed since an instant is a question on the recording axis alone: an
-image that began or ended being known after it. A day's delivery is the same
-question asked for one day, and lists the images the day added and the images
-it superseded, which is enough to replay or audit that delivery. Comparing the
-two axes finds changes recorded more than a week after they took effect:
+image that began or ended being known after it.
+
+- A day's delivery is the same question asked for one day. It lists the images
+  the day added and the images it superseded, which is enough to replay or audit
+  that delivery.
+- Comparing the two axes finds changes recorded more than a week after they took
+  effect.
 
 ```python
 graph.cypher("""
@@ -560,15 +615,18 @@ graph.cypher("""
 #  {'record': 'ada.2:r', 'effective': '2024-06-01', 'recorded': '2024-06-15'}]
 ```
 
-This feed survives a save and a restart because it is data. The engine's
-change stream (`CALL db.cdc.*`) is process-local and never saved, so it is not
-a substitute.
+This feed survives a save and a restart because it is data. The engine's change
+stream (`CALL db.cdc.*`) is process-local and never saved, so it is not a
+substitute.
 
 ### Audit containment and overlap
 
-Two queries audit the current images, each across every valid-time version. An assignment should lie inside the
-period its team belongs to a department, and one employee's assignments
-should not overlap. Both come back empty on this history:
+Two queries audit the current images, each across every valid-time version:
+
+- An assignment should lie inside the period its team belongs to a department.
+- One employee's assignments should not overlap.
+
+Both come back empty on this history:
 
 ```python
 graph.cypher("""
@@ -597,9 +655,14 @@ reading it covers no day at all.
 
 ### The echo, and the other bindings
 
-Each result echoes its valid-time context in `diagnostics["temporal"]`: the
-instant, the declared targets the filter judged, how many rows each hid and the route it took. The
-recording test is ordinary `WHERE` text and does not appear there:
+Each result echoes its valid-time context in `diagnostics["temporal"]`:
+
+- the instant;
+- the declared targets the filter judged;
+- how many rows each hid;
+- the route it took.
+
+The recording test is ordinary `WHERE` text and does not appear there:
 
 ```python
 graph.cypher(AS_KNOWN, params={"tt": "2024-06-15"}, valid_at="2024-07-01").diagnostics["temporal"]
@@ -608,23 +671,34 @@ graph.cypher(AS_KNOWN, params={"tt": "2024-06-15"}, valid_at="2024-07-01").diagn
 #  'slice': False, 'session_version': 24}
 ```
 
-The other bindings follow the same rule. Java passes a `ValidAt` to `query`,
-`queryResult` or `queryBatch`, and the batch reads one snapshot for a
-multi-query report. The MCP `cypher_query`, `run_recipe_query` and named
-recipe tools take `valid_at` (`"all"` reads every version), and a recipe takes the recording instant as an
-ordinary parameter of its own. The C ABI, the `kglite` CLI and Bolt clients
-take query text, so write the `FOR VALID_TIME AS OF` prefix into it. On every
-route the recording instant is a query parameter.
+The other bindings follow the same rule:
+
+- **Java** passes a `ValidAt` to `query`, `queryResult` or `queryBatch`. The
+  batch reads one snapshot for a multi-query report.
+- **MCP** `cypher_query`, `run_recipe_query` and named recipe tools take
+  `valid_at` (`"all"` reads every version). A recipe takes the recording instant
+  as an ordinary parameter of its own.
+- **The C ABI, the `kglite` CLI and Bolt clients** take query text. Write the
+  `FOR VALID_TIME AS OF` prefix into it.
+
+On every route the recording instant is a query parameter.
 
 ## 6. Scale
 
-The measured envelope for a graph shaped like this one, with a declared
-half-open interval and a hand-written recording pair on every element, is
-published in {doc}`valid-time`,
-[section 8](valid-time.md#8-scale-what-one-process-holds-today), and kept
-there. In short: a million versions load in seconds and answer as-of joins in
-milliseconds in one process. In memory and mapped mode a 64-million-version
-history does not fit one 16 GB process (a regional slice of it does, and the
-whole needs a 64 GB machine or shards); disk mode built a 25-million-version
-register in one process on 16 GB, and {doc}`large-registers` describes how.
+The measured envelope for a graph shaped like this one is published in
+{doc}`valid-time`,
+[section 8](valid-time.md#8-scale-what-one-process-holds-today), and kept there.
+The graph has a declared half-open interval and a hand-written recording pair on
+every element.
+
+In short:
+
+- A million versions load in seconds and answer as-of joins in milliseconds in
+  one process.
+- In memory and mapped mode, a 64-million-version history does not fit one 16 GB
+  process. A regional slice of it does, and the whole needs a 64 GB machine or
+  shards.
+- Disk mode built a 25-million-version register in one process on 16 GB.
+  {doc}`large-registers` describes how.
+
 Each superseded image is a record of its own and takes its share of that budget.
