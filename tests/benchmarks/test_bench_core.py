@@ -349,6 +349,62 @@ def test_bench_delete_after_create(benchmark):
     benchmark.pedantic(delete_fresh, setup=setup, rounds=100, warmup_rounds=20, iterations=1)
 
 
+def _graph_with_scattered_deletes(size: int = 1_000_000, deletes: int = 2_000) -> KnowledgeGraph:
+    """A ``size``-node ``Item`` type with ``deletes`` scattered nodes deleted.
+
+    The deletes leave vacated slots on the node free list, which is the state
+    a copy-on-write fork has to reproduce slot for slot (issue #195).
+    """
+    import random
+
+    # Built with Cypher, not `add_nodes`: a bulk-loaded type is columnar, and
+    # its first write under a fork copies the column store (~8.6 ms at 1M),
+    # which would bury the fork cost these cells exist to see.
+    graph = KnowledgeGraph()
+    graph.cypher(f"UNWIND range(0, {size - 1}) AS i CREATE (:Item {{uid: i}})")
+    doomed = random.Random(7).sample(range(size), deletes)
+    graph.cypher("UNWIND $ids AS i MATCH (n:Item {uid: i}) DELETE n", params={"ids": doomed})
+    return graph
+
+
+@pytest.mark.benchmark
+def test_bench_write_tx_after_deletes(benchmark):
+    """One ``begin()`` / ``CREATE`` / ``commit()`` on a 1M-node graph with scattered deletes.
+
+    Every transaction forks the graph it began on. A fork that cannot share a
+    base with vacated slots deep-copies it instead: 16.7-17.2 ms per
+    transaction against 0.85-0.97 ms (2026-10-05).
+    """
+    graph = _graph_with_scattered_deletes()
+    uids = iter(range(10_000_000, 20_000_000))
+
+    def write():
+        tx = graph.begin()
+        tx.cypher("CREATE (:Item {uid: $u})", params={"u": next(uids)})
+        tx.commit()
+
+    benchmark(write)
+
+
+@pytest.mark.benchmark
+def test_bench_scan_under_held_overlay_after_deletes(benchmark):
+    """A labeled filtered scan while ``freeze()`` holds the base and 100 creates sit in the writer's fork.
+
+    The creates reuse vacated slots. Before overlay reads skipped the hash map
+    for base nodes, this scan read 14.4 ms against 9.1 ms unforked (2026-10-05).
+    """
+    graph = _graph_with_scattered_deletes()
+    view = graph.freeze()
+    graph.cypher("UNWIND range(1, 100) AS i CREATE (:Item {uid: 40000000 + i})")
+
+    def scan():
+        return graph.cypher("MATCH (n:Item) WHERE n.uid < 0 RETURN count(n) AS c").to_list()
+
+    assert scan() == [{"c": 0}]
+    benchmark(scan)
+    del view
+
+
 @pytest.mark.benchmark
 def test_bench_cypher_match(benchmark, bench_graph):
     """Simple MATCH...RETURN query."""
