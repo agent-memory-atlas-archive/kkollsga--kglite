@@ -2,6 +2,7 @@
   "connection_types": {
     "KNOWS": {
       "count": 1700,
+      "properties": {},
       "source_types": [
         "Person"
       ],
@@ -11,6 +12,7 @@
     },
     "LIVES_IN": {
       "count": 500,
+      "properties": {},
       "source_types": [
         "Person"
       ],
@@ -20,6 +22,7 @@
     },
     "LOCATED_IN": {
       "count": 300,
+      "properties": {},
       "source_types": [
         "Company"
       ],
@@ -29,6 +32,7 @@
     },
     "WORKS_AT": {
       "count": 500,
+      "properties": {},
       "source_types": [
         "Person"
       ],
