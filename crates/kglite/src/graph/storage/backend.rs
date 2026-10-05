@@ -508,10 +508,19 @@ impl GraphBackend {
         if !matches!(self, GraphBackend::Forked(_)) {
             return;
         }
-        let GraphBackend::Forked(mut forked) = std::mem::replace(self, GraphBackend::new()) else {
+        let GraphBackend::Forked(forked) = self else {
             unreachable!("just matched Forked")
         };
-        *self = GraphBackend::Memory(Arc::new(forked.materialise()));
+        // `materialise` borrows the overlay and folds into a copy, so a refusal
+        // leaves this backend serving the intact overlay rather than an empty
+        // placeholder whose indexes point at nothing (issue #195).
+        match forked.materialise() {
+            Ok(memory) => *self = GraphBackend::Memory(Arc::new(memory)),
+            Err(reason) => panic!(
+                "cannot collapse the copy-on-write overlay: {reason}; the overlay \
+                 is left intact (see storage/forked.rs)"
+            ),
+        }
     }
 
     /// Install a fresh undo journal on a petgraph-backed backend. No-op on
@@ -1093,7 +1102,10 @@ impl Serialize for GraphBackend {
             // Serialization needs one concrete `StableDiGraph`, so the overlay is
             // folded into a throwaway copy. O(V+E) — but so is writing the file,
             // and the bytes are identical to the unforked graph's.
-            GraphBackend::Forked(g) => g.to_memory_graph().serialize(serializer),
+            GraphBackend::Forked(g) => g
+                .to_memory_graph()
+                .map_err(serde::ser::Error::custom)?
+                .serialize(serializer),
             GraphBackend::Disk(_) => Err(serde::ser::Error::custom(
                 "Disk backend does not support serialization",
             )),
