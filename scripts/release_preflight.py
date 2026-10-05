@@ -229,9 +229,28 @@ def check_formatting() -> Check:
     return Check("formatting", True, "cargo fmt and ruff format are clean")
 
 
+SIZE_BASELINE_RE = re.compile(
+    r'^\s*"(?P<platform>darwin|linux)"\s*:\s*\(\s*[0-9_]+\s*,\s*"(?P<version>[^"]*)"\s*\)', re.MULTILINE
+)
+
+
+def _previous_release(version: str) -> str | None:
+    """The newest CHANGELOG release section other than ``version``."""
+    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
+        match = RELEASE_SECTION_RE.match(line)
+        if match is not None and match.group("version") != version:
+            return match.group("version")
+    return None
+
+
 def check_captured_constants(version: str) -> Check:
     """The captured constants that are cheap to verify from files alone:
-    the per-version perf baseline and the phase-5 size-history entry.
+    the per-version perf baseline, the phase-5 size-history entry, and the
+    versions the two binary-size baselines describe.
+
+    macOS must be measured at the version being cut. Linux must be the
+    previous release's published wheel member; a Linux row older than that
+    is the stale-baseline failure that left it at 0.17.12 through 0.19.1.
 
     The `.kgl` golden digest is deliberately not recomputed here — that
     needs a built extension, and the phase-4 parity test is its gate.
@@ -241,12 +260,25 @@ def check_captured_constants(version: str) -> Check:
     baseline = BASELINES_DIR / f"{_version_slug(version)}{suffix}.json"
     if not baseline.exists():
         problems.append(f"no perf baseline {baseline.name}")
-    history = re.search(rf"^\s+- {re.escape(version)}:", PHASE5_TEST.read_text(encoding="utf-8"), re.MULTILINE)
+    phase5 = PHASE5_TEST.read_text(encoding="utf-8")
+    history = re.search(rf"^\s+- {re.escape(version)}:", phase5, re.MULTILINE)
     if history is None:
         problems.append(f"no {version} entry in the phase-5 binary-size history")
+    sizes = {m.group("platform"): m.group("version") for m in SIZE_BASELINE_RE.finditer(phase5)}
+    expected = {"darwin": version, "linux": _previous_release(version)}
+    for platform, want in expected.items():
+        have = sizes.get(platform)
+        if have is None:
+            problems.append(f"no {platform} binary-size baseline entry")
+        elif want is not None and have != want:
+            problems.append(f"{platform} binary-size baseline describes {have}, expected {want}")
     if problems:
         return Check("captured constants", False, "; ".join(problems), "make refresh-release-constants")
-    return Check("captured constants", True, f"perf baseline and size-history entry present for {version}")
+    return Check(
+        "captured constants",
+        True,
+        f"perf baseline, size history and size baselines current for {version}",
+    )
 
 
 def check_hygiene() -> Check:

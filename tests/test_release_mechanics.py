@@ -253,3 +253,49 @@ def test_preflight_member_inheritance_accepts_only_workspace_inheritance(tmp_pat
     monkeypatch.setattr(release_preflight.bump_version, "member_manifests", lambda: [manifest])
     result = release_preflight.check_member_inheritance("0.19.0")
     assert result.ok is ok, result.detail
+
+
+# ── preflight: binary-size baselines describe the right releases ───────
+
+
+def _size_fixture(tmp_path, monkeypatch, darwin: str, linux: str):
+    baselines = tmp_path / "baselines"
+    baselines.mkdir()
+    for name in ("0_2_0.json", "0_2_0.linux.json"):
+        (baselines / name).write_text("{}", encoding="utf-8")
+    phase5 = tmp_path / "test_phase5_parity.py"
+    phase5.write_text(
+        "BINARY_SIZE_BASELINES = {\n"
+        f'    "darwin": (10_000, "{darwin}"),  # host release build\n'
+        f'    "linux": (20_000, "{linux}"),  # published manylinux2014 x86_64 wheel member\n'
+        "}\n"
+        "    Baseline history:\n"
+        "      - 0.2.0:  10,000 bytes.\n",
+        encoding="utf-8",
+    )
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [Unreleased]\n\n## [0.2.0] - x\n\n## [0.1.9] - x\n\n## [0.1.8] - x\n", encoding="utf-8")
+    monkeypatch.setattr(release_preflight, "BASELINES_DIR", baselines)
+    monkeypatch.setattr(release_preflight, "PHASE5_TEST", phase5)
+    monkeypatch.setattr(release_preflight, "CHANGELOG", changelog)
+
+
+def test_preflight_accepts_size_baselines_for_the_cut_and_the_previous_release(tmp_path, monkeypatch):
+    _size_fixture(tmp_path, monkeypatch, darwin="0.2.0", linux="0.1.9")
+    result = release_preflight.check_captured_constants("0.2.0")
+    assert result.ok, result.detail
+
+
+@pytest.mark.parametrize(
+    ("darwin", "linux", "stale"),
+    [
+        # The 0.19.1 failure: the Linux row stayed releases behind.
+        ("0.2.0", "0.1.8", "linux"),
+        ("0.1.9", "0.1.9", "darwin"),
+    ],
+)
+def test_preflight_refuses_a_stale_size_baseline(tmp_path, monkeypatch, darwin, linux, stale):
+    _size_fixture(tmp_path, monkeypatch, darwin=darwin, linux=linux)
+    result = release_preflight.check_captured_constants("0.2.0")
+    assert not result.ok
+    assert stale in result.detail

@@ -164,7 +164,8 @@ semver-check:
 	cargo semver-checks check-release -p kglite --baseline-version $$(curl -s -H "User-Agent: kglite-semver-check" https://crates.io/api/v1/crates/kglite | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_stable_version'])") || true
 
 ## Refresh the three captured constants that drift across releases:
-## the .kgl golden digest, the binary-size baseline, and the perf
+## the .kgl golden digest, the binary-size baselines (macOS host build +
+## the published Linux wheel member), and the perf
 ## baseline. Run as part of every release commit — see CLAUDE.md
 ## under "Captured-constant refresh at release time".
 refresh-release-constants:

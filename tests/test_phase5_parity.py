@@ -89,20 +89,19 @@ def test_graph_copy_cow_correctness_mapped():
     assert mod == [{"age": 99}], f"mapped copy update lost: {mod}"
 
 
-#: Per-platform release-wheel library size baseline. The Linux ELF
-#: (`libkglite_py.so`) is ~65% larger than the macOS Mach-O (`.dylib`) for the
-#: same source — different linker behaviour around debug info, lazy
-#: binding, and the absence of macOS-style `strip` defaults. CI runs on
-#: Linux; most local development happens on macOS; both pin separately.
-#: Update both at release time via `make refresh-release-constants`
-#: (run on each platform; the script writes whichever entry matches the
-#: current host).
+#: Per-platform release library size baseline, as (size in bytes, version it
+#: describes). The Linux ELF is larger than the macOS Mach-O for the same
+#: source (linker, debug-info and strip defaults differ); CI gates Linux, local
+#: development gates macOS. `make refresh-release-constants` rewrites both rows
+#: on a macOS host: macOS from the host release build at the version being cut,
+#: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
+#: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": 28_207_248,  # 0.19.3 darwin baseline
-    # Published 0.19.1 manylinux2014 x86_64 wheel member
-    # `kglite/kglite.abi3.so`; artifact identity is recorded in the history below.
-    "linux": 34_169_144,
+    "darwin": (28_207_248, "0.19.3"),  # host release build
+    "linux": (34_673_848, "0.19.3"),  # published manylinux2014 x86_64 wheel member
 }
+LINUX_SIZE_WHEEL = "kglite-0.19.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "b6229ede5d50ac15113dfeadf88811988ccf540e7a04700b9ae17e13eb6c5d27"
 
 
 @pytest.mark.binary_size
@@ -637,17 +636,17 @@ def test_binary_size_regression():
         pytest.fail("kglite-py release cdylib is missing — run `maturin build --release`")
 
     size = bin_path.stat().st_size
-    # Never fall back to another platform's number: the Linux baseline is
-    # itself an unverified estimate, so comparing e.g. a Windows MSVC DLL
-    # against it would report a meaningless pass or failure.
+    # Never fall back to another platform's number: each baseline describes one
+    # platform's artifact, so comparing e.g. a Windows MSVC DLL against the
+    # Linux wheel member would report a meaningless pass or failure.
     if sys.platform not in BINARY_SIZE_BASELINES:
         pytest.skip(f"no measured binary-size baseline for {sys.platform}; capture one before gating it")
     platform_key = sys.platform
-    baseline = BINARY_SIZE_BASELINES[platform_key]
+    baseline, baseline_version = BINARY_SIZE_BASELINES[platform_key]
     gate = int(baseline * 1.10)
     assert size <= gate, (
         f"{bin_path.name} = {size:,} bytes > gate {gate:,} "
-        f"(+10% over 0.19.3 {platform_key} baseline {baseline:,}). "
+        f"(+10% over {baseline_version} {platform_key} baseline {baseline:,}). "
         "Investigate what grew before raising the gate — see the "
         "growth note in this test's docstring for the breakdown shape."
     )

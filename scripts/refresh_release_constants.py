@@ -9,7 +9,11 @@ nobody updates them at release time:
      digest even when the format itself is unchanged.
 
   2. ``tests/test_phase5_parity.py::test_binary_size_regression``
-     baseline — the release-built ``libkglite`` size, +10% over baseline.
+     baselines, +10% budget each. macOS: the host release-built
+     ``libkglite_py.dylib``, stamped with the version being cut. Linux: the
+     ``kglite/kglite.abi3.so`` member of the newest manylinux2014 x86_64
+     wheel already on PyPI, SHA-256-checked against PyPI's digest and
+     stamped with that published version.
 
   3. ``tests/benchmarks/baselines/<version>.json`` — pytest-benchmark
      JSON for the tracked core benchmarks. ``current.json`` is a copy.
@@ -53,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -60,6 +65,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
+import urllib.request
+import zipfile
 
 try:
     from scripts.benchmark_qualification import record_capture
@@ -116,16 +124,13 @@ def version_slug(version: str) -> str:
 
 
 def find_release_dylib() -> Path | None:
-    """Locate the wheel cdylib, falling back to the core Rust library."""
-    for cand in (
-        REPO_ROOT / "target" / "release" / "libkglite_py.dylib",
-        REPO_ROOT / "target" / "release" / "libkglite_py.so",
-        REPO_ROOT / "target" / "release" / "libkglite.dylib",
-        REPO_ROOT / "target" / "release" / "libkglite.so",
-    ):
-        if cand.exists():
-            return cand
-    return None
+    """Locate the wheel cdylib the macOS host baseline describes.
+
+    Only kglite-py's cdylib is the shipped extension; the engine's own
+    ``libkglite`` is a different artifact and must not stand in for it.
+    """
+    cand = REPO_ROOT / "target" / "release" / "libkglite_py.dylib"
+    return cand if cand.exists() else None
 
 
 # ── 1. .kgl v3 golden digest ───────────────────────────────────────────
@@ -188,17 +193,137 @@ def refresh_kgl_golden(version: str, new_digest: str) -> tuple[bool, str]:
 
 # ── 2. Binary-size baseline ────────────────────────────────────────────
 
+PYPI_JSON_URL = "https://pypi.org/pypi/kglite/json"
+LINUX_WHEEL_TAG = "manylinux2014_x86_64"
+LINUX_WHEEL_MEMBER = "kglite/kglite.abi3.so"
+HOST_COMMENT = "host release build"
+LINUX_COMMENT = "published manylinux2014 x86_64 wheel member"
+LINUX_WHEEL_RE = re.compile(r'^LINUX_SIZE_WHEEL = "[^"]*"$', re.MULTILINE)
+LINUX_SHA_RE = re.compile(r'^LINUX_SIZE_WHEEL_SHA256 = "[^"]*"$', re.MULTILINE)
 
-def refresh_binary_size(version: str, current_size: int) -> tuple[bool, str]:
-    """Update the current platform's size baseline + history note."""
-    text = PHASE5_TEST.read_text(encoding="utf-8")
 
-    platform_key = sys.platform if sys.platform in {"darwin", "linux"} else "linux"
-    bl_match = re.search(
-        rf'^(\s*"{platform_key}"\s*:\s*)([0-9_]+)(,\s*#\s*[^\n]+\n)',
+class LinuxMember(NamedTuple):
+    """The published Linux extension the Linux size baseline describes."""
+
+    version: str
+    wheel: str
+    sha256: str
+    size: int
+
+
+def _baseline_entry(text: str, platform_key: str) -> re.Match[str] | None:
+    """Match ``"<platform>": (<size>, "<version>"),  # <comment>``."""
+    return re.search(
+        rf'^(\s*"{platform_key}"\s*:\s*)\(\s*([0-9_]+)\s*,\s*"([^"]*)"\s*\),[^\n]*\n',
         text,
         re.MULTILINE,
     )
+
+
+def _baseline_line(match: re.Match[str], size: int, version: str, comment: str) -> str:
+    return f'{match.group(1)}({size:_}, "{version}"),  # {comment}\n'
+
+
+def _http_get(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 - fixed https URLs
+        return response.read()
+
+
+def _release_key(version: str) -> tuple[int, ...] | None:
+    """Numeric sort key, or ``None`` for a pre-release / non-numeric version."""
+    parts = version.split(".")
+    if not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def previous_published_linux_member(version: str) -> LinuxMember:
+    """Measure the extension in the newest published manylinux x86_64 wheel
+    older than ``version``.
+
+    The Linux baseline is the artifact users install, so it comes from PyPI
+    rather than from this host. The wheel is checked against PyPI's SHA-256
+    before its member is read; a mismatch aborts the refresh.
+    """
+    cut = _release_key(version)
+    if cut is None:
+        raise RefreshError(f"workspace version {version!r} is not a plain x.y.z release")
+    try:
+        index = json.loads(_http_get(PYPI_JSON_URL))
+    except (OSError, ValueError) as exc:
+        raise RefreshError(f"could not read the PyPI index {PYPI_JSON_URL}: {exc}") from exc
+
+    candidates: list[tuple[tuple[int, ...], str, dict]] = []
+    for published, files in index.get("releases", {}).items():
+        key = _release_key(published)
+        if key is None or key >= cut:
+            continue
+        for entry in files:
+            name = entry.get("filename", "")
+            if LINUX_WHEEL_TAG in name and name.endswith(".whl") and not entry.get("yanked", False):
+                candidates.append((key, published, entry))
+                break
+    if not candidates:
+        raise RefreshError(f"PyPI lists no {LINUX_WHEEL_TAG} wheel published before {version}")
+    _, published, entry = max(candidates, key=lambda candidate: candidate[0])
+
+    name = entry["filename"]
+    expected = entry.get("digests", {}).get("sha256", "")
+    try:
+        payload = _http_get(entry["url"])
+    except OSError as exc:
+        raise RefreshError(f"could not download {name}: {exc}") from exc
+    actual = hashlib.sha256(payload).hexdigest()
+    if not expected or actual != expected:
+        raise RefreshError(
+            f"{name}: downloaded SHA-256 {actual} does not match PyPI's {expected or '(none listed)'}; "
+            "refusing to record a size from an unverified artifact."
+        )
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as wheel:
+            size = wheel.getinfo(LINUX_WHEEL_MEMBER).file_size
+    except (KeyError, zipfile.BadZipFile) as exc:
+        raise RefreshError(f"{name}: cannot read member {LINUX_WHEEL_MEMBER}: {exc}") from exc
+    return LinuxMember(published, name, actual, size)
+
+
+def refresh_linux_binary_size(member: LinuxMember) -> tuple[bool, str]:
+    """Point the Linux size baseline at ``member`` and record its identity."""
+    text = PHASE5_TEST.read_text(encoding="utf-8")
+    entry = _baseline_entry(text, "linux")
+    if entry is None or LINUX_WHEEL_RE.search(text) is None or LINUX_SHA_RE.search(text) is None:
+        raise RefreshError(
+            "tests/test_phase5_parity.py: the Linux baseline entry or its LINUX_SIZE_WHEEL / "
+            "LINUX_SIZE_WHEEL_SHA256 lines were not found. Fix the rewriter before releasing."
+        )
+    original = text
+    text = (
+        text[: entry.start()] + _baseline_line(entry, member.size, member.version, LINUX_COMMENT) + text[entry.end() :]
+    )
+    text = LINUX_WHEEL_RE.sub(f'LINUX_SIZE_WHEEL = "{member.wheel}"', text, count=1)
+    text = LINUX_SHA_RE.sub(f'LINUX_SIZE_WHEEL_SHA256 = "{member.sha256}"', text, count=1)
+    if text == original:
+        return False, f"Linux baseline already the published {member.version} member ({member.size:,} bytes)"
+    PHASE5_TEST.write_text(text, encoding="utf-8", newline="\n")
+    return True, f"Linux baseline -> published {member.version} member, {member.size:,} bytes ({member.wheel})"
+
+
+def refresh_binary_size(version: str, current_size: int) -> tuple[bool, str]:
+    """Update the macOS host baseline + history note.
+
+    Only a macOS host may run this step: its library is the darwin row's
+    artifact. Linux is refreshed from the published wheel instead, and any
+    other host's library describes neither row.
+    """
+    if sys.platform != "darwin":
+        raise RefreshError(
+            f"the host binary-size baseline is the macOS release build; this host is {sys.platform!r}. "
+            "Run the refresh on macOS (the Linux row comes from the published wheel)."
+        )
+    text = PHASE5_TEST.read_text(encoding="utf-8")
+
+    platform_key = "darwin"
+    bl_match = _baseline_entry(text, platform_key)
     if bl_match is None:
         raise RefreshError(
             f"tests/test_phase5_parity.py: no {platform_key!r} baseline entry to update. The "
@@ -215,19 +340,17 @@ def refresh_binary_size(version: str, current_size: int) -> tuple[bool, str]:
         # not an unchanged one. Returning early here made the two tools
         # disagree: this one reported "already current" while preflight
         # reported "no entry", which is exactly what happened cutting 0.15.1.
-        # So fall through and write the row (and re-stamp the version comment
-        # on the baseline line), just with the value left alone.
+        # So fall through and write the row (and re-stamp the version on the
+        # baseline line), just with the value left alone.
         pass
 
-    # Re-stamp the baseline line so its comment names the version being cut,
-    # even when the number itself did not move.
-    formatted = f"{current_size:_}".replace("_", "_")  # "12_345_678" style
-    # No "(unchanged)" marker here: the comment must be a pure function of
-    # (size, version, platform) or re-stamping it is not idempotent, and the
-    # second refresh of a release would report a change that did not happen.
-    # The unchanged-ness is recorded in the history row's prose instead.
-    new_line = f"{bl_match.group(1)}{formatted},  # {version} {platform_key} baseline\n"
-    text = text[: bl_match.start()] + new_line + text[bl_match.end() :]
+    # Re-stamp the version even when the number did not move. The line must be
+    # a pure function of (size, version) or re-stamping is not idempotent.
+    text = (
+        text[: bl_match.start()]
+        + _baseline_line(bl_match, current_size, version, HOST_COMMENT)
+        + text[bl_match.end() :]
+    )
 
     # Best-effort: drop a marker into the docstring's "Baseline history:"
     # block so the growth narrative gains an entry. We don't try to
@@ -262,14 +385,6 @@ def refresh_binary_size(version: str, current_size: int) -> tuple[bool, str]:
         history_anchor = "    Raising the baseline is a deliberate act"
         if history_anchor in text:
             text = text.replace(history_anchor, todo_marker + "\n" + history_anchor, 1)
-
-    # Update the in-message "+10% over X baseline" string to reference
-    # the new version.
-    text = re.sub(
-        r"\(\+10% over [^)]* baseline \{baseline:,\}\)",
-        f"(+10% over {version} {{platform_key}} baseline {{baseline:,}})",
-        text,
-    )
 
     if text == original_text:
         # Re-running after a completed refresh must be a no-op, or the caller
@@ -415,16 +530,18 @@ def run() -> None:
     print(f"   {'CHANGED' if changed else 'no-op '}: {msg}\n")
 
     # 2. binary size
-    print("2. binary-size baseline")
+    print("2. binary-size baselines")
     dylib = find_release_dylib()
     if dylib is None:
         raise RefreshError(
-            "no target/release/libkglite_py.{dylib,so} or libkglite.{dylib,so} — the binary-size "
-            "baseline describes the release artifact and cannot be captured without one.\n"
-            "  uv run --no-sync maturin develop --release   (or: cargo build --release)"
+            "no target/release/libkglite_py.dylib — the macOS binary-size baseline describes the "
+            "release-built extension and cannot be captured without one.\n"
+            "  uv run --no-sync maturin develop --release"
         )
     size = dylib.stat().st_size
     changed, msg = refresh_binary_size(version, size)
+    print(f"   {'CHANGED' if changed else 'no-op '}: macOS {msg}")
+    changed, msg = refresh_linux_binary_size(previous_published_linux_member(version))
     print(f"   {'CHANGED' if changed else 'no-op '}: {msg}\n")
 
     # 3. perf baseline
