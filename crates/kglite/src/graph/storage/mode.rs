@@ -188,7 +188,10 @@ pub fn live_storage_mode(graph: &DirGraph) -> StorageMode {
 /// policy (`memory_limit`), not the representation of the nodes and edges. So
 /// the switch moves the petgraph across — `mem::take`, never a clone, so the
 /// two topologies never coexist — and node indices, and therefore every index
-/// keyed on them, survive untouched.
+/// keyed on them, survive untouched. The one copy is a copy-on-write overlay
+/// whose base a reader (a held view, an open transaction) still holds: it is
+/// collapsed first, which deep-copies that base and leaves the reader's
+/// snapshot as it was.
 ///
 /// **What it deliberately is not.** Converting to `Mapped` sets the spill
 /// policy; it does not retroactively push already-materialized columns out to
@@ -213,6 +216,23 @@ pub fn convert_dir_graph_to_mode(
     if current == StorageMode::Disk || requested == StorageMode::Disk {
         return Err(disk_conversion_refusal(current, requested));
     }
+    // A recording wrapper is mid-flight write-ahead-log capture. Unwrapping it
+    // here would silently drop the capture layer along with everything it has
+    // buffered, so the conversion has to happen before durability is attached
+    // — which is where every current caller does it.
+    if matches!(graph.graph, GraphBackend::Recording(_)) {
+        return Err(format!(
+            "cannot switch storage mode to '{}' on a graph with write-ahead logging \
+             already attached. Open the graph in the mode you want, then enable \
+             durability.",
+            requested.as_str()
+        ));
+    }
+    // A copy-on-write overlay over a base a reader still holds has no single
+    // `StableDiGraph` to move; collapse it first, as `enable_disk_mode` does.
+    // A fold when the reader has gone, one deep copy of the base otherwise —
+    // the reader's snapshot is never touched.
+    graph.graph.flatten_fork();
     // The stores are backend-owned state; the new backend must
     // inherit them or every columnar node loses its properties, id and title.
     let carried_stores: Vec<(InternedKey, std::sync::Arc<ColumnStore>)> = graph
@@ -227,17 +247,9 @@ pub fn convert_dir_graph_to_mode(
         GraphBackend::Mapped(mapped) => {
             std::mem::take(crate::graph::storage::backend::unique_heap_backend(mapped).inner_mut())
         }
-        // A recording wrapper is mid-flight write-ahead-log capture. Unwrapping
-        // it here would silently drop the capture layer along with everything
-        // it has buffered, so the conversion has to happen before durability is
-        // attached — which is where every current caller does it.
-        _ => {
-            return Err(format!(
-                "cannot switch storage mode to '{}' on a graph with write-ahead logging \
-                 already attached. Open the graph in the mode you want, then enable \
-                 durability.",
-                requested.as_str()
-            ))
+        GraphBackend::Forked(_) => unreachable!("flatten_fork collapsed the overlay above"),
+        GraphBackend::Disk(_) | GraphBackend::Recording(_) => {
+            unreachable!("refused above")
         }
     };
     graph.graph = if requested == StorageMode::Mapped {
@@ -436,6 +448,48 @@ mod tests {
             .expect_err("a durable graph must not be silently unwrapped");
         assert!(error.contains("write-ahead logging"), "{error}");
         assert!(matches!(graph.graph, GraphBackend::Recording(_)));
+    }
+
+    /// A writer whose base a reader still holds is a copy-on-write overlay, not
+    /// a write-ahead-log wrapper; the conversion must collapse it the way every
+    /// other whole-graph operation does, not refuse it as a durable graph.
+    #[test]
+    fn forked_writer_converts_and_leaves_the_reader_untouched() {
+        for deletes in [false, true] {
+            let mut seed = seeded(StorageMode::Memory);
+            if deletes {
+                let params = HashMap::new();
+                execute_mut(
+                    &mut seed,
+                    "MATCH (n:Person {id:1}) DELETE n",
+                    &ExecuteOptions::eager(&params),
+                )
+                .expect("fixture DELETE");
+            }
+            let mut writer = std::sync::Arc::new(seed);
+            let reader = std::sync::Arc::clone(&writer);
+            let before = people(&reader);
+            let graph = crate::graph::handle::make_dir_graph_mut(&mut writer);
+            let params = HashMap::new();
+            execute_mut(
+                graph,
+                "CREATE (:Person {id:3, title:'Cleo', age:41})",
+                &ExecuteOptions::eager(&params),
+            )
+            .expect("write under the held reader");
+            assert!(
+                graph.graph.is_forked(),
+                "fixture must exercise the overlay (deletes={deletes})"
+            );
+            let expected = people(graph);
+            for to in [StorageMode::Mapped, StorageMode::Memory] {
+                convert_dir_graph_to_mode(graph, to)
+                    .unwrap_or_else(|e| panic!("deletes={deletes} ->{to:?}: {e}"));
+                assert_eq!(live_storage_mode(graph), to);
+                assert_eq!(people(graph), expected, "deletes={deletes} ->{to:?}");
+            }
+            assert_eq!(people(&reader), before, "the reader's snapshot moved");
+        }
     }
 
     #[test]

@@ -45,6 +45,10 @@ before upgrading.
 
 ### Fixed
 
+- Rust: `kglite::api::storage::convert_dir_graph_to_mode` now converts a
+  memory graph written to while a reader held it (a frozen view, an open
+  transaction, a held result). It refused the conversion with a message about
+  write-ahead logging, which the graph did not have.
 - The `store_as=` writers (`calculate`, `count`, `unique_values`,
   `collect_children`) raise a `UserWarning` when they leave a row with an
   empty validity interval, as `update()` and the loaders do.
