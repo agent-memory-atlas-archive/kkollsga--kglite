@@ -1366,7 +1366,7 @@ fn resolve_column_type(kinds: u16, fit: IntFit) -> ColumnType {
 
 /// How a loose set of values maps onto the [`ColumnType`] vocabulary.
 ///
-/// A row-wise writer (`mutation::maintain::update_node_properties`) records a
+/// A row-wise writer (`mutation::property_updates::update_node_properties`) records a
 /// property's observed type without ever building a frame. Sharing
 /// [`resolve_column_type`] with it is what makes the type a property gets from
 /// `add_property` equal to the one the same values get from `add_nodes`.

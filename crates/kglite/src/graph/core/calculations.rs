@@ -254,7 +254,7 @@ pub fn process_equation(
     }
 
     // Update the node properties with verified node indices
-    let update_result = crate::graph::mutation::maintain::update_node_properties(
+    let update_result = crate::graph::mutation::property_updates::update_node_properties(
         graph,
         &nodes_to_update,
         target_property,
@@ -692,7 +692,7 @@ pub fn store_count_results(
     }
 
     // Use the optimized batch update (which now returns a NodeOperationReport)
-    let update_result = match crate::graph::mutation::maintain::update_node_properties(
+    let update_result = match crate::graph::mutation::property_updates::update_node_properties(
         graph,
         &nodes_to_update,
         target_property,

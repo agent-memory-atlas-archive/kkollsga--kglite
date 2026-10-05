@@ -134,8 +134,8 @@ pub fn declare_from_column_types(
             changed: false,
             rows: 0,
             abutting_rows: None,
-            warning: None,
-            diagnostic: None,
+            warnings: Vec::new(),
+            diagnostics: Vec::new(),
         });
         return Ok(load);
     }

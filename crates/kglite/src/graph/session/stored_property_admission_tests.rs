@@ -4,7 +4,8 @@ use crate::graph::cdc::{self, CdcEnrichment};
 use crate::graph::mutation::{
     add_properties::{add_properties, PropertySpec},
     extend::extend_graph,
-    maintain::{add_connections, add_nodes, update_node_properties},
+    maintain::{add_connections, add_nodes},
+    property_updates::update_node_properties,
     subgraph::extract_subgraph,
 };
 use crate::graph::schema::{CurrentSelection, DirGraph, InternedKey};

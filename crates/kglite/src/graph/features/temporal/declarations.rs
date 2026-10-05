@@ -77,13 +77,13 @@ pub struct DeclareReport {
     /// entity twice because of them. `None` when not counted: a no-op, or a disk-mode label
     /// above [`DISK_NODE_ABUTMENT_CAP`] rows.
     pub abutting_rows: Option<usize>,
-    /// The advisory a declaration earns, at most one applying: a half-open
-    /// one with rows whose interval is empty (valid at no instant, kept and
-    /// counted), a closed one with abutting rows, or one whose `to` property
-    /// no row carries yet.
-    pub warning: Option<String>,
-    /// `warning` with its classification, for a caller that reports by group.
-    pub diagnostic: Option<Diagnostic>,
+    /// The advisories a declaration earns, in this order when several apply:
+    /// a closed one with abutting rows, rows whose interval is empty (valid
+    /// at no instant, kept and counted), and a `to` property no row carries
+    /// yet.
+    pub warnings: Vec<String>,
+    /// `warnings` with each entry's classification, in the same order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// One entry of [`list`].
@@ -105,9 +105,8 @@ pub struct DeclarationInfo {
     /// Rows whose interval is empty now, valid at no instant: `from == to`
     /// under half-open, which a declaration and every load or Cypher write
     /// accept with a warning, or `from` after `to`, which they refuse and
-    /// only a writer the check does not judge can leave (a fluent
-    /// `update()`, an undeclare that hands a source's relationships to the
-    /// unkeyed declaration, or a graph saved by an earlier version). Counted
+    /// only an undeclare that hands a source's relationships to the unkeyed
+    /// declaration, or a graph saved by an earlier version, can leave. Counted
     /// at the graph's current version; `None` where not counted.
     pub empty_rows: Option<usize>,
     /// Rows holding a bound that is now unreadable (not NULL, a date, a
@@ -577,8 +576,8 @@ pub(super) fn declare_walked(
             changed: false,
             rows: 0,
             abutting_rows: None,
-            warning: None,
-            diagnostic: None,
+            warnings: Vec::new(),
+            diagnostics: Vec::new(),
         });
     }
     let Walk {
@@ -604,15 +603,20 @@ pub(super) fn declare_walked(
     .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "abutting_intervals", m));
     let open_ended =
         open_ended.map(|m| Diagnostic::new(DiagnosticGroup::DataShape, "open_ended_interval", m));
-    let diagnostic = abutment.or(empty_warning).or(open_ended);
+    // Every advisory that applies: the empty-interval count used to be
+    // dropped whenever an abutment warning was also earned.
+    let diagnostics: Vec<Diagnostic> = [abutment, empty_warning, open_ended]
+        .into_iter()
+        .flatten()
+        .collect();
     record_insert(graph, target, config, abutting);
     graph.bump_version();
     Ok(DeclareReport {
         changed: true,
         rows,
         abutting_rows: abutting,
-        warning: diagnostic.as_ref().map(|d| d.message.clone()),
-        diagnostic,
+        warnings: diagnostics.iter().map(|d| d.message.clone()).collect(),
+        diagnostics,
     })
 }
 

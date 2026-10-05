@@ -3162,6 +3162,17 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Batch-update properties on all selected nodes.
 
+        The write lands on the selection's own copy of the graph and on the
+        returned ``graph``. The graph ``select()`` was called on is unchanged:
+        a selection forks away from it on its first write. Use :meth:`cypher`
+        (``MATCH … SET``) to change a graph in place.
+
+        On a type with a validity-interval declaration, the rows the update
+        leaves are judged as a Cypher ``SET`` judges them: all of
+        ``properties`` together, before anything is written. A bound that is
+        not a date, or an inverted interval, raises and writes nothing; an
+        empty interval is written with a ``UserWarning``.
+
         Args:
             properties: Mapping of property names to new values.
             keep_selection: Preserve the current selection in the returned graph. Default ``False``.
@@ -3170,12 +3181,16 @@ class KnowledgeGraph:
             Dict with ``graph`` (updated KnowledgeGraph), ``nodes_updated`` (int),
             and ``report_index`` (int).
 
+        Raises:
+            ArgumentError: A node's end state breaks a validity-interval
+                declaration on its type; nothing is written.
+
         Note:
             Not available on a graph opened with ``durable=``. The write happens
-            on the derived handle a selection produced, which shares the storage
-            but not the write-ahead log, so it is refused rather than left
-            unlogged — use :meth:`cypher`, which expresses the same write and is
-            logged. See :func:`kglite.open`.
+            on the derived handle a selection produced, which cannot share the
+            write-ahead log, so it is refused rather than left unlogged — use
+            :meth:`cypher`, which expresses the same write and is logged. See
+            :func:`kglite.open`.
         """
         ...
 
@@ -8149,9 +8164,12 @@ class KnowledgeGraph:
         element and rolls the statement back. An empty interval is written,
         with one warning per load (a ``UserWarning``) or statement (in
         ``result.warnings``). A ``SET`` is judged once its clause has applied
-        every item. A fluent ``update()`` is not judged; a bound it leaves
-        that is not a date raises, naming the element, from the next temporal
-        filter that reads it, and an inverted interval is valid on no date.
+        every item. A fluent ``update()`` and the ``store_as=`` writers are
+        judged the same way, all of an ``update()``'s properties together,
+        and raise :class:`ArgumentError`. A bound a graph saved by an earlier
+        version holds that is not a date raises, naming the element, from the
+        next temporal filter that reads it, and an inverted interval is valid
+        on no date.
 
         A *type_name* that is both a node type and a relationship type is the
         node type unless *source_type* is given.

@@ -134,8 +134,8 @@ def test_the_build_says_a_declared_graph_reads_valid_today(tmp_path):
     assert any(TODAY_NOTE in w for w in warned)
 
 
-def test_the_build_note_is_silent_when_the_stored_default_is_not_today(tmp_path):
-    for value in ("all", "2008-01-01"):
+def test_the_build_note_is_silent_when_a_default_is_stored(tmp_path):
+    for value in ("all", "2008-01-01", "today"):
         graph, warned = _build(tmp_path, {"valid_time_default": value})
         kinds = [d["kind"] for d in graph.graph_info()["build"]["diagnostics"]]
         assert "default_today" not in kinds

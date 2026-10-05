@@ -25,9 +25,31 @@ before upgrading.
   the title and lost the `title` value; now `n.title` and `n.name` read each.
   On a type with a declared title field, a different `title` value in the same
   pattern is refused, as a different `id` already is.
+- The fluent `update()` and the `store_as=` writers (`calculate`, `count`,
+  `unique_values`, `collect_children`) now judge the rows they leave against a
+  validity-interval declaration, as a Cypher `SET` does. They wrote a bound
+  that is not a date, or an inverted interval, without a word, and every
+  `AS OF` read of the type then raised. A refused `update()` raises
+  `ArgumentError` and writes nothing. **Do:** write both bounds in one
+  `update()` to move an interval.
+- Rust: `kglite::api::temporal::DeclareReport` carries `warnings: Vec<String>`
+  and `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
+  declaration earning both an abutment and an empty-interval advisory reported
+  only the abutment. **Do:** read every entry of the vectors.
+
+### Added
+
+- Rust: `kglite::api::mutation::update_node_property_set` writes several
+  properties onto a set of nodes, judging their end state against the
+  validity-interval declarations once.
 
 ### Fixed
 
+- A blueprint with `"valid_time_default": "today"` no longer raises the
+  `default_today` note; storing any default silences it, as documented.
+- `set_temporal` and the loaders raise one `UserWarning` per advisory a
+  declaration earns, and a Cypher declaration reports each in
+  `result.warnings`.
 - `create_index` on a disk graph now raises `ValueError` for a column it
   cannot index (a numeric or missing property over a populated type), as
   Cypher `CREATE INDEX` already did. It reported the index as created and

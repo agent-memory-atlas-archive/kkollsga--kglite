@@ -155,6 +155,48 @@ pub(crate) fn check_stored_node(
     Ok(())
 }
 
+/// Refuse writing `values` (property, new value) onto node `idx` when the
+/// node's end state would break a declaration on one of its labels, and count
+/// it into `empty`. All of `values` are judged together, so a write that moves
+/// both bounds is judged as the pair it leaves — the `SET n.vf = …, n.vt = …`
+/// rule. A declaration none of `values` binds is left as the node holds it.
+/// Judged before anything is written, so a refusal leaves the graph unchanged.
+pub(crate) fn check_node_update(
+    graph: &DirGraph,
+    idx: NodeIndex,
+    values: &[(&str, &Value)],
+    empty: &mut EmptyIntervals,
+) -> Result<(), String> {
+    let name = || format!("node '{}'", node_name(graph, idx));
+    let read = |property: &str| {
+        values
+            .iter()
+            .rev()
+            .find(|(written, _)| *written == property)
+            .map_or_else(
+                || validate::node_bound(graph, idx, property),
+                |(_, value)| (*value).clone(),
+            )
+    };
+    let mut declared = false;
+    let mut row_empty = Emptiness::default();
+    for config in node_configs(graph, idx) {
+        let moves_a_bound = values
+            .iter()
+            .any(|(written, _)| *written == config.valid_from || *written == config.valid_to);
+        if !moves_a_bound {
+            continue;
+        }
+        declared = true;
+        let (from, to) = (read(&config.valid_from), read(&config.valid_to));
+        row_empty |= judge(&from, &to, config, name)?;
+    }
+    if declared {
+        empty.note(row_empty, name);
+    }
+    Ok(())
+}
+
 /// Refuse the stored state of relationship `edge` when it breaks the
 /// declaration governing it, naming its endpoints as a declaration does, and
 /// count it into `empty`.

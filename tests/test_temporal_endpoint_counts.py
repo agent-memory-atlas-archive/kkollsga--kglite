@@ -3,10 +3,11 @@ graph's current state: ``db.temporal.declarations()`` yields ``empty_rows``
 (an inverted interval, or ``from == to`` under half-open — valid at no
 instant) and ``unreadable_rows`` (a bound that is not NULL, a date, a
 datetime or an ISO string), and ``describe()`` prints them when there are
-any. A load and a Cypher write refuse such rows
-(``test_temporal_write_validation.py``); a graph saved by an earlier version,
-which accepted them, can still hold them. The tests write them through the
-one writer the check does not judge, a fluent ``update()``.
+any. Every writer refuses such rows
+(``test_temporal_write_validation.py``, ``test_update_valid_time_check.py``);
+a graph saved by an earlier version, which accepted them, can still hold them.
+The tests open such graphs, written by the published 0.19.3 wheel
+(``tests/fixtures/build_temporal_bad_bounds_fixture.py``).
 
 The counts come from the per-version walk the endpoint index is built by, so
 a write between two reads must show in the second: every write moves the
@@ -20,12 +21,11 @@ column; the same-day inverted-datetime case returned the row.
 
 from __future__ import annotations
 
-import datetime as dt
-
 import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import open_bad_bounds
 
 MODES = [None, "mapped", "disk"]
 MODE_IDS = ["memory", "mapped", "disk"]
@@ -58,8 +58,9 @@ def _counts(g) -> list[dict]:
     return g.cypher(COUNTS).to_list()
 
 
-def _legacy_write(g, node_id, **props) -> kglite.KnowledgeGraph:
-    return g.select("Status", temporal=False).where({"id": node_id}).update(props)["graph"]
+def _legacy(name, storage, tmp_path) -> kglite.KnowledgeGraph:
+    """``_graph`` with rows an earlier version wrote that every writer now refuses."""
+    return open_bad_bounds(name, storage, tmp_path)
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
@@ -71,11 +72,11 @@ def test_a_clean_declaration_counts_nothing(storage, tmp_path) -> None:
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
 def test_each_write_between_two_reads_shows_in_the_second(storage, tmp_path) -> None:
-    g = _graph(storage, tmp_path)
-    assert _counts(g)[0]["empty_rows"] == 0
-    g = _legacy_write(g, 1, vt=dt.date(1990, 1, 1))
-    assert _counts(g) == [{"name": "Status", "empty_rows": 1, "unreadable_rows": 0}]
-    g = _legacy_write(g, 2, vt="someday")
+    assert _counts(_graph(storage, tmp_path))[0]["empty_rows"] == 0
+    assert _counts(_legacy("status_inverted", storage, tmp_path / "a")) == [
+        {"name": "Status", "empty_rows": 1, "unreadable_rows": 0}
+    ]
+    g = _legacy("status_inverted_unreadable", storage, tmp_path / "b")
     assert _counts(g) == [{"name": "Status", "empty_rows": 1, "unreadable_rows": 1}]
     # A load and a Cypher write refuse the rows the counts report.
     with pytest.raises(kglite.ArgumentError, match="is after the to bound"):
@@ -96,8 +97,7 @@ def test_a_write_shows_in_a_later_read_of_the_same_statement(storage, tmp_path) 
     """The version moves only when the statement commits, so a read that
     filled the cache earlier in the statement must not answer a read after
     its write."""
-    g = _legacy_write(_graph(storage, tmp_path), 1, vt=dt.date(1990, 1, 1))
-    g = _legacy_write(g, 2, vt="someday")
+    g = _legacy("status_inverted_unreadable", storage, tmp_path)
     rows = g.cypher(
         "CALL db.temporal.declarations() YIELD empty_rows AS before WITH before "
         "MATCH (s:Status {id: 1}) SET s.vt = null "
@@ -118,8 +118,7 @@ def test_a_write_shows_in_a_later_read_of_the_same_statement(storage, tmp_path) 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)
 def test_describe_prints_the_counts_a_write_left(storage, tmp_path) -> None:
-    g = _legacy_write(_graph(storage, tmp_path), 1, vt=dt.date(1990, 1, 1))
-    g = _legacy_write(g, 2, vf=2005)
+    g = _legacy("status_inverted_int_from", storage, tmp_path)
     assert 'temporal_empty="1" temporal_unreadable="1"' in g.describe()
 
 
@@ -159,7 +158,7 @@ def test_an_inverted_pair_of_datetimes_on_one_day_is_valid_on_no_date(storage, t
             "MATCH (s:Status {id: 1}) SET s.vf = datetime('2003-06-30T08:00:00'), "
             "s.vt = datetime('2003-06-30T00:00:00')"
         ).to_list()
-    g = _legacy_write(g, 1, vf=dt.datetime(2003, 6, 30, 8), vt=dt.datetime(2003, 6, 30))
+    g = _legacy("status_same_day_datetimes", storage, tmp_path / "legacy")
     for instant in ("'2003-06-30'", "date('2003-06-30')", "datetime('2003-06-30T04:00:00')"):
         rows = g.cypher(f"MATCH (s:Status {{id: 1}}) WHERE valid_at(s, {instant}) RETURN s.id").to_list()
         assert rows == [], instant

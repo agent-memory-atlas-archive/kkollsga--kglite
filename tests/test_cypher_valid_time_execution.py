@@ -18,6 +18,7 @@ import datetime as dt
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import open_bad_bounds
 
 
 def at(date: str, body: str) -> str:
@@ -176,30 +177,16 @@ def _storage(storage, tmp_path):
     return kglite.KnowledgeGraph(storage=storage) if storage != "memory" else kglite.KnowledgeGraph()
 
 
-def _legacy_write(graph, label, node_id, **props):
-    """Write bounds the write check refuses, through the one writer it does
-    not judge (a fluent ``update()``) — the rows a graph saved by an earlier
-    version, which accepted such writes, can hold."""
-    return graph.select(label, temporal=False).where({"id": node_id}).update(props)["graph"]
-
-
 @pytest.mark.parametrize("storage", ["memory", "mapped", "disk"])
 def test_an_id_seek_returns_the_last_visible_version_in_node_order(storage, tmp_path):
     """Two of three versions sharing an id are valid: every mode returns the
     last in the type's node order (the id index's own choice), whichever node
     the index holds; an id whose only other version has an unreadable bound
     does not raise from a seek, though a scan that reads it does."""
-    graph = _storage(storage, tmp_path)
-    graph.cypher(
-        "CREATE (:M {id: 1, name: 'a', vf: date('2000-01-01')}),"
-        " (:M {id: 1, name: 'b', vf: date('2000-01-01')}),"
-        " (:M {id: 1, name: 'c', vf: date('2030-01-01'), vt: date('2040-01-01')}),"
-        " (:M {id: 363, name: 'old', vf: date('1900-01-01'), vt: date('1999-12-31')}),"
-        " (:M {id: 363, name: 'new', vf: date('2000-01-01')}),"
-        " (:M {id: 999, name: 'bad', vf: date('1900-01-01')})"
-    ).to_list()
-    graph.cypher("CALL db.temporal.declare({node: 'M', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
-    graph = _legacy_write(graph, "M", 999, vt=42)
+    # Versions (1, 1, 1), (363, 363) and 999 with `vt = 42`, declared closed:
+    # every writer now refuses that bound, so the published 0.19.3 wheel wrote
+    # the graph (`build_temporal_bad_bounds_fixture.py`, `m_versions_int_to`).
+    graph = open_bad_bounds("m_versions_int_to", None if storage == "memory" else storage, tmp_path)
     for body in (
         "MATCH (m:M {id: 1}) RETURN m.name",
         "MATCH (m {id: 1}) RETURN m.name",
@@ -349,10 +336,8 @@ def test_the_registry_boundary_day_under_both_conventions(convention, on_boundar
 
 
 def test_a_wrong_typed_bound_raises():
-    graph = kglite.KnowledgeGraph()
-    graph.cypher("CREATE (:Site {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')})").to_list()
-    graph.cypher("CALL db.temporal.declare({node: 'Site', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
-    graph = _legacy_write(graph, "Site", 1, vt=42)
+    # Site 1 with `vt = 42` under a closed declaration, written by 0.19.3.
+    graph = open_bad_bounds("site_int_to", None, None)
     with pytest.raises(kglite.KgError, match=r"node '1'.*property 'vt'"):
         graph.cypher(at("2006-01-01", "MATCH (s:Site) RETURN s.id")).to_list()
 

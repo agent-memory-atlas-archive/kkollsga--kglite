@@ -2705,6 +2705,7 @@ pub fn kglite::api::mutation::extend_graph(target: &mut kglite::api::DirGraph, s
 pub fn kglite::api::mutation::purge_provisional_nodes(graph: &mut kglite::api::DirGraph) -> (usize, usize)
 pub fn kglite::api::mutation::replace_connections(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, connection_type: alloc::string::String, source_type: alloc::string::String, source_id_field: alloc::string::String, target_type: alloc::string::String, target_id_field: alloc::string::String, source_title_field: core::option::Option<alloc::string::String>, target_title_field: core::option::Option<alloc::string::String>, conflict_handling: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::ConnectionOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::update_node_properties(graph: &mut kglite::api::DirGraph, nodes: &[(core::option::Option<petgraph::graph_impl::NodeIndex>, kglite::datatypes::values::Value)], property: &str) -> core::result::Result<kglite::api::mutation::NodeOperationReport, alloc::string::String>
+pub fn kglite::api::mutation::update_node_property_set(graph: &mut kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], properties: &[(alloc::string::String, kglite::datatypes::values::Value)]) -> core::result::Result<kglite::api::mutation::NodeOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::validate_graph(graph: &kglite::api::DirGraph, schema: &kglite::api::SchemaDefinition, strict: bool) -> alloc::vec::Vec<kglite::api::ValidationError>
 pub mod kglite::api::param
 pub enum kglite::api::param::JsonQueryParameterErrorKind
@@ -3602,9 +3603,9 @@ impl core::marker::StructuralPartialEq for kglite::api::temporal::DeclarationInf
 pub struct kglite::api::temporal::DeclareReport
 pub kglite::api::temporal::DeclareReport::abutting_rows: core::option::Option<usize>
 pub kglite::api::temporal::DeclareReport::changed: bool
-pub kglite::api::temporal::DeclareReport::diagnostic: core::option::Option<kglite::api::blueprint::Diagnostic>
+pub kglite::api::temporal::DeclareReport::diagnostics: alloc::vec::Vec<kglite::api::blueprint::Diagnostic>
 pub kglite::api::temporal::DeclareReport::rows: usize
-pub kglite::api::temporal::DeclareReport::warning: core::option::Option<alloc::string::String>
+pub kglite::api::temporal::DeclareReport::warnings: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::temporal::DeclareReport
 pub fn kglite::api::temporal::DeclareReport::clone(&self) -> kglite::api::temporal::DeclareReport
 impl core::cmp::Eq for kglite::api::temporal::DeclareReport

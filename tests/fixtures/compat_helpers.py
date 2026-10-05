@@ -40,3 +40,21 @@ def copy_fixture(source: Path, tmp_path: Path, name: str | None = None) -> Path:
     else:
         shutil.copy2(source, target)
     return target
+
+
+BAD_BOUNDS = Path(__file__).parent / "temporal_bad_bounds"
+
+
+def open_bad_bounds(name: str, storage: str | None, tmp_path: Path):
+    """Open committed bad-bounds scenario ``name`` in ``storage`` mode.
+
+    The scenarios hold declared rows every current writer refuses, written by
+    the published 0.19.3 wheel (``build_temporal_bad_bounds_fixture.py``).
+    ``None``/``"memory"`` and ``"mapped"`` load the ``.kgl``; ``"disk"`` opens a
+    copy of the disk directory, since writing to a disk graph rewrites it."""
+    import kglite
+
+    if storage == "disk":
+        return kglite.load(str(copy_fixture(BAD_BOUNDS / f"{name}.disk", tmp_path)))
+    path = str(BAD_BOUNDS / f"{name}.kgl")
+    return kglite.load(path, storage="mapped") if storage == "mapped" else kglite.load(path)

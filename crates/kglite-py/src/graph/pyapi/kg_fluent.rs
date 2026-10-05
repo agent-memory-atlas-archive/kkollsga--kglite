@@ -478,29 +478,7 @@ impl KnowledgeGraph {
         self.retain_valid(filter, "VALID_DURING")
     }
 
-    /// Update properties on all currently selected nodes
-    ///
-    /// This allows batch updating of properties on nodes matching the current selection.
-    /// Returns a dictionary containing:
-    ///   - 'graph': A new KnowledgeGraph with the updated nodes (original is unchanged)
-    ///   - 'nodes_updated': Number of nodes that were updated
-    ///   - 'report_index': Index of the operation report
-    ///
-    /// Example:
-    ///     ```python
-    ///     result = graph.select('Discovery').where({'year': {'>=': 2020}}).update({
-    ///         'is_recent': True
-    ///     })
-    ///     graph = result['graph']  # Use the returned graph with updates
-    ///     print(f"Updated {result['nodes_updated']} nodes")
-    ///     ```
-    ///
-    /// Args:
-    ///     properties: Dictionary of property names and values to set
-    ///     keep_selection: If True, preserve the current selection in the returned graph
-    ///
-    /// Returns:
-    ///     Dictionary with 'graph' (KnowledgeGraph), 'nodes_updated' (int), 'report_index' (int)
+    /// Set properties on the selected nodes of a detached copy, judged against valid-time declarations.
     #[pyo3(signature = (properties, keep_selection=None))]
     fn update(
         &mut self,
@@ -539,33 +517,16 @@ impl KnowledgeGraph {
         }
 
         let graph = get_graph_mut(&mut self.inner);
-
-        let mut total_updated = 0;
-        let mut errors = Vec::new();
-
-        for (property_name, property_value) in &parsed_properties {
-            let node_values: Vec<(Option<petgraph::graph::NodeIndex>, Value)> = nodes
-                .iter()
-                .map(|&idx| (Some(idx), property_value.clone()))
-                .collect();
-
-            match kglite_core::api::mutation::update_node_properties(
-                graph,
-                &node_values,
-                property_name,
-            ) {
-                Ok(report) => {
-                    total_updated += report.nodes_updated;
-                    errors.extend(report.errors);
-                }
-                Err(e) => {
-                    errors.push(format!(
-                        "Error updating property '{}': {}",
-                        property_name, e
-                    ));
-                }
-            }
-        }
+        // Every property is judged together against the valid-time
+        // declarations before anything is written, so moving an interval by
+        // writing both bounds is one legal write; a refusal raises.
+        let written =
+            kglite_core::api::mutation::update_node_property_set(graph, &nodes, &parsed_properties)
+                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
+        let total_updated = written.nodes_updated;
+        let errors = written.errors;
+        let warnings = written.warnings;
+        let diagnostics = written.diagnostics;
 
         // The write landed on `self.inner`; the handle returned below is
         // deliberately detached, so `self` is what owns the durability state.
@@ -581,13 +542,15 @@ impl KnowledgeGraph {
             nodes_skipped: 0,
             processing_time_ms: 0.0,
             errors,
-            warnings: Vec::new(),
-            diagnostics: Vec::new(),
+            warnings,
+            diagnostics,
         };
+        let advisories = report.warnings.clone();
 
         let report_index = new_kg.add_report(OperationReport::NodeOperation(report));
 
         Python::attach(|py| {
+            crate::graph::warn_all(py, &advisories)?;
             let dict = PyDict::new(py);
             dict.set_item("graph", Py::new(py, new_kg)?.into_any())?;
             dict.set_item("nodes_updated", total_updated)?;

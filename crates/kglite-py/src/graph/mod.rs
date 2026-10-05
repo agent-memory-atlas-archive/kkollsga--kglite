@@ -1030,23 +1030,15 @@ pub(crate) fn parse_interval_options(
     Ok((convention, empty_when))
 }
 
-/// Raise the advisory a closed declaration with abutting rows earns as a
-/// `UserWarning` — the channel `set_temporal` and the loaders have, where a
-/// Cypher declaration reports it in the result's diagnostics.
+/// Raise each advisory a declaration earns (abutting rows, empty intervals,
+/// an absent `to` property) as a `UserWarning` — the channel `set_temporal`
+/// and the loaders have, where a Cypher declaration reports them in the
+/// result's diagnostics.
 pub(crate) fn warn_declaration(
     py: Python<'_>,
     report: &kglite_core::api::temporal::DeclareReport,
 ) -> PyResult<()> {
-    let Some(warning) = &report.warning else {
-        return Ok(());
-    };
-    let message = std::ffi::CString::new(warning.as_str()).unwrap_or_default();
-    PyErr::warn(
-        py,
-        py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
-        message.as_c_str(),
-        1,
-    )
+    warn_all(py, &report.warnings)
 }
 
 /// Raise each of a write's advisories — the `warnings` its report carries,

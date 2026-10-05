@@ -44,7 +44,7 @@ fn declared_over_rows() -> (DirGraph, Option<String>) {
         &[],
     )
     .unwrap();
-    (g, report.warning)
+    (g, report.warnings.first().cloned())
 }
 
 #[test]
@@ -234,4 +234,29 @@ fn redeclaring_keeps_the_option_and_a_different_form_conflicts() {
     .unwrap_err();
     assert!(err.contains("already declared"), "{err}");
     assert!(err.contains("empty_when 'to_before_from'"), "{err}");
+}
+
+/// A declaration earning both an abutment and an empty-interval advisory
+/// reports both: the empty-interval one used to be dropped beside the
+/// abutment, so the rows valid on no day went unmentioned.
+#[test]
+fn abutting_and_empty_rows_are_both_reported() {
+    let mut g = DirGraph::new();
+    run(
+        &mut g,
+        "CREATE (:Span {id: 1, vf: '2000-01-01', vt: '2004-12-31'}), \
+                (:Span {id: 1, vf: '2004-12-31', vt: '2009-12-31'}), \
+                (:Span {id: 2, vf: '2011-06-10', vt: '2011-06-09'})",
+    )
+    .unwrap();
+    let report = declare_loaded_with(
+        &mut g,
+        &span(),
+        ("vf", "vt", IntervalConvention::Closed, Some(ToBeforeFrom)),
+        &[],
+    )
+    .unwrap();
+    let kinds: Vec<&str> = report.diagnostics.iter().map(|d| d.kind).collect();
+    assert_eq!(kinds, ["abutting_intervals", "empty_interval_rows"]);
+    assert_eq!(report.warnings.len(), 2);
 }

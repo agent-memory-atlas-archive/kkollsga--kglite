@@ -228,10 +228,14 @@ pub fn build(
         )
     });
     let mut report = result?;
+    // The note tells a reader the graph reads valid-today *without having been
+    // asked to*; a blueprint that says `valid_time_default: "today"` asked.
+    let defaulted = stored_default.is_none();
     if let Some(default) = stored_default {
         graph.set_valid_time_default(default, true);
     }
-    if !graph.temporal.is_empty()
+    if defaulted
+        && !graph.temporal.is_empty()
         && graph.stored_valid_time_default
             == crate::graph::features::temporal::ValidTimeDefault::Today
     {

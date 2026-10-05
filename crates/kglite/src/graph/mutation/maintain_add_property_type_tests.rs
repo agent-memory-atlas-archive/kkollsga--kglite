@@ -11,6 +11,7 @@ use crate::graph::introspection::describe::{compute_description, DescribeRequest
 use crate::graph::introspection::DescribeSurface;
 use crate::graph::languages::cypher::parser::parse_cypher;
 use crate::graph::languages::cypher::planner::schema_check::collect_query_warnings;
+use crate::graph::mutation::property_updates::update_node_properties;
 
 /// Three `Person` nodes carrying nothing but an id, in load order.
 fn three_people() -> (DirGraph, Vec<NodeIndex>) {

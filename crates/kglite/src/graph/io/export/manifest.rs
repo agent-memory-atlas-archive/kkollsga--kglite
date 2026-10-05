@@ -546,7 +546,7 @@ impl ExportManifest {
                 &[entry.from.as_str(), entry.to.as_str()],
             )
             .map_err(|e| format!("{}: the declaration is refused: {e}", target.describe()))?;
-            warnings.extend(report.diagnostic);
+            warnings.extend(report.diagnostics);
         }
         Ok(warnings)
     }

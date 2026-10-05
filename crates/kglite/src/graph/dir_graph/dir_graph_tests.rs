@@ -524,7 +524,8 @@ mod constraint_snapshot_tests {
 mod overwrite_index_freshness_tests {
     use super::*;
     use crate::datatypes::values::{DataFrame, Value};
-    use crate::graph::mutation::maintain::{add_nodes, update_node_properties};
+    use crate::graph::mutation::maintain::add_nodes;
+    use crate::graph::mutation::property_updates::update_node_properties;
     use crate::graph::storage::GraphWrite;
 
     fn people(rows: Vec<(&str, &str)>) -> DataFrame {

@@ -1,0 +1,15 @@
+{
+  "segments": [
+    {
+      "segment_id": 0,
+      "node_id_lo": 0,
+      "node_id_hi": 6,
+      "edge_count": 0,
+      "conn_types": [],
+      "node_type_counts": {
+        "12638226782974257592": 6
+      },
+      "indexed_prop_ranges": []
+    }
+  ]
+}

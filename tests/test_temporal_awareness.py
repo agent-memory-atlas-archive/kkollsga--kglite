@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import open_bad_bounds
 
 
 @pytest.fixture
@@ -422,14 +423,16 @@ class TestFluentBoundKinds:
         # set_temporal validates the stored bounds...
         with pytest.raises(kglite.ArgumentError, match="node 'bad'.*someday"):
             g.set_temporal("T", "vf", "vt")
-        # ...and so does a later write. A bound a graph already holds (an
-        # earlier version accepted such writes; written here through the one
-        # writer the check does not judge) is reported by the fluent filters.
+        # ...and so does a later write, by Cypher and by the fluent `update()`.
+        # A bound a graph already holds (an earlier version accepted such
+        # writes; 0.19.3 wrote this fixture) is reported by the fluent filters.
         g.cypher("MATCH (n:T) SET n.vf = date('2015-01-01')")
         g.set_temporal("T", "vf", "vt")
         with pytest.raises(kglite.CypherExecutionError, match="node 'bad'.*someday"):
             g.cypher("MATCH (n:T) SET n.vf = 'someday'")
-        g = g.select("T", temporal=False).update({"vf": "someday"})["graph"]
+        with pytest.raises(kglite.ArgumentError, match="node 'bad'.*someday"):
+            g.select("T", temporal=False).update({"vf": "someday"})
+        g = open_bad_bounds("status_and_t", None, None)
         with pytest.raises(ValueError, match="someday"):
             g.date("2015").select("T")
         with pytest.raises(ValueError, match="bad"):

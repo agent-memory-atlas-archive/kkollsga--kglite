@@ -50,9 +50,11 @@ pub(super) fn execute(
             let report =
                 declare_loaded_with(graph, &target, (&from, &to, convention, empty_when), &[])
                     .map_err(|error| format!("CALL {proc_name}: {error}"))?;
-            if let Some(warning) = report.warning {
+            if !report.warnings.is_empty() {
                 let mut sink = diagnostics.lock().unwrap_or_else(|e| e.into_inner());
-                super::retrieval_diagnostics::record_warning(&mut sink.warnings, warning);
+                for warning in report.warnings {
+                    super::retrieval_diagnostics::record_warning(&mut sink.warnings, warning);
+                }
             }
             HashMap::from([
                 ("declared", Value::Boolean(report.changed)),

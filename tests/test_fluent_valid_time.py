@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 import kglite
+from tests.fixtures.compat_helpers import open_bad_bounds
 
 MODES = [None, "mapped", "disk"]
 MODE_IDS = ["memory", "mapped", "disk"]
@@ -181,11 +182,13 @@ class TestRequests:
 
 class TestErrors:
     def test_an_unreadable_bound_names_the_step(self, statuses):
-        # Refused as a write; a graph an earlier version saved can hold it,
-        # written here through the one writer the check does not judge.
+        # Refused as a write, by Cypher and by the fluent `update()` alike; a
+        # graph an earlier version saved can hold it (0.19.3 wrote it here).
         with pytest.raises(kglite.CypherExecutionError, match="node '2', property 'vt'"):
             statuses.cypher("MATCH (s:Status {id: 2}) SET s.vt = 20210101").to_list()
-        held = statuses.select("Status", temporal=False).where({"id": 2}).update({"vt": 20210101})["graph"]
+        with pytest.raises(kglite.ArgumentError, match="node '2', property 'vt'"):
+            statuses.select("Status", temporal=False).where({"id": 2}).update({"vt": 20210101})
+        held = open_bad_bounds("status_and_t", None, None)
         with pytest.raises(ValueError, match=r"select\(\): node '2', property 'vt'"):
             held.date("2011").select("Status")
 

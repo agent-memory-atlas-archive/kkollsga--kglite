@@ -6,7 +6,7 @@
 use super::specs::FlatSpec;
 use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::mutation::maintain;
+use crate::graph::mutation::property_updates;
 use petgraph::graph::NodeIndex;
 
 /// `point(lat, lon)` as written by the lossless CSV export.
@@ -51,9 +51,9 @@ pub(super) fn convert_point_columns(
                         .collect()
                 };
                 if !updates.is_empty() {
-                    maintain::update_node_properties(graph, &updates, column).map_err(|e| {
-                        format!("node '{}': point column '{column}': {e}", spec.node_type)
-                    })?;
+                    property_updates::update_node_properties(graph, &updates, column).map_err(
+                        |e| format!("node '{}': point column '{column}': {e}", spec.node_type),
+                    )?;
                 }
             }
         }

@@ -71,7 +71,7 @@ fn a_node_declaration_round_trips_through_list() {
     assert!(report.changed);
     assert_eq!(report.rows, 3);
     assert_eq!(report.abutting_rows, Some(0));
-    assert_eq!(report.warning, None);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     assert_eq!(g.version(), before + 1);
     let listed = list(&g);
     assert_eq!(listed.len(), 1);
@@ -177,7 +177,11 @@ fn an_empty_half_open_row_is_accepted_with_a_warning_and_counted() {
     let report = declare(&mut g, &node("Span"), "vf", "vt", HalfOpen).unwrap();
     assert!(report.changed);
     assert_eq!(report.rows, 3);
-    let warning = report.warning.expect("an empty row earns a warning");
+    let warning = report
+        .warnings
+        .first()
+        .cloned()
+        .expect("an empty row earns a warning");
     assert!(
         warning.starts_with(
             "2 of 3 rows of node label 'Span' have an empty interval under convention \
@@ -192,7 +196,7 @@ fn an_empty_half_open_row_is_accepted_with_a_warning_and_counted() {
     // ends on the day row 9 begins, which is the abutment advisory).
     let mut g = graph(&[spans]);
     let report = declare(&mut g, &node("Span"), "vf", "vt", Closed).unwrap();
-    let warning = report.warning.unwrap_or_default();
+    let warning = report.warnings.join("\n");
     assert!(!warning.contains("empty interval"), "{warning}");
     assert_eq!(list(&g)[0].empty_rows, Some(0));
 }
@@ -213,7 +217,9 @@ fn abutting_rows_are_counted_and_warned_about_only_when_closed() {
     assert_eq!(report.rows, 3);
     assert_eq!(report.abutting_rows, Some(1));
     let warning = report
-        .warning
+        .warnings
+        .first()
+        .cloned()
         .expect("a closed declaration with abutting rows warns");
     assert!(
         warning.starts_with(
@@ -233,7 +239,7 @@ fn abutting_rows_are_counted_and_warned_about_only_when_closed() {
     )
     .unwrap();
     assert_eq!(report.abutting_rows, Some(1));
-    assert_eq!(report.warning, None);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
 /// Two entities of one label share a boundary day: nothing is counted in
@@ -251,7 +257,11 @@ fn different_entities_sharing_a_boundary_day_do_not_abut() {
     assert_eq!(report.rows, 3);
     assert_eq!(report.abutting_rows, Some(0));
     assert_eq!(list(&g)[0].abutting_rows, Some(0));
-    let warning = report.warning.expect("the remainder is still reported");
+    let warning = report
+        .warnings
+        .first()
+        .cloned()
+        .expect("the remainder is still reported");
     assert!(
         warning.starts_with("2 of 3 rows of node label 'Project' end on the day another row with a different node id begins; they belong to different entities and may be unrelated"),
         "{warning}"
@@ -261,7 +271,7 @@ fn different_entities_sharing_a_boundary_day_do_not_abut() {
     let mut g = graph(&rows);
     let report = declare(&mut g, &node("Project"), "vf", "vt", HalfOpen).unwrap();
     assert_eq!(report.abutting_rows, Some(0));
-    assert_eq!(report.warning, None);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
 /// Versions sharing an id are one entity: a version ending the day the next
@@ -277,7 +287,11 @@ fn versions_of_one_node_id_abut_within_that_id_only() {
     let mut g = graph(&rows);
     let report = declare(&mut g, &node("Project"), "vf", "vt", Closed).unwrap();
     assert_eq!(report.abutting_rows, Some(1));
-    let warning = report.warning.expect("a closed same-id abutment warns");
+    let warning = report
+        .warnings
+        .first()
+        .cloned()
+        .expect("a closed same-id abutment warns");
     assert!(
         warning.starts_with("1 of 3 rows of node label 'Project' end on the day another row with the same node id begins"),
         "{warning}"
@@ -293,7 +307,7 @@ fn versions_of_one_node_id_abut_within_that_id_only() {
     let mut g = graph(&rows);
     let report = declare(&mut g, &node("Project"), "vf", "vt", HalfOpen).unwrap();
     assert_eq!(report.abutting_rows, Some(1));
-    assert_eq!(report.warning, None);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
 #[test]
@@ -385,7 +399,11 @@ fn a_to_bound_no_row_carries_yet_is_declared_open_with_a_warning() {
     let report = declare(&mut g, &node("Open"), "vf", "vt", HalfOpen).unwrap();
     assert!(report.changed);
     assert_eq!(report.rows, 2);
-    let warning = report.warning.expect("an open-ended declaration warns");
+    let warning = report
+        .warnings
+        .first()
+        .cloned()
+        .expect("an open-ended declaration warns");
     assert!(
         warning.contains("no row of node label 'Open' carries 'vt'"),
         "{warning}"
@@ -397,7 +415,11 @@ fn a_to_bound_no_row_carries_yet_is_declared_open_with_a_warning() {
         "MATCH (a:A), (c:C) CREATE (a)-[:R {vf: '2000-01-01', vt: null}]->(c)",
     ]);
     let report = declare(&mut g, &rel("R", None), "vf", "vt", Closed).unwrap();
-    let warning = report.warning.expect("an open-ended declaration warns");
+    let warning = report
+        .warnings
+        .first()
+        .cloned()
+        .expect("an open-ended declaration warns");
     assert!(
         warning.contains("no row of relationship type 'R' carries 'vt'"),
         "{warning}"
@@ -410,7 +432,7 @@ fn a_loader_may_name_a_column_it_wrote_entirely_null() {
     let mut g = graph(&["UNWIND [1, 2] AS i CREATE (:Open {id: i, vf: '2000-01-01', vt: null})"]);
     let report = declare_loaded(&mut g, &node("Open"), "vf", "vt", Closed, &["vf", "vt"]).unwrap();
     assert_eq!(report.rows, 2);
-    assert_eq!(report.warning, None);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     // The list vouches only for what it names: an absent `from` stays refused.
     let mut g = graph(&["CREATE (:Open {id: 1, vt: '2000-01-01'})"]);
     let message = declare_loaded(&mut g, &node("Open"), "vff", "vt", Closed, &["vf", "vt"])
@@ -489,7 +511,7 @@ fn an_open_ended_to_can_be_written_by_the_first_create() {
     for locked in [false, true] {
         let mut g = graph(&["CREATE (:Name {id: 1, vf: date('2000-01-01')})"]);
         let report = declare(&mut g, &node("Name"), "vf", "vt", HalfOpen).unwrap();
-        assert!(report.warning.is_some(), "an absent `to` warns");
+        assert!(!report.warnings.is_empty(), "an absent `to` warns");
         g.schema_locked = locked;
         attempt(
             &mut g,

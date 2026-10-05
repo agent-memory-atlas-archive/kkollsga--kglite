@@ -277,7 +277,10 @@ pub mod api {
         pub use crate::graph::mutation::identical_rows::IdenticalRows;
         pub use crate::graph::mutation::maintain::{
             add_connections, add_connections_with_identical_rows, add_nodes, create_connections,
-            purge_provisional_nodes, replace_connections, update_node_properties,
+            purge_provisional_nodes, replace_connections,
+        };
+        pub use crate::graph::mutation::property_updates::{
+            update_node_properties, update_node_property_set,
         };
         /// Validate a graph against a `SchemaDefinition`.
         pub use crate::graph::mutation::validation::validate_graph;

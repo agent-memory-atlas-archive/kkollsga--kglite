@@ -254,8 +254,10 @@ Two exceptions:
   (`result.warnings`) naming the first. It is valid at no instant, so no
   temporal filter returns it, and `db.temporal.declarations()` counts it in
   `empty_rows`.
-- A fluent `update()` is not judged. A bound it leaves that is not a date
-  raises from the next filter that reads it, naming the element.
+- A fluent `update()` and the `store_as=` writers are judged too. All of an
+  `update()`'s properties are judged together, so writing both bounds moves
+  an interval in one step. A refusal raises `ArgumentError` and writes
+  nothing.
 
 See `set_temporal()` and the
 [Cypher validity-interval declarations](https://kglite.readthedocs.io/en/latest/reference/cypher-reference.html#validity-interval-declarations).
@@ -1248,6 +1250,10 @@ result = graph.select('Person').where({'city': 'Oslo'}).update({
 })
 print(result['nodes_updated'])
 ```
+
+The write lands on `result['graph']`, not on `graph`: a selection forks away
+from the graph it came from on its first write. Use `cypher()` with
+`MATCH … SET` to change `graph` itself.
 
 ### Cypher Mutations
 

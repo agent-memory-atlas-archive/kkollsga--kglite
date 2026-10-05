@@ -1699,7 +1699,7 @@ CALL db.temporal.declarations()
   - NULL bounds stay open.
   - A load judges an update row by the bounds it leaves, such as a row carrying
     only `to` against the stored `from`, under its conflict mode.
-  - A fluent `update()` is not judged.
+  - A fluent `update()` and the `store_as=` writers are judged the same way.
 - **Empty intervals are kept.** A row a write leaves with `from == to` under
   `half_open` (an assignment created and cancelled on the same day) is written.
   - The statement reports one warning in `result.warnings` ("N of M rows written
@@ -1718,10 +1718,9 @@ CALL db.temporal.declarations()
   - `unreadable_rows`: a bound that is not NULL, a date, a datetime or an ISO
     string.
 
-  Every judged write refuses an inverted interval or an unreadable bound. Only
-  a writer the check does not judge leaves one: a fluent `update()`, an
+  Every write refuses an inverted interval or an unreadable bound. Only an
   undeclare that hands a source's relationships to the unkeyed declaration, or
-  a graph saved by an earlier version, which accepted such writes. A bound that
+  a graph saved by an earlier version, which accepted such writes, leaves one. A bound that
   is not a date raises from the next `valid_at` / `valid_during` (or fluent
   temporal filter) that reads it, naming the node's id or the relationship's
   endpoints and the property. An inverted interval is valid on no date.

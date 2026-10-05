@@ -388,7 +388,7 @@ fn declare_one(
         grouping,
     )
     .map_err(|reason| format!("{place}: the temporal declaration is refused: {reason}"))?;
-    report.add_all(declared.diagnostic);
+    report.add_all(declared.diagnostics);
     Ok(())
 }
 

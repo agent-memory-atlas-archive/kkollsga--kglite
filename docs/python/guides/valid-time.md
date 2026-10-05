@@ -413,7 +413,7 @@ so. The note sits in the `declarations` group, with kind `default_today`:
 
 - The note is informational. `strict=True` and `strict=["declarations"]` never
   fail on it.
-- Storing a default (`all`, or a date) silences it.
+- Storing any default (`all`, `today` or a date) silences it.
 
 ### 2.2 What changed: the default as of today
 
@@ -859,7 +859,9 @@ t.valid_to = …` therefore moves an interval in one step.
 - Every writer that gives a node a declared label judges the node by that
   label's declaration too. The writers are `add_nodes(labels=[…])`, `add_label`,
   a blueprint's `labels` and ontology materialisation.
-- A fluent `update()` is not judged.
+- A fluent `update()` and the `store_as=` writers (`calculate`, `count`,
+  `unique_values`, `collect_children`) are judged the same way. An
+  `update()`'s properties are judged together, before anything is written.
 - A bulk load onto a declared relationship type adds each row that differs from
   the stored relationships as a new version, rather than updating one.
   {doc}`bitemporal` shows this on a change feed.
@@ -874,9 +876,8 @@ t.valid_to = …` therefore moves an interval in one step.
 - counted at the graph's current state, the rows the declaration would refuse
   (`unreadable_rows`), and the rows valid at no instant (`empty_rows`).
 
-Only a writer the check does not judge leaves such rows:
+Only these leave such rows:
 
-- a fluent `update()`;
 - an undeclare that hands a source type's relationships to the unkeyed
   declaration;
 - a graph saved by an earlier version.

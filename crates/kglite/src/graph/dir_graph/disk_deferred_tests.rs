@@ -95,7 +95,7 @@ fn direct_disk_property_update_materializes_deferred_indexes() {
     let node = graph
         .lookup_by_id_readonly("Doc", &Value::Int64(1))
         .unwrap();
-    maintain::update_node_properties(
+    crate::graph::mutation::property_updates::update_node_properties(
         &mut graph,
         &[(Some(node), Value::String("changed".into()))],
         "email",
@@ -180,7 +180,7 @@ fn check_portable_direct_mutation(mode: crate::graph::storage::mode::StorageMode
         graph.lookup_by_index("Doc", "email", &Value::String("second".into())),
         Some(vec![second])
     );
-    maintain::update_node_properties(
+    crate::graph::mutation::property_updates::update_node_properties(
         &mut graph,
         &[(Some(second), Value::String("changed".into()))],
         "email",

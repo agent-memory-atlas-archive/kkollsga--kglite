@@ -264,8 +264,8 @@ fn date_bound(value: &Value) -> Option<Option<NaiveDate>> {
 /// Whether the interval holds any instant: false when its end does not
 /// admit its own start — `from == to` under half-open, which a declaration
 /// and every write accept (counted and warned about), or inverted, which they
-/// refuse and only an unjudged writer (a fluent `update()`, an older
-/// version's file) can leave. Checked apart from the instant, because at
+/// refuse and only an older version's file (or an undeclare handing a
+/// source's relationships to the unkeyed declaration) can leave. Checked apart from the instant, because at
 /// date grain an inverted pair of timestamps on one day (`[08:00, 00:00]`)
 /// would otherwise read as covering that day.
 fn non_empty(from: Option<Instant>, to: Option<Instant>, convention: IntervalConvention) -> bool {
