@@ -1,14 +1,8 @@
 # KGLite
 
-An embedded Cypher dialect for LLM-agent workloads. A knowledge graph that
-runs inside your process — load data, query with Cypher, and hand the graph to
-an agent via the bundled MCP server. The embedded path needs no database
-service; one `.kgl` file can move between Python and Rust bindings.
+An embedded Cypher dialect for LLM-agent workloads. KGLite is a knowledge graph that runs inside your process. You load data, query it with Cypher, and hand the graph to an agent via the bundled MCP server. The embedded path needs no database service. One `.kgl` file can move between Python and Rust bindings.
 
-The engine is a pure-Rust crate (`kglite`); the wheel
-(`pip install kglite`) is a PyO3 wrapper around it. Bolt and MCP
-protocol servers are standalone Rust binaries that wrap the same
-engine. The `.kgl` file format is portable across all bindings.
+The engine is a pure-Rust crate (`kglite`). The wheel (`pip install kglite`) is a PyO3 wrapper around it. Bolt and MCP protocol servers are standalone Rust binaries that wrap the same engine. The `.kgl` file format is portable across all bindings.
 
 ## Start here
 
@@ -31,12 +25,9 @@ engine. The `.kgl` file format is portable across all bindings.
 ```{rubric} Cypher first
 ```
 
-**Cypher** is the primary query surface — agents already know it, and
-the engine targets an explicitly documented openCypher-compatible subset
-(including three-valued NULL logic), checked with independently authored local
-contracts and optional Neo4j differential runs. DataFrame
-loaders `add_nodes()` / `add_relationships()` exist to get bulk data
-in; once it's in, you query with Cypher.
+**Cypher** is the primary query surface, because agents already know it. The engine targets an explicitly documented openCypher-compatible subset, including three-valued NULL logic. Independently authored local contracts and optional Neo4j differential runs check it.
+
+The DataFrame loaders `add_nodes()` / `add_relationships()` exist to get bulk data in. Once the data is in, you query with Cypher.
 
 | | |
 |---|---|
@@ -51,8 +42,7 @@ in; once it's in, you query with Cypher.
 ```{rubric} Ecosystem
 ```
 
-kglite is the engine. Four companion projects surround it — three build graphs
-it serves, one looks at them — each released and versioned on its own cadence:
+kglite is the engine. Four companion projects surround it. Three build graphs it serves, and one looks at them. Each is released and versioned on its own cadence:
 
 - **[kglite](https://github.com/kkollsga/kglite)** — the embedded Cypher
   knowledge-graph engine (this project): graph + Cypher + fluent API + bundled

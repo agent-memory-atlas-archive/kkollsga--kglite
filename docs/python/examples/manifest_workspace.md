@@ -1,39 +1,28 @@
 # Examples: workspace mode (local + github-clone-tracker)
 
-`codingest-mcp --workspace <dir>` runs KGLite's graph-serving surface with
-codingest's code-graph builder injected. Two flavours are selected by the
-manifest's `workspace.kind` field:
+`codingest-mcp --workspace <dir>` runs KGLite's graph-serving surface with codingest's code-graph builder injected. The manifest's `workspace.kind` field selects one of two flavours:
 
-- **`workspace.kind: local`** — a fixed local source directory, watch
-  mode for auto-rebuild on file changes, `set_root_dir(path)` to swap
-  between sibling subdirectories without restarting. Best for
-  code-review against a checked-out project tree.
-- **No `workspace:` block (default github-clone-tracker)** — the agent
-  calls `repo_management('org/repo')` to clone repos into the
-  workspace; the injected codingest builder produces a code graph for each; queries flow
-  against the active one. Best for exploring open-source codebases on
-  demand.
+- **`workspace.kind: local`** is a fixed local source directory. It has watch mode for auto-rebuild on file changes. `set_root_dir(path)` swaps between sibling subdirectories without restarting. It is best for code-review against a checked-out project tree.
+- **No `workspace:` block (default github-clone-tracker)**: the agent calls `repo_management('org/repo')` to clone repos into the workspace. The injected codingest builder produces a code graph for each, and queries flow against the active one. It is best for exploring open-source codebases on demand.
 
-Both share the same source tools (`read_source` / `grep` /
-`list_source`), the same `read_code_source` qualified-name lookup,
-and the same trust gates for extensions.
+Both share the same source tools (`read_source` / `grep` / `list_source`), the same `read_code_source` qualified-name lookup, and the same trust gates for extensions.
 
 Copy-pasteable starting points ship in the repo's `examples/`:
 
 - **Local code-review** → [`examples/local_code_review_mcp.yaml`](https://github.com/kkollsga/kglite/blob/main/examples/local_code_review_mcp.yaml)
 - **GitHub-clone tracker** → [`examples/open_source_workspace_mcp.yaml`](https://github.com/kkollsga/kglite/blob/main/examples/open_source_workspace_mcp.yaml)
 
-After copying one, run `codingest-mcp --selftest --mcp-config <your.yaml>`
-to confirm it stands up correctly (see the guide's
-[Verify your setup](../guides/mcp-servers.md#verify-your-setup)).
+After copying one, run `codingest-mcp --selftest --mcp-config <your.yaml>` to confirm it stands up correctly. See the guide's [Verify your setup](../guides/mcp-servers.md#verify-your-setup).
 
 ## Variant 1 — `workspace.kind: local` + `watch`
 
-Bind a local source directory as the active source root for source
-tools (`read_source` / `grep` / `list_source`), build a code
-graph over it, and auto-rebuild on file changes. The agent can swap
-between sibling project directories with `set_root_dir(path)`
-without restarting the server.
+This variant does three things:
+
+- It binds a local source directory as the active source root for source tools (`read_source` / `grep` / `list_source`).
+- It builds a code graph over that directory.
+- It auto-rebuilds on file changes.
+
+The agent can swap between sibling project directories with `set_root_dir(path)` without restarting the server.
 
 ## Manifest
 
@@ -67,37 +56,26 @@ workspace:
 
 ## The flow
 
-1. Boot: the server canonicalises `/Volumes/.../Koding/` and binds
-   it as the active root. `read_source` / `grep` / `list_source`
-   sandbox to it.
+1. Boot: the server canonicalises `/Volumes/.../Koding/` and binds it as the
+   active root. `read_source` / `grep` / `list_source` sandbox to it.
 2. The watcher starts on the root with a 500 ms debounce.
-3. First agent action: `cypher_query` against the auto-built
-   code graph (modules, functions, calls, imports).
-4. Agent narrows interest to a specific file → calls `read_source`.
+3. First agent action: `cypher_query` against the auto-built code graph
+   (modules, functions, calls, imports).
+4. Agent narrows interest to a specific file and calls `read_source`.
 5. Agent decides to switch to a different project under Koding/:
-   `set_root_dir("/Volumes/EksternalHome/Koding/Rust/KGLite")`.
-   The active root atomically swaps; source tools rebind; the watch
-   handle moves to the new root.
-6. On any file change inside the new root, the watcher fires (after
-   the 500 ms debounce window), the code graph rebuilds on a
-   background thread, and the new graph atomically swaps in. Queries
-   against the previous graph keep working until the swap.
+   `set_root_dir("/Volumes/EksternalHome/Koding/Rust/KGLite")`. The active root
+   atomically swaps, source tools rebind, and the watch handle moves to the new
+   root.
+6. On any file change inside the new root, the watcher fires after the 500 ms
+   debounce window. The code graph rebuilds on a background thread, and the new
+   graph atomically swaps in. Queries against the previous graph keep working
+   until the swap.
 
 ## Sandbox boundary
 
-**Corrected 2026-07-31.** This section previously claimed `workspace.root` was
-an "immutable boundary" that `set_root_dir` validated against, and showed a
-refusal — `"Error: path '/tmp' escapes the workspace root."` — that the server
-never produced. **No containment existed.** The read window was *derived from*
-the active root, so the `starts_with` checks in the source tools only ever
-bounded reads relative to wherever the server already pointed; they never
-constrained where it could be pointed. A swap to any readable directory
-succeeded.
+The sandbox boundary is real from **kglite 0.15.5 / mcp-methods 0.4.3**, and it is **opt-in**. Set `workspace.sandbox_root` to enable it. Without that key, `set_root_dir` remains unbounded. That is the pre-0.4.3 behaviour, preserved deliberately so the upgrade breaks nobody.
 
-The boundary is real from **kglite 0.15.5 / mcp-methods 0.4.3**, and it is
-**opt-in**: set `workspace.sandbox_root`. Without that key, `set_root_dir`
-remains unbounded — which is the pre-0.4.3 behaviour, preserved deliberately so
-the upgrade breaks nobody.
+**Corrected 2026-07-31.** This section previously claimed `workspace.root` was an "immutable boundary" that `set_root_dir` validated against. It also showed a refusal, `"Error: path '/tmp' escapes the workspace root."`, that the server never produced. **No containment existed.** The read window was *derived from* the active root. The `starts_with` checks in the source tools therefore only ever bounded reads relative to wherever the server already pointed. They never constrained where it could be pointed. A swap to any readable directory succeeded.
 
 ```
 # with workspace.sandbox_root: /Volumes/EksternalHome/Koding
@@ -112,43 +90,32 @@ the upgrade breaks nobody.
 → refused; the active root does not change                     ✓ outside the boundary
 ```
 
-Set `sandbox_root` wide enough to cover every directory you intend to swap
-between, and no wider. It bounds an operator's `set_root_dir` and an adopted
-client root alike.
+Set `sandbox_root` wide enough to cover every directory you intend to swap between, and no wider. It bounds an operator's `set_root_dir` and an adopted client root alike.
 
 ## github_issues integration
 
-If the project under the active root has a `.git/config` with a
-GitHub remote, `github_issues` auto-resolves the `repo_name`
-argument from the active root's git config. Agents can call
+If the project under the active root has a `.git/config` with a GitHub remote, `github_issues` auto-resolves the `repo_name` argument from the active root's git config. Agents can call
 
 ```json
 {"name": "github_issues", "arguments": {"limit": 5, "state": "all"}}
 ```
 
-without supplying `repo_name`; the active workspace repo is used as
-the fallback. Registration still needs both halves: `builtins.github:
-true` in the manifest, and the token in env / walked-up `.env`.
+without supplying `repo_name`. The active workspace repo is used as the fallback. Registration still needs both halves: `builtins.github: true` in the manifest, and the token in env / walked-up `.env`.
 
 ## Performance notes
 
-- Code-tree rebuild is incremental for small files (a single-file
-  edit is fast). Whole-tree rebuilds on large projects (>100k LoC)
-  can take a few seconds — the debounce + background thread keep
-  the agent unblocked during the rebuild.
-- Atomic swap means agents never see a half-built graph. Queries
-  against the in-flight graph complete; the next query after the
-  swap sees the new graph.
-- The `.mcp-workspace/` directory inside `workspace.root` stores
-  inventory + last-built SHA. Safe to delete — the next boot
-  re-seeds it.
+- Code-tree rebuild is incremental for small files, so a single-file edit is
+  fast. Whole-tree rebuilds on large projects (>100k LoC) can take a few
+  seconds. The debounce + background thread keep the agent unblocked during
+  the rebuild.
+- Atomic swap means agents never see a half-built graph. Queries against the
+  in-flight graph complete. The next query after the swap sees the new graph.
+- The `.mcp-workspace/` directory inside `workspace.root` stores inventory +
+  last-built SHA. It is safe to delete, and the next boot re-seeds it.
 
 ## Variant 2 — github-clone-tracker (no `workspace:` block)
 
-Run the server with `--workspace <dir>` (no `workspace.kind: local`
-in the manifest) and the agent gets `repo_management` for cloning,
-plus the standard source tools against the active clone. A copy-
-paste-ready manifest lives at
+Run the server with `--workspace <dir>` (no `workspace.kind: local` in the manifest). The agent then gets `repo_management` for cloning, plus the standard source tools against the active clone. A copy-paste-ready manifest lives at
 [`examples/open_source_workspace_mcp.yaml`](https://github.com/kkollsga/kglite/blob/main/examples/open_source_workspace_mcp.yaml).
 
 ### Deployment
@@ -159,12 +126,11 @@ cp examples/open_source_workspace_mcp.yaml /path/to/my-workspace/workspace_mcp.y
 codingest-mcp --workspace /path/to/my-workspace/
 ```
 
-The filename inside the workspace dir MUST be `workspace_mcp.yaml` —
-that's the name the CLI auto-detects when given `--workspace <dir>`.
+The filename inside the workspace dir MUST be `workspace_mcp.yaml`. That's the name the CLI auto-detects when given `--workspace <dir>`.
 
 ### What the manifest enables
 
-Looking at the example file inline:
+The example file inline:
 
 ```yaml
 name: Open Source Explorer
@@ -201,56 +167,52 @@ tools:
 
 Key choices:
 
-- **`env_file: ../.env`** — manifest paths are manifest-relative, so
-  this walks up one level from the workspace dir to find the `.env`.
-  Loads `GITHUB_TOKEN` for `github_issues` + `github_api`. Without a
-  token those tools don't register at boot.
-- **`builtins.github: true`** — the opt-in that makes those tools
-  eligible at all. It is `false` by default: since mcp-methods 0.4.5 a
-  reachable token never widens a server's surface on its own, so a
-  GitHub-focused deployment like this one has to say so explicitly.
-- **`builtins.temp_cleanup: on_overview`** — wipes the temp/ dir on
-  every bare `graph_overview()` call. With `csv_http_server` enabled,
-  every `FORMAT CSV` export writes a file to temp/; without cleanup
-  they accumulate.
-- **`extensions.csv_http_server: true`** — enables the localhost
-  listener so `FORMAT CSV` exports return URLs the agent can fetch
-  (instead of inlining the CSV body, which blows out for large
-  results). Loopback-only, CORS-enabled.
-- **`instructions:`** — server-wide first-message orientation. Kept
-  short: the project pitch + the FIRST STEP framing. The detailed
-  per-tool guidance lives on the tools themselves (see
-  `tools[].bundled:` overrides below). Splitting reduces the
-  one-time-read context the agent has to retain through a long
-  session.
-- **`overview_prefix:`** — sticky context prepended to bare
-  `graph_overview()` output. Skipped for focused drill-downs
-  (`graph_overview(types=...)` etc.) so it doesn't bloat every
-  response. Good place for the "two-read-paths" mental model.
-- **`tools[].bundled:` overrides** — replace the agent-facing
-  `description:` for specific
-  bundled tools. The example overrides four:
-  - `repo_management` — its description carries the "FIRST STEP +
-    five common invocations" guidance that used to live in the
-    global `instructions:` blob. Now it rides `tools/list` next
-    to the tool's schema, so the agent sees the guidance every
-    time it considers which tool to call.
-  - `cypher_query` — description teaches the `FORMAT CSV` →
-    localhost URL pattern.
-  - `read_source` — disambiguates against `read_code_source`
-    (prefer the latter for symbols the graph already indexed) and
-    pins `file_path` semantics to the active repo's clone path.
-  - `grep` — frames the regex-search workhorse against cypher
-    (cypher first for symbols; grep for plain text). Same
-    principle as the other three: per-tool guidance attached to
-    the tool, not buried in a session-wide blob.
+- **`env_file: ../.env`**: manifest paths are manifest-relative, so this walks
+  up one level from the workspace dir to find the `.env`. It loads
+  `GITHUB_TOKEN` for `github_issues` + `github_api`. Without a token, those
+  tools don't register at boot.
+- **`builtins.github: true`** is the opt-in that makes those tools eligible at
+  all. It is `false` by default. Since mcp-methods 0.4.5, a reachable token
+  never widens a server's surface on its own. A GitHub-focused deployment like
+  this one has to say so explicitly.
+- **`builtins.temp_cleanup: on_overview`** wipes the temp/ dir on every bare
+  `graph_overview()` call. With `csv_http_server` enabled, every `FORMAT CSV`
+  export writes a file to temp/. Without cleanup, they accumulate.
+- **`extensions.csv_http_server: true`** enables the localhost listener, so
+  `FORMAT CSV` exports return URLs the agent can fetch. The alternative is
+  inlining the CSV body, which blows out for large results. The listener is
+  loopback-only and CORS-enabled.
+- **`instructions:`** is the server-wide first-message orientation, kept
+  short: the project pitch + the FIRST STEP framing. The detailed per-tool
+  guidance lives on the tools themselves (see `tools[].bundled:` overrides
+  below). Splitting reduces the one-time-read context the agent has to retain
+  through a long session.
+- **`overview_prefix:`** is sticky context prepended to bare `graph_overview()`
+  output. It is skipped for focused drill-downs (`graph_overview(types=...)`
+  etc.), so it doesn't bloat every response. It is a good place for the
+  "two-read-paths" mental model.
+- **`tools[].bundled:` overrides** replace the agent-facing `description:` for
+  specific bundled tools. The example overrides four:
+  - `repo_management`: its description carries the "FIRST STEP + five common
+    invocations" guidance that used to live in the global `instructions:`
+    blob. Now it rides `tools/list` next to the tool's schema, so the agent
+    sees the guidance every time it considers which tool to call.
+  - `cypher_query`: its description teaches the `FORMAT CSV` → localhost URL
+    pattern.
+  - `read_source`: it disambiguates against `read_code_source` (prefer the
+    latter for symbols the graph already indexed) and pins `file_path`
+    semantics to the active repo's clone path.
+  - `grep`: it frames the regex-search workhorse against cypher (cypher first
+    for symbols; grep for plain text). This follows the same principle as the
+    other three: per-tool guidance attached to the tool, not buried in a
+    session-wide blob.
 
-  Override `description` works on any bundled tool in the catalogue reported
-  by the server. Adding `hidden: true` drops a tool from `tools/list` and
-  rejects calls — useful for narrowing the agent surface when a bundled tool
+  Override `description` works on any bundled tool in the catalogue reported by
+  the server. Adding `hidden: true` drops a tool from `tools/list` and rejects
+  calls. That is useful for narrowing the agent surface when a bundled tool
   doesn't fit your deployment. Unknown tool names fail at boot with the full
-  valid catalogue listed in the error message. The catalogue is the authority;
-  it varies with server mode and optional integrations.
+  valid catalogue listed in the error message. The catalogue is the authority,
+  and it varies with server mode and optional integrations.
 
 ### What gets registered
 
@@ -266,22 +228,19 @@ For `--workspace <dir>` mode (no `workspace.kind: local`):
 - github_issues / github_api   # needs builtins.github: true + GITHUB_TOKEN
 ```
 
-Note: `set_root_dir` is **only** in the `workspace.kind: local`
-variant above. `repo_management` is **only** in github-workspace
-mode. The two modes are mutually exclusive.
+`set_root_dir` is **only** in the `workspace.kind: local` variant above. `repo_management` is **only** in github-workspace mode. The two modes are mutually exclusive.
 
 ### Lifecycle
 
-- First call: `repo_management('pydata/xarray')` does a shallow
-  `git clone --depth 1`, the injected builder produces the code graph,
+- **First call:** `repo_management('pydata/xarray')` does a shallow
+  `git clone --depth 1`. The injected builder produces the code graph, and the
   graph is active for subsequent queries.
-- Subsequent calls: `repo_management('pydata/xarray')` again
-  short-circuits to "already cloned, activated."
-  `repo_management(update=True)` does `git fetch --depth 1
-  origin` + reset to remote; graph rebuilds only if the SHA
-  moved (gated by `last_built_sha`).
-- Idle sweep: repos untouched for `--stale-after-days` (default
-  7) get tombstoned in `inventory.json`. The active repo is
-  exempt. Sweep happens on the next `repo_management` call.
-- Force rebuild: `repo_management(update=True, force_rebuild=True)`
-  bypasses the SHA gate — useful after a kglite upgrade.
+- **Subsequent calls:** `repo_management('pydata/xarray')` again short-circuits
+  to "already cloned, activated." `repo_management(update=True)` does
+  `git fetch --depth 1 origin` + reset to remote. The graph rebuilds only if
+  the SHA moved (gated by `last_built_sha`).
+- **Idle sweep:** repos untouched for `--stale-after-days` (default 7) get
+  tombstoned in `inventory.json`. The active repo is exempt. The sweep happens
+  on the next `repo_management` call.
+- **Force rebuild:** `repo_management(update=True, force_rebuild=True)`
+  bypasses the SHA gate. It is useful after a kglite upgrade.

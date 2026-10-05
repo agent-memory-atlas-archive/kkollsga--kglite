@@ -1,25 +1,30 @@
 # Platform and artifact support
 
-KGLite's Python distribution is a native PyO3 extension. Support claims are
-tiered by evidence: running a test suite is stronger than producing an
-artifact, and producing an artifact is stronger than a plausible source build.
+KGLite's Python distribution is a native PyO3 extension. Support claims are tiered by evidence:
+
+1. Running a test suite is the strongest evidence.
+2. Producing an artifact is weaker.
+3. A plausible source build is weaker still.
+
 The active workflows and generated [project facts](../_generated/project-facts.md)
 are the machine-readable authority.
 
 ## CPython and wheel policy
 
 Published extension wheels use CPython's stable ABI with a Python 3.10 floor
-(`cp310-abi3`). One platform wheel can therefore serve CPython 3.10 and newer
-on the same OS/architecture/libc target. Normal installation is:
+(`cp310-abi3`). One platform wheel therefore serves CPython 3.10 and newer on
+the same OS/architecture/libc target. Normal installation is:
 
 ```bash
 pip install kglite
 ```
 
 The base wheel has no required Python packages. Optional integrations declare
-their own dependencies: `kglite[pandas]` for DataFrame workflows,
-`kglite[networkx]` for the NetworkX bridge (including pandas), and
-`kglite[neo4j]` for the Neo4j driver.
+their own dependencies:
+
+- `kglite[pandas]` for DataFrame workflows
+- `kglite[networkx]` for the NetworkX bridge (including pandas)
+- `kglite[neo4j]` for the Neo4j driver
 
 ## Evidence tiers
 
@@ -28,18 +33,18 @@ their own dependencies: `kglite[pandas]` for DataFrame workflows,
 - Linux x86_64 source builds on CPython 3.10, 3.12, 3.13, and 3.14 run the
   Python suite.
 - Linux x86_64 CPython 3.14t builds without abi3 and runs the dedicated
-  free-threading concurrency suite. This proves a source-build configuration;
-  a free-threaded wheel is not currently published.
+  free-threading concurrency suite. This proves a source-build configuration.
+  A free-threaded wheel is not currently published.
 - A Linux x86_64 CPython 3.12 job builds a wheel, installs its `networkx` extra
   into a clean environment outside the checkout, and executes a bridge
   round-trip.
 - At release time, the macOS arm64 wheel is installed on CPython 3.14 with
   current pyarrow for the allocator-coexistence canary.
-- Windows x86_64 and macOS arm64 run the Rust engine's unit suite, which covers
-  the storage backends — including disk mode, whose memory-mapped file
-  lifetimes behave differently on Windows than on POSIX. This is a native-engine
-  test, not a Python-level one: the Python API surface on Windows remains
-  build-verified rather than runtime-tested.
+- Windows x86_64 and macOS arm64 run the Rust engine's unit suite. The suite
+  covers the storage backends, including disk mode, whose memory-mapped file
+  lifetimes behave differently on Windows than on POSIX. This is a
+  native-engine test, not a Python-level one. The Python API surface on Windows
+  remains build-verified rather than runtime-tested.
 
 ### Release-blocking wheel builds
 
@@ -53,14 +58,14 @@ These artifacts must build before publication can proceed:
 | `x86_64-unknown-linux-gnu` | manylinux2014 / glibc 2.17+ |
 | `x86_64-unknown-linux-musl` | musllinux 1.2+ |
 
-A release-blocking build is not the same as a full runtime test on that target.
-Windows and cross-built macOS x86_64 artifacts are build-verified unless a
-separate smoke job is listed above.
+A release-blocking build is not a full runtime test on that target. Windows and
+cross-built macOS x86_64 artifacts are build-verified unless a separate smoke
+job is listed above.
 
 ### Best-effort wheel builds
 
-Linux aarch64 artifacts are published when their cross-build succeeds, but the
-job is explicitly non-blocking:
+Linux aarch64 artifacts are published when their cross-build succeeds. The job
+is explicitly non-blocking:
 
 | Target | Compatibility floor |
 |---|---|
@@ -73,28 +78,32 @@ desired release actually contains it.
 ## PyPy
 
 PyPy is not a supported published-artifact target. The released macOS wheel,
-for example, is tagged `cp310-abi3-macosx_11_0_arm64`; a probe with PyPy 3.10
-rejects it because PyPy requires a `pp310`-compatible artifact. The project
+for example, is tagged `cp310-abi3-macosx_11_0_arm64`. A probe with PyPy 3.10
+rejects it, because PyPy requires a `pp310`-compatible artifact. The project
 therefore does not publish the PyPy classifier. A future PyPy claim requires a
 dedicated build and runtime test, not only a source-level PyO3 capability.
 
 ## Wheel-first distribution, with a tested source fallback
 
 PyPI publication uploads platform wheels for the targets listed above, and a
-source distribution for everything else. When pip finds no matching wheel it
-falls back to the sdist and builds from source, which requires a Rust
-toolchain on the installing machine.
+source distribution for everything else. When pip finds no matching wheel, it
+falls back to the sdist and builds from source. That requires a Rust toolchain
+on the installing machine.
 
-The sdist is not a courtesy upload: every release builds it, unpacks it into
-an empty directory to confirm it resolves with no sibling checkouts present,
-then `pip install`s the tarball and imports the result. A source fallback
-that cannot build is worse than none — it turns a clear "no matching
-distribution" into a compile error deep in someone else's install log.
+The sdist is not a courtesy upload. Every release does the following with it:
 
-What this does *not* promise is that an unlisted platform is release-tested.
-The sdist is verified to build on the CI runner; it is not exercised on every
-target it might reach. Wheels remain the supported path, and a platform in
-the table above has been built and smoke-tested there.
+1. Builds it.
+2. Unpacks it into an empty directory, to confirm it resolves with no sibling
+   checkouts present.
+3. Runs `pip install` on the tarball and imports the result.
+
+A source fallback that cannot build is worse than none. It turns a clear "no
+matching distribution" into a compile error deep in someone else's install log.
+
+This does *not* promise that an unlisted platform is release-tested. The sdist
+is verified to build on the CI runner. It is not exercised on every target it
+might reach. Wheels remain the supported path, and a platform in the table
+above has been built and smoke-tested there.
 
 Developers can also work from a source checkout with a Rust toolchain:
 
@@ -108,12 +117,13 @@ maturin develop --release
 ```
 
 That is a source-build route, not a promise that an unlisted platform is
-release-tested. Rust-only consumers should depend on the `kglite` crate and do
-not need the Python extension.
+release-tested. Rust-only consumers depend on the `kglite` crate and do not
+need the Python extension.
 
 ## Bundled entry points
 
 The same wheel installs both `kglite` and `kglite-mcp-server`. Each console
-script is a thin Python shim over its bundled Rust library inside the extension,
-sharing one graph engine. There is no second CLI/server wheel dependency; the
-standalone `kglite-cli` distribution is an alternative for CLI-only users.
+script is a thin Python shim over its bundled Rust library inside the
+extension, and both share one graph engine. There is no second CLI/server wheel
+dependency. The standalone `kglite-cli` distribution is an alternative for
+CLI-only users.

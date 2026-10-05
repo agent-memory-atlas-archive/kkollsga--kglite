@@ -1100,7 +1100,7 @@ Bundled-tool response shapes are treated as version-stable contracts across patc
 | `repo_management` (list) | `<N> live repo(s):\n  <repo>[ [active]]  (<count> access[es], last <when>)` | Stable. |
 | `repo_management` (activate) | `Cloned 'org/repo' at <path>.` / `Updated 'org/repo' at <path>.` / `Activated (already up to date) 'org/repo' at <path>.` | Stable. |
 | `set_root_dir` (success) | `Active root set to <absolute_path>.` | Stable. |
-| `set_root_dir` (escape) | `Error: path '<path>' escapes the workspace root.` | Stable. |
+| `set_root_dir` (outside `workspace.sandbox_root`) | An error naming `sandbox_root` and the boundary path; the active root does not change. | Stable. |
 | `github_issues` (FETCH) | Issue/PR/discussion body with `cb_N` / `patch_N` / `comment_N` / `review_N` placeholders for collapsed elements. Drill down with `element_id=<placeholder>`. | Stable. |
 | `github_issues` (LIST/SEARCH) | `<N> discussions in org/repo (<state>):` then per-line summary. | Stable. |
 | `github_api` | Pretty-printed JSON body, truncated to `truncate_at` chars (default 80 000). | Stable. |

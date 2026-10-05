@@ -1,13 +1,13 @@
 # Migrating from Neo4j to KGLite
 
-This page is for a developer with an existing Neo4j database and/or
-`neo4j`-driver code who wants to evaluate or adopt KGLite. It covers
-where KGLite fits, reusing tested Bolt driver code or moving to the native
-Python API, how to transfer data, and where the Cypher dialect diverges.
+This page is for a developer with an existing Neo4j database and/or `neo4j`-driver code who wants to evaluate or adopt KGLite. It covers:
 
-KGLite ships a focused openCypher subset, **not a Neo4j drop-in
-replacement**. Many common reads use the same syntax; check the divergences
-below against your workload before adopting it.
+- where KGLite fits;
+- reusing tested Bolt driver code, or moving to the native Python API;
+- how to transfer data;
+- where the Cypher dialect diverges.
+
+KGLite ships a focused openCypher subset, **not a Neo4j drop-in replacement**. Many common reads use the same syntax. Check the divergences below against your workload before adopting it.
 
 ## When KGLite fits — and when it doesn't
 
@@ -22,49 +22,39 @@ below against your workload before adopting it.
 | Transactions | Snapshot isolation + OCC; durability depends on access mode | Server-managed ACID transactions |
 | Data model | One **primary** type per node + optional secondary labels | Arbitrary label sets |
 
-**KGLite fits** when you want Cypher + Python ergonomics in one wheel:
-analytics over a graph that fits on one machine, embedding a graph in
-a Python app or notebook, shipping a queryable `.kgl` artifact, or
-serving a read-mostly graph to LLM agents (KGLite bundles an MCP
-server and a `describe()` schema). See the
-[README comparison table](https://github.com/kkollsga/kglite#how-it-compares)
-for the side-by-side against other embedded graph engines, NetworkX,
-rustworkx, and Neo4j Embedded.
+**KGLite fits** when you want Cypher + Python ergonomics in one wheel. Typical cases:
 
-**KGLite does not fit** when you need server-mode RBAC, multiple
-databases per instance, a causal cluster with routing, or long-lived
-multi-client write transactions managed by a database server.
+- analytics over a graph that fits on one machine;
+- embedding a graph in a Python app or notebook;
+- shipping a queryable `.kgl` artifact;
+- serving a read-mostly graph to LLM agents (KGLite bundles an MCP server and a `describe()` schema).
 
-For positioning detail see
-{doc}`../core-concepts` and the
-[concepts index](../../concepts/index.md).
+See the [README comparison table](https://github.com/kkollsga/kglite#how-it-compares) for the side-by-side against other embedded graph engines, NetworkX, rustworkx, and Neo4j Embedded.
+
+**KGLite does not fit** when you need any of these:
+
+- server-mode RBAC;
+- multiple databases per instance;
+- a causal cluster with routing;
+- long-lived multi-client write transactions managed by a database server.
+
+For positioning detail see {doc}`../core-concepts` and the [concepts index](../../concepts/index.md).
 
 ## Two migration paths
 
 ### Path A — reuse tested Bolt driver code
 
-`kglite-bolt-server` is a pure-Rust binary that speaks the
-[Bolt v5 wire protocol](https://neo4j.com/docs/bolt/current/). The
-official **Python, JavaScript, and Java drivers are regression-tested in
-CI**. Reconfigure the connection URL and authentication; the Java driver also
-needs the server started with `--neo4j-compat` (see the note below). Other Bolt
-v5 clients are untested and need evaluation within the documented protocol and
-Cypher dialect limits:
+`kglite-bolt-server` is a pure-Rust binary that speaks the [Bolt v5 wire protocol](https://neo4j.com/docs/bolt/current/). The official **Python, JavaScript, and Java drivers are regression-tested in CI**. To reuse driver code, reconfigure the connection URL and authentication. The Java driver also needs the server started with `--neo4j-compat` (see the note below).
+
+Other Bolt v5 clients are untested. Evaluate them within the documented protocol and Cypher dialect limits:
 
 - **cypher-shell** connects and queries; standalone `CALL proc()`,
   `SHOW INDEXES/CONSTRAINTS/PROCEDURES`, and `SHOW DATABASES` answer.
-- **Neo4j Browser** requires `--neo4j-compat` (it reads
-  `dbms.components()` for its version banner) and then populates its
-  sidebar and schema tab from `db.labels()` / `db.relationshipTypes()` /
-  `db.propertyKeys()` / `db.schema.visualization()`. Verify against your
-  Browser version; its connect sequence varies across releases — run the
-  server at `RUST_LOG=debug` to see exactly what it sends.
-- **LangChain's `Neo4jGraph` does NOT work unchanged**: its
-  `refresh_schema()` calls `apoc.meta.data()` and its graph-document
-  writer uses `apoc.merge.*`, and KGLite ships no APOC (see the `apoc.*`
-  row below). Construct it with `refresh_schema=False` and supply the
-  schema text yourself (e.g. from `describe()`), and write through Cypher
-  rather than `add_graph_documents`.
+- **Neo4j Browser** requires `--neo4j-compat`, because it reads `dbms.components()` for its version banner. It then populates its sidebar and schema tab from `db.labels()` / `db.relationshipTypes()` / `db.propertyKeys()` / `db.schema.visualization()`. Verify against your Browser version, because its connect sequence varies across releases. Run the server at `RUST_LOG=debug` to see exactly what it sends.
+- **LangChain's `Neo4jGraph` does NOT work unchanged.** Its `refresh_schema()` calls `apoc.meta.data()`, and its graph-document writer uses `apoc.merge.*`. KGLite ships no APOC (see the `apoc.*` row below). To use it:
+  - Construct it with `refresh_schema=False`.
+  - Supply the schema text yourself (e.g. from `describe()`).
+  - Write through Cypher rather than `add_graph_documents`.
 
 See the [Bolt server operator guide](../../operators/bolt-server.md).
 
@@ -75,23 +65,22 @@ kglite-bolt-server --graph my-graph.kgl --bind 127.0.0.1 --port 7687
 
 ````{note}
 **JVM clients need `--neo4j-compat`.** The official Java driver refuses to talk
-to a server whose handshake agent does not begin with `Neo4j/`, and fails at
+to a server whose handshake agent does not begin with `Neo4j/`. It fails at
 connect time with `UntrustedServerException: Server does not identify as a
-genuine Neo4j instance` — before any query runs. The Python and JavaScript
+genuine Neo4j instance`, before any query runs. The Python and JavaScript
 drivers do not perform this check, so they work against the default identity.
 
-Start the server with compatibility mode (or set
-`KGLITE_BOLT_NEO4J_COMPAT=1`) and the agent becomes
-`Neo4j/5.26.0 (kglite-bolt-server/<version>)`, which the driver accepts while
-still naming the real product:
+Start the server with compatibility mode (or set `KGLITE_BOLT_NEO4J_COMPAT=1`).
+The agent becomes `Neo4j/5.26.0 (kglite-bolt-server/<version>)`. The driver
+accepts it, and it still names the real product:
 
 ```bash
 kglite-bolt-server --graph my-graph.kgl --neo4j-compat
 ```
 
 It is opt-in because presenting as another product is the operator's decision.
-Connect a driver that enforces the check with compatibility off and the server
-log tells you exactly this, naming both activation routes. See “Driver identity” in the
+If a driver that enforces the check connects with compatibility off, the server
+log says so and names both activation routes. See “Driver identity” in the
 [Bolt server operator guide](../../operators/bolt-server.md).
 ````
 
@@ -116,19 +105,18 @@ with driver.session() as session:
         print(record["f.name"])
 ```
 
-The query path is the *same* Cypher engine the Python API uses;
-differential tests confirm row-for-row equivalence
-(`tests/test_bolt_server_differential.py`). The official **Python,
-JavaScript, and Java** drivers all have automated regression coverage in
-CI — session and explicit-transaction lifecycle, the managed
-`executeWrite` path, PackStream type round-trips,
-`Node`/`Relationship`/`Path` values, `Neo.*` error codes, and the OCC
-conflict status code (`tests/conformance/`). Those per-driver checks run
-the managed API uncontended; that a managed transaction actually *retries*
-a conflict is covered separately, under real contention, against the
-Python driver
-(`tests/test_bolt_server_transactions.py::test_managed_transaction_retries_after_conflict`).
-Go and .NET are untested; validate them before use.
+The query path is the *same* Cypher engine the Python API uses. Differential tests confirm row-for-row equivalence (`tests/test_bolt_server_differential.py`).
+
+The official **Python, JavaScript, and Java** drivers all have automated regression coverage in CI (`tests/conformance/`). It covers:
+
+- session and explicit-transaction lifecycle;
+- the managed `executeWrite` path;
+- PackStream type round-trips;
+- `Node`/`Relationship`/`Path` values;
+- `Neo.*` error codes;
+- the OCC conflict status code.
+
+Those per-driver checks run the managed API uncontended. That a managed transaction actually *retries* a conflict is covered separately, under real contention, against the Python driver (`tests/test_bolt_server_transactions.py::test_managed_transaction_retries_after_conflict`). Go and .NET are untested; validate them before use.
 
 #### What carries over, and what does not
 
@@ -152,10 +140,7 @@ Go and .NET are untested; validate them before use.
 
 ### Path B — native Python (`cypher()` directly)
 
-If you control the calling code, skip the wire protocol entirely and
-call `cypher()` in-process. No server, no socket, no driver — the
-result is a `ResultView` you iterate, index, or convert with
-`to_df=True`. See {doc}`../getting-started`.
+If you control the calling code, skip the wire protocol and call `cypher()` in-process. There is no server, no socket, and no driver. The result is a `ResultView` you iterate, index, or convert with `to_df=True`. See {doc}`../getting-started`.
 
 The same query, both ways:
 
@@ -176,9 +161,7 @@ rows = list(graph.cypher(
 ))
 ```
 
-Note the parameter syntax difference: the driver takes `**kwargs`
-(or a `parameters=` dict); `cypher()` takes a `params=` dict. The
-`$name` placeholders in the query string are identical.
+Parameter passing differs. The driver takes `**kwargs` (or a `parameters=` dict), and `cypher()` takes a `params=` dict. The `$name` placeholders in the query string are identical.
 
 ## Getting data out of Neo4j into KGLite
 
@@ -219,10 +202,7 @@ graph.add_relationships(knows, connection_type="KNOWS",
 graph.save("my-graph.kgl")
 ```
 
-`add_nodes` auto-detects string vs integer ids from the column dtype
-and supports a `column_types=` override for spatial/temporal columns;
-`add_relationships` can take a Cypher `query=` instead of a DataFrame.
-See the [data-loading guide](../guides/data-loading.md).
+`add_nodes` auto-detects string vs integer ids from the column dtype. It supports a `column_types=` override for spatial/temporal columns. `add_relationships` can take a Cypher `query=` instead of a DataFrame. See the [data-loading guide](../guides/data-loading.md).
 
 ### Route 2 — dump to CSV, then `LOAD CSV` (no pandas needed)
 
@@ -254,9 +234,12 @@ graph.cypher(
 graph.save("my-graph.kgl")
 ```
 
-Prefer this route if you have no pandas (a Bolt client, a Rust or JVM
-consumer) or if you already have import scripts you would rather not
-rewrite. Four differences are worth knowing before you run it:
+Prefer this route in either of these cases:
+
+- You have no pandas (a Bolt client, a Rust or JVM consumer).
+- You already have import scripts you would rather not rewrite.
+
+Four differences are worth knowing before you run it:
 
 | | KGLite | Neo4j |
 |---|---|---|
@@ -265,36 +248,22 @@ rewrite. Four differences are worth knowing before you run it:
 | Whole-result clauses | An aggregate, `ORDER BY`, `SKIP`/`OFFSET`/`LIMIT`, `DISTINCT`, a set operation, `cluster()`, or a `CALL` subquery after `LOAD CSV` cannot be batched, so the file is read in one capped pass and fails past 1,000,000 rows naming the clause responsible. Ordinary procedures remain row-local | Behavior depends on the execution plan and server configuration |
 | Position | Must be the first clause | Anywhere in the pipeline |
 
-`http(s)://` is rejected with a message rather than a syntax error: the
-engine carries no HTTP client at all (network dependencies were removed
-in 0.14.x), so there is nothing to fetch a URL with. Download the file
-first, or fetch it in your own code and pass the rows in as a
-parameter.
+`http(s)://` is rejected with a message rather than a syntax error. The engine carries no HTTP client at all (network dependencies were removed in 0.14.x), so there is nothing to fetch a URL with. Download the file first, or fetch it in your own code and pass the rows in as a parameter.
 
-**Over Bolt, `LOAD CSV` is off by default.** `file://` means the
-*server's* filesystem, and a Bolt client is a remote caller, so serving
-it ungated would publish an arbitrary-file-read primitive. In-process
-callers (this Python API, the Rust library, the CLI) are allowed because
-they already have the host process's filesystem access; a Bolt client
-gets nothing unless the server was started with `--allow-csv-import
-<DIR>`, which confines imports to `DIR` after symlink resolution — the
-same shape as the import-directory setting you will have configured on
-the server side already. See
-[CYPHER.md → LOAD CSV](https://github.com/kkollsga/kglite/blob/main/CYPHER.md#load-csv).
+**Over Bolt, `LOAD CSV` is off by default.** `file://` means the *server's* filesystem, and a Bolt client is a remote caller. Serving it ungated would publish an arbitrary-file-read primitive.
+
+- In-process callers (this Python API, the Rust library, the CLI) are allowed, because they already have the host process's filesystem access.
+- A Bolt client gets nothing unless the server was started with `--allow-csv-import <DIR>`. That confines imports to `DIR` after symlink resolution. It is the same shape as the import-directory setting you will have configured on the server side already.
+
+See [CYPHER.md → LOAD CSV](https://github.com/kkollsga/kglite/blob/main/CYPHER.md#load-csv).
 
 ### Route 3 — pandas between export and load
 
-Still the best fit when you want typing control, column renaming, or
-cleanup in between: `pd.read_csv` → `add_nodes` / `add_relationships`,
-using the same calls as Route 1.
+This route is the best fit when you want typing control, column renaming, or cleanup in between. Use `pd.read_csv` → `add_nodes` / `add_relationships`, with the same calls as Route 1.
 
 ## Cypher dialect divergence
 
-KGLite's supported surface is documented in full in
-[CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md);
-this section lists only where it diverges from Neo4j. An opt-in live comparison
-runner is available at `scripts/cypher_conformance.py`
-(see {doc}`../../concepts/cypher-conformance`).
+[CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md) documents KGLite's supported surface in full. This section lists only where it diverges from Neo4j. An opt-in live comparison runner is available at `scripts/cypher_conformance.py` (see {doc}`../../concepts/cypher-conformance`).
 
 ### Data model — labels and node identity
 
@@ -307,7 +276,7 @@ runner is available at `scripts/cypher_conformance.py`
 
 > **Note:** Neo4j docs and some older KGLite material describe KGLite
 > as "single-label" with `labels(n)` returning a string. That changed
-> in 0.10.5 — multi-label is native and `labels(n)` returns a list.
+> in 0.10.5. Multi-label is native and `labels(n)` returns a list.
 
 #### Node identity (`id`) — the 0.10.10 model
 
@@ -322,7 +291,7 @@ identically in every storage mode.
 | Duplicate ids | `MATCH (n {id: X})` returns one node per id; a rate-limited warning is emitted at index build. Use `MERGE` or dedupe input. |
 
 This is a **breaking** change from earlier releases for prefixed-id
-data — see the
+data. See the
 [0.10.10 CHANGELOG entry](https://github.com/kkollsga/kglite/blob/main/CHANGELOG.md).
 
 ### Missing language constructs
@@ -355,24 +324,33 @@ These forms are supported and are easy to assume missing:
 - `WHERE EXISTS { pattern WHERE ... }` (pattern-existence), inline
   pattern predicates, `any/all/none/single(x IN list WHERE ...)`.
 - `CALL { ... }` **read** subqueries run per input row, whether or not they
-  import outer variables. Modern `CALL (p, q)`, `CALL (*)`, and `CALL ()`
-  scope syntax is supported; those imports remain visible across `WITH` and
-  every set arm. The legacy `CALL { WITH p ... }` form remains available and
-  requires a separate bare-variable importing `WITH` in each arm.
-  `UNION` / `UNION ALL` work inside the body, with `INTERSECT` / `EXCEPT` as
-  KGLite extensions. Aggregating bodies preserve an outer row with a zero;
-  non-aggregating bodies inner-join, so zero returned rows drop it. Writes,
-  unit bodies, and `IN TRANSACTIONS` remain unsupported. See
+  import outer variables.
+  - Modern `CALL (p, q)`, `CALL (*)`, and `CALL ()` scope syntax is supported.
+    Those imports remain visible across `WITH` and every set arm.
+  - The legacy `CALL { WITH p ... }` form remains available. It requires a
+    separate bare-variable importing `WITH` in each arm.
+  - `UNION` / `UNION ALL` work inside the body, with `INTERSECT` / `EXCEPT` as
+    KGLite extensions.
+  - Aggregating bodies preserve an outer row with a zero. Non-aggregating
+    bodies inner-join, so zero returned rows drop it.
+  - Writes, unit bodies, and `IN TRANSACTIONS` remain unsupported.
+
+  See
   [CYPHER.md → `CALL { ... }` read subqueries](https://github.com/kkollsga/kglite/blob/main/CYPHER.md#call----read-subqueries).
 - Ordinary `CALL procedure(...) YIELD ...` evaluates its parameters and joins
   its results per incoming row. `cluster()` is the deliberate exception: it
   consumes the full preceding cohort.
 - Cypher 25 `FILTER`, `OFFSET`, `NODETACH DELETE`, and terminal `FINISH`.
   `INSERT` is supported for static node labels (`&` between multiple labels)
-  and one directed static relationship type. It rejects dynamic labels/types,
-  dynamic property maps, path assignment, colon-separated multiple labels,
-  relationship type alternation, and undirected or variable-length edges; keep
-  `CREATE` where one of those CREATE-only forms is required.
+  and one directed static relationship type. It rejects these forms:
+  - dynamic labels/types;
+  - dynamic property maps;
+  - path assignment;
+  - colon-separated multiple labels;
+  - relationship type alternation;
+  - undirected or variable-length edges.
+
+  Keep `CREATE` where one of those CREATE-only forms is required.
 - List comprehensions `[x IN list WHERE p \| expr]`, `reduce(...)`,
   list slicing `xs[1..3]`, map projections `n {.a, .b}`, map literals.
 - Map subscript `m['key']` and **dynamic property access** `n[key]`
@@ -382,12 +360,7 @@ These forms are supported and are easy to assume missing:
 
 ## Function coverage
 
-KGLite covers the common scalar / string / math / aggregation /
-temporal / spatial families. Rather than duplicate them, see the
-function tables in
-[CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md)
-(Built-in, String, Math, Spatial, Temporal, Timeseries, Text
-predicates, plus the openCypher compatibility matrix).
+KGLite covers the common scalar / string / math / aggregation / temporal / spatial families. See the function tables in [CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md) rather than a copy here. They cover Built-in, String, Math, Spatial, Temporal, Timeseries, and Text predicates, plus the openCypher compatibility matrix.
 
 Current notable function differences:
 
@@ -401,10 +374,14 @@ Current notable function differences:
 | `toBoolean(...)` | Not supported | `CASE` / Python-side coercion |
 | `duration.between(d1, d2)` in months | Fills `days` (and `seconds`) only; `months` is always 0 | `DateTime ± Duration` itself is calendar-correct (months shift by calendar month, clamped to month end); compute a month difference from the year/month parts — see CYPHER.md "Duration semantics" |
 
-KGLite-specific function names include semantic search
-(`text_score`/`vector_score`), timeseries (`ts_*`), fuzzy text
-predicates (`text_edit_distance`, `text_jaccard`), and graph-algorithm
-procedures (`CALL pagerank/louvain/...`). See CYPHER.md.
+KGLite-specific function names include:
+
+- semantic search (`text_score`/`vector_score`);
+- timeseries (`ts_*`);
+- fuzzy text predicates (`text_edit_distance`, `text_jaccard`);
+- graph-algorithm procedures (`CALL pagerank/louvain/...`).
+
+See CYPHER.md.
 
 ### `EXPLAIN` / `PROFILE`
 
@@ -417,9 +394,7 @@ Both are supported but the shape differs from Neo4j's plan tree:
   attaches per-clause stats on `result.profile`
   (`[clause, rows_in, rows_out, elapsed_us]`).
 
-Every `cypher()` call also attaches lightweight `result.diagnostics`
-(`elapsed_ms`, `timeout_ms`, `row_limit`, `total_rows`, `warnings`) with no
-prefix required.
+Every `cypher()` call also attaches lightweight `result.diagnostics` (`elapsed_ms`, `timeout_ms`, `row_limit`, `total_rows`, `warnings`). No prefix is required.
 
 ## Operational differences
 
@@ -433,15 +408,9 @@ prefix required.
 | Constraint DDL | `CREATE CONSTRAINT ... IS UNIQUE / IS NOT NULL / IS NODE KEY / IS :: TYPE` | Supported and enforced on every write path, including the bulk loader. Composite tuples (`REQUIRE (n.a, n.b) IS UNIQUE`) work; `IS NODE KEY` is uniqueness plus presence, installed atomically. Unlike index names, **constraint names are stored**, so `DROP CONSTRAINT <name>` works as written in a Neo4j script; unnamed constraints are addressable by their canonical descriptor. Declaring a constraint the existing data already violates is rejected and changes nothing. `IS :: TYPE` declares a per-property type, checked before a write lands. Relationship constraints — `FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL` / `IS :: TYPE` — are served the same way; `IS UNIQUE` / `IS RELATIONSHIP KEY` on a relationship are refused (see above). See [CYPHER.md → Cypher constraint DDL](https://github.com/kkollsga/kglite/blob/main/CYPHER.md#cypher-constraint-ddl). `define_schema({"nodes": {...}})` declares the same constraints from Python. |
 | Migrations | Versioned migration tools | None — you own schema evolution in Python load code |
 
-Indexes are maintained automatically across Cypher mutations, including
-`CREATE`/`INSERT`, property updates/removals, deletes, and `MERGE`. On disk-backed graphs
-property indexes are persisted next to the store; on in-memory graphs
-they live in a HashMap. See the Indexes section of
-[CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md).
+Indexes are maintained automatically across Cypher mutations, including `CREATE`/`INSERT`, property updates/removals, deletes, and `MERGE`. On disk-backed graphs, property indexes are persisted next to the store. On in-memory graphs, they live in a HashMap. See the Indexes section of [CYPHER.md](https://github.com/kkollsga/kglite/blob/main/CYPHER.md).
 
-For the transaction model (snapshot isolation, OCC, last-writer-wins,
-per-call cost) see {doc}`../transactions`; for the concurrency
-contract see {doc}`../../concepts/concurrency`.
+For the transaction model (snapshot isolation, OCC, last-writer-wins, per-call cost) see {doc}`../transactions`. For the concurrency contract see {doc}`../../concepts/concurrency`.
 
 ## See also
 

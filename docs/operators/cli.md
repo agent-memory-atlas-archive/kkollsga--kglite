@@ -21,7 +21,7 @@ cargo install kglite-cli
 ```
 
 Both routes expose the same Rust CLI implementation. Do not install both into
-one environment because they provide the same `kglite` command name.
+one environment, because they provide the same `kglite` command name.
 
 ## Code-Review Skill
 
@@ -33,8 +33,8 @@ code graphs it queries:
 codingest skill install
 ```
 
-The skill drives this CLI for querying. Build a working-tree graph, or a
-graph that spans a committed base and head revision:
+The skill drives this CLI for querying. Build a working-tree graph, or a graph
+that spans a committed base and head revision:
 
 ```bash
 # Code-graph builds moved to the codingest project (its CLI builds the .kgl):
@@ -43,39 +43,42 @@ graph that spans a committed base and head revision:
 #   codingest status --output .kglite/code-review.kgl
 ```
 
-`build` writes a metadata sidecar with the source/revision fingerprint.
-`status` reports `fresh`, `stale`, or `missing` without loading the graph. The
-review workflow still calls `describe` before Cypher and verifies structural
-results against exact source lines.
+- `build` writes a metadata sidecar with the source/revision fingerprint.
+- `status` reports `fresh`, `stale`, or `missing` without loading the graph.
+- The review workflow still calls `describe` before Cypher. It verifies
+  structural results against exact source lines.
 
 ## One-Shot Commands
 
-Run a read-only Cypher query and exit:
+`kglite query` runs a read-only Cypher query and exits:
 
 ```bash
 kglite query app.kgl "MATCH (n:Person) RETURN n.name AS name" --format json
 ```
 
-`--format json` emits one object per row, with the keys in the query's own
-column order — `RETURN 1 AS zz, 2 AS aa` yields `{"zz": 1, "aa": 2}`, the
-same order `--format csv` writes its header in. The top-level shape is a
+`--format json` emits one object per row. The keys follow the query's own
+column order: `RETURN 1 AS zz, 2 AS aa` yields `{"zz": 1, "aa": 2}`. That is
+the same order `--format csv` writes its header in. The top-level shape is a
 plain array, so `jq '.[0].name'` addresses the first row's column.
 
 ### Valid time
 
 On a graph that declares validity intervals, a statement with no
-`FOR VALID_TIME` prefix reads **as of today** (UTC); prefix it with
-`FOR VALID_TIME ALL` to read every version. `--valid-time-default
-{today|all|YYYY-MM-DD}` on `query`, `write` and `session` changes what an
-unprefixed statement reads for that run; a statement's own prefix still wins.
-Without it, a default the graph stored in its file applies, else today.
+`FOR VALID_TIME` prefix reads **as of today** (UTC). Prefix it with
+`FOR VALID_TIME ALL` to read every version.
+
+`--valid-time-default {today|all|YYYY-MM-DD}` on `query`, `write` and `session`
+changes what an unprefixed statement reads for that run. A statement's own
+prefix still wins. Without the flag, a default the graph stored in its file
+applies, else today.
+
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared
-divergence, not an oversight: the Python API and the MCP server both default
-to 180,000 ms, and the CLI does not, because `Ctrl-C` cancels a running read
-here and a batch query over a Wikidata-scale graph legitimately runs for hours.
-A silent three-minute kill would be the regression.
+divergence, not an oversight. The Python API and the MCP server both default to
+180,000 ms. The CLI does not, because `Ctrl-C` cancels a running read here and
+a batch query over a Wikidata-scale graph legitimately runs for hours. A silent
+three-minute kill would be the regression.
 
 Bound one call with `--timeout-ms`, on `query` and on `write`:
 
@@ -83,12 +86,15 @@ Bound one call with `--timeout-ms`, on `query` and on `write`:
 kglite query app.kgl "MATCH (a)-[*1..6]-(b) RETURN count(*) AS n" --timeout-ms 30000
 ```
 
-The query exits non-zero with the engine's timeout message. `--timeout-ms 0`
-is the same as omitting the flag. `row_limit` — the Python knob that caps the
-rows a call *retains* — has no CLI spelling; write `LIMIT n` in the query,
-which is what a one-shot command wants anyway.
+The query exits non-zero with the engine's timeout message. `--timeout-ms 0` is
+the same as omitting the flag.
 
-Run a write statement and save the graph:
+`row_limit` has no CLI spelling. In Python it caps the rows a call *retains*.
+Write `LIMIT n` in the query, which is what a one-shot command wants anyway.
+
+### Writing and saving
+
+`kglite write` runs a write statement and saves the graph:
 
 ```bash
 kglite write app.kgl "CREATE (:Task {id:'t1', status:'todo'})" \
@@ -98,20 +104,27 @@ kglite write app.kgl "CREATE (:Task {id:'t1', status:'todo'})" \
   --modified-by agent
 ```
 
-`--write-scope` restricts a statement's writes to the listed **node
-types**. A node write—`CREATE`, `INSERT`, `MERGE`'s create arm, `SET`, `REMOVE`,
-`DELETE`, `NODETACH DELETE`, `DETACH DELETE`, and index/constraint DDL—is judged by the
-node's *stored* type, so a pattern label cannot widen the scope. A
-relationship write (a `CREATE`/`INSERT` relationship pattern, `DELETE r`, `SET r.p`,
-`REMOVE r.p`) is allowed when **at least one endpoint's** stored type is
-listed: linking to a matched out-of-scope node is permitted, an edge
-between two out-of-scope nodes is not. Relationship types themselves are
-not scoped, and neither is `db.cdc.enable`/`db.cdc.disable`. Deleting a
-node in scope removes its relationships whatever they point at.
-`--git-sha` and `--modified-by` stamp provenance on `auto_timestamp`
-types.
+`--write-scope` restricts a statement's writes to the listed **node types**.
+`--git-sha` and `--modified-by` stamp provenance on `auto_timestamp` types.
 
-Inspect a dependency frontier:
+Scope rules:
+
+- **Node writes** are judged by the node's *stored* type, so a pattern label
+  cannot widen the scope. Node writes are `CREATE`, `INSERT`, `MERGE`'s create
+  arm, `SET`, `REMOVE`, `DELETE`, `NODETACH DELETE`, `DETACH DELETE`, and
+  index/constraint DDL.
+- **Relationship writes** are allowed when **at least one endpoint's** stored
+  type is listed. Relationship writes are a `CREATE`/`INSERT` relationship
+  pattern, `DELETE r`, `SET r.p`, and `REMOVE r.p`. Linking to a matched
+  out-of-scope node is permitted. An edge between two out-of-scope nodes is
+  not.
+- **Not scoped:** relationship types themselves, and
+  `db.cdc.enable`/`db.cdc.disable`.
+- Deleting a node in scope removes its relationships whatever they point at.
+
+### Dependency frontier
+
+`kglite ready-set` inspects a dependency frontier:
 
 ```bash
 kglite ready-set app.kgl \
@@ -120,7 +133,9 @@ kglite ready-set app.kgl \
   --format csv
 ```
 
-Print the agent-oriented graph description:
+### Describing a graph
+
+`kglite describe` prints the agent-oriented graph description:
 
 ```bash
 kglite describe app.kgl
@@ -129,15 +144,19 @@ kglite describe app.kgl --cypher
 kglite describe app.kgl --connections
 ```
 
-`describe` returns the same XML schema document exposed by the Python API
-and MCP server, including focused views for labels, Cypher support, and
-connection types. When the graph carries skills or recipe queries, the document
-indexes them in `<skills>` and `<recipes>` elements — name, one-line
+`describe` returns the same XML schema document exposed by the Python API and
+MCP server. It includes focused views for labels, Cypher support, and
+connection types.
+
+When the graph carries skills or recipe queries, the document indexes them in
+`<skills>` and `<recipes>` elements. Each entry has a name, a one-line
 description, and the call that reads the full text. A graph carrying neither
 renders neither element, so nothing about an ordinary graph's description
 changes.
 
-Read the skills a graph carries:
+### Reading skills
+
+`kglite skill` reads the skills a graph carries:
 
 ```bash
 kglite skill app.kgl                  # name + description of each skill
@@ -146,32 +165,39 @@ kglite skill app.kgl wells            # the body, raw markdown on stdout
 kglite skill app.kgl wells > wells.md
 ```
 
-With no name the command lists every skill by name and description, sorted, in
-the `--format` you ask for (`table` by default, plus `csv` and `json`). With a
-name it prints that skill's body byte for byte — no reformatting, nothing
-appended — so it can be piped or redirected. A graph carrying no skills lists
-zero rows and exits **0**; a name the graph does not carry is an error naming
-both the name and the graph, and exits **non-zero**. A body is always raw;
-`--format` applies to the listing only.
+- **With no name**, the command lists every skill by name and description,
+  sorted, in the `--format` you ask for (`table` by default, plus `csv` and
+  `json`).
+- **With a name**, it prints that skill's body byte for byte: no reformatting,
+  nothing appended. You can pipe or redirect it. A body is always raw;
+  `--format` applies to the listing only.
+- A graph carrying no skills lists zero rows and exits **0**.
+- A name the graph does not carry is an error naming both the name and the
+  graph, and exits **non-zero**.
 
 A skill is markdown methodology stored inside the `.kgl` itself, which an MCP
-server serves to an agent — `kglite skill` is the offline check on what that
-server would serve. (The server merges the graph's skills with its own bundled
+server serves to an agent. `kglite skill` is the offline check on what that
+server would serve. The server merges the graph's skills with its own bundled
 and operator layers, and re-reads the graph's on every `reload_graph`, so the
-two can differ; see
-[Authoring MCP skills](../python/guides/mcp-skills.md).) Read-only: it takes no
-writer lease, so it is safe against a graph another process owns. Writing
-skills is the Python API's (`set_skill`, `import_skills`), as is writing recipe
-queries (`set_recipe`, `import_recipes`) — there is no `kglite recipe`
-subcommand, because a CLI user writes Cypher.
+two can differ. See [Authoring MCP skills](../python/guides/mcp-skills.md).
+
+The command is read-only. It takes no writer lease, so it is safe against a
+graph another process owns. Writing skills is the Python API's (`set_skill`,
+`import_skills`), as is writing recipe queries (`set_recipe`,
+`import_recipes`). There is no `kglite recipe` subcommand, because a CLI user
+writes Cypher.
 
 ## Vault Directories
 
-`kglite okf` reads a **vault** — a directory of frontmatter-markdown notes in
-the format `VAULT.md` specifies — without Python. `check` reports what a build
-would find and sets the exit code; `build` keeps the result as a `.kgl`;
-`export` runs the other way, writing a `.kgl` back out as a vault; and `status`
-answers the cheap question — has the vault moved since the graph was built:
+`kglite okf` reads a **vault** without Python. A vault is a directory of
+frontmatter-markdown notes in the format `VAULT.md` specifies. The subcommands
+are:
+
+- `check` reports what a build would find and sets the exit code.
+- `build` keeps the result as a `.kgl`.
+- `export` runs the other way, writing a `.kgl` back out as a vault.
+- `status` answers the cheap question: has the vault moved since the graph was
+  built?
 
 ```bash
 kglite okf check vault/                       # counts, then errors, then warnings
@@ -184,51 +210,80 @@ kglite okf status vault/                      # the vault's fingerprint
 kglite okf status vault/ --graph vault.kgl    # 0 = current, 1 = stale
 ```
 
-`check` runs the same read `build` runs and throws the graph away, so it
-reports what a build does rather than a second opinion about it. It exits **0**
-when the report carries no error and **non-zero** otherwise; `--strict` counts
-warnings as errors too, which is what a converter's own test suite wants. The
-classification is `VAULT.md` §9: an id collision or a reference climbing out of
-the vault is an error, a dangling link or a missing attachment is a warning.
-`--json` prints `{ok, strict, counts, errors, warnings}` with the same keys the
-Python `okf.validate()` report carries.
+### `okf check`
 
-`build` writes the graph to `-o` and prints the same report on **stderr**,
-leaving stdout for the path it wrote. `--dialect` takes `obsidian` (the
-default), `okf` or `loose`; an unrecognised spelling is refused rather than
-quietly read as something else. Everything else about a vault — declaring
-indexes, hubs and embed targets in `.kglite/vault.yaml`, carrying skills and
-recipes in `.kglite/` — happens in the vault itself, not in flags.
+`check` runs the same read `build` runs and throws the graph away. It reports
+what a build does rather than a second opinion about it.
 
-`status` reads no note: it `stat`s the files a build would read and folds them
+- It exits **0** when the report carries no error, and **non-zero** otherwise.
+- `--strict` counts warnings as errors too, which is what a converter's own
+  test suite wants.
+- The classification is `VAULT.md` §9. An id collision or a reference climbing
+  out of the vault is an error. A dangling link or a missing attachment is a
+  warning.
+- `--json` prints `{ok, strict, counts, errors, warnings}`, with the same keys
+  the Python `okf.validate()` report carries.
+
+### `okf build`
+
+`build` writes the graph to `-o`. It prints the same report on **stderr**,
+leaving stdout for the path it wrote.
+
+`--dialect` takes `obsidian` (the default), `okf` or `loose`. An unrecognised
+spelling is refused rather than quietly read as something else.
+
+Everything else about a vault happens in the vault itself, not in flags:
+declaring indexes, hubs and embed targets in `.kglite/vault.yaml`, and carrying
+skills and recipes in `.kglite/`.
+
+### `okf status`
+
+`status` reads no note. It `stat`s the files a build would read and folds them
 into the fingerprint `VAULT.md` §12 specifies. Alone it prints that number and
-the directory, reading it as a vault. With `--graph` it compares it against the
-one stamped in the `.kgl` when it was built, printing `current` and exiting
-**0**, or `stale` with both fingerprints and exiting **non-zero** — the verdict
-a scheduled rebuild checks before doing any work. The dialect then comes from
-the graph, because the fingerprint depends on it: a `.kgl` built with
-`--dialect okf` is compared as an OKF bundle without being asked, and a
-`--dialect` that contradicts the stamp is refused instead of reported as
-`stale`. A `.kgl` that carries no provenance (one not built by `okf build`) is
-an error rather than a verdict, because there is nothing to compare. Keep the `.kgl` *outside* the vault: every non-hidden file
-under the root is a candidate attachment, so a graph written into the vault
-changes the vault.
+the directory, reading it as a vault.
 
-`export` writes one `.md` file per node under a folder named for its label,
+With `--graph` it compares the fingerprint against the one stamped in the
+`.kgl` when it was built:
+
+- It prints `current` and exits **0**, or
+- it prints `stale` with both fingerprints and exits **non-zero**.
+
+That is the verdict a scheduled rebuild checks before doing any work.
+
+- **With `--graph`, the dialect comes from the graph**, because the fingerprint depends on it.
+  A `.kgl` built with `--dialect okf` is compared as an OKF bundle without
+  being asked. A `--dialect` that contradicts the stamp is refused instead of
+  reported as `stale`.
+- **A `.kgl` with no provenance** (one not built by `okf build`) is an error
+  rather than a verdict, because there is nothing to compare.
+- **Keep the `.kgl` *outside* the vault.** Every non-hidden file under the root
+  is a candidate attachment, so a graph written into the vault changes the
+  vault.
+
+### `okf export`
+
+`export` writes one `.md` file per node under a folder named for its label. It
 copies the graph's attachments when `--source-root` names the directory they
-were read from, and prints its report on **stderr** with the directory it wrote
-on stdout (`VAULT.md` §10). **It never replaces a file it did not write**:
-`.kglite/export-manifest.json` records a hash per exported file, and a file
-missing from it or edited since is refused, named on stderr, and the command
-exits non-zero. `--force` lifts exactly those two refusals. Exporting the same
-graph twice is byte-identical, so the output is worth committing.
+were read from. It prints its report on **stderr**, with the directory it wrote
+on stdout (`VAULT.md` §10).
+
+**It never replaces a file it did not write.** `.kglite/export-manifest.json`
+records a hash per exported file. A file missing from it, or edited since, is
+refused and named on stderr, and the command exits non-zero. `--force` lifts
+exactly those two refusals. Exporting the same graph twice is byte-identical,
+so the output is worth committing.
+
+#### Edge tables
 
 A frontmatter list carries an edge's target and not its properties, so those
-are a documented loss — unless the type is **declared as an edge table**. The
-source vault declares it in its own `.kglite/vault.yaml`
-(`export: {edge_tables: {WORKED_ON_BY: "Worked on by"}}`, `VAULT.md` §7.3),
-which the export finds through the graph's provenance; `--edge-table` says the
-same thing from the command line, repeatably, and wins per type:
+properties are a documented loss, unless the type is **declared as an edge
+table**. There are two ways to declare one:
+
+- The source vault declares it in its own `.kglite/vault.yaml`
+  (`export: {edge_tables: {WORKED_ON_BY: "Worked on by"}}`, `VAULT.md` §7.3).
+  The export finds it through the graph's provenance.
+- `--edge-table` says the same thing from the command line. It is repeatable
+  and wins per type.
 
 ```bash
 kglite okf export vault.kgl out/ \
@@ -236,25 +291,27 @@ kglite okf export vault.kgl out/ \
     --edge-table 'WORKED_ON_BY=Worked on by'
 ```
 
-Each declared type's edges are then written as a GFM table under that heading in
-the source note's body — the only prose an export ever adds — one column per
-property, and the export owns that table on the next round. Reading it back
-needs the matching `structure.tables … edges: true` rule, which lives in
-`vault.yaml`, which no export writes: copy that file across. The report warns on
-stderr when the rule is missing or when no exported note emits the type.
+Each declared type's edges are written as a GFM table under that heading in the
+source note's body. That is the only prose an export ever adds. The table has
+one column per property, and the export owns it on the next round.
+
+Reading the table back needs the matching `structure.tables … edges: true`
+rule. That rule lives in `vault.yaml`, which no export writes, so copy that
+file across. The report warns on stderr when the rule is missing or when no
+exported note emits the type.
 
 ## Agent Sessions
 
 For byte-bounded output with executable retrieval commands, use explicit
 `--format agent` on one-shot `query` or `write`. The default JSONL session
-contract remains complete; individual requests opt in with `"format":"agent"`
-and discover retained expansion through `{"op":"help"}`.
-See [Bounded agent responses](agent-responses.md) for controls, expansion, cache
+contract remains complete. Individual requests opt in with `"format":"agent"`
+and discover retained expansion through `{"op":"help"}`. See
+[Bounded agent responses](agent-responses.md) for controls, expansion, cache
 lifecycle, and the distinction between a response budget and Cypher `LIMIT`.
 
-Use `session` when an agent needs multiple operations against the same
-graph. The process keeps one graph loaded in memory and accepts JSONL
-requests on stdin:
+Use `session` when an agent needs multiple operations against the same graph.
+The process keeps one graph loaded in memory and accepts JSONL requests on
+stdin:
 
 ```bash
 kglite session app.kgl --format json
@@ -271,21 +328,24 @@ Example request stream:
 {"op":"exit"}
 ```
 
-Responses echo `id` when provided. In JSON mode, `query` and `write`
-return typed `rows`; table and CSV modes return rendered `output`.
+Responses echo `id` when provided. In JSON mode, `query` and `write` return
+typed `rows`. Table and CSV modes return rendered `output`.
 
-CSV is a machine format: integers, floats, timestamps, and values nested in
-lists or maps retain their available text precision, and RFC quoting preserves
-commas, quotes, CR, and LF. Table mode remains compact for people. As in normal
-CSV, an empty string and NULL are both empty fields; use JSON when that
-distinction matters.
+### Output formats
 
-`{"op":"help"}` answers with the op table — every op and its request
-shape — so a driver that only has the pipe can discover the protocol from
-inside it; an unknown op names the valid ops in its error.
+CSV is a machine format. Integers, floats, timestamps, and values nested in
+lists or maps retain their available text precision. RFC quoting preserves
+commas, quotes, CR, and LF. As in normal CSV, an empty string and NULL are both
+empty fields; use JSON when that distinction matters. Table mode remains
+compact for people.
 
-For focused descriptions, agents can use compact or explicit object
-forms:
+### Discovering ops
+
+`{"op":"help"}` answers with the op table: every op and its request shape. A
+driver that only has the pipe can discover the protocol from inside it. An
+unknown op names the valid ops in its error.
+
+For focused descriptions, agents can use compact or explicit object forms:
 
 ```json
 {"op":"describe","connections":true}
@@ -311,17 +371,22 @@ Run with no path for a scratch in-memory graph:
 kglite
 ```
 
-Cypher statements execute when terminated by `;`, so a query can span
-multiple lines. Dot-commands execute on Enter. Tab completion covers
-dot-commands and graph labels.
+Cypher statements execute when terminated by `;`, so a query can span multiple
+lines. Dot-commands execute on Enter. Tab completion covers dot-commands and
+graph labels.
 
-Piped input runs the same way, with two allowances for scripts: a
-dot-command line terminates a statement still waiting for its `;`, and so
-does the end of input, so `kglite app.kgl <<< 'MATCH (n) RETURN count(n)'`
-prints its result instead of exiting silently. A tail left unbalanced by
-an unclosed quote or bracket runs nothing, names itself on stderr, and
-exits non-zero. Table output is only width-capped on a terminal (honoring
-`COLUMNS`); piped output renders every value in full.
+### Piped input
+
+Piped input runs the same way, with two allowances for scripts. A dot-command
+line terminates a statement still waiting for its `;`, and so does the end of
+input. So `kglite app.kgl <<< 'MATCH (n) RETURN count(n)'` prints its result
+instead of exiting silently.
+
+A tail left unbalanced by an unclosed quote or bracket runs nothing, names
+itself on stderr, and exits non-zero. Table output is only width-capped on a
+terminal (honoring `COLUMNS`). Piped output renders every value in full.
+
+### Dot-commands
 
 Common dot-commands:
 
@@ -339,8 +404,9 @@ Common dot-commands:
 
 ## Other Commands
 
-`export-text` prints the deterministic text projection used by git
-textconv:
+### `export-text` and `diff`
+
+`export-text` prints the deterministic text projection used by git textconv:
 
 ```bash
 kglite export-text app.kgl
@@ -352,9 +418,11 @@ kglite export-text app.kgl
 kglite diff before.kgl after.kgl
 ```
 
-`export-sqlite` writes a SQLite-dialect SQL script — node types become
-tables, connection types become link tables — so the graph can leave
-KGLite entirely. Give it an output path, or omit one to write to stdout:
+### `export-sqlite`
+
+`export-sqlite` writes a SQLite-dialect SQL script, so the graph can leave
+KGLite entirely. Node types become tables, and connection types become link
+tables. Give it an output path, or omit one to write to stdout:
 
 ```bash
 kglite export-sqlite app.kgl dump.sql
@@ -363,14 +431,16 @@ sqlite3 app.db < dump.sql
 kglite export-sqlite app.kgl | sqlite3 app.db     # or pipe it straight through
 ```
 
-Deterministic (the same graph always produces byte-identical SQL) and
-dependency-free — no SQLite library is linked into KGLite. The full
-mapping and its trade-offs are in the
+The output is deterministic: the same graph always produces byte-identical SQL.
+It is dependency-free, because no SQLite library is linked into KGLite. The
+full mapping and its trade-offs are in the
 [import/export guide](../python/guides/import-export.md).
+
+### `export`
 
 `export` writes the open formats: a lossless CSV tree with a re-import
 blueprint, or RDF 1.2. The format is inferred from a `.nq` / `.trig` output
-path, or named with `--format csv|nq|trig`; `--base` and `--schema-org` apply
+path, or named with `--format csv|nq|trig`. `--base` and `--schema-org` apply
 to the RDF formats:
 
 ```bash
@@ -382,25 +452,31 @@ kglite export org.kgl org-csv --format csv    # a directory
 The formats, the `kg:` vocabulary and the limits are in the
 [open exports guide](../python/guides/open-exports.md).
 
-`schema-version` reads, and with `--set` writes, the graph's
-**user-schema version** — your own data-model revision, distinct from the
-`.kgl` format version, which the engine stores but never interprets:
+### `schema-version` and `migrate`
+
+`schema-version` reads the graph's **user-schema version**, and with `--set`
+writes it. That version is your own data-model revision. The engine stores it but never interprets it. It is distinct from the `.kgl`
+format version:
 
 ```bash
 kglite schema-version app.kgl            # prints e.g. 3
 kglite schema-version app.kgl --set 2    # stamp without running anything
 ```
 
-`migrate` applies pending Cypher migrations and advances that stamp.
-Migrations are `<version>_<name>.cypher` files in one directory, applied
-in ascending version order:
+`migrate` applies pending Cypher migrations and advances that stamp. Migrations
+are `<version>_<name>.cypher` files in one directory, applied in ascending
+version order:
 
 ```bash
 kglite migrate app.kgl migrations --dry-run   # show the plan, change nothing
 kglite migrate app.kgl migrations             # apply
 ```
 
-Re-running is a no-op, statements run against an in-memory copy so a
-failure part-way leaves the `.kgl` byte-identical, and a stamp the
-migration set cannot explain is refused rather than guessed at. See the
-[schema-migrations guide](../python/guides/schema-migrations.md).
+Migration guarantees:
+
+- Re-running is a no-op.
+- Statements run against an in-memory copy, so a failure part-way leaves the
+  `.kgl` byte-identical.
+- A stamp the migration set cannot explain is refused rather than guessed at.
+
+See the [schema-migrations guide](../python/guides/schema-migrations.md).

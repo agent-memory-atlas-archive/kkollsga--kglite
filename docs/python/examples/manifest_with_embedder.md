@@ -1,16 +1,10 @@
 # Example: enabling semantic search with `extensions.embedder`
 
-Wire bge-m3 (or any catalog model) into the active graph so
-`text_score()` works inside Cypher. This is the **MCP server's**
-embedder path. (For engine-level semantic search from Python, pass your
-own embedder to `graph.set_embedder(...)` instead — see the
-semantic-search guide.)
+Wire bge-m3 (or any catalog model) into the active graph so `text_score()` works inside Cypher. This is the **MCP server's** embedder path. For engine-level semantic search from Python, pass your own embedder to `graph.set_embedder(...)` instead. See the semantic-search guide.
 
 ## You name the engine (`library`) and the `model`; you install the engine
 
-The `library` field selects the embedding engine; the host (Python vs Rust)
-is inferred from it, and you `pip install` (or `cargo install`) whichever you
-name:
+The `library` field selects the embedding engine. The host (Python vs Rust) is inferred from it. You `pip install` (or `cargo install`) whichever engine you name:
 
 | `library:` | Engine | Install | Notes |
 |---|---|---|---|
@@ -21,13 +15,13 @@ name:
 
 > **The two fastembeds are *separate* libraries with *different* catalogs.**
 > fastembed-rs has `bge-m3`; fastembed-py does not. So `library: fastembed` +
-> `model: BAAI/bge-m3` **fails** — use `sentence-transformers` (pip) or
+> `model: BAAI/bge-m3` **fails**. Use `sentence-transformers` (pip) or
 > `fastembed-rs` (cargo) for bge-m3.
 >
-> **And the runtime engine must match the model your graph was embedded with.**
-> `text_score()` compares the query vector against the stored node vectors; if
-> they're from different models the rankings are meaningless. Embed at build
-> time and serve at query time with the *same* model.
+> **The runtime engine must also match the model your graph was embedded
+> with.** `text_score()` compares the query vector against the stored node
+> vectors. If they're from different models, the rankings are meaningless.
+> Embed at build time and serve at query time with the *same* model.
 
 ## Manifest
 
@@ -53,20 +47,20 @@ extensions:
 ```
 
 > `cooldown:` (lazy session release) applies to the Rust `fastembed-rs`
-> engine. A Python library's lifecycle follows whatever the
-> fastembed-py model does (it stays resident for the server's life).
+> engine. A Python library's lifecycle follows whatever the fastembed-py model
+> does: it stays resident for the server's life.
 
 ## What happens at boot
 
 1. The server parses the manifest, validates `extensions.embedder`, builds the
    chosen `library`'s model, and registers it against the active graph.
-2. The model loads at boot (the wheel server builds the Python model then;
-   fastembed-rs lazy-loads weights on the first `text_score()` call).
-3. Warm calls then run fast (fastembed-rs ~20 ms; sentence-transformers depends
-   on the model + device).
-4. For `library: fastembed-rs`, `cooldown` seconds of inactivity releases the
-   ONNX session (RAM returns; next call cold-loads). `cooldown: 0` keeps it
-   resident.
+2. The model loads at boot. The wheel server builds the Python model then.
+   fastembed-rs lazy-loads weights on the first `text_score()` call.
+3. Warm calls then run fast. fastembed-rs takes ~20 ms. sentence-transformers
+   depends on the model + device.
+4. For `library: fastembed-rs`, `cooldown` seconds of inactivity release the
+   ONNX session. RAM returns, and the next call cold-loads. `cooldown: 0`
+   keeps it resident.
 
 ## Calling it
 
@@ -83,17 +77,11 @@ ORDER BY score DESC
 LIMIT 10
 ```
 
-`text_score(node, property_name, query_text)` computes cosine
-similarity between the embedding of `node.property_name` and the
-embedding of `query_text`. Both embeddings are computed on demand
-(the property's text is embedded lazily, then cached against the
-node for the lifetime of the graph in memory).
+`text_score(node, property_name, query_text)` computes cosine similarity between the embedding of `node.property_name` and the embedding of `query_text`. Both embeddings are computed on demand. The property's text is embedded lazily, then cached against the node for the lifetime of the graph in memory.
 
 ## Multi-model: switching to a smaller model
 
-For `text_score()` use cases where bge-m3's 1.5 GB weights are
-overkill, a smaller English model is lighter (these are in both the
-fastembed-py and fastembed-rs catalogs):
+For `text_score()` use cases where bge-m3's 1.5 GB weights are overkill, a smaller English model is lighter. These are in both the fastembed-py and fastembed-rs catalogs:
 
 ```yaml
 extensions:
@@ -115,9 +103,7 @@ Tradeoffs:
 - `intfloat/multilingual-e5-large` (1024-d, ~1.2 GB): multilingual
   alternative.
 
-`cooldown:` works for all of them, but the warm-call savings only
-show up on bge-m3 (the fastembed-catalog models cache differently
-and don't pay the same ~1 s session-init cost).
+`cooldown:` works for all of them. The warm-call savings only show up on bge-m3, because the fastembed-catalog models cache differently and don't pay the same ~1 s session-init cost.
 
 ## Failure modes
 
@@ -134,15 +120,15 @@ and don't pay the same ~1 s session-init cost).
   fastembed-py has no `bge-m3` → use `sentence-transformers`).
 - **Boot** (`cooldown:` negative or non-int):
   `extensions.embedder.cooldown must be a non-negative integer`.
-- **Runtime** (`text_score()` against a node without the named
-  property): returns 0.0 silently. Use `IS NOT NULL` guards if you
-  want to filter explicitly.
+- **Runtime** (`text_score()` against a node without the named property):
+  returns 0.0 silently. Use `IS NOT NULL` guards if you want to filter
+  explicitly.
 
 ## Operational notes
 
 - ONNX weights cache to `~/.cache/fastembed/` (or
   `FASTEMBED_CACHE_PATH` if set). First run downloads.
-- The cooldown timer fires lazily on the next `embed()` call —
-  there are no background threads. A long-idle server (overnight,
-  weekend) doesn't burn CPU just to release the session: it stays
-  loaded until the next call notices the idle time and releases.
+- The cooldown timer fires lazily on the next `embed()` call. There are no
+  background threads. A long-idle server (overnight, weekend) doesn't burn CPU
+  just to release the session. It stays loaded until the next call notices the
+  idle time and releases it.
