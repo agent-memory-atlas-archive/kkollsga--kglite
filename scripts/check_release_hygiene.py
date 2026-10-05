@@ -40,11 +40,21 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
-# https://keepachangelog.com/en/1.1.0/ — the six change groups. New
-# `[Unreleased]` content uses these and nothing else; a bespoke heading
-# is either a typo or a decision that belongs in the prose, not in the
-# document structure.
-KEEP_A_CHANGELOG_HEADINGS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+# https://keepachangelog.com/en/1.1.0/ — the six change groups, plus the
+# house sections that open and close a release: "Breaking changes and
+# migration" first, "Rust API" last (write-docs skill). New `[Unreleased]`
+# content uses these and nothing else; a bespoke heading is either a typo
+# or a decision that belongs in the prose, not in the document structure.
+KEEP_A_CHANGELOG_HEADINGS = (
+    "Breaking changes and migration",
+    "Added",
+    "Changed",
+    "Deprecated",
+    "Removed",
+    "Fixed",
+    "Security",
+    "Rust API",
+)
 
 # Files `scripts/refresh_release_constants.py` rewrites in place and
 # hands back to the maintainer to finish. Keep this list in step with

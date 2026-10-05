@@ -15,6 +15,34 @@ before upgrading.
 implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
 0.19.1 and carries every 0.19.2 change as well.
 
+### Breaking changes and migration
+
+- The implicit parent edge of a blueprint spec with `parent_fk` is now named
+  `OF_` plus the parent type split into words (`ProjectPhase` gives
+  `OF_PROJECT_PHASE`, was `OF_PROJECTPHASE`). **Do:** rebuild from the
+  blueprint, and update queries that name the old `OF_<NAME>`.
+- A blueprint sub-node that already declares an `fk_edges` entry to its parent
+  no longer gets a second implicit parent edge, a `parent_fk` value matching
+  no parent writes no edge and no stub, and a parent with `pk: "auto"` gets no
+  implicit edge (one warning); graphs built by 0.19.2 carried the
+  duplicate edge and stub parents. **Do:** rebuild graphs built by 0.19.2 from
+  such blueprints, or run `purge_provisional()` to remove the stubs.
+- A blueprint edge row whose endpoint no node row supplies is dropped, not
+  stubbed, when the endpoint's type declares valid-time. **Do:** set
+  `on_missing_endpoint: vivify` on the edge (or under `settings`) to keep stubs.
+- `date` / `datetime` plus or minus a `duration` with months or years now shifts
+  by calendar months (`date('2024-01-15') + duration({months: 1})` is
+  `2024-02-15`, was `2024-02-14`). **Do:** use `duration({days: 30})` where a
+  query relied on 30-day months.
+- `ts_at(n.channel, key)` with a `date(…)`, `datetime(…)` or
+  finer-than-resolution key now returns the value of the period that contains it
+  (it returned `null`), and a key coarser than the series resolution (`'2015'`
+  on a month series) is an error again (it read January). **Do:** pass a key at
+  or finer than the series resolution.
+- `from_blueprint` and `from_records` raise one `UserWarning` per advisory group
+  instead of one per advisory. **Do:** match on the text inside the grouped
+  warning, or read `graph_info()['build']['diagnostics']`.
+
 ### Added
 
 - Bitemporal guide: a "From successive snapshots" recipe for sources that
@@ -184,7 +212,72 @@ implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
   an existing graph. A missing `parent_fk` column is reported as a `parent_fk`
   column, not as an undeclared edge.
 
+### Rust API
+
+- `ConnectionTypeStats::property_types`: new field (relationship property types
+  in `schema()`).
+- `DirGraph::stored_valid_time_default` and `DirGraph::set_valid_time_default`:
+  new methods (graph-stored valid-time default).
+- `kglite::api::data_advisories`, `DataAdvisory` and `DirGraph::advisories`: new
+  load-time data advisories.
+- `Diagnostic`, `DiagnosticGroup`, `BuildInfo`, `BuildReport::diagnostics` and
+  `summary()`: new. `BuildReport`, `RecordsReport`, `NodeOperationReport`,
+  `ConnectionOperationReport`, `EdgeSpecReport` and `DeclareReport` gain a
+  `diagnostics` field, which breaks struct literals of those types;
+  `ExportManifest::apply_declarations` returns `Vec<Diagnostic>`.
+- `Settings::strict` and `StrictSetting`: new (strict builds), and
+  `Settings::valid_time_default`: new (the blueprint's
+  `settings.valid_time_default`). Struct literals of `Settings` must add the
+  fields, unless they use `..Default::default()`.
+- `OnMissingEndpoint`, `FkEdge::on_missing_endpoint`,
+  `JunctionEdge::on_missing_endpoint` and `Settings::on_missing_endpoint`: new;
+  struct literals of the three structs break.
+- `FlatSpec` gains a crate-private field, so it can no longer be built with a
+  struct literal outside the crate.
+
 ## [0.19.2] - 2026-10-04
+
+### Breaking changes and migration
+
+- **Breaking:** on a graph that declares validity, a statement with no `FOR
+  VALID_TIME` prefix now runs as of today (UTC); it read every version before.
+  **Do:** add `FOR VALID_TIME ALL` (or `valid_at='all'`) where a query means
+  history, or set the default to `all` (`set_valid_time_default('all')`,
+  `--valid-time-default all`, manifest `extensions.valid_time.default`).
+- `degree()`, `indegree()`, `outdegree()` and `shortest_path_length()` are
+  refused under the default valid-time context. **Do:** use `COUNT { (n)--() }`,
+  or prefix the statement with `FOR VALID_TIME ALL`.
+- A blueprint sub-node that declares `parent_fk` now gets an implicit
+  `OF_<PARENT>` edge to its parent, and one that also declares a differently
+  named edge to its parent has both edge types (0.19.3 changes the edge's name
+  for multi-word parents). **Do:** omit `parent_fk` (keeping the column under
+  `skipped`) to load without the generated edge.
+- A blueprint timeseries sub-node (or top-level timeseries spec with `parent` +
+  `parent_fk`) wrote its parent edge once per CSV row, which inflated joins
+  through it; it is now written once per node. **Do:** rebuild graphs built from
+  such a blueprint on 0.19.0 or 0.19.1.
+- A blueprint timeseries row whose time component is not a whole number is
+  dropped from the series with a warning instead of being filed under year 0,
+  and whole floats (`2020.0`, `0.0`) are read as integers (`0.0` aggregate rows
+  are dropped, not folded into January). **Do:** check the build warnings and
+  rebuild graphs that loaded such values.
+- `MATCH … RETURN count(DISTINCT x)` / `RETURN DISTINCT x` over a pattern with
+  an unnamed node before `x` could under-count; it now enumerates the paths
+  again. **Do:** re-run affected queries; no query change needed.
+- An anchored relationship count on an id shared by several node types (`MATCH
+  ({id: 7})-[:T]->(c) RETURN count(c)`) now sums every node carrying the id; it
+  counted one type, which could differ between processes. **Do:** re-run
+  affected queries; no query change needed.
+- `db.temporal.declarations()` gains an `empty_when` column, so `YIELD *` yields
+  one more column. **Do:** read columns by name.
+- `abutting_rows` now compares versions of one entity (rows sharing an `id`, or
+  one parent for a sub-node) and is 0 for a label whose versions carry distinct
+  ids and no parent edge. **Do:** none for queries; expect a lower count and
+  fewer abutment warnings.
+- The MCP `temporal:` line is now a one-line summary, and
+  `diagnostics['temporal']` carries `source`, `hidden` and `endpoint_invalid`
+  with `targets` listing only reachable targets. **Do:** read the per-target map
+  from the structured diagnostics.
 
 ### Added
 
@@ -612,7 +705,78 @@ implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
   an FK that changes over the series keeps both targets. Graphs built from a
   blueprint with a timeseries sub-node on 0.19.0 or 0.19.1 should be rebuilt.
 
+### Rust API
+
+- `IdenticalRows`, `add_connections_with_identical_rows` and
+  `JunctionEdge.distinct`: new (`distinct`); `JunctionEdge` literals must add
+  the field.
+- `EmptyWhen`, `TemporalConfig.empty_when` and `TemporalSpec.empty_when`: new
+  fields on constructible structs; `declare_loaded_with` is new, and
+  `declare_defaulted` / `declare_from_column_types` take
+  `(Option<IntervalConvention>, Option<EmptyWhen>)` in place of the convention.
+- `prepend_valid_time` takes a `ValidAt` (`At(&Value)` or `All`;
+  `ValidAt::from_value` reads `'all'`).
+- `DirGraph.valid_time_default` (`kglite::api::temporal::ValidTimeDefault`):
+  new.
+- `TemporalDiagnostics` gains the public fields `hidden`, `endpoint_invalid` and
+  `source`, so a struct literal of it no longer compiles.
+- `TimeseriesSpec` gains `extra`, a new field on a constructible struct.
+
 ## [0.19.1] - 2026-10-02
+
+### Breaking changes and migration
+
+- **Breaking:** the `.kgl` container is now v7 and a disk-graph directory has a
+  new layout revision; files this version saves cannot be read by 0.19.0 or
+  earlier (0.19.0 raises `FileFormatError` for a `.kgl` and `unsupported raw
+  index version` for a disk directory). This build still reads v7, v6 and v5 and
+  opens every disk directory 0.19.0 wrote. **Do:** upgrade every reader,
+  including prebuilt MCP, Bolt and CLI binaries, before saving with this
+  version.
+- A disk `save()` now deletes generations older than the one before the one it
+  publishes (it kept every generation before). **Do:** set
+  `KGLITE_KEEP_GENERATIONS=all` in the saving process when a long-lived reader
+  in another process shares the directory with a frequent writer.
+- `save()` on a disk graph now raises `ValueError` when another process or
+  handle published a generation since this handle loaded or last saved, instead
+  of dropping that writer's work. The same applies to a directory written by
+  0.19.0 and earlier, which accepted such a save. **Do:** reload with
+  `kglite.load()` and reapply your changes.
+- Graphs saved by 0.19.0 with a node type named like a path (`../../pwn`) are
+  not repaired: the escaped sidecar file stays wherever it landed. **Do:**
+  find and remove such files by hand; saves by this version keep them inside
+  the graph directory.
+- `export_csv` is lossless by default: it writes a `manifest.json` beside
+  `blueprint.json`, `files_written` counts it, and it refuses an empty
+  destination and a node type whose ids mix kinds. **Do:** give the export a
+  real destination and one id kind per type; the older `export(format='csv')`
+  pair is unchanged.
+- `add_nodes`, `add_relationships` and the other loaders no longer drop rows
+  whose id is a whole number held as a float outside the 32-bit range, and a
+  float id that is not a whole number (`2.5`, `inf`) now raises `ArgumentError`
+  instead of being skipped. **Do:** clean non-whole float ids in the input.
+- In the loaders that resolve ids one at a time (`add_connections`, C ABI and
+  Java `create_edges`, `from_records`), an edge whose endpoint id lies past 2^53
+  now links only to the node that holds that id, or counts as a missing
+  endpoint; it could link to a neighbouring integer. **Do:** rebuild graphs
+  whose edges used such ids.
+- A date or timestamp in a blueprint CSV cell, or an `xsd:date` / `xsd:dateTime`
+  literal in `load_rdf`, with a year outside 1..9999 loads as null (CSV) or
+  stays text (RDF) with a warning. **Do:** correct such dates in the source.
+- `load_rdf` now loads `xsd:duration` literals as durations (they were strings),
+  `kg:json` literals as lists and maps, and percent-decodes type, property and
+  relationship names. **Do:** update queries that read those values as text or
+  by the encoded names.
+- `kglite session --format json` lists each row's columns in `RETURN` order (it
+  sorted them alphabetically). **Do:** read columns by name.
+- A list cell in a blueprint keeps a nested array or object as a list or map (it
+  was JSON text). **Do:** drop `parse_json()` calls on such values.
+- `export_csv` writes one CSV per source type of a relationship, and routes a
+  relationship with several target types by a `target_type` column. **Do:**
+  update scripts that read the exported files directly.
+- A disk directory naming a column type tag this version does not know is
+  refused with `FileFormatError` (it was read as a string column). **Do:** open
+  it with the version that wrote it.
 
 ### Added
 
@@ -1060,7 +1224,144 @@ implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
   `columns/` is refused. Graphs saved by 0.19.0 with such a type name are not
   repaired: the escaped file is wherever it landed.
 
+### Rust API
+
+- Four public structs gained a field, so a struct literal must add it:
+  `blueprint::Settings::manifest`, `MaterializedLabel::warnings`,
+  `RdfStats::warnings` and `RdfConfig::language_maps` (`Settings` and
+  `RdfConfig` implement `Default`, so `..Default::default()` keeps compiling).
+- `DirGraph::save_disk` returns `Result<(), kglite::api::io::SaveError>` (was
+  `Result<(), String>`); a save another writer overtook is its `Refused` case.
+- `kglite::api::io::to_rdf` (`rdf` feature), `ExportManifest`
+  (`kglite-export/1`) and `kglite::api::io::export::kg_vocab`: new.
+- The `fastembed` backend is built against fastembed 7.1 (was 6.0); the minimum
+  versions are `anyhow` 1.0.72 and `indexmap` 2.7 (were 1.0.47 and 2.6).
+
 ## [0.19.0] - 2026-09-28
+
+### Breaking changes and migration
+
+- **Breaking (Python):** a date value comes back as a `datetime.date`, and a
+  date column in `to_df()` is `datetime64[ns]`, on every read route (it came
+  back as an ISO string). **Do:** format with `d.isoformat()` or `str(d)`, and
+  `df[col].dt.strftime('%Y-%m-%d')` for a frame column. Bolt, MCP and JSON
+  output are unchanged.
+- The fluent date context is now the `FOR VALID_TIME AS OF` filter:
+  `traverse()`, `select()`, `valid_at()`, `valid_during()`, `expand()`,
+  `where_connected()`, `where_orphans()`, `degrees()`, `relationships()`,
+  `compare()` and `to_subgraph()` keep only valid nodes and relationships
+  (secondary labels included), today is the UTC date, and a partial end date
+  expands to the end of its period. **Do:** pass `temporal=False` to
+  `traverse()` to turn filtering off for a hop; check chains that relied on the
+  old behaviour.
+- **Breaking (Cypher):** a node `MERGE` whose pattern names an id its type
+  already holds but whose labels or properties that node lacks (`MERGE (n:A:B
+  {id: 'x'})` beside an `A`-only node) raises `CypherExecutionError` and rolls
+  back, and `MERGE (n:A:B {…})` no longer matches a node carrying only `A`.
+  **Do:** `MERGE (n:A {id: 'x'}) SET n:B`, or use `ON MATCH SET`.
+- **Breaking (Cypher):** `datetime()` with no argument returns now in naive UTC
+  (it was the local clock), and `time()` the UTC time of day. **Do:** use
+  `localdatetime()` / `localtime()` where a query compares against local
+  wall-clock values.
+- **Breaking:** a write onto a type with a declared validity interval is refused
+  when a row leaves an inverted interval or a bound that is not NULL, a date, a
+  datetime or an ISO string (`ArgumentError` for loaders, `CypherExecutionError`
+  for `CREATE` / `MERGE` / `SET`); a `half_open` row with `from == to` is
+  written with a warning. **Do:** fix the offending rows or bounds.
+- **Breaking:** a bulk load onto a relationship type with a declared validity
+  interval writes rows as versions and never updates a stored relationship: an
+  identical row is dropped, any other row is a new parallel relationship,
+  whatever `conflict_handling` says, and `connections_updated` is 0. **Do:**
+  close or correct a stored period with Cypher `SET` / `DELETE`.
+- One relationship type loaded from several source node types: each source
+  type's first load now writes one relationship per row, repeated endpoint pairs
+  included (a later row used to fold onto one relationship per pair). **Do:**
+  rebuild graphs built before this change from the blueprint, or re-run the
+  loads, to recover the folded rows.
+- The write-ahead log format is version 10 (durable graphs journal validity
+  declarations); an earlier version refuses a version-10 log. **Do:** rebuild
+  prebuilt `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries
+  that open durable graphs written by this version.
+- Cypher `valid_at` / `valid_during` now read a year or month string (`'2009'`,
+  `'2009-06'`) as the start of the period, and a query date that is not a date
+  or a stored bound that is not a date, datetime or ISO string raises
+  `CypherExecutionError` instead of answering false; `valid_at()` /
+  `valid_during()` on a bound property no element of the type has also raise.
+  **Do:** pass real dates, and name a bound property the type carries.
+- Cypher `valid_at()` / `valid_during()` on a null entity (an unmatched
+  `OPTIONAL MATCH`) return null, so `WHERE` drops the row (they returned
+  `true`). **Do:** none; expect fewer rows from such patterns.
+- Fluent `valid_at()` / `valid_during()` raise `ValueError` for a field the type
+  lacks or an undeclared type with no `date_from` / `date_to`, `traverse(at=…,
+  during=…)` raises `ArgumentError` on a relationship type with no declared
+  interval, and `select(node_type, temporal=True)` on an undeclared type raises
+  `ValueError`. **Do:** declare the interval or name existing fields.
+- `set_temporal()` and `validFrom` / `validTo` column types declare as
+  `db.temporal.declare` does: a missing `from` property, an unreadable bound or
+  an inverted row raises `ArgumentError`, and a different declaration for a type
+  that already has one is refused. **Do:** fix the bounds, or `undeclare` first.
+- Cypher `=`, `<>` and `IN` compare a date or datetime with a string by parsing
+  the string (`n.valid_to = '1990-01-01'` matched nothing before), and
+  `'19900101'` compares as `'1990-01-01'` on every operator. **Do:** review
+  equality filters that relied on a date never equalling text.
+- A blueprint `"date"` cell holding a number of fewer than nine digits is no
+  longer read as epoch milliseconds: eight digits are `YYYYMMDD` (also in
+  `add_nodes`, where they were NULL), and a smaller number is NULL and reported.
+  **Do:** reload date columns that held such numbers.
+- **Breaking (Bolt, C ABI, HTTP):** a Cypher statement that fails on what it was
+  given (a malformed `valid_at`, a missing property, a type with no declared
+  interval) is `Neo.ClientError.Statement.ArgumentError` on Bolt and HTTP 422
+  (`KgErrorCode::CypherExecution`), not
+  `Neo.DatabaseError.Statement.ExecutionFailed` / 500. **Do:** update retry and
+  error handling that keyed on the old status.
+- A `WHERE` predicate that fails to evaluate under an aggregate or top-K query
+  now raises the error instead of answering with the rows that did evaluate;
+  `IN`, subscripts, slices, `head()`, `last()`, `size()` and `length()` over a
+  value of the wrong type raise a type error instead of answering false, null or
+  `[]`. **Do:** fix the predicate or pass a list.
+- A node comparison against NULL pushed into the pattern (`WHERE n.age > $x`
+  with `x` null) now matches no row (it matched every row with a non-null
+  `age`). **Do:** none; expect fewer rows.
+- An unaliased `count(*)` is named `count(*)` on every plan (the count
+  short-circuits named it `count(Star)`). **Do:** read the column as `count(*)`.
+- A constraint on a provenance key (`updated_at`, `git_sha`, `modified_by`) is
+  refused when declared; one in a file saved by an earlier version is dropped on
+  load with a message on stderr. **Do:** remove such constraints from schema
+  definitions.
+- `auto_timestamp` stamps `updated_at` in naive UTC (it was local time), and
+  `SET n.updated_at = …` on an `auto_timestamp` type is replaced by the stamp.
+  **Do:** none; stamps written earlier keep their local values.
+- `extend()` refused by a relationship constraint raises
+  `ConstraintViolationError` (it raised `ArgumentError`). **Do:** catch the new
+  class.
+- `EXPLAIN` / `PROFILE` at the start of a top-level `UNION` arm is a syntax
+  error (it was ignored). **Do:** put the keyword at the start of the statement.
+- `add_nodes(df, 'A', 'id', 'id')` (id column also named as the title field) no
+  longer records a title spelling, so `MERGE (a:A {id: 'n1'})` stops creating a
+  node per run; nodes an affected `MERGE` already duplicated stay in the graph.
+  **Do:** deduplicate them (a duplicate audit now shows their true ids).
+- Fluent `traverse()` and `compare()` on an empty selection return an empty
+  selection instead of raising `No source nodes available for traversal`.
+  **Do:** drop handlers that relied on that error.
+- Writes that used to succeed can now be refused: relationship `IS NOT NULL` /
+  `IS :: <type>` constraints are checked by `create_relationships()`, the C ABI
+  edge batch (and Java) and Rust `from_records` (`ConstraintViolationError`);
+  `max_work_units` bounds a write's value expressions; and a write past its
+  `timeout_ms` is rolled back. **Do:** fix the offending rows, or raise the
+  budget or timeout.
+- `{"$date"}` / `{"$datetime"}` / `{"$duration"}` tags decode on every JSON input
+  (they were stored as maps), and durations load as durations from every tabular
+  input (they raised or were stored as text); a sub-second duration cell is
+  NULL. **Do:** update code that read those values as maps or text.
+- A float column given an integer the float cannot hold exactly widens to mixed,
+  and `to_df()` returns it as `object`. **Do:** cast the column where a float
+  dtype is required.
+- Fluent filters compare bounds stored as datetimes or ISO strings (they treated
+  them as unbounded), and an unreadable bound raises `ValueError`. **Do:** fix
+  unreadable bounds; expect fewer elements where such bounds excluded them.
+- `extend()` copies the other graph's validity declarations and spatial
+  configuration, so its periods between the same endpoints no longer collapse
+  into one relationship. **Do:** redo merges whose periods collapsed.
 
 ### Added
 
@@ -2035,6 +2336,46 @@ implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
   whose cells are `{"months", "days", "seconds"}` objects.
 - `from_records` loads a Python `date`, `datetime` or `timedelta` typed; it
   refused them before. A `time` is still refused.
+
+### Rust API
+
+- Removed: `kglite::api::fluent::{node_is_temporally_valid, node_overlaps_range,
+  node_passes_context}` and `TemporalEdgeFilter`; the filter is `FluentFilter`.
+  `make_traversal`, `expand_selection`, `extract_subgraph`,
+  `filter_by_connection`, `filter_orphan_nodes` and `make_comparison_traversal`
+  take `Option<&FluentFilter>`; `get_connections` and `get_node_degrees` take
+  one too and return a `Result`; `save_subset` and `save_subset_streaming_disk`
+  take a trailing `Option<&FluentFilter>`.
+- `QueryDiagnostics` gains `temporal: Option<Box<TemporalDiagnostics>>`; a
+  struct literal must name it or end in `..Default::default()`.
+- `TemporalConfig` gains `convention` and `source_type`; `NodeSpec`, `FkEdge`
+  and `JunctionEdge` gain `temporal: Option<TemporalSpec>`; struct literals must
+  name them.
+- `Expression` gains a `PatternComprehension` variant, and `ColumnType` and
+  `ColumnData` a `Duration` variant; an exhaustive match needs a new arm.
+- `ExecuteOptions` gains `streaming` and `deadline_origin` (struct literals must
+  name them; `ExecuteOptions::eager` sets `streaming` to `false` and
+  `deadline_origin` to `None`); `ExecuteOptions::set_timeout_ms` is new,
+  `ResolvedQueryOptions` carries `deadline_origin`, and `deadline_span` returns
+  a timeout's `(origin, deadline)` pair.
+- `NodeOperationReport`, `ConnectionOperationReport`, `EdgeSpecReport`,
+  `ExtendReport` and `RecordsReport` gain a `warnings` field;
+  `kglite::api::temporal::check_label_stamp` and `check_labelled_load` return it
+  as `Ok(Some(_))`.
+- `DirGraph::temporal_node_configs` and `temporal_edge_configs` are no longer
+  public fields; use `kglite::api::temporal::{node_config, edge_configs, list}`.
+- New valid-time API: `kglite::api::temporal` (`declare`, `declare_loaded`,
+  `declare_defaulted`, `declare_from_column_types`, `undeclare`, `list`,
+  `view_at` / `ValidTimeView`, `IntervalConvention`, `DeclarationInfo` and
+  related), `kglite::api::cypher::prepend_valid_time`, `PrependError`,
+  `carries_valid_time_context`, `TemporalDiagnostics`,
+  `kglite::api::fluent::{FluentFilter, select_nodes}`,
+  `kglite::api::blueprint::TemporalSpec`,
+  `kglite::api::timeseries::parse_date_or_datetime_query`,
+  `GraphRead::get_edge_property` and `kglite::api::schema_property_keys`.
+- New: `SchemaDefinition::reject_reserved_provenance_constraints`,
+  `NodeSchemaDefinition` / `ConnectionSchemaDefinition::constrained_properties`,
+  `GraphRead::edge_property_list` and `DataFrame::column_has_values`.
 
 ## [0.18.1] - 2026-09-26
 
