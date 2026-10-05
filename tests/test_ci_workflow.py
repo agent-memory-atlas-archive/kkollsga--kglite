@@ -2242,12 +2242,14 @@ def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers) == {"workflow_dispatch", "pull_request"}, triggers
     assert triggers["pull_request"] == {"types": ["labeled"]}, triggers["pull_request"]
-    (job,) = workflow["jobs"].values()
-    assert job.get("if") == "github.event_name == 'workflow_dispatch' || github.event.label.name == 'perf-ab'", job.get(
-        "if"
-    )
+    assert set(workflow["jobs"]) == {"ab", "bisect"}, set(workflow["jobs"])
+    job = workflow["jobs"]["ab"]
+    assert job.get("if") == (
+        "(github.event_name == 'workflow_dispatch' && inputs.mode == 'ab') || github.event.label.name == 'perf-ab'"
+    ), job.get("if")
     # A label-triggered run has no inputs; each must fall back to the dispatch default.
     inputs = triggers["workflow_dispatch"]["inputs"]
+    assert inputs["mode"]["default"] == "ab" and inputs["mode"]["options"] == ["ab", "bisect"], inputs["mode"]
     env = job["env"]
     for name, var in (
         ("source_ref", "SOURCE_REF"),
@@ -2262,20 +2264,9 @@ def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
         if "pip" in line:
             pins = re.findall(r"kglite==", line)
             assert len(pins) <= 1, f"one pip command names {len(pins)} kglite versions: {line}"
-    # Nothing imports kglite from the workspace root, where the repo's own
-    # kglite/ source package shadows the installed wheel (run 37380875100).
     # A step without a working-directory runs in the checkout, so an import
     # there must leave it and keep the cwd off sys.path.
-    importers = 0
-    for step in _steps(job):
-        outside = str(step.get("working-directory", "")).startswith("${{ runner.temp }}")
-        for line in _step_commands(step):
-            if "import kglite" in line or "test_bench_core.py" in line and "pytest" in line:
-                importers += 1
-                assert outside or ('cd "$RUNNER_TEMP"' in line and " -P " in line), (
-                    f"imports kglite from the checkout: {line}"
-                )
-    assert importers >= 2, "found no kglite imports to check; the scan is broken"
+    _assert_imports_kglite_outside_the_checkout(job)
     # Five variants, five venvs, each installed once.
     installs = [line for line in _command_lines(job) if line.startswith("install ")]
     variants = [_tokens(line)[1] for line in installs]
@@ -2290,3 +2281,71 @@ def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
     assert len(host) == 1
     target_dirs.append(host[0].split("--target-dir ")[1])
     assert len(set(target_dirs)) == 3, target_dirs
+
+
+def _assert_imports_kglite_outside_the_checkout(job: dict) -> None:
+    """Nothing imports kglite from the workspace root, where the repo's own
+    kglite/ source package shadows the installed wheel (run 37380875100)."""
+    importers = 0
+    for step in _steps(job):
+        outside = str(step.get("working-directory", "")).startswith("${{ runner.temp }}")
+        for line in _step_commands(step):
+            if "import kglite" in line or "test_bench_core.py" in line and "pytest" in line:
+                importers += 1
+                assert outside or ('cd "$RUNNER_TEMP"' in line and " -P " in line), (
+                    f"imports kglite from the checkout: {line}"
+                )
+    assert importers >= 2, "found no kglite imports to check; the scan is broken"
+
+
+def test_perf_bisect_measures_only_published_wheels_in_isolation() -> None:
+    """The bisect mode brackets the release that slowed a cell: published
+    manylinux x86_64 wheels only, one venv and one pip download per version,
+    each checked to be the version it claims, both rounds on one runner, and a
+    missing capture fails the run instead of dropping a row from the table."""
+    workflow = _load_workflow(WORKFLOWS / "perf_ab.yml")
+    triggers = workflow.get("on", workflow.get(True))
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    job = workflow["jobs"]["bisect"]
+    assert job.get("if") == (
+        "(github.event_name == 'workflow_dispatch' && inputs.mode == 'bisect') "
+        "|| github.event.label.name == 'perf-bisect'"
+    ), job.get("if")
+    env = job["env"]
+    for name, var in (("bisect_versions", "BISECT_VERSIONS"), ("cells", "CELLS")):
+        assert env[var] == f"${{{{ inputs.{name} || '{inputs[name]['default']}' }}}}", env[var]
+    defaults = inputs["bisect_versions"]["default"].split()
+    assert len(defaults) >= 6 and all(re.fullmatch(r"\d+\.\d+\.\d+", v) for v in defaults), defaults
+    as_tuples = [tuple(map(int, v.split("."))) for v in defaults]
+    assert as_tuples == sorted(set(as_tuples)), f"bisect versions must be unique, oldest first: {defaults}"
+    assert "0.13.2" not in defaults
+    # Published wheels only: nothing is built, no toolchain installed.
+    assert not _steps_using(job, "PyO3/maturin-action@")
+    assert not _steps_using(job, "dtolnay/rust-toolchain@")
+    assert not [line for line in _command_lines(job) if "maturin" in line]
+    for line in _command_lines(job):
+        if "pip" in line:
+            assert len(re.findall(r"kglite==", line)) <= 1, f"one pip command names several kglite versions: {line}"
+    fetch = [line for line in _command_lines(job) if line.startswith("find ") and "kglite-$1-" in line]
+    assert len(fetch) == 1 and "manylinux*x86_64" in fetch[0], fetch
+    _assert_imports_kglite_outside_the_checkout(job)
+    # Every venv's kglite must be exactly the version it was installed for.
+    installs = [line for line in _command_lines(job) if line.startswith("install ")]
+    assert installs == [
+        'install "$REFERENCE_VERSION" "$(fetch "$REFERENCE_VERSION")" "$REFERENCE_VERSION"',
+        'install "$v" "$(fetch "$v")" "$v"',
+    ], installs
+    install_body = "\n".join(_command_lines(job))
+    assert '[ "$got" = "$want" ] || { echo "::error::$variant has kglite $got, expected $want"; exit 1; }' in (
+        install_body
+    )
+    assert 'test -n "$wheel" || { echo "::error::no manylinux x86_64 wheel for $variant"; exit 1; }' in install_body
+    # Two rounds, the second reversed, on this one runner.
+    bench = _step_running(job, "for round in 1 2; do")
+    assert 'order=("${reversed[@]}")' in bench["run"]
+    # An empty or partial capture set must fail the run, not upload nothing.
+    summary = _step_running(job, "python - <<'PY' | tee -a \"$GITHUB_STEP_SUMMARY\"")
+    assert "raise SystemExit" in summary["run"] and "bisect incomplete" in summary["run"]
+    assert "if missing or uneven or not names:" in summary["run"]
+    (upload,) = _steps_using(job, "actions/upload-artifact@")
+    assert upload.get("if") == "always()" and upload["with"]["if-no-files-found"] == "error"

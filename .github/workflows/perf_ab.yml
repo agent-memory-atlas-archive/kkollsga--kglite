@@ -23,11 +23,28 @@ name: Linux perf A/B
 # With `source_ref` at the tag of `published_version`, "published" and one of
 # the manylinux builds should agree; the runner build's gap to them is the
 # build environment's share of the Linux-only offset.
+#
+# Second mode, `bisect`: the label `perf-bisect` (or dispatch with mode
+# `bisect`) benchmarks the published manylinux x86_64 wheels of
+# `bisect_versions` against 0.13.2, nothing built from source. Run 37385180539
+# showed every build of 0.19.3 equally slow, so the offset is in the code, and
+# the published wheels bracket the release that introduced it. Each version
+# gets its own venv; the rounds run forward then reversed, so drift along the
+# list cancels instead of reading as a trend.
 on:
   pull_request:
     types: [labeled]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "`ab` builds `source_ref` five ways; `bisect` benchmarks the published wheels of `bisect_versions`"
+        default: ab
+        type: choice
+        options: [ab, bisect]
+      bisect_versions:
+        description: Published kglite versions for `bisect` mode, space-separated, oldest first
+        default: 0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.8 0.18.1 0.19.3
+        type: string
       source_ref:
         description: Git ref built from source (tag of the published version for a like-for-like A/B)
         default: v0.19.3
@@ -56,7 +73,7 @@ jobs:
   ab:
     name: Linux build-environment A/B
     # Only the `perf-ab` label; every other label event on a PR skips.
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'perf-ab'
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'ab') || github.event.label.name == 'perf-ab'
     runs-on: ubuntu-latest
     # A label-triggered run has no `inputs`, so each falls back to the same
     # default the dispatch form shows.
@@ -203,5 +220,131 @@ jobs:
         with:
           name: linux-perf-ab-${{ github.run_id }}
           path: ab-results/
+          if-no-files-found: error
+          retention-days: 14
+
+  bisect:
+    name: Linux published-wheel bisect
+    # Only the `perf-bisect` label; every other label event on a PR skips.
+    if: (github.event_name == 'workflow_dispatch' && inputs.mode == 'bisect') || github.event.label.name == 'perf-bisect'
+    runs-on: ubuntu-latest
+    # A label-triggered run has no `inputs`, so each falls back to the same
+    # default the dispatch form shows.
+    env:
+      BISECT_VERSIONS: ${{ inputs.bisect_versions || '0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.8 0.18.1 0.19.3' }}
+      CELLS: ${{ inputs.cells || 'two_edge_relationship_text_filter or two_edge_distinct_filtered_path' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Create one isolated environment per published version
+        # Same isolation as the A/B job: one pip download and one venv per
+        # version, and the version check runs outside the checkout with -P.
+        run: |
+          set -euo pipefail
+          envs="$RUNNER_TEMP/bisect-envs"
+          mkdir -p "$envs" bisect-results
+          versions=()
+          for v in $BISECT_VERSIONS; do
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release version: '$v'"; exit 1; }
+            [ "$v" != "$REFERENCE_VERSION" ] || { echo "::error::$v is the reference; list only later versions"; exit 1; }
+            case " ${versions[*]-} " in *" $v "*) echo "::error::$v listed twice"; exit 1 ;; esac
+            versions+=("$v")
+          done
+          [ "${#versions[@]}" -gt 0 ] || { echo "::error::bisect_versions is empty"; exit 1; }
+          fetch() {
+            python -m pip download --only-binary=:all: --no-deps --dest "$RUNNER_TEMP/wheel-$1" "kglite==$1" >&2
+            find "$RUNNER_TEMP/wheel-$1" -name "kglite-$1-*manylinux*x86_64*.whl" -print -quit
+          }
+          install() {
+            local variant=$1 wheel=$2 want=$3
+            test -n "$wheel" || { echo "::error::no manylinux x86_64 wheel for $variant"; exit 1; }
+            python -m venv "$envs/$variant"
+            "$envs/$variant/bin/python" -m pip install --quiet -r requirements/benchmark.txt
+            "$envs/$variant/bin/python" -m pip install --quiet "$wheel"
+            got=$(cd "$RUNNER_TEMP" && "$envs/$variant/bin/python" -P -c 'import kglite; print(kglite.__version__)')
+            echo "$variant: kglite $got from $wheel"
+            [ "$got" = "$want" ] || { echo "::error::$variant has kglite $got, expected $want"; exit 1; }
+          }
+          install "$REFERENCE_VERSION" "$(fetch "$REFERENCE_VERSION")" "$REFERENCE_VERSION"
+          for v in "${versions[@]}"; do
+            install "$v" "$(fetch "$v")" "$v"
+          done
+          printf '%s\n' "$REFERENCE_VERSION" "${versions[@]}" > bisect-results/variants.txt
+          mkdir -p "$RUNNER_TEMP/bisect-harness"
+          cp tests/benchmarks/test_bench_core.py "$RUNNER_TEMP/bisect-harness/"
+          lscpu | grep -m1 'Model name' | tee bisect-results/cpu.txt
+
+      - name: Benchmark the versions, forward then reversed
+        working-directory: ${{ runner.temp }}/bisect-harness
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        # A version whose run fails is recorded and skipped, not fatal here:
+        # one bad wheel must not discard the others' captures. The summary
+        # step fails the run on any missing capture.
+        run: |
+          set -euo pipefail
+          if [ "$CELLS" = all ]; then CELLS=; fi
+          mapfile -t variants < "$GITHUB_WORKSPACE/bisect-results/variants.txt"
+          reversed=()
+          for ((i = ${#variants[@]} - 1; i >= 0; i--)); do reversed+=("${variants[i]}"); done
+          for round in 1 2; do
+            if [ "$round" = 1 ]; then order=("${variants[@]}"); else order=("${reversed[@]}"); fi
+            for variant in "${order[@]}"; do
+              "$RUNNER_TEMP/bisect-envs/$variant/bin/python" -m pytest test_bench_core.py -m benchmark \
+                ${CELLS:+-k "$CELLS"} \
+                --benchmark-min-rounds=100 \
+                --benchmark-warmup=on --benchmark-warmup-iterations=20 \
+                --benchmark-json="$GITHUB_WORKSPACE/bisect-results/$variant-r$round.json" \
+                || echo "::error::kglite $variant failed in round $round"
+            done
+          done
+
+      - name: Summarise (min of the two rounds, each version against 0.13.2)
+        run: |
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          results = Path("bisect-results")
+          variants = results.joinpath("variants.txt").read_text().split()
+          reference = variants[0]
+          best, missing = {}, []
+          for variant in variants:
+              cells = {}
+              for round_ in (1, 2):
+                  path = results / f"{variant}-r{round_}.json"
+                  benches = json.loads(path.read_text())["benchmarks"] if path.exists() else []
+                  if not benches:
+                      missing.append(path.name)
+                  for bench in benches:
+                      cells[bench["name"]] = min(cells.get(bench["name"], float("inf")), bench["stats"]["min"])
+              best[variant] = cells
+          uneven = [v for v in variants if set(best[v]) != set(best[reference])]
+          complete = [v for v in variants[1:] if v not in uneven]
+          print(f"CPU: {results.joinpath('cpu.txt').read_text().strip()}\n")
+          print(f"min of two rounds against {reference}; rows are versions, oldest first\n")
+          names = sorted(best[reference])
+          print("| version | " + " | ".join(n.removeprefix("test_bench_") for n in names) + " |")
+          print("|---|" + "---|" * len(names))
+          for v in complete:
+              row = [f"{best[v][n] / best[reference][n] - 1:+.1%}" for n in names]
+              print(f"| {v} | " + " | ".join(row) + " |")
+          if missing or uneven or not names:
+              raise SystemExit(f"::error::bisect incomplete: no results in {missing}; cell set differs for {uneven}")
+          PY
+
+      - name: Upload the bisect captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-perf-bisect-${{ github.run_id }}
+          path: bisect-results/
           if-no-files-found: error
           retention-days: 14
