@@ -1,6 +1,6 @@
 # Ontology (declared semantic layer)
 
-An ontology gives type names a declared "kind of" structure. `Student` *is a* `Person`; `Licence` *is a* `Licensable`. It also adds machine-readable semantics for relationships:
+An ontology gives type names a declared "kind of" structure. `Student` *is a* `Person`; `Contract` *is a* `Agreement`. It also adds machine-readable semantics for relationships:
 
 - which types an edge connects
 - which properties it must carry
@@ -17,7 +17,7 @@ The ontology has three jobs:
 - Provide defaults for validators you already have.
 - Act, opt-in, as a data-quality contract at build time.
 
-It is also deliberately **not** `set_parent_type`. That map is presentation *ownership*: which types are supporting detail in `describe()` tiering. The ontology is semantic *kind-of*. `WellboreCore → Wellbore` is ownership; `Licence is_a Licensable` is an ontology fact. Neither is derived from the other.
+It is also deliberately **not** `set_parent_type`. That map is presentation *ownership*: which types are supporting detail in `describe()` tiering. The ontology is semantic *kind-of*. `ProjectCore → Project` is ownership; `Contract is_a Agreement` is an ontology fact. Neither is derived from the other.
 
 ## Declaring
 
@@ -28,7 +28,7 @@ g.define_ontology({
         "Student": {"is_a": "Person"},
         "Teacher": {"is_a": "Person"},
         # documentation-only discriminator (rendered as unenforced):
-        "Wellbore": {"by": "wlbWellType"},
+        "Project": {"by": "projectKind"},
     },
     "relationships": {
         "ENROLLED_IN": {
@@ -152,7 +152,7 @@ CALL missing_required_edge() YIELD node, rule
 CALL inverse_violation() YIELD a, b, rule
 ```
 
-A `domain`/`range` naming an **abstract class widens to its declared descendants**. This is the union-endpoint case a flat schema cannot declare. `HAS_OPERATOR` from six concrete source types becomes `domain: "Licensable"`, and the existing checks finally reach it.
+A `domain`/`range` naming an **abstract class widens to its declared descendants**. This is the union-endpoint case a flat schema cannot declare. `MANAGED_BY` from six concrete source types becomes `domain: "Agreement"`, and the existing checks finally reach it.
 
 ### The scorecard
 
@@ -277,7 +277,7 @@ Rules describing *upstream* data reality stay `warn` forever. They belong in the
 
 ## Exempting an upstream source
 
-An abstract `domain` lets one declaration cover a union edge, such as `HAS_OPERATOR` from every `Licensable`. It also lets a single nonconforming source poison the whole rule.
+An abstract `domain` lets one declaration cover a union edge, such as `MANAGED_BY` from every `Agreement`. It also lets a single nonconforming source poison the whole rule.
 
 Suppose one upstream source never carried the date the others do. Then `required_properties: ["validFrom"]` can never be promoted past `advisory`. The rule you want to enforce for the sources you control is permanently red because of a source you do not control.
 
@@ -288,24 +288,24 @@ from kglite import KnowledgeGraph
 
 g = KnowledgeGraph()
 g.cypher("""
-CREATE (a:Licence {id: 'PL001'}), (b:Licence {id: 'PL002'}),
-       (p:PetregLicence {id: 'P900'}), (c:Company {id: 'EQNR'})
-CREATE (a)-[:HAS_OPERATOR {validFrom: 1995}]->(c)
-CREATE (b)-[:HAS_OPERATOR]->(c)
-CREATE (p)-[:HAS_OPERATOR]->(c)
+CREATE (a:Contract {id: 'C001'}), (b:Contract {id: 'C002'}),
+       (p:LegacyContract {id: 'L900'}), (c:Company {id: 'ACME'})
+CREATE (a)-[:MANAGED_BY {validFrom: 1995}]->(c)
+CREATE (b)-[:MANAGED_BY]->(c)
+CREATE (p)-[:MANAGED_BY]->(c)
 """)
 g.define_ontology({
-    "classes": {"Licensable": {"abstract": True},
-                "Licence": {"is_a": "Licensable"},
-                "PetregLicence": {"is_a": "Licensable"},
+    "classes": {"Agreement": {"abstract": True},
+                "Contract": {"is_a": "Agreement"},
+                "LegacyContract": {"is_a": "Agreement"},
                 "Company": {}},
     "relationships": {
-        "HAS_OPERATOR": {
-            "domain": "Licensable", "range": "Company",
+        "MANAGED_BY": {
+            "domain": "Agreement", "range": "Company",
             "required_properties": ["validFrom"],
             "enforcement": {"required_properties": "error"},
-            # the Petreg source has no start date; the others must have one
-            "exempt": {"required_properties": ["PetregLicence"]},
+            # the legacy source has no start date; the others must have one
+            "exempt": {"required_properties": ["LegacyContract"]},
         },
     },
 })
@@ -314,18 +314,18 @@ for row in g.cypher(
     "CALL ontology_audit() YIELD rule, severity, violations, exempted, total"
 ):
     print(row)
-# {'rule': 'HAS_OPERATOR.domain', 'severity': 'advisory', 'violations': 0, 'exempted': 0, 'total': 3}
-# {'rule': 'HAS_OPERATOR.range', 'severity': 'advisory', 'violations': 0, 'exempted': 0, 'total': 3}
-# {'rule': 'HAS_OPERATOR.required_properties', 'severity': 'error', 'violations': 1, 'exempted': 1, 'total': 3}
+# {'rule': 'MANAGED_BY.domain', 'severity': 'advisory', 'violations': 0, 'exempted': 0, 'total': 3}
+# {'rule': 'MANAGED_BY.range', 'severity': 'advisory', 'violations': 0, 'exempted': 0, 'total': 3}
+# {'rule': 'MANAGED_BY.required_properties', 'severity': 'error', 'violations': 1, 'exempted': 1, 'total': 3}
 ```
 
-Both edges lack `validFrom`, but only the `Licence` one counts as a violation. The rule can sit at `error` and still block exactly the debt you own.
+Both edges lack `validFrom`, but only the `Contract` one counts as a violation. The rule can sit at `error` and still block exactly the debt you own.
 
 What the form guarantees:
 
-- **Per-check, never flat.** `exempt: ["PetregLicence"]` is refused. An exemption spread silently across every check is not something you can reason about later. Name the check it applies to.
+- **Per-check, never flat.** `exempt: ["LegacyContract"]` is refused. An exemption spread silently across every check is not something you can reason about later. Name the check it applies to.
 - **`required_properties` and `property_types` only.** These are the two checks where "the class to exempt" unambiguously means the edge's *source* type. Any other check name under `exempt` is refused at declaration time with the reason, not just an accept-list.
-- **Ancestor-widening.** A class matches when it is the edge source's primary type *or* one of its declared ancestors, the same widening `domain`/`range` get. Exempting `Licensable` exempts the whole subtree.
+- **Ancestor-widening.** A class matches when it is the edge source's primary type *or* one of its declared ancestors, the same widening `domain`/`range` get. Exempting `Agreement` exempts the whole subtree.
 - **The class must be declared.** An undeclared name is refused. Matching widens over the `is_a` forest, so a typo would silently exempt nothing, which is the exact failure the feature exists to remove.
 
 ### Drilling down to the flagged edges
@@ -338,10 +338,10 @@ for row in g.cypher("""
     RETURN check, source.id AS source, property, properties, exempt
 """):
     print(row)
-# {'check': 'required_properties', 'source': 'PL002', 'property': 'validFrom',
+# {'check': 'required_properties', 'source': 'C002', 'property': 'validFrom',
 #  'properties': ['validFrom'], 'exempt': False}
-# {'check': 'required_properties', 'source': 'P900', 'property': 'validFrom',
-#  'properties': ['validFrom', 'source'], 'exempt': True}
+# {'check': 'required_properties', 'source': 'L900', 'property': 'validFrom',
+#  'properties': ['validFrom'], 'exempt': True}
 ```
 
 `properties` lists every declared property the edge fails, and `property` is the first of them. An edge missing three is still one row, so the listing keeps reconciling with the scorecard. Use `UNWIND properties AS p` for the per-field tally the row listing does not give you, or ask `ontology_audit({by: 'property'})` for it directly.

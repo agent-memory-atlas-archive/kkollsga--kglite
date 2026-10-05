@@ -8,7 +8,7 @@ The `library` field selects the embedding engine. The host (Python vs Rust) is i
 
 | `library:` | Engine | Install | Notes |
 |---|---|---|---|
-| `sentence-transformers` | sentence-transformers (any HF model) | `pip install sentence-transformers` | **Has `bge-m3`** + the whole HF catalog. Heaviest (torch). |
+| `sentence-transformers` | sentence-transformers (any HF model) | `pip install sentence-transformers` | **Has `bge-m3`** + the whole HF catalog. Heaviest (torch). Use torch ≥ 2.13: older torch can crash the server on repeated queries. |
 | `fastembed` | fastembed-**py** | `pip install fastembed` | Light ONNX runtime. Catalog is `bge-*-en-v1.5`, `e5`, etc. — **no `bge-m3`**. |
 | `fastembed-rs` | fastembed-**rs** (Rust) | `cargo install kglite-mcp-server --features fastembed` | The standalone-binary path (no Python). **Has `bge-m3`.** |
 | `factory: mod:attr` | anything you build | (your own deps) | A `module:attr` returning an `EmbeddingModel`. |

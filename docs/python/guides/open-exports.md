@@ -154,6 +154,8 @@ declared valid-time intervals, for consumers that look for them.
 
 `load_rdf` reads Turtle, N-Triples, N-Quads and TriG, including RDF 1.2 reifiers.
 Reifier properties become edge properties.
+Graph names in N-Quads and TriG are ignored: statements from every named graph load into one graph, and
+values for the same property merge.
 
 - **A KGLite export** (a file with a `kg:manifest` statement) gets everything back:
   declarations, labels, parent types, ids and titles. An exported property that
@@ -188,7 +190,7 @@ id column cannot keep them apart, so export it as RDF or save a `.kgl`. A type w
 
 ### Not restored by `export_rdf` / `load_rdf`
 
-- A language-map property. It is an ordinary map, written as `kg:json`.
+- A language-map property, for RDF tools other than KGLite. It is written as a `kg:json` map rather than language-tagged literals; `load_rdf` reads it back unchanged.
 - A secondary label carried by only some nodes of a type.
 - An id of a kind other than int or string. The node gets a dense id.
 - A property column mixing value kinds.
