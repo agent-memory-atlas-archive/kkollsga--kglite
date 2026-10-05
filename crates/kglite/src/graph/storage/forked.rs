@@ -63,19 +63,25 @@
 //! `NodeIndex` is the key of every index structure on `DirGraph`. So the
 //! indices the overlay hands out must be the indices the base will produce when
 //! the overlay is folded back in. `StableGraph::add_node` reuses free-list
-//! slots and offers no index-controlled insertion, so this holds only when the
-//! base's node free list is **empty** — then appends are contiguous from
-//! `node_bound()` and a sequential replay reproduces them exactly.
+//! slots (LIFO) and offers no index-controlled insertion, so the overlay
+//! allocates exactly as `add_node` would: each index is the
+//! [`SlotMirror`](super::slot_mirror) prediction — the free-list head while
+//! the base has vacated slots, then contiguous slots past every occupied one.
+//! Replaying the appends in allocation order then reproduces every index
+//! (issue #195 was an overlay that appended past `node_bound()` while slots
+//! were still listed).
 //!
-//! [`SlotMirror`](super::slot_mirror) is what makes that checkable
-//! ([`can_fork`]), and its `debug_assert` inside `note_node_added` is what
-//! proves it: every `add_node` in [`ForkedGraph::apply_overlay`] — the
-//! fold-back path — runs through the same seam and re-checks the prediction. A
-//! base that cannot be forked cheaply falls back to the deep clone, which is
+//! That needs a mirror whose free-list order is known, which is what
+//! [`can_fork`] checks. Edges need nothing: the overlay never allocates one.
+//! [`ForkedGraph::check_fold`] replays the appends against the fold target's
+//! mirror before anything changes, and the mirror's `debug_assert` in
+//! `note_node_added` re-checks each prediction against petgraph as the fold
+//! runs. A base that cannot be forked falls back to the deep clone, which is
 //! slower and never wrong — the same fail-safe direction
 //! `rollback::journal_covers` takes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::ops::Range;
 use std::sync::Arc;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -84,7 +90,7 @@ use petgraph::visit::NodeIndexable;
 use rustc_hash::FxHashMap;
 
 use crate::datatypes::Value;
-use crate::graph::core::iterators::GraphNodeIndices;
+use crate::graph::core::iterators::{ForkedReusedIndices, GraphNodeIndices};
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
 use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
@@ -100,11 +106,10 @@ pub struct ForkedGraph {
     base: Arc<MemoryGraph>,
     /// Node weights that diverge from the base: copies taken on first write,
     /// plus every node appended since the fork. Keyed by raw node index.
-    nodes: FxHashMap<u32, NodeData>,
-    /// How many nodes have been appended past `base.node_bound()`. Appends are
-    /// contiguous by construction (see [`can_fork`]), which is what keeps
-    /// `node_indices` globally ascending without a merge.
-    appended: u32,
+    nodes: OverlayNodes,
+    /// Which slots the appended nodes took, in the order the fold-back must
+    /// replay them.
+    appended: Appended,
     /// The overlay's own column-store map, seeded with one `Arc` bump per type
     /// at fork time. Complete, so reads never chain into the base for it.
     column_stores: FxHashMap<InternedKey, Arc<ColumnStore>>,
@@ -117,20 +122,121 @@ pub struct ForkedGraph {
     slot_mirror: super::slot_mirror::SlotMirror,
 }
 
+/// The overlay's node weights, keyed by raw index, with a bitmap in front.
+///
+/// Every read of a node the overlay does not hold — nearly all of them in a
+/// scan — would otherwise pay a hash miss, and `FxHash` misses cost about 2.6×
+/// more when the held keys are scattered (reused free-list slots) than when
+/// they are one contiguous run (measured 2026-10-05: 2.09 vs 0.80 ms per 1M
+/// lookups at 100 keys). One bit test answers those reads instead. The bitmap
+/// is allocated on the first insert and grows to the highest index held.
+#[derive(Clone, Default)]
+struct OverlayNodes {
+    map: FxHashMap<u32, NodeData>,
+    present: Vec<u64>,
+}
+
+impl OverlayNodes {
+    #[inline]
+    fn holds(&self, idx: u32) -> bool {
+        self.present
+            .get((idx >> 6) as usize)
+            .is_some_and(|word| (word >> (idx & 63)) & 1 == 1)
+    }
+
+    #[inline]
+    fn get(&self, idx: u32) -> Option<&NodeData> {
+        if self.holds(idx) {
+            self.map.get(&idx)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn get_mut(&mut self, idx: u32) -> Option<&mut NodeData> {
+        self.map.get_mut(&idx)
+    }
+
+    fn insert(&mut self, idx: u32, data: NodeData) {
+        let word = (idx >> 6) as usize;
+        if word >= self.present.len() {
+            self.present.resize(word + 1, 0);
+        }
+        self.present[word] |= 1 << (idx & 63);
+        self.map.insert(idx, data);
+    }
+
+    fn remove(&mut self, idx: u32) -> Option<NodeData> {
+        if let Some(word) = self.present.get_mut((idx >> 6) as usize) {
+            *word &= !(1 << (idx & 63));
+        }
+        self.map.remove(&idx)
+    }
+
+    fn drain(&mut self) -> impl Iterator<Item = (u32, NodeData)> + '_ {
+        self.present.clear();
+        self.map.drain()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// The slots an overlay's appended nodes took.
+///
+/// Allocation has two phases, because `StableGraph::add_node` does: it pops
+/// the free list (LIFO) until it is empty, and only then appends past every
+/// slot. Once the overlay's mirror runs out of free slots it never gains one
+/// (the overlay frees nothing), so every fresh slot follows every reused one.
+#[derive(Clone, Default)]
+struct Appended {
+    /// Slots reused from the base's free list, in allocation order.
+    reused_order: Vec<u32>,
+    /// The same slots, sorted, for merging into `node_indices`.
+    reused: BTreeSet<u32>,
+    /// Slots past every base and reused slot, contiguous by construction.
+    fresh: Range<u32>,
+}
+
+impl Appended {
+    fn len(&self) -> usize {
+        self.reused_order.len() + self.fresh.len()
+    }
+
+    /// One past the highest slot taken, or 0 when none was.
+    fn bound(&self) -> usize {
+        let reused = self.reused.last().map_or(0, |&idx| idx as usize + 1);
+        reused.max(self.fresh.end as usize)
+    }
+
+    /// Every slot in allocation order: the order the fold-back replays.
+    fn in_order(&self) -> impl Iterator<Item = u32> + '_ {
+        self.reused_order.iter().copied().chain(self.fresh.clone())
+    }
+
+    fn push(&mut self, idx: u32, reused: bool) {
+        if reused {
+            self.reused_order.push(idx);
+            self.reused.insert(idx);
+        } else if self.fresh.is_empty() {
+            self.fresh = idx..idx + 1;
+        } else {
+            debug_assert_eq!(idx, self.fresh.end, "fresh slots must be contiguous");
+            self.fresh.end += 1;
+        }
+    }
+}
+
 /// Whether `base` can be shared behind an overlay rather than deep-copied.
 ///
-/// The condition is exactly the slot-identity precondition from the module
-/// doc: the free lists must be provably empty, so appended indices are
-/// contiguous from the bounds and a sequential replay reproduces them. A graph
-/// that has deleted a node or edge since its last vacuum, save/load or bulk
-/// rebuild fails this and keeps the deep clone.
-///
-/// Comparing the next prediction with the bound is not enough: petgraph's
-/// `node_bound()` is the highest *occupied* slot + 1, so a delete order can
-/// leave the free-list head equal to the bound with older slots behind it.
-/// The overlay's second append then disagrees with the fold-back (issue #195).
+/// The overlay allocates by the base's slot-mirror prediction (module doc),
+/// so the mirror must know petgraph's free-list order. It does unless the
+/// graph was adopted with holes — loaded or rebuilt from a `StableDiGraph`
+/// whose free-list order is not observable (`SlotMirror::for_adopted_graph`).
 pub(crate) fn can_fork(base: &MemoryGraph) -> bool {
-    base.slot_mirror.free_lists_empty()
+    base.slot_mirror.is_synced()
 }
 
 impl ForkedGraph {
@@ -157,18 +263,12 @@ impl ForkedGraph {
         let slot_mirror = base.slot_mirror.clone();
         Self {
             base,
-            nodes: FxHashMap::default(),
-            appended: 0,
+            nodes: OverlayNodes::default(),
+            appended: Appended::default(),
             column_stores,
             undo: None,
             slot_mirror,
         }
-    }
-
-    /// The first index this overlay appended, i.e. the base's node bound.
-    #[inline]
-    fn append_floor(&self) -> usize {
-        self.base.inner().node_bound()
     }
 
     /// How many node weights this overlay holds — the only nodes a clone of it
@@ -183,22 +283,24 @@ impl ForkedGraph {
     /// Check that folding into `target` reproduces every appended index,
     /// without mutating anything.
     ///
-    /// Replays the appends against a copy of `target`'s slot mirror: each
-    /// prediction must be the index the overlay handed out, and that index
-    /// must carry its weight. A refusal here leaves both the overlay and
+    /// Replays the appends in allocation order against a copy of `target`'s
+    /// slot mirror: each prediction must be the index the overlay handed out,
+    /// and that index must carry its weight. A refusal here leaves both the overlay and
     /// `target` untouched, so a caller can keep serving the overlay instead of
     /// tearing down a half-folded backend (issue #195).
     fn check_fold(&self, target: &MemoryGraph) -> Result<(), String> {
-        let floor = target.inner().node_bound();
         let mut mirror = target.slot_mirror.clone();
-        for offset in 0..self.appended as usize {
-            let idx = floor + offset;
-            if !self.nodes.contains_key(&(idx as u32)) {
+        // What `node_bound()` would read before each replayed `add_node`.
+        let mut bound = target.inner().node_bound();
+        for idx in self.appended.in_order() {
+            if !self.nodes.holds(idx) {
                 return Err(format!("appended node {idx} has no weight in the overlay"));
             }
-            match mirror.predict_next_node(idx) {
+            let idx = idx as usize;
+            match mirror.predict_next_node(bound) {
                 Some(predicted) if predicted.index() == idx => {
-                    mirror.note_node_added(idx, predicted);
+                    mirror.note_node_added(bound, predicted);
+                    bound = bound.max(idx + 1);
                 }
                 other => {
                     return Err(format!(
@@ -225,14 +327,13 @@ impl ForkedGraph {
     /// every `DirGraph` index that recorded the overlay's number.
     fn apply_overlay(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
         self.check_fold(target)?;
-        let floor = target.inner().node_bound();
-        // Appended nodes first and in index order, so the sequential
-        // reallocation reproduces the overlay's contiguous run.
-        for offset in 0..self.appended {
-            let idx = floor as u32 + offset;
+        // Appended nodes first, in allocation order, so each `add_node` pops
+        // the slot the overlay took.
+        let appended = std::mem::take(&mut self.appended);
+        for idx in appended.in_order() {
             let data = self
                 .nodes
-                .remove(&idx)
+                .remove(idx)
                 .expect("check_fold proved every appended index carries a weight");
             let actual = GraphWrite::add_node(target, data);
             assert_eq!(
@@ -254,7 +355,6 @@ impl ForkedGraph {
         }
         target.column_stores = std::mem::take(&mut self.column_stores);
         target.undo = self.undo.take();
-        self.appended = 0;
         Ok(())
     }
 
@@ -308,7 +408,7 @@ impl ForkedGraph {
         let mut clone = ForkedGraph {
             base: Arc::clone(&self.base),
             nodes: self.nodes.clone(),
-            appended: self.appended,
+            appended: self.appended.clone(),
             column_stores: self.column_stores.clone(),
             undo: None,
             slot_mirror: self.slot_mirror.clone(),
@@ -341,11 +441,11 @@ impl ForkedGraph {
     #[inline]
     fn cow_node(&mut self, idx: NodeIndex) -> Option<&mut NodeData> {
         let raw = idx.index() as u32;
-        if !self.nodes.contains_key(&raw) {
+        if !self.nodes.holds(raw) {
             let base = self.base.inner().node_weight(idx)?.clone();
             self.nodes.insert(raw, base);
         }
-        self.nodes.get_mut(&raw)
+        self.nodes.get_mut(raw)
     }
 
     /// Clone `idx`'s current weight into the journal as its pre-statement
@@ -418,7 +518,7 @@ impl Clone for ForkedGraph {
         Self {
             base: Arc::clone(&self.base),
             nodes: self.nodes.clone(),
-            appended: self.appended,
+            appended: self.appended.clone(),
             column_stores: self.column_stores.clone(),
             undo: None,
             slot_mirror: self.slot_mirror.clone(),
@@ -435,7 +535,7 @@ impl std::fmt::Debug for ForkedGraph {
             self.base.inner().node_count(),
             self.base.inner().edge_count(),
             self.nodes.len(),
-            self.appended
+            self.appended.len()
         )
     }
 }
@@ -452,7 +552,7 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn node_count(&self) -> usize {
-        self.base.inner().node_count() + self.appended as usize
+        self.base.inner().node_count() + self.appended.len()
     }
 
     #[inline]
@@ -460,9 +560,11 @@ impl GraphRead for ForkedGraph {
         self.base.inner().edge_count()
     }
 
+    /// Highest occupied slot + 1, as petgraph's own `node_bound()` would read
+    /// after the same appends.
     #[inline]
     fn node_bound(&self) -> usize {
-        self.append_floor() + self.appended as usize
+        self.base.inner().node_bound().max(self.appended.bound())
     }
 
     /// The base's, unmodified — for the same reason `edge_count` is: no edit
@@ -479,7 +581,7 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn node_weight(&self, idx: NodeIndex) -> Option<&NodeData> {
-        match self.nodes.get(&(idx.index() as u32)) {
+        match self.nodes.get(idx.index() as u32) {
             Some(data) => Some(data),
             None => self.base.inner().node_weight(idx),
         }
@@ -569,15 +671,25 @@ impl GraphRead for ForkedGraph {
         Box::new(self.column_stores.iter().map(|(k, v)| (*k, v)))
     }
 
-    /// Base indices then appended ones. Appends are contiguous above every base
-    /// index (see [`can_fork`]), so the chain is globally ascending and scan
-    /// order — which `type_indices` bucket order and the rollback fidelity
-    /// tests both pin — is unchanged.
+    /// Every live index in ascending order — the unforked graph's scan order,
+    /// which `type_indices` bucket order and the rollback fidelity tests both
+    /// pin. Fresh slots lie above every base slot, so without reused ones a
+    /// chain suffices; reused slots sit in base gaps and are merged in.
     #[inline]
     fn node_indices(&self) -> Self::NodeIndicesIter<'_> {
-        GraphNodeIndices::Forked {
-            base: Box::new(self.base.inner().node_indices()),
-            appended: self.append_floor()..self.node_bound(),
+        let base = self.base.inner().node_indices();
+        let fresh = self.appended.fresh.start as usize..self.appended.fresh.end as usize;
+        if self.appended.reused.is_empty() {
+            GraphNodeIndices::Forked {
+                base: Box::new(base),
+                appended: fresh,
+            }
+        } else {
+            GraphNodeIndices::ForkedReused(Box::new(ForkedReusedIndices::new(
+                base,
+                self.appended.reused.iter(),
+                fresh,
+            )))
         }
     }
 
@@ -794,11 +906,15 @@ impl GraphWrite for ForkedGraph {
     fn add_node(&mut self, data: NodeData) -> NodeIndex {
         let node_type = data.node_type;
         let bound_before = self.node_bound();
-        let idx = NodeIndex::new(bound_before);
+        // The slot petgraph would hand out (module doc): `can_fork` admits only
+        // a synced mirror, so there is always a prediction.
+        let reused = self.slot_mirror.has_free_nodes();
+        let idx = self
+            .slot_mirror
+            .predict_next_node(bound_before)
+            .expect("can_fork admits only a base whose slot mirror is synced");
         self.nodes.insert(idx.index() as u32, data);
-        self.appended += 1;
-        // Keeps the mirror in step with the indices this overlay hands out, so
-        // the fold-back's own `add_node` predicts the same run.
+        self.appended.push(idx.index() as u32, reused);
         self.slot_mirror.note_node_added(bound_before, idx);
         if let Some(journal) = self.undo.as_deref_mut() {
             journal.note_node_added(idx, node_type);
@@ -873,7 +989,7 @@ mod tests {
             2,
             "the target must be untouched"
         );
-        assert_eq!(forked.appended, 1, "the overlay must keep its append");
+        assert_eq!(forked.appended.len(), 1, "the overlay must keep its append");
         assert!(
             GraphRead::node_weight(&forked, appended).is_some(),
             "the overlay must still serve the appended node"

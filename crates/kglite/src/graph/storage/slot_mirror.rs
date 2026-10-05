@@ -115,14 +115,17 @@ impl SlotMirror {
         }
     }
 
-    /// Whether both free lists are provably empty: synced, and no vacated
-    /// slot recorded. Then `add_node`/`add_edge` append at the bounds, which is
-    /// the precondition `forked::can_fork` needs. Checking only the next
-    /// prediction is weaker — a free-list head can equal the bound while older
-    /// vacated slots sit behind it (issue #195).
+    /// Whether predictions are trustworthy: the free-list order is known.
     #[inline]
-    pub(crate) fn free_lists_empty(&self) -> bool {
-        self.synced && self.free_nodes.is_empty() && self.free_edges.is_empty()
+    pub(crate) fn is_synced(&self) -> bool {
+        self.synced
+    }
+
+    /// Whether the next `add_node` reuses a vacated slot rather than
+    /// appending. Meaningful only while synced.
+    #[inline]
+    pub(crate) fn has_free_nodes(&self) -> bool {
+        !self.free_nodes.is_empty()
     }
 
     /// The index `add_node` will return next, or `None` when unsynced.

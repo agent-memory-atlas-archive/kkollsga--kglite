@@ -205,20 +205,73 @@ impl<'a> EdgeRef for GraphEdgeRef<'a> {
 pub enum GraphNodeIndices<'a> {
     InMemory(petgraph::stable_graph::NodeIndices<'a, NodeData, u32>),
     Disk(DiskNodeIndices<'a>),
-    /// A `GraphBackend::Forked` overlay: the shared base's live indices,
-    /// followed by the contiguous run this writer appended past the base's
-    /// bound.
-    ///
-    /// Concatenation rather than a merge is sound *because* the fork is
-    /// conditional: `forked::can_fork` only shares a base whose free lists are
-    /// empty, so every appended index is above every base index and the
-    /// concatenation is globally ascending. Scan order — which `type_indices`
-    /// bucket order and the rollback fidelity fingerprints both pin — is
-    /// therefore identical to the unforked graph's.
+    /// A `GraphBackend::Forked` overlay that reused no vacated slot: the
+    /// shared base's live indices, then the contiguous run appended past
+    /// them. Every appended index is above every base index, so the
+    /// concatenation is ascending — the unforked graph's scan order, which
+    /// `type_indices` bucket order and the rollback fidelity fingerprints pin.
     Forked {
         base: Box<petgraph::stable_graph::NodeIndices<'a, NodeData, u32>>,
         appended: std::ops::Range<usize>,
     },
+    /// A `GraphBackend::Forked` overlay that reused vacated base slots.
+    ForkedReused(Box<ForkedReusedIndices<'a>>),
+}
+
+/// Ascending merge of a base's live indices with the vacated base slots an
+/// overlay reused, then the overlay's fresh run above both.
+pub struct ForkedReusedIndices<'a> {
+    base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
+    /// A base index read ahead while a smaller reused slot was yielded.
+    pending: Option<NodeIndex>,
+    reused: std::collections::btree_set::Iter<'a, u32>,
+    /// The smallest reused slot not yet yielded; `usize::MAX` once exhausted,
+    /// so the common step is one comparison.
+    next_reused: usize,
+    fresh: std::ops::Range<usize>,
+}
+
+impl<'a> ForkedReusedIndices<'a> {
+    pub(crate) fn new(
+        base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
+        mut reused: std::collections::btree_set::Iter<'a, u32>,
+        fresh: std::ops::Range<usize>,
+    ) -> Self {
+        let next_reused = reused.next().map_or(usize::MAX, |&idx| idx as usize);
+        Self {
+            base,
+            pending: None,
+            reused,
+            next_reused,
+            fresh,
+        }
+    }
+
+    #[inline]
+    fn take_reused(&mut self) -> NodeIndex {
+        let idx = self.next_reused;
+        self.next_reused = self.reused.next().map_or(usize::MAX, |&next| next as usize);
+        NodeIndex::new(idx)
+    }
+
+    /// A reused slot was vacant in the base, so the two never collide.
+    #[inline]
+    fn next_index(&mut self) -> Option<NodeIndex> {
+        match self.pending.take().or_else(|| self.base.next()) {
+            Some(base) if base.index() < self.next_reused => Some(base),
+            Some(base) => {
+                self.pending = Some(base);
+                Some(self.take_reused())
+            }
+            None if self.next_reused != usize::MAX => Some(self.take_reused()),
+            None => self.fresh.next().map(NodeIndex::new),
+        }
+    }
+
+    fn remaining_extra(&self) -> usize {
+        let reused = self.reused.len() + usize::from(self.next_reused != usize::MAX);
+        reused + usize::from(self.pending.is_some()) + self.fresh.len()
+    }
 }
 
 /// Iterates alive node slots in the DiskGraph's mmap'd node_slots array.
@@ -264,6 +317,7 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
             GraphNodeIndices::Forked { base, appended } => {
                 base.next().or_else(|| appended.next().map(NodeIndex::new))
             }
+            GraphNodeIndices::ForkedReused(iter) => iter.next_index(),
         }
     }
 
@@ -275,6 +329,11 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
             GraphNodeIndices::Forked { base, appended } => {
                 let (blo, bhi) = base.size_hint();
                 let extra = appended.len();
+                (blo + extra, bhi.map(|h| h + extra))
+            }
+            GraphNodeIndices::ForkedReused(iter) => {
+                let (blo, bhi) = iter.base.size_hint();
+                let extra = iter.remaining_extra();
                 (blo + extra, bhi.map(|h| h + extra))
             }
         }

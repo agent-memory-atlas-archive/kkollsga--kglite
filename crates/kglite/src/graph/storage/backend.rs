@@ -775,8 +775,7 @@ impl GraphBackend {
                 true
             }
             GraphBackend::Recording(rg) => rg.inner_mut().replace_heap_graph(new),
-            // Reached only through `vacuum`, which holds `&mut Arc<DirGraph>` and
-            // therefore compacts at write entry before it gets here.
+            // Reached only through `vacuum`, which collapses an overlay first.
             GraphBackend::Forked(_) => unreachable!("replace_heap_graph on a forked backend"),
             GraphBackend::Disk(_) => false,
         }
@@ -1055,9 +1054,10 @@ impl Clone for GraphBackend {
             // **The fork site.** Instead of deep-copying every node and edge,
             // hand the writer an overlay over the same base; the reader's
             // `Arc<MemoryGraph>` is left byte-for-byte untouched. `can_fork` is
-            // the slot-identity precondition (free lists provably empty, so the
-            // fold-back reproduces the overlay's indices); a base that fails it
-            // keeps the deep copy — slower, never wrong.
+            // the slot-identity precondition (a slot mirror that knows the free
+            // list, so the overlay allocates what the fold-back's `add_node`
+            // will); a base that fails it keeps the deep copy — slower, never
+            // wrong.
             //
             // ⚠ `deep_clone()` on the fallback, never `g.clone()`: `g` is an
             // `Arc` handle, so `.clone()` on it is a refcount bump — one

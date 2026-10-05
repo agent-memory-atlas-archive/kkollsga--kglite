@@ -1,19 +1,20 @@
 //! Writes under a held reader after deletes (issue #195).
 //!
 //! A delete puts its slot on petgraph's node free list, and `add_node` pops
-//! that list LIFO. The copy-on-write overlay hands appended nodes contiguous
-//! indices from the base's `node_bound()`, so it may only be used while the
-//! free list is empty — otherwise the fold-back allocates different slots than
-//! the overlay recorded. These tests pin the outcome on every entry point that
+//! that list LIFO. The copy-on-write overlay must hand out exactly the slots
+//! the fold-back's `add_node` will, or every index keyed on the overlay's
+//! numbers is wrong. These tests pin the outcome on every entry point that
 //! forks: each run is compared, slot for slot, with the same statements run on
 //! a graph that never forked.
 //!
 //! The delete orders are chosen so the free-list *head* equals `node_bound()`
-//! while deeper entries do not — the shape a head-only check let through.
+//! while deeper entries do not — the shape in which an overlay appending past
+//! `node_bound()` diverged from the fold-back.
 
 use super::*;
 use crate::graph::handle::make_dir_graph_mut;
 use crate::graph::session::{CommitOutcome, Session};
+use crate::graph::storage::mode::{convert_dir_graph_to_mode, StorageMode};
 
 const SEED: &str = "UNWIND range(0, 4) AS i CREATE (:Repro {k: 'K' + toString(i)})";
 const CREATE_TWO: &str = "UNWIND ['A', 'B'] AS k CREATE (:Repro {k: k})";
@@ -89,42 +90,29 @@ fn forks_under_a_reader(graph: DirGraph) -> bool {
 }
 
 #[test]
-fn a_graph_with_any_free_slot_does_not_fork() {
-    assert!(
-        forks_under_a_reader(after_deletes(&[])),
-        "a graph that never deleted has empty free lists and must fork — \
-         otherwise the refusals below are vacuous"
-    );
+fn a_graph_forks_unless_its_free_list_order_is_unknown() {
+    // The comparisons below are only about the overlay if these graphs fork.
     for (name, order) in [
+        ("no deletes", &[][..]),
         ("delete-all", &DELETE_ALL[..]),
         ("subset", &DELETE_SUBSET[..]),
         ("top slot only", &["K4"][..]),
         ("ascending", &["K0", "K1", "K2", "K3", "K4"][..]),
     ] {
         assert!(
-            !forks_under_a_reader(after_deletes(order)),
-            "{name}: a non-empty node free list must refuse the fork"
+            forks_under_a_reader(after_deletes(order)),
+            "{name}: a graph built in this process knows its free-list order"
         );
     }
 
-    // The edge clause: deleting every edge in this order leaves the edge
-    // free-list head equal to `edge_bound()` (0) with four slots behind it.
-    let mut graph = DirGraph::new();
-    run(&mut graph, "UNWIND range(0, 5) AS i CREATE (:N {k: i})");
-    run(
-        &mut graph,
-        "UNWIND range(0, 4) AS i MATCH (a:N {k: i}), (b:N {k: i + 1}) \
-         CREATE (a)-[:R {i: i}]->(b)",
-    );
-    for i in [4, 1, 2, 3, 0] {
-        run(
-            &mut graph,
-            &format!("MATCH ()-[r:R {{i: {i}}}]->() DELETE r"),
-        );
-    }
+    // Converting rebuilds the backend from a bare `StableDiGraph`, whose
+    // free-list order is not observable: with holes, the mirror is unsynced.
+    let mut adopted = after_deletes(&DELETE_SUBSET);
+    convert_dir_graph_to_mode(&mut adopted, StorageMode::Mapped).expect("to mapped");
+    convert_dir_graph_to_mode(&mut adopted, StorageMode::Memory).expect("to memory");
     assert!(
-        !forks_under_a_reader(graph),
-        "a non-empty edge free list must refuse the fork too"
+        !forks_under_a_reader(adopted),
+        "an adopted graph with holes cannot predict its slots and must deep-copy"
     );
 }
 
@@ -145,6 +133,22 @@ fn creates_under_a_held_reader_after_deletes_land_on_the_unforked_slots() {
             content(&reader),
             reader_before,
             "{name}: the reader must not see the writer's creates"
+        );
+        // While the overlay is live, its scan must already be the unforked
+        // graph's: reused slots merged into the base's gaps, in order.
+        assert!(
+            writer.graph.is_forked(),
+            "{name}: precondition — an overlay"
+        );
+        assert_eq!(
+            writer.graph.node_indices().collect::<Vec<_>>(),
+            reference.graph.node_indices().collect::<Vec<_>>(),
+            "{name}: node_indices under the overlay"
+        );
+        assert_eq!(
+            content(&writer),
+            content(&reference),
+            "{name}: under the overlay"
         );
         drop(reader);
 
@@ -265,4 +269,30 @@ fn session_write_guard_under_a_live_snapshot_matches_the_unforked_graph() {
     let snapshot = session.snapshot();
     assert_eq!(content(&snapshot), content(&reference));
     assert_indexes_agree(&snapshot, "write guard");
+}
+
+/// `vacuum` rebuilds from one concrete `StableDiGraph`, so it must collapse an
+/// overlay first. A held reader on a graph with holes makes the write entry
+/// fork; before the collapse, `vacuum` reached `take_heap_graph` on the
+/// overlay and panicked (0.19.3: `g.freeze()` then `g.vacuum()`).
+#[test]
+fn a_vacuum_under_a_held_reader_after_deletes_rebuilds_the_writer_only() {
+    let mut reference = after_deletes(&DELETE_SUBSET);
+    let mut writer = Arc::new(after_deletes(&DELETE_SUBSET));
+    let reader = Arc::clone(&writer);
+    let reader_before = content(&reader);
+
+    let graph = make_dir_graph_mut(&mut writer);
+    assert!(graph.graph.is_forked(), "precondition — an overlay");
+    assert!(
+        graph.vacuum().describes_rebuild(),
+        "the fixture has holes, so the vacuum must rebuild"
+    );
+    reference.vacuum();
+    assert_eq!(content(&writer), content(&reference));
+    assert_eq!(
+        content(&reader),
+        reader_before,
+        "the reader keeps its holes"
+    );
 }

@@ -103,13 +103,13 @@ fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
     }
 }
 
-/// The **clone fallback**: a graph whose free lists are non-empty cannot be
+/// The **clone fallback**: a graph whose free-list order is unknown cannot be
 /// forked, so a write taken while a reader holds it must deep-copy — and be
 /// correct.
 ///
 /// `forked::can_fork` is the predicate, pinned on its own by
-/// `forked_free_list::a_graph_with_any_free_slot_does_not_fork`. This test
-/// covers what the `DirGraph` above it then *does*: every other
+/// `forked_free_list::a_graph_forks_unless_its_free_list_order_is_unknown`.
+/// This test covers what the `DirGraph` above it then *does*: every other
 /// held-reader test in this file seeds a graph that has never deleted anything,
 /// so they all take the overlay path and the fallback branch of
 /// `GraphBackend::clone` was reached by no test at all. It is the branch that
@@ -119,21 +119,28 @@ fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
 /// the reader's snapshot in place.
 ///
 /// Both directions are pinned: the fallback must fire *and* cost exactly one
-/// whole-graph copy, so neither "it forked after a delete" (slot identity
-/// broken) nor "it copied per statement" (the cliff since removed) can pass.
+/// whole-graph copy, so neither "it forked without a slot prediction" (slot
+/// identity broken) nor "it copied per statement" (the cliff since removed)
+/// can pass.
 #[test]
 fn a_write_under_a_held_reader_after_a_delete_takes_the_clone_path() {
     use crate::graph::handle::make_dir_graph_mut;
     use crate::graph::storage::backend::{backend_clone_nodes, reset_backend_clone_count};
+    use crate::graph::storage::mode::{convert_dir_graph_to_mode, StorageMode};
     use std::sync::Arc;
 
     let mut writer = Arc::new(seeded());
-    // A delete is what puts a slot on petgraph's free list; from here the
-    // overlay cannot reproduce append indices, so `can_fork` refuses.
+    // A delete puts a slot on petgraph's free list, and the storage-mode round
+    // trip rebuilds the backend from a bare `StableDiGraph` whose free-list
+    // order is not observable — so the overlay could not predict its appends,
+    // and `can_fork` refuses.
     run(
         Arc::make_mut(&mut writer),
         "MATCH (n:Item {id: 3}) DETACH DELETE n",
     );
+    for mode in [StorageMode::Mapped, StorageMode::Memory] {
+        convert_dir_graph_to_mode(Arc::make_mut(&mut writer), mode).expect("convert");
+    }
     let live_nodes = writer.graph.node_count();
 
     let reader = Arc::clone(&writer);
@@ -143,9 +150,9 @@ fn a_write_under_a_held_reader_after_a_delete_takes_the_clone_path() {
     let graph = make_dir_graph_mut(&mut writer);
     assert!(
         !graph.graph.is_forked(),
-        "a graph with a non-empty free list must NOT fork — the overlay hands out \
-         append indices petgraph would reuse from the free list, and the fold-back \
-         would then mis-key every DirGraph index recorded against them"
+        "a graph with an unknown free-list order must NOT fork — the overlay could \
+         not predict the slots petgraph reuses, and the fold-back would then \
+         mis-key every DirGraph index recorded against them"
     );
     assert_eq!(
         backend_clone_nodes(),

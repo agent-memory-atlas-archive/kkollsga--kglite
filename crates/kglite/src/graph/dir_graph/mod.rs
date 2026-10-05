@@ -2069,6 +2069,10 @@ impl DirGraph {
         // originals were dropped moments later when the backend was replaced
         // — the clone/drop pair was pure waste (profiled at ~16% of a fired
         // vacuum at 1M, plus its share of allocator and memcpy time).
+        // A transaction's working copy can still be a copy-on-write overlay
+        // here (`Session::begin` forks it off the published graph); the
+        // rebuild needs one concrete `StableDiGraph`.
+        self.graph.flatten_fork();
         let Some(mut old) = self.graph.take_heap_graph() else {
             // Disk: nothing was taken, so nothing downstream may treat the
             // indices as remapped.
