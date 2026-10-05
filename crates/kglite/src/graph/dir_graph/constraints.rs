@@ -548,10 +548,10 @@ impl DirGraph {
     ///
     /// O(distinct tuples) per constraint, matching the shape the delete path
     /// already uses for the property and composite indexes.
-    pub(crate) fn evict_unique_claims_for_nodes(
+    pub(crate) fn evict_unique_claims_for_nodes<S: std::hash::BuildHasher>(
         &mut self,
         node_type: &str,
-        deleted: &HashSet<NodeIndex>,
+        deleted: &HashSet<NodeIndex, S>,
     ) {
         if !self.has_unique_constraints() {
             return;

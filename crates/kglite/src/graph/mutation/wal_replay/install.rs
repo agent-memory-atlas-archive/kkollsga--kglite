@@ -21,7 +21,7 @@ type Identities = HashMap<NodeKey, NodeIndex>;
 pub(super) fn apply(graph: &mut DirGraph, plan: &ReplayPlan) -> Result<Created, String> {
     let mut created = Created::default();
     let mut identities = exact_identities(graph, plan);
-    let mut doomed = HashSet::new();
+    let mut doomed = rustc_hash::FxHashSet::default();
     for ((node_type, id), state) in &plan.nodes {
         if state.reset {
             if let Some(idx) = identities.get(&(node_type.clone(), id.clone())).copied() {

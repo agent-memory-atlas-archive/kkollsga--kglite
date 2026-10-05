@@ -31,7 +31,9 @@ use crate::graph::schema::{
 use crate::graph::storage::undo::BucketId;
 use crate::graph::storage::GraphRead;
 use petgraph::graph::{EdgeIndex, NodeIndex};
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 /// Report returned by `add_properties()`.
@@ -1553,10 +1555,10 @@ const POSITIONAL_MIN_BUCKET: usize = 1024;
 /// Declines wholesale when some doomed node's type could not be read, because
 /// the retain removes every doomed index from every affected bucket while this
 /// removes only the ones it located.
-fn doomed_bucket_positions(
+fn doomed_bucket_positions<S: BuildHasher>(
     graph: &mut DirGraph,
     doomed_ids: &HashMap<String, Vec<(Value, NodeIndex)>>,
-    nodes_to_delete: &HashSet<NodeIndex>,
+    nodes_to_delete: &HashSet<NodeIndex, S>,
 ) -> HashMap<String, Vec<(usize, NodeIndex)>> {
     let typed: usize = doomed_ids.values().map(Vec::len).sum();
     if typed != nodes_to_delete.len() {
@@ -1590,10 +1592,10 @@ fn doomed_bucket_positions(
 /// the user-index buckets are handed straight to the matcher. Must be called
 /// while the doomed indices are still in their buckets. One `Option` check
 /// when no checkpoint is open, which is every non-mutating call.
-fn journal_bucket_evictions(
+fn journal_bucket_evictions<S: BuildHasher>(
     graph: &mut DirGraph,
     affected_types: &HashSet<String>,
-    nodes_to_delete: &HashSet<NodeIndex>,
+    nodes_to_delete: &HashSet<NodeIndex, S>,
     bucket_positions: &HashMap<String, Vec<(usize, NodeIndex)>>,
 ) {
     if graph.graph.undo_journal_mut().is_none() {
@@ -1691,9 +1693,14 @@ fn journal_bucket_evictions(
 /// Clearing `connection_types` matters because `has_connection_type` treats a
 /// non-empty set as authoritative: one left over from before the delete
 /// answers from memory instead of the live edge set.
-pub(crate) fn detach_delete_nodes(
+///
+/// The set's iteration order is the order slots join petgraph's free lists, so
+/// it decides which slot each later `add_node`/`add_edge` reuses. Production
+/// callers pass an `FxHashSet` — deterministic for identical input — so that
+/// identical statements leave identical slots.
+pub(crate) fn detach_delete_nodes<S: BuildHasher>(
     graph: &mut DirGraph,
-    nodes_to_delete: &HashSet<NodeIndex>,
+    nodes_to_delete: &HashSet<NodeIndex, S>,
 ) -> (usize, usize) {
     if nodes_to_delete.is_empty() {
         return (0, 0);
@@ -2069,7 +2076,7 @@ pub fn replace_connections(
 pub fn purge_provisional_nodes(graph: &mut DirGraph) -> (usize, usize) {
     let _arena_guard = graph.graph.begin_query(); // disk arena guard (owned; no-op on memory/mapped)
     let provisional_key = graph.interner.get_or_intern(PROVISIONAL_KEY);
-    let mut to_delete: HashSet<NodeIndex> = HashSet::new();
+    let mut to_delete: FxHashSet<NodeIndex> = FxHashSet::default();
     for node_idx in graph.graph.node_indices() {
         if matches!(
             GraphRead::get_node_property(&graph.graph, node_idx, provisional_key),

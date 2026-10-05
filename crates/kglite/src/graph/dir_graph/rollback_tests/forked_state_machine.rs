@@ -7,8 +7,7 @@
 //! on the free lists in arbitrary orders, so forks, fold-backs and the
 //! deep-copy fallback all occur. After every step:
 //!
-//! - the session's graph holds the same nodes, edges and type-index sizes as
-//!   the reference (see [`logical`] for why not slot for slot);
+//! - the session's graph equals the reference, slot for slot;
 //! - every type-index entry resolves to a live node of that type, and the
 //!   index, `MATCH (n:T)` and the backend agree on the count;
 //! - a held snapshot still reads exactly as when it was taken.
@@ -42,53 +41,6 @@ fn content(graph: &DirGraph) -> Fingerprint {
     let mut print = fingerprint(&mut copy);
     print.version = 0;
     print
-}
-
-/// Node content, edge endpoints and per-type index sizes, without slots.
-type Logical = (
-    Vec<(String, String, PropPairs, Vec<String>)>,
-    Vec<(String, String, String)>,
-    Vec<(String, usize)>,
-);
-
-/// [`content`] without slot numbers or the slot-derived fabricated titles.
-///
-/// The reference cannot be compared slot for slot: `DELETE` collects its
-/// targets in a `std` `HashSet`, so the order slots join the free list — and
-/// with it which slot a later `CREATE` reuses — differs between two graphs
-/// given identical statements. Slot identity under a fork is pinned by the
-/// deterministic cases in `forked_free_list`.
-fn logical(graph: &DirGraph) -> Logical {
-    let print = content(graph);
-    let key_of: HashMap<usize, String> = print
-        .nodes
-        .iter()
-        .map(|(slot, _, _, _, props, _)| {
-            let k = props
-                .iter()
-                .find(|(name, _)| name == "k")
-                .map_or_else(String::new, |(_, value)| value.clone());
-            (*slot, k)
-        })
-        .collect();
-    let mut nodes: Vec<_> = print
-        .nodes
-        .into_iter()
-        .map(|(_, node_type, id, _, props, labels)| (node_type, id, props, labels))
-        .collect();
-    nodes.sort();
-    let mut edges: Vec<_> = print
-        .edges
-        .into_iter()
-        .map(|(_, src, tgt, conn, _)| (key_of[&src].clone(), key_of[&tgt].clone(), conn))
-        .collect();
-    edges.sort();
-    let types = print
-        .type_indices
-        .into_iter()
-        .map(|(name, members)| (name, members.len()))
-        .collect();
-    (nodes, edges, types)
 }
 
 fn count(graph: &DirGraph, query: &str) -> usize {
@@ -218,8 +170,8 @@ fn run_machine(mode: StorageMode, seed: u64, steps: usize) {
 
         let snapshot = session.snapshot();
         assert_eq!(
-            logical(&snapshot),
-            logical(&reference),
+            content(&snapshot),
+            content(&reference),
             "{context}: {query}"
         );
         assert_indexes_resolve(&snapshot, &context);

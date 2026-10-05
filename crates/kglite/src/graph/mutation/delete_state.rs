@@ -12,6 +12,7 @@
 //! `detach_delete_nodes`, which is this module's only caller.
 
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 
 use petgraph::graph::NodeIndex;
 
@@ -146,7 +147,10 @@ fn prune_doomed_text_docs(graph: &mut DirGraph, node_idx: NodeIndex) {
 /// - **The node's text-index documents.** The same inheritance hazard, one
 ///   layer further up: a BM25 document is addressed by `NodeIndex` directly.
 ///   See [`prune_doomed_text_docs`].
-pub(super) fn remove_doomed_nodes(graph: &mut DirGraph, nodes_to_delete: &HashSet<NodeIndex>) {
+pub(super) fn remove_doomed_nodes<S: BuildHasher>(
+    graph: &mut DirGraph,
+    nodes_to_delete: &HashSet<NodeIndex, S>,
+) {
     let captures_before = graph.graph.captures_before_images();
     for &node_idx in nodes_to_delete {
         let doomed_labels = captures_before.then(|| graph.secondary_label_names(node_idx));

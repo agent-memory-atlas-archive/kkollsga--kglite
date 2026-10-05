@@ -585,6 +585,7 @@ fn seeded_indexed() -> DirGraph {
 
 mod cell_fidelity;
 mod columnar_cost;
+mod delete_determinism;
 // ─────────────────────────────────────────────────────────────────────
 // Shared fixtures used by more than one arm below
 // ─────────────────────────────────────────────────────────────────────

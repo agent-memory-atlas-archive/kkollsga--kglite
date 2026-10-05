@@ -22,6 +22,10 @@ before upgrading.
   panics with `take_heap_graph on a forked backend`.
 - A write transaction after deletes no longer copies the whole graph: 17 ms to
   0.9 ms per transaction at 1M nodes with 2,000 scattered deletes.
+- Running the same statements on two graphs now gives both the same node and
+  relationship slots, so `MATCH` without `ORDER BY` returns rows in the same
+  order. A `DELETE` of several nodes or relationships used to free their slots
+  in a random order, so later creates reused different slots.
 
 ## [0.19.3] - 2026-10-05
 

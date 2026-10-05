@@ -755,7 +755,7 @@ impl UndoJournal {
         &mut self,
         bucket: &BucketId,
         members: impl Iterator<Item = NodeIndex>,
-        doomed: &HashSet<NodeIndex>,
+        doomed: &HashSet<NodeIndex, impl std::hash::BuildHasher>,
     ) {
         let mut hits: Vec<(usize, NodeIndex)> = members
             .enumerate()

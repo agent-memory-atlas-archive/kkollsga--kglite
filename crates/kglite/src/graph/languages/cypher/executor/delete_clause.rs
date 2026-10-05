@@ -6,7 +6,9 @@
 //! refusal must happen before the first storage mutation, and every row's
 //! deletions must be visible to the checks the other rows run.
 
+use rustc_hash::FxHashSet;
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 
 use super::projected_targets::projected_edge_binding;
 use super::relationship_identity::StatementRelationshipIdentities;
@@ -23,10 +25,14 @@ use crate::graph::storage::GraphRead;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
 /// Everything one DELETE statement removes, collected before any mutation.
+///
+/// `Fx` sets, not `std`: iteration order is the order the slots join
+/// petgraph's free lists, and a `std` set's per-instance random seed made two
+/// graphs given identical statements reuse different slots afterwards.
 #[derive(Default)]
 struct DeleteTargets {
-    nodes: HashSet<NodeIndex>,
-    edges: HashSet<EdgeIndex>,
+    nodes: FxHashSet<NodeIndex>,
+    edges: FxHashSet<EdgeIndex>,
 }
 
 pub(super) fn execute_delete(
@@ -346,12 +352,12 @@ fn commit_deletions(graph: &mut DirGraph, targets: &DeleteTargets, stats: &mut M
 
 pub(super) fn invalidate_deleted_relationships(
     graph: &DirGraph,
-    nodes: &HashSet<NodeIndex>,
-    explicitly_deleted: &HashSet<EdgeIndex>,
+    nodes: &HashSet<NodeIndex, impl BuildHasher>,
+    explicitly_deleted: &HashSet<EdgeIndex, impl BuildHasher>,
     detach: bool,
     identities: &mut StatementRelationshipIdentities,
 ) -> Result<(), String> {
-    let mut edges = explicitly_deleted.clone();
+    let mut edges: FxHashSet<EdgeIndex> = explicitly_deleted.iter().copied().collect();
     if detach {
         let _arena_guard = graph.graph.begin_query();
         for &node in nodes {
