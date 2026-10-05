@@ -7412,7 +7412,9 @@ class KnowledgeGraph:
         (``persistent=True``) and is **not** maintained: any write to the graph
         makes it stop answering, and lookups fall back to a scan — correct
         results, at scan speed. ``reindex()`` and ``save()`` rebuild it. Results
-        never depend on whether the index answered.
+        never depend on whether the index answered. A disk index covers
+        **string columns only**: an index that would hold no values over a
+        populated type (a numeric or missing property) raises instead.
 
         Idempotent — re-creating an existing index rebuilds it without error;
         ``created`` is then ``False``. It is ``True`` only when this call made
@@ -7436,13 +7438,19 @@ class KnowledgeGraph:
         Returns:
             Dict with ``node_type``, ``property``, ``unique_values``,
             ``persistent``, ``created`` (``False`` if the index already
-            existed), ``serves_lookups`` (``bool``) and ``not_serving``
-            (``str`` explaining why not, or ``None``).
+            existed), ``serves_lookups`` (``bool``), ``not_serving``
+            (``str`` explaining why not, or ``None``) and ``node_type_known``
+            (``False`` when ``node_type`` has no nodes and no schema
+            declaration — the index is real and fills as nodes arrive, but a
+            misspelled type is the likelier reading).
 
         Raises:
             ValueError: If ``node_type`` exists only as a secondary label —
                 property indexes are keyed by primary type, so such an index
-                would never be consulted. Index the nodes' primary type.
+                would never be consulted. Index the nodes' primary type. Also
+                raised on a disk graph when the index would hold no values
+                over a populated type; nothing is left behind.
+            IOError: The disk backend failed to build the index.
 
         Example:
             ```python

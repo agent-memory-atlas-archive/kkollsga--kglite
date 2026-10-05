@@ -65,6 +65,7 @@ pub(crate) use disk_rebase::{post_publish_failpoint, with_failing_stage};
 mod duplicate_ids;
 mod id_index_reuse;
 mod independent_copy;
+pub(crate) mod index_create;
 mod index_keys;
 pub mod index_layer;
 pub(crate) mod indexes;

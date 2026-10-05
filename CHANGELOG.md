@@ -28,6 +28,11 @@ before upgrading.
 
 ### Fixed
 
+- `create_index` on a disk graph now raises `ValueError` for a column it
+  cannot index (a numeric or missing property over a populated type), as
+  Cypher `CREATE INDEX` already did. It reported the index as created and
+  serving with zero entries. Its result also carries `node_type_known`:
+  `False` when the type has no nodes and no schema declaration.
 - A filtered `MATCH … WHERE … RETURN … LIMIT k` no longer holds every match
   before stopping. Returning 12,000 rows of a 1M-node type held 330–670 MB on
   memory and disk graphs; it now holds under 1 MB, and the query takes 6–12 ms

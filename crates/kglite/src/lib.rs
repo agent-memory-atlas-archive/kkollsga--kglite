@@ -59,6 +59,10 @@ pub mod api {
     pub use crate::datatypes::Value;
     pub use crate::error::{KgError, KgErrorCode};
     pub use crate::graph::advisories::{data_advisories, DataAdvisory};
+    /// The report and the refusal of `DirGraph::create_property_index_checked`,
+    /// the index creation every binding's `create_index` shares with Cypher's
+    /// `CREATE INDEX`.
+    pub use crate::graph::dir_graph::index_create::{PropertyIndexCreated, PropertyIndexError};
     pub use crate::graph::dir_graph::DirGraph;
     /// The storage-health report `DirGraph::graph_info` returns: live vs
     /// tombstoned node and edge slots, columnar row and heap totals, index

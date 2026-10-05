@@ -367,13 +367,12 @@ fn create_single_property_index(
         return Ok(MutationStats::default());
     }
 
-    // Backend-routed: on a disk graph this builds the persistent mmap index
-    // rather than the in-memory HashMap, which is the same decision the
-    // Python `create_index` makes.
-    let (entries, persistent) = graph.create_property_index_routed(label, property)?;
-    if persistent {
-        reject_empty_disk_index(graph, label, property, entries)?;
-    }
+    // The checked build every binding's `create_index` shares: backend
+    // routing plus the refusals (a secondary-only label, a disk index that
+    // indexed nothing).
+    graph
+        .create_property_index_checked(label, property)
+        .map_err(|e| format!("CREATE INDEX: {e}"))?;
     if wants_range {
         // Neo4j's RANGE index serves equality *and* range, so honouring the
         // keyword takes both KGLite structures. See the module doc.
@@ -413,41 +412,6 @@ fn create_composite_index(
     let property_refs: Vec<&str> = properties.iter().map(String::as_str).collect();
     graph.declare_composite_index(label, &property_refs);
     Ok(indexes_added(1))
-}
-
-/// A disk graph's persistent property index covers **string columns only** (see
-/// `DiskGraph::build_property_index`, where a non-string or missing property is
-/// a deliberate zero-entry no-op). A zero-entry index over a populated node
-/// type therefore means the statement indexed nothing, and reporting success
-/// for that is worse than failing: the caller would go on believing their
-/// lookups are indexed. Refuse it, and name the reason.
-///
-/// An empty node type legitimately yields zero entries, so the emptiness check
-/// gates the error rather than the count alone.
-fn reject_empty_disk_index(
-    graph: &mut DirGraph,
-    label: &str,
-    property: &str,
-    entries: usize,
-) -> Result<(), String> {
-    if entries > 0 {
-        return Ok(());
-    }
-    let type_is_populated = graph
-        .type_indices
-        .get(label)
-        .is_some_and(|nodes| nodes.iter().next().is_some());
-    if !type_is_populated {
-        return Ok(());
-    }
-    // Leave no half-built index behind for a statement that failed.
-    let _ = graph.drop_index(label, property);
-    Err(format!(
-        "CREATE INDEX on a disk-backed graph indexed no values for '{label}.{property}'. \
-         Persistent property indexes cover string columns; '{property}' is either absent from \
-         {label} or not stored as a string. Check `describe()` for the column's type, or use an \
-         in-memory / mapped graph, where every property type is indexable."
-    ))
 }
 
 /// Which DDL statement a schema-lock rejection is talking about, so one guard

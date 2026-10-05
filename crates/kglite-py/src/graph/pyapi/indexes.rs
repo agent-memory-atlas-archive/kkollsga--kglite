@@ -5,34 +5,7 @@ use crate::graph::{get_graph_mut, KnowledgeGraph};
 
 #[pymethods]
 impl KnowledgeGraph {
-    /// Create an index on a property for a specific node type.
-    ///
-    /// Indexes dramatically speed up equality filters on the indexed property.
-    /// Once created, the index is automatically used by where() operations.
-    ///
-    /// Args:
-    ///     node_type: The type of nodes to index
-    ///     property: The property name to index
-    ///
-    /// Idempotent — re-creating an existing index rebuilds it without
-    /// error. The returned ``created`` flag is ``False`` when an index
-    /// for ``(node_type, property)`` already existed, ``True`` when this
-    /// call made a new one.
-    ///
-    /// Returns:
-    ///     Dict with ``node_type``, ``property``, ``unique_values`` (count),
-    ///     ``persistent`` (disk-backed), ``created`` (False if the index
-    ///     already existed), ``serves_lookups`` (whether queries will read it)
-    ///     and ``not_serving`` (why not, or None).
-    ///
-    /// Example:
-    ///     ```python
-    ///     # Create an index for faster lookups
-    ///     graph.create_index('Prospect', 'geoprovince')
-    ///
-    ///     # Now this filter will use the index (O(1) instead of O(n))
-    ///     graph.select('Prospect').where({'geoprovince': 'North Sea'})
-    ///     ```
+    /// Create an equality index on a node type's property and report what it serves.
     fn create_index(
         &mut self,
         py: Python<'_>,
@@ -41,47 +14,32 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let graph = get_graph_mut(&mut self.inner);
-        // Raised here as ValueError so the refusal isn't wrapped in the
-        // IOError below, whose message assumes a disk build failure.
-        graph
-            .reject_secondary_only_index_type(node_type)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        // Checked before the rebuild below mutates the index — that ordering
-        // is what makes the returned `created` flag honest.
-        let already_existed = graph.has_any_index(node_type, property);
-        // Backend routing lives in the core (`create_property_index_routed`)
-        // because the Cypher `CREATE INDEX` executor needs the identical
-        // decision: in-memory backends build the HashMap-based
-        // property_indices, while on Disk that HashMap would silently OOM on
-        // large types (~13M rows × String × Vec = multiple GB of heap rebuilt
-        // every load), so the persistent mmap-backed PropertyIndex takes its
-        // place. On disk `unique_values` reports nodes indexed, for API parity.
-        let (unique_values, persistent_disk) = graph
-            .create_property_index_routed(node_type, property)
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                    "Failed to build persistent property index for {}.{}: {}",
-                    node_type, property, e
-                ))
+        // The checked build Cypher `CREATE INDEX` shares: backend routing
+        // (persistent mmap index on disk, where a heap HashMap would OOM on a
+        // large type), the refusals, and whether queries will read the index.
+        let built = graph
+            .create_property_index_checked(node_type, property)
+            .map_err(|e| match e {
+                kglite_core::api::PropertyIndexError::Refused(message) => {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
+                }
+                kglite_core::api::PropertyIndexError::Build(message) => {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                        "Failed to build persistent property index for {}.{}: {}",
+                        node_type, property, message
+                    ))
+                }
             })?;
-
-        // `created` alone reported success for an index no query would ever
-        // read — an index on a structurally-resolved name (`name`, `type`,
-        // `node_type`, `label`) is built from stored values while `MATCH`
-        // resolves the name per node, so the matcher refuses to read it. The
-        // build is kept (its values are real, and a disk graph does serve
-        // them), and the caller is told what it got.
-        let serves = graph.index_serves_lookups(node_type, property);
-        let reason = graph.index_not_serving_reason(node_type, property);
 
         let result_dict = PyDict::new(py);
         result_dict.set_item("node_type", node_type)?;
         result_dict.set_item("property", property)?;
-        result_dict.set_item("unique_values", unique_values)?;
-        result_dict.set_item("persistent", persistent_disk)?;
-        result_dict.set_item("created", !already_existed)?;
-        result_dict.set_item("serves_lookups", serves)?;
-        result_dict.set_item("not_serving", reason)?;
+        result_dict.set_item("unique_values", built.unique_values)?;
+        result_dict.set_item("persistent", built.persistent)?;
+        result_dict.set_item("created", built.created)?;
+        result_dict.set_item("serves_lookups", built.serves_lookups)?;
+        result_dict.set_item("not_serving", built.not_serving)?;
+        result_dict.set_item("node_type_known", built.node_type_known)?;
         self.commit_wal()?;
 
         Ok(result_dict.into())
