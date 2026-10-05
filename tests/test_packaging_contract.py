@@ -294,7 +294,9 @@ def test_wheel_license_gate_covers_every_published_wheel_family() -> None:
 
     assert release.count('python scripts/check_wheel_artifact.py "wheels/*.whl"') == 3
     assert release.count("python scripts/check_wheel_license.py --expected-name kglite-cli") == 3
-    assert 'scripts/check_wheel_license.py --expected-name kglite "$RUNNER_TEMP/candidate-wheel/*.whl"' in ci
+    # The perf candidate builds in the manylinux container, which mounts only
+    # the workspace, so its wheel lands in the checkout, not $RUNNER_TEMP.
+    assert 'scripts/check_wheel_license.py --expected-name kglite "candidate-wheel/*.whl"' in ci
     assert "wheel-only" in documentation
     # Narrowed 2026-07-29: the release process DOES build and install the
     # sdist now. What stayed wheel-only is licence verification, so that is
