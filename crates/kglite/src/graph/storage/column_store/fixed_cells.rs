@@ -40,7 +40,7 @@ impl ColumnStore {
         key: InternedKey,
         pick: impl FnOnce(&TypedColumn) -> Option<(&MmapOrVec<T>, &MmapOrVec<u8>)>,
     ) -> Option<FixedCells<'_, T>> {
-        if self.has_mmap_base() || self.has_overflow() {
+        if !self.columns_cover_rows() || self.has_overflow() {
             return None;
         }
         let column = self.columns.get(self.schema.slot(key)? as usize)?;

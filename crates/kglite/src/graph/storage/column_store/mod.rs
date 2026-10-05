@@ -20,6 +20,8 @@ mod property_layout;
 mod tail;
 pub(crate) use tail::RegionParts;
 #[cfg(test)]
+mod heap_tail_tests;
+#[cfg(test)]
 mod tail_tests;
 #[cfg(test)]
 mod timestamp_column_tests;
@@ -138,15 +140,18 @@ pub struct ColumnStore {
     /// Columns a type change replaced while a statement's undo is recording.
     /// See [`displaced`].
     displaced: Option<Vec<DisplacedColumn>>,
-    /// Rows appended past an mmap base, served from their own owned store.
-    /// See [`tail`].
+    /// Rows appended past an mmap base, or past heap columns a writer overlay
+    /// shares with its reader, served from their own owned store. See
+    /// [`tail`].
     ///
-    /// Only ever present beside `mmap_store`. While it is, every field above
+    /// While it is present, every field above
     /// describes the **base part** — rows `0..row_count` — and the tail holds
     /// rows `row_count..`, addressed `row - row_count` inside it. The public
     /// accessors ([`Self::row_count`] and every per-row reader) answer for the
     /// whole.
     tail: Option<Arc<ColumnStore>>,
+    /// Whether an append may start a heap tail; see [`tail`] ("Heap tails").
+    append_tail: tail::AppendTail,
 }
 
 static NEXT_SPILL_TOKEN: AtomicU64 = AtomicU64::new(0);
@@ -235,6 +240,7 @@ impl Clone for ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: self.tail.clone(),
+            append_tail: tail::AppendTail::Off,
         }
     }
 }
@@ -271,6 +277,7 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            append_tail: tail::AppendTail::Off,
         }
     }
 
@@ -296,6 +303,7 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            append_tail: tail::AppendTail::Off,
         }
     }
 
@@ -320,6 +328,7 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            append_tail: tail::AppendTail::Off,
         }
     }
 
@@ -626,10 +635,9 @@ impl ColumnStore {
         self.row_count + self.tail.as_ref().map_or(0, |tail| tail.row_count())
     }
 
-    /// Whether this store still reads through an mmap base. Every column-level
-    /// reader that walks the overlay columns directly must decline while it
-    /// does: they cover the base part's rows only, and appended rows live in
-    /// the tail (see [`tail`]).
+    /// Whether this store still reads through an mmap base. A column-level
+    /// reader asks [`Self::columns_cover_rows`], which also declines a heap
+    /// tail (see [`tail`]).
     #[inline]
     pub(crate) fn has_mmap_base(&self) -> bool {
         self.mmap_store.is_some()
@@ -665,7 +673,7 @@ impl ColumnStore {
 
     /// Whether any row can resolve a property through the overflow bag.
     ///
-    /// The companion disqualifier to [`Self::has_mmap_base`] for readers that
+    /// The companion disqualifier to [`Self::columns_cover_rows`] for readers that
     /// walk the dense columns directly: `get`/`row_properties` fall through to
     /// the bag when a dense column has nothing for a row, so a column-major
     /// walk of a store carrying one would silently drop those values.

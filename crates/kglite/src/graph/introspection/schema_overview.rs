@@ -1148,7 +1148,7 @@ fn columnar_scan_rows(
     if FORCE_ROW_MAJOR_STATS.get() {
         return None;
     }
-    if store.has_mmap_base() || store.has_overflow() {
+    if !store.columns_cover_rows() || store.has_overflow() {
         return None;
     }
     let mut rows = Vec::with_capacity(scan_indices.len());

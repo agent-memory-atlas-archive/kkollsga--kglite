@@ -27,6 +27,9 @@
 //! - **An mmap base or an overflow bag.** `ColumnStore::get`/`str_field` fall
 //!   through to both when a dense column has nothing for a row, so a column
 //!   read alone would report a value as absent that the row route resolves.
+//!   A heap tail (`column_store/tail.rs`) is not declined: the columns answer
+//!   for the base rows, and [`ColumnFilter::matches`] hands each tail row to
+//!   the row route.
 //! - **A soft-aliased field** (`name`, `type`, `node_type`, `label`). These
 //!   fall back to the node's title or its type *string* when no stored property
 //!   answers ([`soft_alias_fallback`](crate::graph::schema::soft_alias_fallback)),
@@ -303,6 +306,11 @@ pub(super) struct ColumnFilter<'a> {
     /// Whether any predicate reads an identity sidecar — the only reason
     /// [`Self::matches`] ever has to look at the node's inline fields.
     reads_identity: bool,
+    /// The first row a heap tail holds (`u32::MAX` without one): the columns
+    /// cover the rows before it only.
+    tail_from: u32,
+    /// The store's row count, read once rather than per row.
+    rows: u32,
 }
 
 impl<'a> ColumnFilter<'a> {
@@ -323,6 +331,11 @@ impl<'a> ColumnFilter<'a> {
         if store.has_mmap_base() || store.has_overflow() {
             return None;
         }
+        let tail_from = if store.has_heap_tail() {
+            store.column_rows()
+        } else {
+            u32::MAX
+        };
         let hoist = hoist_numeric_slices();
         let mut preds = Vec::with_capacity(props.len());
         let mut reads_identity = false;
@@ -361,15 +374,18 @@ impl<'a> ColumnFilter<'a> {
             store,
             preds,
             reads_identity,
+            tail_from,
+            rows: store.row_count(),
         })
     }
 
     /// Whether the node at `row` satisfies every predicate.
     ///
     /// `None` means "this row is not mine": the node carries an inline
-    /// `id`/`title` that outranks the sidecar column, or its row is outside
-    /// the store while a predicate accepts an absent property, so only the
-    /// row route can answer. The caller falls back for that node alone.
+    /// `id`/`title` that outranks the sidecar column, its row is in a heap
+    /// tail, or its row is outside the store while a predicate accepts an
+    /// absent property, so only the row route can answer. The caller falls
+    /// back for that node alone.
     #[inline]
     pub(super) fn matches(
         &self,
@@ -382,13 +398,16 @@ impl<'a> ColumnFilter<'a> {
         {
             return None;
         }
+        if row >= self.tail_from {
+            return None;
+        }
         #[cfg(test)]
         ROWS_FILTERED.set(ROWS_FILTERED.get() + 1);
         // The bounds/tombstone guard `ColumnStore`'s property reads apply, taken
         // once per row instead of once per predicate. Identity reads do not
         // apply it (`id_field`/`title_field` go straight to their column), so it
         // gates only the property arms.
-        let dead = row >= self.store.row_count() || self.store.is_tombstoned(row);
+        let dead = row >= self.rows || self.store.base_tombstoned(row);
         for pred in &self.preds {
             let matched = if pred.source == Source::Property && dead {
                 // A matcher that accepts an absent property cannot read

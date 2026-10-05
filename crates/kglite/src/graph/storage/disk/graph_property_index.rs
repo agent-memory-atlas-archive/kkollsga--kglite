@@ -72,7 +72,7 @@ struct IndexedColumn<'a> {
 
 impl<'a> IndexedColumn<'a> {
     fn new(store: &'a crate::graph::storage::column_store::ColumnStore, key: InternedKey) -> Self {
-        let slot = if store.has_mmap_base() {
+        let slot = if !store.columns_cover_rows() {
             None
         } else {
             store.schema().slot(key)

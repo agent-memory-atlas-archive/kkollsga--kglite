@@ -348,6 +348,9 @@ impl BatchProcessor {
             // the sole owner and `try_unwrap` succeeds outright.
             if let Some(arc_store) = graph.take_column_store(node_type) {
                 let mut store = Arc::try_unwrap(arc_store).unwrap_or_else(|a| (*a).clone());
+                if graph.graph.is_forked() {
+                    store.allow_append_tail();
+                }
                 // On disk, a store served from its column file takes the chunk
                 // in a tail of its own, typed like a fresh store; the base is
                 // not copied or written.

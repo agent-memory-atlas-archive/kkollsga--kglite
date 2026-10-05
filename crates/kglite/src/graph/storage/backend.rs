@@ -401,7 +401,9 @@ impl GraphBackend {
     /// Public as a **diagnostic**: the one cheap, non-timing observable that
     /// distinguishes the fork from the whole-graph clone it replaced, and from a
     /// compaction that failed to fold back. Bindings expose it for regression
-    /// tests (`kglite._backend_is_forked`); no engine behaviour depends on it.
+    /// tests (`kglite._backend_is_forked`). The one engine behaviour that
+    /// depends on it: a store this overlay appends to may take a heap tail
+    /// (`ColumnStore::allow_append_tail`), which the overlay's fold removes.
     #[inline]
     pub fn is_forked(&self) -> bool {
         match self {

@@ -104,6 +104,14 @@ before upgrading.
   relationships with duplicate vectors (6.4 ms instead of 0.012 ms with an
   index). Which tied relationships fill the last places, and their order, is
   unspecified; the store ranks them by relationship index.
+- A write transaction that creates nodes of a large type no longer copies
+  that type's columns. Each transaction's first `CREATE` on a type copied
+  every column the committed graph shared with it. At 1M nodes,
+  begin/`CREATE`/commit now takes 0.03 ms instead of 1.2 ms for a type built
+  with Cypher, 5.4 ms built with `add_nodes`, and 9.8 ms built with
+  `add_nodes` from integer ids. The new rows wait in a side store until the
+  commit folds them in; while a held view such as `freeze()` delays the fold,
+  reads see them there.
 
 ## [0.19.3] - 2026-10-05
 

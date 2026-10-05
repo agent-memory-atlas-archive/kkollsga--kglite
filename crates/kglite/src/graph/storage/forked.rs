@@ -354,6 +354,14 @@ impl ForkedGraph {
             }
         }
         target.column_stores = std::mem::take(&mut self.column_stores);
+        // The base's stores went with the assignment above, so on compaction
+        // each overlay store's columns are its own again and folding its heap
+        // tail copies the tail only (`column_store/tail.rs`, "Heap tails").
+        for store in target.column_stores.values_mut() {
+            if store.has_heap_tail() {
+                Arc::make_mut(store).fold_heap_tail();
+            }
+        }
         target.undo = self.undo.take();
         Ok(())
     }

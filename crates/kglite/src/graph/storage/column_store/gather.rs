@@ -17,11 +17,11 @@ impl ColumnStore {
     /// that are NULL on every gathered row.
     ///
     /// `None` when a row could resolve through something other than the
-    /// columns — an mmap base or an overflow bag — for the caller's per-row
+    /// columns — an mmap base, a tail or an overflow bag — for the caller's per-row
     /// path. `rows` must name live rows; a row a column is short of reads as
     /// NULL, as it does through [`Self::get`].
     pub(crate) fn gather_rows(&self, rows: &[u32]) -> Option<ColumnStore> {
-        if self.has_mmap_base() || self.has_overflow() {
+        if !self.columns_cover_rows() || self.has_overflow() {
             return None;
         }
         debug_assert!(rows
@@ -44,6 +44,7 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            append_tail: super::tail::AppendTail::Off,
         })
     }
 

@@ -185,10 +185,14 @@ impl DirGraph {
         // `ensure_column_store_for_push` already ran; take the mutable handle
         // directly rather than paying its existence and mmap-base checks twice
         // on a path that runs once per node created.
+        let forked = self.graph.is_forked();
         let store = Arc::make_mut(
             self.column_store_mut(node_type)
                 .expect("ensure_column_store_for_push installed it"),
         );
+        if forked {
+            store.allow_append_tail();
+        }
         if log_displaced {
             store.begin_displaced_log();
         }

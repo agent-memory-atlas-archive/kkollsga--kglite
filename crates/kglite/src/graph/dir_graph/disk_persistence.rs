@@ -844,6 +844,8 @@ impl DirGraph {
                     || store.has_retypable_mixed_column(meta);
                 let store = if flatten {
                     Arc::new(store.flattened_owned(meta, &self.interner))
+                } else if store.has_heap_tail() {
+                    Arc::new(store.with_heap_tail_folded().into_owned())
                 } else {
                     Arc::clone(store)
                 };

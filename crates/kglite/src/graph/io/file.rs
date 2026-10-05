@@ -1036,6 +1036,9 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     let mut column_stores_sorted: Vec<(&str, &Arc<ColumnStore>)> = graph.column_stores_by_name();
     column_stores_sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (type_name, store) in column_stores_sorted {
+        // A writer overlay's store can carry a heap tail; the sections are
+        // written from its columns, so they must hold every row.
+        let store = store.with_heap_tail_folded();
         let packed = store.write_packed_with_codec(
             &graph.interner,
             codec,

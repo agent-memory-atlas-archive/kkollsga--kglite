@@ -259,7 +259,7 @@ fn copy_nodes(
                 .graph
                 .column_store(key)
                 .map(|store| &**store)
-                .filter(|store| !store.has_mmap_base() && !store.has_overflow());
+                .filter(|store| store.columns_cover_rows() && !store.has_overflow());
             types.push(TypeCopy {
                 key,
                 store,
