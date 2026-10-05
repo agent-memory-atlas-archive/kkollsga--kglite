@@ -1,11 +1,12 @@
 # Guides
 
-KGLite has a set of how-to guides. Most projects only need three.
+KGLite has a set of how-to guides. Most projects need only the ones under
+*Start here*.
 
 ## Start here (the load-bearing path)
 
-Every project that loads its own data and queries it goes through these
-three, in this order:
+Every project that loads its own data and queries it goes through these, in
+this order:
 
 | | |
 |---|---|

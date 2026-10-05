@@ -24,20 +24,23 @@ graph = kglite.from_records({
 }, on_missing_endpoint="vivify")
 ```
 
-The key sets above are closed — `nodes`, `connections` and
-`on_missing_endpoint` at the top level, and the per-spec keys shown. An unknown
-key raises a `ValueError` naming a near-miss where there is one, because a key
-the loader does not read would otherwise be dropped in silence: a spec written
-with `"relationships"` builds no relationships at all.
+The key sets above are closed: `nodes`, `connections` and
+`on_missing_endpoint` at the top level, and the per-spec keys shown.
 
-A node spec may also carry `"labels": ["Human", "Agent"]` — secondary labels
-stamped on every node of that type, including endpoint stubs `vivify` created
-for it, so `MATCH (:Human)` sees the whole type. Listing the type's own name is
-a no-op, not a duplicate.
+- An unknown key raises a `ValueError` naming a near-miss where there is one.
+- Without that check, a key the loader does not read would be dropped in
+  silence: a spec written with `"relationships"` would build no relationships
+  at all.
 
-JSON arrays/maps become native list/map values. `on_missing_endpoint` can be
-written in the spec (as above) or passed as the argument, which overrides the
-spec's value when given; it is:
+A node spec may also carry `"labels": ["Human", "Agent"]`. These secondary
+labels are stamped on every node of that type, including endpoint stubs
+`vivify` created for it, so `MATCH (:Human)` sees the whole type. Listing the
+type's own name is a no-op, not a duplicate.
+
+JSON arrays and maps become native list and map values.
+
+`on_missing_endpoint` can be written in the spec (as above) or passed as the
+argument. The argument overrides the spec's value when given. The values are:
 
 - `"vivify"` (default) — create provisional endpoint stubs.
 - `"drop"` — skip relationships whose source/target is absent and report them.
@@ -59,19 +62,23 @@ whose range is a union of node types:
 }
 ```
 
-`target_type_column` names the record field holding each record's target type;
-without it the listed types are probed for the record's target id and the first
-that has it wins, an id none has taking the first listed type. Values are
-closed like the keys are: a record naming a type outside the list raises,
-where the blueprint loader — whose CSVs are not authored by the caller in the
-same breath — warns and skips the row.
+`target_type_column` names the record field holding each record's target type.
+Without it:
 
-Use `from_blueprint()` for repeatable CSV pipelines with compute operations;
-use DataFrame bulk loaders for already-tabular/high-volume Python data.
+- the listed types are probed for the record's target id, and the first that
+  has it wins;
+- an id that none has takes the first listed type.
+
+Values are closed like the keys are: a record naming a type outside the list
+raises. The blueprint loader instead warns and skips the row, because its CSVs
+are not authored by the caller in the same breath.
+
+Use `from_blueprint()` for repeatable CSV pipelines with compute operations.
+Use the DataFrame bulk loaders for already-tabular or high-volume Python data.
 
 
 ## Embedded table vs row nodes
 
-Nested lists/maps loaded through `from_records` can also live as embedded
-table properties or as row nodes — the decision table, the declared-shape
-validation, and the `attach_rows` helper are in {doc}`structured-data`.
+Nested lists and maps loaded through `from_records` can live as embedded
+table properties or as row nodes. The decision table, the declared-shape
+validation and the `attach_rows` helper are in {doc}`structured-data`.

@@ -1,23 +1,23 @@
 {
  "CYPHER.md": {
-  "avg_words": 21.8,
-  "long_pct": 23.1,
-  "sentences": 1124
+  "avg_words": 14.5,
+  "long_pct": 3.9,
+  "sentences": 1666
  },
  "FLUENT.md": {
-  "avg_words": 24.1,
-  "long_pct": 24.1,
-  "sentences": 54
+  "avg_words": 16.1,
+  "long_pct": 7.4,
+  "sentences": 81
  },
  "README.md": {
-  "avg_words": 20.9,
-  "long_pct": 18.6,
-  "sentences": 140
+  "avg_words": 15.4,
+  "long_pct": 6.3,
+  "sentences": 190
  },
  "VAULT.md": {
-  "avg_words": 23.5,
-  "long_pct": 28.2,
-  "sentences": 670
+  "avg_words": 13.8,
+  "long_pct": 2.7,
+  "sentences": 1142
  },
  "docs/changelog.md": {
   "avg_words": 0.0,
@@ -35,24 +35,24 @@
   "sentences": 27
  },
  "docs/concepts/architecture.md": {
-  "avg_words": 16.1,
-  "long_pct": 10.1,
-  "sentences": 69
+  "avg_words": 13.7,
+  "long_pct": 1.2,
+  "sentences": 82
  },
  "docs/concepts/concurrency.md": {
-  "avg_words": 17.2,
-  "long_pct": 14.0,
-  "sentences": 43
+  "avg_words": 13.1,
+  "long_pct": 0.0,
+  "sentences": 57
  },
  "docs/concepts/cypher-conformance.md": {
-  "avg_words": 14.9,
-  "long_pct": 8.5,
-  "sentences": 59
+  "avg_words": 13.6,
+  "long_pct": 1.5,
+  "sentences": 65
  },
  "docs/concepts/design-decisions.md": {
-  "avg_words": 14.8,
-  "long_pct": 3.4,
-  "sentences": 59
+  "avg_words": 14.0,
+  "long_pct": 0.0,
+  "sentences": 62
  },
  "docs/concepts/index.md": {
   "avg_words": 13.9,
@@ -60,9 +60,9 @@
   "sentences": 11
  },
  "docs/concepts/multi-label-rationale.md": {
-  "avg_words": 18.0,
-  "long_pct": 11.1,
-  "sentences": 27
+  "avg_words": 13.9,
+  "long_pct": 0.0,
+  "sentences": 35
  },
  "docs/contributing.md": {
   "avg_words": 0.0,
@@ -75,219 +75,224 @@
   "sentences": 17
  },
  "docs/index.md": {
-  "avg_words": 16.1,
-  "long_pct": 3.6,
-  "sentences": 28
+  "avg_words": 12.7,
+  "long_pct": 2.8,
+  "sentences": 36
  },
  "docs/operators/agent-responses.md": {
-  "avg_words": 12.8,
+  "avg_words": 10.5,
   "long_pct": 0.0,
-  "sentences": 59
+  "sentences": 72
  },
  "docs/operators/bolt-server.md": {
-  "avg_words": 20.7,
-  "long_pct": 22.6,
-  "sentences": 137
+  "avg_words": 12.9,
+  "long_pct": 0.5,
+  "sentences": 219
  },
  "docs/operators/cli.md": {
-  "avg_words": 18.5,
-  "long_pct": 14.3,
-  "sentences": 112
+  "avg_words": 12.3,
+  "long_pct": 0.6,
+  "sentences": 172
  },
  "docs/operators/index.md": {
-  "avg_words": 12.8,
+  "avg_words": 10.7,
   "long_pct": 0.0,
-  "sentences": 15
+  "sentences": 18
  },
  "docs/operators/mcp-server.md": {
-  "avg_words": 24.9,
-  "long_pct": 27.9,
-  "sentences": 201
+  "avg_words": 14.0,
+  "long_pct": 1.1,
+  "sentences": 358
  },
  "docs/python/core-concepts.md": {
-  "avg_words": 22.6,
-  "long_pct": 26.5,
-  "sentences": 83
+  "avg_words": 12.8,
+  "long_pct": 2.1,
+  "sentences": 144
  },
  "docs/python/error-handling.md": {
-  "avg_words": 19.1,
-  "long_pct": 13.6,
-  "sentences": 66
+  "avg_words": 12.6,
+  "long_pct": 3.0,
+  "sentences": 99
  },
  "docs/python/examples/manifest_cypher_tool.md": {
-  "avg_words": 14.9,
-  "long_pct": 6.2,
-  "sentences": 16
+  "avg_words": 11.6,
+  "long_pct": 0.0,
+  "sentences": 21
  },
  "docs/python/examples/manifest_value_codecs.md": {
-  "avg_words": 17.0,
-  "long_pct": 11.1,
-  "sentences": 27
- },
- "docs/python/examples/manifest_with_embedder.md": {
-  "avg_words": 13.7,
-  "long_pct": 4.7,
-  "sentences": 43
- },
- "docs/python/examples/manifest_workspace.md": {
-  "avg_words": 14.8,
-  "long_pct": 6.3,
-  "sentences": 79
- },
- "docs/python/getting-started.md": {
-  "avg_words": 18.7,
-  "long_pct": 8.7,
-  "sentences": 23
- },
- "docs/python/guides/ai-agents.md": {
-  "avg_words": 20.1,
-  "long_pct": 17.4,
+  "avg_words": 10.2,
+  "long_pct": 0.0,
   "sentences": 46
  },
+ "docs/python/examples/manifest_with_embedder.md": {
+  "avg_words": 10.7,
+  "long_pct": 1.8,
+  "sentences": 55
+ },
+ "docs/python/examples/manifest_workspace.md": {
+  "avg_words": 11.5,
+  "long_pct": 0.0,
+  "sentences": 105
+ },
+ "docs/python/getting-started.md": {
+  "avg_words": 16.3,
+  "long_pct": 7.7,
+  "sentences": 26
+ },
+ "docs/python/guides/ai-agents.md": {
+  "avg_words": 11.6,
+  "long_pct": 1.3,
+  "sentences": 79
+ },
  "docs/python/guides/bitemporal.md": {
-  "avg_words": 19.8,
-  "long_pct": 14.4,
-  "sentences": 118
+  "avg_words": 14.8,
+  "long_pct": 1.9,
+  "sentences": 158
  },
  "docs/python/guides/blueprints.md": {
-  "avg_words": 18.1,
-  "long_pct": 13.3,
-  "sentences": 264
+  "avg_words": 12.1,
+  "long_pct": 1.0,
+  "sentences": 389
  },
  "docs/python/guides/cypher.md": {
-  "avg_words": 20.4,
-  "long_pct": 17.0,
-  "sentences": 153
+  "avg_words": 13.4,
+  "long_pct": 3.8,
+  "sentences": 234
  },
  "docs/python/guides/data-loading.md": {
-  "avg_words": 17.5,
-  "long_pct": 10.3,
-  "sentences": 87
+  "avg_words": 14.3,
+  "long_pct": 2.8,
+  "sentences": 106
  },
  "docs/python/guides/derived-index.md": {
-  "avg_words": 18.5,
-  "long_pct": 10.0,
-  "sentences": 70
+  "avg_words": 11.7,
+  "long_pct": 1.0,
+  "sentences": 100
  },
  "docs/python/guides/durable-apps.md": {
-  "avg_words": 23.2,
-  "long_pct": 22.2,
-  "sentences": 135
+  "avg_words": 13.8,
+  "long_pct": 3.6,
+  "sentences": 224
  },
  "docs/python/guides/graph-algorithms.md": {
-  "avg_words": 17.8,
-  "long_pct": 10.6,
-  "sentences": 47
+  "avg_words": 12.5,
+  "long_pct": 1.5,
+  "sentences": 68
  },
  "docs/python/guides/help-vault.md": {
-  "avg_words": 16.1,
-  "long_pct": 4.2,
-  "sentences": 71
+  "avg_words": 12.3,
+  "long_pct": 1.1,
+  "sentences": 93
  },
  "docs/python/guides/import-export.md": {
-  "avg_words": 18.4,
-  "long_pct": 13.7,
-  "sentences": 190
+  "avg_words": 12.3,
+  "long_pct": 1.4,
+  "sentences": 283
  },
  "docs/python/guides/index.md": {
-  "avg_words": 19.4,
+  "avg_words": 20.0,
   "long_pct": 20.0,
   "sentences": 5
  },
  "docs/python/guides/inline-records.md": {
-  "avg_words": 20.6,
-  "long_pct": 25.0,
-  "sentences": 16
+  "avg_words": 13.6,
+  "long_pct": 0.0,
+  "sentences": 25
  },
  "docs/python/guides/large-registers.md": {
-  "avg_words": 27.6,
-  "long_pct": 35.2,
-  "sentences": 54
+  "avg_words": 15.6,
+  "long_pct": 3.2,
+  "sentences": 95
  },
  "docs/python/guides/mcp-servers.md": {
-  "avg_words": 18.4,
-  "long_pct": 14.6,
-  "sentences": 472
+  "avg_words": 13.2,
+  "long_pct": 2.3,
+  "sentences": 666
  },
  "docs/python/guides/mcp-skills.md": {
-  "avg_words": 19.5,
-  "long_pct": 21.6,
-  "sentences": 148
+  "avg_words": 12.6,
+  "long_pct": 3.1,
+  "sentences": 226
  },
  "docs/python/guides/okf.md": {
-  "avg_words": 27.1,
-  "long_pct": 37.3,
-  "sentences": 67
+  "avg_words": 11.3,
+  "long_pct": 0.6,
+  "sentences": 158
  },
  "docs/python/guides/ontology.md": {
-  "avg_words": 18.8,
-  "long_pct": 18.2,
-  "sentences": 132
+  "avg_words": 11.6,
+  "long_pct": 1.9,
+  "sentences": 214
  },
  "docs/python/guides/open-exports.md": {
-  "avg_words": 20.7,
-  "long_pct": 20.0,
-  "sentences": 40
+  "avg_words": 11.5,
+  "long_pct": 1.4,
+  "sentences": 71
  },
  "docs/python/guides/primary-store.md": {
-  "avg_words": 24.0,
-  "long_pct": 27.3,
-  "sentences": 205
+  "avg_words": 14.1,
+  "long_pct": 3.2,
+  "sentences": 339
  },
  "docs/python/guides/querying.md": {
-  "avg_words": 11.9,
+  "avg_words": 10.9,
   "long_pct": 0.0,
-  "sentences": 14
+  "sentences": 15
  },
  "docs/python/guides/recipes.md": {
-  "avg_words": 16.9,
-  "long_pct": 15.0,
-  "sentences": 20
+  "avg_words": 10.4,
+  "long_pct": 0.0,
+  "sentences": 34
  },
  "docs/python/guides/schema-migrations.md": {
-  "avg_words": 15.7,
-  "long_pct": 4.7,
-  "sentences": 64
+  "avg_words": 12.7,
+  "long_pct": 1.3,
+  "sentences": 78
  },
  "docs/python/guides/semantic-search.md": {
-  "avg_words": 19.3,
-  "long_pct": 16.3,
-  "sentences": 221
+  "avg_words": 12.1,
+  "long_pct": 1.1,
+  "sentences": 355
  },
  "docs/python/guides/spatial.md": {
-  "avg_words": 11.2,
+  "avg_words": 9.8,
   "long_pct": 0.0,
-  "sentences": 11
+  "sentences": 13
  },
  "docs/python/guides/structured-data.md": {
-  "avg_words": 15.9,
-  "long_pct": 9.4,
-  "sentences": 53
+  "avg_words": 9.1,
+  "long_pct": 1.1,
+  "sentences": 87
  },
  "docs/python/guides/text-search.md": {
-  "avg_words": 20.6,
-  "long_pct": 17.5,
-  "sentences": 143
+  "avg_words": 12.3,
+  "long_pct": 3.0,
+  "sentences": 236
  },
  "docs/python/guides/timeseries.md": {
-  "avg_words": 16.4,
-  "long_pct": 8.3,
-  "sentences": 12
+  "avg_words": 12.9,
+  "long_pct": 0.0,
+  "sentences": 17
  },
  "docs/python/guides/traversal-hierarchy.md": {
-  "avg_words": 13.8,
+  "avg_words": 11.9,
   "long_pct": 0.0,
-  "sentences": 24
+  "sentences": 28
  },
  "docs/python/guides/valid-time.md": {
-  "avg_words": 23.2,
-  "long_pct": 26.9,
-  "sentences": 160
+  "avg_words": 13.2,
+  "long_pct": 4.3,
+  "sentences": 282
  },
  "docs/python/index.md": {
-  "avg_words": 13.2,
+  "avg_words": 13.9,
   "long_pct": 5.9,
   "sentences": 17
+ },
+ "docs/python/introspection-reference.md": {
+  "avg_words": 10.1,
+  "long_pct": 0.0,
+  "sentences": 30
  },
  "docs/python/migrations/0.13-to-0.14.md": {
   "avg_words": 14.4,
@@ -310,24 +315,24 @@
   "sentences": 23
  },
  "docs/python/migrations/neo4j-to-kglite.md": {
-  "avg_words": 17.3,
-  "long_pct": 6.0,
-  "sentences": 84
+  "avg_words": 12.5,
+  "long_pct": 1.7,
+  "sentences": 118
  },
  "docs/python/platform-support.md": {
-  "avg_words": 16.1,
-  "long_pct": 5.3,
-  "sentences": 38
+  "avg_words": 11.7,
+  "long_pct": 1.9,
+  "sentences": 52
  },
  "docs/python/transactions.md": {
-  "avg_words": 13.6,
-  "long_pct": 1.9,
-  "sentences": 54
+  "avg_words": 10.8,
+  "long_pct": 1.4,
+  "sentences": 69
  },
  "docs/python/value-projection.md": {
-  "avg_words": 15.5,
-  "long_pct": 6.9,
-  "sentences": 101
+  "avg_words": 12.3,
+  "long_pct": 3.9,
+  "sentences": 128
  },
  "docs/reference/cypher-reference.md": {
   "avg_words": 0.0,
@@ -355,34 +360,34 @@
   "sentences": 0
  },
  "docs/rust/api-reference.md": {
-  "avg_words": 17.6,
-  "long_pct": 13.0,
-  "sentences": 46
+  "avg_words": 14.5,
+  "long_pct": 1.8,
+  "sentences": 55
  },
  "docs/rust/boundary-principle.md": {
-  "avg_words": 16.8,
-  "long_pct": 8.5,
-  "sentences": 94
+  "avg_words": 16.3,
+  "long_pct": 6.2,
+  "sentences": 97
  },
  "docs/rust/building-on-kglite.md": {
-  "avg_words": 21.2,
-  "long_pct": 22.2,
-  "sentences": 81
+  "avg_words": 15.9,
+  "long_pct": 3.7,
+  "sentences": 108
  },
  "docs/rust/c-abi.md": {
-  "avg_words": 15.6,
-  "long_pct": 8.1,
-  "sentences": 74
+  "avg_words": 14.8,
+  "long_pct": 3.8,
+  "sentences": 78
  },
  "docs/rust/concurrency-verification.md": {
-  "avg_words": 24.0,
-  "long_pct": 23.3,
-  "sentences": 30
+  "avg_words": 16.1,
+  "long_pct": 4.5,
+  "sentences": 44
  },
  "docs/rust/embedding.md": {
-  "avg_words": 14.9,
-  "long_pct": 3.7,
-  "sentences": 82
+  "avg_words": 14.0,
+  "long_pct": 0.0,
+  "sentences": 87
  },
  "docs/rust/implementing-a-binding.md": {
   "avg_words": 11.8,
@@ -390,9 +395,9 @@
   "sentences": 49
  },
  "docs/rust/index.md": {
-  "avg_words": 13.0,
-  "long_pct": 7.1,
-  "sentences": 28
+  "avg_words": 11.6,
+  "long_pct": 0.0,
+  "sentences": 32
  },
  "docs/rust/postcard-persistence-performance.md": {
   "avg_words": 15.9,
@@ -400,13 +405,13 @@
   "sentences": 22
  },
  "docs/rust/session.md": {
-  "avg_words": 15.1,
-  "long_pct": 4.3,
-  "sentences": 69
+  "avg_words": 13.6,
+  "long_pct": 0.0,
+  "sentences": 77
  },
  "docs/rust/structural-sharing.md": {
-  "avg_words": 24.5,
-  "long_pct": 33.0,
-  "sentences": 100
+  "avg_words": 17.0,
+  "long_pct": 4.2,
+  "sentences": 143
  }
 }
