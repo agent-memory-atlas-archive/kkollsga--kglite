@@ -114,6 +114,17 @@ impl<'a> CypherExecutor<'a> {
             return result.map(Some);
         }
 
+        // A single node keyed by a row-resolved equality: a hash probe once
+        // the shape has been evaluated enough times to justify the index. A
+        // graph filter's guard lives in the matcher, which the probe skips.
+        if self.graph_filter().is_none() && where_clause.is_none() {
+            if let [pattern] = patterns {
+                if let Some(found) = self.exists_probes.exists(self.graph, pattern, row) {
+                    return Ok(Some(found));
+                }
+            }
+        }
+
         // Slow path: full pattern execution for complex EXISTS.
         //
         // Multi-pattern subqueries (`EXISTS { MATCH ... MATCH ... [WHERE ...] }`)

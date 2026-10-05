@@ -751,16 +751,7 @@ impl<'a> CypherExecutor<'a> {
                     );
                     // A probe the index cannot key (a cross-kind text rule)
                     // falls through to the per-row matcher below.
-                    let hits = if !cur.node_bindings.contains_key(idx.bind_var.as_str())
-                        && !cur.projected.contains_key(idx.bind_var.as_str())
-                    {
-                        match idx.probe_value(cur, self.graph) {
-                            Some(probe) => idx.lookup(&probe),
-                            None => Some(&[][..]),
-                        }
-                    } else {
-                        None
-                    };
+                    let hits = idx.hits_for_row(cur, self.graph);
                     if let Some(hits) = hits {
                         for &node_idx in hits {
                             self.check_interrupt_periodic(work)?;

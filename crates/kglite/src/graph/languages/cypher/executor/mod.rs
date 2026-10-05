@@ -160,6 +160,9 @@ pub struct CypherExecutor<'a> {
     /// element type and bound-name pair (see
     /// [`scalar_functions::validity::ValidityCaches`]).
     validity_caches: scalar_functions::validity::ValidityCaches,
+    /// Equality indexes the `EXISTS { MATCH (v:L {p: ref}) }` subqueries of
+    /// this executor build for themselves; see [`transient_index::ExistsProbes`].
+    exists_probes: transient_index::ExistsProbes,
     pub(super) deadline: Option<Instant>,
     /// Optional cooperative-cancellation flag, polled alongside
     /// `deadline` (and propagated to the pattern matcher). Set by a
@@ -297,6 +300,7 @@ impl<'a> CypherExecutor<'a> {
             vs_cache: VectorScoreCaches::default(),
             tb_cache: OnceLock::new(),
             validity_caches: Default::default(),
+            exists_probes: Default::default(),
             deadline,
             cancel: None,
             budget,

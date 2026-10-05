@@ -4,6 +4,9 @@
 //! source-quality ceiling. Shared helpers and the imports every submodule
 //! needs live here; each submodule pulls them in with `use super::*`.
 //!
+//! - [`correlated_lookup`] — `UNWIND … OPTIONAL MATCH` / `EXISTS` keyed by a row
+//!   value: the same rows below and above the index threshold, and a deadline
+//!   a per-row label scan would miss
 //! - [`drop_index`] — `DROP INDEX` against the names `SHOW INDEXES` prints,
 //!   node and relationship, and what `IF EXISTS` may report as a no-op
 //! - [`exists_witness`] — which `EXISTS { … }` subqueries may stop at one match
@@ -57,6 +60,7 @@ use crate::graph::storage::GraphWrite;
 // the `super::super::parser` the flat file used before the split.
 use crate::graph::languages::cypher::parser;
 
+mod correlated_lookup;
 mod cypher25_clauses;
 mod deadline_rows;
 mod drop_index;

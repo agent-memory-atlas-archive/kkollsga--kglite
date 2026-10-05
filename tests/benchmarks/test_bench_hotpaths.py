@@ -144,6 +144,38 @@ def test_bench_unwind_range_aggregate(benchmark, hot_graph):
 
 
 # ---------------------------------------------------------------------------
+# Correlated lookups keyed by a driving row's value (no persistent index)
+# ---------------------------------------------------------------------------
+
+_KEYED_ROWS = [{"key": f"hc_{i}" if i % 2 == 0 else f"miss_{i}"} for i in range(2000)]
+
+
+@pytest.mark.benchmark
+def test_bench_optional_match_row_keyed_lookup(benchmark, hot_graph):
+    """2k driving rows x OPTIONAL MATCH on an unindexed property of a 50k label.
+
+    Was one label scan per row (rows x nodes); now a query-local hash probe.
+    """
+    result = benchmark(
+        hot_graph.cypher,
+        "UNWIND $rows AS row OPTIONAL MATCH (m:Item {high_card: row.key}) RETURN count(*) AS n, count(m) AS hits",
+        params={"rows": _KEYED_ROWS},
+    )
+    assert result.to_list()[0] == {"n": 1000 * 2 + 1000, "hits": 1000 * 2}
+
+
+@pytest.mark.benchmark
+def test_bench_not_exists_row_keyed_lookup(benchmark, hot_graph):
+    """The same lookup as a NOT EXISTS anti-join."""
+    result = benchmark(
+        hot_graph.cypher,
+        "UNWIND $rows AS row WITH row WHERE NOT EXISTS { MATCH (m:Item {high_card: row.key}) } RETURN count(*) AS n",
+        params={"rows": _KEYED_ROWS},
+    )
+    assert result.to_list()[0]["n"] == 1000
+
+
+# ---------------------------------------------------------------------------
 # WHERE / alias resolution
 # ---------------------------------------------------------------------------
 

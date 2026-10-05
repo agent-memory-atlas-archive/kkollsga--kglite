@@ -581,6 +581,7 @@ impl<'a> CypherExecutor<'a> {
     fn expand_optional_match_row(
         &self,
         clause: &MatchClause,
+        transient_indexes: &[Option<transient_index::TransientEqIndex>],
         row: &ResultRow,
         budget_rows_base: usize,
         scoped_where: Option<&Predicate>,
@@ -594,13 +595,37 @@ impl<'a> CypherExecutor<'a> {
         } else {
             Vec::new()
         };
-        for pattern in &clause.patterns {
+        for (pi, pattern) in clause.patterns.iter().enumerate() {
             if row_set.is_empty() {
                 break;
             }
             let mut expanded: Vec<ResultRow> = Vec::new();
             let mut expanded_sets: Vec<Vec<EdgeIndex>> = Vec::new();
             for (ci, cur) in row_set.iter().enumerate() {
+                // Single typed-node pattern with a row-resolved equality: probe
+                // the query-local index instead of scanning the label per row.
+                // The index covers single-node patterns only, so the
+                // clause-local edge set is unchanged.
+                if let Some(hits) = transient_indexes[pi]
+                    .as_ref()
+                    .and_then(|idx| idx.hits_for_row(cur, self.graph).map(|h| (idx, h)))
+                {
+                    let (idx, hits) = hits;
+                    for &node_idx in hits {
+                        self.budget.reserve_rows(
+                            budget_rows_base + expanded.len(),
+                            1,
+                            "OPTIONAL MATCH",
+                        )?;
+                        let mut new_row = cur.clone();
+                        new_row.node_bindings.insert(idx.bind_var.clone(), node_idx);
+                        expanded.push(new_row);
+                        if enforce_rel_uniqueness {
+                            expanded_sets.push(edge_sets[ci].clone());
+                        }
+                    }
+                    continue;
+                }
                 // Resolve EqualsVar references against the working row so a
                 // later pattern can reference variables bound by an earlier
                 // one within the same OPTIONAL MATCH.
@@ -873,6 +898,22 @@ impl<'a> CypherExecutor<'a> {
             .first()
             .filter(|pa| pa.is_shortest_path);
 
+        // Query-local equality indexes, built once for the whole driving set.
+        // An element-id anchor seeds a variable the probe would not honour,
+        // and a graph filter's guard lives in the matcher; both decline.
+        let probe_declined =
+            shortest.is_some() || self.graph_filter().is_some() || !clause.node_anchors.is_empty();
+        let transient_indexes: Vec<Option<transient_index::TransientEqIndex>> = clause
+            .patterns
+            .iter()
+            .map(|p| {
+                if probe_declined {
+                    return None;
+                }
+                transient_index::TransientEqIndex::try_build(self.graph, p, existing.rows.len())
+            })
+            .collect();
+
         for row in &existing.rows {
             let expanded = match shortest {
                 Some(pa) => {
@@ -884,9 +925,13 @@ impl<'a> CypherExecutor<'a> {
                     self.execute_shortest_path_match(clause, pa, driving, scoped_where)?
                         .rows
                 }
-                None => {
-                    self.expand_optional_match_row(clause, row, new_rows.len(), scoped_where)?
-                }
+                None => self.expand_optional_match_row(
+                    clause,
+                    &transient_indexes,
+                    row,
+                    new_rows.len(),
+                    scoped_where,
+                )?,
             };
             if expanded.is_empty() {
                 // The joined pattern set produced no match: keep the row,

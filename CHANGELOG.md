@@ -127,6 +127,13 @@ before upgrading.
   first count over a mask set visits the nodes. On a 561 000-node register
   with a secondary label the untyped count went from 2.5 ms to under 4 µs and
   a typed count from 31 µs to 1.5-2.5 µs.
+- `UNWIND $rows AS row OPTIONAL MATCH (m:L {key: row.key})` and
+  `WHERE NOT EXISTS { MATCH (m:L {key: row.key}) }` on a property without a
+  persistent index probe a query-local hash index once the driving set reaches
+  64 rows, as a plain `MATCH` already did; they scanned the whole label once
+  per row, so cost grew with rows x nodes. With 80 000 rows against 80 000
+  nodes the query went from about a minute (extrapolated from 3.7 s at 20 000) to under 0.1 s, and the timing now scales
+  linearly with the row count.
 
 ### Fixed
 

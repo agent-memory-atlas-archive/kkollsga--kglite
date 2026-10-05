@@ -1,9 +1,11 @@
 //! Query-local equality hash index for cross-MATCH joins on non-id properties.
 //!
-//! Built once per `execute_match` call when the heuristic detects a single
-//! typed-node pattern carrying exactly one `EqualsVar` / `EqualsNodeProp`
-//! matcher. Probed per outer row, replacing N×M property scans with O(N+M)
-//! work. Mirrors the per-query R-tree pattern in [`super::spatial_join`].
+//! Built once per `execute_match` / `execute_optional_match` call when the
+//! heuristic detects a single typed-node pattern carrying exactly one
+//! `EqualsVar` / `EqualsNodeProp` matcher, and per executor by
+//! [`ExistsProbes`] for the same shape inside `EXISTS { … }`. Probed per outer
+//! row, replacing N×M property scans with O(N+M) work. Mirrors the per-query
+//! R-tree pattern in [`super::spatial_join`].
 //!
 //! The index is dropped when the executor goes out of scope; it never
 //! mutates [`DirGraph::property_indices`].
@@ -39,6 +41,7 @@ use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Activation threshold: only build the index when there are at least this
 /// many outer rows. Below it, the per-row pattern execution is already
@@ -180,6 +183,23 @@ impl TransientEqIndex {
         }
     }
 
+    /// The nodes this row's probe finds, or `None` when the row must take the
+    /// per-row matcher: the bind variable is already constrained by a live or
+    /// projected binding (a probe would bypass the compatibility check that
+    /// enforces it), or the key cannot answer for the probe value
+    /// ([`Self::lookup`]). A missing or null probe value finds nothing.
+    pub(super) fn hits_for_row(&self, row: &ResultRow, graph: &DirGraph) -> Option<&[NodeIndex]> {
+        if row.node_bindings.contains_key(self.bind_var.as_str())
+            || row.projected.contains_key(self.bind_var.as_str())
+        {
+            return None;
+        }
+        match self.probe_value(row, graph) {
+            Some(probe) => self.lookup(&probe),
+            None => Some(&[]),
+        }
+    }
+
     /// The nodes whose value equals `value` (empty when none do), or `None`
     /// when a key cannot answer for it and the per-row matcher must: see the
     /// module docs, per kind.
@@ -256,4 +276,93 @@ fn extract_single_node_pattern(pattern: &Pattern) -> Option<&NodePattern> {
         PatternElement::Node(np) => Some(np),
         _ => None,
     }
+}
+
+/// Equality indexes for the `EXISTS { MATCH (v:L {p: ref}) }` subqueries of
+/// one executor.
+///
+/// An EXISTS is evaluated once per row, so there is no driving-row count to
+/// size an index against as [`TransientEqIndex::try_build`] wants. Each
+/// distinct `(label, property, reference)` shape instead counts its
+/// evaluations and builds its index on the [`TRANSIENT_INDEX_THRESHOLD`]th:
+/// from then on a probe is a hash lookup, and the one build costs about as
+/// much as the label scans the earlier evaluations already paid. The graph is
+/// immutable for the executor's lifetime, so a built index never goes stale.
+#[derive(Default)]
+pub(super) struct ExistsProbes {
+    slots: Mutex<HashMap<(String, String, String), ExistsSlot>>,
+}
+
+enum ExistsSlot {
+    /// Evaluations so far, below the build threshold.
+    Counting(usize),
+    Built(Arc<TransientEqIndex>),
+    /// The shape does not qualify for an index; every row takes the matcher.
+    Declined,
+}
+
+impl ExistsProbes {
+    /// Whether the single-node `pattern` has a match for `row`, or `None` when
+    /// the per-row matcher must answer: the shape has no index yet or never
+    /// will, the row constrains the pattern's variable, or the key cannot
+    /// answer for the probe value ([`TransientEqIndex::hits_for_row`]).
+    pub(super) fn exists(
+        &self,
+        graph: &DirGraph,
+        pattern: &Pattern,
+        row: &ResultRow,
+    ) -> Option<bool> {
+        let key = probe_key(pattern)?;
+        let index = {
+            let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
+            let slot = slots.entry(key.clone()).or_insert(ExistsSlot::Counting(0));
+            match slot {
+                ExistsSlot::Declined => return None,
+                ExistsSlot::Built(index) => Arc::clone(index),
+                ExistsSlot::Counting(seen) => {
+                    *seen += 1;
+                    if *seen < TRANSIENT_INDEX_THRESHOLD {
+                        return None;
+                    }
+                    // Built outside the lock: a concurrent evaluation may
+                    // build the same index twice, and only one is kept.
+                    drop(slots);
+                    let built =
+                        TransientEqIndex::try_build(graph, pattern, usize::MAX).map(Arc::new);
+                    let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
+                    let index = match slots.get(&key) {
+                        Some(ExistsSlot::Built(index)) => Arc::clone(index),
+                        _ => match built {
+                            Some(index) => {
+                                slots.insert(key, ExistsSlot::Built(Arc::clone(&index)));
+                                index
+                            }
+                            None => {
+                                slots.insert(key, ExistsSlot::Declined);
+                                return None;
+                            }
+                        },
+                    };
+                    drop(slots);
+                    index
+                }
+            }
+        };
+        index.hits_for_row(row, graph).map(|hits| !hits.is_empty())
+    }
+}
+
+/// `(label, property, reference)` identifying the index a single-node
+/// `{property: reference}` pattern probes, or `None` for a shape no index
+/// serves ([`TransientEqIndex::try_build`] is the authority on the rest).
+fn probe_key(pattern: &Pattern) -> Option<(String, String, String)> {
+    let np = extract_single_node_pattern(pattern)?;
+    let props = np.properties.as_ref().filter(|p| p.len() == 1)?;
+    let (property, matcher) = props.iter().next()?;
+    let reference = match matcher {
+        PropertyMatcher::EqualsVar(name) => name.clone(),
+        PropertyMatcher::EqualsNodeProp { var, prop } => format!("{var}.{prop}"),
+        _ => return None,
+    };
+    Some((np.node_type.clone()?, property.clone(), reference))
 }
