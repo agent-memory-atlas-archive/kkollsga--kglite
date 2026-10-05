@@ -63,6 +63,8 @@ guides/recipes
   hierarchy and stable error codes.
 - **[Value projection](value-projection.md)** — NULL handling,
   CASE branches, optional property semantics.
+- **[Introspection reference](introspection-reference.md)** — keys of
+  `graph_info()`, shape of `schema()`, format of `describe()`.
 - **[Platform and artifact support](platform-support.md)** — runtime-tested,
   release-built, and best-effort targets; wheel and source-build policy.
 
@@ -89,6 +91,7 @@ core-concepts
 transactions
 error-handling
 value-projection
+introspection-reference
 platform-support
 migrations/0.16-to-0.17
 migrations/neo4j-to-kglite

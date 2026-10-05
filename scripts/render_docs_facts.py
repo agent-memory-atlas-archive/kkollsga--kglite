@@ -13,8 +13,10 @@ import sys
 from typing import Any
 
 try:
+    from scripts import _introspection_reference as introspection
     from scripts.benchmark_qualification import Registry
-except ModuleNotFoundError:  # Direct script execution.
+except ImportError:  # Direct script execution.
+    import _introspection_reference as introspection
     from benchmark_qualification import Registry
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,12 @@ PROCEDURE_REGISTRY = (
 )
 PROCEDURE_BEGIN = "<!-- BEGIN GENERATED: procedure-reference (scripts/render_docs_facts.py) -->"
 PROCEDURE_END = "<!-- END GENERATED: procedure-reference -->"
+INTROSPECTION_DOC = REPO_ROOT / "docs" / "python" / "introspection-reference.md"
+INTROSPECTION_BLOCKS = {
+    "graph-info": introspection.graph_info_tables,
+    "schema": introspection.schema_tables,
+    "describe": introspection.describe_tables,
+}
 
 
 def _section(text: str, name: str) -> str:
@@ -245,6 +253,20 @@ def render_cypher_doc() -> str:
     return pattern.sub(lambda _: block, text)
 
 
+def render_introspection_doc() -> str:
+    """The introspection reference page with each generated block rendered."""
+    text = INTROSPECTION_DOC.read_text(encoding="utf-8")
+    for name, table in INTROSPECTION_BLOCKS.items():
+        begin = f"<!-- BEGIN GENERATED: {name} (scripts/render_docs_facts.py) -->"
+        end = f"<!-- END GENERATED: {name} -->"
+        pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.DOTALL)
+        if len(pattern.findall(text)) != 1:
+            raise ValueError(f"{INTROSPECTION_DOC.name}: expected exactly one {name} marker block")
+        block = f"{begin}\n\n{table()}\n\n{end}"
+        text = pattern.sub(lambda _, block=block: block, text)
+    return text
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="fail if output is stale")
@@ -253,9 +275,14 @@ def main() -> int:
 
     expected = render()
     cypher = render_cypher_doc()
+    introspection_doc = render_introspection_doc()
     if args.check:
         stale = False
-        for path, wanted in ((args.output, expected), (CYPHER_DOC, cypher)):
+        for path, wanted in (
+            (args.output, expected),
+            (CYPHER_DOC, cypher),
+            (INTROSPECTION_DOC, introspection_doc),
+        ):
             current = path.read_text(encoding="utf-8") if path.exists() else ""
             if current != wanted:
                 shown = str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
@@ -264,6 +291,7 @@ def main() -> int:
         return 1 if stale else 0
 
     CYPHER_DOC.write_text(cypher, encoding="utf-8", newline="\n")
+    INTROSPECTION_DOC.write_text(introspection_doc, encoding="utf-8", newline="\n")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(expected, encoding="utf-8", newline="\n")
