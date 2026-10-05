@@ -130,7 +130,11 @@ jobs:
             python -m venv "$envs/$variant"
             "$envs/$variant/bin/python" -m pip install --quiet -r requirements/benchmark.txt
             "$envs/$variant/bin/python" -m pip install --quiet "$wheel"
-            got=$("$envs/$variant/bin/python" -c 'import kglite; print(kglite.__version__)')
+            # From outside the checkout and with -P: run in the workspace, the
+            # repo's own kglite/ source package shadows the installed wheel
+            # (run 37380875100). The benchmarks run from $RUNNER_TEMP for the
+            # same reason, as ci.yml's perf harness does.
+            got=$(cd "$RUNNER_TEMP" && "$envs/$variant/bin/python" -P -c 'import kglite; print(kglite.__version__)')
             echo "$variant: kglite $got from $wheel"
             if [ -n "$want" ] && [ "$got" != "$want" ]; then
               echo "::error::$variant has kglite $got, expected $want"; exit 1

@@ -2262,6 +2262,20 @@ def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
         if "pip" in line:
             pins = re.findall(r"kglite==", line)
             assert len(pins) <= 1, f"one pip command names {len(pins)} kglite versions: {line}"
+    # Nothing imports kglite from the workspace root, where the repo's own
+    # kglite/ source package shadows the installed wheel (run 37380875100).
+    # A step without a working-directory runs in the checkout, so an import
+    # there must leave it and keep the cwd off sys.path.
+    importers = 0
+    for step in _steps(job):
+        outside = str(step.get("working-directory", "")).startswith("${{ runner.temp }}")
+        for line in _step_commands(step):
+            if "import kglite" in line or "test_bench_core.py" in line and "pytest" in line:
+                importers += 1
+                assert outside or ('cd "$RUNNER_TEMP"' in line and " -P " in line), (
+                    f"imports kglite from the checkout: {line}"
+                )
+    assert importers >= 2, "found no kglite imports to check; the scan is broken"
     # Five variants, five venvs, each installed once.
     installs = [line for line in _command_lines(job) if line.startswith("install ")]
     variants = [_tokens(line)[1] for line in installs]
