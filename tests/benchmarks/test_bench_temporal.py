@@ -176,7 +176,10 @@ def _load(frames: dict[str, pd.DataFrame], *, declared: bool, kg: KnowledgeGraph
     lic = frames["LIC"][["f", "c", "share", "lf", "lt"]]
     kg.add_connections(lic, "HAS_LICENSEE", "Field", "f", "Company", "c")
     kg.add_connections(frames["OP"][["f", "c", "of", "ot"]], "HAS_OPERATOR", "Field", "f", "Company", "c")
-    kg.create_index("E", "eid")
+    # A disk index covers string columns only and refuses the integer `eid`;
+    # the disk cells scan it, as they always did (the index held nothing).
+    if kg.graph_info()["storage_mode"] != "disk":
+        kg.create_index("E", "eid")
     if declared:
         kg.set_temporal("E", "vf", "vt")
         kg.set_temporal("HAS_LICENSEE", "lf", "lt")
