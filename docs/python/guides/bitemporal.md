@@ -293,6 +293,79 @@ and cannot branch between statements, such as Java's, has to make the check
 fail inside a statement. An integer division by zero (`1 / 0`) raises and
 rolls the transaction back, and that is the available idiom today.
 
+### From successive snapshots
+
+Some sources deliver their whole table each period and say nothing about what
+changed. The recording history is then the difference between each snapshot
+and the images currently on record. Compare by key and by a digest of the
+content columns:
+
+- a key that is **new** gets an image added;
+- a key whose content **changed** has its current image closed (its
+  `recorded_to` set to the snapshot date) and a new image added, so the old
+  image stays as a record of what the source said before;
+- a key that **vanished** has its current image closed and nothing added;
+- a snapshot delivered **twice** changes nothing, because every key then matches
+  its current image;
+- a snapshot **older** than the latest applied is refused, since closing and
+  adding images in the past would rewrite the recording history.
+
+Apply each snapshot in one transaction, as in the daily delivery above. The
+image id is `<key>@<snapshot date>`, so a re-applied `MERGE` finds the image it
+already wrote. A small `Snapshot` marker per applied date keeps the order check
+honest even when a snapshot changes nothing:
+
+```python
+with graph.begin() as tx:
+    current_rows = tx.cypher("""
+        FOR VALID_TIME ALL
+        MATCH (m:Membership) WHERE m.recorded_to IS NULL
+        RETURN m.key AS key, m.id AS id, m.digest AS digest
+    """).to_list()
+    latest = tx.cypher("MATCH (s:Snapshot) RETURN max(s.id) AS latest").to_list()[0]["latest"]
+    if latest > t:
+        raise ValueError(f"snapshot {t} is older than the latest applied ({latest})")
+    tx.cypher("MERGE (:Snapshot {id: $t})", params={"t": t})
+    current = {r["key"]: r for r in current_rows}
+    close = [r["id"] for key, r in current.items() if incoming.get(key) != r["digest"]]
+    add = [row for row in rows if current.get(row["key"], {}).get("digest") != row["digest"]]
+    tx.cypher("UNWIND $ids AS id MATCH (m:Membership {id: id}) SET m.recorded_to = date($t)",
+              params={"ids": close, "t": t})
+    tx.cypher("UNWIND $rows AS row MERGE (m:Membership {id: row.id}) ON CREATE SET ...",
+              params={"rows": add, "t": t})
+```
+
+`incoming` maps each snapshot key to its digest and `rows` holds the snapshot's
+images; [`examples/bitemporal_snapshots.py`](https://github.com/kkollsga/kglite/blob/main/examples/bitemporal_snapshots.py)
+is the complete, runnable version. Run on three month-end snapshots (the second
+ends `m1`'s validity, changes `m2`'s role and adds `m3`; the third drops `m1`),
+with the second and third delivered twice, it prints:
+
+```text
+2024-01-31 {'added': 2, 'closed': 0}
+2024-02-29 {'added': 3, 'closed': 2}
+2024-02-29 {'added': 0, 'closed': 0}
+2024-03-31 {'added': 0, 'closed': 1}
+2024-03-31 {'added': 0, 'closed': 0}
+refused: snapshot 2024-02-29 is older than the latest applied (2024-03-31)
+```
+
+**Read the current images under `FOR VALID_TIME ALL`.** Under the default
+(valid today) a membership whose validity has ended is hidden, so a
+current-image query without the prefix does not see it. Every snapshot would
+then find that key "new" and add another image of it. In the example, `m2`'s
+validity ended in 2023:
+
+```text
+on record, valid today: ['m3']
+on record, all validity: ['m2', 'm3']
+```
+
+**Bootstrap with `add_nodes`.** The first snapshot goes through `add_nodes` with
+`column_types` (and `convention`) as in the set-up above: that is where the
+validity pair and the recording columns get their types, and a `MERGE` cannot
+declare them. Later snapshots only add images with the declared columns.
+
 ## 5. Querying
 
 ### As of an instant

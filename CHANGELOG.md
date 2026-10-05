@@ -11,6 +11,12 @@ before upgrading.
 
 ### Added
 
+- Bitemporal guide: a "From successive snapshots" recipe for sources that
+  deliver a full table each period (new, changed, vanished, re-delivered and
+  out-of-order snapshots, and why current images are read under
+  `FOR VALID_TIME ALL`), with `examples/bitemporal_snapshots.py`. Both bitemporal
+  examples now have a test that compares their printed output with a golden.
+
 - `schema()` lists each relationship type's properties with their types
   (`connection_types[name]['properties']`, `{name: type}`, the node-type shape);
   the C ABI schema JSON carries the same map as `properties` beside

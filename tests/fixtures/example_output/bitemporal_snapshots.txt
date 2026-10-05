@@ -1,0 +1,14 @@
+2024-01-31 {'added': 2, 'closed': 0}
+2024-02-29 {'added': 3, 'closed': 2}
+2024-02-29 {'added': 0, 'closed': 0}
+2024-03-31 {'added': 0, 'closed': 1}
+2024-03-31 {'added': 0, 'closed': 0}
+refused: snapshot 2024-02-29 is older than the latest applied (2024-03-31)
+  {'id': 'm1@2024-01-31', 'role': 'lead', 'recorded_from': '2024-01-31', 'recorded_to': '2024-02-29'}
+  {'id': 'm1@2024-02-29', 'role': 'lead', 'recorded_from': '2024-02-29', 'recorded_to': '2024-03-31'}
+  {'id': 'm2@2024-01-31', 'role': 'eng', 'recorded_from': '2024-01-31', 'recorded_to': '2024-02-29'}
+  {'id': 'm2@2024-02-29', 'role': 'senior', 'recorded_from': '2024-02-29', 'recorded_to': None}
+  {'id': 'm3@2024-02-29', 'role': 'lead', 'recorded_from': '2024-02-29', 'recorded_to': None}
+on record, valid today: ['m3']
+on record, all validity: ['m2', 'm3']
+known 2024-02-29, valid 2024-01-15: ['m1@2024-02-29']

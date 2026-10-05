@@ -1,0 +1,28 @@
+load warning: 1 of 3 rows written have an empty interval under convention 'half_open' (the from bound equals the to bound) and are valid at no instant; the first is row 1 (0-based) of the load. They are stored and counted in db.temporal.declarations() as empty_rows.
+redelivered links: {'connections_created': 0, 'connections_updated': 0}
+valid on 2022-01-01: [{'id': 'ben.2:r'}]
+declarations: [{'kind': 'node', 'name': 'Assignment', 'convention': 'half_open', 'abutting_rows': 0, 'empty_rows': 1}, {'kind': 'relationship', 'name': 'PART_OF', 'convention': 'half_open', 'abutting_rows': 0, 'empty_rows': 0}]
+after the delivery: [{'nodes': 12, 'relationships': 13}]
+after a redelivery: [{'nodes': 12, 'relationships': 13}]
+refused: delivery 2024-06-20: 0 of 1 superseded records are current
+rolled back: Cypher execution error: node 'ben.2:e', the from bound 2022-01-01 ('valid_from') is after the to bound 2021-12-31 ('valid_to'), an inverted interval under convention 'half_open'
+ben.2:r after the rollback: [{'recorded_to': None}]
+as of 2024-05-01, as known now: [{'employee': 'Ada', 'team': 'Data'}, {'employee': 'Ben', 'team': 'Platform'}]
+as of 2024-07-01, as known now: [{'employee': 'Ada', 'team': 'Machine Learning'}, {'employee': 'Ben', 'team': 'Platform'}]
+fluent, as of 2024-07-01: ['ada.2:r', 'ben.2:r']
+as of 2024-07-01, as known on 2024-06-14: [{'employee': 'Ada', 'team': 'Data'}, {'employee': 'Ben', 'team': 'Platform'}]
+as of 2024-07-01, as known on 2024-06-15: [{'employee': 'Ada', 'team': 'Machine Learning'}, {'employee': 'Ben', 'team': 'Platform'}]
+as of 2021-06-30, as known on 2021-06-30: [{'employee': 'Ada', 'team': 'Data'}]
+both axes, known on 2024-06-14: [{'employee': 'Ada', 'team': 'Data', 'department': 'Product'}, {'employee': 'Ben', 'team': 'Platform', 'department': 'Engineering'}]
+both axes, known on 2024-06-15: [{'employee': 'Ada', 'team': 'Machine Learning', 'department': 'Engineering'}, {'employee': 'Ben', 'team': 'Platform', 'department': 'Engineering'}]
+lineage of ada, known on 2024-06-14: [{'team': 'data', 'valid_from': '2020-03-01', 'valid_to': None}]
+lineage of ada, known on 2024-06-15: [{'team': 'data', 'valid_from': '2020-03-01', 'valid_to': '2024-06-01'}, {'team': 'ml', 'valid_from': '2024-06-01', 'valid_to': None}]
+lineage of ben, known on 2024-06-15: [{'team': 'data', 'valid_from': '2022-01-01', 'valid_to': '2022-01-01'}, {'team': 'platform', 'valid_from': '2022-01-01', 'valid_to': None}]
+changed since 2024-06-01: [{'employee': 'ada'}]
+delivery of 2024-06-15: [{'record': 'ada.1:e', 'change': 'added'}, {'record': 'ada.1:r', 'change': 'superseded'}, {'record': 'ada.2:r', 'change': 'added'}]
+recorded late: [{'record': 'ada.1:e', 'effective': '2024-06-01', 'recorded': '2024-06-15'}, {'record': 'ada.2:r', 'effective': '2024-06-01', 'recorded': '2024-06-15'}]
+named form, known on 2024-06-15: [{'employee': 'Ada', 'team': 'Data'}, {'employee': 'Ada', 'team': 'Machine Learning'}, {'employee': 'Ben', 'team': 'Platform'}]
+one hop tested: [{'employee': 'Ada', 'team': 'Data', 'department': 'Product'}, {'employee': 'Ada', 'team': 'Machine Learning', 'department': 'Engineering'}, {'employee': 'Ben', 'team': 'Platform', 'department': 'Engineering'}]
+outside the team's department period: []
+overlapping assignments: []
+echo: {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'hidden': {'(:Assignment)': 2}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 24}
