@@ -37,6 +37,29 @@ use crate::graph::core::pattern_matching::PatternMatch;
 // crossed, an offset a partition cannot know); and `limit_hint` has no
 // partitioned stopping point.
 
+/// The widest buffer of first-pattern matches a `MATCH` held at once — the
+/// whole vector, or the widest chunk — so a test can pin what a filtered
+/// `LIMIT` materialises without measuring the process.
+#[cfg(test)]
+pub(crate) mod first_rows_probe {
+    thread_local! {
+        static WIDEST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(crate) fn note(held: usize) {
+        WIDEST.with(|w| w.set(w.get().max(held)));
+    }
+
+    /// The widest buffer since the last call.
+    pub(crate) fn take() -> usize {
+        WIDEST.with(|w| w.replace(0))
+    }
+}
+
+#[cfg(test)]
+#[path = "filtered_limit_tests.rs"]
+mod filtered_limit_tests;
+
 /// Turns a first pattern's matches into rows: the fused WHERE, the
 /// `distinct_node_hint` dedup and the limit, in the order the materialized
 /// route always applied them. Fed one vector or one chunk at a time, so the
@@ -335,6 +358,8 @@ impl<'a> CypherExecutor<'a> {
             if let Some(mut chunker) = executor.begin_chunks(pattern)? {
                 let mut rows = MatchRowCollector::new(clause, inline_where, limit_hint, 0, false);
                 while let Some(chunk) = executor.next_chunk(pattern, &mut chunker)? {
+                    #[cfg(test)]
+                    first_rows_probe::note(chunk.len());
                     self.budget.check_work(chunk.len(), "MATCH expansion")?;
                     if rows.take_all(self, chunk)?.is_some_and(|full| full) {
                         break;
@@ -346,6 +371,8 @@ impl<'a> CypherExecutor<'a> {
             }
         }
         let matches = executor.execute(pattern)?;
+        #[cfg(test)]
+        first_rows_probe::note(matches.len());
         self.budget.check_work(matches.len(), "MATCH expansion")?;
 
         // Every match becomes a row when nothing can drop one: with no fused
