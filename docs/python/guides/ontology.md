@@ -1,24 +1,23 @@
 # Ontology (declared semantic layer)
 
-An ontology gives type names a declared "kind of" structure — `Student`
-*is a* `Person`, `Licence` *is a* `Licensable` — plus machine-readable
-semantics for relationships: which types an edge connects, which properties
-it must carry, its inverse's name, its cardinality. KGLite persists these
-declarations with the graph and wires them into `describe()`, the rule
-procedures, blueprint builds, and (optionally) label matching itself.
+An ontology gives type names a declared "kind of" structure. `Student` *is a* `Person`; `Licence` *is a* `Licensable`. It also adds machine-readable semantics for relationships:
 
-**The scope fence: annotations, not axioms.** In spirit this is SKOS, not
-OWL. The ontology never invents facts and never changes what a query
-matches on its own — no entailment, no open-world semantics, no reasoning.
-Its three jobs are: state the concept model machines can read, provide
-defaults for validators you already have, and (opt-in) act as a
-data-quality contract at build time.
+- which types an edge connects
+- which properties it must carry
+- its inverse's name
+- its cardinality
 
-It is also deliberately **not** `set_parent_type`: that map is presentation
-*ownership* (which types are supporting detail in `describe()` tiering); the
-ontology is semantic *kind-of*. `WellboreCore → Wellbore` is ownership;
-`Licence is_a Licensable` is an ontology fact. Neither is derived from the
-other.
+KGLite persists these declarations with the graph. It wires them into `describe()`, the rule procedures, blueprint builds and, optionally, label matching itself.
+
+**The scope fence: annotations, not axioms.** In spirit this is SKOS, not OWL. The ontology never invents facts and never changes what a query matches on its own. There is no entailment, no open-world semantics and no reasoning.
+
+The ontology has three jobs:
+
+- State the concept model machines can read.
+- Provide defaults for validators you already have.
+- Act, opt-in, as a data-quality contract at build time.
+
+It is also deliberately **not** `set_parent_type`. That map is presentation *ownership*: which types are supporting detail in `describe()` tiering. The ontology is semantic *kind-of*. `WellboreCore → Wellbore` is ownership; `Licence is_a Licensable` is an ontology fact. Neither is derived from the other.
 
 ## Declaring
 
@@ -49,63 +48,51 @@ g.define_ontology({
 })
 ```
 
-Rules the declaration must satisfy (checked on install):
+KGLite checks the rules below when it installs a declaration.
 
-- `is_a` is a **forest**: one parent per class, no cycles, parents must be
-  declared. Multi-role nodes are modelled with secondary labels on nodes,
-  not multiple inheritance in the class graph.
-- Class names share the label namespace. A class naming a live node type is
-  *concrete*; a class naming none must usually be `abstract: True`
-  (concrete-with-no-instances is a returned warning, abstract-shadowing-a-
-  live-type is an error) — `MATCH (n:X)` keeps exactly one meaning per name.
-- There is an enforced class cap of **512 classes**
-  (`MAX_ONTOLOGY_CLASSES`) — a hard number, so capacity planning needs no
-  experiment: the layer is for schema-level vocabularies. A million-class
-  taxonomy (Wikidata's P279) is **data** — keep it as edges, declare the
-  relationship `ancestry: True`, and walk it with `*1..` paths. That
-  boundary is a feature. Do **not** reach for `transitive: True` there —
-  see the next bullet.
-- `transitive: True` and `ancestry: True` both say "this edge is a
-  hierarchy", and they are mutually exclusive (declaring both is refused).
-  `transitive` is a **promise that the closure is stored**: it enrolls
-  `transitivity_violation`, which flags every `a→b→c` with no stored `a→c`
-  edge, so a taxonomy that stores only parent pointers reports 100%
-  violations. `ancestry` is the annotation for that shape: it records that
-  the chain is meaningful and is walked with `*1..`, shows up in
-  `describe()`, and enrolls no check.
+### Classes and hierarchy
+
+- `is_a` is a **forest**: one parent per class, no cycles, and parents must be declared. You model multi-role nodes with secondary labels on nodes, not with multiple inheritance in the class graph.
+- Class names share the label namespace. This keeps `MATCH (n:X)` at exactly one meaning per name:
+  - A class naming a live node type is *concrete*.
+  - A class naming none must usually be `abstract: True`.
+  - A non-abstract class naming no live type is a returned warning.
+  - An abstract class shadowing a live type is an error.
+- The class cap is **512 classes** (`MAX_ONTOLOGY_CLASSES`), and it is enforced. It is a hard number, so capacity planning needs no experiment. The layer is for schema-level vocabularies.
+- A million-class taxonomy (Wikidata's P279) is **data**. Keep it as edges, declare the relationship `ancestry: True`, and walk it with `*1..` paths. That boundary is a feature. Do **not** reach for `transitive: True` there; see the next bullet.
+- `transitive: True` and `ancestry: True` both say "this edge is a hierarchy". They are mutually exclusive, and declaring both is refused.
+  - `transitive` is a **promise that the closure is stored**. It enrolls `transitivity_violation`, which flags every `a→b→c` with no stored `a→c` edge. A taxonomy that stores only parent pointers therefore reports 100% violations.
+  - `ancestry` is the annotation for that shape. It records that the chain is meaningful and is walked with `*1..`, shows up in `describe()`, and enrolls no check.
+
+### Relationship declarations
+
 - `cardinality` / `required` describe **outgoing** edges of the domain type.
-- `symmetric: True` lowers to an inverse check of the relationship against
-  itself.
-- `property_types` accepts `list` (alias `array`, case-insensitive) for any
-  native list, including empty, mixed and nested lists. This checks the outer
-  container only; it does not declare an element type. Missing/null values are
-  left to `required_properties`.
-- `required_properties` and `property_types` apply to nodes in class
-  declarations and to edges in relationship declarations. Required values
-  must be present and non-null; type checks ignore absent/null values. Repeated
-  required names count once. Type names are validated on declaration. Edge
-  properties use stored names, including a blueprint's renamed output column.
-  Node properties use the actual primary type's loader aliases and id/title
-  resolution.
-- `inverse_name` is a **reading-direction alias** — no second edge exists or
-  is implied, and it enrolls no check. `inverse_enforced: True` opts into
-  auditing physical pairing (each edge must have a stored inverse partner);
-  `symmetric: True` keeps its self-inverse check regardless, because
-  symmetry *is* a physical claim.
-- `enforcement` (`advisory` — the default — / `warn` / `error`) is data for
-  the consumers below, never an engine write-guarantee. It also accepts a
-  per-check map — `{"required_properties": "error", "domain": "warn"}` —
-  where unlisted checks keep the advisory base; keys are the check names
-  the audit's `rule` column uses (`domain`, `range`, `required`,
-  `required_properties`, `property_types`, `cardinality`, `inverse`,
-  `symmetric`, `transitive`).
-- `exempt` names, per check, source classes whose violations are counted
-  separately instead of against severity — see [Exempting an upstream
-  source](#exempting-an-upstream-source).
+- `symmetric: True` lowers to an inverse check of the relationship against itself.
+- `inverse_name` is a **reading-direction alias**. No second edge exists or is implied, and it enrolls no check.
+  - `inverse_enforced: True` opts into auditing physical pairing: each edge must have a stored inverse partner.
+  - `symmetric: True` keeps its self-inverse check regardless, because symmetry *is* a physical claim.
 
-`g.ontology()` returns the store as a dict, `g.clear_ontology()` removes it
-(withdrawing any materialized labels first). The store persists in the
-`.kgl` and travels with `save_subset` / `to_subgraph`.
+### Property contracts
+
+- `property_types` accepts `list` (alias `array`, case-insensitive) for any native list, including empty, mixed and nested lists. This checks the outer container only; it does not declare an element type. Missing and null values are left to `required_properties`.
+- `required_properties` and `property_types` apply to nodes in class declarations and to edges in relationship declarations.
+  - Required values must be present and non-null.
+  - Type checks ignore absent and null values.
+  - Repeated required names count once.
+  - Type names are validated on declaration.
+  - Edge properties use stored names, including a blueprint's renamed output column.
+  - Node properties use the actual primary type's loader aliases and id/title resolution.
+
+### Enforcement and exemptions
+
+- `enforcement` is `advisory` (the default), `warn` or `error`. It is data for the consumers below, never an engine write-guarantee.
+- `enforcement` also accepts a per-check map, such as `{"required_properties": "error", "domain": "warn"}`. Unlisted checks keep the advisory base.
+- The map keys are the check names the audit's `rule` column uses: `domain`, `range`, `required`, `required_properties`, `property_types`, `cardinality`, `inverse`, `symmetric`, `transitive`.
+- `exempt` names, per check, source classes whose violations are counted separately instead of against severity. See [Exempting an upstream source](#exempting-an-upstream-source).
+
+### Reading and removing the store
+
+`g.ontology()` returns the store as a dict. `g.clear_ontology()` removes it, withdrawing any materialized labels first. The store persists in the `.kgl` and travels with `save_subset` / `to_subgraph`.
 
 ## Node property contracts
 
@@ -118,20 +105,24 @@ g.define_ontology({"classes": {
 }})
 ```
 
-Each declaring class governs nodes whose primary class is itself or a declared
-descendant. Parent and child contracts are independent and additive; unrelated
-secondary labels do not enroll a node. Class enforcement accepts only
-`required_properties` and `property_types`, defaults to advisory, and has no
-edge-style exemptions. Blueprint builds apply the same warn/error behavior to
-node contracts before publishing output.
+Each declaring class governs nodes whose primary class is itself or a declared descendant.
 
-`CALL ontology_audit()` returns `entity_kind` (`node` or `edge`) beside `rule`.
-Together they identify a rule even when a class and relationship have the same
-name. A node rule's denominator is its covered live nodes, exemptions are zero,
-and an empty denominator yields zero violations and `0.0` percent. Property
-breakdowns count a node under every failed field, including zero-count declared
-fields; aggregate counts count that node once. Domain-class breakdowns group
-violations by actual primary type.
+- Parent and child contracts are independent and additive.
+- Unrelated secondary labels do not enroll a node.
+- Class enforcement accepts only `required_properties` and `property_types`.
+- Class enforcement defaults to advisory and has no edge-style exemptions.
+- Blueprint builds apply the same warn/error behavior to node contracts before publishing output.
+
+`CALL ontology_audit()` returns `entity_kind` (`node` or `edge`) beside `rule`. Together they identify a rule even when a class and a relationship have the same name.
+
+Node rules in the audit follow these conventions:
+
+- A node rule's denominator is its covered live nodes.
+- Exemptions are zero.
+- An empty denominator yields zero violations and `0.0` percent.
+- Property breakdowns count a node under every failed field, including zero-count declared fields.
+- Aggregate counts count that node once.
+- Domain-class breakdowns group violations by actual primary type.
 
 ```cypher
 CALL node_property_violation()
@@ -139,29 +130,21 @@ YIELD class, check, node, property, properties
 RETURN class, check, node.id AS id, properties
 ```
 
-This procedure takes no parameters. It returns one row per violating node per
-declaring class/check; `properties` lists all failed fields and `property` is the
-first. The node binding composes with subsequent query clauses. No ontology is
-an error; an ontology without node contracts returns no findings.
+`node_property_violation()` takes no parameters. It returns one row per violating node per declaring class/check. `properties` lists all failed fields and `property` is the first. The node binding composes with subsequent query clauses.
 
-`SHOW ONTOLOGY` exposes `required_properties`, `property_types`, and enforcement
-for classes and relationships. The contracts persist with the graph; legacy
-class declarations without these fields retain empty/advisory defaults.
+No ontology is an error. An ontology without node contracts returns no findings.
+
+`SHOW ONTOLOGY` exposes `required_properties`, `property_types` and enforcement for classes and relationships. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
 
 ## Reading it back
 
-- `SHOW ONTOLOGY` — one row per class and relationship.
-- `describe()` — an `<ontology>` section renders whenever a store is
-  declared (focused mode narrows to the classes touching the requested
-  types). No new mode or parameter: absence of the section *is* the "no
-  ontology" signal.
-- `describe(cypher=["ontology"])` — the agent-facing topic documentation.
+- `SHOW ONTOLOGY` returns one row per class and relationship.
+- `describe()` renders an `<ontology>` section whenever a store is declared. Focused mode narrows to the classes touching the requested types. There is no new mode or parameter: absence of the section *is* the "no ontology" signal.
+- `describe(cypher=["ontology"])` returns the agent-facing topic documentation.
 
 ## Declaration-driven validators
 
-The six declaration-backed rule procedures called with **no arguments**
-check every relevant declaration, each row carrying a `rule` column naming
-the declaration it came from:
+Call the six declaration-backed rule procedures with **no arguments** to check every relevant declaration. Each row carries a `rule` column naming the declaration it came from:
 
 ```cypher
 CALL type_domain_violation() YIELD source, target, rule
@@ -169,14 +152,17 @@ CALL missing_required_edge() YIELD node, rule
 CALL inverse_violation() YIELD a, b, rule
 ```
 
-A `domain`/`range` naming an **abstract class widens to its declared
-descendants** — this is the union-endpoint case a flat schema cannot
-declare (`HAS_OPERATOR` from six concrete source types becomes
-`domain: "Licensable"`, and the existing checks finally reach it).
+A `domain`/`range` naming an **abstract class widens to its declared descendants**. This is the union-endpoint case a flat schema cannot declare. `HAS_OPERATOR` from six concrete source types becomes `domain: "Licensable"`, and the existing checks finally reach it.
 
-The scorecard rolls every declared check up into one call — one row per
-declared check, carrying its violation count, denominator, percentage,
-declared severity, and the count its `exempt` classes excused:
+### The scorecard
+
+`ontology_audit()` rolls every declared check up into one call. It returns one row per declared check, carrying:
+
+- its violation count
+- its denominator
+- its percentage
+- its declared severity
+- the count its `exempt` classes excused
 
 ```python
 from kglite import KnowledgeGraph
@@ -207,20 +193,16 @@ for row in g.cypher(
 # {'rule': 'ENROLLED_IN.range', 'severity': 'warn', 'violations': 0, 'exempted': 0, 'total': 3, 'pct': 0.0}
 ```
 
-Run it after every rebuild and you have data-quality-over-time for free;
-an agent can call it cold and qualify its own answers.
+Run it after every rebuild and you have data-quality-over-time for free. An agent can call it cold and qualify its own answers.
 
-**Which source types are violating?** That is the next question every
-scorecard raises, and `{by: 'domain_class'}` answers it: each rule's row
-fans out into one row per primary node type its violations come from, with
-that class's share of `violations` and `pct` (they sum back to the rule's
-aggregate) while `severity`, `exempted` and `total` keep their per-rule
-values. Exempted rows are left out, so a class whose every violation is
-excused gets no row at all, and a rule with nothing to break down keeps its
-single aggregate row. Without the parameter, `domain_class` is `None` on
-every row — a bare `CALL ontology_audit()` returns all nine columns, including
-`entity_kind` to distinguish node and edge rules, either
-way.
+### Which source types are violating
+
+`{by: 'domain_class'}` answers the question every scorecard raises next. Each rule's row fans out into one row per primary node type its violations come from. Each row carries that class's share of `violations` and `pct`; they sum back to the rule's aggregate. `severity`, `exempted` and `total` keep their per-rule values.
+
+- Exempted rows are left out, so a class whose every violation is excused gets no row at all.
+- A rule with nothing to break down keeps its single aggregate row.
+- Without the parameter, `domain_class` is `None` on every row.
+- A bare `CALL ontology_audit()` and the `{by: …}` forms all return the nine columns, including `entity_kind` to distinguish node and edge rules.
 
 ```python
 for row in g.cypher(
@@ -232,16 +214,20 @@ for row in g.cypher(
 # {'rule': 'ENROLLED_IN.range', 'domain_class': None, 'violations': 0, 'pct': 0.0}
 ```
 
-The domain-side class is the edge's source for `domain` / `range` /
-`required_properties` / `property_types`, the node itself for `required` /
-`cardinality`, and for the pair and triple shapes (`inverse`, `symmetric`,
-`transitive`) the first bound node.
+The domain-side class is:
 
-**Which fields are missing?** `{by: 'property'}` fans the
-`required_properties` and `property_types` rules into one row per **declared**
-property — `violations` counts the nodes or edges failing that property, `total` the
-rule's covered nodes or relationship edges, and `pct` the share failing it.
-Every other rule keeps its aggregate row with a `None` property.
+- the edge's source for `domain` / `range` / `required_properties` / `property_types`
+- the node itself for `required` / `cardinality`
+- the first bound node for the pair and triple shapes (`inverse`, `symmetric`, `transitive`)
+
+### Which fields are missing
+
+`{by: 'property'}` fans the `required_properties` and `property_types` rules into one row per **declared** property.
+
+- `violations` counts the nodes or edges failing that property.
+- `total` is the rule's covered nodes or relationship edges.
+- `pct` is the share failing it.
+- Every other rule keeps its aggregate row with a `None` property.
 
 ```python
 for row in g.cypher(
@@ -267,15 +253,13 @@ the column you did not ask for is `None`.
 
 ## The blueprint gate (observe → fix → enforce)
 
-Reference the document from a blueprint and the declarations become a
-build-time contract:
+Reference the document from a blueprint and the declarations become a build-time contract:
 
 ```json
 { "ontology": "school.ontology.json", "nodes": { ... } }
 ```
 
-The gate runs as a final build phase, after all loading, before anything is
-saved. Per-declaration severity decides what a violation does:
+The gate runs as a final build phase, after all loading and before anything is saved. Per-declaration severity decides what a violation does:
 
 | `enforcement` | On violation |
 |---|---|
@@ -283,23 +267,21 @@ saved. Per-declaration severity decides what a violation does:
 | `warn` | one summary line per rule in the build report |
 | `error` | **report every violation, then fail once** — no output file is written |
 
-The intended lifecycle: start every rule at `advisory`, read the report as
-your cleanup worklist, fix the data, then flip the rules you own to
-`error` so the debt can never silently return. Rules describing *upstream*
-data reality stay `warn` forever — they belong in the build log, not the
-exit code.
+The intended lifecycle has three steps:
+
+1. Start every rule at `advisory`.
+2. Read the report as your cleanup worklist and fix the data.
+3. Flip the rules you own to `error`, so the debt can never silently return.
+
+Rules describing *upstream* data reality stay `warn` forever. They belong in the build log, not the exit code.
 
 ## Exempting an upstream source
 
-An abstract `domain` is what lets one declaration cover a union edge —
-`HAS_OPERATOR` from every `Licensable` — and it is also what makes a single
-nonconforming source poison the whole rule. If one upstream source never
-carried the date the others do, `required_properties: ["validFrom"]` can
-never be promoted past `advisory`: the rule you want to enforce for the
-sources you control is permanently red because of a source you do not.
+An abstract `domain` lets one declaration cover a union edge, such as `HAS_OPERATOR` from every `Licensable`. It also lets a single nonconforming source poison the whole rule.
 
-`exempt` is the seam. It is a **per-check map** of source classes whose
-violations are counted separately instead of against severity:
+Suppose one upstream source never carried the date the others do. Then `required_properties: ["validFrom"]` can never be promoted past `advisory`. The rule you want to enforce for the sources you control is permanently red because of a source you do not control.
+
+`exempt` is the seam. It is a **per-check map** of source classes whose violations are counted separately instead of against severity:
 
 ```python
 from kglite import KnowledgeGraph
@@ -337,29 +319,18 @@ for row in g.cypher(
 # {'rule': 'HAS_OPERATOR.required_properties', 'severity': 'error', 'violations': 1, 'exempted': 1, 'total': 3}
 ```
 
-Both edges lack `validFrom`; only the `Licence` one counts as a violation,
-so the rule can sit at `error` and still block exactly the debt you own.
+Both edges lack `validFrom`, but only the `Licence` one counts as a violation. The rule can sit at `error` and still block exactly the debt you own.
 
 What the form guarantees:
 
-- **Per-check, never flat.** `exempt: ["PetregLicence"]` is refused — an
-  exemption spread silently across every check is not something you can
-  reason about later. Name the check it applies to.
-- **`required_properties` and `property_types` only.** These are the two
-  checks where "the class to exempt" unambiguously means the edge's *source*
-  type. Any other check name under `exempt` is refused at declaration time
-  with the reason, not just an accept-list.
-- **Ancestor-widening.** A class matches when it is the edge source's
-  primary type *or* one of its declared ancestors, the same widening
-  `domain`/`range` get — exempting `Licensable` exempts the whole subtree.
-- **The class must be declared.** An undeclared name is refused: since
-  matching widens over the `is_a` forest, a typo would silently exempt
-  nothing, which is the exact failure the feature exists to remove.
+- **Per-check, never flat.** `exempt: ["PetregLicence"]` is refused. An exemption spread silently across every check is not something you can reason about later. Name the check it applies to.
+- **`required_properties` and `property_types` only.** These are the two checks where "the class to exempt" unambiguously means the edge's *source* type. Any other check name under `exempt` is refused at declaration time with the reason, not just an accept-list.
+- **Ancestor-widening.** A class matches when it is the edge source's primary type *or* one of its declared ancestors, the same widening `domain`/`range` get. Exempting `Licensable` exempts the whole subtree.
+- **The class must be declared.** An undeclared name is refused. Matching widens over the `is_a` forest, so a typo would silently exempt nothing, which is the exact failure the feature exists to remove.
 
-`exempted` never hides rows. `violations + exempted` is everything the check
-flagged, and `edge_property_violation()` lists those individual edges — the
-row-level drill-down behind the `required_properties` / `property_types`
-counts, with `exempt` marking which side of the line each row fell on:
+### Drilling down to the flagged edges
+
+`exempted` never hides rows. `violations + exempted` is everything the check flagged. `edge_property_violation()` lists those individual edges: the row-level drill-down behind the `required_properties` / `property_types` counts. Its `exempt` column marks which side of the line each row fell on:
 
 ```python
 for row in g.cypher("""
@@ -373,60 +344,36 @@ for row in g.cypher("""
 #  'properties': ['validFrom', 'source'], 'exempt': True}
 ```
 
-`properties` lists every declared property the edge fails and `property` is
-the first of them, so an edge missing three is still one row and the listing
-keeps reconciling with the scorecard. `UNWIND properties AS p` when you want
-the per-field tally the row listing itself does not give you — or ask
-`ontology_audit({by: 'property'})` for it directly.
+`properties` lists every declared property the edge fails, and `property` is the first of them. An edge missing three is still one row, so the listing keeps reconciling with the scorecard. Use `UNWIND properties AS p` for the per-field tally the row listing does not give you, or ask `ontology_audit({by: 'property'})` for it directly.
 
-At the blueprint gate the exempted count is reported, never dropped: every
-summary line carries a `(+N exempted)` tail, and a rule declared `error`
-whose violations are *all* exempted is reported as a **warning** rather than
-passing silently. An exemption that quietly absorbed every flagged row
-would make a passing gate indistinguishable from a clean graph.
+At the blueprint gate the exempted count is reported, never dropped. Every summary line carries a `(+N exempted)` tail. A rule declared `error` whose violations are *all* exempted is reported as a **warning** rather than passing silently. An exemption that quietly absorbed every flagged row would make a passing gate indistinguishable from a clean graph.
 
 ## Materialization (making supertypes matchable)
 
-Everything above changes no query semantics. Materialization does — by
-explicit opt-in, and through completely ordinary machinery:
+Everything above changes no query semantics. Materialization does, by explicit opt-in and through completely ordinary machinery:
 
 ```python
 g.materialize_ontology()
 g.cypher("MATCH (p:Person) RETURN p.name")   # finds Students and Teachers
 ```
 
-`Student is_a Person` is stamped as the **real secondary label** `:Person`
-on every `Student` node, through the same bulk label path every label write
-uses — so `MATCH (p:Person)` works with today's semantics, today's
-candidate index, today's `EXPLAIN`, and `labels(n)`, CDC, exports, and Bolt
-clients never disagree with what queries see. From then on the write paths
-maintain the closure: a created `Student` carries `:Person` from birth, and
-creating a node of a declared *abstract* class is refused, naming the
-concrete subtypes.
+`Student is_a Person` is stamped as the **real secondary label** `:Person` on every `Student` node. It goes through the same bulk label path every label write uses. So `MATCH (p:Person)` works with today's semantics, today's candidate index and today's `EXPLAIN`. `labels(n)`, CDC, exports and Bolt clients never disagree with what queries see.
 
-Each materialized label is **managed**, in one of two states
-(`g.ontology_diff()` reports them):
+From then on the write paths maintain the closure:
 
-- **`closed`** — the engine is the bucket's only writer; the label holds
-  exactly the declared closure. Closure-reliant optimizations may trust it:
-  a property-filtered supertype match (`MATCH (p:Person {name: 'Ann'})`)
-  runs per-descendant index probes instead of scanning.
-- **`open`** — something outside the closure touched the label (a manual
-  `SET n:Person` on a non-member, an adopted pre-existing bucket, an
-  extend-graph union). Everything stays *correct*; the optimizations switch
-  off for that label.
+- A created `Student` carries `:Person` from birth.
+- Creating a node of a declared *abstract* class is refused, naming the concrete subtypes.
 
-Writers downgrade to `open` rather than refuse — a performance cliff
-instead of a wrong-answer cliff. The one refusal is manual `REMOVE` of a
-managed label (an under-complete bucket has no safe state);
-`g.dematerialize_ontology()` is the exit, and it recovers correctly through
-the write-ahead log like every other write.
+Each materialized label is **managed**, in one of two states. `g.ontology_diff()` reports them.
+
+- **`closed`**: the engine is the bucket's only writer, and the label holds exactly the declared closure. Closure-reliant optimizations may trust it. A property-filtered supertype match (`MATCH (p:Person {name: 'Ann'})`) runs per-descendant index probes instead of scanning.
+- **`open`**: something outside the closure touched the label. Examples are a manual `SET n:Person` on a non-member, an adopted pre-existing bucket, and an extend-graph union. Everything stays *correct*; the optimizations switch off for that label.
+
+Writers downgrade to `open` rather than refuse, so the result is a performance cliff instead of a wrong-answer cliff. The one refusal is manual `REMOVE` of a managed label, because an under-complete bucket has no safe state. `g.dematerialize_ontology()` is the exit, and it recovers correctly through the write-ahead log like every other write.
 
 ### Where you write the label decides the plan
 
-A materialized supertype is worth having only if your queries reach it
-through the label engine, and that depends on *where in the query the label
-sits* — not on whether the name is spelled the same:
+A materialized supertype is worth having only if your queries reach it through the label engine. That depends on *where in the query the label sits*, not on whether the name is spelled the same:
 
 ```python
 from kglite import KnowledgeGraph
@@ -455,33 +402,27 @@ for row in g.cypher("EXPLAIN MATCH (p) WHERE p:Person AND p.title = 'Ann' RETURN
 # {'step': 4, 'operation': 'OptimizerPass push_where_into_match.1', 'estimated_rows': None}
 ```
 
-- **Pattern position — `MATCH (p:Person)`** is the label engine: the label
-  *is* the candidate set. On a `closed` label whose every live member type
-  carries an index for the filtered property, a property-filtered supertype
-  match runs per-member index probes instead of scanning, and `EXPLAIN` says
-  so with a `ClosureProbe :Person (Student, Teacher)` row naming the members
-  it would visit. No row means no probe — the label is `open`, a member is
-  unindexed, or the label is not materialized at all, and the match falls
-  back to a scan that is still correct. (A value written as a parameter,
-  `{title: $t}`, is unresolved when the plan renders, so the marker stays
-  off; the runtime probe still applies.)
-- **`WHERE p:Person`** is an ordinary post-candidate predicate. The pattern
-  binds every node in the graph and the label is checked per row — note the
-  unlabelled `Match` above, estimating all 3 nodes rather than the 2 that
-  carry `:Person`. Nothing rewrites a `WHERE`-position label check into a
-  candidate set, so this shape never probes. Move the label into the
-  pattern.
-- **Alternation — `MATCH (p:Student|Teacher)`** is the *unmaterialized*
-  alternative: it matches the union of the branches with no labels stamped
-  and no closure to maintain. It carries no `ClosureProbe` either — there is
-  no managed bucket to trust — and it names the members literally, so a
-  subtype added to the class forest later will not be in it. Prefer it when
-  you want the union once; materialize when the supertype is a first-class
-  thing your queries name repeatedly.
+**Pattern position: `MATCH (p:Person)`** is the label engine, because the label *is* the candidate set.
 
-Materializing onto a graph whose label buckets already have members the
-closure cannot explain is refused unless `materialize_ontology(adopt=True)`
-(the label is then managed `open`).
+- On a `closed` label whose every live member type carries an index for the filtered property, a property-filtered supertype match runs per-member index probes instead of scanning.
+- `EXPLAIN` says so with a `ClosureProbe :Person (Student, Teacher)` row naming the members it would visit.
+- No row means no probe: the label is `open`, a member is unindexed, or the label is not materialized at all. The match then falls back to a scan that is still correct.
+- A value written as a parameter, `{title: $t}`, is unresolved when the plan renders, so the marker stays off. The runtime probe still applies.
+
+**`WHERE p:Person`** is an ordinary post-candidate predicate.
+
+- The pattern binds every node in the graph and checks the label per row. Note the unlabelled `Match` above, estimating all 3 nodes rather than the 2 that carry `:Person`.
+- Nothing rewrites a `WHERE`-position label check into a candidate set, so this shape never probes.
+- Move the label into the pattern.
+
+**Alternation: `MATCH (p:Student|Teacher)`** is the *unmaterialized* alternative.
+
+- It matches the union of the branches with no labels stamped and no closure to maintain.
+- It carries no `ClosureProbe` either, because there is no managed bucket to trust.
+- It names the members literally, so a subtype added to the class forest later will not be in it.
+- Prefer it when you want the union once. Materialize when the supertype is a first-class thing your queries name repeatedly.
+
+Materializing onto a graph whose label buckets already have members the closure cannot explain is refused unless you pass `materialize_ontology(adopt=True)`. The label is then managed `open`.
 
 ## Serving it over MCP
 
@@ -492,16 +433,11 @@ extensions:
     materialize: true        # optional
 ```
 
-The server installs (and optionally materializes) the declarations at boot,
-**memory-only**: nothing in the server auto-saves, so the source `.kgl` is
-untouched — adoption with zero build-script changes. An agent explicitly
-calling the `save_graph` tool persists them, which is then correct.
+The server installs (and optionally materializes) the declarations at boot, **memory-only**. Nothing in the server auto-saves, so the source `.kgl` is untouched. That gives you adoption with zero build-script changes. An agent explicitly calling the `save_graph` tool persists them, which is then correct.
 
 ## How this maps to RDFS / OWL / SHACL
 
-For readers coming from the semantic-web stack, the honest positioning —
-including three places where a familiar word carries *different* semantics
-here:
+For readers coming from the semantic-web stack, here is the honest positioning, including three places where a familiar word carries *different* semantics here:
 
 | Concept | There | Here |
 |---|---|---|
@@ -514,23 +450,22 @@ here:
 | `ancestry` | no counterpart — a reasoner would entail the chain | documentation only: the chain is meaningful and is *walked* (`*1..`), never stored. This is what a parent-pointer taxonomy declares. |
 | "abstract" | not an ontology notion (any class may have instances) | borrowed from the schema world: a class that names no node type and cannot be instantiated directly. |
 
-**Deliberate non-goals** (not omissions): entailment of any kind,
-open-world semantics, equivalence classes (`owl:equivalentClass` — within
-one graph, two names for one concept is a rebuild, not an axiom),
-restriction classes, property hierarchies (`rdfs:subPropertyOf`), and
-disjointness axioms (low value under single primary types). RDFS/SKOS
-import/export is tracked as future interop, adopting the vocabulary, not
-the entailment.
+**Deliberate non-goals** (not omissions):
+
+- entailment of any kind
+- open-world semantics
+- equivalence classes (`owl:equivalentClass`): within one graph, two names for one concept is a rebuild, not an axiom
+- restriction classes
+- property hierarchies (`rdfs:subPropertyOf`)
+- disjointness axioms (low value under single primary types)
+
+RDFS/SKOS import/export is tracked as future interop, adopting the vocabulary, not the entailment.
 
 ## When not to use it
 
-- **Large taxonomies as classes** — enforced away by the class cap; keep
-  them as edges (see the declaration rules above).
-- **Entity resolution** — the ontology relates *types*, never records.
-  `Student is_a Person` says nothing about whether two Alice Smiths are one
-  human.
-- **As a data-cleaning tool** — the gate *finds and then guards* cleanup;
-  the fixing itself belongs in your load pipeline.
+- **Large taxonomies as classes.** The class cap enforces this away; keep them as edges (see the declaration rules above).
+- **Entity resolution.** The ontology relates *types*, never records. `Student is_a Person` says nothing about whether two Alice Smiths are one human.
+- **As a data-cleaning tool.** The gate *finds and then guards* cleanup. The fixing itself belongs in your load pipeline.
 
 ## See also
 
