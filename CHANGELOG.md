@@ -13,7 +13,7 @@ before upgrading.
 
 - Creating nodes while a read view is held, after deleting nodes, no longer
   panics or leaves property-less and duplicate nodes. Held views include
-  `freeze()`, `copy()`, a lazy result, a `begin()` transaction and a Bolt or
+  `freeze()`, `copy()`, a `begin()` transaction and a Bolt or
   C-ABI session write transaction. Some delete orders made the copy-on-write
   fork hand out different slots than the fold-back used. The fork now
   allocates exactly as the graph would, and a fold-back that would misplace a
