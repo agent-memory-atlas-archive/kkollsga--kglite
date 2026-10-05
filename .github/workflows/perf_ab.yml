@@ -43,7 +43,7 @@ on:
         options: [ab, bisect]
       bisect_versions:
         description: Published kglite versions for `bisect` mode, space-separated, oldest first
-        default: 0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.8 0.18.1 0.19.3
+        default: 0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.0 0.17.1 0.17.8 0.18.1 0.19.0 0.19.3
         type: string
       source_ref:
         description: Git ref built from source (tag of the published version for a like-for-like A/B)
@@ -231,7 +231,7 @@ jobs:
     # A label-triggered run has no `inputs`, so each falls back to the same
     # default the dispatch form shows.
     env:
-      BISECT_VERSIONS: ${{ inputs.bisect_versions || '0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.8 0.18.1 0.19.3' }}
+      BISECT_VERSIONS: ${{ inputs.bisect_versions || '0.14.0 0.15.0 0.15.9 0.16.3 0.16.13 0.16.23 0.17.0 0.17.1 0.17.8 0.18.1 0.19.0 0.19.3' }}
       CELLS: ${{ inputs.cells || 'two_edge_relationship_text_filter or two_edge_distinct_filtered_path' }}
     timeout-minutes: 120
     steps:
