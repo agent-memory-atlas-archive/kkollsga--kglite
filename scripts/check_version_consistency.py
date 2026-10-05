@@ -2293,15 +2293,6 @@ BREAKING_SYMBOLS_BY_VERSION: dict[str, list[str]] = {
 }
 
 
-def breaking_symbols_for(version: str) -> list[str]:
-    """The symbols this exact release broke, or ``[]``.
-
-    Deliberately an exact-version lookup with no fallback: inheriting the
-    previous release's set is precisely the defect this table exists to remove.
-    """
-    return list(BREAKING_SYMBOLS_BY_VERSION.get(version, []))
-
-
 def breaking_symbols_between(
     since: tuple[int, int, int] | None, upstream_version: tuple[int, int, int]
 ) -> list[tuple[str, str]]:
