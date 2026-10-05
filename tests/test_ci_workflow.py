@@ -2256,6 +2256,19 @@ def test_perf_ab_diagnostic_runs_only_by_hand_or_by_its_label() -> None:
         ("cells", "CELLS"),
     ):
         assert env[var] == f"${{{{ inputs.{name} || '{inputs[name]['default']}' }}}}", env[var]
+    # One kglite per interpreter: a pip command naming two kglite versions asks
+    # one resolver for both and fails (run 37376164682, ResolutionImpossible).
+    for line in _command_lines(job):
+        if "pip" in line:
+            pins = re.findall(r"kglite==", line)
+            assert len(pins) <= 1, f"one pip command names {len(pins)} kglite versions: {line}"
+    # Five variants, five venvs, each installed once.
+    installs = [line for line in _command_lines(job) if line.startswith("install ")]
+    variants = [_tokens(line)[1] for line in installs]
+    assert variants == ["ref-0.13.2", "published", "runner", "manylinux-pin", "manylinux-alt"], variants
+    # An empty or partial capture set must fail the run, not upload nothing.
+    summary = _step_running(job, "python - <<'PY' | tee -a \"$GITHUB_STEP_SUMMARY\"")
+    assert "raise SystemExit" in summary["run"] and "A/B incomplete" in summary["run"]
     builds = _steps_using(job, "PyO3/maturin-action@")
     assert len(builds) == 2
     target_dirs = [step["with"]["args"].split("--target-dir ")[1] for step in builds]

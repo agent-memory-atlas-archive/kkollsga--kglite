@@ -111,24 +111,36 @@ jobs:
           working-directory: src
           args: --release --out dist-manylinux-alt --target-dir target-manylinux-alt
 
-      - name: Create one environment per variant
+      - name: Create one isolated environment per variant
+        # One venv and one kglite per variant. Each published version is
+        # downloaded by its own pip call: a single `pip download` naming both
+        # versions asks one resolver for two kglites and fails with
+        # ResolutionImpossible (run 37376164682).
         run: |
           set -euo pipefail
           envs="$RUNNER_TEMP/ab-envs"
           mkdir -p "$envs"
-          install() {
-            python -m venv "$envs/$1"
-            "$envs/$1/bin/python" -m pip install --quiet -r requirements/benchmark.txt
-            "$envs/$1/bin/python" -m pip install --quiet "$2"
-            echo "$1: $("$envs/$1/bin/python" -c 'import kglite; print(kglite.__version__, kglite.__file__)')"
+          fetch() {
+            python -m pip download --only-binary=:all: --no-deps --dest "$RUNNER_TEMP/wheel-$1" "kglite==$1" >&2
+            find "$RUNNER_TEMP/wheel-$1" -name "kglite-$1-*.whl" -print -quit
           }
-          python -m pip download --only-binary=:all: --no-deps --dest "$RUNNER_TEMP/published" \
-            "kglite==$REFERENCE_VERSION" "kglite==$PUBLISHED_VERSION"
-          install ref-0.13.2 "$(find "$RUNNER_TEMP/published" -name "kglite-$REFERENCE_VERSION-*.whl" -print -quit)"
-          install published "$(find "$RUNNER_TEMP/published" -name "kglite-$PUBLISHED_VERSION-*.whl" -print -quit)"
-          install runner "$(find src/dist-runner -name '*.whl' -print -quit)"
-          install manylinux-pin "$(find src/dist-manylinux-pin -name '*.whl' -print -quit)"
-          install manylinux-alt "$(find src/dist-manylinux-alt -name '*.whl' -print -quit)"
+          install() {
+            local variant=$1 wheel=$2 want=$3
+            test -n "$wheel" || { echo "::error::no wheel for $variant"; exit 1; }
+            python -m venv "$envs/$variant"
+            "$envs/$variant/bin/python" -m pip install --quiet -r requirements/benchmark.txt
+            "$envs/$variant/bin/python" -m pip install --quiet "$wheel"
+            got=$("$envs/$variant/bin/python" -c 'import kglite; print(kglite.__version__)')
+            echo "$variant: kglite $got from $wheel"
+            if [ -n "$want" ] && [ "$got" != "$want" ]; then
+              echo "::error::$variant has kglite $got, expected $want"; exit 1
+            fi
+          }
+          install ref-0.13.2 "$(fetch "$REFERENCE_VERSION")" "$REFERENCE_VERSION"
+          install published "$(fetch "$PUBLISHED_VERSION")" "$PUBLISHED_VERSION"
+          install runner "$(find src/dist-runner -name '*.whl' -print -quit)" ""
+          install manylinux-pin "$(find src/dist-manylinux-pin -name '*.whl' -print -quit)" ""
+          install manylinux-alt "$(find src/dist-manylinux-alt -name '*.whl' -print -quit)" ""
           mkdir -p "$RUNNER_TEMP/ab-harness" ab-results
           cp tests/benchmarks/test_bench_core.py "$RUNNER_TEMP/ab-harness/"
           lscpu | grep -m1 'Model name' | tee ab-results/cpu.txt
@@ -158,13 +170,20 @@ jobs:
           from pathlib import Path
 
           variants = ["ref-0.13.2", "published", "runner", "manylinux-pin", "manylinux-alt"]
-          best = {}
+          best, missing = {}, []
           for variant in variants:
               cells = {}
-              for path in sorted(Path("ab-results").glob(f"{variant}-r*.json")):
-                  for bench in json.loads(path.read_text())["benchmarks"]:
+              for round_ in (1, 2):
+                  path = Path("ab-results") / f"{variant}-r{round_}.json"
+                  benches = json.loads(path.read_text())["benchmarks"] if path.exists() else []
+                  if not benches:
+                      missing.append(path.name)
+                  for bench in benches:
                       cells[bench["name"]] = min(cells.get(bench["name"], float("inf")), bench["stats"]["min"])
               best[variant] = cells
+          uneven = [v for v in variants if set(best[v]) != set(best["ref-0.13.2"])]
+          if missing or uneven:
+              raise SystemExit(f"::error::A/B incomplete: no results in {missing}; cell set differs for {uneven}")
           print(f"CPU: {Path('ab-results/cpu.txt').read_text().strip()}\n")
           print("| cell | " + " | ".join(variants[1:]) + " |")
           print("|---|" + "---|" * (len(variants) - 1))
