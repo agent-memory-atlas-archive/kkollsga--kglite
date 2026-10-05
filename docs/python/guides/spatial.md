@@ -4,7 +4,8 @@
 
 ## Spatial Types
 
-Declare spatial properties via `column_types` when loading data. This enables auto-resolution in Cypher queries and fluent API methods.
+Declare spatial properties via `column_types` when loading data.
+This enables auto-resolution in Cypher queries and fluent API methods.
 
 | Type | Cardinality | Purpose |
 |------|-------------|---------|
@@ -112,10 +113,9 @@ graph.select('Block').contains_point(lat=60.5, lon=3.2)
 
 ## Constructive geometry (Cypher)
 
-Beyond the predicates (`distance`/`contains`/`intersects`) and measures
-(`area`/`perimeter`/`centroid`), Cypher exposes *constructive* operators that
-build new geometry from existing geometry. They return WKT, so results chain
-into other spatial functions or land in a GeoDataFrame.
+Cypher also exposes *constructive* operators that build new geometry from existing geometry.
+They sit beside the predicates (`distance`/`contains`/`intersects`) and measures (`area`/`perimeter`/`centroid`).
+They return WKT, so results chain into other spatial functions or land in a GeoDataFrame.
 
 | Function | Returns | Use |
 |----------|---------|-----|
@@ -143,9 +143,9 @@ graph.cypher("""
 """)
 ```
 
-`geom_buffer` builds a planar buffer at the geometry's centroid latitude
-(accurate locally; it degrades far from the centroid). `geom_convex_hull`
-also accepts variadic arguments, not just a list.
+`geom_buffer` builds a planar buffer at the geometry's centroid latitude.
+It is accurate locally and degrades far from the centroid.
+`geom_convex_hull` also accepts variadic arguments, not just a list.
 
 ## GeoDataFrame Export
 

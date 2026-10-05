@@ -6,9 +6,9 @@ for property enrichment and grouped collection.
 
 ## How the hierarchy works
 
-Every fluent chain starts with `select()`, which creates **level 0** —
-a flat set of nodes of a single type. Each subsequent `traverse()` or
-`compare()` call adds a new level, building a parent → child tree:
+Every fluent chain starts with `select()`, which creates **level 0**.
+Level 0 is a flat set of nodes of a single type.
+Each subsequent `traverse()` or `compare()` call adds a new level, building a parent → child tree:
 
 ```
 Level 0:  select('Field')         → [Field_A, Field_B]
@@ -138,19 +138,19 @@ grouped = graph.select('Field').traverse('HAS_WELL') \
 (presentation-dictionary-keys)=
 ### Presentation dictionary keys
 
-Group and connection dictionary keys are presentation labels. When labels
-collide, generated suffixes avoid every genuine label and metadata key in the
-same dictionary, so all parents, selected nodes, and connections remain
-present. The same result content receives deterministic keys, but the keys are
-not stable graph identifiers and may change after graph mutation or selection
-changes. Use returned ids and types, where available, for identity.
+Group and connection dictionary keys are presentation labels.
 
-The existing result layouts remain unchanged. Flattened `collect_grouped()`
-output with `parent_info=True` uses `nodes`; grouped output uses `children`.
-For `connections()`, parent metadata stays outside a non-flattened
-`connections` dictionary; flattened metadata shares that dictionary, and its
-keys are reserved against title collisions. Dictionary iteration order is not
-an API guarantee.
+- When labels collide, generated suffixes avoid every genuine label and metadata key in the same dictionary. All parents, selected nodes, and connections therefore remain present.
+- The same result content receives deterministic keys.
+- The keys are not stable graph identifiers and may change after graph mutation or selection changes.
+- Use returned ids and types, where available, for identity.
+
+The existing result layouts remain unchanged:
+
+- Flattened `collect_grouped()` output with `parent_info=True` uses `nodes`; grouped output uses `children`.
+- For `connections()`, parent metadata stays outside a non-flattened `connections` dictionary.
+- Flattened metadata shares that dictionary, and its keys are reserved against title collisions.
+- Dictionary iteration order is not an API guarantee.
 
 ## Common patterns
 

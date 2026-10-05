@@ -65,8 +65,8 @@ alice.relationships(include_node_properties=True)
 
 ### Comparison Operations
 
-For spatial, semantic, or clustering operations — where nodes are related
-by proximity rather than explicit edges — use `compare()`:
+For spatial, semantic, or clustering operations, use `compare()`.
+It relates nodes by proximity rather than explicit edges:
 
 ```python
 # Spatial: find wells inside structure polygons
@@ -122,10 +122,13 @@ n3.difference(m3)               # nodes in n3 but not m3
 n3.symmetric_difference(m3)     # nodes in exactly one (XOR)
 ```
 
-Both operands must be selections over the same immutable graph view. Sibling
-selections derived from one graph are compatible. Copies, unrelated graphs,
-and selections retained across a copy-on-write mutation or vacuum are separate
-views because their physical node slots are not interchangeable.
+Both operands must be selections over the same immutable graph view.
+Sibling selections derived from one graph are compatible.
+These are separate views, because their physical node slots are not interchangeable:
+
+- copies;
+- unrelated graphs;
+- selections retained across a copy-on-write mutation or vacuum.
 
 ## Retrieving Results
 
@@ -151,7 +154,7 @@ graph.node('Person', 1)       # → {'type': 'Person', 'title': 'Alice', ...} or
 
 ## Schema Introspection
 
-Methods for exploring graph structure — what types exist, what properties they have, and how they connect.
+These methods explore graph structure: what types exist, what properties they have, and how they connect.
 
 ### `schema()` — Full graph overview
 

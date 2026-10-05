@@ -20,7 +20,8 @@ graph.shortest_path_indices(...)   # → list[int] | None (raw graph indices, fa
 ```
 
 **Which options each method takes.** Every member of the family accepts the
-same traversal controls, so they all answer the same question:
+same traversal controls, so they all answer the same question.
+Only `weight_property` varies:
 
 | Method | `connection_types` / `via_types` / `direction` / `timeout_ms` | `weight_property` |
 | --- | --- | --- |
@@ -33,17 +34,17 @@ same traversal controls, so they all answer the same question:
 | `are_connected` | yes | no |
 | `all_paths` | yes | no |
 
-**`source_type` / `target_type` / `node_type` are an ID namespace.** They say
-which type to look the endpoint id up in — they never restrict which node
-types the path may pass through. So this:
+**`source_type` / `target_type` / `node_type` are an ID namespace.**
+They say which type to look the endpoint id up in.
+They never restrict which node types the path may pass through. So this:
 
 ```python
 graph.shortest_path_length("Person", 3, "Person", 4)
 ```
 
 happily answers `2` through a `City` node, because two people who live in the
-same city are two hops apart. If you meant "how far apart through *people*",
-say so:
+same city are two hops apart.
+If you meant "how far apart through *people*", say so:
 
 ```python
 graph.shortest_path_length("Person", 3, "Person", 4, via_types=["Person"])
@@ -52,11 +53,11 @@ graph.shortest_path_length("Person", 3, "Person", 4, connection_types=["KNOWS"])
 # → None
 ```
 
-`via_types` restricts the *intermediate* nodes only — the two endpoints are
-always allowed, whatever their type.
+`via_types` restricts the *intermediate* nodes only.
+The two endpoints are always allowed, whatever their type.
 
-**These methods are undirected by default.** Edges are traversed both ways
-whatever direction they were created in, unless you pass `direction`:
+**These methods are undirected by default.**
+Edges are traversed both ways whatever direction they were created in, unless you pass `direction`:
 
 ```python
 graph.shortest_path_length("Person", 1, "Person", 4)                        # 2 (either way)
@@ -64,17 +65,26 @@ graph.shortest_path_length("Person", 1, "Person", 4, direction="outgoing")  # 3 
 graph.shortest_path_length("Person", 1, "Person", 4, direction="incoming")  # None
 ```
 
-`direction` accepts `'outgoing'` / `'out'`, `'incoming'` / `'in'`, and
-`'any'` / `'both'` / `None` (the default). Anything else raises — it is never
-silently ignored. This is the same vocabulary `traverse()` and
-`where_connected()` use. Cypher's `shortestPath()` expresses the same thing
-with the arrow in the pattern (`(a)-[:KNOWS*..10]->(b)` is directed,
-`(a)-[:KNOWS*..10]-(b)` is not); see the `shortestPath()` section of
-`CYPHER.md`.
+`direction` accepts:
+
+- `'outgoing'` / `'out'`
+- `'incoming'` / `'in'`
+- `'any'` / `'both'` / `None` (the default)
+
+Anything else raises; it is never silently ignored.
+This is the same vocabulary `traverse()` and `where_connected()` use.
+
+Cypher's `shortestPath()` expresses the same thing with the arrow in the pattern.
+`(a)-[:KNOWS*..10]->(b)` is directed, and `(a)-[:KNOWS*..10]-(b)` is not.
+See the `shortestPath()` section of `CYPHER.md`.
 
 ### Weighted shortest path
 
-Pass `weight_property` to switch from BFS (hop count) to Dijkstra (sum of edge weights). Edges missing the property default to weight 1.0; negative weights cause the path to be reported as missing. The weighted search honours `connection_types`, `via_types` and `direction` exactly as the unweighted one does.
+Pass `weight_property` to switch from BFS (hop count) to Dijkstra (sum of edge weights).
+
+- Edges missing the property default to weight 1.0.
+- Negative weights cause the path to be reported as missing.
+- The weighted search honours `connection_types`, `via_types` and `direction` exactly as the unweighted one does.
 
 ```python
 # Cheapest path by edge.cost
@@ -88,8 +98,8 @@ result = graph.shortest_path(
 graph.shortest_path_length("Stop", "A", "Stop", "Z", weight_property="cost")  # → 4.7
 ```
 
-Batch variant for computing many distances at once — it builds the adjacency
-once for the whole batch, so it is far cheaper than a loop:
+To compute many distances at once, use the batch variant.
+It builds the adjacency once for the whole batch, so it is far cheaper than a loop:
 
 ```python
 distances = graph.shortest_path_lengths_batch('Person', [(1, 5), (2, 8), (3, 10)])
@@ -102,15 +112,15 @@ graph.shortest_path_lengths_batch(
 )
 ```
 
-A pair whose endpoint the filters exclude entirely (a person with no `KNOWS`
-edge, under `connection_types=['KNOWS']`) answers `None` — the same "no path"
-a disconnected pair gets, never an error.
+A pair whose endpoint the filters exclude entirely answers `None`.
+An example is a person with no `KNOWS` edge, under `connection_types=['KNOWS']`.
+This is the same "no path" a disconnected pair gets, never an error.
 
 ### One source, many targets
 
 `shortest_path_lengths_from()` walks outward from a single source once and
-returns `{node id: hop count}` — the one-to-many shape, where the batch is the
-many-to-many one:
+returns `{node id: hop count}`.
+It is the one-to-many shape, where the batch is the many-to-many one:
 
 ```python
 # Every Person within 3 hops of Alice.
@@ -129,23 +139,21 @@ contract:
   gave them, and an unreachable target maps to `None`. You asked about it, so
   you get an answer for it.
 * **Without `target_ids`** (discovery mode) you get only the nodes actually
-  reached. **Absent means unreachable** — or beyond `max_hops`. There are no
+  reached. **Absent means unreachable**, or beyond `max_hops`. There are no
   `None` values, because listing every unreached node in the graph is exactly
   the footgun this mode exists to avoid.
 
 For the same reason, at least one of `target_ids`, `target_type` or `max_hops`
-is required; an unbounded one-to-all walk is refused with a message naming the
-three bounds.
+is required.
+An unbounded one-to-all walk is refused with a message naming the three bounds.
 
-`target_type` filters the **result** (and is the id namespace `target_ids` are
-looked up in). It does not restrict the walk — `via_types` does that, and a
-node `via_types` excludes is still reported with its own distance while
-nothing is reached *through* it, exactly as the pair members exempt their
-endpoints.
+`target_type` filters the **result**, and is the id namespace `target_ids` are looked up in.
+It does not restrict the walk; `via_types` does that.
+A node `via_types` excludes is still reported with its own distance, but nothing is reached *through* it.
+The pair members exempt their endpoints in the same way.
 
-Unlike the pair members, a `timeout_ms` expiry **raises** here rather than
-answering `None`: a dict silently missing its far half is a wrong answer, not
-a missing one.
+Unlike the pair members, a `timeout_ms` expiry **raises** here rather than answering `None`.
+A dict silently missing its far half is a wrong answer, not a missing one.
 
 ## All Paths
 
@@ -175,25 +183,26 @@ graph.are_connected('Person', 1, 'Person', 100, connection_types=['KNOWS'])
 
 ## Cypher procedures: scoped subgraph algorithms
 
-Several algorithms are also exposed as Cypher `CALL` procedures so you can
-run them over a *subgraph* — one node type and one (or several) relationship
-types — instead of the whole graph. This is the idiomatic way to ask
-"components among `Person` nodes connected by `KNOWS`" without first
-extracting a separate graph.
+Several algorithms are also exposed as Cypher `CALL` procedures.
+They run over a *subgraph*, one node type and one (or several) relationship types, instead of the whole graph.
+This is the idiomatic way to ask "components among `Person` nodes connected by `KNOWS`" without first extracting a separate graph.
 
-All three share the same optional `{node_type, relationship}` scoping. Each
-field accepts a string or a list of strings; omit the map to run over the
-whole graph.
+All three share the same optional `{node_type, relationship}` scoping.
+Each field accepts a string or a list of strings.
+Omit the map to run over the whole graph.
 
 > **Edge-scope key:** `relationship` and `connection_types` are interchangeable
-> on every algorithm procedure — the centrality/community procedures historically
+> on every algorithm procedure. The centrality/community procedures historically
 > read `connection_types` and the components/k-core ones read `relationship`, but
-> either term now works anywhere. **Unknown config keys are rejected** with a
+> either term now works anywhere.
+>
+> **Unknown config keys are rejected** with a
 > did-you-mean (`CALL pagerank(): unknown config key 'connection_typ'. Did you
 > mean 'connection_types'?`) rather than silently producing an empty result.
-> (`where` predicate-scoping is supported by the centrality + community
-> procedures; the components/k-core/clustering group scopes by `node_type` +
-> `relationship` only.)
+>
+> `where` predicate-scoping is supported by the centrality + community
+> procedures. The components/k-core/clustering group scopes by `node_type` +
+> `relationship` only.
 
 ### Connected components
 
@@ -215,10 +224,10 @@ RETURN count(DISTINCT component) AS num_components
 
 ### K-core decomposition (coreness)
 
-The *coreness* of a node is the largest `k` for which it survives in the
-`k`-core (the maximal subgraph where every node has degree ≥ `k`). High
-coreness marks structurally central, resilient nodes. `k_core` and `coreness`
-are aliases.
+The *coreness* of a node is the largest `k` for which it survives in the `k`-core.
+The `k`-core is the maximal subgraph where every node has degree ≥ `k`.
+High coreness marks structurally central, resilient nodes.
+`k_core` and `coreness` are aliases.
 
 ```cypher
 CALL k_core() YIELD node, coreness
@@ -232,10 +241,9 @@ RETURN coreness, count(*) AS n ORDER BY coreness DESC
 
 ### Local clustering coefficient
 
-The fraction of a node's neighbour pairs that are themselves connected — the
-local triangle-closure rate (0.0 = no neighbours linked, 1.0 = neighbourhood
-is a clique). `clustering_coefficient` and `local_clustering_coefficient` are
-aliases.
+The coefficient is the fraction of a node's neighbour pairs that are themselves connected.
+It is the local triangle-closure rate: 0.0 means no neighbours are linked, and 1.0 means the neighbourhood is a clique.
+`clustering_coefficient` and `local_clustering_coefficient` are aliases.
 
 ```cypher
 CALL clustering_coefficient() YIELD node, coefficient
@@ -247,8 +255,8 @@ YIELD node, coefficient
 RETURN avg(coefficient) AS global_avg
 ```
 
-Scoping is computed lazily over the live graph (no copy), so these run
-identically across the in-memory, mapped, and disk storage modes.
+Scoping is computed lazily over the live graph (no copy).
+These procedures therefore run identically across the in-memory, mapped, and disk storage modes.
 
 ## Centrality Algorithms
 
@@ -288,11 +296,14 @@ result = graph.louvain_communities(weight_property='strength', resolution=1.5)
 result = graph.label_propagation(max_iterations=100)
 ```
 
-Communities also drive Graph RAG retrieval over relationships. The
-[relationship communities recipe](semantic-search.md#relationship-communities)
-runs `CALL louvain` over a Graph RAG extraction graph, separates intra-community relations
-from bridge relations, ranks one community's relations against a question, and
-ranks community summaries first.
+Communities also drive Graph RAG retrieval over relationships.
+The [relationship communities recipe](semantic-search.md#relationship-communities)
+runs `CALL louvain` over a Graph RAG extraction graph.
+The recipe also:
+
+- separates intra-community relations from bridge relations;
+- ranks one community's relations against a question;
+- ranks community summaries first.
 
 ## Clustering
 
