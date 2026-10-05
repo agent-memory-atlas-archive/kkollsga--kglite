@@ -696,6 +696,7 @@ fn item_prop(graph: &DirGraph, id: i64, property: &str) -> Option<Value> {
 
 mod fidelity;
 mod forked_free_list;
+mod forked_state_machine;
 mod held_reader;
 mod journal_invariants;
 mod row_undo;
