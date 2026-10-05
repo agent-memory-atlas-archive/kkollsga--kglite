@@ -41,7 +41,12 @@ def _graph(storage: str | None, index: bool, tmp_path) -> kglite.KnowledgeGraph:
         column_types={"vt": "date", "ts": "timestamp", "text": "string"},
     )
     if index:
-        graph.create_index("M", "vt")
+        if storage == "disk":
+            # A disk index covers string columns only; a date column refuses.
+            with pytest.raises(ValueError, match="indexed no values for 'M.vt'"):
+                graph.create_index("M", "vt")
+        else:
+            graph.create_index("M", "vt")
         graph.create_index("M", "text")
     return graph
 
