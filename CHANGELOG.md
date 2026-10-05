@@ -68,6 +68,12 @@ before upgrading.
   | `cardinality_violation` | 637 ms, +1.33 GB | 146 ms, +0.54 GB |
   | `describe()` | 2.2 s, +2.3 GB | 0.3 s, +0.07 GB |
   | `neighbors_schema()` | 4.8 s, +2.5 GB | 0.9 s, +0 MB |
+- `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships is now
+  served from the embedding store when scores tie. It used to fall back to
+  scoring every relationship: 13.4 ms instead of 0.11 ms on 32,000
+  relationships with duplicate vectors (6.4 ms instead of 0.012 ms with an
+  index). Which tied relationships fill the last places, and their order, is
+  unspecified; the store ranks them by relationship index.
 
 ## [0.19.3] - 2026-10-05
 

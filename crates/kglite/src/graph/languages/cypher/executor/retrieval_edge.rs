@@ -26,12 +26,16 @@
 //! without a store. Each store scores under its own metric, exactly as the
 //! scalar does row by row, so the merge ranks what the unfused query ranks.
 //!
-//! **Tie order.** The unfused query ranks equal scores in the order the
-//! pattern matcher produced the rows, which the entry never sees. So the entry
-//! declines whenever the k+1 best scores are not strictly decreasing, and the
-//! generic route answers instead: the fused answer is then identical to the
-//! unfused one, not merely equivalent. The rows route breaks ties by row
-//! position, exactly as the node arm does.
+//! **Tie order.** Which of several relationships with an equal score make the
+//! cut, and in what order, is unspecified. The entry ranks by score, then by
+//! relationship index: each store's exact route already ranks its whole
+//! population that way, so its best k+1 hold every member of the global top k
+//! and the merge is exact. (Through HNSW the members are approximate, ties
+//! included.) The unfused query ranks ties in the order the pattern matcher
+//! produced the rows, so on a tie at the cut the two answers can name
+//! different relationships with the same scores; declining on every tie to
+//! stay row-identical sent any store with duplicate texts to the full scan.
+//! The rows route breaks ties by row position, exactly as the node arm does.
 use super::retrieval::{FusedTopK, HnswOutcome, VectorScoreArgs};
 use super::*;
 use crate::graph::algorithms::vector::DistanceMetric;
@@ -128,14 +132,12 @@ fn store_label(rel_types: &[&str], property: &str) -> String {
         .join(",")
 }
 
-/// Whether the k+1 best hits leave the first k ranked by score alone: no two
-/// equal scores among them, none tied with the first excluded hit, no NaN.
-fn ranked_by_score_alone(hits: &[EdgeVectorQueryHit], limit: usize) -> bool {
-    let considered = &hits[..hits.len().min(limit + 1)];
-    considered.iter().all(|hit| !hit.score.is_nan())
-        && considered
-            .windows(2)
-            .all(|pair| pair[0].score > pair[1].score)
+/// Whether the k+1 best hits are all numbers: a NaN score ranks differently
+/// under the merge's total order than under `ORDER BY`, so the entry declines.
+fn scores_are_numbers(hits: &[EdgeVectorQueryHit], limit: usize) -> bool {
+    hits[..hits.len().min(limit + 1)]
+        .iter()
+        .all(|hit| !hit.score.is_nan())
 }
 
 impl<'a> CypherExecutor<'a> {
@@ -217,9 +219,14 @@ impl<'a> CypherExecutor<'a> {
         let search_method = per_store[0].search_method;
         let mut merged: Vec<EdgeVectorQueryHit> =
             per_store.into_iter().flat_map(|store| store.hits).collect();
-        merged.sort_by(|left, right| right.score.total_cmp(&left.score));
+        merged.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.edge.cmp(&right.edge))
+        });
         merged.truncate(limit.saturating_add(1));
-        if !ranked_by_score_alone(&merged, limit) {
+        if !scores_are_numbers(&merged, limit) {
             return Ok(None);
         }
         let rows = merged

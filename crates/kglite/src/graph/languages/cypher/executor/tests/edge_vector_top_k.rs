@@ -1,7 +1,10 @@
 //! `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships: the fused
 //! relationship route must return exactly what the unfused pipeline returns —
 //! rows, order, endpoint projection — on every shape, with and without an
-//! index, and including ties, NULL scores and filtered populations.
+//! index, and including NULL scores and filtered populations. On tied scores
+//! the order is unspecified: the store entry ranks ties by relationship
+//! index, the unfused query by matcher order, so a tied cut is compared by
+//! scores and by the rows above the tie.
 use super::*;
 use crate::graph::languages::cypher::result::{CypherResult, RetrievalDiagnostics};
 use crate::graph::session::execute::{execute_mut, execute_read, ExecuteOptions};
@@ -73,6 +76,32 @@ fn assert_same(graph: &DirGraph, query: &str) -> CypherResult {
     fused
 }
 
+/// [`assert_same`] up to tie order: the same columns and scores (column
+/// `score`), and for every score but the last the same rows in some order.
+/// The last score's rows may be different members of a group the cut split.
+fn assert_same_up_to_ties(graph: &DirGraph, query: &str, score: usize) -> CypherResult {
+    let fused = read(graph, query, false);
+    let unfused = read(graph, query, true);
+    assert_eq!(fused.columns, unfused.columns, "{query}");
+    let scores = |result: &CypherResult| -> Vec<Value> {
+        result.rows.iter().map(|row| row[score].clone()).collect()
+    };
+    assert_eq!(scores(&fused), scores(&unfused), "{query}");
+    let last = fused.rows.last().map(|row| row[score].clone());
+    let settled = |result: &CypherResult| -> Vec<String> {
+        let mut rows: Vec<String> = result
+            .rows
+            .iter()
+            .filter(|row| Some(&row[score]) != last.as_ref())
+            .map(|row| format!("{row:?}"))
+            .collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(settled(&fused), settled(&unfused), "{query}");
+    fused
+}
+
 fn retrieval(result: &CypherResult) -> Vec<RetrievalDiagnostics> {
     result
         .diagnostics
@@ -140,17 +169,25 @@ fn endpoints_resolve_for_the_winners() {
 #[test]
 fn ties_nulls_where_and_asc_keep_the_unfused_answer() {
     let graph = corpus(true);
-    // k=1 and k=4 tie for first: the entry declines, order is the matcher's.
-    assert_same(
-        &graph,
-        "MATCH ()-[r:C]->() RETURN r.k AS k, vector_score(r, 'text_emb', [1.0, 0.0]) AS s \
-         ORDER BY s DESC LIMIT 1",
+    // k=1 and k=4 tie for first. The entry serves the tie, ranking k=1 (the
+    // lower relationship index) first; the matcher yields k=4 first.
+    let tied = |limit: usize| {
+        format!(
+            "MATCH ()-[r:C]->() RETURN r.k AS k, vector_score(r, 'text_emb', [1.0, 0.0]) AS s \
+             ORDER BY s DESC LIMIT {limit}"
+        )
+    };
+    let fused = assert_same_up_to_ties(&graph, &tied(1), 1);
+    assert_eq!(fused.rows[0][0], Value::Int64(1));
+    let unfused = read(&graph, &tied(1), true);
+    assert_eq!(
+        unfused.rows[0][0],
+        Value::Int64(4),
+        "the corpus must put matcher order against index order, or the tie case is vacuous"
     );
-    assert_same(
-        &graph,
-        "MATCH ()-[r:C]->() RETURN r.k AS k, vector_score(r, 'text_emb', [1.0, 0.0]) AS s \
-         ORDER BY s DESC LIMIT 5",
-    );
+    let fused = assert_same_up_to_ties(&graph, &tied(5), 1);
+    let ks: Vec<Value> = fused.rows.iter().map(|row| row[0].clone()).collect();
+    assert_eq!(&ks[..2], &[Value::Int64(1), Value::Int64(4)]);
     assert_same(
         &graph,
         "MATCH (a)-[r:C]->(b) WHERE b.id > 2 RETURN r.k AS k, \
@@ -261,9 +298,11 @@ fn the_store_entry_serves_exactly_the_store_shaped_scans() {
         entry(&graph, &q("(a)<-[r:C]-(b)", "[0.0, 1.0]", 3)),
         Some(3)
     );
-    // Tie at the boundary, an unembedded relationship, a label that excludes
-    // one relationship of the type, a WHERE: all left to the pipeline.
-    assert_eq!(entry(&graph, &q("()-[r:C]->()", "[1.0, 0.0]", 1)), None);
+    // A tie at the boundary is served (ranked by relationship index).
+    assert_eq!(entry(&graph, &q("()-[r:C]->()", "[1.0, 0.0]", 1)), Some(1));
+    assert_eq!(entry(&graph, &q("()-[r:C]->()", "[1.0, 0.0]", 2)), Some(2));
+    // An unembedded relationship, a label that excludes one relationship of
+    // the type, a WHERE: all left to the pipeline.
     assert_eq!(entry(&sparse, &q("()-[r:C]->()", "[0.0, 1.0]", 3)), None);
     assert_eq!(entry(&graph, &q("(:Hub)-[r:C]->()", "[0.0, 1.0]", 3)), None);
     assert_eq!(

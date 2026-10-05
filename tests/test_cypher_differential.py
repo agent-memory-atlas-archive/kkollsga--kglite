@@ -28,6 +28,7 @@ query to DIFFERENTIAL_QUERIES** so the regression is permanent.
 from __future__ import annotations
 
 import math
+import re
 
 import pytest
 
@@ -1501,9 +1502,10 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     ),
     # `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships: the
     # trigger shape on an indexed and an unindexed store, endpoint projection
-    # in both directions, a tie at the boundary (the store entry declines and
-    # the matcher's tie order stands), and the WHERE / ASC / NULL-scoring
-    # shapes that keep the pipeline route.
+    # in both directions, a tie at the boundary (the store entry ranks it by
+    # relationship index; compared up to tie order, see
+    # TIE_INSENSITIVE_CASES), and the WHERE / ASC / NULL-scoring shapes that
+    # keep the pipeline route.
     (
         "edge_vector_topk_indexed_scan",
         "edge_vector_differential_graph",
@@ -7821,6 +7823,27 @@ def _normalize(rows: list[dict], *, order="bag") -> list[tuple]:
     return canonical_rows(rows, order=order)
 
 
+# Top-k cases whose order among equal scores is unspecified, by score column.
+# The relationship store entry ranks a tie by relationship index and the
+# unfused query by matcher order, so at a tied cut the two may hold different
+# members of the tied group (`retrieval_edge.rs`, "Tie order").
+TIE_INSENSITIVE_CASES = {"edge_vector_topk_ties": "s"}
+
+
+def _same_up_to_ties(got: list[dict], naive: list[dict], every_row: list[dict], score: str) -> bool:
+    """`got` ranks the scores `naive` does, holds the same rows at every score
+    but the last, and at the last only members of that score's whole group
+    (`every_row`: the naive answer without its LIMIT)."""
+    if [row[score] for row in got] != [row[score] for row in naive]:
+        return False
+    last = got[-1][score] if got else None
+    settled = [_normalize([row for row in rows if row[score] != last]) for rows in (got, naive)]
+    group = _normalize([row for row in every_row if row[score] == last])
+    return settled[0] == settled[1] and all(
+        canon in group for canon in _normalize([row for row in got if row[score] == last])
+    )
+
+
 @pytest.mark.differential
 @pytest.mark.parametrize(
     "name,fixture,query,params",
@@ -7846,6 +7869,17 @@ def test_optimized_matches_naive(
     assert list(optimized_result.columns) == list(naive_result.columns), (
         f"Optimizer column divergence on `{name}`: {optimized_result.columns} vs {naive_result.columns}"
     )
+    if name in TIE_INSENSITIVE_CASES:
+        score = TIE_INSENSITIVE_CASES[name]
+        unlimited = re.sub(r"\s+LIMIT\s+\d+\s*$", "", query)
+        assert unlimited != query, name
+        every_row = g.cypher(unlimited, disable_optimizer=True, **kwargs).to_list()
+        naive_rows = naive_result.to_list()
+        for label, kw in [("optimized", {})] + [(p, {"disabled_passes": [p]}) for p in kglite.cypher_pass_names()]:
+            rows = optimized_result.to_list() if not kw else g.cypher(query, **kw, **kwargs).to_list()
+            assert _same_up_to_ties(rows, naive_rows, every_row, score), (name, label, rows, naive_rows)
+        return
+
     naive = _normalize(naive_result.to_list(), order=order)
     optimized = _normalize(optimized_result.to_list(), order=order)
 
