@@ -286,6 +286,11 @@ release-preflight:
 ##  - every internal kglite dependency requirement matches the workspace version
 ##  - CHANGELOG [Unreleased] has no duplicate/bespoke `###` headings, and no
 ##    `TODO:` marker written by refresh_release_constants.py survived
+## Prose-density ratchet for the user docs (write-docs skill): no doc may get
+## denser than its baseline. After a deliberate rewrite: python3 scripts/check_doc_density.py --update
+check-doc-density:
+	python3 scripts/check_doc_density.py
+
 check-release-hygiene:
 	python3 scripts/bump_version.py --check
 	python3 scripts/check_release_hygiene.py
@@ -322,7 +327,7 @@ notify-downstream:
 ## Fast local checkpoint. Pair this with the smallest package/test filter
 ## covering the change. Policy audits, workspace clippy, stubtest, packaged-
 ## consumer verification, and the broad test matrix run in CI.
-gate: lint check-docs-facts check-release-hygiene check-skill-mirrors check-dev-docs
+gate: lint check-docs-facts check-release-hygiene check-skill-mirrors check-dev-docs check-doc-density
 
 ## Fast formatting/static lint. Intentionally performs no Rust compilation,
 ## metadata walk, or runtime import.

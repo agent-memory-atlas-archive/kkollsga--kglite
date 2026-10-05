@@ -512,6 +512,11 @@ Docs auto-rebuild at [kglite.readthedocs.io](https://kglite.readthedocs.io) on e
 - **Fluent API reference**: `FLUENT.md`.
 - **Guide content**: `docs/python/guides/*.md`.
 - **README.md**: landing page only — don't duplicate guide content.
+- **Writing style**: any prose under `docs/`, the top-level `.md` files or
+  `CHANGELOG.md` follows the `write-docs` skill (rule first, one idea per
+  sentence, lists and tables, breaking changes first in each release).
+  `make gate` runs `check-doc-density`, so a doc cannot get denser than its
+  baseline.
 
 ## dev-docs steers the sprint; commits are the durable record
 
