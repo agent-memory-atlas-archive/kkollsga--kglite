@@ -281,9 +281,13 @@ impl<'a> CypherExecutor<'a> {
                 *date,
                 crate::graph::features::timeseries::DatePrecision::Day,
             ))),
+            Value::Timestamp(t) => Ok(Some((
+                t.date(),
+                crate::graph::features::timeseries::DatePrecision::Day,
+            ))),
             Value::Null => Ok(None),
             _ => Err(format!(
-                "ts_*() date argument must be a string, integer, date, or null, got {:?}",
+                "ts_*() date argument must be a string, integer, date, datetime, or null, got {:?}",
                 v
             )),
         }

@@ -577,7 +577,7 @@ Suppose `monthly_sales.csv` contains per-employee sales data:
 Key points:
 
 - **`time_key`** — a single column name (`"date_col"`) or a composite dict (`{"year": "yr", "month": "mo"}`). Composite keys support `year`, `month`, `day`, `hour`.
-- **`resolution`** — `"year"`, `"month"`, `"day"`, or `"hour"`.
+- **`resolution`** — `"year"`, `"month"`, or `"day"`.
 - **`channels`** — maps channel names (what you want to call them) to CSV column names (what they're called in the file). Format: `{"channel_name": "csv_column_name"}`.
 - **`units`** — optional per-channel units.
 

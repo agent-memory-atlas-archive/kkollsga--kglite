@@ -161,6 +161,50 @@ pub fn expand_end(date: NaiveDate, precision: DatePrecision) -> NaiveDate {
 
 use chrono::Datelike;
 
+impl DatePrecision {
+    fn depth(self) -> u8 {
+        match self {
+            DatePrecision::Year => 1,
+            DatePrecision::Month => 2,
+            DatePrecision::Day => 3,
+        }
+    }
+}
+
+/// The key of the period of a `resolution` series that contains `date`: the
+/// first day of its year / month, or the day itself. An unrecognised or empty
+/// resolution leaves the date unchanged (exact lookup).
+pub fn snap_to_period(date: NaiveDate, resolution: &str) -> NaiveDate {
+    match resolution {
+        "year" => NaiveDate::from_ymd_opt(date.year(), 1, 1).unwrap_or(date),
+        "month" => NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap_or(date),
+        _ => date,
+    }
+}
+
+/// `ts_at` reads one period, so a key coarser than the series resolution
+/// (`'2015'` on a month series) names several of them and is refused; a key
+/// as fine as the resolution or finer snaps to the period containing it.
+pub fn check_lookup_precision(precision: DatePrecision, resolution: &str) -> Result<(), String> {
+    let (depth, name) = match resolution {
+        "year" => (1, "year"),
+        "month" => (2, "month"),
+        "day" => (3, "day"),
+        _ => return Ok(()),
+    };
+    if precision.depth() >= depth {
+        return Ok(());
+    }
+    let (got_name, example) = match precision {
+        DatePrecision::Year => ("year", "'YYYY-M'"),
+        _ => ("month", "'YYYY-M-D'"),
+    };
+    Err(format!(
+        "ts_at() key precision '{got_name}' is coarser than the series resolution '{name}'; \
+         give a {name}-level key such as {example}, or use ts_sum/ts_avg/ts_series for a range"
+    ))
+}
+
 // ─── Lookup helpers ──────────────────────────────────────────────────────────
 
 /// Binary search for an exact NaiveDate key. Returns the index if found.
@@ -582,5 +626,20 @@ mod tests {
         assert_eq!(date_from_ymd(2020, 6, 15).unwrap(), d(2020, 6, 15));
         assert_eq!(date_from_ymd(2020, 6, 1).unwrap(), d(2020, 6, 1));
         assert!(date_from_ymd(2020, 13, 1).is_err());
+    }
+
+    #[test]
+    fn snapping_and_lookup_precision() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        assert_eq!(snap_to_period(d(2015, 6, 15), "month"), d(2015, 6, 1));
+        assert_eq!(snap_to_period(d(2015, 6, 15), "year"), d(2015, 1, 1));
+        assert_eq!(snap_to_period(d(2015, 6, 15), "day"), d(2015, 6, 15));
+        assert_eq!(snap_to_period(d(2015, 6, 15), ""), d(2015, 6, 15));
+        assert!(check_lookup_precision(DatePrecision::Day, "month").is_ok());
+        assert!(check_lookup_precision(DatePrecision::Month, "month").is_ok());
+        assert!(check_lookup_precision(DatePrecision::Year, "year").is_ok());
+        assert!(check_lookup_precision(DatePrecision::Year, "month").is_err());
+        assert!(check_lookup_precision(DatePrecision::Month, "day").is_err());
+        assert!(check_lookup_precision(DatePrecision::Year, "").is_ok());
     }
 }

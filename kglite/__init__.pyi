@@ -2282,12 +2282,12 @@ class KnowledgeGraph:
 
                 - ``time`` (required): column name containing date strings
                   (``'yyyy-mm'``, ``'yyyy-mm-dd'``, ``'yyyy-mm-dd hh:mm'``),
-                  or a dict mapping ``year``/``month``/``day``/``hour``/``minute``
+                  or a dict mapping ``year``/``month``/``day``
                   to column names (e.g. ``{'year': 'ar', 'month': 'maned'}``).
                 - ``channels`` (required): list of column names for timeseries
                   data (e.g. ``['oil', 'gas', 'condensate']``).
-                - ``resolution`` (optional): ``'year'``, ``'month'``, ``'day'``,
-                  ``'hour'``, or ``'minute'``. Auto-detected from time format if omitted.
+                - ``resolution`` (optional): ``'year'``, ``'month'``, or ``'day'``.
+                  Auto-detected from time format if omitted.
                 - ``units`` (optional): dict mapping channel names to unit strings
                   (e.g. ``{'oil': 'MSm3'}``).
             labels: Optional secondary labels to apply to every node in

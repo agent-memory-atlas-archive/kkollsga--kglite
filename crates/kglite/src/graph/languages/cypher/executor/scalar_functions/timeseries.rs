@@ -17,11 +17,14 @@ impl<'a> CypherExecutor<'a> {
                 if args.len() != 2 {
                     return Err("ts_at() requires 2 arguments: (n.channel, '2020-2')".into());
                 }
-                let (ts, channel, _config) = self.resolve_timeseries_channel(&args[0], row)?;
+                let (ts, channel, config) = self.resolve_timeseries_channel(&args[0], row)?;
                 let date_arg = self.resolve_ts_date_arg(&args[1], row)?;
                 match date_arg {
-                    Some((date, _prec)) => {
-                        match crate::graph::features::timeseries::find_key_index(&ts.keys, date) {
+                    Some((date, prec)) => {
+                        use crate::graph::features::timeseries as tsf;
+                        tsf::check_lookup_precision(prec, &config.resolution)?;
+                        let key = tsf::snap_to_period(date, &config.resolution);
+                        match tsf::find_key_index(&ts.keys, key) {
                             Some(idx) => {
                                 let v = channel[idx];
                                 if v.is_finite() {
@@ -106,27 +109,30 @@ impl<'a> CypherExecutor<'a> {
                         "ts_delta() requires 3 arguments: (n.channel, '2019-12', '2021-1')".into(),
                     );
                 }
-                let (ts, channel, _config) = self.resolve_timeseries_channel(&args[0], row)?;
+                let (ts, channel, config) = self.resolve_timeseries_channel(&args[0], row)?;
                 let a1 = self.resolve_ts_date_arg(&args[1], row)?;
                 let a2 = self.resolve_ts_date_arg(&args[2], row)?;
-                let v1 = a1.and_then(|(date, prec)| {
-                    let end = crate::graph::features::timeseries::expand_end(date, prec);
-                    let (lo, hi) = crate::graph::features::timeseries::find_range(
-                        &ts.keys,
-                        Some(date),
-                        Some(end),
-                    );
-                    if lo < hi { Some(channel[lo]) } else { None }.filter(|v| v.is_finite())
-                });
-                let v2 = a2.and_then(|(date, prec)| {
-                    let end = crate::graph::features::timeseries::expand_end(date, prec);
-                    let (lo, hi) = crate::graph::features::timeseries::find_range(
-                        &ts.keys,
-                        Some(date),
-                        Some(end),
-                    );
-                    if lo < hi { Some(channel[lo]) } else { None }.filter(|v| v.is_finite())
-                });
+                // The first entry of the period the key names; a key finer than the
+                // resolution starts its search at the containing period's key.
+                let first_in = |arg: Option<(
+                    chrono::NaiveDate,
+                    crate::graph::features::timeseries::DatePrecision,
+                )>| {
+                    arg.and_then(|(date, prec)| {
+                        let start = crate::graph::features::timeseries::snap_to_period(
+                            date,
+                            &config.resolution,
+                        );
+                        let end = crate::graph::features::timeseries::expand_end(date, prec);
+                        let (lo, hi) = crate::graph::features::timeseries::find_range(
+                            &ts.keys,
+                            Some(start),
+                            Some(end),
+                        );
+                        if lo < hi { Some(channel[lo]) } else { None }.filter(|v| v.is_finite())
+                    })
+                };
+                let (v1, v2) = (first_in(a1), first_in(a2));
                 match (v1, v2) {
                     (Some(a), Some(b)) => Ok(Value::Float64(b - a)),
                     _ => Ok(Value::Null),

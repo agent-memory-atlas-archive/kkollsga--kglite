@@ -4337,7 +4337,7 @@ probe with a [`ClosureProbe` row](#explain).
 
 ## Timeseries Functions
 
-Query time-indexed numeric data attached to nodes. All date arguments are strings (`'2020'`, `'2020-2'`, `'2020-2-15'`), and precision is validated against the data's resolution.
+Query time-indexed numeric data attached to nodes. Date arguments are strings (`'2020'`, `'2020-2'`, `'2020-2-15'`), integers (a year), `date(…)` or `datetime(…)` values. A series' resolution is `year`, `month` or `day`; each entry is keyed by the first day of its period.
 
 ### Date-string syntax
 
@@ -4347,7 +4347,10 @@ Query time-indexed numeric data attached to nodes. All date arguments are string
 | `'2020-2'` | month | month, day |
 | `'2020-2-15'` | day | day only |
 
-**Precision rule:** Query depth must be ≤ data resolution for range functions (`ts_sum`, `ts_avg`, etc.). For exact-lookup functions (`ts_at`), query depth must equal the data resolution. Querying with day precision on month-resolution data produces an error.
+**Precision rule:**
+- `ts_at` reads one entry. A key as fine as the series resolution or finer reads the period that *contains* it: on a month series `'2015-6-15'`, `date('2015-06-15')` and `datetime('2015-06-15T13:00:00')` all read June 2015. A key coarser than the resolution (`'2015'` or `2015` on a month series) names several periods and is an error.
+- Range functions (`ts_sum`, `ts_avg`, `ts_min`, `ts_max`, `ts_count`, `ts_series`) count an entry when its key (the first day of its period) lies in `[start, end]`; a string or integer bound expands to its whole year or month. A day-level bound therefore does not cut a month in half: on a month series `ts_sum(ch, date('2015-02-15'), date('2015-04-15'))` covers the March and April entries only (the February key, 02-01, lies before the start), while `ts_sum(ch, '2015-2', '2015-4')` covers February to April.
+- `ts_delta` takes the first entry of the period each bound names; a bound finer than the resolution starts at the containing period.
 
 ### Functions
 
@@ -4360,7 +4363,7 @@ Query time-indexed numeric data attached to nodes. All date arguments are string
 | `ts_min(n.channel [, 'start'] [, 'end'])` | 1-3 | Float | Minimum value in range |
 | `ts_max(n.channel [, 'start'] [, 'end'])` | 1-3 | Float | Maximum value in range |
 | `ts_count(n.channel)` | 1 | Integer | Count of non-NaN values |
-| `ts_at(n.channel, 'date')` | 2 | Float/null | Exact key lookup (depth must match resolution) |
+| `ts_at(n.channel, 'date')` | 2 | Float/null | The entry of the period containing the key (a coarser key is an error) |
 | `ts_first(n.channel)` | 1 | Float/null | First non-NaN value in series |
 | `ts_last(n.channel)` | 1 | Float/null | Last non-NaN value in series |
 | `ts_delta(n.channel, 'from', 'to')` | 3 | Float/null | Value at 'to' minus value at 'from' (prefix match) |
@@ -4407,22 +4410,22 @@ graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_series(f.oil, '2015', '
 graph.cypher("MATCH (s:Sensor) RETURN s.title, ts_last(s.temperature) AS latest")
 ```
 
-### Precision validation
+### Precision
 
 ```python
-# OK: year query on month data (coarser → aggregates all months)
+# OK: year query on month data (a range: aggregates all months of 2020)
 graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, '2020')")
 
-# OK: month query on month data (exact match)
+# OK: month, day, date and datetime keys on month data read the containing month
 graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020-3')")
+graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, date('2020-03-15'))")
 
-# ERROR: day query on month data (finer than data resolution)
-graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, '2020-3-15')")
-# → "Query precision 'day' (depth 3) exceeds data resolution 'month' (depth 2)"
-
-# ERROR: year query with ts_at on month data (depth must match for exact lookup)
+# ERROR: a year key with ts_at on month data names twelve entries
 graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020')")
-# → "Exact lookup requires 2 date components for 'month' resolution, got 1"
+# → "ts_at() key precision 'year' is coarser than the series resolution 'month'; …"
+
+# Range bounds are key-in-range: the 2020-02 entry (key 2020-02-01) is before 02-15
+graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, date('2020-02-15'), date('2020-04-15'))")
 ```
 
 ## Naming — identifiers, reserved words & structural accessors

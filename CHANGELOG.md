@@ -94,6 +94,18 @@ before upgrading.
 
 ### Fixed
 
+- `ts_at(n.channel, key)` with a `date(…)`, `datetime(…)` or finer-than-resolution
+  string key now reads the period that contains it (a month series with
+  `date('2015-06-15')` returns June's value; it returned `null`, because the
+  lookup was exact on the period's first day). `datetime` values are accepted
+  by every `ts_*` date argument, and `ts_delta` starts at the period containing
+  a finer bound. A key coarser than the series resolution (`'2015'` on a month
+  series) is an error for `ts_at` again, as documented (it silently read
+  January). Range functions are unchanged: a period counts when its key, the
+  first day of the period, lies in `[start, end]`. The docs now state both
+  rules, and no longer list `hour`/`minute` series resolutions, which are
+  rejected.
+
 - The duplicate-id warning of a blueprint or `from_records` build is no longer
   capped for the rest of the process: it joins the build's warnings, once per
   build, and is not raised for the versioned rows of a type the blueprint

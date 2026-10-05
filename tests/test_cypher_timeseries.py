@@ -49,11 +49,10 @@ def test_ts_at_missing_key(ts_graph):
     assert result[0]["val"] is None
 
 
-def test_ts_at_year_returns_jan(ts_graph):
-    """ts_at with year precision returns the Jan 1 value (first-of-year key)."""
-    result = ts_graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_at(f.oil, '2020') AS val")
-    # '2020' → NaiveDate(2020-01-01) → matches 2020-01-01 key → oil = 1.0
-    assert result[0]["val"] == 1.0
+def test_ts_at_year_key_on_month_series_is_an_error(ts_graph):
+    """A key coarser than the series resolution names several periods; ts_at refuses it."""
+    with pytest.raises(Exception, match="coarser than the series resolution 'month'"):
+        ts_graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_at(f.oil, '2020') AS val")
 
 
 # ── ts_sum ────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ Configure timeseries metadata per node type: resolution, channel names, units, a
 
 ```python
 graph.set_timeseries("Field",
-    resolution="month",                         # "year", "month", "day", "hour", "minute"
+    resolution="month",                         # "year", "month" or "day"
     channels=["oil", "gas"],                    # channel names
     units={"oil": "MSm3", "gas": "BSm3"},      # optional: per-channel units
     bin_type="total",                            # optional: "total", "mean", or "sample"
@@ -39,7 +39,7 @@ graph.add_ts_channel(node_id, "oil", [1.23, 1.18, 1.25])
 graph.add_ts_channel(node_id, "gas", [0.45, 0.42, 0.48])
 ```
 
-**Validation:** `time_key` column count must match resolution depth (1 for year, 2 for month, 3 for day, 4 for hour, 5 for minute).
+**Validation:** `time_key` column count must match resolution depth (1 for year, 2 for month, 3 for day).
 
 ## Inline Loading via `add_nodes`
 
@@ -69,7 +69,7 @@ The `timeseries` dict accepts:
 |-----|------|----------|-------------|
 | `time` | `str` or `dict` | Yes | Date string column name, or dict mapping resolution levels to column names |
 | `channels` | `list[str]` | Yes | Column names containing numeric time-varying data |
-| `resolution` | `str` | No | `"year"`, `"month"`, `"day"`, `"hour"`, `"minute"` — auto-detected if omitted |
+| `resolution` | `str` | No | `"year"`, `"month"`, `"day"` — auto-detected if omitted |
 | `units` | `dict[str, str]` | No | Per-channel unit labels |
 
 **Separate time columns** — when time is split across multiple columns:
