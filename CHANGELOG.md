@@ -9,6 +9,12 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-10-05
+
+0.19.2 was published to PyPI only: its crates were held back because of the
+implicit parent edge regression fixed below, so on crates.io 0.19.3 follows
+0.19.1 and carries every 0.19.2 change as well.
+
 ### Added
 
 - Bitemporal guide: a "From successive snapshots" recipe for sources that
@@ -120,6 +126,8 @@ before upgrading.
   `OF_TEAM_V2` (it was `OF_PROJECTPHASE`). A single-word parent is unchanged.
   Graphs rebuilt from a blueprint with a multi-word parent carry the new name,
   for top-level `parent` specs too.
+  Rust API: `FlatSpec` gains a crate-private field, so it can no longer be
+  built with a struct literal outside the crate.
 
 - Performance: `MATCH (n) RETURN count(n)` under a valid-time context (the
   default included) is one popcount of the context's node mask instead of a
