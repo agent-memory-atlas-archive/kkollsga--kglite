@@ -2230,3 +2230,20 @@ def test_perf_candidate_builds_like_the_published_linux_wheel() -> None:
     assert not [line for line in _command_lines(perf) if "maturin build" in line], (
         "perf-regression still builds the candidate on the runner host"
     )
+
+
+def test_perf_ab_diagnostic_runs_only_by_hand() -> None:
+    """The build-environment A/B is a one-off diagnostic: dispatch only, five
+    variants on one runner, each build in its own target dir so the container
+    builds cannot reuse the host's compiled objects."""
+    workflow = _load_workflow(WORKFLOWS / "perf_ab.yml")
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"workflow_dispatch"}, triggers
+    (job,) = workflow["jobs"].values()
+    builds = _steps_using(job, "PyO3/maturin-action@")
+    assert len(builds) == 2
+    target_dirs = [step["with"]["args"].split("--target-dir ")[1] for step in builds]
+    host = [line for line in _command_lines(job) if line.startswith("maturin build")]
+    assert len(host) == 1
+    target_dirs.append(host[0].split("--target-dir ")[1])
+    assert len(set(target_dirs)) == 3, target_dirs

@@ -1,0 +1,173 @@
+name: Linux perf A/B
+# One-off diagnostic, run by hand (Actions -> "Linux perf A/B" -> Run
+# workflow, or `gh workflow run perf_ab.yml --ref <branch>`). It never gates
+# anything and never runs on push.
+#
+# Question it answers: why do the relationship text-filter cells run 11-17%
+# slower against 0.13.2 on Linux CI only? The CI candidate and the published
+# wheel differ in more than code: CI built on the runner host (rustc pinned,
+# gcc 13, glibc 2.39), the release built in the manylinux2014 container
+# (gcc 10, and until 0.19.4 an unpinned rustc: 0.19.3 shipped from 1.99).
+#
+# All five variants run on ONE runner, interleaved over two rounds, so the
+# runner's speed cancels between them. Each build gets its own target dir:
+# the container mounts the workspace at the same path, so a shared one would
+# let cargo reuse the host's compiled C objects in the "manylinux" builds.
+#   ref-0.13.2      published 0.13.2 wheel (the CI gate's reference)
+#   published       the published wheel of `published_version`
+#   runner          `source_ref` built on the runner host (how CI built it)
+#   manylinux-pin   `source_ref` built in manylinux2014 with RUST_STABLE
+#   manylinux-alt   `source_ref` built in manylinux2014 with `alt_toolchain`
+# With `source_ref` at the tag of `published_version`, "published" and one of
+# the manylinux builds should agree; the runner build's gap to them is the
+# build environment's share of the Linux-only offset.
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref built from source (tag of the published version for a like-for-like A/B)
+        default: v0.19.3
+        type: string
+      published_version:
+        description: Published kglite wheel to compare against
+        default: 0.19.3
+        type: string
+      alt_toolchain:
+        description: Second manylinux toolchain (the one the published wheel shipped from)
+        default: 1.99.0
+        type: string
+      cells:
+        description: pytest -k expression over test_bench_core.py (empty = every core cell)
+        default: two_edge_relationship_text_filter or two_edge_distinct_filtered_path
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RUST_STABLE: "1.98.0"
+  REFERENCE_VERSION: "0.13.2"
+
+jobs:
+  ab:
+    name: Linux build-environment A/B
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check out the source under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: src
+
+      - name: Install Rust (runner-host build)
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Build on the runner host
+        working-directory: src
+        run: |
+          python -m pip install maturin==1.14.1
+          rustc --version
+          gcc --version | head -1
+          maturin build --release --out dist-runner --target-dir target-runner
+
+      - name: Build in manylinux2014 with RUST_STABLE
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: x86_64-unknown-linux-gnu
+          manylinux: '2014'
+          rust-toolchain: ${{ env.RUST_STABLE }}
+          working-directory: src
+          args: --release --out dist-manylinux-pin --target-dir target-manylinux-pin
+
+      - name: Build in manylinux2014 with the alternative toolchain
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: x86_64-unknown-linux-gnu
+          manylinux: '2014'
+          rust-toolchain: ${{ inputs.alt_toolchain }}
+          working-directory: src
+          args: --release --out dist-manylinux-alt --target-dir target-manylinux-alt
+
+      - name: Create one environment per variant
+        env:
+          PUBLISHED_VERSION: ${{ inputs.published_version }}
+        run: |
+          set -euo pipefail
+          envs="$RUNNER_TEMP/ab-envs"
+          mkdir -p "$envs"
+          install() {
+            python -m venv "$envs/$1"
+            "$envs/$1/bin/python" -m pip install --quiet -r requirements/benchmark.txt
+            "$envs/$1/bin/python" -m pip install --quiet "$2"
+            echo "$1: $("$envs/$1/bin/python" -c 'import kglite; print(kglite.__version__, kglite.__file__)')"
+          }
+          python -m pip download --only-binary=:all: --no-deps --dest "$RUNNER_TEMP/published" \
+            "kglite==$REFERENCE_VERSION" "kglite==$PUBLISHED_VERSION"
+          install ref-0.13.2 "$(find "$RUNNER_TEMP/published" -name "kglite-$REFERENCE_VERSION-*.whl" -print -quit)"
+          install published "$(find "$RUNNER_TEMP/published" -name "kglite-$PUBLISHED_VERSION-*.whl" -print -quit)"
+          install runner "$(find src/dist-runner -name '*.whl' -print -quit)"
+          install manylinux-pin "$(find src/dist-manylinux-pin -name '*.whl' -print -quit)"
+          install manylinux-alt "$(find src/dist-manylinux-alt -name '*.whl' -print -quit)"
+          mkdir -p "$RUNNER_TEMP/ab-harness" ab-results
+          cp tests/benchmarks/test_bench_core.py "$RUNNER_TEMP/ab-harness/"
+          lscpu | grep -m1 'Model name' | tee ab-results/cpu.txt
+
+      - name: Benchmark the variants, interleaved over two rounds
+        working-directory: ${{ runner.temp }}/ab-harness
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+          CELLS: ${{ inputs.cells }}
+        run: |
+          set -euo pipefail
+          for round in 1 2; do
+            for variant in ref-0.13.2 published runner manylinux-pin manylinux-alt; do
+              "$RUNNER_TEMP/ab-envs/$variant/bin/python" -m pytest test_bench_core.py -m benchmark \
+                ${CELLS:+-k "$CELLS"} \
+                --benchmark-min-rounds=100 \
+                --benchmark-warmup=on --benchmark-warmup-iterations=20 \
+                --benchmark-json="$GITHUB_WORKSPACE/ab-results/$variant-r$round.json"
+            done
+          done
+
+      - name: Summarise (min of the two rounds, each variant against 0.13.2)
+        run: |
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          variants = ["ref-0.13.2", "published", "runner", "manylinux-pin", "manylinux-alt"]
+          best = {}
+          for variant in variants:
+              cells = {}
+              for path in sorted(Path("ab-results").glob(f"{variant}-r*.json")):
+                  for bench in json.loads(path.read_text())["benchmarks"]:
+                      cells[bench["name"]] = min(cells.get(bench["name"], float("inf")), bench["stats"]["min"])
+              best[variant] = cells
+          print(f"CPU: {Path('ab-results/cpu.txt').read_text().strip()}\n")
+          print("| cell | " + " | ".join(variants[1:]) + " |")
+          print("|---|" + "---|" * (len(variants) - 1))
+          for name in sorted(best["ref-0.13.2"]):
+              base = best["ref-0.13.2"][name]
+              row = [f"{best[v][name] / base - 1:+.1%}" for v in variants[1:]]
+              print(f"| {name.removeprefix('test_bench_')} | " + " | ".join(row) + " |")
+          PY
+
+      - name: Upload the A/B captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-perf-ab-${{ github.run_id }}
+          path: ab-results/
+          if-no-files-found: error
+          retention-days: 14
