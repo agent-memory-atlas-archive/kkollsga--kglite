@@ -68,13 +68,17 @@ genuinely affected:
 
 * its declared range **excludes** the new version (blocked), or
 * it pins the upstream at a now-superseded exact version somewhere, or
-* a breaking change in this release touches a symbol the repo actually
+* a breaking change it has not yet taken touches a symbol the repo actually
   references (approximated by scanning its *code* — never comments or prose —
-  for the symbols ``BREAKING_SYMBOLS_BY_VERSION`` records against **this**
-  version, or the ones given with ``--breaking-symbol``).
+  for the symbols ``BREAKING_SYMBOLS_BY_VERSION`` records against every
+  release after the repo's own version, up to this one, or the ones given with
+  ``--breaking-symbol``). The repo's own version is the highest of its
+  package-metadata floors and lockfile resolutions; a repo that skipped
+  releases still hears about their breaks.
 
 Each note's "what changed" section is read from the announced release's own
-``## [X.Y.Z]`` CHANGELOG entry. When that entry cannot be resolved the section
+``## [X.Y.Z]`` CHANGELOG entry, plus the entries of any releases the repo
+skipped, each labelled. When the announced entry cannot be resolved the section
 is omitted and a warning goes to stderr: a blurb that is silently a different
 release's is worse than an absent one, and three shipped notes proved it.
 
@@ -777,7 +781,8 @@ _CITATION_CUES = re.compile(
     r"migrat(?:ed|ion|ing)|verified|was|were|used\s+to|since|as\s+of|onwards?|"
     r"previously|formerly|originally|earlier|historical\w*|history|no\s+longer|"
     r"already|first\s+appeared|described|correction|moved\s+from|"
-    r"upgraded\s+from|bumped\s+from|ran(?:\s+against)?|tested\s+against)\b",
+    r"upgraded\s+from|bumped\s+from|ran(?:\s+against)?|tested\s+against|"
+    r"measured|benchmarked|observed|passed|fixed|until)\b",
     re.IGNORECASE,
 )
 #: Cues that make a sentence a live requirement even if it is phrased in prose.
@@ -842,10 +847,10 @@ def _prose_context(lines: list[str], index: int) -> tuple[str, int]:
     return " ".join([*before, lines[index].strip(), *after]), line_start
 
 
-def _sentence_at(text: str, index: int) -> str:
-    starts = [m.end() for m in re.finditer(r"[.!?;:]\s+", text[:index])]
+def _sentence_at(text: str, index: int, boundary: str = r"[.!?;:]\s+") -> str:
+    starts = [m.end() for m in re.finditer(boundary, text[:index])]
     start = starts[-1] if starts else 0
-    m = re.search(r"[.!?;:]\s+", text[index:])
+    m = re.search(boundary, text[index:])
     end = index + m.start() + 1 if m else len(text)
     return text[start:end]
 
@@ -856,7 +861,8 @@ def is_version_citation(lines: list[str], index: int, match: re.Match[str]) -> b
         return False  # `0.15.5+` — a floor, not a record
     context, line_start = _prose_context(lines, index)
     lead_ws = len(lines[index]) - len(lines[index].lstrip())
-    sentence = _sentence_at(context, line_start + max(0, match.start() - lead_ws))
+    at = line_start + max(0, match.start() - lead_ws)
+    sentence = _sentence_at(context, at)
     if _VERSION_RANGE.search(sentence):
         return True
     if _DECLARATION_CUES.search(sentence):
@@ -867,7 +873,11 @@ def is_version_citation(lines: list[str], index: int, match: re.Match[str]) -> b
     # record shape.
     if _POSSESSIVE.match(lines[index][match.end() :]):
         return True
-    return bool(_CITATION_CUES.search(sentence) or _DATED_PROSE.search(context))
+    # Record cues are read across a colon: "Measured on X: ... under kglite
+    # 0.16.17" dates everything after the lead-in. Declaration cues above stay
+    # clause-scoped, so a requirement after the colon is still a requirement.
+    full_sentence = _sentence_at(context, at, r"[.!?;]\s+")
+    return bool(_CITATION_CUES.search(full_sentence) or _DATED_PROSE.search(context))
 
 
 # ---- Gradle / Maven coordinates -------------------------------------------
@@ -1567,6 +1577,11 @@ class NotifyDecision:
     blocked: bool = False
     findings: list[Finding] = dataclasses.field(default_factory=list)
     touched_symbols: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    #: Release that broke each touched symbol, when known.
+    symbol_versions: dict[str, str] = dataclasses.field(default_factory=dict)
+    #: The upstream version this downstream already declares or resolves —
+    #: max(metadata floor, lockfile) — or None when it declares neither.
+    since: tuple[int, int, int] | None = None
 
 
 #: Files a symbol reference can live in at all. Markdown, RST and text are
@@ -1709,13 +1724,39 @@ def find_symbol_uses(root: Path, symbols: list[str]) -> list[tuple[str, str]]:
     return hits
 
 
+def downstream_base(declarations: list[Declaration], repo: str, upstream_pkgs: set[str]) -> tuple[int, int, int] | None:
+    """The upstream version ``repo`` is already on: the highest of its
+    package-metadata floors and its lockfile resolutions, or None."""
+    seen: list[tuple[int, int, int]] = []
+    for d in declarations:
+        if d.repo != repo or d.package.lower().replace("_", "-") not in upstream_pkgs:
+            continue
+        if d.site == "cargo-lock":
+            version = parse_version(d.spec.lstrip("="))
+            if version is not None:
+                seen.append(version)
+        elif d.metadata:
+            interval = d.interval
+            if interval is not None and interval.lo > (0, 0, 0):
+                seen.append(interval.lo)
+    return max(seen) if seen else None
+
+
 def decide_notifications(
     findings: list[Finding],
     declarations: list[Declaration],
     repos: dict[str, Path],
     upstream_version: tuple[int, int, int],
-    breaking_symbols: list[str],
+    breaking_symbols: list[str] | None,
 ) -> list[NotifyDecision]:
+    """Decide, per downstream, whether a note is owed.
+
+    ``breaking_symbols`` overrides the table (``--breaking-symbol``). Without
+    it, each downstream is checked against every symbol broken by a release it
+    has not yet taken: after its own version (``downstream_base``) up to and
+    including ``upstream_version``. A downstream that skips releases otherwise
+    never hears about their breaks.
+    """
     decisions: list[NotifyDecision] = []
     for repo in DOWNSTREAM_REPOS:
         root = repos.get(repo)
@@ -1735,7 +1776,12 @@ def decide_notifications(
         self_gated = (root / SELF_GATE_MARKER).is_file()
         if self_gated:
             stale_docs = []
-        touched = find_symbol_uses(root, breaking_symbols)
+        since = downstream_base(declarations, repo, upstream_pkgs)
+        if breaking_symbols is not None:
+            symbol_versions = {sym: fmt_version(upstream_version) for sym in breaking_symbols}
+        else:
+            symbol_versions = dict(breaking_symbols_between(since, upstream_version))
+        touched = find_symbol_uses(root, list(symbol_versions))
 
         reasons: list[str] = []
         relevant: list[Finding] = []
@@ -1762,13 +1808,22 @@ def decide_notifications(
         if touched:
             reasons.append(
                 "references "
-                + ", ".join(f"`{s}`" for s, _ in touched)
-                + " — touched by a breaking change in this release"
+                + ", ".join(f"`{s}` (broken in {symbol_versions[s]})" for s, _ in touched)
+                + " — touched by a breaking change you have not yet taken"
             )
 
         if reasons:
             decisions.append(
-                NotifyDecision(repo, True, reasons, blocked=bool(blocked), findings=relevant, touched_symbols=touched)
+                NotifyDecision(
+                    repo,
+                    True,
+                    reasons,
+                    blocked=bool(blocked),
+                    findings=relevant,
+                    touched_symbols=touched,
+                    symbol_versions={s: symbol_versions[s] for s, _ in touched},
+                    since=since,
+                )
             )
             continue
 
@@ -1786,7 +1841,7 @@ def decide_notifications(
             skip = (
                 f"declares {fmt_version(upstream_version)} correctly everywhere: range "
                 f"admits it, no superseded pin, no stale documented version, and no "
-                f"reference to this release's breaking surface"
+                f"reference to a breaking surface it has not yet taken"
             )
         decisions.append(NotifyDecision(repo, False, [], skip_reason=skip))
     return decisions
@@ -1883,13 +1938,36 @@ def _lead_sentence(text: str) -> str:
     return first if len(first) <= 240 else first[:239].rstrip() + "…"
 
 
-def release_highlights(upstream_root: Path, upstream_version: tuple[int, int, int]) -> list[str]:
-    """What the announced release changed, condensed from its own entry.
+def changelog_versions(path: Path) -> list[tuple[int, int, int]]:
+    """Every ``## [x.y.z]`` release heading in ``path``, newest first."""
+    lines = _read(path) or []
+    out: list[tuple[int, int, int]] = []
+    for line in lines:
+        m = _CHANGELOG_RELEASE_RE.match(line)
+        if m:
+            version = parse_version(m.group("ver"))
+            if version is not None:
+                out.append(version)
+    return out
 
-    Empty when the entry cannot be resolved — and that emptiness is the whole
-    point. Notes for 0.15.11, 0.15.12 and 0.15.13 all shipped 0.15.9's prose
-    because this text came from a constant that no release step had to touch;
-    an absent section is strictly better than a confidently wrong one.
+
+def release_highlights(
+    upstream_root: Path,
+    upstream_version: tuple[int, int, int],
+    since: tuple[int, int, int] | None = None,
+) -> list[str]:
+    """What changed for a downstream on ``since``, condensed from the entries
+    of every release after it up to and including ``upstream_version``.
+
+    With ``since`` unknown or not older than the previous release, only the
+    announced release's entry is quoted, unlabelled. Covering several releases,
+    each line is prefixed with its ``[x.y.z]``.
+
+    Empty when the announced release's own entry cannot be resolved — and that
+    emptiness is the whole point. Notes for 0.15.11, 0.15.12 and 0.15.13 all
+    shipped 0.15.9's prose because this text came from a constant that no
+    release step had to touch; an absent section is strictly better than a
+    confidently wrong one.
     """
     ver = fmt_version(upstream_version)
     path = upstream_root / "CHANGELOG.md"
@@ -1901,7 +1979,17 @@ def release_highlights(upstream_root: Path, upstream_version: tuple[int, int, in
             file=sys.stderr,
         )
         return []
-    highlights = summarise_changelog_entry(body, ver)
+    releases = [upstream_version]
+    if since is not None:
+        skipped = [v for v in changelog_versions(path) if since < v < upstream_version]
+        releases = [upstream_version, *sorted(skipped, reverse=True)]
+    highlights: list[str] = []
+    for release in releases:
+        entry = body if release == upstream_version else changelog_entry(path, release)
+        lines = summarise_changelog_entry(entry or [], fmt_version(release))
+        if len(releases) > 1:
+            lines = [f"[{fmt_version(release)}] {line}" for line in lines]
+        highlights += lines
     if not highlights:
         print(
             f"warning: the `## [{ver}]` entry in {path} has no bullet entries to quote; "
@@ -1994,14 +2082,24 @@ def compose_note(
 
     if decision.touched_symbols:
         lines += ["**Breaking-change surface you actually reference:**", ""]
-        lines += [f"- `{sym}` — in `{where}`" for sym, where in decision.touched_symbols]
+        lines += [
+            f"- `{sym}` — in `{where}`"
+            + (f" (broken in {decision.symbol_versions[sym]})" if sym in decision.symbol_versions else "")
+            for sym, where in decision.touched_symbols
+        ]
         lines.append("")
 
     if highlights and not docs_only:
-        lines += [
-            f"**What changed in this release that can reach you** (lead lines of the `[{ver}]` CHANGELOG entry):",
-            "",
-        ]
+        if highlights[0].startswith("["):
+            heading = (
+                f"**What changed since kglite {fmt_version(decision.since)} that can reach you** "
+                f"(lead lines of every CHANGELOG entry after it, through `[{ver}]`):"
+            )
+        else:
+            heading = (
+                f"**What changed in this release that can reach you** (lead lines of the `[{ver}]` CHANGELOG entry):"
+            )
+        lines += [heading, ""]
         lines += [f"- {h}" for h in highlights]
         lines.append("")
 
@@ -2026,8 +2124,11 @@ def compose_note(
     # A note whose only reason is a referenced breaking symbol has no sites to
     # move; "move the sites above" pointed at nothing at all in that case.
     if decision.touched_symbols:
+        broke_in = sorted(set(decision.symbol_versions.values()) or {ver}, key=parse_version)
+        entries = ", ".join(f"`[{v}]`" for v in broke_in)
         lines.append(
-            f"- Check those call sites against the `[{ver}]` CHANGELOG before upgrading; "
+            f"- Check those call sites against the {entries} CHANGELOG "
+            f"entr{'ies' if len(broke_in) > 1 else 'y'} before upgrading; "
             f"they may need an edit, not just a version bump."
         )
     lines += [
@@ -2049,7 +2150,7 @@ def run_notify(
     repos: dict[str, Path],
     upstream_version: tuple[int, int, int],
     date: str,
-    highlights: list[str],
+    upstream_root: Path,
     dry_run: bool,
 ) -> int:
     ver = fmt_version(upstream_version)
@@ -2061,6 +2162,7 @@ def run_notify(
             print(f"  SKIP   {d.repo:<16} — {d.skip_reason}")
             continue
         root = repos[d.repo]
+        highlights = release_highlights(upstream_root, upstream_version, d.since)
         filename, body = compose_note(d, upstream_version, date, highlights)
         target = root / "inbox" / "unread" / filename
         print(f"  NOTIFY {d.repo:<16} -> {target}")
@@ -2200,6 +2302,22 @@ def breaking_symbols_for(version: str) -> list[str]:
     return list(BREAKING_SYMBOLS_BY_VERSION.get(version, []))
 
 
+def breaking_symbols_between(
+    since: tuple[int, int, int] | None, upstream_version: tuple[int, int, int]
+) -> list[tuple[str, str]]:
+    """``(symbol, release that broke it)`` for every release after ``since``
+    up to and including ``upstream_version``; only the announced release when
+    ``since`` is unknown. Oldest release first."""
+    out: list[tuple[str, str]] = []
+    for version in sorted(BREAKING_SYMBOLS_BY_VERSION, key=lambda v: parse_version(v) or (0, 0, 0)):
+        parsed = parse_version(version)
+        if parsed is None or parsed > upstream_version:
+            continue
+        if parsed == upstream_version or (since is not None and parsed > since):
+            out += [(symbol, version) for symbol in BREAKING_SYMBOLS_BY_VERSION[version]]
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     global ECOSYSTEM_ROOT
     default_ecosystem_root = ECOSYSTEM_ROOT.resolve()
@@ -2228,7 +2346,10 @@ def main(argv: list[str] | None = None) -> int:
         "--breaking-symbol",
         action="append",
         default=None,
-        help="symbol broken by this release; repeatable (default: BREAKING_SYMBOLS_BY_VERSION[<version>], or none)",
+        help=(
+            "symbol broken by this release; repeatable (default: BREAKING_SYMBOLS_BY_VERSION for every "
+            "release each downstream has not yet taken)"
+        ),
     )
     p.add_argument("--date", default=None, help="date stamp for notes (default: today)")
     args = p.parse_args(argv)
@@ -2304,14 +2425,9 @@ def main(argv: list[str] | None = None) -> int:
     findings = analyse(decls, package_owner)
 
     if args.notify:
-        if args.breaking_symbol is not None:
-            symbols = args.breaking_symbol
-        else:
-            symbols = breaking_symbols_for(fmt_version(upstream_version))
         date = args.date or _dt.date.today().isoformat()
-        highlights = release_highlights(repos[UPSTREAM_REPO], upstream_version)
-        decisions = decide_notifications(findings, decls, repos, upstream_version, symbols)
-        return run_notify(decisions, repos, upstream_version, date, highlights, args.dry_run)
+        decisions = decide_notifications(findings, decls, repos, upstream_version, args.breaking_symbol)
+        return run_notify(decisions, repos, upstream_version, date, repos[UPSTREAM_REPO], args.dry_run)
 
     if args.json:
         print(

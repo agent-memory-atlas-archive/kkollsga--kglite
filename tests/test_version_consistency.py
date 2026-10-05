@@ -610,15 +610,62 @@ def test_notify_is_idempotent_for_a_given_release(ecosystem: Path) -> None:
 # --------------------------------------------------------------------------
 
 
+def _move_downstream_to(root: Path, version: str) -> None:
+    """Re-declare the fixture downstream at ``version`` (floor and pins)."""
+    major_minor = ".".join(version.split(".")[:2])
+    _write(
+        root / "downstream" / "Cargo.toml",
+        f'[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\nkglite = {{ version = "{version}" }}\n',
+    )
+    _write(
+        root / "downstream" / "pyproject.toml",
+        f'[project]\nversion = "1.0.0"\ndependencies = [\n  "kglite>={version},<{major_minor}.99",\n]\n',
+    )
+    _write(
+        root / "downstream" / ".github" / "workflows" / "ci.yml",
+        f"jobs:\n  test:\n    steps:\n      - run: pip install kglite=={version}\n",
+    )
+
+
 def test_what_changed_quotes_the_named_releases_changelog_entry(ecosystem: Path) -> None:
+    _move_downstream_to(ecosystem, "0.16.0")
     code, out = run(ecosystem, "--upstream-version", "0.17.0", "--notify", "--dry-run")
     assert code == 0, out
     assert "What changed in this release" in out
     assert "A join filtered on a type's title field is no longer planned" in out
     assert "`.statistics()` on a type's own title field returned nothing." in out
-    # The neighbouring releases' entries must not leak in.
+    # Releases at or below the downstream's own version must not leak in.
     assert "retriable" not in out, out
     assert "Durability rungs" not in out, out
+
+
+def test_what_changed_covers_every_release_the_downstream_skips(ecosystem: Path) -> None:
+    """A downstream on 0.15.0 jumping to 0.17.0 crosses 0.16.0 too; the note
+    must quote that entry, labelled, and nothing at or below its own version."""
+    code, out = run(ecosystem, "--upstream-version", "0.17.0", "--notify", "--dry-run")
+    assert code == 0, out
+    assert "What changed since kglite 0.15.0" in out, out
+    assert "[0.16.0] Changed: A lost Bolt write conflict is now retriable." in out, out
+    assert "[0.17.0] Fixed: A join filtered on a type's title field" in out, out
+    assert "Durability rungs" not in out, out
+
+
+def test_breaking_symbols_aggregate_over_skipped_releases(ecosystem: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symbol broken by a release the downstream skips still reaches it."""
+    monkeypatch.setattr(vc, "BREAKING_SYMBOLS_BY_VERSION", {"0.16.0": ["RetryPolicy"], "0.15.0": ["OldThing"]})
+    _write(
+        ecosystem / "downstream" / "src" / "lib.rs",
+        "fn f(p: kglite::RetryPolicy, o: kglite::OldThing) {}\n",
+    )
+    assert [s for s, _ in vc.breaking_symbols_between((0, 15, 0), (0, 17, 0))] == ["RetryPolicy"]
+    _, out = run(ecosystem, "--upstream-version", "0.17.0", "--notify", "--dry-run")
+    assert "`RetryPolicy` (broken in 0.16.0)" in out, out
+    assert "OldThing" not in out, out
+
+    # A downstream already past 0.16.0 is not told about it.
+    _move_downstream_to(ecosystem, "0.16.0")
+    _, out = run(ecosystem, "--upstream-version", "0.17.0", "--notify", "--dry-run")
+    assert "RetryPolicy" not in out, out
 
 
 def test_a_different_release_gets_its_own_entry(ecosystem: Path) -> None:
@@ -671,6 +718,8 @@ def test_breaking_symbols_are_scoped_to_the_release_that_broke_them(ecosystem: P
         ecosystem / "downstream" / "src" / "lib.rs",
         "fn f(node: &kglite::api::NodeView<'_>) -> bool { node.title().is_some() }\n",
     )
+    # Already past 0.15.9, so its NodeView break is behind this downstream.
+    _move_downstream_to(ecosystem, "0.16.0")
     _, out = run(ecosystem, "--upstream-version", "0.17.0", "--notify", "--dry-run")
     assert "touched by a breaking change" not in out, out
 
@@ -714,6 +763,14 @@ def test_breaking_symbols_are_scoped_to_the_release_that_broke_them(ecosystem: P
         # staleness finding at all).
         "kglite 0.14.5's planner fix made that exact query 5.7× faster.",
         "kglite 0.14.5's release notes name the same three files.",
+        # Measurement and test records from the 0.19.3 wave (kglite-visual and
+        # codingest docs), which the notifier would have asked to renumber.
+        "**Read the counts first.** Measured on sodir\n(kglite 0.14.5): a three-hop path returns in ~1 s.",
+        "Measured on a 546,850-node graph: a three-hop path previewing at **1,941,015\n"
+        "rows** answers in about a second under kglite 0.14.5, truncated to the row\nceiling.",
+        "**The server stays up.** Until kglite 0.14.5 it did not: the deadline\nwas checked too late.",
+        "The deadline was polled too late. kglite 0.14.5 fixed that, so a runaway is now a\nbounded wait.",
+        "The Python acceptance suite\npassed all 39 tests against the installed kglite 0.14.5 wheel.",
     ],
 )
 def test_historical_citations_are_not_flagged_as_drift(ecosystem: Path, prose: str) -> None:
@@ -738,6 +795,10 @@ def test_historical_citations_are_not_flagged_as_drift(ecosystem: Path, prose: s
         # same sentence still wins, so `<version>'s <noun>` cannot be used to
         # smuggle a stale requirement past the scan.
         "This requires kglite 0.14.3's schema loader.",
+        # A colon lead-in only dates what follows when it carries a record cue;
+        # a declaration after the colon is still a declaration.
+        "Measured on a laptop: the viewer requires kglite 0.14.3.",
+        "Until further notice, pin kglite 0.14.3.",
     ],
 )
 def test_declarations_are_still_flagged(ecosystem: Path, prose: str) -> None:
