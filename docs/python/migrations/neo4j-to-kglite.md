@@ -399,7 +399,7 @@ Current notable function differences:
 | `duration('P1Y2M')` (ISO-8601) | Map form only | `duration({years: 1, months: 2})`; `duration.between(d1, d2)` accepts dates or timestamps and returns a months/days/seconds duration |
 | `timestamp()` | Not supported | `datetime()` and `localdatetime()` return zoneless timestamp values; an offset-bearing `datetime(str)` is normalized to naive UTC, so zoned round-trip identity is not preserved. There is no epoch-millisecond alias |
 | `toBoolean(...)` | Not supported | `CASE` / Python-side coercion |
-| Calendar-aware month diffs | Approximated (months ≈ 30 days in `DateTime ± Duration`) | Use literal dates for exact month arithmetic — see CYPHER.md "Duration semantics" |
+| `duration.between(d1, d2)` in months | Fills `days` (and `seconds`) only; `months` is always 0 | `DateTime ± Duration` itself is calendar-correct (months shift by calendar month, clamped to month end); compute a month difference from the year/month parts — see CYPHER.md "Duration semantics" |
 
 KGLite-specific function names include semantic search
 (`text_score`/`vector_score`), timeseries (`ts_*`), fuzzy text

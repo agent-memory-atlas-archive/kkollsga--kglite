@@ -5,6 +5,7 @@
 use super::super::*;
 use super::shared::*;
 use crate::datatypes::values::Value;
+use crate::graph::core::value_operations::checked_shift_months;
 
 impl<'a> CypherExecutor<'a> {
     pub(super) fn eval_temporal_fn(
@@ -237,18 +238,6 @@ fn checked_component_add(
         .checked_add(scaled)
         .ok_or_else(|| format!("duration() {component} component overflow"))?;
     Ok(())
-}
-
-/// Shift a date by a signed month delta without negating `i64::MIN` or
-/// narrowing a file/query-controlled value to `u32`.
-fn checked_shift_months(date: chrono::NaiveDate, delta: i64) -> Option<chrono::NaiveDate> {
-    if delta >= 0 {
-        let magnitude = u32::try_from(delta).ok()?;
-        date.checked_add_months(chrono::Months::new(magnitude))
-    } else {
-        let magnitude = u32::try_from(delta.unsigned_abs()).ok()?;
-        date.checked_sub_months(chrono::Months::new(magnitude))
-    }
 }
 
 impl CypherExecutor<'_> {

@@ -1822,14 +1822,26 @@ RETURN d.months AS m, d.years AS y, d.days AS days
 
 #### `DateTime ± Duration`
 
-Calendar months in the duration are approximated as 30 days for
-`DateTime` arithmetic (the `Value::DateTime` precision limitation
-again). For exact month-aware addition, use a literal date.
+A date or datetime plus or minus a duration applies the components in
+order: calendar months (`years` + `months`), then days, then — for a datetime
+— the clock seconds. A month shift keeps the day of the month and clamps to the
+last day of a shorter target month, exactly as `add_months()` / `add_years()`
+do (and as Neo4j does). A date has no time of day, so a duration's `seconds` do
+not move it. A result outside the representable calendar is `null`.
 
 ```cypher
-RETURN date('2024-01-15') + duration({days: 30})  // → 2024-02-14
-RETURN date('2024-01-15') + duration({months: 1}) // → 2024-02-14 (1*30 days), NOT 2024-02-15
+RETURN date('2015-06-15') - duration({months: 11})   // → 2014-07-15
+RETURN date('2024-01-15') + duration({months: 1})    // → 2024-02-15
+RETURN date('2024-01-31') + duration({months: 1})    // → 2024-02-29 (clamped)
+RETURN date('2016-02-29') + duration({years: 1})     // → 2017-02-28 (clamped)
+RETURN date('2024-01-30') + duration({months: 1, days: 2}) // → 2024-03-02 (Feb 29, then +2 days)
+RETURN date('2024-01-15') + duration({days: 30})     // → 2024-02-14
+RETURN datetime('2024-01-31T10:30:00') + duration({months: 1, hours: 2}) // → 2024-02-29T12:30:00
 ```
+
+Before 0.19.3 every month counted as 30 days, so `date('2024-01-15') +
+duration({months: 1})` was `2024-02-14`. Use `duration({days: 30})` for a
+fixed 30-day offset.
 
 ## Math Functions
 

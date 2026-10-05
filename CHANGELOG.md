@@ -72,6 +72,17 @@ before upgrading.
 
 ### Changed
 
+- **Behaviour change:** `date` / `datetime` plus or minus a `duration` with
+  months or years now shifts by calendar months, then days, then time, instead
+  of counting every month as 30 days. The day clamps to the end of a shorter
+  target month, matching `add_months()` and Neo4j: `date('2015-06-15') -
+  duration({months: 11})` is `2014-07-15` (it was `2014-07-20`),
+  `date('2016-02-29') + duration({years: 1})` is `2017-02-28`, and
+  `date('2024-01-15') + duration({months: 1})` is `2024-02-15` (it was
+  `2024-02-14`). Durations with only days or time are unchanged. Stored data is
+  untouched; a query or recipe that relied on 30-day months should use
+  `duration({days: 30})`.
+
 - A blueprint edge row whose endpoint no node row supplies is dropped, not
   stubbed, when the endpoint's type is one the build declares valid-time on
   (its specs' `temporal` keys, the manifest, the graph): a stub carries no

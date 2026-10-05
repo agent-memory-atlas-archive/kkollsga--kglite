@@ -220,9 +220,7 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 seconds: _,
             },
             Value::DateTime(date),
-        ) => Ok(checked_duration_days(*months, *days)
-            .and_then(checked_days)
-            .and_then(|delta| date.checked_add_signed(delta))
+        ) => Ok(shift_date(*date, i64::from(*months), i64::from(*days))
             .map_or(Value::Null, Value::DateTime)),
         (
             Value::Timestamp(timestamp),
@@ -239,14 +237,10 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 seconds,
             },
             Value::Timestamp(timestamp),
-        ) => Ok(checked_duration_days(*months, *days)
-            .and_then(checked_days)
-            .and_then(|delta| timestamp.checked_add_signed(delta))
-            .and_then(|shifted| {
-                chrono::TimeDelta::try_seconds(*seconds)
-                    .and_then(|delta| shifted.checked_add_signed(delta))
-            })
-            .map_or(Value::Null, Value::Timestamp)),
+        ) => Ok(
+            shift_timestamp(*timestamp, i64::from(*months), i64::from(*days), *seconds)
+                .map_or(Value::Null, Value::Timestamp),
+        ),
         (
             Value::Duration {
                 months: am,
@@ -300,9 +294,7 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 days,
                 seconds: _,
             },
-        ) => Ok(checked_duration_days(*months, *days)
-            .and_then(checked_days)
-            .and_then(|delta| date.checked_sub_signed(delta))
+        ) => Ok(shift_date(*date, -i64::from(*months), -i64::from(*days))
             .map_or(Value::Null, Value::DateTime)),
         (
             Value::Timestamp(timestamp),
@@ -311,12 +303,10 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 days,
                 seconds,
             },
-        ) => Ok(checked_duration_days(*months, *days)
-            .and_then(checked_days)
-            .and_then(|delta| timestamp.checked_sub_signed(delta))
-            .and_then(|shifted| {
-                chrono::TimeDelta::try_seconds(*seconds)
-                    .and_then(|delta| shifted.checked_sub_signed(delta))
+        ) => Ok(seconds
+            .checked_neg()
+            .and_then(|negated| {
+                shift_timestamp(*timestamp, -i64::from(*months), -i64::from(*days), negated)
             })
             .map_or(Value::Null, Value::Timestamp)),
         (
@@ -381,11 +371,46 @@ fn checked_days(days: i64) -> Option<chrono::TimeDelta> {
     chrono::TimeDelta::try_days(days)
 }
 
-#[inline]
-fn checked_duration_days(months: i32, days: i32) -> Option<i64> {
-    i64::from(months)
-        .checked_mul(30)
-        .and_then(|month_days| month_days.checked_add(i64::from(days)))
+/// Shift a date by a signed month delta without negating `i64::MIN` or
+/// narrowing a file/query-controlled value to `u32`. The day clamps to the end
+/// of a shorter target month (Jan 31 + 1 month = Feb 28/29).
+pub(crate) fn checked_shift_months(
+    date: chrono::NaiveDate,
+    delta: i64,
+) -> Option<chrono::NaiveDate> {
+    let magnitude = u32::try_from(delta.unsigned_abs()).ok()?;
+    if delta >= 0 {
+        date.checked_add_months(chrono::Months::new(magnitude))
+    } else {
+        date.checked_sub_months(chrono::Months::new(magnitude))
+    }
+}
+
+/// `date + duration`: calendar months first (clamped as above), then days.
+/// Negative components subtract; `date - duration` passes the negated
+/// components. A date has no time of day, so the duration's seconds do not
+/// move it.
+fn shift_date(date: chrono::NaiveDate, months: i64, days: i64) -> Option<chrono::NaiveDate> {
+    checked_shift_months(date, months)?.checked_add_signed(checked_days(days)?)
+}
+
+/// `datetime + duration`: calendar months, then days, then seconds, the time
+/// of day carried through the month shift.
+fn shift_timestamp(
+    timestamp: chrono::NaiveDateTime,
+    months: i64,
+    days: i64,
+    seconds: i64,
+) -> Option<chrono::NaiveDateTime> {
+    let magnitude = u32::try_from(months.unsigned_abs()).ok()?;
+    let by_months = if months >= 0 {
+        timestamp.checked_add_months(chrono::Months::new(magnitude))
+    } else {
+        timestamp.checked_sub_months(chrono::Months::new(magnitude))
+    }?;
+    by_months
+        .checked_add_signed(checked_days(days)?)?
+        .checked_add_signed(chrono::TimeDelta::try_seconds(seconds)?)
 }
 
 // Test-only value-returning adapters keep the long-standing numeric helper
