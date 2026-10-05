@@ -237,13 +237,13 @@ def _release_key(version: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in parts)
 
 
-def previous_published_linux_member(version: str) -> LinuxMember:
-    """Measure the extension in the newest published manylinux x86_64 wheel
-    older than ``version``.
+def previous_published_linux_wheel(version: str) -> tuple[str, dict]:
+    """``(version, PyPI file entry)`` of the newest non-yanked manylinux2014
+    x86_64 wheel published before ``version``.
 
-    The Linux baseline is the artifact users install, so it comes from PyPI
-    rather than from this host. The wheel is checked against PyPI's SHA-256
-    before its member is read; a mismatch aborts the refresh.
+    The one definition of "the previous release" for the Linux size row:
+    the refresh measures this wheel and preflight checks the row against it,
+    so a release that never reached PyPI cannot make the two disagree.
     """
     cut = _release_key(version)
     if cut is None:
@@ -266,7 +266,18 @@ def previous_published_linux_member(version: str) -> LinuxMember:
     if not candidates:
         raise RefreshError(f"PyPI lists no {LINUX_WHEEL_TAG} wheel published before {version}")
     _, published, entry = max(candidates, key=lambda candidate: candidate[0])
+    return published, entry
 
+
+def previous_published_linux_member(version: str) -> LinuxMember:
+    """Measure the extension in the newest published manylinux x86_64 wheel
+    older than ``version``.
+
+    The Linux baseline is the artifact users install, so it comes from PyPI
+    rather than from this host. The wheel is checked against PyPI's SHA-256
+    before its member is read; a mismatch aborts the refresh.
+    """
+    published, entry = previous_published_linux_wheel(version)
     name = entry["filename"]
     expected = entry.get("digests", {}).get("sha256", "")
     try:

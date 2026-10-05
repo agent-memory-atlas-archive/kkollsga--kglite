@@ -258,9 +258,24 @@ def test_preflight_member_inheritance_accepts_only_workspace_inheritance(tmp_pat
 # ── preflight: binary-size baselines describe the right releases ───────
 
 
+def _pypi_index_with(monkeypatch, *published: str) -> None:
+    """Stub PyPI so `published` are the versions with a manylinux x86_64 wheel."""
+    import json
+
+    refresh = sys.modules.get("refresh_release_constants") or _load("refresh_release_constants")
+    index = {
+        "releases": {
+            v: [{"filename": f"kglite-{v}-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"}]
+            for v in published
+        }
+    }
+    monkeypatch.setattr(refresh, "_http_get", lambda url: json.dumps(index).encode())
+
+
 def _size_fixture(tmp_path, monkeypatch, darwin: str, linux: str):
+    _pypi_index_with(monkeypatch, "0.1.8", "0.1.9")
     baselines = tmp_path / "baselines"
-    baselines.mkdir()
+    baselines.mkdir(parents=True)
     for name in ("0_2_0.json", "0_2_0.linux.json"):
         (baselines / name).write_text("{}", encoding="utf-8")
     phase5 = tmp_path / "test_phase5_parity.py"
@@ -299,3 +314,32 @@ def test_preflight_refuses_a_stale_size_baseline(tmp_path, monkeypatch, darwin, 
     result = release_preflight.check_captured_constants("0.2.0")
     assert not result.ok
     assert stale in result.detail
+
+
+def test_preflight_linux_row_follows_pypi_not_the_changelog(tmp_path, monkeypatch):
+    """0.1.9 has a CHANGELOG section but never reached PyPI (the 0.19.2
+    crates-held-back shape, inverted). The refresh measures the newest wheel
+    PyPI has, 0.1.8, so preflight must expect exactly that row."""
+    _size_fixture(tmp_path, monkeypatch, darwin="0.2.0", linux="0.1.8")
+    _pypi_index_with(monkeypatch, "0.1.8")
+    result = release_preflight.check_captured_constants("0.2.0")
+    assert result.ok, result.detail
+
+    _size_fixture(tmp_path / "b", monkeypatch, darwin="0.2.0", linux="0.1.9")
+    _pypi_index_with(monkeypatch, "0.1.8")
+    result = release_preflight.check_captured_constants("0.2.0")
+    assert not result.ok
+    assert "linux binary-size baseline describes 0.1.9, expected 0.1.8" in result.detail
+
+
+def test_preflight_reports_an_unreachable_pypi_instead_of_passing(tmp_path, monkeypatch):
+    _size_fixture(tmp_path, monkeypatch, darwin="0.2.0", linux="0.1.9")
+    refresh = sys.modules["refresh_release_constants"]
+
+    def offline(url):
+        raise OSError("network down")
+
+    monkeypatch.setattr(refresh, "_http_get", offline)
+    result = release_preflight.check_captured_constants("0.2.0")
+    assert not result.ok
+    assert "cannot tell which Linux wheel" in result.detail

@@ -49,6 +49,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import bump_version  # noqa: E402
 import check_release_hygiene  # noqa: E402
+import refresh_release_constants  # noqa: E402
 
 ROOT_MANIFEST = REPO_ROOT / "Cargo.toml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -234,23 +235,16 @@ SIZE_BASELINE_RE = re.compile(
 )
 
 
-def _previous_release(version: str) -> str | None:
-    """The newest CHANGELOG release section other than ``version``."""
-    for line in CHANGELOG.read_text(encoding="utf-8").splitlines():
-        match = RELEASE_SECTION_RE.match(line)
-        if match is not None and match.group("version") != version:
-            return match.group("version")
-    return None
-
-
 def check_captured_constants(version: str) -> Check:
     """The captured constants that are cheap to verify from files alone:
     the per-version perf baseline, the phase-5 size-history entry, and the
     versions the two binary-size baselines describe.
 
     macOS must be measured at the version being cut. Linux must be the
-    previous release's published wheel member; a Linux row older than that
-    is the stale-baseline failure that left it at 0.17.12 through 0.19.1.
+    member of the newest manylinux wheel on PyPI before it — the same lookup
+    the refresh uses, so a release that never reached PyPI cannot make them
+    disagree. A Linux row older than that is the stale-baseline failure that
+    left it at 0.17.12 through 0.19.1.
 
     The `.kgl` golden digest is deliberately not recomputed here — that
     needs a built extension, and the phase-4 parity test is its gate.
@@ -265,7 +259,11 @@ def check_captured_constants(version: str) -> Check:
     if history is None:
         problems.append(f"no {version} entry in the phase-5 binary-size history")
     sizes = {m.group("platform"): m.group("version") for m in SIZE_BASELINE_RE.finditer(phase5)}
-    expected = {"darwin": version, "linux": _previous_release(version)}
+    expected: dict[str, str | None] = {"darwin": version, "linux": None}
+    try:
+        expected["linux"], _ = refresh_release_constants.previous_published_linux_wheel(version)
+    except refresh_release_constants.RefreshError as exc:
+        problems.append(f"cannot tell which Linux wheel the size baseline must describe: {exc}")
     for platform, want in expected.items():
         have = sizes.get(platform)
         if have is None:
