@@ -7,8 +7,8 @@ use crate::graph::mutation::batch::{
     BatchProcessor, BatchStats, ConflictHandling, ConnectionBatchProcessor, NodeAction,
 };
 use crate::graph::mutation::batch_title_admission::{
-    node_property_columns, prepare_connection_admission, snapshot_node_titles,
-    ConnectionAdmissionFields, ConnectionTitles,
+    node_property_columns, prepare_connection_admission, resolve_node_title_field,
+    shadowed_identity_columns, snapshot_node_titles, ConnectionAdmissionFields, ConnectionTitles,
 };
 use crate::graph::mutation::connection_stubs::vivify_endpoints;
 use crate::graph::mutation::delete_state::remove_doomed_nodes;
@@ -885,8 +885,8 @@ pub fn add_nodes(
     )?;
     let conflict_mode = parse_conflict_mode(conflict_handling.as_deref())?;
 
-    let should_update_title = node_title_field.is_some();
-    let title_field = node_title_field.unwrap_or_else(|| unique_id_field.clone());
+    let (title_field, should_update_title) =
+        resolve_node_title_field(&df_data, &unique_id_field, node_title_field);
     check_data_validity(&df_data, &unique_id_field)?;
 
     let mut errors = Vec::new();
@@ -1059,8 +1059,8 @@ pub fn add_nodes(
     if !errors.is_empty() {
         report = report.with_errors(errors);
     }
-    report.warn_all(empty_intervals.diagnostic());
-
+    let shadowed = shadowed_identity_columns(&df_data, &node_type, &unique_id_field, &title_field);
+    report.warn_all(empty_intervals.diagnostic().into_iter().chain(shadowed));
     graph.bump_version();
     Ok(report)
 }

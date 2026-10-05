@@ -152,16 +152,7 @@ pub(super) fn create_identity(
     // fabrication is the last resort it always was — what changed is that it no
     // longer overrides a value the caller actually supplied under the type's own
     // column name.
-    let supplied_title = aliases
-        .title
-        .as_deref()
-        .and_then(|alias| properties.remove(alias))
-        .or_else(|| {
-            properties
-                .get("name")
-                .or_else(|| properties.get("title"))
-                .cloned()
-        });
+    let supplied_title = supplied_title(label, aliases, properties)?;
     let title_supplied = supplied_title.is_some();
     let title = supplied_title.unwrap_or_else(|| {
         let label = node_pat.label.as_deref().unwrap_or("Node");
@@ -173,6 +164,48 @@ pub(super) fn create_identity(
         title,
         title_supplied,
     })
+}
+
+/// The title a `CREATE` pattern supplies.
+///
+/// A type with a declared title field spells its title that way; `title` is
+/// the spelling every type accepts. Both land in the one title field, so two
+/// different values are refused — the `id` rule in [`create_identity`] refuses
+/// the same request for the identity. A type with no declared title field takes
+/// `title`, else `name`: `name` stays a stored property that `n.name` reads, so
+/// a pattern carrying both keeps both values. A null spelling supplies nothing
+/// and yields to a non-null one.
+fn supplied_title(
+    label: &str,
+    aliases: &IdentityAliases,
+    properties: &mut HashMap<String, Value>,
+) -> Result<Option<Value>, String> {
+    let literal = properties.get("title").cloned();
+    let declared = aliases
+        .title
+        .as_deref()
+        .and_then(|alias| properties.remove(alias).map(|value| (alias, value)));
+    let non_null = |value: &Option<Value>| value.clone().filter(|v| !matches!(v, Value::Null));
+    if let Some((alias, value)) = declared {
+        if let (false, Some(other)) = (matches!(value, Value::Null), non_null(&literal)) {
+            if value != other {
+                return Err(format!(
+                    "CREATE gives node type '{label}' two different titles: '{alias}' is its \
+                     declared title field (value {value}) and 'title' is the title spelling \
+                     every type accepts (value {other}). Both name the same field, so supply \
+                     one of them."
+                ));
+            }
+        }
+        return Ok(Some(value)
+            .filter(|v| !matches!(v, Value::Null))
+            .or(literal));
+    }
+    let name = properties.get("name").cloned();
+    Ok(non_null(&literal)
+        .or_else(|| non_null(&name))
+        .or(literal)
+        .or(name))
 }
 
 /// Refuse a `CREATE` whose identity is already taken, where identity uniqueness
@@ -284,3 +317,7 @@ pub(super) fn merge_expected_props<'p>(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "identity_fields_tests.rs"]
+mod tests;

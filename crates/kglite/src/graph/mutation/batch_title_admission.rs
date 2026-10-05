@@ -2,6 +2,7 @@
 
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::constraints::UniqueConstraintKey;
+use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::features::temporal::{check_edge_load, EmptyIntervals};
 use crate::graph::mutation::endpoints::{
     resolve_endpoints, title_column_indices, ResolvedEndpoints,
@@ -119,6 +120,61 @@ pub(super) fn snapshot_node_titles(
 ) -> Option<Vec<Value>> {
     crate::graph::session::snapshot_dataframe_properties(&graph.graph, frame, &[id_field]);
     (title_field == id_field).then(|| snapshot_column(graph, frame, title_idx))
+}
+
+/// The column a node load takes its titles from, and whether those titles
+/// overwrite an existing node's on update.
+///
+/// An explicit `node_title_field` wins. Without one, a frame carrying a
+/// `title` column titles its nodes from it: falling back to the id column
+/// there stored the `title` values as a property every read shadows with the
+/// id, so `n.title` answered the id and the column was silently lost.
+pub(super) fn resolve_node_title_field(
+    frame: &DataFrame,
+    unique_id_field: &str,
+    node_title_field: Option<String>,
+) -> (String, bool) {
+    match node_title_field {
+        Some(field) => (field, true),
+        None if unique_id_field != "title" && frame.get_column_index("title").is_some() => {
+            ("title".to_string(), true)
+        }
+        None => (unique_id_field.to_string(), false),
+    }
+}
+
+/// One advisory per `id` / `title` column the load cannot store readably,
+/// because the identity field of that name comes from a different column.
+///
+/// `n.id` and `n.title` always read the node's identity fields, so a property
+/// column spelled `id` or `title` beside a different `unique_id_field` /
+/// title column is stored but answers nowhere — a silent loss the caller
+/// should hear about.
+pub(super) fn shadowed_identity_columns(
+    frame: &DataFrame,
+    node_type: &str,
+    unique_id_field: &str,
+    title_field: &str,
+) -> Vec<Diagnostic> {
+    [
+        ("id", unique_id_field, "unique_id_field"),
+        ("title", title_field, "node_title_field"),
+    ]
+    .into_iter()
+    .filter(|(field, source, _)| source != field && frame.get_column_index(field).is_some())
+    .map(|(field, source, parameter)| {
+        Diagnostic::new(
+            DiagnosticGroup::DataShape,
+            "identity_column_shadowed",
+            format!(
+                "add_nodes: node type '{node_type}' takes its {field} from column \
+                 '{source}', so its '{field}' column is not readable — n.{field} answers \
+                 with the '{source}' value. Rename the '{field}' column, or pass \
+                 {parameter}='{field}'."
+            ),
+        )
+    })
+    .collect()
 }
 
 pub(super) fn node_property_columns(
@@ -346,5 +402,55 @@ fn deferred_title_field(
         "title" => (!matches!(update.value, Value::Null)).then(|| update.value.clone()),
         PROVISIONAL_KEY => Some(Value::Boolean(true)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::datatypes::{DataFrame, Value};
+    use crate::graph::mutation::maintain::add_nodes;
+    use crate::graph::schema::DirGraph;
+
+    fn load(columns: &[&str], row: Vec<Value>, id: &str, title: Option<&str>) -> Vec<String> {
+        let mut graph = DirGraph::new();
+        let names = columns.iter().map(|c| c.to_string()).collect();
+        let df = DataFrame::from_cypher_rows(names, vec![row]).unwrap();
+        let report = add_nodes(
+            &mut graph,
+            df,
+            "P".into(),
+            id.into(),
+            title.map(str::to_string),
+            None,
+        )
+        .unwrap();
+        report
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "identity_column_shadowed")
+            .map(|d| d.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_shadowed_id_or_title_column_is_reported() {
+        let s = |v: &str| Value::String(v.into());
+        let shadowed = load(
+            &["pid", "id", "name", "title"],
+            vec![Value::Int64(10), Value::Int64(99), s("Nan"), s("Ann")],
+            "pid",
+            Some("name"),
+        );
+        assert_eq!(shadowed.len(), 2, "{shadowed:?}");
+        assert!(shadowed[0].contains("its 'id' column is not readable"));
+        assert!(shadowed[1].contains("its 'title' column is not readable"));
+        // With no title field named, the title column is the title.
+        let defaulted = load(
+            &["id", "title"],
+            vec![Value::Int64(1), s("Ann")],
+            "id",
+            None,
+        );
+        assert!(defaulted.is_empty(), "{defaulted:?}");
     }
 }

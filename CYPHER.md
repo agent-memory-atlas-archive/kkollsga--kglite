@@ -5155,6 +5155,14 @@ round-trips and reads back correctly.
 stored property can shadow them). Use `labels(n)` for the label set and `id(n)` /
 `type(r)` for the structural forms regardless of any same-named property.
 
+`CREATE` and `MERGE` take a node's title from its pattern in this order:
+
+- On a type loaded with `node_title_field`, the declared title field. A
+  different `title` value in the same pattern is refused, as two different
+  values for the id and its declared spelling are.
+- Otherwise `title`, then `name`. A pattern carrying both keeps both: `n.title`
+  reads the title and `n.name` reads the stored `name`.
+
 ### Identity (`id`) and prefixed-id datasets (`nid`)
 
 **`id(n)` reads the node's `id` field, not an internal identifier.** In Neo4j and

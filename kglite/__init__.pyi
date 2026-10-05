@@ -2172,11 +2172,15 @@ class KnowledgeGraph:
                 :class:`ArgumentError` and writes nothing. Re-declaring the
                 same spelling (every chunked load) and declaring on an empty
                 or new type are unaffected.
-            node_title_field: Column used as display title. Defaults to ``unique_id_field``,
-                and naming the id column (``add_nodes(df, 'A', 'id', 'id')``) means
-                the same as omitting it: ``n.id`` and ``{id: ...}`` keep naming
-                the identity. Fixed once the type has nodes, exactly like
-                ``unique_id_field``.
+            node_title_field: Column used as display title. Defaults to the
+                frame's ``title`` column when it has one, otherwise to
+                ``unique_id_field``. Naming the id column
+                (``add_nodes(df, 'A', 'id', 'id')``) declares no title spelling:
+                ``n.id`` and ``{id: ...}`` keep naming the identity. Fixed once
+                the type has nodes, exactly like ``unique_id_field``. A frame
+                column spelled ``id`` or ``title`` that is not the identity's
+                source cannot be read back — ``n.title`` answers the title — so
+                the call emits a ``UserWarning`` naming it.
             columns: Whitelist of columns to include. ``None`` = all.
             conflict_handling: ``'update'`` (default), ``'replace'``, ``'skip'``,
                 ``'preserve'``, or ``'sum'``. ``'sum'`` acts as ``'update'`` for nodes.

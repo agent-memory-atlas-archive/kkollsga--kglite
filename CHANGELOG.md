@@ -16,9 +16,20 @@ before upgrading.
   `workspace.root`, so the key never took effect. A rooted manifest booted with
   it ignored; a rootless one failed with "missing required `root`". **Do:**
   remove the key and set `workspace.root`; switch roots with `set_root_dir`.
+- `add_nodes` without `node_title_field` now titles nodes from the frame's
+  `title` column when it has one. It used the id column, so `n.title`
+  answered the id and the `title` values were unreadable. **Do:** pass
+  `node_title_field=unique_id_field` to keep id titles.
+- `CREATE` and `MERGE` on a type with no declared title field now take the
+  title from `title` before `name`. A pattern carrying both kept `name` as
+  the title and lost the `title` value; now `n.title` and `n.name` read each.
+  On a type with a declared title field, a different `title` value in the same
+  pattern is refused, as a different `id` already is.
 
 ### Fixed
 
+- `add_nodes` warns (`UserWarning`) when a column named `id` or `title` cannot
+  be read back because the identity field comes from another column.
 - Creating nodes while a read view is held, after deleting nodes, no longer
   panics or leaves property-less and duplicate nodes. Held views include
   `freeze()`, `copy()`, a `begin()` transaction and a Bolt or
