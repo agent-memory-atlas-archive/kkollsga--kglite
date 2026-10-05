@@ -350,3 +350,74 @@ def test_server_readonly_flag_blocks_writes_at_startup(bolt_binary_path, tmp_pat
                 assert result.single()["c"] == 4
     finally:
         _teardown_bolt_server(proc)
+
+
+@pytest.fixture
+def bolt_server_without_edges(tmp_path):
+    """A read-write server over a one-node graph with no relationships.
+
+    The shared fixture's relationships stay on the edge free list once deleted,
+    which changes which writes fork; this graph starts with empty free lists.
+    """
+    from tests.conftest import (
+        _BOLT_SKIP_REASON,
+        _bolt_binary_available,
+        _spawn_bolt_server,
+        _teardown_bolt_server,
+    )
+
+    if not _bolt_binary_available():
+        pytest.skip(_BOLT_SKIP_REASON)
+    import kglite
+
+    fixture = tmp_path / "seed.kgl"
+    seed = kglite.KnowledgeGraph()
+    seed.cypher("CREATE (:Seed {k: 'seed'})")
+    seed.save(str(fixture))
+    proc, url = _spawn_bolt_server(fixture)
+    yield url
+    _teardown_bolt_server(proc)
+
+
+@pytest.mark.parametrize("batch", ["create", "merge"])
+def test_delete_all_then_create_rounds_keep_exact_counts(bolt_server_without_edges, batch):
+    """Issue #195: delete every node, create a batch, count — round after round.
+
+    Each write transaction forks off the published graph. A fork taken while
+    vacated slots were still listed made the fold-back panic after publication:
+    the client saw `IncompleteCommit` for a commit that had landed, and later
+    rounds found duplicate and property-less nodes. The client retries the way
+    a managed transaction function does, so a dropped commit shows up here as
+    a wrong count rather than a stopped loop.
+    """
+    from neo4j.exceptions import IncompleteCommit, ServiceUnavailable, SessionExpired
+
+    query = {
+        "create": "UNWIND $rows AS r CREATE (:Repro {k: r.k, v: r.v})",
+        "merge": "UNWIND $rows AS r MERGE (s:Repro {k: r.k}) SET s += r",
+    }[batch]
+    size = 5
+    # The driver's own retry loop backs off for up to 30 s per call; the loop
+    # below retries instead, so a failure reads as a count, not a hang.
+    with neo4j.GraphDatabase.driver(
+        bolt_server_without_edges, auth=("neo4j", "password"), max_transaction_retry_time=0
+    ) as driver:
+
+        def write(work):
+            for _ in range(3):
+                try:
+                    with driver.session() as session:
+                        return session.execute_write(work)
+                except (IncompleteCommit, ServiceUnavailable, SessionExpired):
+                    continue
+            pytest.fail("the write kept failing after three retries")
+
+        for round_no in range(20):
+            write(lambda tx: tx.run("MATCH (n) DETACH DELETE n").consume())
+            rows = [{"k": f"K{i}", "v": round_no} for i in range(size)]
+            write(lambda tx, rows=rows: tx.run(query, rows=rows).consume())
+            with driver.session() as session:
+                keys = sorted(record["k"] for record in session.run("MATCH (n) RETURN n.k AS k"))
+                typed = session.run("MATCH (n:Repro) RETURN count(n) AS c").single()["c"]
+            assert keys == [f"K{i}" for i in range(size)], f"round {round_no}: {keys}"
+            assert typed == size, f"round {round_no}: {typed} Repro nodes"

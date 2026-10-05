@@ -107,8 +107,9 @@ fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
 /// forked, so a write taken while a reader holds it must deep-copy — and be
 /// correct.
 ///
-/// `forked::can_fork` is the predicate, and its unit tests cover the predicate
-/// alone. Nothing covered what the `DirGraph` above it then *does*: every other
+/// `forked::can_fork` is the predicate, pinned on its own by
+/// `forked_free_list::a_graph_with_any_free_slot_does_not_fork`. This test
+/// covers what the `DirGraph` above it then *does*: every other
 /// held-reader test in this file seeds a graph that has never deleted anything,
 /// so they all take the overlay path and the fallback branch of
 /// `GraphBackend::clone` was reached by no test at all. It is the branch that

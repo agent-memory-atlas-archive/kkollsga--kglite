@@ -296,3 +296,49 @@ def test_copy_does_not_share_a_backend_with_its_source(graph: kglite.KnowledgeGr
 
     assert graph.cypher("MATCH (n:Item {id: 2}) RETURN n.name AS name").to_list()[0]["name"] == "source-only"
     assert other.cypher("MATCH (n:Item {id: 2}) RETURN n.name AS name").to_list()[0]["name"] == "copy-only"
+
+
+#: Delete orders that leave petgraph's free-list head equal to the node bound
+#: while older vacated slots sit behind it (issue #195). The first empties the
+#: graph; the second keeps K0, K2 and K3.
+_FREE_LIST_ORDERS = {
+    "delete-all": ["K4", "K1", "K2", "K3", "K0"],
+    "subset": ["K1", "K4"],
+}
+
+
+@pytest.mark.parametrize("holder", ["frozen", "copy", "transaction"])
+@pytest.mark.parametrize("order", sorted(_FREE_LIST_ORDERS))
+def test_creates_after_deletes_under_a_held_view_keep_every_node(holder: str, order: str) -> None:
+    """Issue #195: creates taken under a held view after deletes must all survive.
+
+    The write forks only when the free lists are empty. A fork taken with
+    vacated slots still listed made the fold-back allocate different slots than
+    the overlay had handed out: a panic, then ghost and duplicate nodes.
+    """
+    deleted = _FREE_LIST_ORDERS[order]
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("UNWIND range(0, 4) AS i CREATE (:Repro {k: 'K' + toString(i)})")
+    for k in deleted:
+        graph.cypher(f"MATCH (n:Repro {{k: '{k}'}}) DELETE n")
+
+    create_two = "UNWIND ['A', 'B'] AS k CREATE (:Repro {k: k})"
+    if holder == "transaction":
+        tx = graph.begin()
+        tx.cypher(create_two)
+        tx.commit()
+    else:
+        pin = graph.freeze() if holder == "frozen" else graph.copy()
+        graph.cypher(create_two)
+        del pin
+        gc.collect()
+    # The first write after the holder drops is where the fold ran.
+    graph.cypher("CREATE (:Repro {k: 'C'})")
+    graph.cypher("UNWIND ['K0', 'K1', 'K2'] AS k MERGE (s:Repro {k: k}) SET s.v = 1")
+
+    survivors = {f"K{i}" for i in range(5)} - set(deleted)
+    expected = sorted(survivors | {"A", "B", "C", "K0", "K1", "K2"})
+    rows = graph.cypher("MATCH (n) RETURN n.k AS k, labels(n) AS labels").to_list()
+    assert sorted(row["k"] for row in rows) == expected
+    assert all(row["labels"] == ["Repro"] for row in rows), rows
+    assert graph.cypher("MATCH (n:Repro) RETURN count(n) AS c").to_list()[0]["c"] == len(expected)
