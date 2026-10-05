@@ -1,12 +1,13 @@
 # Structured data (tables, nested values, shapes)
 
-Nodes and relationships carry scalar properties naturally; real data also
-arrives as **tables and nested records** — an order's line items, a config
-blob, a list of tags. KGLite stores these on the existing `list`/`map`
-value substrate (there is deliberately no separate "table" value or file
-format) and layers four things on top: DataFrame fidelity, declared
-shapes, atomic nested mutations, and an easy path to the normalized
-row-nodes form when embedding stops being right.
+Nodes and relationships carry scalar properties naturally. Real data also arrives as **tables and nested records**: an order's line items, a config blob, a list of tags.
+
+KGLite stores these on the existing `list`/`map` value substrate. There is deliberately no separate "table" value or file format. Four things sit on top of that substrate:
+
+- DataFrame fidelity.
+- Declared shapes.
+- Atomic nested mutations.
+- An easy path to the normalized row-nodes form, for when embedding stops being the right fit.
 
 ## Table properties (DataFrame in, DataFrame out)
 
@@ -25,8 +26,7 @@ df = g.get_table_property("Order", "order-1", "line_items")
 # nullable dtypes (Int64) for columns that held nulls
 ```
 
-The stored value is a plain **list of maps**, so Cypher sees ordinary
-data — no special reader required:
+The stored value is a plain **list of maps**, so Cypher sees ordinary data. No special reader is required:
 
 ```cypher
 MATCH (o:Order {id: 'order-1'})
@@ -36,19 +36,15 @@ RETURN r.sku, r.qty
 MATCH (o:Order {id: 'order-1'}) RETURN o.line_items[2].price
 ```
 
-What a bare list of maps loses is DataFrame fidelity — map keys are stored
-sorted, so column order would be gone — which is why the helper records
-column order, dtypes, and nullability in a per-`(type, property)` registry
-persisted with the graph. Only `get_table_property` reads it; Cypher never
-does. Writes route through Cypher `SET` internally, so write scope,
-constraints, declared shapes, WAL, and CDC all apply. Unsupported cell
-values are rejected up front, never silently dropped.
+A bare list of maps loses DataFrame fidelity. Map keys are stored sorted, so column order would be gone. The helper therefore records column order, dtypes and nullability in a per-`(type, property)` registry persisted with the graph.
+
+- Only `get_table_property` reads the registry. Cypher never does.
+- Writes route through Cypher `SET` internally. Write scope, constraints, declared shapes, WAL and CDC all apply.
+- Unsupported cell values are rejected up front, never silently dropped.
 
 ## Declared shapes (validating nested values)
 
-KGLite lists are heterogeneous by design, and the `IS :: TYPE` constraint
-vocabulary deliberately excludes `LIST`/`MAP`. Structured **shapes** fill
-the gap, declared through `define_schema`'s `types` values:
+KGLite lists are heterogeneous by design. The `IS :: TYPE` constraint vocabulary deliberately excludes `LIST`/`MAP`. Structured **shapes** fill the gap. You declare them through `define_schema`'s `types` values:
 
 ```python
 g.define_schema({"nodes": {"Order": {"types": {
@@ -58,37 +54,32 @@ g.define_schema({"nodes": {"Order": {"types": {
 }}}})
 ```
 
-`!` marks a required key; unmarked keys may be absent or null. Scalars use
-the `define_schema` spellings (`string|str`, `int|integer`, `float`,
-`bool|boolean`, `date|datetime`).
+- `!` marks a required key. Unmarked keys may be absent or null.
+- Scalars use the `define_schema` spellings: `string|str`, `int|integer`, `float`, `bool|boolean`, `date|datetime`.
 
-A declared shape is enforced **before anything is written** at every write
-path — `add_nodes`/`from_records` (whole-frame: one bad row aborts the
-batch with nothing loaded), Cypher `SET`, and `CREATE` — with the exact
-cell named:
+### Enforcement
+
+A declared shape is enforced **before anything is written**. It applies at every write path:
+
+- `add_nodes` / `from_records`, whole-frame: one bad row aborts the batch with nothing loaded.
+- Cypher `SET`.
+- Cypher `CREATE`.
+
+The error names the exact cell:
 
 ```text
 add_nodes row 37: line_items[37].qty: expected integer, got String
 ```
 
-Plain scalar type strings (`"qty": "int"` outside a shape) remain advisory
-exactly as before — declaring a *shape* is the opt-in to enforcement. A
-structured-looking declaration that does not parse fails `define_schema`
-rather than silently becoming advisory. Recovery does not repeat structured
-shape checks on values already admitted to the log. It does validate the final
-state against declared uniqueness, required-property and property-type
-constraints, preserving unchanged violations from the loaded checkpoint.
+Declaring a *shape* is the opt-in to enforcement. Plain scalar type strings (`"qty": "int"` outside a shape) remain advisory exactly as before. A structured-looking declaration that does not parse fails `define_schema` rather than silently becoming advisory.
 
-`describe()` renders the declared shape per property (or, without a
-declaration, a shape inferred from one sampled value, flagged
-`shape_inferred="true"`), so agents see the contract.
+Recovery does not repeat structured shape checks on values already admitted to the log. It does validate the final state against declared uniqueness, required-property and property-type constraints. Unchanged violations from the loaded checkpoint are preserved.
+
+`describe()` renders the declared shape per property, so agents see the contract. Without a declaration, it renders a shape inferred from one sampled value, flagged `shape_inferred="true"`.
 
 ## Atomic nested mutations
 
-Updating one cell no longer means rebuilding the collection in application
-code — the read-modify-write happens inside the engine, atomically per
-statement, which also removes the lost-update window between an
-application-level read and write:
+You can update one cell without rebuilding the collection in application code. The read-modify-write happens inside the engine, atomically per statement. This also removes the lost-update window between an application-level read and write:
 
 ```cypher
 SET o.line_items[2].qty = 8          -- one cell
@@ -96,12 +87,14 @@ SET o.metadata.status = 'approved'   -- creates the map if absent
 SET o.line_items = o.line_items + [$row]   -- append (the list `+` operator)
 ```
 
-Errors name the path (`line_items[7]: index out of bounds (list has 3
-entries)`); negative indexes count from the end; a declared shape
-re-validates the whole collection after the edit. Nested paths are
-read-side too: `o.line_items[2].price` in any expression.
+- Errors name the path: `line_items[7]: index out of bounds (list has 3 entries)`.
+- Negative indexes count from the end.
+- A declared shape re-validates the whole collection after the edit.
+- Nested paths are read-side too: use `o.line_items[2].price` in any expression.
 
-For keyed row operations there are two write procedures:
+### Keyed row operations
+
+Two write procedures handle keyed rows:
 
 ```cypher
 CALL table.upsert({type: 'Order', id: 'order-1', property: 'line_items',
@@ -113,15 +106,14 @@ CALL table.delete({type: 'Order', id: 'order-1', property: 'line_items',
   YIELD removed, rows
 ```
 
-`table.upsert` replaces the first row whose `key` cell matches `row[key]`
-(whole-row replace) or appends; `table.delete` removes every match. Both
-report `mode: WRITE` in `SHOW PROCEDURES` and honor read-only mode and
-write scope.
+- `table.upsert` replaces the first row whose `key` cell matches `row[key]` (whole-row replace), or appends.
+- `table.delete` removes every match.
+- Both report `mode: WRITE` in `SHOW PROCEDURES`.
+- Both honor read-only mode and write scope.
 
 ## Embedded table vs row nodes
 
-Structured payloads have two homes, and choosing deliberately matters more
-than the mechanics:
+Structured payloads have two homes. Choosing deliberately matters more than the mechanics:
 
 | | Embedded table (`set_table_property`) | Row nodes (`attach_rows`) |
 |---|---|---|
@@ -133,9 +125,11 @@ than the mechanics:
 | Memory | lives in a heap-only Mixed column — cannot spill or mmap | normal columnar storage |
 | Best for | small, always-read-together payloads | rows queried independently, joined, indexed, or large |
 
-Rules of thumb: reach for row nodes as soon as a row needs its own edges
-or an index, or tables grow past a few hundred rows per parent; keep
-tables embedded when they travel with the parent as one unit.
+Rules of thumb:
+
+- Use row nodes as soon as a row needs its own edges or an index.
+- Use row nodes when tables grow past a few hundred rows per parent.
+- Keep tables embedded when they travel with the parent as one unit.
 
 `attach_rows` makes the normalized form one call:
 
@@ -145,29 +139,28 @@ kglite.attach_rows(g, "Order", "order-1", items,
 # one :LineItem node per row (id "order-1:<sku>"), HAS_LINE edges from the parent
 ```
 
-## See also
+## Exact scalar and DataFrame values
 
-- {doc}`data-loading` — bulk-loading the row-nodes form directly.
-- {doc}`inline-records` — nested JSON through `from_records` (which
-  produces the same `list`/`map` values).
-- {doc}`ontology` — declared semantics for the *types and relationships*
-  themselves.
+### Declared integer strings
 
+Declared integer strings must fit signed Int64 exactly. This includes whole decimal and scientific spellings.
 
-### Exact scalar and DataFrame values
+- `"9007199254740993.0"` becomes `9007199254740993`.
+- `"9007199254740993.1"` becomes NULL.
+- CSV blueprint cells and declared frame/direct-loader integer cells share this parsing.
+- Whitespace around declared scalar text is ignored.
+- Invalid declared cells keep the tolerant NULL policy.
+- A float already rounded before ingestion cannot be reconstructed from its former text spelling.
 
-Declared integer strings, including whole decimal/scientific spellings, must
-fit signed Int64 exactly. For example, `"9007199254740993.0"` becomes
-`9007199254740993`; `"9007199254740993.1"` becomes NULL. This parsing is shared
-by CSV blueprint cells and declared frame/direct-loader integer cells.
-Whitespace around declared scalar text is ignored. Invalid declared cells keep
-the tolerant NULL policy. A float already rounded before ingestion cannot be
-reconstructed from its former text spelling.
+### Result DataFrame dtypes
 
 Result DataFrames select dtypes from exact cells before pandas inference:
-integer/NULL columns use nullable `Int64`, and mixed columns containing integers
-use `object`. Other columns keep pandas inference and missing-value conventions.
-Table properties apply stored dtype metadata from those same exact cells.
+
+- Integer/NULL columns use nullable `Int64`.
+- Mixed columns containing integers use `object`.
+- Other columns keep pandas inference and missing-value conventions.
+- Table properties apply stored dtype metadata from those same exact cells.
+
 Do not use a DataFrame's dtype name alone as a value-preservation check:
 
 ```python
@@ -175,20 +168,30 @@ r = graph.cypher("UNWIND $values AS v RETURN v", params={"values": [900719925474
 assert int(r.to_df()["v"].iloc[0]) == 9007199254740993
 ```
 
-Aware Python datetime cells normalize to naive UTC, just like query parameters
-and nested maps/lists. Explicit date-only loading retains the local calendar
-date. Direct date loading keeps its historical `YYYY/MM/DD`, `DD-MM-YYYY` and
-`MM/DD/YYYY` aliases; blueprint declared date strings use the CSV grammar
-(ISO date/datetime, or epoch milliseconds of nine digits or more).
+### Dates and datetimes
 
-A column declared `'datetime'` or `'timestamp'` accepts `YYYY-MM-DD` with an
-optional `HH:MM[:SS[.fff]]` after a space or a `T`; `'datetime'` keeps the
-date and drops the time, `'timestamp'` keeps both. Both routes also read ISO
-8601 basic `YYYYMMDD` — as text, an integer, or a whole-number float — as the
-date it spells; eight digits are never epoch milliseconds. On the direct
-`add_nodes`/`add_relationships` path a cell that parses as none of these is
-stored as NULL **and reported** through `on_invalid` — a warning by default, a
-refusal under `on_invalid='error'`. Blueprint declared cells keep their
-documented NULL-on-invalid behaviour and are reported by one build warning per
-column instead. An empty or blank cell is a missing value on both routes and is
-not reported.
+- Aware Python datetime cells normalize to naive UTC, like query parameters and nested maps/lists.
+- Explicit date-only loading retains the local calendar date.
+- Direct date loading keeps its historical `YYYY/MM/DD`, `DD-MM-YYYY` and `MM/DD/YYYY` aliases.
+- Blueprint declared date strings use the CSV grammar: ISO date/datetime, or epoch milliseconds of nine digits or more.
+
+A column declared `'datetime'` or `'timestamp'` accepts `YYYY-MM-DD` with an optional `HH:MM[:SS[.fff]]` after a space or a `T`.
+
+- `'datetime'` keeps the date and drops the time.
+- `'timestamp'` keeps both.
+- Both routes also read ISO 8601 basic `YYYYMMDD` as the date it spells. The cell can be text, an integer or a whole-number float. Eight digits are never epoch milliseconds.
+
+A cell that parses as none of these is handled by route:
+
+| Route | Result |
+|---|---|
+| Direct `add_nodes` / `add_relationships` | Stored as NULL **and reported** through `on_invalid`: a warning by default, a refusal under `on_invalid='error'`. |
+| Blueprint declared cells | Keep their documented NULL-on-invalid behaviour. One build warning per column reports them instead. |
+
+An empty or blank cell is a missing value on both routes and is not reported.
+
+## See also
+
+- {doc}`data-loading` — bulk-loading the row-nodes form directly.
+- {doc}`inline-records` — nested JSON through `from_records` (which produces the same `list`/`map` values).
+- {doc}`ontology` — declared semantics for the *types and relationships* themselves.

@@ -2,23 +2,22 @@
 
 KGLite has two ranked-retrieval lanes, and they find different things.
 
-The **lexical lane** — a BM25 index built by `build_text_index()`, queried with
-the Cypher scalar `text_bm25()` — ranks documents by word overlap, weighting
-each word by how rare it is in the corpus. It finds the exact term: a product
-code, a surname, an error string, a rare noun. It needs no model, no vectors and
-no GPU, and it answers `'ORA-01555'` correctly the first time it sees it.
+The **lexical lane** is a BM25 index built by `build_text_index()` and queried with the Cypher scalar `text_bm25()`.
 
-The **semantic lane** — embeddings plus `vector_score()` / `search_text()`, see
-{doc}`semantic-search` — ranks by meaning. It finds the paraphrase that shares
-no word with the query, and it does not care that the user typed "car" and the
-document says "vehicle".
+- It ranks documents by word overlap, weighting each word by how rare it is in the corpus.
+- It finds the exact term: a product code, a surname, an error string, a rare noun.
+- It needs no model, no vectors and no GPU.
+- It answers `'ORA-01555'` correctly the first time it sees it.
 
-Neither is a superset of the other, and the failure modes are opposite: an
-embedding blurs away the rare token that *is* the query, and a keyword index
-cannot see a synonym. That is why the interesting configuration is **both, in
-one query** — which in KGLite is one Cypher statement rather than two systems
-and a merge step, because `score_fuse()` combines the lanes per row while
-ordinary `MATCH` / `WHERE` does the graph part around them.
+The **semantic lane** is embeddings plus `vector_score()` / `search_text()`; see {doc}`semantic-search`.
+
+- It ranks by meaning.
+- It finds the paraphrase that shares no word with the query.
+- It does not care that the user typed "car" and the document says "vehicle".
+
+Neither lane is a superset of the other, and the failure modes are opposite. An embedding blurs away the rare token that *is* the query. A keyword index cannot see a synonym.
+
+The interesting configuration is therefore **both, in one query**. In KGLite that is one Cypher statement, not two systems and a merge step. `score_fuse()` combines the lanes per row, and ordinary `MATCH` / `WHERE` does the graph part around them.
 
 | You want… | Lane |
 |---|---|
@@ -28,16 +27,11 @@ ordinary `MATCH` / `WHERE` does the graph part around them.
 | No embedding model in the deployment | lexical only |
 | Non-text similarity (images, feature vectors) | semantic only |
 
-This guide is the Python-side walk-through. The exact Cypher semantics of
-`text_bm25()` and `score_fuse()` — argument forms, null rules, weights — live in
-the [Cypher reference](../../reference/cypher-reference.md) under *Lexical
-search* and *Fusing the lexical and semantic lanes*.
+This guide is the Python-side walk-through. The exact Cypher semantics of `text_bm25()` and `score_fuse()` (argument forms, null rules, weights) live in the [Cypher reference](../../reference/cypher-reference.md) under *Lexical search* and *Fusing the lexical and semantic lanes*.
 
 ## Build the index
 
-The index is **opt-in and explicit**, like `create_index()` and
-`build_vector_index()`: nothing builds one for you, and a graph that never calls
-`build_text_index()` never pays for one.
+The index is **opt-in and explicit**, like `create_index()` and `build_vector_index()`. Nothing builds one for you, and a graph that never calls `build_text_index()` never pays for one.
 
 One index covers one `(node type, property)` pair.
 
@@ -69,39 +63,46 @@ print(report)
 # {'indexed': 4, 'skipped': 0, 'terms': 26}
 ```
 
-`indexed` is the number of documents in the corpus, `skipped` the nodes passed
-over, and `terms` the size of the resulting vocabulary.
+The report has three keys:
 
-**What counts as a document.** A string or list containing only strings and
-nulls produces one document. List members are separated by spaces, nulls are
-ignored, and repeated words retain their frequency. Empty strings and
-empty/all-null lists are empty documents counted in corpus statistics. An absent
-property, another type, or any non-string/non-null list member skips the whole
-document and is counted in `skipped`; values are never stringified.
+- `indexed`: the number of documents in the corpus.
+- `skipped`: the nodes passed over.
+- `terms`: the size of the resulting vocabulary.
 
-**What counts as a word.** Runs of alphanumeric characters are terms and
-everything else separates them; terms are lowercased per character. The rule is
-unicode-aware — `Tromsø` is one token, not two — and it is the same rule
-`text_normalize()` exposes, applied identically at build time and at query time
-so the two cannot drift.
+### What counts as a document
 
-There is **no stemming and no stopword list**. That is deliberate rather than
-unfinished: BM25's IDF term already discounts a word that appears in nearly
-every document, statistically, without a per-language list to maintain or to be
-wrong about. `'the'` in a query contributes almost nothing to the ranking
-because almost every document has it. There is also no CJK segmentation — a run
-of Han characters with no separator is one term.
+A string, or a list containing only strings and nulls, produces one document.
 
-**Memory.** Roughly **26 bytes per token** on a near-worst-case synthetic corpus
-(2,000 documents of 40 tokens drawn from a 5,000-term vocabulary, so almost
-every token is a distinct term — 2.08 MB for 80,000 tokens, measured). Real
-prose repeats words inside a document, which collapses two postings into one
-with a higher frequency, so it lands lower. Multiply your token count by 26
-bytes for a ceiling: a corpus of 100,000 documents averaging 200 tokens is
-20 million tokens, so budget half a gigabyte and expect to use less.
+- List members are separated by spaces.
+- Nulls are ignored.
+- Repeated words retain their frequency.
+- Empty strings and empty or all-null lists are empty documents. They count in corpus statistics.
 
-**Storage modes.** The default (in-memory) and `'mapped'` backends build the
-index. The `'disk'` backend refuses, loudly:
+An absent property, another type, or any non-string/non-null list member skips the whole document. It is counted in `skipped`. Values are never stringified.
+
+### What counts as a word
+
+Runs of alphanumeric characters are terms. Everything else separates them. Terms are lowercased per character.
+
+The rule is unicode-aware: `Tromsø` is one token, not two. It is the same rule `text_normalize()` exposes. It is applied identically at build time and at query time, so the two cannot drift.
+
+There is **no stemming and no stopword list**. That is deliberate, not unfinished.
+
+- BM25's IDF term already discounts a word that appears in nearly every document, statistically. There is no per-language list to maintain or to be wrong about.
+- `'the'` in a query contributes almost nothing to the ranking, because almost every document has it.
+- There is no CJK segmentation. A run of Han characters with no separator is one term.
+
+### Memory
+
+The index costs roughly **26 bytes per token** on a near-worst-case synthetic corpus. That corpus has 2,000 documents of 40 tokens drawn from a 5,000-term vocabulary, so almost every token is a distinct term. Measured: 2.08 MB for 80,000 tokens.
+
+Real prose repeats words inside a document. That collapses two postings into one with a higher frequency, so real corpora land lower.
+
+Multiply your token count by 26 bytes for a ceiling. A corpus of 100,000 documents averaging 200 tokens is 20 million tokens, so budget half a gigabyte and expect to use less.
+
+### Storage modes
+
+The default (in-memory) and `'mapped'` backends build the index. The `'disk'` backend refuses, loudly:
 
 ```text
 build_text_index('Article', 'body') is not supported on a disk-backed graph:
@@ -110,18 +111,16 @@ disk backend is the memory cliff that backend exists to avoid. Use the default
 (in-memory) or 'mapped' storage mode.
 ```
 
-That is the point of the disk backend — it exists so a graph larger than RAM
-stays queryable, and a heap-resident inverted index over it would undo that
-silently.
+That is the point of the disk backend. It exists so a graph larger than RAM stays queryable, and a heap-resident inverted index over it would undo that silently.
 
-`has_text_index(node_type, property)` reports whether one is built;
-`drop_text_index(node_type, property)` removes it and returns whether there was
-one.
+### Checking and dropping
+
+- `has_text_index(node_type, property)` reports whether one is built.
+- `drop_text_index(node_type, property)` removes it and returns whether there was one.
 
 ## Rank with `text_bm25()`
 
-`text_bm25(n, 'property', 'query text')` is an ordinary Cypher scalar returning
-that row's BM25 relevance, so it composes with everything else in a query:
+`text_bm25(n, 'property', 'query text')` is an ordinary Cypher scalar. It returns that row's BM25 relevance, so it composes with everything else in a query:
 
 ```python
 rows = graph.cypher("""
@@ -142,49 +141,43 @@ print(rows.to_df())
 
 Two results are deliberately different answers:
 
-- **`0.0`** — the document was searched and shares no word with the query.
-- **`null`** — the index holds no document for that row: it was created after
-  the build and has not been caught up yet, or its property is absent or is
-  neither text nor a list containing only text and nulls.
+- **`0.0`**: the document was searched and shares no word with the query.
+- **`null`**: the index holds no document for that row. Either the row was created after the build and has not been caught up yet, or its property is absent or is neither text nor a list containing only text and nulls.
 
-Collapsing them would make an index that is quietly behind the graph look like
-a corpus with no matches. Ties break by node id, so an unchanged corpus returns
-the same order every time.
+Collapsing them would make an index that is quietly behind the graph look like a corpus with no matches. Ties break by node id, so an unchanged corpus returns the same order every time.
 
-Calling `text_bm25()` on a `(type, property)` with no index is an **error**
-naming `build_text_index` — never a silent column of nulls.
+Calling `text_bm25()` on a `(type, property)` with no index is an **error** naming `build_text_index`. It is never a silent column of nulls.
 
 ### The shape that gets the fast path
 
-This exact shape —
+This exact shape gets a fast path:
 
 > `RETURN … text_bm25(n, prop, q) AS score` · `ORDER BY score DESC` · `LIMIT k`,
 > over a `MATCH` that binds the whole indexed node type
 
-— plans as a single operator that asks the index's posting lists for their own
-best *k* documents instead of scoring every row. Measured on a 100,000-document
-synthetic corpus (release build, Apple Silicon, 2026-08-25, p50 over 200
-rounds):
+It plans as a single operator. The operator asks the index's posting lists for their own best *k* documents, instead of scoring every row.
+
+Measured on a 100,000-document synthetic corpus (release build, Apple Silicon, 2026-08-25, p50 over 200 rounds):
 
 | Query | Per-row scoring | Postings top-k |
 |---|---|---|
 | Two terms, the rarer in ~30 documents | 30.8 ms | **7.5 ms** |
 | Opens with a near-stopword (nothing to prune) | 25.2 ms | **21.4 ms** |
 
-So a search over a six-figure corpus is single-digit to low-tens of
-milliseconds, and the cost now follows the query's selectivity instead of being
-flat. Both paths are exact: candidates are scored through the same kernel in the
-same summation order, so the rows and their order are identical either way.
+A search over a six-figure corpus is therefore single-digit to low-tens of milliseconds. The cost follows the query's selectivity instead of being flat.
 
-The operator hands the query back to ordinary per-row scoring whenever the index
-cannot answer it alone — a `WHERE` that makes the rows a subset of the corpus,
-`ORDER BY … ASC`, a per-row property or query argument, or an index that has
-fallen behind. Those queries answer *exactly* the same, just without the
-shortcut. **Fewer matching documents than the `LIMIT` asks for is not one of
-them**: the operator keeps the documents it found and completes the answer from
-the corpus, since every remaining document scores `0.0`. That case used to fall
-back, which made the most selective queries the most expensive ones — 39.7 ms
-against 0.62 ms for the same query one `k` lower, on a 200,000-document corpus.
+Both paths are exact. Candidates are scored through the same kernel in the same summation order, so the rows and their order are identical either way.
+
+The operator hands the query back to ordinary per-row scoring whenever the index cannot answer it alone:
+
+- a `WHERE` that makes the rows a subset of the corpus,
+- `ORDER BY … ASC`,
+- a per-row property or query argument,
+- an index that has fallen behind.
+
+Those queries answer *exactly* the same, just without the shortcut.
+
+**Fewer matching documents than the `LIMIT` asks for is not one of them.** The operator keeps the documents it found and completes the answer from the corpus, since every remaining document scores `0.0`. That case used to fall back, which made the most selective queries the most expensive ones: 39.7 ms against 0.62 ms for the same query one `k` lower, on a 200,000-document corpus.
 
 ```python
 rows = graph.cypher("""
@@ -203,35 +196,32 @@ print(rows.to_df())
 # 4        Bogs of the Baltic  0.000000
 ```
 
-`LIMIT k` means *k rows*: two documents mention chlorophyll, so the answer is
-those two followed by three that do not, at `0.0`. Ask for fewer rows, or drop
-the ones scoring zero after the fact — a `WHERE` on the score costs the
-postings shortcut and buys nothing, since a zero already sorts last.
+`LIMIT k` means *k rows*. Two documents mention chlorophyll, so the answer is those two followed by three that do not, at `0.0`. To avoid the padding, ask for fewer rows, or drop the zero scores after the fact. A `WHERE` on the score costs the postings shortcut and buys nothing, since a zero already sorts last.
 
-Filter first when the filter is what makes the query fast (a year, an author, a
-one-hop traversal); leave the `WHERE` off and let the postings do the work when
-you are ranking the whole corpus.
+Choose where the filter goes:
+
+- Filter first when the filter is what makes the query fast (a year, an author, a one-hop traversal).
+- Leave the `WHERE` off and let the postings do the work when you are ranking the whole corpus.
 
 ## The freshness contract
 
-A text index does not follow writes. It **records** them and folds them in when
-a query next reads it. That one sentence has three consequences worth stating
-plainly, because they are the whole contract.
+A text index does not follow writes. It **records** them and folds them in when a query next reads it. That sentence has three consequences, and they are the whole contract.
 
-**Writes are never slowed.** Recording a creation is a comparison of one node
-slot against a high-water mark — O(1) per bulk operation, nothing per row — so
-`add_nodes()` into an indexed graph runs at the speed it would without one.
-A relationship write never touches a node text index; it is recorded only by a
-[relationship text index](#relationship-text-indexes) on its own type and
-property, by the same rule. A graph with no text index pays a single branch. This is not a tuning claim; it is why the design is watermark-based, and
-there are committed benchmark cells that fail if bulk ingest into an indexed
-graph diverges from the unindexed control.
+### Writes are never slowed
 
-**Queries catch up, up to a limit.** When a query reads the index, an
-outstanding delta at or under that index's `auto_refresh_limit` (default 1,000
-documents) is folded in first, inline, and the query sees fresh scores without
-anyone calling anything. The limit is set to 1 below only so the *next* example
-can cross it; leave it at the default in real code:
+Recording a creation is a comparison of one node slot against a high-water mark. That is O(1) per bulk operation and nothing per row, so `add_nodes()` into an indexed graph runs at the speed it would without one.
+
+- A relationship write never touches a node text index.
+- A [relationship text index](#relationship-text-indexes) on its own type and property records it, by the same rule.
+- A graph with no text index pays a single branch.
+
+This is not a tuning claim. It is why the design is watermark-based. Committed benchmark cells fail if bulk ingest into an indexed graph diverges from the unindexed control.
+
+### Queries catch up, up to a limit
+
+When a query reads the index, an outstanding delta at or under that index's `auto_refresh_limit` (default 1,000 documents) is folded in first, inline. The query sees fresh scores without anyone calling anything.
+
+The limit is set to 1 below only so the *next* example can cross it. Leave it at the default in real code:
 
 ```python
 small = kglite.KnowledgeGraph()
@@ -261,18 +251,18 @@ print(small.cypher("SHOW INDEXES").to_df()[["stale", "delta"]].to_dict("records"
 
 The new node scored, nothing was rebuilt by hand, and the index came back clean.
 
-**`auto_refresh_limit` is a document count, not a time budget.** Catch-up cost
-also depends on corpus size and changed content. Fewer than 100 index-relevant
-changes use direct posting edits; larger deltas merge affected posting lists in
-batches. Indexes below 20,000 documents rebuild above 1,500 changes; larger
-indexes batch through 5,000 changes before rebuilding. These conservative
-boundaries reflect the measured corpus sizes, and workloads vary. The limit
-still decides whether to refresh at all: a delta above it is served stale even
-when a batch would be fast. Raising the limit can put a full rebuild in the query.
+**`auto_refresh_limit` is a document count, not a time budget.** Catch-up cost also depends on corpus size and changed content.
 
-**Over the limit, the index says so.** It serves what it has, scores the rows it
-has no document for `null`, and attaches a warning naming the delta and the call
-that fixes it:
+- Fewer than 100 index-relevant changes use direct posting edits.
+- Larger deltas merge affected posting lists in batches.
+- Indexes below 20,000 documents rebuild above 1,500 changes.
+- Larger indexes batch through 5,000 changes before rebuilding.
+
+These conservative boundaries reflect the measured corpus sizes, and workloads vary. The limit still decides whether to refresh at all: a delta above it is served stale even when a batch would be fast. Raising the limit can put a full rebuild in the query.
+
+### Over the limit, the index says so
+
+Over the limit, the index serves what it has. It scores the rows it has no document for `null`. It attaches a warning naming the delta and the call that fixes it:
 
 ```python
 for i in range(6, 9):
@@ -291,8 +281,7 @@ for w in rows.warnings:
 # build_text_index('Article', 'body').
 ```
 
-A read-only graph gets the same treatment with the reason named, since a query
-may not write to it:
+A read-only graph gets the same treatment, with the reason named, since a query may not write to it:
 
 ```python
 small.read_only(True)
@@ -304,14 +293,13 @@ print(rows.warnings[0])
 small.read_only(False)
 ```
 
-The point is that you never have to guess: a query that reads a behind-the-graph
-index says so, in the result, with the number.
+You never have to guess. A query that reads a behind-the-graph index says so, in the result, with the number.
 
-The warning rides the result (`rows.warnings`, and `rows.diagnostics["warnings"]`)
-and is echoed as a `warning: …` line on stderr by default — relationship indexes
-and node indexes alike. To route it through Python's `warnings` module instead,
-so a filter can silence it or `-W error` can turn it into an exception, call
-`kglite.set_query_warning_policy("pywarn")` once per process:
+### Routing the warning
+
+The warning rides the result: `rows.warnings`, and `rows.diagnostics["warnings"]`. It is echoed as a `warning: …` line on stderr by default, for relationship indexes and node indexes alike.
+
+To route it through Python's `warnings` module instead, call `kglite.set_query_warning_policy("pywarn")` once per process. A filter can then silence it, or `-W error` can turn it into an exception:
 
 ```python
 import warnings
@@ -325,56 +313,51 @@ print(caught[0].category.__name__)
 kglite.set_query_warning_policy("stderr")
 ```
 
-`"stderr"` stays the default because a warning raised through `warnings` under
-`-W error` would turn an advisory into an exception out of `cypher()`.
+`"stderr"` stays the default. A warning raised through `warnings` under `-W error` would turn an advisory into an exception out of `cypher()`.
 
 ### Checking and repairing freshness
 
-`SHOW INDEXES` reports `stale` and `delta` for every opt-in index. `delta` is an
-upper bound on the documents a catch-up would re-read; both columns are `null`
-on index kinds that are maintained on every write and have nothing to report.
-`graph.schema()` lists which indexes exist (`'Article.body [text]'`) without the
-freshness columns — use `SHOW INDEXES` when the question is how far behind.
+`SHOW INDEXES` reports `stale` and `delta` for every opt-in index.
 
-Calling `build_text_index()` again rebuilds the index wholesale — the route back
-from any delta, at any time. Omitting `auto_refresh_limit` on that call keeps
-whatever the existing index used, so a rebuild does not quietly restore the
-default.
+- `delta` is an upper bound on the documents a catch-up would re-read.
+- Both columns are `null` on index kinds that are maintained on every write and have nothing to report.
+- `graph.schema()` lists which indexes exist (`'Article.body [text]'`) without the freshness columns. Use `SHOW INDEXES` when the question is how far behind.
+
+Calling `build_text_index()` again rebuilds the index wholesale. It is the route back from any delta, at any time. Omitting `auto_refresh_limit` on that call keeps whatever the existing index used, so a rebuild does not quietly restore the default.
 
 Two things are **not** staleness:
 
-- **Deletes.** Deleting a node prunes its document immediately, at the delete.
-  It has to: the freed node slot is handed to the next node created, and an
-  orphaned document would be inherited by it and score as a ghost.
-- **`vacuum()`.** It renumbers every node, so it **drops** text indexes
-  wholesale. Rebuild after vacuuming — the same rule HNSW indexes have always
-  had. Auto-refreshing across a vacuum would be a hidden full rebuild inside
-  whatever query happened to run next.
+- **Deletes.** Deleting a node prunes its document immediately, at the delete. It has to: the freed node slot is handed to the next node created, and an orphaned document would be inherited by it and score as a ghost.
+- **`vacuum()`.** It renumbers every node, so it **drops** text indexes wholesale. Rebuild after vacuuming, the same rule HNSW indexes have always had. Auto-refreshing across a vacuum would be a hidden full rebuild inside whatever query happened to run next.
 
-A text index is **saved with the graph**. `save()` writes it into the `.kgl` as
-its own self-describing section carrying its resolved column, its refresh
-ceiling and its staleness, and `kglite.load()` restores all of it — a reloaded
-index that was stale is still stale by the same delta. The section is a
-rebuildable cache, not a format break: a graph with no text index writes
-byte-identical files to before, older files load unchanged, and a section a
-build cannot read is skipped rather than refused (rebuild it in that case).
+### Persistence and durability
 
-A text index is **not** recorded in the write-ahead log, on nodes or on
-relationships. On a durable graph (`kglite.open(path, durable=...)`), building
-one is not a logged write: the index reaches disk only with the next checkpoint
-(`save()`). After a crash, the reopened graph recovers every logged write, but a
-text index built since the last checkpoint is gone. Check with
-`has_text_index()` (nodes) or `CALL db.relationship_text_index.list()` (relationships),
-then rebuild. A vector index is logged, so it survives the same crash.
+A text index is **saved with the graph**. `save()` writes it into the `.kgl` as its own self-describing section. The section carries its resolved column, its refresh ceiling and its staleness. `kglite.load()` restores all of it, so a reloaded index that was stale is still stale by the same delta.
+
+The section is a rebuildable cache, not a format break:
+
+- A graph with no text index writes byte-identical files to before.
+- Older files load unchanged.
+- A section a build cannot read is skipped rather than refused. Rebuild it in that case.
+
+A text index is **not** recorded in the write-ahead log, on nodes or on relationships. On a durable graph (`kglite.open(path, durable=...)`), building one is not a logged write. The index reaches disk only with the next checkpoint (`save()`).
+
+After a crash, the reopened graph recovers every logged write, but a text index built since the last checkpoint is gone. To recover:
+
+1. Check with `has_text_index()` (nodes) or `CALL db.relationship_text_index.list()` (relationships).
+2. Rebuild.
+
+A vector index is logged, so it survives the same crash.
 
 ## Relationship text indexes
 
-A relationship property can carry a BM25 index too: evidence on a `SUPPORTS`
-edge, a quote on a `CITES` edge. The relationship index is the node index's
-twin: the same document rule (a string, or a list of strings and nulls joined),
-the same scoring, and the same freshness contract. Its lifecycle lives in
-Cypher, as the relationship vector index's does, so every binding reaches it
-through `cypher()`:
+A relationship property can carry a BM25 index too: evidence on a `SUPPORTS` edge, a quote on a `CITES` edge. The relationship index is the node index's twin. It has:
+
+- the same document rule (a string, or a list of strings and nulls joined),
+- the same scoring,
+- the same freshness contract.
+
+Its lifecycle lives in Cypher, as the relationship vector index's does, so every binding reaches it through `cypher()`:
 
 ```python
 graph.cypher("""
@@ -389,12 +372,11 @@ rows = graph.cypher("""
 """).to_df()
 ```
 
-`text_bm25(r, 'property', 'query')` scores a relationship bound by `MATCH`, or a
-relationship *value*: `collect(r)[0]`, `UNWIND`, a `CALL { }` column, or the
-`relationship` column of `db.relationship_embeddings.query`. It returns `0.0` for a
-relationship sharing no word with the query, `null` for one the index holds no
-document for, and an error naming `db.relationship_text_index.build` when no index
-exists.
+`text_bm25(r, 'property', 'query')` scores a relationship bound by `MATCH`, or a relationship *value*. A value can come from `collect(r)[0]`, `UNWIND`, a `CALL { }` column, or the `relationship` column of `db.relationship_embeddings.query`. It returns:
+
+- `0.0` for a relationship sharing no word with the query,
+- `null` for one the index holds no document for,
+- an error naming `db.relationship_text_index.build` when no index exists.
 
 | Procedure | Yields |
 |---|---|
@@ -403,29 +385,36 @@ exists.
 | `db.relationship_text_index.drop({type, text_column})` | `dropped` (`false` when there was no index) |
 | `db.relationship_text_index.list({type?, text_column?})` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` |
 
-**Freshness.** Writes (`SET`, `REMOVE`, `CREATE` or `MERGE` of a relationship,
-including one that reuses a deleted relationship's storage slot, and
-`add_relationships`) are folded in at the next query within
-`auto_refresh_limit`. Past it, the query serves what the index holds — a
-relationship whose text changed scores its old text, one created since scores
-`null` — and warns, until `db.relationship_text_index.refresh` runs. A deleted relationship's document is removed
-at the delete. `list` and `SHOW INDEXES` report `stale` and `delta` exactly as
-for nodes.
+### Freshness
 
-**Rollback.** `build`, `drop`, and any catch-up a statement triggered are undone
-when that statement fails, so the index never keeps words from a write that did
-not happen.
+These writes are folded in at the next query within `auto_refresh_limit`:
 
-**Naming and dropping.** `SHOW INDEXES` lists the index as
-`relationship:SUPPORTS.evidence`, type `FULLTEXT`, `entityType` `RELATIONSHIP`.
-`DROP INDEX relationship:SUPPORTS.evidence` removes every relationship
-structure under that name, the BM25 index and a relationship vector index on
-the same property alike.
+- `SET` and `REMOVE`,
+- `CREATE` or `MERGE` of a relationship, including one that reuses a deleted relationship's storage slot,
+- `add_relationships`.
 
-**Storage.** The index is saved in the `.kgl`, and a reloaded graph keeps it.
-`vacuum()` drops it; rebuild after vacuuming. Memory and mapped storage only:
-a disk-backed graph refuses to build one, for the same reason it refuses a node
-text index.
+Past the limit, the query serves what the index holds and warns, until `db.relationship_text_index.refresh` runs.
+
+- A relationship whose text changed scores its old text.
+- A relationship created since scores `null`.
+
+A deleted relationship's document is removed at the delete. `list` and `SHOW INDEXES` report `stale` and `delta` exactly as for nodes.
+
+### Rollback
+
+`build`, `drop`, and any catch-up a statement triggered are undone when that statement fails. The index never keeps words from a write that did not happen.
+
+### Naming and dropping
+
+`SHOW INDEXES` lists the index as `relationship:SUPPORTS.evidence`, type `FULLTEXT`, `entityType` `RELATIONSHIP`.
+
+`DROP INDEX relationship:SUPPORTS.evidence` removes every relationship structure under that name. That includes the BM25 index and a relationship vector index on the same property.
+
+### Storage
+
+- The index is saved in the `.kgl`, and a reloaded graph keeps it.
+- `vacuum()` drops it. Rebuild after vacuuming.
+- Memory and mapped storage only: a disk-backed graph refuses to build one, for the same reason it refuses a node text index.
 
 Both relationship lanes fuse exactly as node lanes do:
 
@@ -440,11 +429,7 @@ graph.cypher("""
 
 ## Both lanes in one query
 
-This is the reason the lexical lane exists here rather than in a separate
-package. `score_fuse()` combines several ranked lanes into one number per row,
-so keyword relevance and semantic similarity rank the same query in a single
-statement — with the graph filters and traversals of ordinary Cypher around
-them.
+This is the reason the lexical lane exists here rather than in a separate package. `score_fuse()` combines several ranked lanes into one number per row. Keyword relevance and semantic similarity rank the same query in a single statement, with the graph filters and traversals of ordinary Cypher around them.
 
 ```python
 graph.set_embeddings("Article", "body", {
@@ -470,12 +455,11 @@ print(hits.to_df())
 # 2        Chlorophyll assays  0.494731
 ```
 
-(In a real deployment the vectors come from `embed_texts()` and an embedder —
-see {doc}`semantic-search`. Two-dimensional literals are used here so the
-example runs without a model.)
+In a real deployment the vectors come from `embed_texts()` and an embedder; see {doc}`semantic-search`. This example uses two-dimensional literals so it runs without a model.
 
-The lanes weigh equally by default. A **trailing list** weights them, in
-argument order — relative, so `[3, 1]` and `[0.75, 0.25]` rank identically:
+### Weighting the lanes
+
+The lanes weigh equally by default. A **trailing list** weights them, in argument order. The weights are relative, so `[3, 1]` and `[0.75, 0.25]` rank identically:
 
 ```python
 hits = graph.cypher("""
@@ -491,23 +475,19 @@ print(hits.to_df().head(1))
 # 0  Low-light photosynthesis  1.256278
 ```
 
-**An absent lane leaves the average; it does not score zero.** A lane returns
-`null` for a row it could not *see* — a document the text index has not caught
-up with, a node with no stored embedding — and that row keeps the score of the
-lanes that did run, with the absent lane's weight leaving the denominator too.
-Zero would mean "this lane looked and found nothing", which would rank a
-document one lane could not see below a document both lanes actively disliked.
-The result is `null` only when every lane is absent. This is the rule that lets
-hybrid retrieval work on a half-embedded corpus.
+A wrong-length weights list, a negative weight and a non-numeric score are all errors rather than a quietly different ranking.
 
-A wrong-length weights list, a negative weight and a non-numeric score are all
-errors rather than a quietly different ranking.
+### Absent lanes
+
+**An absent lane leaves the average. It does not score zero.**
+
+A lane returns `null` for a row it could not *see*: a document the text index has not caught up with, or a node with no stored embedding. That row keeps the score of the lanes that did run. The absent lane's weight leaves the denominator too. The result is `null` only when every lane is absent.
+
+Zero would mean "this lane looked and found nothing". That would rank a document one lane could not see below a document both lanes actively disliked. This rule is what lets hybrid retrieval work on a half-embedded corpus.
 
 ### Reciprocal Rank Fusion
 
-There is no `rrf()` scalar, because RRF works on each lane's **rank across the
-whole result set** and a per-row scalar sees one row. It is two lines of what
-already exists — window `rank()` in a `WITH`, then fuse the reciprocals:
+There is no `rrf()` scalar. RRF works on each lane's **rank across the whole result set**, and a per-row scalar sees one row. RRF is two lines of what already exists: window `rank()` in a `WITH`, then fuse the reciprocals:
 
 ```python
 hits = graph.cypher("""
@@ -526,11 +506,12 @@ print(hits.to_df().head(2))
 # 1  Shade tolerance in ferns  0.016001
 ```
 
-Reach for RRF when the lanes' scores are on incomparable scales — BM25 is
-unbounded, cosine is not — since ranks discard the magnitudes. Fuse the scores
-directly when the magnitudes carry information you want. The
-[Cypher reference](../../reference/cypher-reference.md) carries the same recipe
-alongside the `score_fuse` semantics.
+Choose between RRF and direct fusion:
+
+- Use RRF when the lanes' scores are on incomparable scales (BM25 is unbounded, cosine is not). Ranks discard the magnitudes.
+- Fuse the scores directly when the magnitudes carry information you want.
+
+The [Cypher reference](../../reference/cypher-reference.md) carries the same recipe alongside the `score_fuse` semantics.
 
 ## Request exact vector retrieval
 
@@ -543,28 +524,33 @@ RETURN a.title AS title,
 ORDER BY score DESC LIMIT 5
 ```
 
-The map may be a query parameter. An explicit metric goes before it, for example
-`text_score(a, 'body', $query, 'cosine', {exact: true})`. `exact` must be boolean;
-unknown options are rejected. Exact execution does not use or refresh HNSW.
-Without this option, a compatible index may narrow candidates approximately;
-a filter alone does not guarantee an exact scan. Omitted metrics come from each
-node type's actual embedding store.
+- The map may be a query parameter.
+- An explicit metric goes before the map, for example `text_score(a, 'body', $query, 'cosine', {exact: true})`.
+- `exact` must be boolean. Unknown options are rejected.
+- Exact execution does not use or refresh HNSW.
+- Without this option, a compatible index may narrow candidates approximately. A filter alone does not guarantee an exact scan.
+- Omitted metrics come from each node type's actual embedding store.
+
+### Checking the route taken
+
+The returned view's `diagnostics["retrieval"]` reports the actual search route, including with `PROFILE`.
+
+- `actual_mode="hnsw"` means approximate candidate selection ran.
+- `actual_mode="exact"` includes a `fallback_reason` such as `forced_exact`, `no_index`, or `stale_index`.
+- Records survive nested `CALL` and `UNION` queries.
+- `EXPLAIN` reports requested policy without executing it.
 
 ## The vector lane catches up the same way
 
-Freshness is one shared mechanism, so an HNSW vector index behaves like a text
-index where it can. Writing vectors after `build_vector_index()` no longer drops
-the index: the outstanding vectors are recorded and folded in at query entry
-while the delta is at or under `auto_refresh_limit`, a larger delta is served by
-the exact scan (correct, and slower) until you rebuild or call
-`refresh_vector_index()`, and both facts show up in `SHOW INDEXES`.
+Freshness is one shared mechanism, so an HNSW vector index behaves like a text index where it can. Writing vectors after `build_vector_index()` no longer drops the index.
 
-The one difference is what a *query* is allowed to do for you:
+- The outstanding vectors are recorded and folded in at query entry, while the delta is at or under `auto_refresh_limit`.
+- A larger delta is served by the exact scan (correct, and slower) until you rebuild or call `refresh_vector_index()`.
+- Both facts show up in `SHOW INDEXES`.
 
-**Catch-up never embeds.** A node with no vector is not part of the delta — it
-is counted in `SHOW INDEXES`' `unembedded` column and stays invisible to vector
-search until you embed it. No query turns into an embedding run behind your
-back; run `embed_texts()` when you mean to.
+The one difference is what a *query* is allowed to do for you.
+
+**Catch-up never embeds.** A node with no vector is not part of the delta. It is counted in `SHOW INDEXES`' `unembedded` column and stays invisible to vector search until you embed it. No query turns into an embedding run behind your back. Run `embed_texts()` when you mean to.
 
 ```python
 vec = kglite.KnowledgeGraph()
@@ -585,23 +571,15 @@ print(vec.refresh_vector_index("Article", "body"))
 ```
 
 What still drops a vector index is a change to the slot layout it addresses:
-deleting an embedded node, and a `vacuum()` that compacts, which drops every
-vector index in the graph — node and relationship, on types that saw no delete
-too. Rebuild after those — `refresh_vector_index()` refuses while no index is
-built. A delete that a failed statement or a rolled-back transaction undoes
-leaves the index in place.
+
+- Deleting an embedded node.
+- A `vacuum()` that compacts. It drops every vector index in the graph, node and relationship, including on types that saw no delete.
+
+Rebuild after those. `refresh_vector_index()` refuses while no index is built. A delete that a failed statement or a rolled-back transaction undoes leaves the index in place.
 
 ## See also
 
-- {doc}`semantic-search` — embedders, `embed_texts()`, HNSW tuning, and the
-  recall numbers on hard corpora.
-- [Cypher reference](../../reference/cypher-reference.md) — `text_bm25()`,
-  `score_fuse()`, `SHOW INDEXES`, and the window functions RRF uses.
+- {doc}`semantic-search` — embedders, `embed_texts()`, HNSW tuning, and the recall numbers on hard corpora.
+- [Cypher reference](../../reference/cypher-reference.md) — `text_bm25()`, `score_fuse()`, `SHOW INDEXES`, and the window functions RRF uses.
 - {doc}`data-loading` — getting the documents in before you index them.
 - {doc}`ai-agents` — exposing a retrieval graph to an agent.
-
-The returned view's `diagnostics["retrieval"]` reports the actual search route,
-including with `PROFILE`. `actual_mode="hnsw"` means approximate candidate
-selection ran; `actual_mode="exact"` includes a `fallback_reason` such as
-`forced_exact`, `no_index`, or `stale_index`. Records survive nested `CALL`
-and `UNION` queries. `EXPLAIN` reports requested policy without executing it.

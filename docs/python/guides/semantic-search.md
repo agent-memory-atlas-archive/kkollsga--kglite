@@ -1,10 +1,10 @@
 # Semantic Search
 
-Store embedding vectors alongside nodes and query them with fast similarity search. Embeddings are stored separately from node properties — they don't appear in `collect()`, `to_df()`, or regular Cypher property access.
+Store embedding vectors alongside nodes and query them with fast similarity search. Embeddings are stored separately from node properties. They don't appear in `collect()`, `to_df()`, or regular Cypher property access.
 
 ## Text-Level API (Recommended)
 
-Register an embedding model once, then embed and search using text column names. The model runs on the Python side — KGLite only stores the resulting vectors.
+Register an embedding model once, then embed and search using text column names. The model runs on the Python side. KGLite only stores the resulting vectors.
 
 ```python
 from sentence_transformers import SentenceTransformer
@@ -53,12 +53,20 @@ results = graph.select("Article").search_text("summary", "machine learning", top
 
 **Key details:**
 
-- **Auto-naming:** text column `"summary"` → store name `"summary_emb"` (auto-derived)
-- **Incremental, three modes:** `embed_texts(mode=…)` — `'missing'` (default) embeds only nodes without a vector; `'changed'` also re-embeds nodes whose **text changed** since the last pass (a per-node content hash is stored to detect this); `'all'` rebuilds the whole store.
-- **Model provenance:** an incremental pass over a store named for model A requires the registered model to name itself A. Model B or an unnamed model is refused before model work; use `mode='all'` to rebuild and assign the current model identity. An unknown/mixed store can be incrementally refreshed, but stays `model=None`; only a full rebuild restores named aggregate provenance.
-- **Progress bar:** shows a tqdm progress bar by default. Disable with `show_progress=False`.
+- **Auto-naming:** text column `"summary"` → store name `"summary_emb"` (auto-derived).
+- **Incremental, three modes:** `embed_texts(mode=…)` takes one of:
+  - `'missing'` (default) embeds only nodes without a vector.
+  - `'changed'` also re-embeds nodes whose **text changed** since the last pass. A per-node content hash is stored to detect this.
+  - `'all'` rebuilds the whole store.
+- **Model provenance:** an incremental pass over a store named for model A requires the registered model to name itself A.
+  - Model B, or an unnamed model, is refused before model work. Use `mode='all'` to rebuild and assign the current model identity.
+  - An unknown/mixed store can be incrementally refreshed, but stays `model=None`.
+  - Only a full rebuild restores named aggregate provenance.
+- **Progress bar:** a tqdm progress bar shows by default. Disable it with `show_progress=False`.
 - **Load/unload lifecycle:** if the model has optional `load()` / `unload()` methods, they are called automatically before and after each embedding operation.
-- **Registration metadata:** `set_embedder()` snapshots `dimension` and the optional `model_id` / `model_name`. Set their final values before registration and register again to adopt changed metadata. The model object itself is **not** saved with `save()` — call `set_embedder()` again after deserializing.
+- **Registration metadata:** `set_embedder()` snapshots `dimension` and the optional `model_id` / `model_name`.
+  - Set their final values before registration. Register again to adopt changed metadata.
+  - The model object itself is **not** saved with `save()`. Call `set_embedder()` again after deserializing.
 
 ```python
 # Add new articles, then re-embed — only new ones are processed
@@ -84,10 +92,9 @@ results = (graph
 
 ### Carrying vectors across a rebuild
 
-The common "rebuild a fresh graph from a source of truth on each load" workflow
-needs the vectors carried forward. `copy_embeddings_from` does it in one call,
-matched by node id (carrying dimension, metric, model id, and the per-node text
-hashes — so a following `mode='changed'` only re-embeds genuinely new text):
+A common workflow rebuilds a fresh graph from a source of truth on each load. The vectors then need carrying forward.
+
+`copy_embeddings_from` does it in one call, matched by node id. It carries the dimension, metric, model id and per-node text hashes. A following `mode='changed'` therefore only re-embeds genuinely new text:
 
 ```python
 new_graph = build_from_source()              # fresh, no vectors yet
@@ -99,7 +106,7 @@ new_graph.embed_texts("Article", "summary", mode="changed")  # fill only the new
 
 ## Low-Level Vector API
 
-If you manage vectors yourself, use the low-level API:
+If you manage vectors yourself, use the low-level API.
 
 ### Storing Embeddings
 
@@ -122,14 +129,11 @@ graph.add_nodes(df, 'Doc', 'id', 'title', column_types={'text_emb': 'embedding'}
 
 ### Incremental ingest — `add_embeddings`
 
-`set_embeddings` is a **full replace**: each call discards the existing
-store for `(node_type, '{text_column}_emb')`. When you ingest documents in
-batches — embed chunks for doc A, then doc B, then doc C — a second
-`set_embeddings` call would wipe doc A's vectors.
+`set_embeddings` is a **full replace**. Each call discards the existing store for `(node_type, '{text_column}_emb')`.
 
-Use `add_embeddings` for that. It **upserts** into the existing store
-(creating it on the first call), so batches coexist without a
-read-merge-write cycle in your own code:
+Ingesting documents in batches breaks under this rule: embed chunks for doc A, then doc B, then doc C. A second `set_embeddings` call would wipe doc A's vectors.
+
+Use `add_embeddings` for batches. It **upserts** into the existing store, creating it on the first call. Batches coexist without a read-merge-write cycle in your own code:
 
 ```python
 graph.add_embeddings('Chunk', 'text', {  # doc A's chunks
@@ -142,37 +146,34 @@ graph.add_embeddings('Chunk', 'text', {  # doc B's chunks — A's survive
 # -> {'embeddings_stored': int, 'dimension': int, 'skipped': int, 'store_created': bool}
 ```
 
-Reach for `set_embeddings` only when you genuinely want to replace the
-entire store (e.g. re-embedding everything with a new model).
+Reach for `set_embeddings` only when you genuinely want to replace the entire store (e.g. re-embedding everything with a new model).
 
-Both calls require `text_column` to name a property that exists on the node
-type (`id`, `title` and `type` are always accepted) — the guard that catches
-passing the store name `'summary_emb'` where the column name `'summary'`
-belongs. Both resolve every id, check every dimension, and reject NaN or
-infinite coordinates before writing, so a rejected batch leaves the store as
-it was. Both count ids that match no node in `skipped`.
+Both calls share these rules:
 
-A store built this way records exactly what you supply: the vectors, their
-dimension, and the metric. `embed_texts()` additionally records the embedder's
-`model_id` and per-node text hashes. A real `add_embeddings()` upsert into a
-generated store clears the affected rows' hashes and changes aggregate model
-provenance to `None`; a batch containing only unknown IDs changes neither.
-Incremental generation over unknown/mixed provenance uses text freshness only
-and keeps `model=None`. Use `mode='all'` to restore one named model provenance.
+- `text_column` must name a property that exists on the node type (`id`, `title` and `type` are always accepted). This guard catches passing the store name `'summary_emb'` where the column name `'summary'` belongs.
+- Both resolve every id, check every dimension, and reject NaN or infinite coordinates before writing. A rejected batch leaves the store as it was.
+- Both count ids that match no node in `skipped`.
 
-Call `save()` to persist a store: embeddings ride the checkpoint, so a durable
-graph writes them at `save()` rather than per-call.
+A store built this way records exactly what you supply: the vectors, their dimension, and the metric. `embed_texts()` additionally records the embedder's `model_id` and per-node text hashes.
+
+Provenance changes follow these rules:
+
+- A real `add_embeddings()` upsert into a generated store clears the affected rows' hashes and changes aggregate model provenance to `None`.
+- A batch containing only unknown IDs changes neither.
+- Incremental generation over unknown/mixed provenance uses text freshness only and keeps `model=None`.
+- Use `mode='all'` to restore one named model provenance.
+
+Call `save()` to persist a store. Embeddings ride the checkpoint, so a durable graph writes them at `save()` rather than per-call.
 
 ### Vector Search
 
-Query vectors must contain only finite coordinates; NaN and either infinity
-are rejected before exact or indexed scoring.
+Query vectors must contain only finite coordinates. NaN and either infinity are rejected before exact or indexed scoring.
 
-Each hit is a dict with `id`, `title`, `type`, `score`, **and all node
-properties**. `score` is always present (every metric), and properties are
-read live from the node — so a hit carries the same fields before and after
-`save()` + reload. You don't need a follow-up `MATCH ... WHERE id IN [...]`
-to recover properties.
+Each hit is a dict with `id`, `title`, `type`, `score`, **and all node properties**.
+
+- `score` is always present (every metric).
+- Properties are read live from the node, so a hit carries the same fields before and after `save()` + reload.
+- You don't need a follow-up `MATCH ... WHERE id IN [...]` to recover properties.
 
 ```python
 # Basic search — each hit carries id, title, type, score AND every node
@@ -201,11 +202,9 @@ results = graph.select('Article').vector_search(
 
 ### Scaling search with an index (HNSW)
 
-By default vector search is an **exact** brute-force scan: every candidate is
-scored. That's the right thing for small/medium stores and for filtered
-searches — but on a large corpus, scoring every vector on every query doesn't
-scale. Build an **HNSW** approximate-nearest-neighbour index once, and
-whole-corpus queries become sub-linear:
+By default, vector search is an **exact** brute-force scan: every candidate is scored. That is the right choice for small and medium stores and for filtered searches. On a large corpus, scoring every vector on every query doesn't scale.
+
+Build an **HNSW** approximate-nearest-neighbour index once, and whole-corpus queries become sub-linear:
 
 ```python
 graph.embed_texts('Article', 'summary')          # produce vectors
@@ -221,30 +220,16 @@ hits = graph.search_text('summary', 'machine learning', top_k=10)
 hits = graph.select('Article').vector_search('summary', query_vec, top_k=10, exact=True)
 ```
 
-It behaves like `create_index`: **opt-in**, and once built it's used
-automatically. Key points:
+The index behaves like `create_index`: it is **opt-in**, and once built it is used automatically. Key points:
 
-- **Auto-use, with an escape hatch.** A query that covers most of a large
-  indexed store (≥400 covered vectors) uses the index; `exact=True` always
-  forces the exact scan. The scores returned are on the exact same scale as the
-  brute-force path (the index only narrows *which* nodes get scored).
-- **The selection doesn't have to be that one type.** While only one node type
-  carries the column, the index is used whatever else the selection spans —
-  including a whole-graph `graph.vector_search('summary', q)` on a graph full
-  of other node types. Nodes of other types simply have no vector in the store
-  and are skipped, exactly as the exact scan skips them.
-- **Two embedded types are ranked exactly.** If both `Article.summary` and
-  `Note.summary` are embedded, a selection spanning *both* falls back to an
-  exact global ranking: using one type's index would silently drop the other
-  type's rows. Select a single type to get the index back.
-- **Filtered queries stay exact.** A selective `.where(...)` before the search
-  falls back to an exact scan automatically — correctness over speed when a
-  filter is tight. (So an index helps "search the whole corpus", not "search a
-  small filtered slice".)
-- **Approximate.** Recall depends on your data and `ef_search`: well-structured
-  embeddings (sentence-transformers, bge, OpenAI, etc.) typically get ≥0.99
-  recall@10 at the defaults; raise `ef_search` for higher recall at some latency
-  cost, or use `exact=True` when you can't tolerate any miss.
+- **Auto-use, with an escape hatch.** A query that covers most of a large indexed store (≥400 covered vectors) uses the index. `exact=True` always forces the exact scan. Returned scores are on the exact same scale as the brute-force path, because the index only narrows *which* nodes get scored.
+- **The selection doesn't have to be that one type.** While only one node type carries the column, the index is used whatever else the selection spans. That includes a whole-graph `graph.vector_search('summary', q)` on a graph full of other node types. Nodes of other types simply have no vector in the store and are skipped, exactly as the exact scan skips them.
+- **Two embedded types are ranked exactly.** Suppose both `Article.summary` and `Note.summary` are embedded. A selection spanning *both* falls back to an exact global ranking, because using one type's index would silently drop the other type's rows. Select a single type to get the index back.
+- **Filtered queries stay exact.** A selective `.where(...)` before the search falls back to an exact scan automatically: correctness over speed when a filter is tight. An index helps "search the whole corpus", not "search a small filtered slice".
+- **Approximate.** Recall depends on your data and `ef_search`.
+  - Well-structured embeddings (sentence-transformers, bge, OpenAI, etc.) typically get ≥0.99 recall@10 at the defaults.
+  - Raise `ef_search` for higher recall at some latency cost.
+  - Use `exact=True` when you can't tolerate any miss.
 
   > **Benchmark HNSW on *real* embeddings, not random vectors.** Random unit
   > vectors in high dimensions have no neighbourhood structure — every pair is
@@ -253,31 +238,15 @@ automatically. Key points:
   > engine defect: on real embeddings the same index hits ~0.99. If you must
   > sanity-check on synthetic data, query with *stored* vectors (which have a
   > true nearest neighbour) rather than fresh random ones.
-- **Metrics.** cosine / dot_product / euclidean are indexable; `poincare` always
-  uses the exact path.
-- **Lifecycle.** Writing vectors (`add_embeddings`, `embed_texts`,
-  `set_embeddings`) does **not** drop the index: the write is recorded, and the
-  next vector query folds it in while the outstanding delta stays at or under
-  `auto_refresh_limit` (default 1000). A larger delta is served by the exact
-  scan — correct, and slower — until you rebuild or call
-  `refresh_vector_index(...)`. What *does* drop the index is a change to the
-  slot layout it addresses: deleting an embedded node (the delete prunes its
-  vector), and a `vacuum()` that compacts — its result reports
-  `tombstones_removed > 0`, whether you called it or auto-vacuum ran it after a
-  large delete — which drops **every** vector index in the graph, node and
-  relationship, including those on types that saw no delete (on disk
-  `vacuum()` is a no-op). Rebuild after those: `refresh_vector_index(...)`
-  folds in a delta but never builds, so it refuses while no index is built,
-  naming the
-  `build_vector_index(...)` call. A delete that a failed statement or a
-  rolled-back transaction undoes leaves the index in place.
-  `SHOW INDEXES` reports `stale` / `delta`, plus `unembedded` — the nodes with
-  no vector at all, which catch-up never embeds. Check with
-  `has_vector_index(...)`, remove with `drop_vector_index(...)`.
-- **Persisted.** The index is saved inside the `.kgl` (and `to_bytes()`), so a
-  reloaded graph keeps it — no rebuild on load. A disk-mode graph's directory
-  keeps neither node nor relationship indexes: rebuild after reopening a disk
-  graph.
+- **Metrics.** cosine / dot_product / euclidean are indexable. `poincare` always uses the exact path.
+- **Lifecycle.** Writing vectors (`add_embeddings`, `embed_texts`, `set_embeddings`) does **not** drop the index. The write is recorded, and the next vector query folds it in while the outstanding delta stays at or under `auto_refresh_limit` (default 1000). A larger delta is served by the exact scan (correct, and slower) until you rebuild or call `refresh_vector_index(...)`.
+  - **What drops the index:** a change to the slot layout it addresses.
+    - Deleting an embedded node (the delete prunes its vector).
+    - A `vacuum()` that compacts. Its result reports `tombstones_removed > 0`, whether you called it or auto-vacuum ran it after a large delete. It drops **every** vector index in the graph, node and relationship, including those on types that saw no delete. On disk, `vacuum()` is a no-op.
+  - **What leaves it in place:** a delete that a failed statement or a rolled-back transaction undoes.
+  - **Rebuilding:** rebuild after either of those. `refresh_vector_index(...)` folds in a delta but never builds. It refuses while no index is built, naming the `build_vector_index(...)` call.
+  - **Inspecting:** `SHOW INDEXES` reports `stale` / `delta`, plus `unembedded`: the nodes with no vector at all, which catch-up never embeds. Check with `has_vector_index(...)`, remove with `drop_vector_index(...)`.
+- **Persisted.** The index is saved inside the `.kgl` (and `to_bytes()`), so a reloaded graph keeps it. No rebuild on load. A disk-mode graph's directory keeps neither node nor relationship indexes, so rebuild after reopening a disk graph.
 
 ```python
 graph.build_vector_index(
@@ -292,44 +261,31 @@ graph.save('articles.kgl')                       # index travels with the file
 
 #### Recall on hard corpora
 
-Recall is a property of **your vectors**, not only of the index. HNSW walks a
-neighbourhood graph, so it needs neighbourhoods: vectors with real cluster or
-low-rank structure — what a sentence-embedding model produces — are found
-essentially exactly at the defaults. Uniform or independent high-dimensional
-random vectors have no such structure (every pair is nearly orthogonal), the
-walk has nothing to follow, and recall degrades with **both** corpus size and
-dimension. That is the corpus, not a defect: the same index on the same engine
-is at ~1.0 on the structured corpus and at 0.4 on the unstructured one.
+Recall is a property of **your vectors**, not only of the index. HNSW walks a neighbourhood graph, so it needs neighbourhoods.
 
-Measured with `tests/benchmarks/bench_vector_index.py --recall-sweep` (release
-build, `m=16`, `ef_construction=200`, `ef_search=64`, cosine, `top_k=10`,
-queries are *stored* vectors, recall@10 against the exact scan; the range spans
-two runs):
+- Vectors with real cluster or low-rank structure, such as a sentence-embedding model produces, are found essentially exactly at the defaults.
+- Uniform or independent high-dimensional random vectors have no such structure: every pair is nearly orthogonal. The walk has nothing to follow, and recall degrades with **both** corpus size and dimension.
+
+That is the corpus, not a defect. The same index on the same engine is at ~1.0 on the structured corpus and at 0.4 on the unstructured one.
+
+Measured with `tests/benchmarks/bench_vector_index.py --recall-sweep`. Setup: release build, `m=16`, `ef_construction=200`, `ef_search=64`, cosine, `top_k=10`. Queries are *stored* vectors, and recall@10 is against the exact scan. The range spans two runs:
 
 | corpus | 20k×128 | 50k×128 | 100k×128 | 20k×384 | 50k×384 | 100k×384 |
 | --- | --- | --- | --- | --- | --- | --- |
 | clustered / low-rank (realistic) | ≥0.99 | ≥0.99 | ≥0.99 | ≥0.99 | ≥0.99 | ≥0.99 |
 | independent Gaussian (adversarial) | 0.94 | 0.80 | 0.62–0.71 | 0.77–0.80 | 0.52–0.57 | 0.42 |
 
-**The knobs are `ef_search`, `ef_construction` and `m`** — all arguments of
-`build_vector_index`. `ef_search` (default 64) is the query-time one, and its
-effect is very different on the two corpora:
+**The knobs are `ef_search`, `ef_construction` and `m`**, all arguments of `build_vector_index`. `ef_search` (default 64) is the query-time one. Its effect is very different on the two corpora:
 
-- On the **clustered** corpus there is nothing to buy: recall is already ≥0.99
-  at 64, and raising it only costs latency (100k×384: 0.10 ms at 64, 0.13 ms at
-  128, 0.19 ms at 256).
-- On the **adversarial** corpus it helps, but far less than it costs. At
-  100k×384: recall 0.42 → 0.43–0.45 → 0.46–0.50 for ef_search 64 → 128 → 256,
-  while latency goes 0.17–0.19 → 0.27–0.33 → 0.49 ms. At 100k×128: 0.62–0.71 → 0.70–0.73
-  → 0.77–0.80. Index construction inserts concurrently, so two builds of the
-  same corpus differ by ±0.04 recall on this corpus (±0.005 on the clustered
-  one) — an ef_search step of 64 → 128 is inside that noise.
+- On the **clustered** corpus there is nothing to buy. Recall is already ≥0.99 at 64, and raising it only costs latency (100k×384: 0.10 ms at 64, 0.13 ms at 128, 0.19 ms at 256).
+- On the **adversarial** corpus it helps, but far less than it costs.
+  - At 100k×384: recall 0.42 → 0.43–0.45 → 0.46–0.50 for ef_search 64 → 128 → 256, while latency goes 0.17–0.19 → 0.27–0.33 → 0.49 ms.
+  - At 100k×128: 0.62–0.71 → 0.70–0.73 → 0.77–0.80.
+  - Index construction inserts concurrently. Two builds of the same corpus therefore differ by ±0.04 recall on this corpus (±0.005 on the clustered one). An ef_search step of 64 → 128 is inside that noise.
 
-So `ef_search=64` stays the default: it is exact-grade on the corpora the
-feature exists for, and no reachable setting rescues a corpus with no
-neighbourhood structure. If your vectors are in that regime, **`exact=True` is
-always available** and, at these sizes, cheap: the exact scan is 0.7 ms at
-100k×128 and 1.6 ms at 100k×384 (it parallelises above 10k vectors).
+So `ef_search=64` stays the default. It is exact-grade on the corpora the feature exists for, and no reachable setting rescues a corpus with no neighbourhood structure.
+
+If your vectors are in that regime, **`exact=True` is always available** and, at these sizes, cheap. The exact scan is 0.7 ms at 100k×128 and 1.6 ms at 100k×384 (it parallelises above 10k vectors).
 
 > The Cypher `text_score()` / `vector_score()` whole-corpus top-k
 > (`RETURN vector_score(n, prop, q) AS s ORDER BY s DESC LIMIT k`) auto-uses the
@@ -353,7 +309,7 @@ always available** and, at these sizes, cheap: the exact scan is 0.7 ms at
 
 ### Stored Metric
 
-When embeddings are trained for a specific geometry, store the intended metric alongside them so it becomes the default at query time:
+When embeddings are trained for a specific geometry, store the intended metric alongside them. It then becomes the default at query time:
 
 ```python
 # Store Poincaré embeddings with their intended metric
@@ -376,10 +332,10 @@ Metric resolution order: explicit `metric=` argument > stored metric > `cosine` 
 
 ### Semantic Search in Cypher
 
-`text_score()` enables semantic search directly in Cypher queries. Give it a
-**string** query and it embeds that text with the registered model (via
-`set_embedder()`) before scoring; give it a **list** and it scores your own
-query vector directly, needing only the embedding store:
+`text_score()` enables semantic search directly in Cypher queries. Its query argument decides how it works:
+
+- A **string** query is embedded with the registered model (via `set_embedder()`) before scoring.
+- A **list** is scored directly as your own query vector. It needs only the embedding store.
 
 ```python
 # Requires: set_embedder() + embed_texts()
@@ -412,8 +368,7 @@ graph.cypher("""
 """)
 ```
 
-Both scoring functions take a **pre-computed vector**, so scoring works with
-the embedding store alone:
+Both scoring functions take a **pre-computed vector**, so scoring works with the embedding store alone:
 
 ```python
 # Same scores, same ordering — the store is all either one needs.
@@ -423,29 +378,33 @@ graph.cypher("MATCH (n:Article) RETURN text_score(n, 'summary', $q) AS s",
              params={'q': query_vec})    # names the column
 ```
 
-**Filter out unembedded rows before a `DESC` top-k.** A node or relationship
-the store holds no vector for scores `null`, and openCypher sorts `null` above
-every value, so `ORDER BY score DESC LIMIT k` returns the unembedded entities
-*first*. A node type with unembedded members is still answered from its store —
-the null-scored nodes first, in the type's order, then the store's ranking — and
-reports `fallback_reason: 'row_coverage'` only when all `k` rows are null or the
-store's order differs from the type's; a relationship type with unembedded
-members is answered by row scan (`row_coverage`). Add
-`WHERE vector_score(n, 'summary_emb', $q) IS NOT NULL` (or the `text_score`
-form, or `r` for a relationship) to the `MATCH`: it drops those rows and is
-served from the store at the cost of the store procedure, HNSW included. Written after the projection as
-`WITH … WHERE score IS NOT NULL` it leaves the fused route and scores every row.
-`vector_search()`, `search_text()` and `db.relationship_embeddings.query` rank stored
-vectors only and never return an unembedded entity.
+The query argument's type decides how `text_score` reads it: a list is a vector, a string is text. A stringified vector like `'[1.0, 2.0]'` is therefore embedded as a 10-character query. Pass a list and both spellings agree.
 
-`vector_score` is the Cypher counterpart of the fluent `vector_search()`
-method. Note the surfaces differ: `text_score()`/`vector_score()` are **Cypher
-functions** (used in `RETURN`/`WHERE`); `search_text()`/`vector_search()` are
-**fluent methods** on a selection.
+`vector_score` is the Cypher counterpart of the fluent `vector_search()` method. The surfaces differ:
 
-Relationships are queried through the same Cypher path. This claim/evidence example
-embeds an explicit filtered selection and then combines exact semantic scoring
-with the graph pattern:
+- `text_score()` / `vector_score()` are **Cypher functions**, used in `RETURN` / `WHERE`.
+- `search_text()` / `vector_search()` are **fluent methods** on a selection.
+
+#### Filter out unembedded rows before a `DESC` top-k
+
+A node or relationship the store holds no vector for scores `null`. openCypher sorts `null` above every value, so `ORDER BY score DESC LIMIT k` returns the unembedded entities *first*.
+
+Add a filter to the `MATCH`: `WHERE vector_score(n, 'summary_emb', $q) IS NOT NULL`,
+or the `text_score` form, or `r` for a relationship.
+
+- In the `MATCH`, it drops those rows. The query is served from the store at the cost of the store procedure, HNSW included.
+- Written after the projection as `WITH … WHERE score IS NOT NULL`, it leaves the fused route and scores every row.
+
+Without the filter, the routes behave as follows:
+
+- A node type with unembedded members is still answered from its store: the null-scored nodes first, in the type's order, then the store's ranking. It reports `fallback_reason: 'row_coverage'` only when all `k` rows are null or the store's order differs from the type's.
+- A relationship type with unembedded members is answered by row scan (`row_coverage`).
+
+`vector_search()`, `search_text()` and `db.relationship_embeddings.query` rank stored vectors only. They never return an unembedded entity.
+
+#### Relationship embeddings in Cypher
+
+Relationships are queried through the same Cypher path. This claim/evidence example embeds an explicit filtered selection. It then combines exact semantic scoring with the graph pattern:
 
 ```python
 class DemoEmbedder:
@@ -478,44 +437,39 @@ rows = graph.cypher("""
 """, params={'question': 'Which evidence supports this claim?'})
 ```
 
-`embed` always acts on the relationships supplied in its map. `mode='all'`
-rebuilds that selected slice; missing/non-string selected source text removes
-an old vector, while unselected vectors remain. The aggregate model is null
-when retained vectors cannot all be attributed to the reported model, and a
-dimension change requires selection coverage of every stored vector. The
-write and model callback are atomic, and same-statement property updates are
-read from current graph state.
+`embed` always acts on the relationships supplied in its map.
 
-`embed` is the in-query route: it acts on relationships a query has just
-matched. The bulk route is a method. `graph.embed_relationship_texts('SUPPORTS',
-'evidence', mode='changed')` embeds every relationship of the type with the
-registered model — the relationship twin of `embed_texts()`, storing the same
-vectors, hashes and model id `embed` stores. `types: ['SUPPORTS', 'REFUTES']`
-in place of `type` makes one `embed` call cover several types; each listed type
-gets its own pass. For vectors computed outside the graph, see
-`set_relationship_embeddings()` / `add_relationship_embeddings()` below.
+- `mode='all'` rebuilds that selected slice. Missing or non-string selected source text removes an old vector. Unselected vectors remain.
+- The aggregate model is null when retained vectors cannot all be attributed to the reported model.
+- A dimension change requires selection coverage of every stored vector.
+- The write and model callback are atomic.
+- Same-statement property updates are read from current graph state.
 
-Mutating procedures remain top-level pipeline clauses. A read-only `CALL {}`
-subquery may collect native relationship values and return them to an outer
-top-level `db.relationship_embeddings.embed` call, preserving statement identity.
-Putting the mutating procedure inside `CALL {}` or a `UNION` arm follows the
-existing Cypher write boundary and is rejected before invoking the model.
+`embed` is the in-query route: it acts on relationships a query has just matched. The bulk route is a method.
 
-Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and
-`text_score(r, 'evidence', $text)` for source-column text. Scored per row inside
-a filtered `MATCH`, they are exact. The top-k shape `ORDER BY vector_score(r, …)
-DESC LIMIT k` (or `text_score`) is served from the store, as for nodes: a plain
-single-type pattern whose every relationship is embedded goes straight to the
-store (a `WHERE … IS NOT NULL` filter on the score keeps it there), and any
-other shape scores its matched rows. `WITH r, vector_score(r, …) AS s ORDER BY s
-DESC LIMIT k RETURN startNode(r)…` is served the same way, and an undirected
-`(a)-[r:T]-(b)` uses the index too, returning each relationship once per
-orientation. Either way the query runs
-through HNSW when an index is online. That answer is approximate; pass
-`{exact:true}` as the final argument to force exact. Ties at the cut are
-answered by the ordinary pipeline, and `diagnostics["retrieval"]` reports the
-route. Build and query the separate whole-store HNSW index only when the
-relationship type and source-property store are the intended search corpus:
+- `graph.embed_relationship_texts('SUPPORTS', 'evidence', mode='changed')` embeds every relationship of the type with the registered model. It is the relationship twin of `embed_texts()`, and stores the same vectors, hashes and model id `embed` stores.
+- `types: ['SUPPORTS', 'REFUTES']` in place of `type` makes one `embed` call cover several types. Each listed type gets its own pass.
+- For vectors computed outside the graph, see `set_relationship_embeddings()` / `add_relationship_embeddings()` below.
+
+Mutating procedures remain top-level pipeline clauses.
+
+- A read-only `CALL {}` subquery may collect native relationship values and return them to an outer top-level `db.relationship_embeddings.embed` call, preserving statement identity.
+- Putting the mutating procedure inside `CALL {}` or a `UNION` arm follows the existing Cypher write boundary. It is rejected before invoking the model.
+
+#### Scoring and ranking relationships
+
+Use `vector_score(r, 'evidence_emb', $vector)` for a query vector and `text_score(r, 'evidence', $text)` for source-column text. Scored per row inside a filtered `MATCH`, they are exact.
+
+The top-k shape `ORDER BY vector_score(r, …) DESC LIMIT k` (or `text_score`) is served from the store, as for nodes:
+
+- A plain single-type pattern whose every relationship is embedded goes straight to the store. A `WHERE … IS NOT NULL` filter on the score keeps it there.
+- Any other shape scores its matched rows.
+- `WITH r, vector_score(r, …) AS s ORDER BY s DESC LIMIT k RETURN startNode(r)…` is served the same way.
+- An undirected `(a)-[r:T]-(b)` uses the index too, returning each relationship once per orientation.
+
+Either way, the query runs through HNSW when an index is online. That answer is approximate. Pass `{exact:true}` as the final argument to force exact. Ties at the cut are answered by the ordinary pipeline, and `diagnostics["retrieval"]` reports the route.
+
+Build and query the separate whole-store HNSW index only when the relationship type and source-property store are the intended search corpus:
 
 ```python
 graph.cypher("""
@@ -535,52 +489,50 @@ nearest = graph.cypher("""
 """, params={'query_vector': [0.1, 0.2]})
 ```
 
-`text:'…'` (or `text:$param`) in place of `vector` embeds the query once with
-the registered embedder before the statement runs; `text` and `vector` together
-are refused, and so is a text computed from a row.
+`text:'…'` (or `text:$param`) in place of `vector` embeds the query once with the registered embedder before the statement runs. `text` and `vector` together are refused, and so is a text computed from a row.
 
-`search_method` reports `hnsw` only when the index served the query. A missing
-or metric-incompatible index falls back to `exact`; a stale writable index may
-catch up at query entry, while a stale index that cannot catch up also falls
-back. `exact:true` always bypasses HNSW. `refresh_index` incorporates pending index changes and
-`drop_index` removes the index while retaining vectors. `list` reports
-`index_state` (`none`, `online`, or `stale`), pending `delta`, and the number of
-`unembedded` relationships. A saved `.kgl` keeps a built relationship index, so
-a reloaded graph answers through HNSW immediately and reports the same pending
-delta it was saved with; a disk-mode graph's directory keeps no index, as for
-nodes.
+`search_method` reports `hnsw` only when the index served the query:
 
-Deletes drop the relationship index, as they drop the node index. `SET` and
-`CREATE` leave it `online`; deleting an embedded relationship — `DELETE r`, or
-`DETACH DELETE` of either endpoint, embedded or not — takes `index_state` to
-`none` until `build_index` runs again. A `vacuum()` that compacts drops every
-vector index in the graph — node and relationship, including those on types
-that saw no delete — as described for node indexes above (on disk `vacuum()` is
-a no-op). Deleting a relationship the
-store holds no vector for leaves the index alone, and so does a delete that a
-failed statement or a rolled-back transaction undoes. Until the rebuild,
-queries answer by the exact scan. `refresh_index` folds pending changes into an
-index but never builds one, so with no index it refuses, naming the
-`build_index` call, rather than answering `{refreshed: 0}`.
+- A missing or metric-incompatible index falls back to `exact`.
+- A stale writable index may catch up at query entry.
+- A stale index that cannot catch up also falls back.
+- `exact:true` always bypasses HNSW.
 
-From Python, `list_embeddings()` and `embedding_diagnostics()` report
-relationship stores as `entity='relationship'` rows. `embedding_info(type, col,
-entity='relationship')` reads one relationship store; the keyword keeps a node
-type and a relationship type of the same name apart. `describe()` shows each
-relationship store on its `<conn>` line and in `describe(connections=['T'])`,
-marked `hnsw` once an index is built, as it marks node stores (a BM25 index
-shows as `text_index`). `describe(cypher=['relationship_semantic'])` gathers
-the relationship scoring, cross-type ranking and index lifecycle in one topic.
+The other index procedures:
 
-To read the vectors back out, use `embedding(r, 'evidence_emb')` in Cypher. It
-returns one relationship's stored vector, and `embedding(n, 'summary_emb')`
-does the same for a node. Because `vector_score` takes any list as its query,
-`vector_score(r2, 'evidence_emb', embedding(r1, 'evidence_emb'))` is
-relationship-to-relationship similarity. From Python,
-`relationship_embeddings('SUPPORTS', 'evidence')` returns every vector in the
-store as rows `{source, target, source_type, target_type, key, vector}`,
-ordered by source, then target, then key. That is a graph-learning edge list
-plus edge features, e.g. for PyTorch Geometric:
+- `refresh_index` incorporates pending index changes.
+- `drop_index` removes the index while retaining vectors.
+- `list` reports `index_state` (`none`, `online`, or `stale`), pending `delta`, and the number of `unembedded` relationships.
+
+A saved `.kgl` keeps a built relationship index. A reloaded graph answers through HNSW immediately and reports the same pending delta it was saved with. A disk-mode graph's directory keeps no index, as for nodes.
+
+#### Relationship index lifecycle
+
+Deletes drop the relationship index, as they drop the node index.
+
+- `SET` and `CREATE` leave it `online`.
+- Deleting an embedded relationship takes `index_state` to `none` until `build_index` runs again. This covers `DELETE r`, and `DETACH DELETE` of either endpoint, embedded or not.
+- A `vacuum()` that compacts drops every vector index in the graph, node and relationship, including those on types that saw no delete. This is as described for node indexes above. On disk, `vacuum()` is a no-op.
+- Deleting a relationship the store holds no vector for leaves the index alone.
+- A delete that a failed statement or a rolled-back transaction undoes also leaves it alone.
+
+Until the rebuild, queries answer by the exact scan. `refresh_index` folds pending changes into an index but never builds one. With no index it refuses, naming the `build_index` call, rather than answering `{refreshed: 0}`.
+
+#### Inspecting relationship stores
+
+From Python, `list_embeddings()` and `embedding_diagnostics()` report relationship stores as `entity='relationship'` rows.
+
+- `embedding_info(type, col, entity='relationship')` reads one relationship store. The keyword keeps a node type and a relationship type of the same name apart.
+- `describe()` shows each relationship store on its `<conn>` line and in `describe(connections=['T'])`. It marks the store `hnsw` once an index is built, as it marks node stores. A BM25 index shows as `text_index`.
+- `describe(cypher=['relationship_semantic'])` gathers the relationship scoring, cross-type ranking and index lifecycle in one topic.
+
+#### Reading and writing relationship vectors
+
+To read the vectors back out, use `embedding(r, 'evidence_emb')` in Cypher. It returns one relationship's stored vector. `embedding(n, 'summary_emb')` does the same for a node.
+
+`vector_score` takes any list as its query. `vector_score(r2, 'evidence_emb', embedding(r1, 'evidence_emb'))` is therefore relationship-to-relationship similarity.
+
+From Python, `relationship_embeddings('SUPPORTS', 'evidence')` returns every vector in the store as rows `{source, target, source_type, target_type, key, vector}`. Rows are ordered by source, then target, then key. That is a graph-learning edge list plus edge features, e.g. for PyTorch Geometric:
 
 ```python
 import numpy as np
@@ -593,25 +545,21 @@ edge_index = np.array([[index[n] for n in src], [index[n] for n in dst]])
 edge_attr = np.array([r["vector"] for r in rows], dtype=np.float32)
 ```
 
-Nodes are keyed on `(type, id)` because ids are unique per type only, and
-numbered in row order rather than sorted: a graph can hold integer and string
-ids, which Python cannot order against each other.
+Nodes are keyed on `(type, id)` because ids are unique per type only. They are numbered in row order rather than sorted, because a graph can hold integer and string ids, which Python cannot order against each other.
 
-A parallel group (several relationships of the type between the same two
-nodes) returns all its members. `relationship_keys` names the property that
-tells them apart, the same mapping `export_embeddings()` takes. It is optional,
-but a named key that is missing or repeated within a group is refused.
+A parallel group (several relationships of the type between the same two nodes) returns all its members. `relationship_keys` names the property that tells them apart, the same mapping `export_embeddings()` takes. It is optional, but a named key that is missing or repeated within a group is refused.
 
 The write side takes the same address, in the node API's two forms:
-`set_relationship_embeddings()` replaces the store (like `set_embeddings()`)
-and `add_relationship_embeddings()` upserts into it (like `add_embeddings()`
-and `db.relationship_embeddings.set`). They are the bulk route for vectors you computed
-yourself — a numpy matrix from an external model, or rows read above and
-modified — without a per-row query. Key a dict by
-`(source_id, target_id)` when the relationship type has one source and one
-target node type, by `(source_type, source_id, target_type, target_id)`
-otherwise, and append the key value for a parallel-group member; or pass the
-rows `relationship_embeddings()` returned:
+
+- `set_relationship_embeddings()` replaces the store (like `set_embeddings()`).
+- `add_relationship_embeddings()` upserts into it (like `add_embeddings()` and `db.relationship_embeddings.set`).
+
+They are the bulk route for vectors you computed yourself, without a per-row query. Examples are a numpy matrix from an external model, or rows read above and modified. Address a relationship in one of these ways:
+
+- Key a dict by `(source_id, target_id)` when the relationship type has one source and one target node type.
+- Key it by `(source_type, source_id, target_type, target_id)` otherwise.
+- Append the key value for a parallel-group member.
+- Or pass the rows `relationship_embeddings()` returned.
 
 ```python
 graph.add_relationship_embeddings(
@@ -624,14 +572,17 @@ for row in rows:
 graph.set_relationship_embeddings("SUPPORTS", "evidence", rows, relationship_keys={"SUPPORTS": "uid"})
 ```
 
-A parallel group written without a key, an endpoint pair no relationship of
-the type connects, or a vector of the wrong width is refused by row, naming the
-relationship, and nothing is written. `db.relationship_embeddings.set` remains the
-in-query route, for relationships a `MATCH` binds.
+These cases are refused by row, naming the relationship, and nothing is written:
 
-The methods in this table each have a node spelling, a relationship spelling,
-and a generic router that picks one with `entity=` — `"node"` by default, so
-every existing node call is unchanged:
+- A parallel group written without a key.
+- An endpoint pair no relationship of the type connects.
+- A vector of the wrong width.
+
+`db.relationship_embeddings.set` remains the in-query route, for relationships a `MATCH` binds.
+
+#### Node and relationship routers
+
+Each method in this table has a node spelling, a relationship spelling, and a generic router that picks one with `entity=`. The default is `"node"`, so every existing node call is unchanged:
 
 | Router (`entity="node"` default) | Node route | Relationship route |
 |---|---|---|
@@ -647,19 +598,14 @@ every existing node call is unchanged:
 | `build_vector_index` | `build_node_vector_index` | `build_relationship_vector_index` |
 | `refresh_vector_index` / `drop_vector_index` / `has_vector_index` | `…_node_vector_index` | `…_relationship_vector_index` |
 
-The inventory methods need no twin: `embedding_info` takes `entity=` itself,
-and `list_embeddings`, `embedding_diagnostics`, `export_embeddings`,
-`import_embeddings` and `copy_embeddings_from` cover both entities in one call.
-In Cypher the same split holds: `db.node_embeddings.*` and
-`db.relationship_embeddings.*` are the twins, and `db.embeddings.*` routes to
-one of them with an `entity:` key (`'node'` by default).
+The inventory methods need no twin. `embedding_info` takes `entity=` itself. `list_embeddings`, `embedding_diagnostics`, `export_embeddings`, `import_embeddings` and `copy_embeddings_from` cover both entities in one call.
 
-`relationship_vector_search` / `relationship_search_text` rank what
-`db.relationship_embeddings.query` ranks — every relationship type with a
-`text_column` store, or the ones `types=` names — and return each hit as a
-`relationship_embeddings()` row without the vector, plus `relationship_type`
-and `score`. `relationship_embedding` reads one relationship's vector by an
-address shaped like a writer's dict key:
+In Cypher the same split holds:
+
+- `db.node_embeddings.*` and `db.relationship_embeddings.*` are the twins.
+- `db.embeddings.*` routes to one of them with an `entity:` key (`'node'` by default).
+
+`relationship_vector_search` / `relationship_search_text` rank what `db.relationship_embeddings.query` ranks: every relationship type with a `text_column` store, or the ones `types=` names. Each hit is a `relationship_embeddings()` row without the vector, plus `relationship_type` and `score`. `relationship_embedding` reads one relationship's vector by an address shaped like a writer's dict key:
 
 ```python
 hits = graph.relationship_search_text("evidence", "water damage", top_k=5)
@@ -668,33 +614,25 @@ hits = graph.relationship_search_text("evidence", "water damage", top_k=5)
 vector = graph.relationship_embedding("SUPPORTS", "evidence", (1, 10))
 ```
 
-`remove_embeddings` and `embedding` refuse a store that does not exist,
-naming the store you probably meant — the text column when the store name was
-passed, a near-miss column or type, or the same name on the other entity.
+`remove_embeddings` and `embedding` refuse a store that does not exist. The error names the store you probably meant: the text column when the store name was passed, a near-miss column or type, or the same name on the other entity.
 
 ```python
 graph.add_embeddings("SUPPORTS", "evidence", rows, entity="relationship")
 graph.build_vector_index("SUPPORTS", "evidence", entity="relationship")
 ```
 
-A router behaves exactly as the method it routes to. It accepts both routes'
-keywords and refuses, by name, one the chosen route does not take —
-`relationship_keys` on a node call, for instance. The relationship index
-methods share their code path with `db.relationship_embeddings.build_index` /
-`.refresh_index` / `.drop_index`.
+A router behaves exactly as the method it routes to. It accepts both routes' keywords. It refuses, by name, a keyword the chosen route does not take, such as `relationship_keys` on a node call. The relationship index methods share their code path with `db.relationship_embeddings.build_index` / `.refresh_index` / `.drop_index`.
 
-The `query` procedure ranks the complete declared store before later clauses
-run. A `WHERE` after `YIELD` filters the returned top-k candidates; it does not
-constrain HNSW. Use filtered `MATCH` plus `vector_score`/`text_score` when an
-endpoint or relationship predicate must constrain the ranking corpus.
+#### Ranking across relationship types
 
-A graph that spreads its relations over many relationship types — one per
-predicate, as knowledge-graph extractors produce — can be ranked as one corpus.
-`types:['created', 'works_at']` in place of `type` ranks those stores together,
-and leaving out both `type` and `types` ranks every relationship store for
-`text_column`. Each store answers on its own route and the answers merge into
-one `top_k`, ordered by score, then relationship type, then relationship slot.
-Every row yields `type` and its own `search_method`:
+The `query` procedure ranks the complete declared store before later clauses run. A `WHERE` after `YIELD` filters the returned top-k candidates. It does not constrain HNSW. Use filtered `MATCH` plus `vector_score` / `text_score` when an endpoint or relationship predicate must constrain the ranking corpus.
+
+A graph can spread its relations over many relationship types, one per predicate, as knowledge-graph extractors produce. You can rank all of them as one corpus:
+
+- `types:['created', 'works_at']` in place of `type` ranks those stores together.
+- Leaving out both `type` and `types` ranks every relationship store for `text_column`.
+- Each store answers on its own route, and the answers merge into one `top_k`. The order is score, then relationship type, then relationship slot.
+- Every row yields `type` and its own `search_method`.
 
 ```python
 rows = graph.cypher("""
@@ -704,74 +642,60 @@ rows = graph.cypher("""
 """, params={'q': 'who founded the company?'})
 ```
 
-A named type without a store is refused by name. Stores that declare different
-metrics refuse the merge, naming both, because their scores are not on one
-scale; pass `metric` to score every store under one. The `MATCH` form takes
-the same shapes: `MATCH ()-[r:created|works_at]->() … ORDER BY
-text_score(r, 'description', $q) DESC LIMIT k`, or an untyped `()-[r]->()`, is
-served per store and merged when every type in play carries the store. It runs
-through HNSW when every store's index is online, and `diagnostics["retrieval"]`
-lists the stores it read.
+Error cases:
 
-Every form runs **one search per relationship type** — each type's store has
-its own HNSW index — and merges the answers, so a ranking across many types
-costs about the number of types times one search. Under the long tail of small
-relationship types an extractor produces, that per-store cost dominates and an
-index buys little over the exact scan of each small store; the answer is the
-same either way. The Python router is the same fan-out:
-`graph.search_text("description", q, entity="relationship")` ranks every
-relationship type that has a `description` store. If a type in play has no store, the query raises the
-same error it raises row by row: embed that type, or name the types that have
-stores.
+- A named type without a store is refused by name.
+- Stores that declare different metrics refuse the merge, naming both, because their scores are not on one scale. Pass `metric` to score every store under one.
 
-The network-free
-[`examples/relationship_graphrag.py`](https://github.com/kkollsga/kglite/blob/main/examples/relationship_graphrag.py)
-puts the full workflow together with a deterministic fake embedder: selected
-generation, exact endpoint-filtered claim/evidence ranking, a changed-text
-refresh, provenance inspection, explicit whole-store HNSW retrieval, and a
-save/reopen/re-register check that the HNSW index survives the `.kgl`. Run it
-with an explicit scratch output:
+The `MATCH` form takes the same shapes: `MATCH ()-[r:created|works_at]->() … ORDER BY text_score(r, 'description', $q) DESC LIMIT k`, or an untyped `()-[r]->()`. It is served per store and merged when every type in play carries the store. It runs through HNSW when every store's index is online. `diagnostics["retrieval"]` lists the stores it read.
+
+Every form runs **one search per relationship type**, because each type's store has its own HNSW index. The answers are merged, so a ranking across many types costs about the number of types times one search.
+
+Under the long tail of small relationship types an extractor produces, that per-store cost dominates. An index buys little over the exact scan of each small store. The answer is the same either way.
+
+The Python router is the same fan-out: `graph.search_text("description", q, entity="relationship")` ranks every relationship type that has a `description` store. If a type in play has no store, the query raises the same error it raises row by row. Embed that type, or name the types that have stores.
+
+#### Relationship Graph RAG example
+
+The network-free [`examples/relationship_graphrag.py`](https://github.com/kkollsga/kglite/blob/main/examples/relationship_graphrag.py) puts the full workflow together with a deterministic fake embedder:
+
+- selected generation,
+- exact endpoint-filtered claim/evidence ranking,
+- a changed-text refresh,
+- provenance inspection,
+- explicit whole-store HNSW retrieval,
+- a save/reopen/re-register check that the HNSW index survives the `.kgl`.
+
+Run it with an explicit scratch output:
 
 ```bash
 python examples/relationship_graphrag.py --output /tmp/claims.kgl
 ```
 
-Relationship values should stay bound inside the statement: physical IDs are
-graph-local slots. To carry relationship vectors to an independently rebuilt
-graph, use `export_embeddings()` / `import_embeddings()` or
-`copy_embeddings_from()`. Each vector is matched by relationship type and the
-`(type, id)` of both endpoints. Where several relationships of one type
-connect the same two nodes, name a property that is unique within each such
-group, and each vector lands on the right member whatever order the rebuild
-created them in:
+#### Carrying relationship vectors across a rebuild
+
+Relationship values should stay bound inside the statement, because physical IDs are graph-local slots.
+
+To carry relationship vectors to an independently rebuilt graph, use `export_embeddings()` / `import_embeddings()` or `copy_embeddings_from()`. Each vector is matched by relationship type and the `(type, id)` of both endpoints.
+
+Where several relationships of one type connect the same two nodes, name a property that is unique within each such group. Each vector then lands on the right member, whatever order the rebuild created them in:
 
 ```python
 old.export_embeddings("vectors.kgle", relationship_keys={"SUPPORTS": "uid"})
 new.import_embeddings("vectors.kgle")  # the file records the key
 ```
 
-A group with no usable key is refused by name (type, endpoints, member count)
-rather than guessed at, and nothing is written. An export that carries
-relationship stores is `.kgle` version 4, which released versions up to
-0.17.12 refuse by version; a node-only export stays version 3.
+A group with no usable key is refused by name (type, endpoints, member count) rather than guessed at, and nothing is written.
 
-The query argument's type decides how `text_score` reads it — a list is a
-vector, a string is text — so a stringified vector like `'[1.0, 2.0]'` is
-embedded as a 10-character query. Pass a list and both spellings agree.
+An export that carries relationship stores is `.kgle` version 4, which released versions up to 0.17.12 refuse by version. A node-only export stays version 3.
 
 #### Relationship communities
 
-Graph RAG pipelines such as Microsoft GraphRAG, LightRAG and knwler answer
-broad questions from *communities*: clusters of the extracted graph, each with a
-summary. They answer from the community summary and from the relations inside
-that community. kglite has no native relationship clustering. The whole recipe
-is Cypher over node communities, and every snippet below runs as written
-(`tests/test_relationship_community_recipe.py` executes this section).
+Graph RAG pipelines such as Microsoft GraphRAG, LightRAG and knwler answer broad questions from *communities*: clusters of the extracted graph, each with a summary. They answer from the community summary and from the relations inside that community.
 
-Start with a graph of extracted names (nodes labelled `Entity`, as Graph RAG
-extractors call them) whose relations carry a `description` and a
-`strength`, and embed the descriptions per relationship type. The embedder here
-is a network-free stand-in; use a real model in practice:
+kglite has no native relationship clustering. The whole recipe is Cypher over node communities. Every snippet below runs as written (`tests/test_relationship_community_recipe.py` executes this section).
+
+Start with a graph of extracted names (nodes labelled `Entity`, as Graph RAG extractors call them). Their relations carry a `description` and a `strength`. Embed the descriptions per relationship type. The embedder here is a network-free stand-in; use a real model in practice:
 
 ```python
 import kglite
@@ -821,10 +745,7 @@ for rel_type in RELATION_TYPES:
     )
 ```
 
-**1. Detect communities over the `Entity` nodes**, weighted by relation
-strength, and store each node's community as a property. `CALL leiden`
-takes the same parameters as `CALL louvain`; the [graph algorithms
-guide](graph-algorithms.md#community-detection) covers both:
+**1. Detect communities over the `Entity` nodes**, weighted by relation strength. Store each node's community as a property. `CALL leiden` takes the same parameters as `CALL louvain`. The [graph algorithms guide](graph-algorithms.md#community-detection) covers both:
 
 ```python
 graph.cypher("""
@@ -834,9 +755,7 @@ graph.cypher("""
 """, params={"types": RELATION_TYPES})
 ```
 
-**2. Classify each relation as intra-community or bridge.** A bridge relation
-joins two communities. Bridges are the relations a community-scoped answer
-leaves out, and the ones to read when a question spans topics:
+**2. Classify each relation as intra-community or bridge.** A bridge relation joins two communities. Bridges are the relations a community-scoped answer leaves out. They are also the ones to read when a question spans topics:
 
 ```python
 kinds = graph.cypher("""
@@ -849,13 +768,10 @@ bridges = [row for row in kinds if row["kind"] == "bridge"]
 # [{'kind': 'bridge', 'type': 'inspired', 'source': 'Joseph Banks', 'target': 'Macintosh'}]
 ```
 
-**3. Rank one community's relations against a question.** The `WHERE`
-restricts the ranking to relations with both endpoints in the community. The
-query keeps the `ORDER BY text_score(r, …) DESC LIMIT k` shape, so it is served
-from the relationship stores (merged across the alternation's types) instead of
-sorting every scored row. Name the relation types in the alternation: an
-untyped `-[r]->` would also put `IN_COMMUNITY` (step 4) in play, and that type
-has no store:
+**3. Rank one community's relations against a question.** The `WHERE` restricts the ranking to relations with both endpoints in the community.
+
+- The query keeps the `ORDER BY text_score(r, …) DESC LIMIT k` shape. It is served from the relationship stores (merged across the alternation's types) instead of sorting every scored row.
+- Name the relation types in the alternation. An untyped `-[r]->` would also put `IN_COMMUNITY` (step 4) in play, and that type has no store.
 
 ```python
 apple_community = graph.cypher(
@@ -872,11 +788,7 @@ top = graph.cypher("""
 # top.diagnostics["retrieval"] names the stores the ranking read
 ```
 
-**4. Summaries as embedded nodes, ranked first** (the knwler shape).
-Materialise each community as a node linked to its members, give it a summary,
-and embed the summaries. A question then picks the best community first and
-ranks only that community's relations. Here the summary joins the community's
-relation descriptions; a real pipeline asks an LLM to summarise them:
+**4. Summaries as embedded nodes, ranked first** (the knwler shape). Materialise each community as a node linked to its members, give it a summary, and embed the summaries. A question then picks the best community first and ranks only that community's relations. Here the summary joins the community's relation descriptions. A real pipeline asks an LLM to summarise them:
 
 ```python
 graph.cypher("MATCH (e:Entity) WITH DISTINCT e.community AS c CREATE (:Community {id: c})")
@@ -901,9 +813,7 @@ answer = graph.cypher("""
 # answer.to_list() -> James Cook sailed_on Endeavour, then Joseph Banks sailed_on Endeavour
 ```
 
-Clustering the relationships themselves, for example k-means over a
-relationship store, is not supported: `CALL cluster()` clusters the nodes a
-preceding `MATCH` binds.
+Clustering the relationships themselves, for example k-means over a relationship store, is not supported. `CALL cluster()` clusters the nodes a preceding `MATCH` binds.
 
 ### Embedding Norm in Cypher
 
@@ -967,14 +877,11 @@ result = graph.import_embeddings("embeddings.kgle")
 #  'relationship_stores': 0, 'relationship_imported': 0, ...}
 ```
 
-Relationship stores travel in the same file, matched by relationship type and
-endpoint ids, with parallel relationships told apart by the key named in
-`relationship_keys` — see the relationship section above.
+Relationship stores travel in the same file, matched by relationship type and endpoint ids. Parallel relationships are told apart by the key named in `relationship_keys`. See the relationship section above.
 
-A `.kgle` carries each store's **provenance** — its `metric`, the embedder
-`model_id`, and per-node text hashes — so a rebuild-from-`.kgle` pipeline keeps
-it: after import, `embedding_info()` reports the model/metric, and
-`embed_texts(mode='changed')` re-embeds only genuinely-changed text instead of
-everything. Current releases import `.kgle` v3 (node stores) and v4 (node and
-relationship stores), both Postcard. Convert v1/v2 files with kglite 0.13.4 by importing them into the matching graph and
-re-exporting them before upgrading.
+A `.kgle` carries each store's **provenance**: its `metric`, the embedder `model_id`, and per-node text hashes. A rebuild-from-`.kgle` pipeline therefore keeps it.
+
+- After import, `embedding_info()` reports the model/metric.
+- `embed_texts(mode='changed')` re-embeds only genuinely-changed text instead of everything.
+
+Current releases import `.kgle` v3 (node stores) and v4 (node and relationship stores), both Postcard. To upgrade from v1/v2 files, convert them with kglite 0.13.4 first: import them into the matching graph and re-export them before upgrading.
