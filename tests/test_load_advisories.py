@@ -96,10 +96,10 @@ def _timeseries_graph(duplicate_edges):
 
 def _implicit_edge_graph(both):
     g = KnowledgeGraph()
-    g.add_nodes(pd.DataFrame({"id": [1], "name": ["p"]}), "SeismicSurvey", "id", "name")
-    g.add_nodes(pd.DataFrame({"id": [5], "name": ["s"]}), "Survey", "id", "name")
-    for edge in ("OF_SEISMIC_SURVEY", "OF_SEISMICSURVEY") if both else ("OF_SEISMICSURVEY",):
-        g.cypher(f"MATCH (s:Survey {{id: 5}}), (p:SeismicSurvey {{id: 1}}) CREATE (s)-[:{edge}]->(p)")
+    g.add_nodes(pd.DataFrame({"id": [1], "name": ["p"]}), "ProjectPhase", "id", "name")
+    g.add_nodes(pd.DataFrame({"id": [5], "name": ["s"]}), "Task", "id", "name")
+    for edge in ("OF_PROJECT_PHASE", "OF_PROJECTPHASE") if both else ("OF_PROJECTPHASE",):
+        g.cypher(f"MATCH (s:Task {{id: 5}}), (p:ProjectPhase {{id: 1}}) CREATE (s)-[:{edge}]->(p)")
     return g
 
 

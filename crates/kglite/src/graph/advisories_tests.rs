@@ -119,7 +119,7 @@ fn triple(src: &str, conn: &str, tgt: &str, count: usize) -> ConnectivityTriple 
 }
 
 /// A graph whose metadata and connectivity say `Survey` links to
-/// `SeismicSurvey` through each of `edges` with the given counts.
+/// `ProjectPhase` through each of `edges` with the given counts.
 fn linked(writer: &str, parent: &str, edges: &[(&str, usize)]) -> DirGraph {
     let mut graph = stamped(writer);
     for (name, _) in edges {
@@ -136,25 +136,25 @@ fn linked(writer: &str, parent: &str, edges: &[(&str, usize)]) -> DirGraph {
 
 #[test]
 fn a_second_parent_edge_with_the_unsplit_name_is_flagged_for_the_one_writer() {
-    let both = [("OF_SEISMIC_SURVEY", 100), ("OF_SEISMICSURVEY", 100)];
-    let found = compute_advisories(&linked("0.19.2", "SeismicSurvey", &both));
+    let both = [("OF_PROJECT_PHASE", 100), ("OF_PROJECTPHASE", 100)];
+    let found = compute_advisories(&linked("0.19.2", "ProjectPhase", &both));
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].code, "implicit_parent_edge_duplicates");
     assert_eq!(
-        data_advisories(&linked("0.19.2", "SeismicSurvey", &both)),
+        data_advisories(&linked("0.19.2", "ProjectPhase", &both)),
         Vec::new(),
         "computed at load only"
     );
 
     // Other writers, a single-word parent, a lone edge, or counts that are
     // nowhere near each other: silent.
-    assert!(compute_advisories(&linked("0.19.3", "SeismicSurvey", &both)).is_empty());
+    assert!(compute_advisories(&linked("0.19.3", "ProjectPhase", &both)).is_empty());
     let silent = [
-        ("SeismicSurvey", vec![("OF_SEISMICSURVEY", 100)]),
-        ("Wellbore", vec![("OF_WELLBORE", 100), ("BELONGS_TO", 100)]),
+        ("ProjectPhase", vec![("OF_PROJECTPHASE", 100)]),
+        ("Team", vec![("OF_TEAM", 100), ("BELONGS_TO", 100)]),
         (
-            "SeismicSurvey",
-            vec![("OF_SEISMIC_SURVEY", 100), ("OF_SEISMICSURVEY", 5)],
+            "ProjectPhase",
+            vec![("OF_PROJECT_PHASE", 100), ("OF_PROJECTPHASE", 5)],
         ),
     ];
     for (parent, edges) in silent {

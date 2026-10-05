@@ -140,7 +140,7 @@ fn has_duplicate_edge_pair(graph: &DirGraph, node_type: &str) -> bool {
 }
 
 /// `OF_` + the type name upper-cased with no word breaks, the spelling 0.19.2's
-/// implicit parent edge used (`OF_SEISMICSURVEY`).
+/// implicit parent edge used (`OF_PROJECTPHASE`).
 fn unsplit_parent_edge_name(parent_type: &str) -> String {
     format!("OF_{}", parent_type.to_uppercase())
 }
@@ -220,7 +220,7 @@ fn unsplit_edge_candidates(graph: &DirGraph) -> Vec<(String, String, String, Vec
     out
 }
 
-/// A CamelCase name with a word break (`SeismicSurvey`), not `Wellbore`/`HQ`.
+/// A CamelCase name with a word break (`ProjectPhase`), not `Team`/`HQ`.
 fn is_multi_word(name: &str) -> bool {
     let chars: Vec<char> = name.chars().collect();
     chars
