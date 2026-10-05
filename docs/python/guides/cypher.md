@@ -197,8 +197,9 @@ Scope, to know before you go looking for a win that is not there:
   keyword at the call sites you profiled. The CLI spells it
   `kglite query <graph> "<cypher>" --parallel`.
 - **`KnowledgeGraph.cypher()` only.** `Session.cypher()`,
-  `Transaction.cypher()` and `FrozenGraph.cypher()` execute sequentially, and
-  so do the Bolt and MCP servers. This is deliberate, because a server's cores
+  `Transaction.cypher()` and `FrozenGraph.cypher()` execute sequentially and
+  take no `parallel` keyword (passing it raises `TypeError`). The Bolt and MCP
+  servers also execute sequentially. This is deliberate, because a server's cores
   belong to its concurrent clients.
 - **Memory and mapped graphs fan out; `storage="disk"` graphs and graphs with
   a spatial configuration ignore the flag.** They run sequentially rather than
@@ -212,7 +213,8 @@ Scope, to know before you go looking for a win that is not there:
 ```python
 r = graph.cypher("MATCH (n:Person) RETURN n.name")
 r.diagnostics
-# {'elapsed_ms': 1, 'timeout_ms': 180000, 'row_limit': None, 'total_rows': None, 'warnings': []}
+# {'elapsed_ms': 1, 'timeout_ms': 180000, 'row_limit': None, 'total_rows': None, 'warnings': [],
+#  'retrieval': [], 'temporal': None}
 ```
 
 The `warnings` list surfaces non-fatal advisories.
@@ -318,7 +320,7 @@ That is why the two errors have opposite remedies:
 - `CypherExecutionError` naming `max_work_units` means narrow the pattern (or raise the budget).
 - `CypherTimeoutError` means the query is genuinely slow.
 
-In-memory graphs default to a generous deadline (shown in `diagnostics['timeout_ms']`).
+Python calls default to a generous deadline on every storage mode (shown in `diagnostics['timeout_ms']`).
 Pass `timeout_ms=0` to disable it.
 When a query repeatedly nears its deadline, that is the signal to add an index or anchor the pattern, not just to raise the budget.
 
@@ -550,8 +552,9 @@ Cheap structural filters run first, so semantic scoring runs only on the survivi
 
 ## Edge provenance via reified nodes
 
-A second `add_relationships` (or `MERGE`) for a `(source, target, edge_type)` triple that already has an edge updates that edge's properties.
+A `MERGE`, or a later `add_relationships` load from the same source type, for a `(source, target, edge_type)` triple that already has an edge updates that edge's properties.
 It does not create a parallel edge.
+(The first load of a type from a source type writes one relationship per row, and a type with a declared validity interval stores every differing row as a new version.)
 That keeps the storage layer dense.
 But if you need to track *who applied the edge, when, and why*, you need provenance per application, not one shared property bag.
 

@@ -135,12 +135,17 @@ The MCP server ships with the default install. One command exposes any current
 kglite-mcp-server --graph my_graph.kgl
 ```
 
-You get three tools out of the box: `ping`, `graph_overview` for schema
-discovery, and `cypher_query` for execution.
+The agent gets these tools out of the box:
 
-Add a sibling `<basename>_mcp.yaml` file with `source_root: ./data` and you get
-**six** tools. Three sandboxed file-access tools (`read_source` / `grep` /
-`list_source`) register automatically. See {doc}`guides/mcp-servers`.
+- `graph_overview` for schema discovery;
+- `cypher_query` for execution;
+- `ping`, `reload_graph`, `expand_response` and `fetch_images`;
+- three file-access tools: `read_source`, `grep` and `list_source`.
+
+The file-access tools are sandboxed to the `.kgl`'s own directory. An agent can
+read the files next to the graph. A sibling `<basename>_mcp.yaml` with
+`source_root: ./data` moves the sandbox to `./data`. It does not add tools. See
+{doc}`guides/mcp-servers`.
 
 ## Loading a Public Dataset
 

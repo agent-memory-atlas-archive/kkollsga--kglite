@@ -417,7 +417,7 @@ so. The note sits in the `declarations` group, with kind `default_today`:
 
 ### 2.2 What changed: the default as of today
 
-Before this change, a statement with no prefix read **every version** of every
+Before 0.19.2, a statement with no prefix read **every version** of every
 element, and only the fluent API defaulted to today. Now both default to today.
 
 To keep an old query's answer:
@@ -871,7 +871,8 @@ t.valid_to = …` therefore moves an interval in one step.
 - every declaration with its convention;
 - the rows that abut at declare time (here 2 `MEMBER_OF`, 1 `PART_OF` and 1
   `REPORTS_TO` row, and none for `Team`);
-- counted at the graph's current state, the rows the declaration would refuse.
+- counted at the graph's current state, the rows the declaration would refuse
+  (`unreadable_rows`), and the rows valid at no instant (`empty_rows`).
 
 Only a writer the check does not judge leaves such rows:
 

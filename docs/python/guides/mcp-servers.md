@@ -61,7 +61,7 @@ See the [embedder example](../examples/manifest_with_embedder.md). The two faste
 kglite-mcp-server --graph /path/to/my_graph.kgl
 ```
 
-The server speaks MCP over stdio and exposes three tools out of the box:
+The server speaks MCP over stdio. Its core tools are:
 
 - `graph_overview(...)` — wraps `describe()` for progressive schema disclosure (types, connections, Cypher reference).
 - `cypher_query(query)` — runs any Cypher query. It returns up to 15 rows inline. Append `FORMAT CSV` for a localhost-served file export.
@@ -280,7 +280,7 @@ A declared root that does not exist is **not** a boot failure, and resolution is
 
 - **Some roots missing.** The surviving roots are searched as usual. The missing ones are simply absent from every result, and no per-call message says so. That is why the agent's `instructions` name them.
 - **All roots missing.** The three source tools stay listed. Each call answers "no active source root", followed by a line per declared root naming it and the path it was looked for at.
-- **`--graph` mode never falls back.** Even when nothing resolves, the `.kgl`'s parent directory is not auto-bound in its place. Serving a directory the operator never asked for would be a silent wrong answer.
+- **`--graph` mode never falls back from a declared root.** With no declaration it binds the `.kgl`'s parent directory. When a declaration resolves to nothing, the `.kgl`'s parent directory is not auto-bound in its place. Serving a directory the operator never asked for would be a silent wrong answer.
 
 Fix the path (or create the directory) and restart to pick the root back up. This requires kglite 0.16.18+ / mcp-methods 0.4.7+. Earlier versions resolved all-or-nothing, so one missing entry cost every root.
 
