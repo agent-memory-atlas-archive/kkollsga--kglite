@@ -396,30 +396,39 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
         assert [arg for arg in args if arg.startswith("--benchmark-json=")], f"capture without --benchmark-json: {args}"
 
     _assert_runs(perf, "sleep 30")
-    # Two legs, two thresholds, and the asymmetry is the point (the workflow
-    # step carries the full reasoning). Leg 1 compares the candidate against a
-    # reference benchmarked in this same job on this same runner, so machine
-    # speed cancels and 20% is a real 20%. Leg 2 compares it against a capture
-    # committed from another runner at another time, so its delta carries the
-    # runner-to-runner spread as well — every recorded flake landed there
-    # (0.14.3 at +21.6%, return_node_10k at +26-32% while the normalized read
-    # moved +4%), which is why it is 30 and not 20.
-    _assert_runs(
-        perf,
+    # Leg 1 is the only verdict: the candidate against the 0.13.2 wheel
+    # benchmarked in this same job. Leg 2 (`current.linux.json`, 0.13.2
+    # captures promoted from other runners) measures runner-to-runner spread,
+    # not the code; it caused 6 of 14 red verdicts over 90 replayed artifacts,
+    # all runner effects, so it is printed and must never decide the job.
+    gate = (
         'python scripts/compare_bench.py .bench-reference-0.13.2.json "$1" '
-        "--metric min --threshold 20 --require-exact-set "
-        '&& python scripts/compare_bench.py tests/benchmarks/baselines/current.linux.json "$1" '
-        "--metric min --threshold 30 --require-exact-set",
+        "--metric min --threshold 20 --require-exact-set"
     )
-    # Exactly two comparisons in the whole job, so a third leg (or a stray
-    # threshold somewhere else in it) cannot slip past the literal above.
+    record = (
+        'python scripts/compare_bench.py tests/benchmarks/baselines/current.linux.json "$1" '
+        "--metric min --threshold 30 --require-exact-set "
+        '|| echo "::notice::The non-gating comparison against current.linux.json flagged cells; '
+        'leg 1 decides the job."'
+    )
+    _assert_runs(perf, gate)
+    _assert_runs(perf, record)
+    step = _step_running(perf, gate)
+    commands = _step_commands(step)
+    # The only comparison against the committed record is the `||`-guarded
+    # line, so no other line can turn it back into a verdict.
+    record_lines = [line for line in commands if "compare_bench.py" in line and "current.linux.json" in line]
+    assert record_lines == [record], record_lines
+    assert sum("compare_bench.py" in line for line in _command_lines(perf)) == 2
     assert tokens.count("--require-exact-set") == 2
     assert tokens.count("--threshold") == 2
 
     # Retry-once contract: a first-capture regression verdict triggers exactly
-    # one recapture; only a repeated failure is red.
-    _assert_runs(perf, "if compare .bench-candidate.json; then")
-    _assert_runs(perf, "compare .bench-candidate-retry.json")
+    # one recapture; only a repeated leg-1 failure is red, so the step's last
+    # command is the leg-1 gate on the recapture.
+    _assert_runs(perf, "if gate .bench-candidate.json; then")
+    assert commands[-1] == "gate .bench-candidate-retry.json", commands[-1]
+    assert "continue-on-error" not in step
 
     assert "scripts/benchmark_provenance.py" in tokens
 
