@@ -9,6 +9,14 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- `kglite-mcp-server` now refuses `workspace.adopt_client_roots` at boot with
+  a message naming the key. Its local-workspace mode always binds the explicit
+  `workspace.root`, so the key never took effect. A rooted manifest booted with
+  it ignored; a rootless one failed with "missing required `root`". **Do:**
+  remove the key and set `workspace.root`; switch roots with `set_root_dir`.
+
 ### Fixed
 
 - Creating nodes while a read view is held, after deleting nodes, no longer

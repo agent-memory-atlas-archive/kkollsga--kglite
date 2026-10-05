@@ -11,26 +11,24 @@ use mcp_methods::server::{resolve_source_roots_lenient, workspace, Manifest, Ser
 use crate::tools::GraphState;
 use crate::*;
 
-/// Github-workspace wiring: clone-and-track activation builds the workspace
-/// graph through the injected producer ([`WorkspaceGraphHooks`]); without one,
-/// activation still binds source tools and the activation summary carries
-/// the builder-unavailable note.
-/// Apply the manifest's workspace-boundary keys to a freshly-opened workspace.
+/// Apply the manifest's workspace-boundary key to a freshly-opened workspace.
 ///
-/// `sandbox_root` and `adopt_client_roots` are **manifest** keys parsed by
-/// mcp-methods' loader, but they take effect only as *builder* calls on the
-/// `Workspace`. Nothing carries them across on its own. Opening a workspace
-/// without this step leaves both at their defaults, so a manifest that sets
-/// them would be read, validated as known keys, and then silently ignored —
-/// the exact shape of two defects this project has already had to fix
-/// (`storage=` on `open`, `from_blueprint(save=True)`). If you add a third
-/// boundary key upstream, wire it here in the same change.
+/// `sandbox_root` is a **manifest** key parsed by mcp-methods' loader, but it
+/// takes effect only as a *builder* call on the `Workspace`. Nothing carries it
+/// across on its own. Opening a workspace without this step leaves it at its
+/// default, so a manifest that sets it would be read, validated as a known
+/// key, and then silently ignored — the exact shape of two defects this
+/// project has already had to fix (`storage=` on `open`,
+/// `from_blueprint(save=True)`). If you add another boundary key upstream,
+/// wire it here in the same change.
 ///
-/// Both keys are applied at every construction site, but the manifest loader
-/// refuses either unless `workspace.kind: local` (and `kind: local` in turn
-/// requires `workspace.root`), so in practice only the local path ever sees
-/// them. Applying them uniformly anyway costs nothing and means a future
-/// upstream relaxation of that constraint does not silently skip a mode.
+/// `adopt_client_roots` is the other upstream boundary key; it is refused at
+/// boot by `promote_local_workspace`, so it never reaches this point.
+///
+/// The key is applied at every construction site, but the manifest loader
+/// refuses it unless `workspace.kind: local`, so in practice only the local
+/// path ever sees it. Applying it uniformly anyway costs nothing and means a
+/// future upstream relaxation of that constraint does not silently skip a mode.
 pub(crate) fn apply_workspace_boundaries(
     ws: workspace::Workspace,
     manifest: Option<&Manifest>,
@@ -46,12 +44,13 @@ pub(crate) fn apply_workspace_boundaries(
             .with_sandbox_root(&path)
             .with_context(|| format!("workspace.sandbox_root is not usable: {boundary}"))?;
     }
-    if cfg.adopt_client_roots {
-        ws = ws.with_adopt_client_roots();
-    }
     Ok(ws)
 }
 
+/// Github-workspace wiring: clone-and-track activation builds the workspace
+/// graph through the injected producer ([`WorkspaceGraphHooks`]); without one,
+/// activation still binds source tools and the activation summary carries
+/// the builder-unavailable note.
 pub(crate) fn github_workspace(
     canon: PathBuf,
     stale_after_days: u32,
@@ -278,17 +277,18 @@ pub(crate) fn bind_mode(
 
 /// The manifest's workspace-boundary keys must actually reach the `Workspace`.
 ///
-/// mcp-methods parses `workspace.sandbox_root` and `workspace.adopt_client_roots`
-/// in its manifest loader, but they only take effect as builder calls on the
-/// `Workspace` we construct. Nothing carries them across implicitly. Before
-/// 0.4.3 was wired in, opening a workspace ignored both — a manifest setting
-/// them would be read, accepted as valid, and then do nothing.
+/// mcp-methods parses `workspace.sandbox_root` in its manifest loader, but it
+/// only takes effect as a builder call on the `Workspace` we construct. Nothing
+/// carries it across implicitly. Before 0.4.3 was wired in, opening a
+/// workspace ignored it — a manifest setting it would be read, accepted as
+/// valid, and then do nothing.
 ///
 /// That is the same shape as two defects this project already shipped and had
 /// to fix: `storage=` silently ignored by `open()`, and
 /// `from_blueprint(save=True)` silently doing nothing. Both were "the kwarg is
 /// parsed, then dropped". These tests exist so a third one cannot happen here
-/// quietly.
+/// quietly. `adopt_client_roots`, the other boundary key, is refused at boot
+/// instead; its test pins that refusal.
 #[cfg(test)]
 mod workspace_boundary_tests {
     use super::*;
@@ -323,45 +323,66 @@ mod workspace_boundary_tests {
         local_workspace(dir.to_path_buf(), &state, manifest).expect("local workspace opens")
     }
 
+    /// `workspace.adopt_client_roots` is refused at boot, rooted or rootless.
+    ///
+    /// Upstream the key is a fallback that applies only when no explicit root
+    /// is configured, and lets `workspace.root` be omitted. This server's local
+    /// mode always binds an explicit root, so the key could never take effect:
+    /// a rooted manifest booted with it silently inert, and a rootless one died
+    /// with "missing required `root`", which names the wrong key. Both now get
+    /// one message naming `adopt_client_roots`.
     #[test]
-    fn adopt_client_roots_reaches_the_workspace() {
+    fn adopt_client_roots_is_refused_at_boot() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().canonicalize().expect("canonicalize");
 
-        // The control arm is what makes the positive arm mean anything: if the
-        // default were already `true`, the assertion below would pass without
-        // the plumbing existing at all.
-        let without = open(&root, None);
-        assert!(
-            !without.adopts_client_roots(),
-            "no manifest must leave adoption off — otherwise the positive arm proves nothing"
-        );
-        let m_off = manifest_with(
+        // Control: the same rooted manifest without the key promotes, so the
+        // refusals below are attributable to the key alone.
+        let plain = manifest_with(
             tmp.path(),
             &format!(
-                "workspace:\n  kind: local\n  root: {:?}\n  adopt_client_roots: false\n",
+                "workspace:\n  kind: local\n  root: {:?}\n",
                 root.to_string_lossy()
             ),
         );
-        let off = open(&root, Some(&m_off));
         assert!(
-            !off.adopts_client_roots(),
-            "a manifest that does not opt in must leave adoption off"
+            matches!(
+                promote_local_workspace(Mode::Bare, Some(&plain)),
+                Ok(Mode::LocalWorkspace { .. })
+            ),
+            "a rooted local manifest without the key must promote"
         );
 
-        let m_on = manifest_with(
+        let rooted = manifest_with(
             tmp.path(),
             &format!(
                 "workspace:\n  kind: local\n  root: {:?}\n  adopt_client_roots: true\n",
                 root.to_string_lossy()
             ),
         );
-        let on = open(&root, Some(&m_on));
-        assert!(
-            on.adopts_client_roots(),
-            "workspace.adopt_client_roots = true must reach the Workspace; if this \
-             fails the manifest key is being parsed and then dropped"
+        let rootless = manifest_with(
+            tmp.path(),
+            "workspace:\n  kind: local\n  adopt_client_roots: true\n",
         );
+        for (label, m) in [("rooted", &rooted), ("rootless", &rootless)] {
+            let err = promote_local_workspace(Mode::Bare, Some(m))
+                .expect_err(&format!("{label} adopt_client_roots must be refused"));
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("adopt_client_roots") && msg.contains("not supported"),
+                "{label}: the refusal must name the key, got: {msg}"
+            );
+        }
+
+        // `false` is the default spelled out; it stays accepted.
+        let off = manifest_with(
+            tmp.path(),
+            &format!(
+                "workspace:\n  kind: local\n  root: {:?}\n  adopt_client_roots: false\n",
+                root.to_string_lossy()
+            ),
+        );
+        assert!(promote_local_workspace(Mode::Bare, Some(&off)).is_ok());
     }
 
     /// `sandbox_root` has no public reader, so it is asserted through the

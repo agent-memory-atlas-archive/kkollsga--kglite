@@ -322,6 +322,18 @@ pub(crate) fn promote_local_workspace(mode: Mode, manifest: Option<&Manifest>) -
     if wcfg.kind != WorkspaceKind::Local {
         return Ok(mode);
     }
+    // Upstream, `adopt_client_roots` is a fallback for when no root is
+    // configured, and it lets `root` be omitted. Local mode here always binds
+    // an explicit root, so the key can never take effect: refuse it instead of
+    // booting with it inert, or failing a rootless manifest on "missing root".
+    if wcfg.adopt_client_roots {
+        anyhow::bail!(
+            "manifest.workspace.adopt_client_roots is not supported by kglite-mcp-server: \
+             local-workspace mode always binds the explicit `workspace.root`, so a \
+             client-advertised root would never be adopted. Remove the key and set \
+             `workspace.root` (switch roots at runtime with `set_root_dir`)."
+        );
+    }
     let m = manifest.expect("manifest present when wcfg is");
     let raw_root = wcfg.root.as_ref().ok_or_else(|| {
         anyhow::anyhow!("manifest.workspace.kind=local is missing required `root`")

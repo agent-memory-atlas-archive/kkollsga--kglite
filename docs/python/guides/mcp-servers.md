@@ -1022,31 +1022,26 @@ The matrix shows which manifest key takes effect in which CLI mode. "—" means 
 | `env_file` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `workspace.kind: local` + `workspace.root: <dir>` | — | — | — | — | promotes into local-workspace mode |
 | `workspace.watch: true` | — | — | ✓ (auto-rebuild) | — | ✓ when `workspace.kind: local` |
-| `workspace.sandbox_root: <dir>` | — | — | — | — | ✓ bounds `set_root_dir` and any adopted client root. **Opt-in; without it swaps are unbounded.** kglite 0.15.5+ / mcp-methods 0.4.3+. Requires `workspace.kind: local`. |
-| `workspace.adopt_client_roots: true` | — | — | — | — | ✓ adopt the MCP-client-advertised root as a **fallback** when no explicit root is configured; explicit config always wins. **Pair it with `sandbox_root`** — an adopted root is proposed by an external party. See the deprecation note below. |
+| `workspace.sandbox_root: <dir>` | — | — | — | — | ✓ bounds `set_root_dir`. **Opt-in; without it swaps are unbounded.** kglite 0.15.5+ / mcp-methods 0.4.3+. Requires `workspace.kind: local`. |
+| `workspace.adopt_client_roots: true` | refused at boot | refused at boot | refused at boot | refused at boot | refused at boot. Local-workspace mode always binds the explicit `workspace.root`, so a client-advertised root would never be adopted. Set `workspace.root` and switch roots with `set_root_dir`. See the note below. |
 | `tools[].cypher` | ✓ | ✓ (per active repo) | ✓ | — (no graph) | — |
 | `trust.allow_embedder` | parsed, required by `extensions.embedder` | parsed, required by matching extension | parsed, required by matching extension | parsed (no graph) | parsed (no graph) |
 | `builtins.save_graph: true` | ✓ (registers `save_graph` only; `cypher_query` stays read-only) | — (multiple graphs) | — | — | — |
 | `extensions.writable: true` | ✓ (write-enables: mutation + `save_graph` + lifecycle tools; same as `--writable`) | — (multiple graphs) | — | — | — |
 
-> **`adopt_client_roots` rests on a deprecated protocol feature.** MCP `roots`
-> was deprecated in protocol revision `2026-07-28` (SEP-2577): *"New
-> implementations SHOULD NOT adopt it; existing implementations SHOULD migrate
-> to passing directories or files via tool parameters, resource URIs, or server
-> configuration."* Earliest removal is the first revision released on or after
-> 2027-07-28, and that revision re-plumbs the mechanism entirely — no
-> server→client `roots/list`, the capability moves to per-request `_meta`, and
-> `notifications/roots/list_changed` does not exist in it.
+> **kglite-mcp-server refuses `adopt_client_roots`.** The key is an
+> mcp-methods fallback: it adopts a client-advertised root only when no root
+> is configured. This server's local-workspace mode always binds the explicit
+> `workspace.root`, so the fallback can never fire. The server exits at boot
+> with a message naming the key, rooted or rootless.
 >
-> The key is supported because it works today against clients negotiating a
-> revision where the mechanism is live, and it is inert when unset. But if you
-> are choosing between this and passing the directory as a tool parameter or as
-> server configuration, the latter is the spec's own migration path and will
-> outlive this one.
+> The mechanism behind it is also deprecated. MCP `roots` was deprecated in
+> protocol revision `2026-07-28` (SEP-2577). The spec's migration path is to
+> pass directories as tool parameters, resource URIs or server configuration.
+> Here that means `workspace.root` plus `set_root_dir`.
 >
-> `workspace.sandbox_root` is **not** affected — it is a local containment
-> boundary with no protocol dependency, and it is worth setting whether or not
-> you adopt client roots.
+> `workspace.sandbox_root` is **not** affected. It is a local containment
+> boundary with no protocol dependency.
 | `builtins.temp_cleanup: on_overview` | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `extensions.embedder` | ✓ | ✓ (per active repo) | ✓ | — (no graph) | — |
 | `extensions.cypher_recipes` | ✓ (merged with the graph's own `KgliteRecipe` records) | ✓ (per active repo) | ✓ (merged, as `--graph`) | registers discovery/run tools, but execution needs an active graph | registers discovery/run tools, but execution needs an active graph |

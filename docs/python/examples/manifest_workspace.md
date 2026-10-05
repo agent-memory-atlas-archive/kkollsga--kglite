@@ -90,7 +90,7 @@ The sandbox boundary is real from **kglite 0.15.5 / mcp-methods 0.4.3**, and it 
 → refused; the active root does not change                     ✓ outside the boundary
 ```
 
-Set `sandbox_root` wide enough to cover every directory you intend to swap between, and no wider. It bounds an operator's `set_root_dir` and an adopted client root alike.
+Set `sandbox_root` wide enough to cover every directory you intend to swap between, and no wider. It bounds every `set_root_dir` swap.
 
 ## github_issues integration
 
