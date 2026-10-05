@@ -2081,6 +2081,7 @@ pub struct kglite::api::introspection::ConnectionTypeStats
 pub kglite::api::introspection::ConnectionTypeStats::connection_type: alloc::string::String
 pub kglite::api::introspection::ConnectionTypeStats::count: usize
 pub kglite::api::introspection::ConnectionTypeStats::property_names: alloc::vec::Vec<alloc::string::String>
+pub kglite::api::introspection::ConnectionTypeStats::property_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
 pub kglite::api::introspection::ConnectionTypeStats::source_types: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::introspection::ConnectionTypeStats::target_types: alloc::vec::Vec<alloc::string::String>
 pub struct kglite::api::introspection::ConnectivityTriple

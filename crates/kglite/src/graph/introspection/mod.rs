@@ -29,7 +29,7 @@ pub mod topics;
 use crate::datatypes::values::Value;
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub use connectivity::{
     compute_type_connectivity, derive_edge_counts_from_triples, sort_connectivity_triples,
@@ -41,6 +41,9 @@ pub struct ConnectionTypeStats {
     pub source_types: Vec<String>,
     pub target_types: Vec<String>,
     pub property_names: Vec<String>,
+    /// Type string per entry of `property_names` (`"Any"` when the type is not
+    /// recorded, i.e. endpoints recovered from an edge scan).
+    pub property_types: BTreeMap<String, String>,
 }
 
 pub struct NodeTypeOverview {
@@ -83,6 +86,7 @@ pub fn schema_overview_to_json(schema: &SchemaOverview) -> serde_json::Value {
                 "source_types": c.source_types,
                 "target_types": c.target_types,
                 "property_names": c.property_names,
+                "properties": c.property_types,
             })
         })
         .collect();

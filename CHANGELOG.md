@@ -11,6 +11,14 @@ before upgrading.
 
 ### Added
 
+- `schema()` lists each relationship type's properties with their types
+  (`connection_types[name]['properties']`, `{name: type}`, the node-type shape);
+  the C ABI schema JSON carries the same map as `properties` beside
+  `property_names`. Rust API: `ConnectionTypeStats::property_types`. The
+  `describe()` docstring now points to `schema()` and `graph_info()` for
+  structured data, and `CYPHER.md` has a generated procedure reference table
+  (name, YIELD columns, description) rendered from the procedure registry.
+
 - `valid_instant()`: the instant of the statement's valid-time context, as a
   date for a date context and a datetime for a datetime context; today (UTC)
   under the default context, and the stored date under a graph-stored default.

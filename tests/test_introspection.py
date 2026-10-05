@@ -37,6 +37,50 @@ class TestSchema:
         assert "Person" in knows["source_types"]
         assert "Person" in knows["target_types"]
 
+    def test_schema_relationship_properties_carry_types(self):
+        """Each relationship type lists its properties with types, the node shape.
+
+        A declared validity pair is reported like any property; a column that
+        is null in every row is never stored, so it appears in neither
+        ``schema()`` nor ``db.schema.relTypeProperties()``.
+        """
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": ["a", "b"], "name": ["A", "B"]}), "Employee", "id", "name")
+        g.add_nodes(pd.DataFrame({"id": ["t"], "name": ["T"]}), "Team", "id", "name")
+        edges = pd.DataFrame(
+            {
+                "emp": ["a", "b"],
+                "team": ["t", "t"],
+                "valid_from": ["2020-01-01", "2021-01-01"],
+                "valid_to": ["2022-01-01", None],
+                "role": ["lead", "eng"],
+                "weight": [1, 2],
+                "note": [None, None],
+            }
+        )
+        g.add_relationships(
+            edges,
+            "MEMBER_OF",
+            "Employee",
+            "emp",
+            "Team",
+            "team",
+            column_types={"valid_from": "validFrom", "valid_to": "validTo"},
+            convention="half_open",
+        )
+        member = g.schema()["connection_types"]["MEMBER_OF"]
+        assert member["properties"] == {
+            "role": "String",
+            "valid_from": "DateTime",
+            "valid_to": "DateTime",
+            "weight": "Int64",
+        }
+        listed = {r["propertyName"] for r in g.cypher("CALL db.schema.relTypeProperties()").to_dicts()}
+        assert listed == set(member["properties"])
+
+    def test_schema_relationship_property_fixture(self, small_graph):
+        assert small_graph.schema()["connection_types"]["KNOWS"]["properties"] == {"since": "Int64"}
+
     def test_schema_edge_count(self, small_graph):
         s = small_graph.schema()
         assert s["edge_count"] == 3

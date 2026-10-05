@@ -326,6 +326,7 @@ impl KnowledgeGraph {
                 ct_dict.set_item("count", ct.count)?;
                 ct_dict.set_item("source_types", &ct.source_types)?;
                 ct_dict.set_item("target_types", &ct.target_types)?;
+                ct_dict.set_item("properties", &ct.property_types)?;
                 conn_dict.set_item(ct.connection_type.as_str(), ct_dict)?;
             }
             result.set_item("connection_types", conn_dict)?;

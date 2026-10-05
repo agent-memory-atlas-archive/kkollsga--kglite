@@ -4506,6 +4506,10 @@ class KnowledgeGraph:
     ) -> str:
         """Return an XML description of this graph for AI agents.
 
+        The XML is for reading, not parsing. For structured data use
+        :meth:`schema` (types, counts, node and relationship properties with
+        their types) and :meth:`graph_info` (storage).
+
         Five independent axes for progressive disclosure:
 
         **Node types** (``types`` parameter):
@@ -4769,7 +4773,8 @@ class KnowledgeGraph:
         Returns:
             Dict with keys:
                 - ``node_types``: ``{type_name: {count, properties: {name: type_str}}}``
-                - ``connection_types``: ``{conn_name: {count, source_types: list, target_types: list}}``
+                - ``connection_types``: ``{conn_name: {count, source_types: list, target_types: list,
+                  properties: {name: type_str}}}``
                 - ``indexes``: list of ``"Type.property"`` strings
                 - ``node_count``: total nodes
                 - ``edge_count``: total edges

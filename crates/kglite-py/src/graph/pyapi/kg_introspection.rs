@@ -1592,6 +1592,7 @@ impl KnowledgeGraph {
     }
 
     /// Return an XML description of this graph for AI agents (progressive disclosure).
+    /// For structured data use `schema()` and `graph_info()`.
     ///
     /// Five independent axes:
     /// - `types` → Node type detail (None=inventory, list=focused)

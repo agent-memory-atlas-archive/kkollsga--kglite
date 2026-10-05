@@ -1235,6 +1235,54 @@ fn compute_schema_json_describes_graph() {
     unsafe { kglite_graph_free(graph) };
 }
 
+/// The schema JSON types each relationship property (`properties`) beside the
+/// name list (`property_names`), so a non-Python consumer reads the same
+/// `{name: type}` map `schema()` returns.
+#[test]
+fn compute_schema_json_types_relationship_properties() {
+    let session = empty_session();
+    execute_mut_ok(
+        session,
+        "CREATE (a:T {id: 1})-[:KNOWS {weight: 3, note: 'x'}]->(b:T {id: 2})",
+    );
+    let path = std::env::temp_dir().join(format!(
+        "kglite-c-schema-props-{}-{:?}.kgl",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let path_c = CString::new(path.to_string_lossy().into_owned()).unwrap();
+    let mut err: *const c_char = std::ptr::null();
+    assert_eq!(
+        unsafe { kglite_session_save(session, path_c.as_ptr(), 1, &mut err) },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_session_free(session) };
+    let mut graph: *mut KgliteGraph = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { kglite_load_file(path_c.as_ptr(), &mut graph, &mut err) },
+        KgliteStatusCode::Ok
+    );
+
+    let mut out: *const c_char = std::ptr::null();
+    let rc = unsafe { kglite_compute_schema_json(graph, &mut out, &mut err) };
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    let parsed: serde_json::Value =
+        serde_json::from_str(unsafe { CStr::from_ptr(out).to_str().unwrap() }).unwrap();
+    let knows = &parsed["connection_types"][0];
+    assert_eq!(knows["type"], "KNOWS");
+    assert_eq!(
+        knows["property_names"],
+        serde_json::json!(["note", "weight"])
+    );
+    assert_eq!(
+        knows["properties"],
+        serde_json::json!({"note": "String", "weight": "Int64"})
+    );
+    unsafe { kglite_free_string(out) };
+    unsafe { kglite_graph_free(graph) };
+    let _ = std::fs::remove_file(&path);
+}
+
 // ───────────────────────── embedder ─────────────────────────────────
 
 #[cfg(feature = "fastembed")]

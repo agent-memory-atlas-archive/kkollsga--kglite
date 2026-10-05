@@ -902,3 +902,39 @@ mod mixed_property_type_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod schema_relationship_property_types {
+    use super::*;
+    use crate::graph::algorithms::Interrupt;
+    use crate::graph::introspection::schema_overview::compute_schema;
+    use crate::graph::introspection::schema_overview_to_json;
+    use crate::graph::languages::cypher::executor::write::execute_mutable;
+    use crate::graph::languages::cypher::parser::parse_cypher;
+    use std::collections::HashMap;
+
+    /// `schema()` and the C ABI JSON report each relationship property with its
+    /// type, from the same metadata `describe()` renders `name:Type` from.
+    #[test]
+    fn the_schema_json_types_every_relationship_property() {
+        let mut graph = DirGraph::new();
+        let parsed = parse_cypher(
+            "CREATE (a:Person {person_id: 1})-[:KNOWS {since: 2020, note: 'x'}]->\
+             (b:Person {person_id: 2})",
+        )
+        .unwrap();
+        execute_mutable(&mut graph, &parsed, HashMap::new(), Interrupt::default()).unwrap();
+
+        let json = schema_overview_to_json(&compute_schema(&graph));
+        let knows = &json["connection_types"][0];
+        assert_eq!(knows["type"], "KNOWS");
+        assert_eq!(
+            knows["property_names"],
+            serde_json::json!(["note", "since"])
+        );
+        assert_eq!(
+            knows["properties"],
+            serde_json::json!({"note": "String", "since": "Int64"})
+        );
+    }
+}

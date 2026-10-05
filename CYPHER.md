@@ -2848,6 +2848,123 @@ from a Bolt client or inside a Cypher pipeline; use `list_indexes()`
 from Python code where you'd rather have a Python list of dicts than
 a `cypher()` result.
 
+## Procedure reference
+
+Every procedure, its `YIELD` columns in declared order, and a one-line
+description. Generated from the procedure registry (`CALL list_procedures()`
+and `SHOW PROCEDURES` read the same table); parameters and examples are in the
+sections above and in `describe(cypher=['<topic>'])`.
+
+<!-- BEGIN GENERATED: procedure-reference (scripts/render_docs_facts.py) -->
+
+| Procedure | YIELD columns | Description |
+|---|---|---|
+| `pagerank` | `node`, `score` | Compute PageRank centrality for all nodes |
+| `betweenness` | `node`, `score` | Compute betweenness centrality for all nodes |
+| `degree` | `node`, `score` | Compute degree centrality for all nodes |
+| `closeness` | `node`, `score` | Compute closeness centrality for all nodes |
+| `louvain` | `node`, `community`, `level` | Detect communities using multilevel Louvain (hierarchical). |
+| `leiden` | `node`, `community`, `level` | Detect communities using Leiden (multilevel, well-connected communities). |
+| `label_propagation` | `node`, `community` | Detect communities using label propagation |
+| `connected_components` | `node`, `component` | Find weakly connected components. |
+| `k_core` | `node`, `coreness` | k-core decomposition (coreness per node). |
+| `ready_set` | `node`, `dependency_count` | Dependency frontier: nodes whose {edge} prerequisites all satisfy the `done` predicate — the next actionable work items. |
+| `clustering_coefficient` | `node`, `coefficient` | Local clustering coefficient per node (how interconnected its neighbours are). |
+| `triangle_count` | `triangles`, `transitivity` | Global triangle count + transitivity (global clustering coefficient) for the whole graph. |
+| `eccentricity` | `node`, `eccentricity` | Per-node eccentricity (longest shortest path to any node in its component). |
+| `diameter` | `diameter` | Graph diameter (max eccentricity). |
+| `cluster` | `node`, `cluster` | Cluster nodes by spatial location or numeric properties (DBSCAN/K-means). |
+| `orphan_node` | `node` | Rule: nodes of {type} with zero matching edges (default: any edge, both directions). |
+| `self_loop` | `node` | Rule: nodes of {type} with a self-loop via {edge} |
+| `cycle_2step` | `node_a`, `node_b` | Rule: a-{edge}->b-{edge}->a pairs where both nodes are of {type} |
+| `missing_required_edge` | `node`, `rule` | Rule: nodes of {type} with no outgoing edge of {edge} (direction-validated); no-arg form checks every ontology declaration |
+| `missing_inbound_edge` | `node` | Rule: nodes of {type} with no incoming edge of {edge} (direction-validated) |
+| `duplicate_title` | `node` | Rule: nodes of {type} whose title is shared with another node of the same type |
+| `duplicate_id` | `node` | Rule: nodes of {type} whose id is shared with another node of the same type |
+| `null_property` | `node` | Rule: nodes of {type} where {property} is missing, null, or empty |
+| `outline` | `node`, `depth`, `parent_id`, `node_type`, `node_id_type`, `parent_type`, `parent_id_type`, `node_token`, `parent_token` | Projection: BFS spanning tree from node id {root} and optional {root_type} along {edge} — typed ids plus result-local identity tokens (render with kglite.outline) |
+| `inverse_violation` | `a`, `b`, `rule` | Rule: (a)-[rel_a]->(b) without a matching (b)-[rel_b]->(a); no-arg form checks every ontology declaration |
+| `transitivity_violation` | `a`, `b`, `c`, `rule` | Rule: (a)->(b)->(c) chains under {rel} where the direct (a)->(c) edge is absent; no-arg form checks every ontology declaration |
+| `cardinality_violation` | `node`, `count`, `rule` | Rule: nodes of {type} whose outgoing-{edge} count is outside [min, max]; no-arg form checks every ontology declaration |
+| `type_domain_violation` | `source`, `target`, `rule` | Rule: edges of {edge} whose source node is not of {expected_source} type; no-arg form checks every ontology declaration (a declared class widens to its descendants) |
+| `type_range_violation` | `source`, `target`, `rule` | Rule: edges of {edge} whose target node is not of {expected_target} type; no-arg form checks every ontology declaration (a declared class widens to its descendants) |
+| `table.upsert` | `action`, `rows` | Atomic keyed row upsert into a list-of-maps property: replaces the first row whose {key} cell matches row[key], else appends. |
+| `table.delete` | `removed`, `rows` | Atomic keyed row delete from a list-of-maps property: removes every row whose {key} cell equals {value}. |
+| `db.node_embeddings.set` | `stored`, `dimension` | Atomically upsert vectors for explicitly selected nodes (entries: [{node: n, vector: [...]}]) |
+| `db.node_embeddings.embed` | `embedded`, `skipped`, `dimension`, `model` | Generate vectors for explicitly selected nodes (nodes: collect(n)) with the registered embedder |
+| `db.node_embeddings.remove` | `removed` | Remove vectors from explicitly selected nodes |
+| `db.node_embeddings.drop` | `dropped` | Drop one node embedding store |
+| `db.node_embeddings.list` | `entity`, `type`, `text_column`, `store`, `dimension`, `count`, `metric`, `model`, `index_state`, `delta`, `unembedded` | List node embedding stores and their metadata |
+| `db.node_embeddings.build_index` | `indexed`, `metric`, `m` | Build an HNSW index for one node embedding store |
+| `db.node_embeddings.refresh_index` | `refreshed` | Refresh a node vector index from current stored vectors |
+| `db.node_embeddings.drop_index` | `dropped` | Drop one node vector index while retaining its vectors |
+| `db.node_embeddings.query` | `node`, `score`, `search_method`, `type` | Retrieve the nearest nodes from one or several whole embedding stores (type, types, or every store for text_column), merged into one top-k, by query vector or by text the registered embedder embeds |
+| `db.temporal.declare` | `declared`, `rows`, `abutting_rows` | Declare which two properties (from, to) bound a node label's or relationship type's validity interval, and whether the to day belongs to it (convention 'closed') or ends it ('half_open'), with an optional empty_when: 'to_before_from' under 'closed' that keeps a row whose to is the day before its from as an empty interval; validates every stored bound and counts rows whose end meets another row's start. |
+| `db.temporal.undeclare` | `undeclared` | Remove one validity-interval declaration (node, or relationship with optional source_type). |
+| `db.temporal.declarations` | `kind`, `name`, `source_type`, `from`, `to`, `convention`, `empty_when`, `abutting_rows`, `ambiguous`, `empty_rows`, `unreadable_rows` | List validity-interval declarations: kind, name, source type, bound properties, convention, empty_when, abutting rows counted at declare time, whether the relationship type is ambiguous (several unkeyed declarations from an older graph; re-declare them per source_type), and the rows a write since left with an empty interval (valid at no instant) or an unreadable bound, counted now |
+| `db.node_text_index.build` | `indexed`, `skipped`, `terms` | Build (or rebuild) a BM25 text index over one node type's string property (text_column), for text_bm25(n, text_column, query) |
+| `db.node_text_index.refresh` | `refreshed` | Fold every node change since the last build or refresh into a node text index |
+| `db.node_text_index.drop` | `dropped` | Drop one node text index |
+| `db.node_text_index.list` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | List node text indexes and their freshness |
+| `db.embeddings.set` | `stored`, `dimension` | Router: entity:'node' (default) runs db.node_embeddings.set, entity:'relationship' runs db.relationship_embeddings.set |
+| `db.embeddings.embed` | `embedded`, `skipped`, `dimension`, `model` | Router: entity:'node' (default) runs db.node_embeddings.embed, entity:'relationship' runs db.relationship_embeddings.embed |
+| `db.embeddings.remove` | `removed` | Router: entity:'node' (default) runs db.node_embeddings.remove, entity:'relationship' runs db.relationship_embeddings.remove |
+| `db.embeddings.drop` | `dropped` | Router: entity:'node' (default) runs db.node_embeddings.drop, entity:'relationship' runs db.relationship_embeddings.drop |
+| `db.embeddings.list` | `entity`, `type`, `text_column`, `store`, `dimension`, `count`, `metric`, `model`, `index_state`, `delta`, `unembedded` | Router: entity:'node' (default) runs db.node_embeddings.list, entity:'relationship' runs db.relationship_embeddings.list |
+| `db.embeddings.build_index` | `indexed`, `metric`, `m` | Router: entity:'node' (default) runs db.node_embeddings.build_index, entity:'relationship' runs db.relationship_embeddings.build_index |
+| `db.embeddings.refresh_index` | `refreshed` | Router: entity:'node' (default) runs db.node_embeddings.refresh_index, entity:'relationship' runs db.relationship_embeddings.refresh_index |
+| `db.embeddings.drop_index` | `dropped` | Router: entity:'node' (default) runs db.node_embeddings.drop_index, entity:'relationship' runs db.relationship_embeddings.drop_index |
+| `db.embeddings.query` | `node`, `score`, `search_method`, `type` | Router: entity:'node' (default) runs db.node_embeddings.query, entity:'relationship' runs db.relationship_embeddings.query (the relationship route yields relationship in place of node) |
+| `db.text_index.build` | `indexed`, `skipped`, `terms` | Router: entity:'node' (default) runs db.node_text_index.build, entity:'relationship' runs db.relationship_text_index.build |
+| `db.text_index.refresh` | `refreshed` | Router: entity:'node' (default) runs db.node_text_index.refresh, entity:'relationship' runs db.relationship_text_index.refresh |
+| `db.text_index.drop` | `dropped` | Router: entity:'node' (default) runs db.node_text_index.drop, entity:'relationship' runs db.relationship_text_index.drop |
+| `db.text_index.list` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Router: entity:'node' (default) runs db.node_text_index.list, entity:'relationship' runs db.relationship_text_index.list |
+| `db.relationship_embeddings.set` | `stored`, `dimension` | Atomically upsert vectors for explicitly selected relationships |
+| `db.relationship_embeddings.embed` | `embedded`, `skipped`, `dimension`, `model` | Generate vectors for explicitly selected relationships |
+| `db.relationship_embeddings.remove` | `removed` | Remove vectors from explicitly selected relationships |
+| `db.relationship_embeddings.drop` | `dropped` | Drop one relationship embedding store |
+| `db.relationship_embeddings.list` | `entity`, `type`, `text_column`, `store`, `dimension`, `count`, `metric`, `model`, `index_state`, `delta`, `unembedded` | List declared relationship embedding stores and their metadata |
+| `db.relationship_embeddings.build_index` | `indexed`, `metric`, `m` | Build an HNSW index for one relationship embedding store |
+| `db.relationship_embeddings.refresh_index` | `refreshed` | Refresh a relationship vector index from current stored vectors |
+| `db.relationship_embeddings.drop_index` | `dropped` | Drop one relationship vector index while retaining its vectors |
+| `db.relationship_embeddings.query` | `relationship`, `score`, `search_method`, `type` | Retrieve the nearest relationships from one or several whole embedding stores (type, types, or every store for text_column), merged into one top-k, by query vector or by text the registered embedder embeds |
+| `db.relationship_text_index.build` | `indexed`, `skipped`, `terms` | Build (or rebuild) a BM25 text index over one relationship type's string property (text_column), for text_bm25(r, text_column, query) |
+| `db.relationship_text_index.refresh` | `refreshed` | Fold every relationship change since the last build or refresh into a relationship text index |
+| `db.relationship_text_index.drop` | `dropped` | Drop one relationship text index |
+| `db.relationship_text_index.list` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | List relationship text indexes and their freshness |
+| `ontology_audit` | `entity_kind`, `rule`, `severity`, `violations`, `exempted`, `total`, `pct`, `domain_class`, `property` | Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). |
+| `node_property_violation` | `class`, `check`, `node`, `property`, `properties` | Class property violations, including declared descendants by primary type. |
+| `edge_property_violation` | `relationship`, `check`, `source`, `target`, `property`, `properties`, `exempt` | Rule: edges flagged by a declaration's required_properties (property absent/null) or property_types (present value of the wrong type) — the row listing behind those two ontology_audit counts. |
+| `parallel_edges` | `a`, `b`, `count` | Rule: (a, b) pairs connected by more than one edge of {edge} |
+| `kg_knn` | `node`, `distance_m` | Spatial: k nearest nodes of {target_type} to ({lat}, {lon}) |
+| `affected_tests` | `test_file`, `depth` | Code graphs: test files reachable from changed files via inbound IMPORTS edges. |
+| `rev_diff` | `bucket`, `type`, `qualified_name`, `name`, `file`, `line` | Multi-rev code graphs: added/removed/changed code entities between two revs {from, to}. |
+| `dead_code` | `node` | Functions with no inbound use edge (CALLS / REFERENCES_FN / HANDLES / IMPLEMENTED_BY / DECORATES); excludes tests, dunder and main (pass exclude_public to also drop pub/exported, include_tests to keep tests) |
+| `refresh_stats` | `src_type`, `edge_type`, `tgt_type`, `count` | Recompute the label-pair edge-count cache; one row per (src_type, edge_type, tgt_type) with its fresh count. |
+| `list_procedures` | `name`, `description`, `yield_columns` | List all available procedures |
+| `db.labels` | `label` | All node-type names ('labels') in the graph, sorted |
+| `db.relationshipTypes` | `relationshipType` | All connection-type names ('relationship types') in the graph, sorted |
+| `db.indexes` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded` | All indexes in the graph (equality, composite, range, text, vector), sorted by name |
+| `db.constraints` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType` | All declared constraints (UNIQUENESS, NODE_KEY, NODE_PROPERTY_EXISTENCE, NODE_PROPERTY_TYPE, RELATIONSHIP_PROPERTY_EXISTENCE, RELATIONSHIP_PROPERTY_TYPE), sorted by name |
+| `db.propertyKeys` | `propertyKey` | All property keys declared in the graph (node + relationship), sorted |
+| `db.schema` | `nodeType`, `properties` | One row per node type with its sorted property-name list |
+| `db.schema.visualization` | `nodes`, `relationships` | Schema graph for visualization: one row with virtual nodes (one per label; properties name/indexes/constraints) and virtual relationships (one per observed source-label/type/target-label combination). |
+| `db.schema.nodeTypeProperties` | `nodeType`, `nodeLabels`, `propertyName`, `propertyTypes`, `mandatory` | Typed node schema: one row per (label, property) with propertyTypes and mandatory — the shape Neo4j clients load their data model from. |
+| `db.schema.relTypeProperties` | `relType`, `propertyName`, `propertyTypes`, `mandatory` | Typed relationship schema: one row per (type, property) with propertyTypes and mandatory. |
+| `apoc.meta.nodeTypeProperties` | `nodeType`, `nodeLabels`, `propertyName`, `propertyTypes`, `mandatory`, `propertyObservations`, `totalObservations` | APOC-compatibility shim over db.schema.nodeTypeProperties: same typed node schema under APOC's column set (adds totalObservations/propertyObservations). |
+| `apoc.meta.relTypeProperties` | `relType`, `sourceNodeLabels`, `targetNodeLabels`, `propertyName`, `propertyTypes`, `mandatory`, `propertyObservations`, `totalObservations` | APOC-compatibility shim over db.schema.relTypeProperties, adding the endpoint columns (sourceNodeLabels/targetNodeLabels) the db.schema contract lacks - one row per observed (source, type, target) pairing. |
+| `db.graph_stats` | `node_count`, `edge_count`, `label_count`, `relationship_type_count` | Per-graph summary: node, edge, label, and relationship-type counts. |
+| `db.property_stats` | `value_count`, `null_count`, `distinct_count` | Per-(label, property) statistics: value, null, and distinct counts. |
+| `db.property_uniqueness` | `is_unique`, `violation_count`, `distinct_count` | Uniqueness pre-flight for a (label, property): is it unique, and how many violations. |
+| `db.cdc.enable` | `enabled`, `epoch`, `capacity`, `enrichment`, `cursor` | Start change data capture on this graph, or reconfigure a running log in place. |
+| `db.cdc.disable` | `enabled`, `wasEnabled` | Stop change data capture and discard the log. |
+| `db.cdc.status` | `enabled`, `epoch`, `capacity`, `enrichment`, `buffered`, `earliest`, `current` | How change data capture is configured on this graph, and how much it is holding. |
+| `db.cdc.current` | `id` | Cursor addressing the newest published change — the position to start from to see only future changes |
+| `db.cdc.earliest` | `id` | Cursor addressing the oldest change still retained — the position to resync from after a cursor expires |
+| `db.cdc.query` | `id`, `seq`, `operation`, `elementType`, `nodeType`, `nodeId`, `relationshipType`, `srcType`, `srcId`, `tgtType`, `tgtId`, `state` | Changes published after a cursor, oldest first. |
+
+<!-- END GENERATED: procedure-reference -->
+
 ## Change data capture (`CALL db.cdc.*`)
 
 An opt-in stream of the changes the graph publishes, read from Cypher — so

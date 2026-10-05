@@ -1455,7 +1455,7 @@ pub(super) fn write_fluent_topic_schema(xml: &mut String) {
     xml.push_str("  <schema>\n");
     xml.push_str("    <desc>Inspect and enforce graph schema.</desc>\n");
     xml.push_str("    <methods>\n");
-    xml.push_str("      <m sig=\"schema()\">Full schema dict: node types, connections, indexes, counts.</m>\n");
+    xml.push_str("      <m sig=\"schema()\">Full schema dict: node types and relationship types with counts, endpoint types and property types, plus indexes.</m>\n");
     xml.push_str("      <m sig=\"schema_text()\">Human-readable schema summary.</m>\n");
     xml.push_str("      <m sig=\"properties(node_type)\">Per-property statistics: type, non_null, unique, samples.</m>\n");
     xml.push_str(

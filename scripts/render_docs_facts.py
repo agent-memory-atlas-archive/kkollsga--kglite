@@ -19,6 +19,12 @@ except ModuleNotFoundError:  # Direct script execution.
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "_generated" / "project-facts.md"
+CYPHER_DOC = REPO_ROOT / "CYPHER.md"
+PROCEDURE_REGISTRY = (
+    REPO_ROOT / "crates" / "kglite" / "src" / "graph" / "languages" / "cypher" / "executor" / "procedure_registry.rs"
+)
+PROCEDURE_BEGIN = "<!-- BEGIN GENERATED: procedure-reference (scripts/render_docs_facts.py) -->"
+PROCEDURE_END = "<!-- END GENERATED: procedure-reference -->"
 
 
 def _section(text: str, name: str) -> str:
@@ -210,6 +216,35 @@ def render() -> str:
     return "\n".join(lines)
 
 
+def _procedure_table() -> str:
+    """The procedure reference table, rendered from `PROCEDURES` in the registry."""
+    source = PROCEDURE_REGISTRY.read_text(encoding="utf-8")
+    start = source.index("pub(super) const PROCEDURES:")
+    end = source.index("\n];", start)
+    entry = re.compile(
+        r'name:\s*"([^"]+)",\s*aliases:\s*&\[[^\]]*\],\s*description:\s*"((?:[^"\\]|\\.)*)",\s*columns:\s*&\[([^\]]*)\]'
+    )
+    rows = []
+    for name, description, columns in entry.findall(source[start:end]):
+        first = re.split(r"(?<=[.!?])\s", description.replace('\\"', '"'), maxsplit=1)[0]
+        yielded = ", ".join(f"`{c}`" for c in re.findall(r'"([^"]+)"', columns)) or "—"
+        rows.append(f"| `{name}` | {yielded} | {first.replace('|', chr(92) + '|')} |")
+    expected = source[start:end].count("ProcedureSpec {")
+    if not rows or len(rows) != expected:
+        raise ValueError(f"procedure registry: parsed {len(rows)} of {expected} entries")
+    return "\n".join(["| Procedure | YIELD columns | Description |", "|---|---|---|", *rows])
+
+
+def render_cypher_doc() -> str:
+    """`CYPHER.md` with the generated procedure table between its markers."""
+    text = CYPHER_DOC.read_text(encoding="utf-8")
+    pattern = re.compile(re.escape(PROCEDURE_BEGIN) + r".*?" + re.escape(PROCEDURE_END), re.DOTALL)
+    if len(pattern.findall(text)) != 1:
+        raise ValueError("CYPHER.md: expected exactly one procedure-reference marker block")
+    block = f"{PROCEDURE_BEGIN}\n\n{_procedure_table()}\n\n{PROCEDURE_END}"
+    return pattern.sub(lambda _: block, text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="fail if output is stale")
@@ -217,18 +252,18 @@ def main() -> int:
     args = parser.parse_args()
 
     expected = render()
+    cypher = render_cypher_doc()
     if args.check:
-        current = args.output.read_text(encoding="utf-8") if args.output.exists() else ""
-        if current != expected:
-            shown = (
-                str(args.output.relative_to(REPO_ROOT)) if args.output.is_relative_to(REPO_ROOT) else str(args.output)
-            )
-            print(
-                f"{shown} is stale; run: python scripts/render_docs_facts.py",
-                file=sys.stderr,
-            )
-            return 1
-        return 0
+        stale = False
+        for path, wanted in ((args.output, expected), (CYPHER_DOC, cypher)):
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            if current != wanted:
+                shown = str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
+                print(f"{shown} is stale; run: python scripts/render_docs_facts.py", file=sys.stderr)
+                stale = True
+        return 1 if stale else 0
+
+    CYPHER_DOC.write_text(cypher, encoding="utf-8", newline="\n")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(expected, encoding="utf-8", newline="\n")

@@ -41,12 +41,17 @@ pub fn compute_connection_type_stats(graph: &DirGraph) -> Vec<ConnectionTypeStat
                     .cloned()
                     .collect();
                 property_names.sort();
+                let property_types = property_names
+                    .iter()
+                    .map(|k| (k.clone(), info.property_types[k].clone()))
+                    .collect();
                 ConnectionTypeStats {
                     connection_type: conn_type.clone(),
                     count: counts.get(conn_type).copied().unwrap_or(0),
                     source_types,
                     target_types,
                     property_names,
+                    property_types,
                 }
             })
             .collect();
@@ -142,12 +147,17 @@ pub fn compute_connection_type_stats(graph: &DirGraph) -> Vec<ConnectionTypeStat
                 .filter(|k| !crate::graph::schema::is_reserved_provenance_key(k))
                 .collect();
             property_names.sort();
+            let property_types = property_names
+                .iter()
+                .map(|k| (k.clone(), "Any".to_string()))
+                .collect();
             ConnectionTypeStats {
                 connection_type: conn_type,
                 count: acc.count,
                 source_types,
                 target_types,
                 property_names,
+                property_types,
             }
         })
         .collect();
