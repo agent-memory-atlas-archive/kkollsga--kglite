@@ -25,8 +25,12 @@ impl CypherExecutor<'_> {
     #[cold]
     #[inline(never)]
     pub(super) fn resolve_graph_filter(&self, query: &CypherQuery) -> Result<(), String> {
-        if let Some(filter) = valid_time::execution_filter(query, self.graph, self.params)? {
+        let scope = valid_time::execution_scope(query, self.graph, self.params)?;
+        if let Some(filter) = scope.filter {
             let _ = self.graph_filter.set(filter);
+        }
+        if let Some(instant) = scope.instant {
+            let _ = self.statement_instant.set(instant);
         }
         Ok(())
     }

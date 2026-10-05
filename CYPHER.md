@@ -583,6 +583,7 @@ graph.cypher("""
 | `longitude(point)` | Extract longitude from point |
 | `valid_at(e, date)` / `valid_at(e, date, 'from', 'to')` | Temporal point-in-time filter (nodes or edges); the short form reads the type's declared interval |
 | `valid_during(e, start, end)` / `valid_during(e, start, end, 'from', 'to')` | Temporal range overlap filter |
+| `valid_instant()` | The statement's valid-time instant (see [Temporal](#temporal-functions)) |
 | `text_bm25(n, prop, query)` | Lexical (BM25) relevance of the node's — or relationship's — indexed text against a query string. Needs `build_text_index(node_type, property)` for a node, `CALL db.relationship_text_index.build({type, text_column})` for a relationship; `0.0` when the document shares no word with the query, `null` when the index has no document for that row |
 | `text_score(n, prop, query)` | Semantic similarity. A **list** `query` is scored directly as your query vector; a **string** `query` is embedded first (requires `set_embedder()`) |
 | `text_score(n, prop, query, metric)` | With explicit metric (`'cosine'`, `'dot_product'`, `'euclidean'`, `'poincare'`) |
@@ -1364,6 +1365,7 @@ covers declaring intervals and modelling history.
 |----------|-------------|
 | `date()` | Today's date in UTC (no-arg form) |
 | `date(str)` | Parse a date string to a DateTime (date-only) value: `'YYYY'`, `'YYYY-MM'`, `'YYYY-MM-DD'`, or ISO 8601 basic `'YYYYMMDD'`; anything else is null |
+| `date(datetime)` | The date part of a datetime value |
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
 | `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond})` | Build a zoneless datetime the same way; missing time fields are 0. A `timezone` key is refused |
 | `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). Unparseable input is NULL |
@@ -1386,6 +1388,7 @@ covers declaring intervals and modelling history.
 | `valid_during(entity, start, end)` | True if entity's declared interval overlaps `[start, end]` |
 | `valid_at(entity, date, 'from_field', 'to_field')` | True if entity is active at a point in time — closed, unless the type's declaration names the same two properties, whose convention then applies |
 | `valid_during(entity, start, end, 'from_field', 'to_field')` | True if entity's range overlaps the given interval, under the same rule |
+| `valid_instant()` | The instant the statement's valid-time context reads: a date, or the datetime it was written as; today (UTC) under the default context. An error under `FOR VALID_TIME ALL`, in a write statement, and where no context applies (a graph with no declaration and no prefix). It does not count as a `valid_at()` call: a statement using it still gets the default context |
 
 The entity may be a matched variable or a value — an item of `collect()`, `UNWIND`, `nodes(p)`,
 `relationships(p)` or a variable-length relationship list — and its type's declaration is read the same
@@ -4409,6 +4412,20 @@ graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_series(f.oil, '2015', '
 # Latest reading
 graph.cypher("MATCH (s:Sensor) RETURN s.title, ts_last(s.temperature) AS latest")
 ```
+
+### Windows relative to the statement's instant
+
+`valid_instant()` returns the instant of the statement's valid-time context, so a series can be read relative to it without repeating the date:
+
+```cypher
+FOR VALID_TIME AS OF date('2015-06-15')
+MATCH (p:Plant)
+RETURN ts_at(p.output, valid_instant()) AS this_month,
+       ts_sum(p.output, date_truncate(valid_instant(), 'year'), valid_instant()) AS year_to_date,
+       ts_sum(p.output, add_months(date_truncate(valid_instant(), 'month'), -11), valid_instant()) AS trailing_12m
+```
+
+With no prefix on a graph that declares validity the instant is today. Under `FOR VALID_TIME ALL`, in a write, and on a graph with no context, `valid_instant()` is an error. A datetime context returns a datetime; `date_truncate()` and `add_months()` take dates, so wrap it as `date(valid_instant())` first.
 
 ### Precision
 

@@ -79,6 +79,7 @@ impl<'a> CypherExecutor<'a> {
             // ── Temporal filtering functions ──────────────────────────────
             "valid_at" => self.eval_valid_at(args, row),
             "valid_during" => self.eval_valid_during(args, row),
+            "valid_instant" => self.eval_valid_instant(args),
             // Aggregate functions should not be evaluated per-row
             "count" | "sum" | "avg" | "min" | "max" | "collect" | "mean" | "std" | "stdev" => {
                 Err(format!(

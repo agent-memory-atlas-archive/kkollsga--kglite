@@ -261,6 +261,13 @@ pub struct CypherExecutor<'a> {
     /// Lowering refuses the scalar functions that read relationships
     /// directly (`degree()` and kin).
     graph_filter: OnceLock<std::sync::Arc<ElementFilter>>,
+    /// The instant of the statement's `FOR VALID_TIME AS OF` context, set
+    /// beside `graph_filter` but also when that filter removes nothing: what
+    /// `valid_instant()` returns. Unset without an AS OF context (none
+    /// applies, `FOR VALID_TIME ALL`, a write), and on the executors that
+    /// evaluate plan-time constants, so `valid_instant()` never folds into a
+    /// cached plan.
+    statement_instant: OnceLock<crate::graph::features::temporal::eval::Instant>,
     /// The valid slice the statement's routed algorithm procedures run on,
     /// built on the first one (see `view_call.rs`).
     view_slice: OnceLock<std::sync::Arc<crate::graph::features::temporal::view::ValidSlice>>,
@@ -304,6 +311,7 @@ impl<'a> CypherExecutor<'a> {
             _arena_guard: graph.graph.begin_query(),
             row_limit: None,
             graph_filter: OnceLock::new(),
+            statement_instant: OnceLock::new(),
             view_slice: OnceLock::new(),
         }
     }
@@ -461,6 +469,25 @@ impl<'a> CypherExecutor<'a> {
     #[inline]
     pub(super) fn graph_filter(&self) -> Option<&std::sync::Arc<ElementFilter>> {
         self.graph_filter.get()
+    }
+
+    /// The statement's AS OF instant, if it has one.
+    #[inline]
+    pub(super) fn statement_instant(
+        &self,
+    ) -> Option<crate::graph::features::temporal::eval::Instant> {
+        self.statement_instant.get().copied()
+    }
+
+    /// Carry the statement's AS OF instant into a nested executor.
+    pub(super) fn with_statement_instant(
+        self,
+        instant: Option<crate::graph::features::temporal::eval::Instant>,
+    ) -> Self {
+        if let Some(instant) = instant {
+            let _ = self.statement_instant.set(instant);
+        }
+        self
     }
 
     /// Run under `filter` — a nested executor inheriting its statement's.

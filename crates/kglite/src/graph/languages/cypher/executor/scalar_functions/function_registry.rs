@@ -854,6 +854,13 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         signature: "valid_during(entity :: NODE | RELATIONSHIP, start :: DATE | LOCAL DATETIME | STRING, end :: DATE | LOCAL DATETIME | STRING [, fromField :: STRING, toField :: STRING]) :: BOOLEAN",
     },
     FunctionSpec {
+        name: "valid_instant",
+        aliases: &[],
+        category: "utility",
+        description: "The instant the statement's valid-time context reads: a DATE (today under the default context) or a DATETIME as the context was written; an error under FOR VALID_TIME ALL, in a write, and where no context applies",
+        signature: "valid_instant() :: DATE | LOCAL DATETIME",
+    },
+    FunctionSpec {
         name: "parse_json",
         aliases: &["from_json"],
         category: "utility",

@@ -166,6 +166,49 @@ fn a_doubled_context_is_a_syntax_error() {
     assert!(message.contains("this one has two"), "{message}");
 }
 
+/// `valid_instant()` is the statement's own instant through the C read path:
+/// the written date under an AS OF context and today under the default; an
+/// error under `FOR VALID_TIME ALL`.
+#[test]
+fn valid_instant_is_the_statements_instant() {
+    let session = session_after(&WELLS);
+    let (rows, _) = read(
+        session,
+        "FOR VALID_TIME AS OF date('2003-06-30') MATCH (w:Well {id: 1}) \
+         RETURN valid_instant() AS v",
+    );
+    assert_eq!(rows[0]["v"], "2003-06-30");
+    let (rows, _) = read(
+        session,
+        "MATCH (w:Well {id: 2}) RETURN valid_instant() = date() AS v",
+    );
+    assert_eq!(rows[0]["v"], true);
+
+    let query =
+        CString::new("FOR VALID_TIME ALL MATCH (w:Well) RETURN valid_instant() AS v").unwrap();
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    let mut error: *const c_char = std::ptr::null();
+    let rc = unsafe {
+        kglite_session_execute_read(
+            session,
+            query.as_ptr(),
+            std::ptr::null(),
+            &mut result,
+            &mut error,
+        )
+    };
+    assert_ne!(rc, KgliteStatusCode::Ok);
+    let message = unsafe { CStr::from_ptr(error) }
+        .to_str()
+        .unwrap()
+        .to_string();
+    unsafe {
+        kglite_free_string(error);
+        kglite_session_free(session);
+    }
+    assert!(message.contains("valid_instant"), "{message}");
+}
+
 const NETWORK: [&str; 3] = [
     "CREATE (s1:Stop {id: 1}), (s2:Stop {id: 2, vf: date('2000-01-01'), vt: date('2005-01-01')}), \
      (s3:Stop {id: 3}), (s4:Stop {id: 4}), (s5:Stop {id: 5}), \

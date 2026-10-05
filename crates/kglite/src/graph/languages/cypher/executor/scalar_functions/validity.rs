@@ -162,6 +162,25 @@ enum Subject<'s> {
 }
 
 impl CypherExecutor<'_> {
+    /// `valid_instant()`: the instant the statement's `FOR VALID_TIME AS OF`
+    /// context reads, as a date or a datetime as written.
+    pub(super) fn eval_valid_instant(&self, args: &[Expression]) -> Result<Value, String> {
+        if !args.is_empty() {
+            return Err("valid_instant() takes no arguments".into());
+        }
+        match self.statement_instant() {
+            Some(Instant::Date(date)) => Ok(Value::DateTime(date)),
+            Some(Instant::Timestamp(ts)) => Ok(Value::Timestamp(ts)),
+            None => Err(
+                "valid_instant() needs a statement with a valid-time instant: \
+                        read under FOR VALID_TIME AS OF <date> (or pass valid_at=<date>) \
+                        or on a graph whose default context applies. FOR VALID_TIME ALL, \
+                        a write statement and a statement with no context have none"
+                    .into(),
+            ),
+        }
+    }
+
     /// `valid_at(entity, date)` or `valid_at(entity, date, 'from', 'to')`.
     pub(super) fn eval_valid_at(
         &self,

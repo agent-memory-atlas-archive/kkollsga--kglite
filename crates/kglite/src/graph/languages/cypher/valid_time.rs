@@ -14,7 +14,7 @@
 //! A statement lowering refuses keeps its context with the refusal on it,
 //! raised before execution and before EXPLAIN renders a plan (see
 //! [`check_executable`]). One that lowers executes under the filter
-//! [`execution_filter`] resolves.
+//! [`execution_scope`] resolves.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -398,46 +398,62 @@ pub(crate) fn check_executable(query: &CypherQuery) -> Result<(), String> {
     }
 }
 
-/// The filter `query` executes under: the template of every scope joined
-/// with the instant this execution resolves, from the caller's parameters,
-/// against the graph's endpoint indexes. `None` without a context, and when
-/// the filter removes nothing at the instant (every target timeless).
-pub(crate) fn execution_filter(
+/// What one execution of a statement resolves from its context.
+#[derive(Default)]
+pub(crate) struct ExecutionScope {
+    /// The template of every scope joined with the instant, against the
+    /// graph's endpoint indexes. `None` when the filter removes nothing at
+    /// the instant (every target timeless).
+    pub filter: Option<Arc<ElementFilter>>,
+    /// The `AS OF` instant, from the caller's parameters. `None` without a
+    /// context and under `FOR VALID_TIME ALL`.
+    pub instant: Option<eval::Instant>,
+}
+
+/// The scope `query` executes under: empty without a context.
+pub(crate) fn execution_scope(
     query: &CypherQuery,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-) -> Result<Option<Arc<ElementFilter>>, String> {
+) -> Result<ExecutionScope, String> {
     let Some(context) = &query.context else {
-        return Ok(None);
+        return Ok(ExecutionScope::default());
     };
     if is_all(context) {
-        return Ok(None);
+        return Ok(ExecutionScope::default());
     }
-    resolve_execution_filter(query, context, graph, params)
+    resolve_execution_scope(query, context, graph, params)
 }
 
 #[cold]
 #[inline(never)]
-fn resolve_execution_filter(
+fn resolve_execution_scope(
     query: &CypherQuery,
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
-) -> Result<Option<Arc<ElementFilter>>, String> {
+) -> Result<ExecutionScope, String> {
     // Resolved before the template is looked at, so an instant that does not
     // resolve is raised whatever the statement reaches.
     let instant = resolve_instant(context, graph, params)?;
     let merged = merged_of(query, context);
+    let scope = ExecutionScope {
+        filter: None,
+        instant: Some(instant),
+    };
     if merged.template.is_empty() {
-        return Ok(None);
+        return Ok(scope);
     }
     let resolution = temporal::endpoint_index::resolve_shared(graph, &merged.template, instant);
-    Ok(ElementFilter::from_resolved(
-        &merged.template,
-        ValidTimeSelector::AsOf(instant),
-        &resolution.resolved,
-    )
-    .map(Arc::new))
+    Ok(ExecutionScope {
+        filter: ElementFilter::from_resolved(
+            &merged.template,
+            ValidTimeSelector::AsOf(instant),
+            &resolution.resolved,
+        )
+        .map(Arc::new),
+        ..scope
+    })
 }
 
 /// [`merge_scope_templates`] over `query`, named for the echo.

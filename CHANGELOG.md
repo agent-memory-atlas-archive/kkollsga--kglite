@@ -11,6 +11,17 @@ before upgrading.
 
 ### Added
 
+- `valid_instant()`: the instant of the statement's valid-time context, as a
+  date for a date context and a datetime for a datetime context; today (UTC)
+  under the default context, and the stored date under a graph-stored default.
+  It lets a series window follow the statement's date, for example
+  `ts_sum(p.ch, date_truncate(valid_instant(), 'year'), valid_instant())` for
+  year-to-date. It is an error under `FOR VALID_TIME ALL`, in a write statement
+  and where no context applies, and it does not count as a `valid_at()` call, so
+  the statement still gets the default context. `date()` also accepts a
+  datetime (its date part), so `date(valid_instant())` works in a datetime
+  context.
+
 - A graph can store its own valid-time default. A blueprint's
   `settings.valid_time_default` (`all`, `today` or a `YYYY-MM-DD` date) and
   `set_valid_time_default(value, persist=True)` write it into the `.kgl` file;

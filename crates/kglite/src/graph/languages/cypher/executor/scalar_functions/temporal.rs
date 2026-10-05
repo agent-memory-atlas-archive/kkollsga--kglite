@@ -272,10 +272,11 @@ impl CypherExecutor<'_> {
                 }
             }
             Value::DateTime(_) => Ok(val),
+            Value::Timestamp(t) => Ok(Value::DateTime(t.date())),
             Value::Map(map) => temporal_from_map("date", &map),
             Value::Null => Ok(Value::Null),
             _ => Err(format!(
-                "date() argument must be a string or a map, got {:?}",
+                "date() argument must be a string, a date, a datetime or a map, got {:?}",
                 val
             )),
         }

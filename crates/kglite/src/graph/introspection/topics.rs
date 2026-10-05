@@ -829,6 +829,7 @@ pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("      <fn name=\"valid_at(entity, date)\">On a declared type (db.temporal.declare, a loader's validFrom/validTo): true if the entity is valid at date under the declared bounds and convention — half_open treats the to day as no longer valid. Raises on an undeclared type. A null entity gives null.</fn>\n");
     xml.push_str("      <fn name=\"valid_at(entity, date, 'from_field', 'to_field')\">True if entity.from_field &lt;= date &lt;= entity.to_field (closed); when the type's declaration names the same two properties, its convention applies instead. NULL from_field = valid since beginning. NULL to_field = still valid.</fn>\n");
     xml.push_str("      <fn name=\"valid_during(entity, start, end[, 'from_field', 'to_field'])\">True if entity's validity period overlaps [start, end], under the same bounds and convention rule as valid_at. NULL = open-ended.</fn>\n");
+    xml.push_str("      <fn name=\"valid_instant()\">The instant the statement's valid-time context reads (a date, or the datetime it was written as; today under the default context). Errors under FOR VALID_TIME ALL, in a write and where no context applies. Feeds date arithmetic and ts_* windows: ts_sum(p.ch, date_truncate(valid_instant(), 'year'), valid_instant()).</fn>\n");
     xml.push_str("    </functions>\n");
     xml.push_str("    <examples>\n");
     xml.push_str("      <ex desc=\"declared type\">MATCH (t:Team) WHERE valid_at(t, date('2010-01-01')) RETURN count(*)</ex>\n");

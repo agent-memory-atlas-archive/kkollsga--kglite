@@ -44,7 +44,8 @@ impl CypherExecutor<'_> {
             .with_streaming(self.streaming)
             .with_parallel(self.parallel)
             .with_cancel(self.cancel)
-            .with_budget(self.budget.clone());
+            .with_budget(self.budget.clone())
+            .with_statement_instant(self.statement_instant());
         let rows = child.execute_resolved_call_once(proc_name, clause, params);
         self.absorb_warnings(&child);
         let mut rows = rows?;
