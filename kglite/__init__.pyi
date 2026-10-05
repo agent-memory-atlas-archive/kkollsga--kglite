@@ -4044,6 +4044,10 @@ class KnowledgeGraph:
             :ref:`presentation-dictionary-keys`.
 
         Note:
+            With ``store_as``, the write lands on this selection's own copy of
+            the graph. The graph ``select()`` was called on is unchanged: a
+            selection forks away from it on its first write.
+
             ``store_as`` writes node properties, so on a graph opened with
             ``durable=`` it must be reached through the handle
             :func:`kglite.open` returned. A selection is itself a derived
@@ -4280,11 +4284,14 @@ class KnowledgeGraph:
                     properties={'B': ['score']})
 
         Note:
-            Not available on a graph opened with ``durable=``. The write happens
-            on the derived handle a selection produced, which shares the storage
-            but not the write-ahead log, so it is refused rather than left
-            unlogged — use :meth:`cypher`, which expresses the same write and is
-            logged. See :func:`kglite.open`.
+            The write lands on the selection's own copy of the graph and on the
+            returned graph. The graph ``select()`` was called on is unchanged:
+            a selection forks away from it on its first write. Use
+            :meth:`cypher` to change a graph in place. Not available on a graph
+            opened with ``durable=``: the selection's copy cannot share the
+            write-ahead log, so the write is refused rather than left unlogged
+            — use :meth:`cypher`, which expresses the same write and is logged.
+            See :func:`kglite.open`.
         """
         ...
 
@@ -4353,11 +4360,14 @@ class KnowledgeGraph:
                 }})
 
         Note:
-            Not available on a graph opened with ``durable=``. The write happens
-            on the derived handle a selection produced, which shares the storage
-            but not the write-ahead log, so it is refused rather than left
-            unlogged — use :meth:`cypher`, which expresses the same write and is
-            logged. See :func:`kglite.open`.
+            The write lands on the selection's own copy of the graph and on the
+            returned graph. The graph ``select()`` was called on is unchanged:
+            a selection forks away from it on its first write. Use
+            :meth:`cypher` to change a graph in place. Not available on a graph
+            opened with ``durable=``: the selection's copy cannot share the
+            write-ahead log, so the write is refused rather than left unlogged
+            — use :meth:`cypher`, which expresses the same write and is logged.
+            See :func:`kglite.open`.
         """
         ...
 
@@ -4387,11 +4397,13 @@ class KnowledgeGraph:
             if ``store_as`` is set.
 
         Note:
-            Not available on a graph opened with ``durable=``. ``store_as=`` writes, and the write happens
-            on the derived handle a selection produced, which shares the storage
-            but not the write-ahead log, so it is refused rather than left
-            unlogged — use :meth:`cypher`, which expresses the same write and is
-            logged. See :func:`kglite.open`.
+            With ``store_as=``, the write lands on the selection's own copy of
+            the graph and on the returned graph. The graph ``select()`` was
+            called on is unchanged: a selection forks away from it on its first
+            write. Not available on a graph opened with ``durable=``: the
+            selection's copy cannot share the write-ahead log, so the write is
+            refused rather than left unlogged — use :meth:`cypher`, which
+            expresses the same write and is logged. See :func:`kglite.open`.
         """
         ...
 
@@ -4444,10 +4456,13 @@ class KnowledgeGraph:
             :ref:`presentation-dictionary-keys`.
 
         Note:
-            ``store_as=`` writes, and the write happens on the derived handle a
-            selection produced, which shares the storage but not the write-ahead
-            log — so it is refused on a graph opened with ``durable=`` rather
-            than left unlogged. Use :meth:`cypher` there; see :func:`kglite.open`.
+            With ``store_as=``, the write lands on the selection's own copy of
+            the graph and on the returned graph. The graph ``select()`` was
+            called on is unchanged: a selection forks away from it on its first
+            write. Not available on a graph opened with ``durable=``: the
+            selection's copy cannot share the write-ahead log, so the write is
+            refused rather than left unlogged — use :meth:`cypher`, which
+            expresses the same write and is logged. See :func:`kglite.open`.
         """
         ...
 
@@ -4476,10 +4491,13 @@ class KnowledgeGraph:
             :ref:`presentation-dictionary-keys`.
 
         Note:
-            ``store_as=`` writes, and the write happens on the derived handle a
-            selection produced, which shares the storage but not the write-ahead
-            log — so it is refused on a graph opened with ``durable=`` rather
-            than left unlogged. Use :meth:`cypher` there; see :func:`kglite.open`.
+            With ``store_as=``, the write lands on the selection's own copy of
+            the graph and on the returned graph. The graph ``select()`` was
+            called on is unchanged: a selection forks away from it on its first
+            write. Not available on a graph opened with ``durable=``: the
+            selection's copy cannot share the write-ahead log, so the write is
+            refused rather than left unlogged — use :meth:`cypher`, which
+            expresses the same write and is logged. See :func:`kglite.open`.
         """
         ...
 
