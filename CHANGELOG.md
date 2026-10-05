@@ -28,6 +28,11 @@ before upgrading.
 
 ### Fixed
 
+- A filtered `MATCH … WHERE … RETURN … LIMIT k` no longer holds every match
+  before stopping. Returning 12,000 rows of a 1M-node type held 330–670 MB on
+  memory and disk graphs; it now holds under 1 MB, and the query takes 6–12 ms
+  instead of 50–110 ms. A `WHERE` the pattern already enforces lets the scan
+  stop at the limit; any other `WHERE` reads the matches a slice at a time.
 - A node created without a title is now titled `<Label>_<id>`. The title came
   from the storage slot count, so after deletes two nodes could share a
   title, and memory, mapped and disk graphs titled the same nodes differently.

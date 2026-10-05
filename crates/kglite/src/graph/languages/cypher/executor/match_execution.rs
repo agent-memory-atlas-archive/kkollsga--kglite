@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::graph::core::membership::MembershipSet;
+use crate::graph::core::pattern_matching::PatternMatch;
 
 // The fused MATCH+WHERE row loop below stays **sequential, on measurement.**
 //
@@ -35,6 +36,107 @@ use crate::graph::core::membership::MembershipSet;
 // sequential error message (which names the count at which the cap was
 // crossed, an offset a partition cannot know); and `limit_hint` has no
 // partitioned stopping point.
+
+/// Turns a first pattern's matches into rows: the fused WHERE, the
+/// `distinct_node_hint` dedup and the limit, in the order the materialized
+/// route always applied them. Fed one vector or one chunk at a time, so the
+/// chunked route keeps exactly the rows the whole-vector route would.
+struct MatchRowCollector<'c> {
+    clause: &'c MatchClause,
+    inline_where: Option<&'c Predicate>,
+    limit_hint: Option<usize>,
+    matcher_deduped: bool,
+    bind_paths: Option<bool>,
+    seen: rustc_hash::FxHashSet<petgraph::graph::NodeIndex>,
+    rows: Vec<ResultRow>,
+    work: usize,
+}
+
+impl<'c> MatchRowCollector<'c> {
+    fn new(
+        clause: &'c MatchClause,
+        inline_where: Option<&'c Predicate>,
+        limit_hint: Option<usize>,
+        capacity: usize,
+        matcher_deduped: bool,
+    ) -> Self {
+        Self {
+            clause,
+            inline_where,
+            limit_hint,
+            matcher_deduped,
+            bind_paths: None,
+            seen: Default::default(),
+            rows: Vec::with_capacity(capacity),
+            work: 0,
+        }
+    }
+
+    /// Fold `matches` in. `Ok(None)`: a matcher-deduplicated representative
+    /// failed the predicate, so this pass cannot answer the clause.
+    /// `Ok(Some(true))`: the limit is filled.
+    //
+    // Every unit here is a row this loop builds, filters and retains, and
+    // the enclosing matcher has already finished: nothing further down
+    // polls until the whole vector is converted. A 1.9M-match MATCH spent
+    // that entire conversion past its deadline before this poll existed
+    // (the kglite-visual OOM), so the loop that charges `reserve_rows`
+    // charges the interrupt at the same stride.
+    fn take_all(
+        &mut self,
+        executor: &CypherExecutor<'_>,
+        matches: Vec<PatternMatch>,
+    ) -> Result<Option<bool>, String> {
+        let bind_paths = *self.bind_paths.get_or_insert_with(|| {
+            CypherExecutor::binds_paths_before_where(self.clause, self.inline_where)
+        });
+        for m in matches {
+            executor.check_interrupt_periodic(self.work)?;
+            self.work = self.work.saturating_add(1);
+            let dedup_idx = self
+                .clause
+                .distinct_node_hint
+                .as_ref()
+                .and_then(|hint| match_clause::match_node_index(&m, &hint.var));
+            if let Some(idx) = dedup_idx {
+                if self.seen.contains(&idx) {
+                    continue;
+                }
+            }
+            let mut row = executor.pattern_match_to_row(m);
+            if bind_paths {
+                executor.bind_row_paths(self.clause, &mut row);
+            }
+            // Residual WHERE fused into this MATCH: filter BEFORE the dedup
+            // insert so the kept representative is a row that passed the
+            // predicate (filter-then-dedup).
+            if let Some(pred) = self.inline_where {
+                if !executor.evaluate_predicate(pred, &row)? {
+                    if self.matcher_deduped {
+                        // The matcher already discarded this target's other
+                        // matches; one of them may have passed. This pass
+                        // cannot answer the clause.
+                        return Ok(None);
+                    }
+                    continue;
+                }
+            }
+            if let Some(idx) = dedup_idx {
+                self.seen.insert(idx);
+            }
+            executor.budget.reserve_rows(self.rows.len(), 1, "MATCH")?;
+            self.rows.push(row);
+            // Stop after limit matching rows (not candidates)
+            if self
+                .limit_hint
+                .is_some_and(|limit| self.rows.len() >= limit)
+            {
+                return Ok(Some(true));
+            }
+        }
+        Ok(Some(false))
+    }
+}
 
 /// The per-clause invariants of one subsequent-MATCH execution: everything
 /// [`CypherExecutor::expand_driving_row`] needs that is the same for every
@@ -223,6 +325,26 @@ impl<'a> CypherExecutor<'a> {
             .pattern_executor(pattern_limit, anchors.as_ref())
             .set_match_ceiling(self.budget.match_ceiling("MATCH expansion"))
             .set_distinct_target(matcher_distinct_target);
+        // A residual WHERE under a LIMIT: the matcher cannot be capped (it
+        // does not know how many matches the predicate rejects), so drain it a
+        // slice of start nodes at a time and stop once the limit is filled.
+        // Materialising every match first held ~670 MB to return 12 000 rows
+        // of a 1M-node type. Matcher-level dedup is whole-pass (its retry
+        // cannot take back rows), so a licensed dedup keeps the whole route.
+        if let (Some(_), Some(limit), false) = (inline_where, limit_hint, matcher_deduped) {
+            if let Some(mut chunker) = executor.begin_chunks(pattern)? {
+                let mut rows = MatchRowCollector::new(clause, inline_where, limit_hint, 0, false);
+                while let Some(chunk) = executor.next_chunk(pattern, &mut chunker)? {
+                    self.budget.check_work(chunk.len(), "MATCH expansion")?;
+                    if rows.take_all(self, chunk)?.is_some_and(|full| full) {
+                        break;
+                    }
+                }
+                let mut rows = rows.rows;
+                rows.truncate(limit);
+                return Ok(Some(rows));
+            }
+        }
         let matches = executor.execute(pattern)?;
         self.budget.check_work(matches.len(), "MATCH expansion")?;
 
@@ -234,75 +356,27 @@ impl<'a> CypherExecutor<'a> {
         // on a 19k-row k-hop that realloc, not the rows, was the peak.
         let exact_rows = (inline_where.is_none() || matcher_deduped)
             .then(|| limit_hint.map_or(matches.len(), |l| l.min(matches.len())));
-        let mut rows: Vec<ResultRow> = Vec::with_capacity(exact_rows.unwrap_or(0));
+        let mut rows = MatchRowCollector::new(
+            clause,
+            inline_where,
+            limit_hint,
+            exact_rows.unwrap_or(0),
+            matcher_deduped,
+        );
         // When distinct_node_hint is set, pre-dedup by NodeIndex to avoid
         // creating ResultRows for matches that would be DISTINCT-removed later.
-        let mut seen: rustc_hash::FxHashSet<petgraph::graph::NodeIndex> =
-            rustc_hash::FxHashSet::with_capacity_and_hasher(
-                if clause.distinct_node_hint.is_some() {
-                    matches.len().min(10000)
-                } else {
-                    0
-                },
-                Default::default(),
-            );
-        // Every unit here is a row this loop builds, filters and retains, and
-        // the enclosing matcher has already finished: nothing further down
-        // polls until the whole vector is converted. A 1.9M-match MATCH spent
-        // that entire conversion past its deadline before this poll existed
-        // (the kglite-visual OOM), so the loop that charges `reserve_rows`
-        // charges the interrupt at the same stride.
-        let mut work = 0usize;
-        let bind_paths = Self::binds_paths_before_where(clause, inline_where);
-        for m in matches {
-            self.check_interrupt_periodic(work)?;
-            work = work.saturating_add(1);
-            let dedup_idx = clause
-                .distinct_node_hint
-                .as_ref()
-                .and_then(|hint| match_clause::match_node_index(&m, &hint.var));
-            if let Some(idx) = dedup_idx {
-                if seen.contains(&idx) {
-                    continue;
-                }
-            }
-            let mut row = self.pattern_match_to_row(m);
-            if bind_paths {
-                self.bind_row_paths(clause, &mut row);
-            }
-            // Residual WHERE fused into this MATCH: filter BEFORE the dedup
-            // insert so the kept representative is a row that passed the
-            // predicate (filter-then-dedup).
-            if let Some(pred) = inline_where {
-                match self.evaluate_predicate(pred, &row) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        if matcher_deduped {
-                            // The matcher already discarded this target's other
-                            // matches; one of them may have passed. This pass
-                            // cannot answer the clause.
-                            return Ok(None);
-                        }
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            if let Some(idx) = dedup_idx {
-                seen.insert(idx);
-            }
-            self.budget.reserve_rows(rows.len(), 1, "MATCH")?;
-            rows.push(row);
-            // Stop after limit matching rows (not candidates)
-            if let Some(limit) = limit_hint {
-                if rows.len() >= limit {
-                    break;
-                }
-            }
+        rows.seen.reserve(if clause.distinct_node_hint.is_some() {
+            matches.len().min(10000)
+        } else {
+            0
+        });
+        if rows.take_all(self, matches)?.is_none() {
+            return Ok(None);
         }
-        // Redundant with the in-loop break above, which caps `rows` at
-        // `limit_hint` — except for `limit_hint == 0`, where that break only
-        // fires after the first push.
+        let mut rows = rows.rows;
+        // Redundant with the in-loop break, which caps `rows` at `limit_hint` —
+        // except for `limit_hint == 0`, where that break only fires after the
+        // first push.
         if inline_where.is_none() {
             if let Some(limit) = limit_hint {
                 rows.truncate(limit);

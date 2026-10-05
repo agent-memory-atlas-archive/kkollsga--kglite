@@ -3102,6 +3102,44 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     ("limit_simple", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 5", None),
     ("limit_one", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 1", None),
     ("limit_zero", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 0", None),
+    # A filtered LIMIT: a subsumed WHERE is dropped so the scan stops at the
+    # limit; a residual one drains the matcher a slice of start nodes at a time.
+    (
+        "limit_where_subsumed_eq",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.city = 'Bergen' RETURN p.name AS n LIMIT 3",
+        None,
+    ),
+    (
+        "limit_where_subsumed_range",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.age > 25 AND p.age < 38 RETURN p.name AS n LIMIT 4",
+        None,
+    ),
+    (
+        "limit_where_residual",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.email IS NULL RETURN p.name AS n LIMIT 4",
+        None,
+    ),
+    (
+        "limit_where_mixed",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.city = 'Stavanger' AND p.email IS NOT NULL RETURN p.name AS n LIMIT 2",
+        None,
+    ),
+    (
+        "limit_where_residual_hop",
+        "social_graph",
+        "MATCH (p:Person)-[k:KNOWS]->(q:Person) WHERE q.age > p.age + 1 RETURN p.name AS a, q.name AS b LIMIT 7",
+        None,
+    ),
+    (
+        "limit_where_residual_late",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.age + 0 > 38 RETURN p.name AS n LIMIT 5",
+        None,
+    ),
     # ── 0.8.27 bug: multi-MATCH + WHERE on late-bound var + LIMIT ──
     (
         "multi_match_where_limit",

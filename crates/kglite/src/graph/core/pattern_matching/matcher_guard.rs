@@ -37,12 +37,17 @@ impl PatternExecutor<'_> {
         pattern: &NodePattern,
         cap: Option<usize>,
     ) -> Result<Vec<NodeIndex>, String> {
-        let candidates = self.find_matching_nodes_unguarded(pattern)?;
-        Ok(match &self.graph_filter {
-            Some(filter) if pattern_may_hide(filter, self.graph, pattern) => {
-                guard_candidates(filter, self.graph, candidates, cap)
-            }
-            _ => candidates,
+        let hides = self
+            .graph_filter
+            .as_ref()
+            .filter(|filter| pattern_may_hide(filter, self.graph, pattern));
+        // A hiding filter drops candidates after the scan, so the scan itself
+        // cannot stop at the cap.
+        let candidates =
+            self.find_matching_nodes_unguarded(pattern, cap.filter(|_| hides.is_none()))?;
+        Ok(match hides {
+            Some(filter) => guard_candidates(filter, self.graph, candidates, cap),
+            None => candidates,
         })
     }
 

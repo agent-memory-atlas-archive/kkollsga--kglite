@@ -649,9 +649,13 @@ impl<'a> PatternExecutor<'a> {
         self.find_matching_nodes(pattern)
     }
 
+    /// `cap`: the caller keeps only the first `cap` nodes, so the type scan
+    /// stops once it has found one more than that (the extra one tells a capped
+    /// caller that more exist). The other routes return their full answer.
     fn find_matching_nodes_unguarded(
         &self,
         pattern: &NodePattern,
+        cap: Option<usize>,
     ) -> Result<Vec<NodeIndex>, String> {
         let extra_keys: Vec<InternedKey> = pattern
             .extra_labels
@@ -763,7 +767,26 @@ impl<'a> PatternExecutor<'a> {
             if pattern.properties.is_none() && extra_keys.is_empty() {
                 return Ok(candidates);
             }
-            self.filter_node_candidates(&candidates, pattern.properties.as_ref(), &extra_keys)
+            match cap {
+                // A capped scan runs in order and stops early: without the stop
+                // a filtered `LIMIT` walked, and on disk materialised, every
+                // node of the type to keep a handful.
+                Some(cap) => {
+                    let interrupt = ParallelInterrupt::new(|| self.check_scan_deadline().err());
+                    self.filter_candidate_partition(
+                        &candidates,
+                        pattern.properties.as_ref(),
+                        &extra_keys,
+                        &interrupt,
+                        Some(cap.saturating_add(1)),
+                    )
+                }
+                None => self.filter_node_candidates(
+                    &candidates,
+                    pattern.properties.as_ref(),
+                    &extra_keys,
+                ),
+            }
         } else if let Some(ref props) = pattern.properties {
             // Fast path: untyped node with {id: X} — cross-type id lookup, one
             // O(1) id-index probe per type, so O(types): fast even at 132K types.
@@ -844,7 +867,7 @@ impl<'a> PatternExecutor<'a> {
             return self.filter_candidates_parallel(candidates, props, extra_keys);
         }
         let interrupt = ParallelInterrupt::new(|| self.check_scan_deadline().err());
-        self.filter_candidate_partition(candidates, props, extra_keys, &interrupt)
+        self.filter_candidate_partition(candidates, props, extra_keys, &interrupt, None)
     }
 
     /// Whether the candidate scan may fan out.
@@ -948,8 +971,8 @@ impl<'a> PatternExecutor<'a> {
                     // back into the measuring thread below. Compiles to
                     // nothing outside `cfg(test)`.
                     let before = column_filter::local_rows_filtered();
-                    let kept =
-                        self.filter_candidate_partition(chunk, props, extra_keys, &interrupt)?;
+                    let kept = self
+                        .filter_candidate_partition(chunk, props, extra_keys, &interrupt, None)?;
                     Ok((kept, column_filter::local_rows_filtered() - before))
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -973,6 +996,7 @@ impl<'a> PatternExecutor<'a> {
         props: Option<&'p HashMap<String, PropertyMatcher>>,
         extra_keys: &[InternedKey],
         interrupt: &ParallelInterrupt<F>,
+        keep: Option<usize>,
     ) -> Result<Vec<NodeIndex>, String>
     where
         F: Fn() -> Option<String> + Sync,
@@ -983,6 +1007,9 @@ impl<'a> PatternExecutor<'a> {
         let scoped_materialization = self.graph.graph.is_disk();
         for (i, &idx) in candidates.iter().enumerate() {
             interrupt.check(i)?;
+            if keep.is_some_and(|keep| out.len() >= keep) {
+                break;
+            }
             if !extra_keys.is_empty()
                 && !extra_keys
                     .iter()

@@ -353,7 +353,11 @@ pub(super) fn push_limit_into_aggregate(query: &mut CypherQuery, _graph: &DirGra
 /// per-row `max_matches` bound and can return fewer rows than LIMIT requests
 /// (see the safety notes in the body); only the provably-safe shapes are
 /// rewritten.
-pub(super) fn push_limit_into_match(query: &mut CypherQuery, _graph: &DirGraph) {
+pub(super) fn push_limit_into_match(
+    query: &mut CypherQuery,
+    _graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) {
     if query.clauses.len() < 3 {
         return;
     }
@@ -461,7 +465,34 @@ pub(super) fn push_limit_into_match(query: &mut CypherQuery, _graph: &DirGraph) 
             m.limit_hint = Some(limit);
         }
         query.clauses.remove(limit_offset);
+        // A surviving WHERE keeps the matcher uncapped (the executor cannot
+        // know how many candidates it rejects), so a filtered LIMIT used to
+        // materialise every match first — ~670 MB for 12 000 rows of a
+        // 1M-node type. When it is only the pushdown's safety net over a
+        // single-node pattern, `find_matching_nodes` applies every term of it
+        // and the net can go: the matcher then stops at the limit.
+        if has_where && single_node_where_subsumed(&query.clauses[i], &query.clauses[i + 1], params)
+        {
+            query.clauses.remove(i + 1);
+        }
     }
+}
+
+/// Whether `where_clause` is the pushdown's safety net over a single-node
+/// `match_clause`: the node scan applies every term it holds, so dropping it
+/// changes no answer. Patterns with edges keep it — their matcher routes are
+/// many, and only the node scan is proven to apply the replayed matchers.
+fn single_node_where_subsumed(
+    match_clause: &Clause,
+    where_clause: &Clause,
+    params: &HashMap<String, Value>,
+) -> bool {
+    let (Clause::Match(m), Clause::Where(w)) = (match_clause, where_clause) else {
+        return false;
+    };
+    m.patterns.len() == 1
+        && matches!(m.patterns[0].elements.as_slice(), [PatternElement::Node(_)])
+        && super::index_selection::where_subsumed_by_pattern(&w.predicate, &m.patterns, params)
 }
 
 /// The single node variable an *aggregate-only* projection reads, when every

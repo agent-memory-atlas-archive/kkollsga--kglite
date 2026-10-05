@@ -555,7 +555,7 @@ fn pass_reorder_match_patterns(query: &mut CypherQuery, ctx: &PassCtx) {
 /// queries (multi-MATCH + WHERE on a late-bound var silently drops
 /// rows).
 fn pass_push_limit_into_match(query: &mut CypherQuery, ctx: &PassCtx) {
-    push_limit_into_match(query, ctx.graph)
+    push_limit_into_match(query, ctx.graph, ctx.params)
 }
 
 /// **Pass:** `push_limit_into_aggregate` — Stamp `group_limit_hint`

@@ -1599,6 +1599,32 @@ mod subsumption_tests {
         );
     }
 
+    // ── a pushed LIMIT over a single-node pattern ───────────────────────
+
+    #[test]
+    fn a_limit_drops_the_safety_net_over_a_single_node_scan() {
+        // The net kept the matcher uncapped, so the filtered LIMIT
+        // materialised every match before stopping.
+        for query in [
+            "MATCH (n:Person) WHERE n.city = 'Oslo' RETURN n.name LIMIT 5",
+            "MATCH (n:Person) WHERE n.age > 30 AND n.age <= 40 RETURN n LIMIT 5",
+        ] {
+            assert!(!has_where_clause(query), "`{query}` keeps its WHERE");
+        }
+    }
+
+    #[test]
+    fn a_limit_keeps_a_residual_or_edge_pattern_where() {
+        for query in [
+            "MATCH (n:Person) WHERE n.email IS NULL RETURN n LIMIT 5",
+            "MATCH (n:Person) WHERE n.name CONTAINS 'a' RETURN n LIMIT 5",
+            "MATCH (n:Person)-[:KNOWS]->(m) WHERE n.city = 'Oslo' RETURN m LIMIT 5",
+            "MATCH (n:Person) WHERE n.city = 'Oslo' RETURN n.name",
+        ] {
+            assert!(has_where_clause(query), "`{query}` lost its WHERE");
+        }
+    }
+
     // ── the subsumption predicate itself ────────────────────────────────
 
     #[test]
