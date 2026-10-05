@@ -78,7 +78,8 @@ before upgrading.
 - `vacuum()` while a view is held on a graph with deleted nodes no longer
   panics with `take_heap_graph on a forked backend`.
 - A write transaction after deletes no longer copies the whole graph: 17 ms to
-  0.9 ms per transaction at 1M nodes with 2,000 scattered deletes.
+  0.03 ms per transaction at 1M nodes with 2,000 scattered deletes (together
+  with the column change below).
 - Running the same statements on two graphs now gives both the same node and
   relationship slots, so `MATCH` without `ORDER BY` returns rows in the same
   order. A `DELETE` of several nodes or relationships used to free their slots
@@ -86,23 +87,23 @@ before upgrading.
 - Disk graphs no longer load a relationship's properties to read its type.
   Type-filtered traversals, `EXISTS`, the rule procedures, `describe()` and
   `neighbors_schema()` did, which cost memory and time per edge. Measured on
-  a disk graph of 1M nodes and 6M edges: time is the best run (7 for
-  queries, 2 for `describe()` and `neighbors_schema()`), memory the peak
-  growth.
+  a disk graph of 1M nodes and 6M edges, release builds, range of two runs;
+  memory is the peak growth where measured.
 
   | Read | Before | After |
   | --- | --- | --- |
-  | two-hop count | 987 ms, +743 MB | 200 ms, +0 MB |
-  | hop count with a peer filter | 129 ms, +84 MB | 47 ms, +0 MB |
-  | `orphan_node` with `link_type` | 1.73 s, +1.17 GB | 0.25 s, +0.39 GB |
-  | `cardinality_violation` | 637 ms, +1.33 GB | 146 ms, +0.54 GB |
-  | `describe()` | 2.2 s, +2.3 GB | 0.3 s, +0.07 GB |
-  | `neighbors_schema()` | 4.8 s, +2.5 GB | 0.9 s, +0 MB |
+  | two-hop count | 939–952 ms, +743 MB | 131–195 ms, +0 MB |
+  | hop count with a peer filter | 128–135 ms | 49 ms |
+  | `EXISTS` | 391–447 ms | 201–211 ms |
+  | `orphan_node` with `link_type` | 1.56–1.71 s | 266–285 ms |
+  | `cardinality_violation` | 583–850 ms | 160–196 ms |
+  | `describe()` | 1.86–1.89 s, +2.3–2.6 GB | 0.09–0.21 s, ~0 MB |
+  | `neighbors_schema()` | 3.8–5.3 s, +1.4–2.5 GB | 0.52–0.62 s, +0 MB |
 - `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships is now
   served from the embedding store when scores tie. It used to fall back to
-  scoring every relationship: 13.4 ms instead of 0.11 ms on 32,000
-  relationships with duplicate vectors (6.4 ms instead of 0.012 ms with an
-  index). Which tied relationships fill the last places, and their order, is
+  scoring every relationship: 13.6–15.3 ms instead of 0.11 ms on 32,000
+  relationships with duplicate vectors (7.4–8.7 ms instead of 0.011–0.029 ms
+  with an index). Which tied relationships fill the last places, and their order, is
   unspecified; the store ranks them by relationship index.
 - A write transaction that creates nodes of a large type no longer copies
   that type's columns. Each transaction's first `CREATE` on a type copied
