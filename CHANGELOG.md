@@ -9,6 +9,20 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- Creating nodes while a read view is held, after deleting nodes, no longer
+  panics or leaves property-less and duplicate nodes. Held views include
+  `freeze()`, `copy()`, a lazy result, a `begin()` transaction and a Bolt or
+  C-ABI session write transaction. Some delete orders made the copy-on-write
+  fork hand out different slots than the fold-back used. The fork now
+  allocates exactly as the graph would, and a fold-back that would misplace a
+  node is refused before anything changes (#195, reported by @cognite-fholm).
+- `vacuum()` while a view is held on a graph with deleted nodes no longer
+  panics with `take_heap_graph on a forked backend`.
+- A write transaction after deletes no longer copies the whole graph: 17 ms to
+  0.9 ms per transaction at 1M nodes with 2,000 scattered deletes.
+
 ## [0.19.3] - 2026-10-05
 
 0.19.2 was published to PyPI only: its crates were held back because of the
