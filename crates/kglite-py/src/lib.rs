@@ -210,6 +210,22 @@ fn warn_if_sidecar_runs_ahead(py: Python<'_>, path: &str, checkpoint_lsn: u64) {
     }
 }
 
+/// One `UserWarning` per data advisory the loaded file raised (a writer version
+/// with a known data-shape bug AND data showing it). Warns, never raises: the
+/// graph loaded and is queryable; the message says what to rebuild.
+fn warn_data_advisories(py: Python<'_>, graph: &kglite_core::api::DirGraph) {
+    for advisory in kglite_core::api::data_advisories(graph) {
+        if let Ok(cmsg) = std::ffi::CString::new(advisory.message) {
+            let _ = PyErr::warn(
+                py,
+                py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+                cmsg.as_c_str(),
+                1,
+            );
+        }
+    }
+}
+
 /// Build the core `LoadOptions` from the `storage=` / `defer_index_rebuild=`
 /// kwargs the three read-only load entry points share.
 ///
@@ -306,6 +322,7 @@ fn load(
         .detach(|| kglite_core::api::io::load_file_with(&path, &options))
         .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
     warn_if_sidecar_runs_ahead(py, &path, inner.checkpoint_lsn);
+    warn_data_advisories(py, &inner);
     let mut kg = KnowledgeGraph::from_arc(inner);
     kg.lifecycle.source_path = Some(std::path::PathBuf::from(&path));
     Ok(kg)
@@ -406,6 +423,7 @@ fn open_session(
         .detach(|| kglite_core::api::io::load_file_with(&path, &options))
         .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
     warn_if_sidecar_runs_ahead(py, &path, inner.checkpoint_lsn);
+    warn_data_advisories(py, &inner);
     Ok(Session::from_arc(inner, None))
 }
 

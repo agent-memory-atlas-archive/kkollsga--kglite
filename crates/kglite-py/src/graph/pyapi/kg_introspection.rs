@@ -402,6 +402,18 @@ impl KnowledgeGraph {
             if let Some(build) = &self.inner.build_info {
                 dict.set_item("build", build_info_dict(py, build)?)?;
             }
+            if !self.inner.advisories.is_empty() {
+                let list = pyo3::types::PyList::empty(py);
+                for a in &self.inner.advisories {
+                    let entry = PyDict::new(py);
+                    entry.set_item("code", &a.code)?;
+                    entry.set_item("writer", &a.writer)?;
+                    entry.set_item("message", &a.message)?;
+                    entry.set_item("affected", &a.affected)?;
+                    list.append(entry)?;
+                }
+                dict.set_item("advisories", list)?;
+            }
             Ok(dict.into())
         })
     }

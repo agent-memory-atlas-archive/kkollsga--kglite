@@ -969,6 +969,12 @@ pub struct SaveMetadata {
     pub format_version: u32,
     /// Library version at save time, e.g. "0.4.7".
     pub library_version: String,
+    /// The oldest library version that has written this graph's data: carried
+    /// through every load and re-save, so a file an old build wrote and a new
+    /// build re-saved still names the old writer. Empty on a graph built in
+    /// this process (its oldest writer is the running build). Persisted only
+    /// when it differs from the saving build's own version.
+    pub(crate) oldest_writer: String,
 }
 
 impl SaveMetadata {
@@ -976,6 +982,21 @@ impl SaveMetadata {
         SaveMetadata {
             format_version: KGL_FORMAT_VERSION,
             library_version: env!("CARGO_PKG_VERSION").to_string(),
+            oldest_writer: String::new(),
+        }
+    }
+
+    /// The oldest writer a save from this build would record: the carried one
+    /// when it parses as older than the running version, else the running
+    /// version.
+    pub(crate) fn oldest_writer_for_save(&self) -> String {
+        let current = env!("CARGO_PKG_VERSION");
+        match (
+            crate::graph::advisories::parse_version(&self.oldest_writer),
+            crate::graph::advisories::parse_version(current),
+        ) {
+            (Some(carried), Some(now)) if carried < now => self.oldest_writer.clone(),
+            _ => current.to_string(),
         }
     }
 }

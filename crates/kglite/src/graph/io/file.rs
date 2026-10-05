@@ -169,6 +169,11 @@ pub(crate) struct FileMetadata {
     core_data_version: u32,
     #[serde(default)]
     library_version: String,
+    /// Oldest library version that wrote this data (`SaveMetadata`). Absent
+    /// whenever it equals `library_version`, so a graph built and saved by one
+    /// version writes the bytes it wrote before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oldest_writer: Option<String>,
     #[serde(default)]
     schema_definition: Option<SchemaDefinition>,
     /// Index keys (property / composite / range) rebuilt after load.
@@ -485,6 +490,8 @@ impl FileMetadata {
         FileMetadata {
             core_data_version,
             library_version: env!("CARGO_PKG_VERSION").to_string(),
+            oldest_writer: Some(graph.save_metadata.oldest_writer_for_save())
+                .filter(|oldest| oldest != env!("CARGO_PKG_VERSION")),
             schema_definition: graph.schema_definition.clone(),
             property_index_keys: graph.property_index_keys.clone(),
             composite_index_keys: graph.composite_index_keys.clone(),
@@ -626,6 +633,10 @@ impl FileMetadata {
         // container was current when this line was written.
         graph.save_metadata = SaveMetadata {
             format_version: crate::graph::schema::KGL_FORMAT_VERSION,
+            oldest_writer: self
+                .oldest_writer
+                .filter(|oldest| !oldest.is_empty())
+                .unwrap_or_else(|| self.library_version.clone()),
             library_version: self.library_version,
         };
         if let Some(counts) = self.edge_type_counts {
@@ -740,7 +751,9 @@ pub(crate) use fast_load_sidecars::{
 /// Stamp save metadata and snapshot index keys. Quick, runs with GIL held.
 pub fn prepare_save(graph: &mut Arc<DirGraph>) {
     let g = crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph);
+    let oldest_writer = g.save_metadata.oldest_writer_for_save();
     g.save_metadata = SaveMetadata::current();
+    g.save_metadata.oldest_writer = oldest_writer;
     g.populate_index_keys();
 }
 
@@ -1453,6 +1466,21 @@ pub fn load_file(path: &str) -> io::Result<Arc<DirGraph>> {
 /// [`LoadOptions`] before reaching for `storage` as a memory lever — it is not
 /// one for a `.kgl`.
 pub fn load_file_with(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGraph>> {
+    with_load_advisories(load_file_inner(path, options)?)
+}
+
+/// Record the data advisories of a graph that was just loaded, while it is
+/// still uniquely held.
+fn with_load_advisories(mut graph: Arc<DirGraph>) -> io::Result<Arc<DirGraph>> {
+    if let Some(g) = Arc::get_mut(&mut graph) {
+        let t = crate::graph::io::load_timing::stage_timer();
+        g.advisories = crate::graph::advisories::compute_advisories(g);
+        crate::graph::io::load_timing::log_stage("data_advisories", t);
+    }
+    Ok(graph)
+}
+
+fn load_file_inner(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGraph>> {
     let p = std::path::Path::new(path);
     if p.is_dir() {
         // The directory *is* the graph, so a request for a portable mode has
@@ -1541,7 +1569,7 @@ pub fn load_kgl_bytes_with(data: &[u8], options: &LoadOptions) -> io::Result<Arc
         ));
     }
     let format_name = portable_container_format(data, "the byte buffer")?;
-    load_portable_container(data, format_name, options)
+    with_load_advisories(load_portable_container(data, format_name, options)?)
 }
 
 /// Contained break message for a pre-v3 embeddings section (model_id +

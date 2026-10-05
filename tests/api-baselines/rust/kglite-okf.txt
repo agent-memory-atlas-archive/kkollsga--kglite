@@ -4179,7 +4179,25 @@ impl core::clone::Clone for kglite::api::CurrentSelection
 pub fn kglite::api::CurrentSelection::clone(&self) -> kglite::api::CurrentSelection
 impl core::default::Default for kglite::api::CurrentSelection
 pub fn kglite::api::CurrentSelection::default() -> kglite::api::CurrentSelection
+pub struct kglite::api::DataAdvisory
+pub kglite::api::DataAdvisory::affected: alloc::vec::Vec<alloc::string::String>
+pub kglite::api::DataAdvisory::code: alloc::string::String
+pub kglite::api::DataAdvisory::message: alloc::string::String
+pub kglite::api::DataAdvisory::writer: alloc::string::String
+impl core::clone::Clone for kglite::api::DataAdvisory
+pub fn kglite::api::DataAdvisory::clone(&self) -> kglite::api::DataAdvisory
+impl core::cmp::Eq for kglite::api::DataAdvisory
+impl core::cmp::PartialEq for kglite::api::DataAdvisory
+pub fn kglite::api::DataAdvisory::eq(&self, other: &kglite::api::DataAdvisory) -> bool
+impl core::fmt::Debug for kglite::api::DataAdvisory
+pub fn kglite::api::DataAdvisory::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::DataAdvisory
+impl serde_core::ser::Serialize for kglite::api::DataAdvisory
+pub fn kglite::api::DataAdvisory::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::DataAdvisory
+pub fn kglite::api::DataAdvisory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::DirGraph
+pub kglite::api::DirGraph::advisories: alloc::vec::Vec<kglite::api::DataAdvisory>
 pub kglite::api::DirGraph::auto_vacuum_threshold: core::option::Option<f64>
 pub kglite::api::DirGraph::auto_vacuums_run: u64
 pub kglite::api::DirGraph::build_info: core::option::Option<kglite::api::blueprint::BuildInfo>
@@ -5326,6 +5344,7 @@ pub fn kglite::api::durable::RecordingGraph<G>::set_node_property_if_absent(&mut
 pub fn kglite::api::durable::RecordingGraph<G>::set_node_title(&mut self, idx: petgraph::graph_impl::NodeIndex, value: kglite::datatypes::values::Value)
 pub fn kglite::api::durable::RecordingGraph<G>::take_column_store(&mut self, type_key: kglite::api::InternedKey) -> core::option::Option<alloc::sync::Arc<kglite::graph::storage::column_store::ColumnStore>>
 pub fn kglite::api::durable::RecordingGraph<G>::update_row_id(&mut self, node_idx: petgraph::graph_impl::NodeIndex, row_id: u32)
+pub fn kglite::api::data_advisories(graph: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::DataAdvisory>
 pub fn kglite::api::discover_property_keys_excluding(nodes: &[(&str, kglite::api::NodeView<'_>)], interner: &kglite::api::StringInterner, excluded: &[&str]) -> alloc::vec::Vec<alloc::string::String>
 pub fn kglite::api::discover_property_keys_from_data(nodes: &[(&str, kglite::api::NodeView<'_>)], interner: &kglite::api::StringInterner) -> alloc::vec::Vec<alloc::string::String>
 pub fn kglite::api::explore_markdown(dir: &kglite::api::DirGraph, query: &str, opts: &kglite::api::ExploreOptions, source_roots: &[std::path::PathBuf]) -> alloc::string::String

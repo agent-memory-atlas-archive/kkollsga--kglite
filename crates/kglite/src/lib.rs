@@ -58,6 +58,7 @@ pub mod api {
     pub use crate::datatypes::PropMap;
     pub use crate::datatypes::Value;
     pub use crate::error::{KgError, KgErrorCode};
+    pub use crate::graph::advisories::{data_advisories, DataAdvisory};
     pub use crate::graph::dir_graph::DirGraph;
     /// The storage-health report `DirGraph::graph_info` returns: live vs
     /// tombstoned node and edge slots, columnar row and heap totals, index

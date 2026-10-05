@@ -295,6 +295,25 @@ are omitted or degraded. Recreate those from their source after import. If the
 current fluent selection is intentional, omit `selection_only=False` and treat
 the result as a subgraph export.
 
+(files-written-by-older-versions)=
+## Files written by older versions
+
+A few past releases wrote a data shape that was later fixed: history versions
+folded into one relationship (before 0.19.0), a parent edge repeated once per
+time-series row (0.19.0 and 0.19.1), and a duplicated, mis-spelled implicit
+parent edge (0.19.2). The `.kgl` loads either way. When the file's data shows
+the shape, `kglite.load()` and `kglite.open_session()` raise one `UserWarning`
+per finding, `graph_info()['advisories']` lists them (`code`, `writer`,
+`message`, `affected`), `describe()` carries a `<data-advisory>` line, and the
+MCP server names the codes on its boot line.
+
+Each finding needs two things at once: a writer version in the affected range
+and data matching the defect, so a clean file by an affected version is
+silent. The writer is the **oldest** version that wrote the data — it is kept
+through every load and re-save, so saving an old file with a newer version
+does not hide it. Rebuild the graph from its source with the current version to
+clear a finding.
+
 ## NetworkX Interop
 
 Round-trip with [NetworkX](https://networkx.org/) for graph algorithms.

@@ -254,6 +254,18 @@ pub(crate) struct ServedLayers<'a> {
     pub(crate) graph_recipes: &'a crate::recipe_queries::GraphRecipeStats,
 }
 
+/// The boot-line part naming a served file's data advisories, `None` when it
+/// raised none.
+fn advisories_boot_part(advisories: &[kglite::api::DataAdvisory]) -> Option<String> {
+    let first = advisories.first()?;
+    let codes: Vec<&str> = advisories.iter().map(|a| a.code.as_str()).collect();
+    Some(format!(
+        "data advisories: {} (written by kglite {}; see graph_overview)",
+        codes.join(", "),
+        first.writer
+    ))
+}
+
 pub(crate) fn print_boot_summary(
     mode: &Mode,
     manifest: Option<&Manifest>,
@@ -288,6 +300,9 @@ pub(crate) fn print_boot_summary(
     if let Some((nodes, edges)) = graph_state.schema() {
         parts.push(format!("graph: {nodes} nodes, {edges} edges"));
     }
+    // A file written by a build with a known data-shape bug names itself here:
+    // the operator reads this line, the agent reads the overview header.
+    parts.extend(advisories_boot_part(&graph_state.data_advisories()));
     // A configured-but-dead CSV listener is the one boot outcome an operator
     // cannot see anywhere else: the server serves normally and only a
     // `FORMAT CSV` query notices. Named here, with the port when it is up —
@@ -330,6 +345,29 @@ pub(crate) fn print_boot_summary(
         parts.push(summary);
     }
     eprintln!("kglite-mcp-server: {}", parts.join("; "));
+}
+
+#[cfg(test)]
+mod advisories_boot_part_tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_file_adds_no_part_and_an_affected_one_names_codes_and_writer() {
+        assert_eq!(advisories_boot_part(&[]), None);
+        let advisory = |code: &str| kglite::api::DataAdvisory {
+            code: code.to_string(),
+            writer: "0.19.1".to_string(),
+            message: String::new(),
+            affected: Vec::new(),
+        };
+        assert_eq!(
+            advisories_boot_part(&[advisory("timeseries_parent_copies")]).as_deref(),
+            Some(
+                "data advisories: timeseries_parent_copies (written by kglite 0.19.1; \
+                 see graph_overview)"
+            )
+        );
+    }
 }
 
 #[cfg(test)]

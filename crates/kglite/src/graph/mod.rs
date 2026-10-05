@@ -7,6 +7,7 @@
 // attributes. This module declares the engine submodules + a few
 // shared types those wrappers reference.
 
+pub mod advisories;
 pub mod algorithms;
 pub mod blueprint;
 pub mod cdc;
@@ -46,6 +47,10 @@ pub mod tables;
 mod test_scope;
 pub mod text_indexes;
 pub mod wal;
+
+#[cfg(test)]
+#[path = "advisories_tests.rs"]
+mod advisories_tests;
 
 #[cfg(test)]
 #[path = "value_byte_identity_tests.rs"]

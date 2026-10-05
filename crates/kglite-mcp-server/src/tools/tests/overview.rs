@@ -182,3 +182,28 @@ fn temp_cleanup_uses_the_same_bare_predicate_as_decorations() {
         "bare call cleans every accumulated entry"
     );
 }
+
+/// A load advisory reaches the agent as a header line of the overview, and a
+/// graph without one renders no such line.
+#[test]
+fn overview_carries_the_load_advisories_of_the_served_graph() {
+    let mut active = active_with_vessel();
+    let clean = run_overview(&active, &OverviewArgs::default()).expect("overview");
+    assert!(!clean.contains("data-advisory"), "{clean}");
+
+    kglite::api::make_dir_graph_mut(active.kg.dir_mut()).advisories =
+        vec![kglite::api::DataAdvisory {
+            code: "timeseries_parent_copies".to_string(),
+            writer: "0.19.1".to_string(),
+            message: "rebuild <it>".to_string(),
+            affected: vec!["Series".to_string()],
+        }];
+    let flagged = run_overview(&active, &OverviewArgs::default()).expect("overview");
+    assert!(
+        flagged.contains(
+            "<data-advisory code=\"timeseries_parent_copies\" writer=\"0.19.1\">rebuild &lt;it&gt;</data-advisory>"
+        ),
+        "{flagged}"
+    );
+    assert_eq!(state_with_active(active).data_advisories().len(), 1);
+}

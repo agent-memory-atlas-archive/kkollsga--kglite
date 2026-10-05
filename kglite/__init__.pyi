@@ -3862,6 +3862,13 @@ class KnowledgeGraph:
                   clean build; ``diagnostics`` holds at most the 100 most
                   severe while ``summary`` counts all. Saved with the graph and
                   restored on load
+                - ``advisories``: present only on a graph loaded from a file
+                  an older build wrote whose data shows that build's known
+                  defect — a list of ``{"code", "writer", "message",
+                  "affected"}`` (``writer`` is the oldest kglite version that
+                  wrote the data; ``affected`` the matched types). Each entry
+                  also raised one ``UserWarning`` at load. See
+                  :ref:`files-written-by-older-versions`
 
         Example::
 

@@ -407,6 +407,10 @@ pub struct DirGraph {
     /// `DirGraph`'s own serde derive.
     #[serde(skip)]
     pub build_info: Option<crate::graph::diagnostics::BuildInfo>,
+    /// Data-shape advisories computed once when the graph was loaded
+    /// (`advisories::data_advisories`); empty for a graph built in-process.
+    #[serde(skip)]
+    pub advisories: Vec<crate::graph::advisories::DataAdvisory>,
     /// The directory this graph was built from, when it was built from one —
     /// [`okf::build`](crate::okf::build) stamps the root it walked, and
     /// nothing else writes it.
@@ -976,6 +980,7 @@ impl DirGraph {
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
             build_info: None,
+            advisories: Vec::new(),
             source_root: None,
             source_fingerprint: None,
             source_dialect: None,

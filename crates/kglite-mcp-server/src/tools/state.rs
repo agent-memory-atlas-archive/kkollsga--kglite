@@ -709,6 +709,16 @@ impl GraphState {
         *write_lock(&self.ontology) = Some(bound);
     }
 
+    /// Data advisories the active graph's load raised (empty when none, or no
+    /// graph is active).
+    pub fn data_advisories(&self) -> Vec<kglite::api::DataAdvisory> {
+        let guard = read_lock(&self.inner);
+        guard
+            .as_ref()
+            .map(|active| kglite::api::data_advisories(active.kg.dir()))
+            .unwrap_or_default()
+    }
+
     pub fn schema(&self) -> Option<(u64, u64)> {
         let guard = read_lock(&self.inner);
         let active = guard.as_ref()?;

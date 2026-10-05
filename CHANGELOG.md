@@ -11,6 +11,19 @@ before upgrading.
 
 ### Added
 
+- Load-time data advisories: a `.kgl` written by a build with a known
+  data-shape bug (history versions folded into one relationship before 0.19.0;
+  per-row parent-edge copies on time-series types in 0.19.0-0.19.1; 0.19.2's
+  duplicated implicit parent edge) warns when its data shows the shape. Each
+  finding needs a writer version in range and a data predicate, so a clean file
+  stays silent. The file metadata records `oldest_writer` (only when it differs
+  from `library_version`, so fresh saves are byte-identical), carried through
+  re-saves so an old file saved by a newer version still warns. `load()` and
+  `open_session()` raise one `UserWarning` per finding; `graph_info()
+  ['advisories']`, a `<data-advisory>` line in `describe()`/`graph_overview`,
+  and the MCP boot line report them. Rust API: `kglite::api::data_advisories`,
+  `DataAdvisory`, `DirGraph::advisories`.
+
 - Blueprint build warnings are classified. Each carries a group
   (`declarations`, `stubs`, `data_shape`, `data_quality`, `cosmetic`, most
   severe first) and a stable `kind` code. `from_blueprint` and `from_records`

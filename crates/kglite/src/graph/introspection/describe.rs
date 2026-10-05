@@ -1547,6 +1547,7 @@ fn build_inventory_capped(
     write_ontology(&mut xml, graph, None);
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
+    crate::graph::advisories::write_xml_lines(&mut xml, graph);
 
     let mut entries: Vec<(String, usize, usize)> = visible_types(graph)
         .filter(|(nt, _)| !has_tiers || !graph.parent_types.contains_key(*nt))
@@ -1653,6 +1654,7 @@ fn build_extreme_inventory(graph: &DirGraph, surface: DescribeSurface) -> String
     write_ontology(&mut xml, graph, None);
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
+    crate::graph::advisories::write_xml_lines(&mut xml, graph);
 
     let mut type_entries: Vec<(&str, usize)> = visible_types(graph).collect();
     type_entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
@@ -1794,6 +1796,7 @@ fn build_inventory_with_detail(
     write_ontology(&mut xml, graph, None);
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
+    crate::graph::advisories::write_xml_lines(&mut xml, graph);
 
     let has_tiers = !graph.parent_types.is_empty();
     let mut type_names: Vec<&str> = visible_types(graph)
@@ -1890,6 +1893,7 @@ fn build_focused_detail(
     write_ontology(&mut xml, graph, Some(types));
     write_read_only_notice(&mut xml, graph);
     write_user_schema_version(&mut xml, graph);
+    crate::graph::advisories::write_xml_lines(&mut xml, graph);
 
     for t in types {
         let tc = caps.get(t).unwrap_or(&empty_caps);
@@ -2226,7 +2230,7 @@ pub(super) fn contains_case_insensitive(haystack: &[u8], pattern: &[u8]) -> bool
     false
 }
 
-pub(super) fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
