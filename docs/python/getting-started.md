@@ -6,12 +6,13 @@
 pip install kglite
 ```
 
-The default install has no required Python runtime dependencies and includes
-everything needed to ship the graph as an MCP server for Claude, Cursor, or
-other agents. The embedded graph engine requires no external database service.
-(Parsing codebases into graphs now lives in the companion
-[codingest](https://codingest.readthedocs.io) project; kglite loads and queries
-the `.kgl` it builds.)
+The default install has no required Python runtime dependencies. It includes
+everything needed to ship the graph as an MCP server for Claude, Cursor, or other
+agents. The embedded graph engine requires no external database service.
+
+Parsing codebases into graphs lives in the companion
+[codingest](https://codingest.readthedocs.io) project. kglite loads and queries
+the `.kgl` it builds.
 
 Optional extras:
 
@@ -23,18 +24,20 @@ pip install "kglite[networkx]"  # NetworkX import/export (includes pandas)
 ```
 
 Published wheels target CPython. See [Platform and artifact
-support](platform-support.md) for the exact OS/architecture tiers, PyPy status,
-and what to do when no wheel matches.
+support](platform-support.md) for:
+
+- the exact OS/architecture tiers
+- PyPy status
+- what to do when no wheel matches
 
 ## Quick Start — DataFrames in, queries out
 
 Install `kglite[pandas]` before following this DataFrame walkthrough. The base
 `kglite` wheel stays dependency-free for graph-only, Rust-backed, and MCP use.
 
-The day-1 workflow is *not* writing CREATE statements one node at a
-time — that path exists, but it isn't how anyone loads real data.
-Shape the data as a flat DataFrame (one row per node, one row per
-edge) and bulk-load it:
+The day-1 workflow is *not* writing CREATE statements one node at a time. That
+path exists, but it isn't how anyone loads real data. Shape the data as a flat
+DataFrame (one row per node, one row per edge) and bulk-load it:
 
 ```python
 import pandas as pd
@@ -89,19 +92,22 @@ loaded = kglite.load("my_graph.kgl")
 loaded = kglite.from_bytes(graph.to_bytes())   # no filesystem path
 ```
 
-Building a code graph? The companion [codingest](https://codingest.readthedocs.io)
-project parses a codebase into a kglite graph (kglite loads and queries it).
-Serving concurrent readers? Share a
-`graph.freeze()` snapshot — immutable and lock-free across threads (see
-{doc}`/concepts/concurrency`).
+- **Building a code graph?** The companion
+  [codingest](https://codingest.readthedocs.io) project parses a codebase into a
+  kglite graph (kglite loads and queries it).
+- **Serving concurrent readers?** Share a `graph.freeze()` snapshot, which is
+  immutable and lock-free across threads (see {doc}`/concepts/concurrency`).
 
-That's the loop: shape DataFrames → `add_nodes` / `add_relationships` →
-Cypher → save. {doc}`guides/data-loading` covers conflict handling
-(`update` / `replace` / `skip` / `preserve` / `sum`), incremental
-loads, hierarchies, and N-Triples / CSV ingest.
+That's the loop: shape DataFrames → `add_nodes` / `add_relationships` → Cypher →
+save. {doc}`guides/data-loading` covers:
 
-For a runnable, self-contained version of this loop starting from real
-CSV files, see
+- conflict handling (`update` / `replace` / `skip` / `preserve` / `sum`)
+- incremental loads
+- hierarchies
+- N-Triples / CSV ingest
+
+For a runnable, self-contained version of this loop starting from real CSV files,
+see
 [`examples/csv_to_graph.py`](https://github.com/kkollsga/kglite/blob/main/examples/csv_to_graph.py).
 
 ### Ad-hoc inserts
@@ -116,31 +122,32 @@ graph.cypher("""
 """)
 ```
 
-For thousands of rows, `add_nodes` / `add_relationships` is 50–100×
-faster — every Cypher CREATE goes through the parser; the bulk path
-goes straight to the columnar store.
+For thousands of rows, `add_nodes` / `add_relationships` is 50–100× faster. Every
+Cypher CREATE goes through the parser, while the bulk path goes straight to the
+columnar store.
 
 ## Serve it to an AI agent
 
-The MCP server ships with the default install — expose any current `.kgl`
-file to Claude / Cursor / any MCP-capable agent in one command:
+The MCP server ships with the default install. One command exposes any current
+`.kgl` file to Claude / Cursor / any MCP-capable agent:
 
 ```bash
 kglite-mcp-server --graph my_graph.kgl
 ```
 
-Three tools out of the box (`ping`, `graph_overview` for schema discovery,
-and `cypher_query` for execution). Add a sibling `<basename>_mcp.yaml`
-file with `source_root: ./data` and you get **six** tools — three
-sandboxed file-access tools (`read_source` / `grep` / `list_source`)
-register automatically. See {doc}`guides/mcp-servers`.
+You get three tools out of the box: `ping`, `graph_overview` for schema
+discovery, and `cypher_query` for execution.
+
+Add a sibling `<basename>_mcp.yaml` file with `source_root: ./data` and you get
+**six** tools. Three sandboxed file-access tools (`read_source` / `grep` /
+`list_source`) register automatically. See {doc}`guides/mcp-servers`.
 
 ## Loading a Public Dataset
 
-The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) live
-in the companion [kglite-datasets](https://kglite-datasets.readthedocs.io)
-project; kglite loads the graphs they produce. Point KGLite at a graph one of
-those loaders built and open it like any other:
+The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) live in the
+companion [kglite-datasets](https://kglite-datasets.readthedocs.io) project.
+kglite loads the graphs they produce. Point KGLite at a graph one of those loaders
+built and open it like any other:
 
 ```python
 import kglite
@@ -150,8 +157,8 @@ g = kglite.load("/data/wd")
 ```
 
 To load public RDF sources directly with the kept loaders, use
-`kglite.load_rdf(...)` / `KnowledgeGraph(...).load_ntriples(...)` —
-see {doc}`guides/data-loading`.
+`kglite.load_rdf(...)` / `KnowledgeGraph(...).load_ntriples(...)`. See
+{doc}`guides/data-loading`.
 
 ## Next Steps
 

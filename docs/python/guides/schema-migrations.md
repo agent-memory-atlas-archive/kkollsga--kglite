@@ -7,8 +7,8 @@ where a graph is in that history, and how to move it forward safely.
 
 The whole mechanism is two things: **ordered Cypher scripts** and **one integer
 stored with the graph**. There is no ledger table, no checksums, no lock row.
-That is deliberate — for an embedded single-file database, the ordered
-filenames *are* the history.
+That is deliberate. For an embedded single-file database, the ordered filenames
+*are* the history.
 
 ## The user-schema version
 
@@ -33,12 +33,13 @@ never interprets it. Do not confuse it with the two engine-owned versions:
 | `graph_info()['format_version']` | KGLite | The `.kgl` on-disk layout version. Changes when the engine's storage format changes. |
 | `graph_info()['library_version']` | KGLite | Which KGLite version last saved the file. |
 
-`0` means unversioned. A graph saved before this field existed also reports
-`0` — the field is additive, so older `.kgl` files load fine and simply start
-from the baseline.
+`0` means unversioned.
 
-Once you set a version, `describe()` reports it, so an agent opening the graph
-cold can see which schema generation it is looking at.
+- A graph saved before this field existed also reports `0`.
+- The field is additive, so older `.kgl` files load fine and simply start from the
+  baseline.
+- Once you set a version, `describe()` reports it. An agent opening the graph cold
+  can see which schema generation it is looking at.
 
 ## Writing migrations
 
@@ -59,7 +60,7 @@ Each file holds one or more `;`-separated Cypher statements:
 MATCH (p:Person) WHERE p.email IS NULL SET p.email = 'unknown';
 ```
 
-Numbering only has to ascend — gaps are fine (`001`, `005`, `010`). Zero is
+Numbering only has to ascend. Gaps are fine (`001`, `005`, `010`). Zero is
 reserved for the unversioned baseline, so migrations start at 1.
 
 ## Running them
@@ -82,14 +83,14 @@ saved mygraph.kgl at user-schema version 3
 
 What you can rely on:
 
-- **Re-running is a no-op.** Everything at or below the stamp is already
-  applied. A second run reports `nothing to do`, exits 0, and does not even
-  rewrite the file.
-- **Order is by version number**, not filename order — `010` runs after `002`.
-- **All-or-nothing at the file level.** Statements run against an in-memory
-  copy and the `.kgl` is written once, at the end. If migration 3 of 5 fails,
-  nothing is saved and the file on disk is byte-for-byte what it was. Fix the
-  migration and run again.
+- **Re-running is a no-op.** Everything at or below the stamp is already applied.
+  A second run reports `nothing to do`, exits 0, and does not even rewrite the
+  file.
+- **Order is by version number**, not filename order. `010` runs after `002`.
+- **All-or-nothing at the file level.** Statements run against an in-memory copy
+  and the `.kgl` is written once, at the end. If migration 3 of 5 fails, nothing
+  is saved and the file on disk is byte-for-byte what it was. Fix the migration
+  and run again.
 - **Only new migrations run later.** Append `004_…` and the next run applies
   just that one.
 
@@ -120,8 +121,8 @@ is true.
 
 ### Migrating from Python
 
-The CLI is a convenience, not a requirement — the stamp is part of the normal
-API, so a migration step is just Cypher plus a stamp:
+The CLI is a convenience, not a requirement. The stamp is part of the normal API,
+so a migration step is just Cypher plus a stamp:
 
 ```python
 import kglite
@@ -148,34 +149,37 @@ MATCH (n:Contractor) SET n:Person
 -- succeeds — but it does NOT change the type
 ```
 
-The first writes an ordinary property: `n.type` reads it back as `'Person'`
-(a stored `type` wins over the label on read, as it does on relationships),
-while `labels(n)` stays `['Contractor']` and `MATCH (n:Person)` finds nothing.
-`REMOVE n.type` removes the property, and `n.type` answers the label again.
+**`SET n.type = 'Person'`** writes an ordinary property.
 
-The second adds a **secondary label**. Afterwards `n.type` is still
-`'Contractor'`, `labels(n)` is `['Contractor', 'Person']`, and — the confusing
-part — `MATCH (n:Person)` *does* match the node. So a migration that used
-`SET n:Person` and checked with `MATCH (n:Person)` would look like it worked
-while every node kept its original type.
+- `n.type` reads it back as `'Person'`. A stored `type` wins over the label on
+  read, as it does on relationships.
+- `labels(n)` stays `['Contractor']`, and `MATCH (n:Person)` finds nothing.
+- `REMOVE n.type` removes the property, and `n.type` answers the label again.
 
-If a secondary label is all you need — extra classification, an additional way
-to match — then that is the cheap and correct tool, and you are done. It does
-not move the node.
+**`SET n:Person`** adds a **secondary label**.
 
-If you genuinely need the primary type changed, you have to recreate the node.
-The primary type is how nodes are indexed and partitioned in storage, so
-changing it in place would mean relocating the node across every index that
-references it — hence the restriction, which is a design decision rather than
-an oversight.
+- `n.type` is still `'Contractor'`.
+- `labels(n)` is `['Contractor', 'Person']`.
+- The confusing part: `MATCH (n:Person)` *does* match the node. A migration that
+  used `SET n:Person` and checked with `MATCH (n:Person)` would look like it
+  worked while every node kept its original type.
 
-The documented pattern for a type change is therefore: **create the
-replacement, copy the properties, re-wire the edges, delete the original.**
+If a secondary label is all you need, such as extra classification or an
+additional way to match, that is the cheap and correct tool, and you are done. It
+does not move the node.
 
-The part people underestimate is the edges. A node's relationships belong to
-that node, so deleting it deletes them — the new node does not inherit
-anything. Every relationship type the old node participated in has to be
-recreated explicitly, **in both directions**:
+If you genuinely need the primary type changed, you have to recreate the node. The
+primary type is how nodes are indexed and partitioned in storage. Changing it in
+place would mean relocating the node across every index that references it. The
+restriction is therefore a design decision rather than an oversight.
+
+The documented pattern for a type change is: **create the replacement, copy the
+properties, re-wire the edges, delete the original.**
+
+The part people underestimate is the edges. A node's relationships belong to that
+node, so deleting it deletes them. The new node does not inherit anything. Every
+relationship type the old node participated in has to be recreated explicitly,
+**in both directions**:
 
 ```cypher
 -- 004_contractor_becomes_person.cypher
@@ -198,29 +202,29 @@ MATCH (c:Contractor) DETACH DELETE c;
 
 Practical advice for this shape of migration:
 
-- **Enumerate the edge types first.** `describe()` or
-  `graph.relationships()` will tell you which relationship types actually touch
-  the type you are replacing. A type you forget is silently dropped at step 4 —
-  no error, just missing relationships.
-- **Copy edge properties explicitly.** As in step 2 above; `CREATE
+- **Enumerate the edge types first.** `describe()` or `graph.relationships()` will
+  tell you which relationship types actually touch the type you are replacing. A
+  type you forget is silently dropped at step 4: no error, just missing
+  relationships.
+- **Copy edge properties explicitly.** As in step 2 above, `CREATE
   (p)-[:WORKS_AT]->(company)` alone loses `since`.
-- **Do not reuse the `id` for a different entity.** Keeping the same `id`
-  across the swap is what lets steps 2 and 3 find the new node.
-- **Verify before deleting.** Split the migration in two — everything up to
-  step 3 in one file, step 4 in the next — and check the counts in between if
-  the graph matters.
+- **Do not reuse the `id` for a different entity.** Keeping the same `id` across
+  the swap is what lets steps 2 and 3 find the new node.
+- **Verify before deleting.** Split the migration in two, with everything up to
+  step 3 in one file and step 4 in the next. Check the counts in between if the
+  graph matters.
 - **If the type is large, prefer a rebuild.** For a big graph, re-running your
-  original loader against the corrected schema is often faster and safer than
-  an in-place type migration.
+  original loader against the corrected schema is often faster and safer than an
+  in-place type migration.
 
 The recipe above is exercised end to end in KGLite's own test suite, so the
-statements are known to work as written — including the property and edge-
-property carry-over.
+statements are known to work as written, including the property and edge-property
+carry-over.
 
 ## Before a risky migration, take a portable copy
 
-`.kgl` is a versioned binary cache. Before a migration you are unsure about,
-export something that does not depend on the engine at all:
+`.kgl` is a versioned binary cache. Before a migration you are unsure about, export
+something that does not depend on the engine at all:
 
 ```bash
 kglite export-sqlite mygraph.kgl before-004.sql

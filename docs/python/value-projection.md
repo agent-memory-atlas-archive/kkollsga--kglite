@@ -32,39 +32,48 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | **`Map(BTreeMap<String, Value>)`** | string-keyed map (deterministic order) | MAP (sized) |
 
 Persistence uses the explicitly versioned RGF v7/Postcard container. The
-current reader accepts v7, v6 and v5; it rejects v4/bincode and older containers
+current reader accepts v7, v6 and v5. It rejects v4/bincode and older containers
 with a clear migration/rebuild error.
 
+### Timestamps and dates
+
 Timestamp JSON, query CSV, SQL export, and semantic string conversion preserve
-fractional seconds, omitting the fractional suffix for whole-second values.
-Bolt LocalDateTime preserves epoch seconds and nanoseconds; Chrono leap-second
-values outside its 0–999,999,999 nanosecond field are rejected with a typed error. Python's native
-`datetime` supports microseconds; its conversion cannot represent finer digits.
-In Python a `Timestamp` arrives as a naive `datetime.datetime` and a `DateTime`
-(a date) as a `datetime.date`; in `to_df()` both make `datetime64` columns (a
-date at midnight). Earlier releases returned a date as its ISO string, `'2024-03-09'`.
-`datetime()` normalises offset-bearing input to UTC; `localdatetime()` keeps
-its local wall time. Neither parsed constructor drops fractional seconds.
+fractional seconds. They omit the fractional suffix for whole-second values.
+
+- **Bolt `LocalDateTime`** preserves epoch seconds and nanoseconds. Chrono
+  leap-second values outside its 0–999,999,999 nanosecond field are rejected with
+  a typed error.
+- **Python's native `datetime`** supports microseconds. Its conversion cannot
+  represent finer digits.
+- **Python types.** A `Timestamp` arrives as a naive `datetime.datetime`. A
+  `DateTime` (a date) arrives as a `datetime.date`. In `to_df()` both make
+  `datetime64` columns (a date at midnight). Earlier releases returned a date as
+  its ISO string, `'2024-03-09'`.
+- **Constructors.** `datetime()` normalises offset-bearing input to UTC.
+  `localdatetime()` keeps its local wall time. Neither parsed constructor drops
+  fractional seconds.
 
 ### Timezone-aware `datetime` parameters
 
 **A timezone-aware `datetime` bound as a query parameter is converted to UTC
 and stored without a zone.** KGLite's temporal values are zoneless, so
 `datetime(2024, 3, 9, 14, 30, tzinfo=timezone(timedelta(hours=2)))` binds as
-`2024-03-09T12:30`, exactly as the Cypher `datetime()` constructor normalises
-an offset-bearing literal. Bind a naive datetime when you want the wall-clock
-value preserved.
+`2024-03-09T12:30`. This is exactly how the Cypher `datetime()` constructor
+normalises an offset-bearing literal. Bind a naive datetime when you want the
+wall-clock value preserved.
 
-The Bolt server does **not** do this: it receives an explicitly zoned
-PackStream type and *refuses* the parameter
-(`Neo.ClientError.Request.Invalid`) rather than converting it. The two
-surfaces differ on purpose. Python's `datetime` arrives through a conversion
-the language already forces — the value has no wire representation that
-carries the zone onward — while a PackStream `DateTime` is a distinct type a
-driver expects to round-trip, and converting it would silently corrupt that
-round-trip. Making Python refuse would break working code for no gain; making
-Bolt convert would lose data. See
-{doc}`../operators/bolt-server` for the Bolt half.
+The Bolt server does **not** do this. It receives an explicitly zoned PackStream
+type and *refuses* the parameter (`Neo.ClientError.Request.Invalid`) rather than
+converting it. The two surfaces differ on purpose:
+
+- Python's `datetime` arrives through a conversion the language already forces.
+  The value has no wire representation that carries the zone onward.
+- A PackStream `DateTime` is a distinct type a driver expects to round-trip.
+  Converting it would silently corrupt that round-trip.
+- Making Python refuse would break working code for no gain.
+- Making Bolt convert would lose data.
+
+See {doc}`../operators/bolt-server` for the Bolt half.
 
 ## `NodeRef` vs `Node` — reference vs materialised
 
@@ -72,45 +81,69 @@ Bolt convert would lose data. See
 but serve different roles in the executor:
 
 - **`NodeRef(idx)`** — an internal reference carrying the petgraph `NodeIndex`.
-  Endpoint functions `startNode()` and `endNode()` produce it, and it remains a
-  node identity while the query runs. Public query output and Python graph
-  projections resolve it to the referenced node's title against the executing
-  view. This includes fluent `collect()`/`to_df()`, `sample()`, `node()`,
-  grouped nodes, property values, connection properties and diagnostic value
-  samples. Nested graph-entity properties are resolved too.
-
-  When a query or loader admits a value as a stored property, KGLite
-  recursively snapshots every `NodeRef` to the referenced node's ordinary
-  title value first. The rule covers node titles, scalar/list/map properties,
-  Cypher writes (including `CREATE`/`INSERT`/`SET`/repeated `MERGE`), table-backed
-  writes, subsets, and graph
-  transfers such as `extend()`. A transfer resolves against its source view
-  before inserting into the destination. A missing reference or cyclic chain
-  becomes NULL. Constraints, indexes, CDC and WAL therefore observe the same
-  stored ordinary value. Structural node and relationship IDs remain identity;
-  property admission never rewrites them.
-
-  Every endpoint snapshot written by one Cypher statement reads the statement's
-  source view. A title update produced by one matched row therefore cannot
-  change the endpoint title snapshotted by another row in that statement.
-
-  Low-level Rust `GraphWrite` mutators remain a raw escape hatch. A caller that
-  supplies `Value::NodeRef` there must keep it in its originating view and must
-  normalize it before persistence or transfer. When a complete portable or
-  disk checkpoint contains a recoverable raw reference from an older build,
-  loading resolves it against the unchanged complete snapshot before
-  constraints, indexes, or the returned graph can observe it. The source file
-  or disk generation stays unchanged; call `save()` explicitly to persist the
-  ordinary value. This can recover only the title the stored physical slot
-  names now. It cannot reconstruct an intended target already changed by an
-  older deletion, slot reuse, load, or compaction.
-  Raw executor and graph-data consumers use `api::session::resolve_noderefs`
-  or the borrowed single-value `resolve_noderef_value` helper themselves.
+  See [NodeRef resolution](#noderef-resolution).
 - **`Node(Box<NodeValue>)`** — a materialised graph value with the
   full `(id, labels, properties)` triple. Built at *projection
   time* when the executor needs to hand a node value to a consumer:
   `RETURN n`, `collect(n)`, `nodes(p)`, the `WITH n` chain that
   carries n forward, etc.
+
+### NodeRef resolution
+
+Endpoint functions `startNode()` and `endNode()` produce a `NodeRef`. It remains a
+node identity while the query runs.
+
+#### In query output
+
+Public query output and Python graph projections resolve a `NodeRef` to the
+referenced node's title against the executing view. This includes:
+
+- fluent `collect()`/`to_df()`, `sample()` and `node()`
+- grouped nodes
+- property values and connection properties
+- diagnostic value samples
+
+Nested graph-entity properties are resolved too.
+
+#### As a stored property
+
+When a query or loader admits a value as a stored property, KGLite recursively
+snapshots every `NodeRef` to the referenced node's ordinary title value first.
+
+- **Scope.** The rule covers node titles, scalar/list/map properties, Cypher
+  writes (including `CREATE`/`INSERT`/`SET`/repeated `MERGE`), table-backed
+  writes, subsets, and graph transfers such as `extend()`.
+- **Transfers.** A transfer resolves against its source view before inserting into
+  the destination.
+- **Missing or cyclic.** A missing reference or cyclic chain becomes NULL.
+- **Observers.** Constraints, indexes, CDC and WAL therefore observe the same
+  stored ordinary value.
+- **Identity.** Structural node and relationship IDs remain identity. Property
+  admission never rewrites them.
+
+Every endpoint snapshot written by one Cypher statement reads the statement's
+source view. A title update produced by one matched row therefore cannot change
+the endpoint title snapshotted by another row in that statement.
+
+#### Rust mutators and older checkpoints
+
+Low-level Rust `GraphWrite` mutators remain a raw escape hatch. A caller that
+supplies `Value::NodeRef` there must keep it in its originating view and must
+normalize it before persistence or transfer. Raw executor and graph-data
+consumers use `api::session::resolve_noderefs` or the borrowed single-value
+`resolve_noderef_value` helper themselves.
+
+When a complete portable or disk checkpoint contains a recoverable raw reference
+from an older build, loading resolves it against the unchanged complete snapshot
+before constraints, indexes, or the returned graph can observe it.
+
+- The source file or disk generation stays unchanged. Call `save()` explicitly to
+  persist the ordinary value.
+- This can recover only the title the stored physical slot names now.
+- It cannot reconstruct an intended target already changed by an older deletion,
+  slot reuse, load, or compaction.
+
+### Materialising a node
 
 The transition happens in `evaluate_expression(Expression::Variable)`
 at `crates/kglite/src/graph/languages/cypher/executor/expression.rs`:
@@ -126,12 +159,14 @@ if let Some(&idx) = row.node_bindings.get(name) {
 ```
 
 The tombstone arm preserves Cypher's "count-of-matched-rows" semantics
-across `MATCH ... DELETE n RETURN count(n)` — the binding survives
-deletion but materialising the node would return `None`; the tombstone
-keeps `count(n)` non-Null without faking data.
+across `MATCH ... DELETE n RETURN count(n)`. The binding survives deletion, but
+materialising the node would return `None`. The tombstone keeps `count(n)`
+non-Null without faking data.
 
-For example, a newly admitted endpoint property keeps the title visible when
-the target is renamed later:
+### Example: endpoint properties
+
+A newly admitted endpoint property keeps the title visible when the target is
+renamed later:
 
 ```python
 g.cypher("CREATE (a:Item {id: 1}), (b:Item {id: 2, title: 'Beta'}), (a)-[:LINK]->(b)")
@@ -141,13 +176,14 @@ assert g.cypher("MATCH (a:Item {id: 1}) RETURN a.owner").scalar() == "Beta"
 ```
 
 Before this admission rule, `a.owner` stored a physical slot and the last line
-returned `"Renamed"`. Code that intended a changing relationship should query
-the relationship itself rather than store `startNode()` or `endNode()` in a
-property.
+returned `"Renamed"`. Code that intended a changing relationship should query the
+relationship itself rather than store `startNode()` or `endNode()` in a property.
 
-To migrate a checkpoint created by an affected older build, load it before any
-mutation that can change physical slots, check the semantic values, and save a
-new checkpoint explicitly:
+To migrate a checkpoint created by an affected older build:
+
+1. Load it before any mutation that can change physical slots.
+2. Check the semantic values.
+3. Save a new checkpoint explicitly.
 
 ```python
 legacy = kglite.load("legacy.kgl")
@@ -159,7 +195,7 @@ assert legacy.cypher("MATCH (a:Item {id: 1}) RETURN a.owner").scalar() == "Beta"
 legacy.save("normalized.kgl")
 ```
 
-The explicit assertion matters: if an older graph had already retargeted the
+The explicit assertion matters. If an older graph had already retargeted the
 slot, loading cannot infer the former identity. Restore that property from the
 application's source of truth before saving.
 
@@ -197,14 +233,15 @@ py_out::value_to_py(py, &Value::Node(node_val)) →
 ```
 
 The `materialize_node_value` helper (`executor/helpers.rs`) is the
-canonical entry point. It's **backend-aware**: in memory mode it reads
-properties via `NodeView::property_pairs_named`; in mapped / disk modes
-properties live in the column store, so it walks `graph
-.get_node_type_metadata(node_type)` and reads each property via
-`resolve_node_property` (which knows the column-aware path). The
-parametrised tests in `tests/test_value_variants.py` run every
-projection assertion 3× (memory / mapped / disk) to keep the
-behaviours in lockstep.
+canonical entry point. It's **backend-aware**:
+
+- In memory mode it reads properties via `NodeView::property_pairs_named`.
+- In mapped / disk modes properties live in the column store. It walks `graph
+  .get_node_type_metadata(node_type)` and reads each property via
+  `resolve_node_property` (which knows the column-aware path).
+
+The parametrised tests in `tests/test_value_variants.py` run every projection
+assertion 3× (memory / mapped / disk) to keep the behaviours in lockstep.
 
 ## At the Python boundary
 
@@ -234,9 +271,11 @@ infer types by parsing JSON-looking strings.
 
 When the planner flags a terminal `RETURN` as `lazy_eligible`, small results
 may be materialised eagerly. Otherwise, first access to a row evaluates that
-row's `RETURN` items; bulk access can materialise row ranges. The Rust values
-are cached via `Mutex<Vec<Option<Vec<Value>>>>`, with one optional entry per
-row. Accessors convert those values to Python objects when returning data.
+row's `RETURN` items, and bulk access can materialise row ranges.
+
+The Rust values are cached via `Mutex<Vec<Option<Vec<Value>>>>`, with one
+optional entry per row. Accessors convert those values to Python objects when
+returning data.
 
 ## In `.kgl` files
 
@@ -257,19 +296,24 @@ The current `.kgl` format is an RGF v7 binary container:
 
 Byte ranges are half-open; `N = 13 + metadata_length`.
 
-`Value` serialises via `serde` with a discriminant tagged by
-variant position. The order in `crates/kglite/src/datatypes/values.rs` is
-intentionally stable for the first 10 variants (UniqueId=0 .. Duration=9;
-Null=7, NodeRef=8)
-so future enum changes append at the end (Timestamp is discriminant 15).
-The container and codec tags make compatibility explicit: the current reader
-selects v7, v6 or v5/Postcard by header and refuses v4/bincode or older containers rather
-than guessing. Kglite 0.13.4 is the conversion bridge for pre-0.14 artifacts.
+`Value` serialises via `serde` with a discriminant tagged by variant position. The
+order in `crates/kglite/src/datatypes/values.rs` is intentionally stable for the
+first 10 variants (UniqueId=0 .. Duration=9; Null=7, NodeRef=8), so future enum
+changes append at the end (Timestamp is discriminant 15).
 
-The `tests/test_phase4_parity.py::test_kgl_v3_golden_hash` byte-level
-tripwire fires on any drift in the saved layout; the
-`test_kgl_v3_file_rejected_with_clear_error` test pins the
-hard-break error message.
+Compatibility is explicit:
+
+- The container and codec tags make compatibility explicit. The current reader
+  selects v7, v6 or v5/Postcard by header and refuses v4/bincode or older
+  containers rather than guessing.
+- Kglite 0.13.4 is the conversion bridge for pre-0.14 artifacts.
+
+Two tests guard the format:
+
+- The `tests/test_phase4_parity.py::test_kgl_v3_golden_hash` byte-level tripwire
+  fires on any drift in the saved layout.
+- The `test_kgl_v3_file_rejected_with_clear_error` test pins the hard-break error
+  message.
 
 ## For binding implementers
 
@@ -324,10 +368,10 @@ Bolt PackStream analogue. For other targets:
 
 The `Value::type_name() -> &'static str` method (at
 `crates/kglite/src/datatypes/values.rs`) returns the canonical PascalCase variant
-name — useful for binding-side dispatch tables. The `impl Display`
-gives a debug-shaped string suitable for log lines and error
-messages; for wire serialisation, use the per-binding mapping
-explicitly.
+name, useful for binding-side dispatch tables.
+
+The `impl Display` gives a debug-shaped string suitable for log lines and error
+messages. For wire serialisation, use the per-binding mapping explicitly.
 
 ## What this is NOT
 

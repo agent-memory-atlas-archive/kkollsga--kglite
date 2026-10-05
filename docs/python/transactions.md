@@ -27,28 +27,36 @@ read_tx.commit()              # no-op; releases the snapshot
 ```
 
 `begin()` is O(1). It captures an `Arc` snapshot and creates a
-backend-specific working fork only on the first mutation. Memory/mapped modes
-clone then; disk mode shares immutable bases and copies mutation overlays.
-Outside readers continue to see the pre-commit snapshot.
+backend-specific working fork only on the first mutation.
 
-`commit()` checks the graph version. If another writer committed after
-`begin()`, the commit raises a typed `kglite.KgError`; the application decides
-whether to retry. `rollback()` discards the working fork. A transaction cannot
-be reused after commit or rollback.
+- Memory/mapped modes clone the graph at that point.
+- Disk mode shares immutable bases and copies mutation overlays.
+- Outside readers continue to see the pre-commit snapshot.
 
-Transaction deadlines and query deadlines raise
-`kglite.CypherTimeoutError`. Read-only transactions reject mutations. Nested
-transactions/savepoints, last-writer-wins, and multi-graph atomic commits are
-not supported.
+### Commit, rollback and limits
+
+- **`commit()`** checks the graph version. If another writer committed after
+  `begin()`, the commit raises a typed `kglite.KgError`. The application decides
+  whether to retry.
+- **`rollback()`** discards the working fork.
+- **Reuse.** A transaction cannot be reused after commit or rollback.
+- **Deadlines.** Transaction deadlines and query deadlines raise
+  `kglite.CypherTimeoutError`.
+- **Read-only transactions** reject mutations.
+- **Not supported:** nested transactions/savepoints, last-writer-wins, and
+  multi-graph atomic commits.
 
 ## Statement rollback
 
 Each Cypher statement restores its changes if execution fails, including a late
 work-budget refusal after a write. This applies to direct graph calls, sessions,
-and transactions. Catching a statement error inside a transaction preserves its
-previous successful statements; committing afterward does not publish the failed
-statement's writes. Result retention limits do not abort or undo successful
-writes. Signal-based cancellation is exposed separately by each binding.
+and transactions.
+
+- Catching a statement error inside a transaction preserves its previous
+  successful statements.
+- Committing afterward does not publish the failed statement's writes.
+- Result retention limits do not abort or undo successful writes.
+- Signal-based cancellation is exposed separately by each binding.
 
 ```python
 import kglite
@@ -85,40 +93,51 @@ snapshot = store.snapshot()
 ```
 
 `Session.execute()` serializes writers. Each writer begins from the previous
-committed state and publishes with an atomic pointer swap, so failed execution
-does not expose a partial working copy. Readers take stable snapshots; readers
-already in flight keep seeing their prior snapshot while a write lands.
+committed state and publishes with an atomic pointer swap. A failed execution
+therefore does not expose a partial working copy.
+
+Readers take stable snapshots. Readers already in flight keep seeing their prior
+snapshot while a write lands.
 
 ## Captured embedding services
 
 `freeze()`, `session()`, `begin()`, and `begin_read()` capture the embedding
 model registered on the source graph when the handle is created. Session
-snapshots and cursors inherit that binding. Replacing or unbinding the source
-model affects newly created handles only. This captures the model object, not a
-deep copy of its mutable weights or callback state, so mutations inside that
-same object remain visible. Model bindings are runtime services and are not
-stored in `.kgl` files; register them again after loading.
+snapshots and cursors inherit that binding.
+
+- Replacing or unbinding the source model affects newly created handles only.
+- The capture is of the model object, not a deep copy of its mutable weights or
+  callback state. Mutations inside that same object remain visible.
+- Model bindings are runtime services and are not stored in `.kgl` files.
+  Register them again after loading.
 
 The captured model powers `text_score()` in read queries and mutation
-expressions, including supported nested `CALL` subqueries, `UNION` arms,
-`EXISTS` predicates and `FOREACH` bodies. Only a mutation whose prepared query
-can invoke that model uses an isolated working copy; other mutations use the
-direct serialized path. Its callback may read the same Session's committed
-snapshot. A synchronous same-thread write re-entering that Session from the
-callback raises `kglite.ArgumentError` with code `InvalidArgument` before
-waiting for the writer lock. A callback error rolls back the current statement
-while leaving the handle usable. Python exposes no value-codec registration on
-these handles; native callers pass codecs per execution, and configured
-protocol servers forward their own runtime service.
+expressions. That includes supported nested `CALL` subqueries, `UNION` arms,
+`EXISTS` predicates and `FOREACH` bodies.
+
+- Only a mutation whose prepared query can invoke that model uses an isolated
+  working copy. Other mutations use the direct serialized path.
+- Its callback may read the same Session's committed snapshot.
+- A synchronous same-thread write re-entering that Session from the callback
+  raises `kglite.ArgumentError` with code `InvalidArgument` before waiting for the
+  writer lock.
+- A callback error rolls back the current statement while leaving the handle
+  usable.
+- Python exposes no value-codec registration on these handles. Native callers pass
+  codecs per execution, and configured protocol servers forward their own runtime
+  service.
 
 ## Storage and protocol bindings
 
 Transactions and sessions use the same core implementation for memory, mapped,
-and disk storage. Rust protocol servers consume the native session/transaction
-surface directly; they do not depend on Python or the GIL. Bolt maps KGLite's
-typed error codes to Neo4j status codes and manages one transaction per Bolt
-session. The C ABI currently exposes atomic mutation batches rather than an
-explicit begin/commit handle.
+and disk storage.
+
+- Rust protocol servers consume the native session/transaction surface directly.
+  They do not depend on Python or the GIL.
+- Bolt maps KGLite's typed error codes to Neo4j status codes and manages one
+  transaction per Bolt session.
+- The C ABI currently exposes atomic mutation batches rather than an explicit
+  begin/commit handle.
 
 ## See also
 
@@ -131,29 +150,42 @@ explicit begin/commit handle.
 
 `freeze()`, `session()`, `begin()` and `begin_read()` capture the source graph's
 query timeout, work budget and row cap. Session snapshots/cursors inherit that
-captured policy. Changing the original graph's defaults affects newly created
-handles, not existing snapshots or transactions. Embedding services follow the
-separate capture contract above; they are not part of these three query defaults.
+captured policy.
+
+- Changing the original graph's defaults affects newly created handles, not
+  existing snapshots or transactions.
+- Embedding services follow the separate capture contract above. They are not part
+  of these three query defaults.
 
 | Option | Omitted or `None` | Explicit zero |
 |---|---|---|
-| Query `timeout_ms` | captured default, then180000ms | no per-query deadline |
+| Query `timeout_ms` | captured default, then 180000 ms | no per-query deadline |
 | Query `max_work_units` | captured budget, then engine backstop | literal zero budget |
 | Query `row_limit` | captured row cap, then no cap | retain no result rows |
 | `begin(timeout_ms=...)` | no transaction lifetime deadline | no transaction lifetime deadline |
 
-An explicit per-call value overrides the captured value. A positive transaction
-lifetime still bounds every query; per-query zero cannot bypass it. Clear a graph
-default with its setter before deriving a handle when no inherited row/work limit
-is wanted; passing `None` to a query means inherit.
+An explicit per-call value overrides the captured value.
 
-Closing a persisted graph ends its write-back authority. Its retained data stays
-mutable as a detached graph, but an earlier transaction with writes cannot commit
-into that ended owner. Read-only snapshots and rollback remain available. This is
-separate from optimistic data-version conflicts. A with-block around `open()` is
-not a multi-statement transaction; see {doc}`guides/durable-apps`.
+- A positive transaction lifetime still bounds every query. Per-query zero cannot
+  bypass it.
+- To avoid an inherited row/work limit, clear the graph default with its setter
+  before deriving a handle.
+- Passing `None` to a query means inherit.
+
+### Closing a persisted graph
+
+Closing a persisted graph ends its write-back authority.
+
+- Its retained data stays mutable as a detached graph.
+- An earlier transaction with writes cannot commit into that ended owner.
+- Read-only snapshots and rollback remain available.
+- This is separate from optimistic data-version conflicts.
+- A with-block around `open()` is not a multi-statement transaction; see
+  {doc}`guides/durable-apps`.
+
+### Change-data capture
 
 Fluent views of a CDC-owning graph and Session cursors sharing change-data
-capture (CDC) are read-only for captured mutations. Their descendants inherit
-that restriction. Use `cursor.copy()`
-for an independent graph and change stream, or write through the original owner.
+capture (CDC) are read-only for captured mutations. Their descendants inherit that
+restriction. Use `cursor.copy()` for an independent graph and change stream, or
+write through the original owner.

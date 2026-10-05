@@ -35,16 +35,20 @@ Exception
     └── kglite.InternalError
 ```
 
-`CypherSyntaxError` always has `.line` and `.col` attributes (either may be
-`None`). `CypherExecutionError` has them when the executor can identify the
-source position. Timeout messages report the configured limit and the elapsed
-time, both measured from when the call resolved its deadline — so time spent
-converting parameters or forking a transaction's working copy counts toward it.
+Position and timeout details:
+
+- `CypherSyntaxError` always has `.line` and `.col` attributes (either may be
+  `None`).
+- `CypherExecutionError` has them when the executor can identify the source
+  position.
+- Timeout messages report the configured limit and the elapsed time. Both are
+  measured from when the call resolved its deadline, so time spent converting
+  parameters or forking a transaction's working copy counts toward it.
 
 ## Stable codes
 
-Every instance carries `.code`, a stable classifier string — branch on that
-rather than on message prose, which is free to improve between releases:
+Every instance carries `.code`, a stable classifier string. Branch on that rather
+than on message prose, which is free to improve between releases:
 
 ```python
 try:
@@ -54,21 +58,27 @@ except kglite.KgError as exc:
 ```
 
 `.code` is also readable on the concrete classes themselves
-(`kglite.ConstraintViolationError.code == "ConstraintViolation"`), so a
-dispatch table can be built up front. It is `None` on the three abstract bases
-— `KgError`, `CypherError`, `ConstraintError` — which each span several codes.
-The same strings appear as `KGLITE_STATUS_*` in the C ABI and drive the Bolt
-`Neo.*` status mapping, so one code means the same thing in every binding.
+(`kglite.ConstraintViolationError.code == "ConstraintViolation"`), so a dispatch
+table can be built up front.
+
+- `.code` is `None` on the three abstract bases (`KgError`, `CypherError`,
+  `ConstraintError`), which each span several codes.
+- The same strings appear as `KGLITE_STATUS_*` in the C ABI and drive the Bolt
+  `Neo.*` status mapping. One code therefore means the same thing in every
+  binding.
 
 ## Constraint violations
 
 A write that breaks a declared UNIQUE / NOT NULL / NODE KEY / `IS :: TYPE`
-constraint raises `ConstraintViolationError` — from **every** write path,
-`cypher()` and the bulk loaders alike. Relationship constraints
-(`FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL` / `IS :: TYPE`) raise the same
-exception, with a message written in relationship words. Declaring a constraint the stored data already violates is a
-different problem with a different fix, so it raises the sibling
-`ConstraintCreationError`; both subclass `ConstraintError`.
+constraint raises `ConstraintViolationError`, from **every** write path:
+`cypher()` and the bulk loaders alike.
+
+- Relationship constraints (`FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL` /
+  `IS :: TYPE`) raise the same exception, with a message written in relationship
+  words.
+- Declaring a constraint the stored data already violates is a different problem
+  with a different fix. It raises the sibling `ConstraintCreationError`.
+- Both subclass `ConstraintError`.
 
 ```python
 try:
@@ -77,15 +87,15 @@ except kglite.ConstraintViolationError:
     raise Conflict("that email is already registered")
 ```
 
-The message names the constraint, the property, and the offending value, so it
-is worth logging — but the type and `.code` are the contract.
+The message names the constraint, the property, and the offending value, so it is
+worth logging. The type and `.code` are the contract.
 
 ## Transaction conflicts
 
 `Transaction.commit()` raises `TransactionConflictError` when the graph moved
-since `begin()`. Nothing was applied, so the fix is to re-run the work against
-a fresh `begin()` — see {doc}`transactions` for `retry_on_conflict`, which is
-that loop.
+since `begin()`. Nothing was applied, so the fix is to re-run the work against a
+fresh `begin()`. See {doc}`transactions` for `retry_on_conflict`, which is that
+loop.
 
 ```python
 try:
@@ -96,8 +106,8 @@ except kglite.TransactionConflictError:
 
 ## A write on a read handle
 
-Four handles refuse writes, and all four refuse with the same class and the
-same code — `ArgumentError` / `InvalidArgument`:
+Four handles refuse writes, and all four refuse with the same class and the same
+code: `ArgumentError` / `InvalidArgument`.
 
 | Handle | Refuses |
 |---|---|
@@ -116,35 +126,52 @@ except kglite.ArgumentError as exc:
     assert exc.code == "InvalidArgument"
 ```
 
-The refusal is deliberately *not* `CypherExecutionError`: the query did not
-fail to execute, it was aimed at a handle that does not take it, and a caller
-routes on the class. Both are client errors on the wire — `CypherExecution`
-and `InvalidArgument` map to `Neo.ClientError.Statement.ArgumentError` over
-Bolt (HTTP 422 and 400). A `CypherExecutionError` is a statement that failed
-on what it was given — a malformed function argument, a property or
-declaration the query relies on that does not exist, a stored value an
-operation cannot read — so it is the query or the data to fix, not the
-server; server faults are `InternalError` / `FileIoError`.
+The refusal is deliberately *not* `CypherExecutionError`. The query did not fail to
+execute. It was aimed at a handle that does not take it, and a caller routes on
+the class. Both are client errors on the wire: `CypherExecution` and
+`InvalidArgument` map to `Neo.ClientError.Statement.ArgumentError` over Bolt
+(HTTP 422 and 400).
 
-The same rule covers an **unknown node type**: `properties()`,
-`neighbors_schema()`, `sample()`, `describe(types=[...])`, `set_parent_type()`
-and `set_temporal()` all raise `ArgumentError` for a type the graph does not
-have.
+A `CypherExecutionError` is a statement that failed on what it was given:
 
-**Valid time** follows the same split. A statement under
-`FOR VALID_TIME AS OF` that writes, calls a procedure with no valid-time route,
-names an axis other than `VALID_TIME`, or runs on a graph with no validity
-declaration raises `CypherExecutionError` (`FOR VALID_TIME ALL` is exempt: it
-writes, and on a graph with no declaration it does nothing). With no prefix on
-a graph that declares validity, `degree()`, `indegree()`, `outdegree()` and
-`shortest_path_length()` raise `CypherExecutionError` too, with a hint to use
-`COUNT { (n)--() }` or `FOR VALID_TIME ALL`; a second context in one statement is
-a `CypherSyntaxError`. Python's `valid_at=` raises `ValueError` before the
-query runs for an instant that is not a date or datetime, and for a query that
-already carries a context. The fluent node filters (`select()`, `valid_at()`,
-`valid_during()`) raise `ValueError` for bounds they cannot read or a field the
-type does not have; `traverse(at=…)` on an undeclared relationship type and an
-unreadable `date()` argument raise `ArgumentError`.
+- a malformed function argument
+- a property or declaration the query relies on that does not exist
+- a stored value an operation cannot read
+
+It is the query or the data to fix, not the server. Server faults are
+`InternalError` / `FileIoError`.
+
+### Unknown node types
+
+The same rule covers an **unknown node type**. `properties()`,
+`neighbors_schema()`, `sample()`, `describe(types=[...])`, `set_parent_type()` and
+`set_temporal()` all raise `ArgumentError` for a type the graph does not have.
+
+### Valid-time errors
+
+**Valid time** follows the same split.
+
+- **`CypherExecutionError`.** A statement under `FOR VALID_TIME AS OF` raises it
+  when it does any of these:
+  - writes
+  - calls a procedure with no valid-time route
+  - names an axis other than `VALID_TIME`
+  - runs on a graph with no validity declaration
+
+  `FOR VALID_TIME ALL` is exempt: it writes, and on a graph with no declaration it
+  does nothing.
+- **`CypherExecutionError`, no prefix.** On a graph that declares validity,
+  `degree()`, `indegree()`, `outdegree()` and `shortest_path_length()` raise it
+  too, with a hint to use `COUNT { (n)--() }` or `FOR VALID_TIME ALL`.
+- **`CypherSyntaxError`.** A second context in one statement.
+- **`ValueError`, from Python's `valid_at=`.** It raises before the query runs for
+  an instant that is not a date or datetime, and for a query that already carries
+  a context.
+- **`ValueError`, from the fluent node filters** (`select()`, `valid_at()`,
+  `valid_during()`). They raise it for bounds they cannot read or a field the type
+  does not have.
+- **`ArgumentError`.** `traverse(at=…)` on an undeclared relationship type, and an
+  unreadable `date()` argument.
 
 ## Catching errors
 
@@ -161,13 +188,17 @@ except kglite.CypherError as exc:
     print(f"query failed: {exc}")
 ```
 
-A timed-out Cypher query raises `CypherTimeoutError`; it does not return a
-partial `ResultView`. Mutation execution restores a statement checkpoint on an
-execution error, timeout, or work-budget refusal, including direct
-`KnowledgeGraph.cypher()` calls. Previously successful statements remain intact.
-Use an explicit {doc}`Transaction <transactions>` when several statements must
-commit or roll back together. This is an execution guarantee, not rollback of
-later application-side result conversion or consumer errors.
+A timed-out Cypher query raises `CypherTimeoutError`. It does not return a partial
+`ResultView`.
+
+- Mutation execution restores a statement checkpoint on an execution error,
+  timeout, or work-budget refusal, including direct `KnowledgeGraph.cypher()`
+  calls.
+- Previously successful statements remain intact.
+- Use an explicit {doc}`Transaction <transactions>` when several statements must
+  commit or roll back together.
+- This is an execution guarantee, not rollback of later application-side result
+  conversion or consumer errors.
 
 For a broad engine boundary:
 
@@ -194,8 +225,8 @@ protocols retain conventional exceptions:
 | Borrow or object-lifecycle conflict | `RuntimeError` |
 | User cancellation with Ctrl-C | `KeyboardInterrupt` |
 
-`KeyboardInterrupt` is deliberately outside `KgError`; an interrupt is a user
-action, not a query fault. Catch it separately if the application needs
+`KeyboardInterrupt` is deliberately outside `KgError`, because an interrupt is a
+user action, not a query fault. Catch it separately if the application needs
 cleanup:
 
 ```python
@@ -207,24 +238,36 @@ except KeyboardInterrupt:
 
 ## Loading and recovery
 
-Load failures are classifiable: a missing engine-managed path raises
-`FileError`; malformed, truncated, or unsupported saved data raises
-`FileFormatError`; other I/O failures raise `FileIoError`.
+Load failures are classifiable:
+
+| Failure | Exception |
+|---|---|
+| A missing engine-managed path | `FileError` |
+| Malformed, truncated, or unsupported saved data | `FileFormatError` |
+| Other I/O failures | `FileIoError` |
+
+### Load memory ceiling
 
 A fourth case is not a failure of the file at all. `kglite.load(path,
-max_load_mb=N)` — and the process-wide `KGLITE_MAX_LOAD_MB` — raise
-`LoadMemoryLimitError` when the estimated peak is over the ceiling. Metadata-
-known terms refuse *before* decompression. An older portable file containing
-stored endpoint references needs a second conservative normalization-overlay
-check after the affected values are decoded, but before the private graph is
-changed or published. The graph is valid; this process cannot afford it.
-Rebuilding would not help, which is exactly why it is its own class: raise the
-ceiling, pass `defer_index_rebuild=True` (usually the largest metadata term), or
-load it somewhere with more memory.
+max_load_mb=N)`, and the process-wide `KGLITE_MAX_LOAD_MB`, raise
+`LoadMemoryLimitError` when the estimated peak is over the ceiling.
 
-`kglite.estimate_load_memory(path)` reports the metadata-known terms as a dict.
-It cannot see legacy reference values without decoding them, so an affected
-file can pass that public estimate and still be refused on the additional
+- Metadata-known terms refuse *before* decompression.
+- An older portable file containing stored endpoint references needs a second
+  conservative normalization-overlay check. It runs after the affected values are
+  decoded, but before the private graph is changed or published.
+- The graph is valid; this process cannot afford it. Rebuilding would not help,
+  which is exactly why it is its own class.
+
+To proceed, do one of these:
+
+- Raise the ceiling.
+- Pass `defer_index_rebuild=True` (usually the largest metadata term).
+- Load it somewhere with more memory.
+
+`kglite.estimate_load_memory(path)` reports the metadata-known terms as a dict. It
+cannot see legacy reference values without decoding them. An affected file can
+therefore pass that public estimate and still be refused on the additional
 normalization term. The refusal message says which check fired.
 
 ```python
@@ -237,18 +280,22 @@ except kglite.LoadMemoryLimitError:
 ```
 
 The ceiling compares an *estimate* read from the file's metadata head, not a
-measurement, and it errs high on purpose — so a ceiling set close to a graph's
-real cost can refuse a load that would have fitted. Set it where a failure is
+measurement, and it errs high on purpose. A ceiling set close to a graph's real
+cost can therefore refuse a load that would have fitted. Set it where a failure is
 what you want (a serving process that must not be killed by a file it did not
 choose), not as a tight budget.
 
-The write half classifies the same way: a `save()`, `sync()` or `to_bytes()`
-that fails on I/O — a full disk, a read-only directory, a failing device —
-raises `FileIoError` too, so `except kglite.KgError` covers both directions of
-the file lifecycle. A `save()` *refused* before it touched the path (no
-remembered path, or a write-ahead sidecar running ahead of the target) is a
-`ValueError` instead: nothing was written, and the fix is a different argument
-rather than a different disk.
+### Save failures
+
+The write half classifies the same way. A `save()`, `sync()` or `to_bytes()` that
+fails on I/O raises `FileIoError` too. Examples are a full disk, a read-only
+directory, and a failing device. `except kglite.KgError` therefore covers both
+directions of the file lifecycle.
+
+A `save()` *refused* before it touched the path is a `ValueError` instead. That
+covers no remembered path, or a write-ahead sidecar running ahead of the target.
+Nothing was written, and the fix is a different argument rather than a different
+disk.
 
 ```python
 try:
@@ -259,26 +306,30 @@ except kglite.FileFormatError:
     graph = rebuild_from_source()
 ```
 
-A CSV export is an interoperability view, not a byte-for-byte graph backup:
-labels, schema, indexes, embeddings, time series, and some structured values
-are not fully preserved. Keep the original source or a tested rebuild path;
-see {doc}`guides/import-export` for the exact persistence and export contract.
+A CSV export is an interoperability view, not a byte-for-byte graph backup.
+Labels, schema, indexes, embeddings, time series, and some structured values are
+not fully preserved. Keep the original source or a tested rebuild path. See
+{doc}`guides/import-export` for the exact persistence and export contract.
 
 ## Concurrency conflicts
 
 Direct `KnowledgeGraph` objects follow Python ownership and borrow rules. For
-shared readers and writers, use `graph.session()`. A transaction commits with
-optimistic concurrency control; a stale snapshot raises a typed `KgError`
-instead of silently overwriting a newer commit. See {doc}`transactions` and
-{doc}`/concepts/concurrency`.
+shared readers and writers, use `graph.session()`.
+
+A transaction commits with optimistic concurrency control. A stale snapshot raises
+a typed `KgError` instead of silently overwriting a newer commit. See
+{doc}`transactions` and {doc}`/concepts/concurrency`.
 
 ## Other bindings
 
-Rust code matches on `KgError` or the stable classifier `KgErrorCode`. The
-classifier also supplies canonical HTTP and Neo4j/Bolt status codes; each
-binding still owns its response shape and lifecycle. The C ABI exposes the
-corresponding `KGLITE_STATUS_*` codes declared in the generated header. See
-{doc}`/rust/c-abi` for ownership and status details.
+Rust code matches on `KgError` or the stable classifier `KgErrorCode`.
+
+- The classifier also supplies canonical HTTP and Neo4j/Bolt status codes. Each
+  binding still owns its response shape and lifecycle.
+- The C ABI exposes the corresponding `KGLITE_STATUS_*` codes declared in the
+  generated header.
+
+See {doc}`/rust/c-abi` for ownership and status details.
 
 `InternalError` represents a broken KGLite invariant. It is not a recoverable
 user-input condition; report it with the complete message and a minimal
