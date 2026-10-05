@@ -1411,3 +1411,35 @@ fn load_packed_pads_a_schema_column_the_payload_lacks() {
     assert_eq!(loaded.get(row, extra), Some(Value::Int64(5)));
     assert_eq!(loaded.get(1, extra), Some(Value::Int64(9)));
 }
+
+/// A demotion to `Mixed` copies every cell, so the copy counter sees it like
+/// a clone — on the id, title and property write paths. It used to read 0 for
+/// the costliest re-typing a write can do.
+#[test]
+fn a_demotion_to_mixed_counts_as_a_column_copy() {
+    let (schema, meta, interner) = make_schema_and_meta();
+    let mut store = ColumnStore::new(schema, &meta, &interner);
+    store.push_id(&Value::Int64(1));
+    store.push_title(&Value::Int64(1));
+    store.push_row(&[(InternedKey::from_str("age"), Value::Int64(1))]);
+
+    reset_column_clones();
+    store.push_id(&Value::String("Q7".into()));
+    store.push_title(&Value::Int64(2));
+    store.push_row(&[]);
+    assert_eq!(store.id_type_str(), Some("mixed"));
+    assert_eq!(column_clones(), 1, "id demotion");
+
+    reset_column_clones();
+    assert!(store.set_title(1, &Value::String("two".into())));
+    assert_eq!(store.title_type_str(), Some("mixed"));
+    assert_eq!(column_clones(), 1, "title demotion");
+
+    reset_column_clones();
+    let age = InternedKey::from_str("age");
+    assert!(store.set(0, age, &Value::String("old".into()), None));
+    assert_eq!(column_clones(), 1, "property demotion");
+    assert_eq!(store.get(0, age), Some(Value::String("old".into())));
+    assert_eq!(store.get_id(0), Some(Value::Int64(1)));
+    assert_eq!(store.get_title(1), Some(Value::String("two".into())));
+}

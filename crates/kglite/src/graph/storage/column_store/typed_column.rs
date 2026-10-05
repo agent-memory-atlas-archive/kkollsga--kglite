@@ -83,7 +83,9 @@ pub enum TypedColumn {
 
 #[cfg(test)]
 thread_local! {
-    /// `TypedColumn` deep copies performed since the last reset.
+    /// `TypedColumn` deep copies performed since the last reset: clones,
+    /// append-reserving clones, and the demotions to `Mixed` that copy every
+    /// cell into a new shape.
     ///
     /// The **unit oracle** of the copy-on-write family, and the one the
     /// store-level counter cannot express. `COLUMN_STORE_CLONES` counts
@@ -98,6 +100,13 @@ thread_local! {
     /// Thread-local like its siblings: it sees copies performed on the calling
     /// thread only, which is where every statement-scoped write happens.
     static COLUMN_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one whole-column copy in [`COLUMN_CLONES`].
+#[inline]
+fn note_column_copy() {
+    #[cfg(test)]
+    COLUMN_CLONES.set(COLUMN_CLONES.get() + 1);
 }
 
 #[cfg(test)]
@@ -115,8 +124,7 @@ pub(crate) fn column_clones() -> usize {
 /// are exactly what `#[derive(Clone)]` produced.
 impl Clone for TypedColumn {
     fn clone(&self) -> Self {
-        #[cfg(test)]
-        COLUMN_CLONES.set(COLUMN_CLONES.get() + 1);
+        note_column_copy();
         match self {
             Self::Int64 { data, nulls } => Self::Int64 {
                 data: data.clone(),
@@ -245,8 +253,7 @@ impl TypedColumn {
             // conversion rather than predicting their replacement storage.
             _ => return None,
         };
-        #[cfg(test)]
-        COLUMN_CLONES.set(COLUMN_CLONES.get() + 1);
+        note_column_copy();
         Some(copied)
     }
 }
@@ -944,17 +951,24 @@ impl TypedColumn {
         Ok(())
     }
 
+    /// Every cell of this column as a heap `Mixed` column.
+    pub(super) fn to_mixed(&self) -> Self {
+        note_column_copy();
+        Self::Mixed {
+            data: (0..self.len())
+                .map(|row| self.get(row as u32).unwrap_or(Value::Null))
+                .collect(),
+        }
+    }
+
     /// Push a null value for this column type.
     pub fn push_null(&mut self) {
         if self.push(&Value::Null).is_err() {
             // Infallible ColumnStore mutation boundary: preserve all existing
             // values and the new NULL in an explicit heap-backed fallback.
-            let mut mixed = Vec::with_capacity(self.len() + 1);
-            for row in 0..self.len() {
-                mixed.push(self.get(row as u32).unwrap_or(Value::Null));
-            }
-            mixed.push(Value::Null);
-            *self = Self::Mixed { data: mixed };
+            let mut mixed = self.to_mixed();
+            let _ = mixed.push(&Value::Null); // `Mixed` takes every value.
+            *self = mixed;
         }
     }
 

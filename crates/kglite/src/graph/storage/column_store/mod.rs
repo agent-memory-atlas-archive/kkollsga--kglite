@@ -386,12 +386,9 @@ impl ColumnStore {
         if col.push(value).is_err() {
             // Type mismatch or storage growth failure: this API is
             // intentionally infallible, so fall back to a heap Mixed column.
-            let mut mixed = Vec::with_capacity(col.len() + 1);
-            for i in 0..col.len() {
-                mixed.push(col.get(i as u32).unwrap_or(Value::Null));
-            }
-            mixed.push(value.clone());
-            self.swap_id_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
+            let mut mixed = col.to_mixed();
+            let _ = mixed.push(value);
+            self.swap_id_column(Some(Arc::new(mixed)));
         }
     }
 
@@ -421,12 +418,9 @@ impl ColumnStore {
         );
         if col.push(value).is_err() {
             // Type mismatch or storage growth failure: explicit heap fallback.
-            let mut mixed = Vec::with_capacity(col.len() + 1);
-            for i in 0..col.len() {
-                mixed.push(col.get(i as u32).unwrap_or(Value::Null));
-            }
-            mixed.push(value.clone());
-            self.swap_title_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
+            let mut mixed = col.to_mixed();
+            let _ = mixed.push(value);
+            self.swap_title_column(Some(Arc::new(mixed)));
         }
     }
 
@@ -463,11 +457,9 @@ impl ColumnStore {
             return false;
         }
         if col.set(row_id, value).is_err() {
-            let mut mixed: Vec<Value> = (0..col.len())
-                .map(|i| col.get(i as u32).unwrap_or(Value::Null))
-                .collect();
-            mixed[row_id as usize] = value.clone();
-            self.swap_title_column(Some(Arc::new(TypedColumn::Mixed { data: mixed })));
+            let mut mixed = col.to_mixed();
+            let _ = mixed.set(row_id, value);
+            self.swap_title_column(Some(Arc::new(mixed)));
         }
         true
     }
@@ -1458,12 +1450,8 @@ impl ColumnStore {
     /// Demote a column from typed to Mixed, preserving all existing data.
     fn demote_to_mixed(&mut self, slot: usize) {
         self.spillable_growth = true;
-        let old_col = &self.columns[slot];
-        let mut mixed_data = Vec::with_capacity(old_col.len());
-        for i in 0..old_col.len() {
-            mixed_data.push(old_col.get(i as u32).unwrap_or(Value::Null));
-        }
-        self.swap_column(slot, Arc::new(TypedColumn::Mixed { data: mixed_data }));
+        let mixed = self.columns[slot].to_mixed();
+        self.swap_column(slot, Arc::new(mixed));
     }
 
     /// Materialize all columns to file-backed mmap in the given directory.
