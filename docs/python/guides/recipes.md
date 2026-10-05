@@ -1,13 +1,12 @@
 # Common Recipes
 
-Short, copy-paste examples for common tasks.
+This page holds short, copy-paste examples for common tasks.
 
 ```{note}
-"Recipe" means two different things in KGLite. This page is snippets to copy
-into your own code. A **recipe query** is something else: a named,
-parameterised, read-only Cypher statement stored in a manifest or in the graph
-and served to an agent as `run_recipe_query`. For those see the
-`extensions.cypher_recipes` section of {doc}`mcp-servers`.
+"Recipe" means two different things in KGLite.
+
+- This page is snippets to copy into your own code.
+- A **recipe query** is a named, parameterised, read-only Cypher statement. It is stored in a manifest or in the graph and served to an agent as `run_recipe_query`. For those see the `extensions.cypher_recipes` section of {doc}`mcp-servers`.
 ```
 
 ## Upsert with MERGE
@@ -22,9 +21,9 @@ graph.cypher("""
 
 ## Top-K Nodes by Centrality
 
-Two equivalent forms — pick by who's calling. Agent / manifest /
-Cypher-tool contexts want the `CALL` form because everything reaches
-KGLite through `cypher()` there:
+Two equivalent forms exist. Pick by who is calling.
+
+In agent, manifest and Cypher-tool contexts, use the `CALL` form. Everything reaches KGLite through `cypher()` there:
 
 ```python
 graph.cypher("""
@@ -34,8 +33,7 @@ graph.cypher("""
 """)
 ```
 
-For Python-only callers, the inherent method is shorter and skips the
-parser:
+For Python-only callers, the inherent method is shorter and skips the parser:
 
 ```python
 top_nodes = graph.pagerank(top_k=10)
@@ -43,8 +41,7 @@ for node in top_nodes:
     print(f"{node['title']}: {node['score']:.3f}")
 ```
 
-The same `CALL <algo>() YIELD ...` shape works for the other graph
-algorithms — see {doc}`graph-algorithms` for the full list.
+The same `CALL <algo>() YIELD ...` shape works for the other graph algorithms. See {doc}`graph-algorithms` for the full list.
 
 ## 2-Hop Neighborhood
 
@@ -98,12 +95,9 @@ graph.cypher("""
 
 ## Replace Cypher `SET` aggregations with `add_properties()`
 
-When you've been recomputing summary properties on parent nodes via
-imperative Cypher `SET` after running an aggregation `MATCH`, the
-fluent `add_properties()` API expresses the same operation
-declaratively in a single chain. The hub-aggregation pattern (`count
-of children`, `sum of a child property`, `most-recent timestamp`) is
-the textbook fit.
+The fluent `add_properties()` API can replace imperative Cypher `SET` after an aggregation `MATCH`. If you recompute summary properties on parent nodes that way, `add_properties()` expresses the same operation declaratively in a single chain.
+
+The hub-aggregation pattern is the textbook fit: `count of children`, `sum of a child property`, `most-recent timestamp`.
 
 ### Cypher way — imperative `SET` per metric
 
@@ -121,10 +115,12 @@ graph.cypher("""
 """)
 ```
 
-This works but: each metric is a separate string; mistyping a
-property name fails silently; the schema for the new properties
-isn't visible to `g.describe()` until run; the call writes to the
-graph in-place rather than yielding a re-queryable view.
+This works, with four drawbacks:
+
+- Each metric is a separate string.
+- Mistyping a property name fails silently.
+- The schema for the new properties isn't visible to `g.describe()` until the query runs.
+- The call writes to the graph in place rather than yielding a re-queryable view.
 
 ### Fluent way — declarative `add_properties` with `Agg`
 
@@ -139,14 +135,15 @@ graph.select('Field').traverse('HAS_WELL') \
     }})
 ```
 
-Same effect on the graph. The metric definitions are typed
-expressions (autocompletes in IDEs); the traversal direction is
-explicit; you can chain further (`.collect()`, `.to_df()`) without
-re-querying.
+The effect on the graph is the same. Three things differ:
+
+- The metric definitions are typed expressions (autocompletes in IDEs).
+- The traversal direction is explicit.
+- You can chain further (`.collect()`, `.to_df()`) without re-querying.
 
 ### Spatial hub aggregation
 
-When the parent has geometry, mix `Spatial.*` helpers in:
+If the parent has geometry, mix `Spatial.*` helpers in:
 
 ```python
 from kglite import Agg, Spatial
@@ -160,24 +157,17 @@ graph.select('Structure').compare('Well', 'contains') \
     }})
 ```
 
-The `compare('Well', 'contains')` step uses the spatial index, so
-this is one query whether you have 1k wells or 1M.
+The `compare('Well', 'contains')` step uses the spatial index. It is one query whether you have 1k wells or 1M.
 
 ### When to keep the Cypher form
 
-`SET` is still the right tool when:
+`SET` is still the right tool in three cases:
 
-- The aggregation needs `WHERE` clauses on relationship properties
-  that `add_properties()` doesn't expose (e.g. `WHERE r.score > 0.5`
-  on the edge between parent and child).
-- You're doing in-place mutation on properties that depend on
-  other in-place mutations within the same query (multi-step `WITH`
-  pipelines).
-- The aggregation crosses three or more node types in non-hierarchy
-  ways (e.g. both up- and down-walks from the same anchor).
+- The aggregation needs `WHERE` clauses on relationship properties that `add_properties()` doesn't expose (e.g. `WHERE r.score > 0.5` on the edge between parent and child).
+- You mutate properties in place that depend on other in-place mutations within the same query (multi-step `WITH` pipelines).
+- The aggregation crosses three or more node types in non-hierarchy ways (e.g. both up- and down-walks from the same anchor).
 
-Otherwise the fluent form is type-checkable, cheaper to read, and
-re-runnable without re-querying.
+In every other case the fluent form is type-checkable, cheaper to read, and re-runnable without re-querying.
 
 ### Helper reference
 
@@ -187,8 +177,6 @@ re-runnable without re-querying.
 **`Spatial`:** `distance()`, `area()`, `perimeter()`,
 `centroid_lat()`, `centroid_lon()`
 
-The raw string forms (`'count(*)'`, `'mean(depth)'`, `'distance'`,
-etc.) still work — the helpers just return those strings, so mixing
-is fine when adapting older code incrementally. See
-[`docs/guides/traversal-hierarchy.md`](traversal-hierarchy.md) for
-the full traversal-API context.
+The raw string forms (`'count(*)'`, `'mean(depth)'`, `'distance'`, etc.) still work. The helpers just return those strings, so you can mix both when adapting older code incrementally.
+
+See [`docs/guides/traversal-hierarchy.md`](traversal-hierarchy.md) for the full traversal-API context.
