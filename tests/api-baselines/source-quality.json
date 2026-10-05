@@ -73,8 +73,8 @@
     {
       "path": "crates/kglite/src/graph/core/calculations.rs",
       "qualified_name": "crate::process_equation",
-      "lines": 239,
-      "branches": 38,
+      "lines": 237,
+      "branches": 37,
       "nesting": 9
     },
     {

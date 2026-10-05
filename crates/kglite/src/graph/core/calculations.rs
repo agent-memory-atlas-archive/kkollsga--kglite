@@ -267,7 +267,7 @@ pub fn process_equation(
     let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
     // Create the report - using all counters to avoid unused assignment warnings
-    let mut report = CalculationOperationReport::new(
+    let report = CalculationOperationReport::new(
         "process_equation".to_string(),
         expression.to_string(),
         nodes_processed,
@@ -276,14 +276,28 @@ pub fn process_equation(
         elapsed_ms,
         is_aggregation,
     );
+    Ok(EvaluationResult::Stored(with_write_outcome(
+        report,
+        errors,
+        update_result,
+    )))
+}
 
-    // Add errors if we found any
-    if !errors.is_empty() {
-        report = report.with_errors(errors);
-    }
-    report.warn_all(update_result.diagnostics);
-
-    Ok(EvaluationResult::Stored(report))
+/// `report` with the stored write's outcome folded in: the calculation's
+/// `errors`, and the advisories (an empty validity interval) the property
+/// write raised.
+fn with_write_outcome(
+    report: CalculationOperationReport,
+    errors: Vec<String>,
+    written: crate::graph::introspection::reporting::NodeOperationReport,
+) -> CalculationOperationReport {
+    let mut report = if errors.is_empty() {
+        report
+    } else {
+        report.with_errors(errors)
+    };
+    report.warn_all(written.diagnostics);
+    report
 }
 
 // Helper function to extract potentially unknown aggregate function name from expression
@@ -714,7 +728,7 @@ pub fn store_count_results(
     let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
     // Create the calculation report
-    let mut report = CalculationOperationReport::new(
+    let report = CalculationOperationReport::new(
         "count".to_string(),
         format!(
             "count({})",
@@ -731,11 +745,7 @@ pub fn store_count_results(
         group_by_parent,
     );
 
-    // Add errors if we found any
-    if !errors.is_empty() {
-        report = report.with_errors(errors);
-    }
-    report.warn_all(update_result.diagnostics);
+    let report = with_write_outcome(report, errors, update_result);
 
     Ok(report)
 }
