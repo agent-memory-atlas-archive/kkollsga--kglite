@@ -2178,3 +2178,55 @@ def test_parity_execution_guard_rejects_missing_owner_or_target(monkeypatch, rem
     )
     with pytest.raises((AssertionError, ValueError)):
         test_storage_and_disk_jobs_run_bounded_regression_targets()
+
+
+#: Workflows whose output is a published artifact. Their Rust toolchain must be
+#: the one CI tests: a floating `stable` let 0.19.3 ship from rustc 1.99 while
+#: every CI job ran 1.98.
+SHIPPING_WORKFLOWS = ("release.yml", "publish_java.yml")
+PINNED_TOOLCHAIN = "${{ env.RUST_STABLE }}"
+
+
+def test_shipped_artifacts_build_on_the_pinned_toolchain() -> None:
+    ci_pin = CI.get("env", {}).get("RUST_STABLE")
+    checked = 0
+    for name in SHIPPING_WORKFLOWS:
+        workflow = _load_workflow(WORKFLOWS / name)
+        assert workflow.get("env", {}).get("RUST_STABLE") == ci_pin, f"{name} does not pin RUST_STABLE={ci_pin!r}"
+        for job_name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if uses.startswith("dtolnay/rust-toolchain@"):
+                    key = "toolchain"
+                elif uses.startswith("PyO3/maturin-action@"):
+                    key = "rust-toolchain"
+                else:
+                    continue
+                checked += 1
+                assert step.get("with", {}).get(key) == PINNED_TOOLCHAIN, (
+                    f"{name} `{job_name}` builds with {step.get('with', {}).get(key)!r}, not {PINNED_TOOLCHAIN}"
+                )
+    assert checked >= 9, f"found only {checked} toolchain installs across {SHIPPING_WORKFLOWS}; the scan is broken"
+
+
+def test_perf_candidate_builds_like_the_published_linux_wheel() -> None:
+    """The perf gate measures the build users install: the release's x86_64 gnu
+    cell (manylinux2014 container, pinned toolchain), not a runner-host build
+    with a different gcc and glibc."""
+    perf = _ci_job("perf-regression")
+    builds = _steps_using(perf, "PyO3/maturin-action@")
+    assert len(builds) == 1, f"perf-regression has {len(builds)} maturin-action builds, expected 1"
+    build = builds[0]["with"]
+    release_jobs = _load_workflow(WORKFLOWS / "release.yml")["jobs"]
+    shipped = [
+        cell
+        for cell in release_jobs["wheels-linux"]["strategy"]["matrix"]["include"]
+        if cell["target"] == "x86_64-unknown-linux-gnu"
+    ]
+    assert len(shipped) == 1
+    assert build["target"] == shipped[0]["target"]
+    assert str(build["manylinux"]) == str(shipped[0]["manylinux"])
+    assert build["rust-toolchain"] == PINNED_TOOLCHAIN
+    assert not [line for line in _command_lines(perf) if "maturin build" in line], (
+        "perf-regression still builds the candidate on the runner host"
+    )

@@ -693,7 +693,9 @@ jobs:
     if: needs.dedup.outputs.fresh == 'true'
     name: Perf regression gate
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The candidate builds cold in the manylinux container (no host target
+    # cache reaches it), so this allows for a full release build.
+    timeout-minutes: 75
     env:
       REFERENCE_VERSION: "0.13.2"
     steps:
@@ -711,12 +713,6 @@ jobs:
           cache: pip
           cache-dependency-path: requirements/benchmark.txt
 
-      - name: Cache cargo registry & target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: perf
-          workspaces: ". -> target"
-
       - name: Create isolated reference and candidate environments
         run: |
           python -m venv .venv
@@ -732,10 +728,21 @@ jobs:
           echo "HARNESS_DIR=$RUNNER_TEMP/kglite-core-harness" >> "$GITHUB_ENV"
 
       - name: Build candidate wheel before measurement
+        # Built exactly like the published x86_64 wheel (release.yml
+        # `wheels-linux`): manylinux2014 container, pinned toolchain. A
+        # runner-host build differs in gcc and glibc, so its timings described
+        # an artifact nobody installs.
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: x86_64-unknown-linux-gnu
+          manylinux: '2014'
+          rust-toolchain: ${{ env.RUST_STABLE }}
+          args: --release --out candidate-wheel --target-dir target-candidate
+
+      - name: Install the candidate wheel
         run: |
-          .venv/bin/maturin build --release --out "$RUNNER_TEMP/candidate-wheel"
-          .venv/bin/python scripts/check_wheel_license.py --expected-name kglite "$RUNNER_TEMP/candidate-wheel/*.whl"
-          CANDIDATE_WHEEL=$(find "$RUNNER_TEMP/candidate-wheel" -name '*.whl' -print -quit)
+          .venv/bin/python scripts/check_wheel_license.py --expected-name kglite "candidate-wheel/*.whl"
+          CANDIDATE_WHEEL=$(find candidate-wheel -name '*.whl' -print -quit)
           CANDIDATE_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "kglite") | .version')
           .venv/bin/python -m pip install "$CANDIDATE_WHEEL"
           echo "CANDIDATE_WHEEL=$CANDIDATE_WHEEL" >> "$GITHUB_ENV"

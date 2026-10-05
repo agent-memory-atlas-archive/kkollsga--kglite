@@ -31,6 +31,12 @@ on:
       - 'docs/**'
   workflow_dispatch:
 
+# The shipped artifacts build on the toolchain CI tests. A floating `stable`
+# let 0.19.3 ship from rustc 1.99 while every CI job ran 1.98. Bump this pin
+# together with ci.yml's (tests/test_ci_workflow.py checks both).
+env:
+  RUST_STABLE: "1.98.0"
+
 jobs:
   version-check:
     name: Check the workspace version against crates.io and PyPI
@@ -276,7 +282,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_STABLE }}
           targets: ${{ matrix.target }}
       - name: Force cargo PATH precedence (macOS rustup-init shim workaround)
         # macos-latest images ship a `rustup-init` shim at
@@ -400,6 +406,7 @@ jobs:
       - name: Build abi3 wheel (manylinux/musllinux container)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
+          rust-toolchain: ${{ env.RUST_STABLE }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           args: --release --out wheels
@@ -454,6 +461,7 @@ jobs:
       - name: Build abi3 wheel (manylinux/musllinux container)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
+          rust-toolchain: ${{ env.RUST_STABLE }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           args: --release --out wheels
@@ -515,7 +523,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_STABLE }}
       - name: Install Maturin
         run: pip install maturin
       - name: Build sdist
@@ -602,7 +610,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_STABLE }}
           targets: ${{ matrix.target }}
       - name: Force cargo PATH precedence (macOS rustup-init shim workaround)
         # See wheels-native's copy of this step for the shim's failure mode.
@@ -654,6 +662,7 @@ jobs:
       - name: Build kglite-cli bin wheel (manylinux/musllinux)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
+          rust-toolchain: ${{ env.RUST_STABLE }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           working-directory: crates/kglite-cli
@@ -692,6 +701,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
+          rust-toolchain: ${{ env.RUST_STABLE }}
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
           working-directory: crates/kglite-cli
@@ -740,7 +750,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_STABLE }}
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
