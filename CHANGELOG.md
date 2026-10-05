@@ -78,7 +78,8 @@ before upgrading.
   `ExportManifest::apply_declarations` returns `Vec<Diagnostic>`.
 
 - Strict builds: `from_blueprint(..., strict=True)` or `settings.strict` fails
-  the build when it raises an advisory in the `declarations` or `stubs` group;
+  the build when it raises an advisory in the `declarations` or `stubs` group
+  (the informational default-today note never fails it);
   `strict=["data_quality"]` names groups, `strict=False` overrides the
   setting. The build finishes and assembles its report first, so the error
   carries each failing group's count and first items and nothing is saved.
@@ -158,7 +159,8 @@ before upgrading.
   `contextlib.redirect_stdout` and notebook capture see it, with one node
   count rather than two.
 - The stub advisory of a blueprint build says a stub on a declared label is
-  valid at every instant.
+  valid at every instant (such stubs now appear only with
+  `on_missing_endpoint: vivify`).
 - A blueprint sub-node that already declares an `fk_edges` entry to its parent
   type no longer gets a second, implicit parent edge, and the implicit edge no
   longer creates stub parents. Built by 0.19.2, such a blueprint carried the
