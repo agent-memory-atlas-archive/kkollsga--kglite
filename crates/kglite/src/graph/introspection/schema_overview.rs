@@ -1440,138 +1440,132 @@ pub fn compute_neighbors_schema(
     graph: &DirGraph,
     node_type: &str,
 ) -> Result<NeighborsSchema, String> {
-    // Arena guard: disk-backed node/edge reads materialize into the query
-    // arena (protocol in disk/graph.rs); no-op on memory/mapped.
-    let _arena_guard = graph.graph.begin_query();
     let node_indices = graph
         .type_indices
         .get(node_type)
         .ok_or_else(|| format!("Node type '{}' not found", node_type))?;
+    let (outgoing, incoming) = count_incident_edges(graph, node_indices.iter());
+    let mut outgoing = neighbor_connections(graph, outgoing, 1.0);
+    let mut incoming = neighbor_connections(graph, incoming, 1.0);
+    sort_by_type_pair(&mut outgoing);
+    sort_by_type_pair(&mut incoming);
+    Ok(NeighborsSchema { outgoing, incoming })
+}
 
-    let mut outgoing: HashMap<(String, String), usize> = HashMap::new();
-    let mut incoming: HashMap<(String, String), usize> = HashMap::new();
+/// `(connection type, far node's type) -> edges`, one map per direction.
+pub(super) type IncidentCounts = FxHashMap<(InternedKey, InternedKey), usize>;
 
+/// Count the edges incident to `nodes` by connection type and far node type,
+/// outgoing and incoming.
+///
+/// Reads only each edge's connection type and the far node's type — never an
+/// edge's properties or a node's row — so on a disk graph it materialises
+/// nothing. Through `node_view` and `weight()` it used to fill the query arena
+/// with every incident node and edge: O(E) memory for one `describe()`.
+pub(super) fn count_incident_edges(
+    graph: &DirGraph,
+    nodes: impl Iterator<Item = petgraph::graph::NodeIndex>,
+) -> (IncidentCounts, IncidentCounts) {
+    let mut outgoing = IncidentCounts::default();
+    let mut incoming = IncidentCounts::default();
     let g = &graph.graph;
-    for node_idx in node_indices.iter() {
+    for node_idx in nodes {
         for edge_ref in g.edges_directed(node_idx, Direction::Outgoing) {
-            if let Some(target_node) = graph.node_view(edge_ref.target()) {
-                let key = (
-                    edge_ref
-                        .weight()
-                        .connection_type_str(&graph.interner)
-                        .to_string(),
-                    target_node.node_type_str(&graph.interner).to_string(),
-                );
-                *outgoing.entry(key).or_insert(0) += 1;
+            if let Some(far_type) = g.node_type_of(edge_ref.target()) {
+                *outgoing
+                    .entry((edge_ref.connection_type(), far_type))
+                    .or_insert(0) += 1;
             }
         }
         for edge_ref in g.edges_directed(node_idx, Direction::Incoming) {
-            if let Some(source_node) = graph.node_view(edge_ref.source()) {
-                let key = (
-                    edge_ref
-                        .weight()
-                        .connection_type_str(&graph.interner)
-                        .to_string(),
-                    source_node.node_type_str(&graph.interner).to_string(),
-                );
-                *incoming.entry(key).or_insert(0) += 1;
+            if let Some(far_type) = g.node_type_of(edge_ref.source()) {
+                *incoming
+                    .entry((edge_ref.connection_type(), far_type))
+                    .or_insert(0) += 1;
             }
         }
     }
+    (outgoing, incoming)
+}
 
-    let mut outgoing_list: Vec<NeighborConnection> = outgoing
+/// [`IncidentCounts`] as named connections, each count multiplied by `scale`
+/// (1.0 for an exact count, the population/sample ratio for a sample).
+pub(super) fn neighbor_connections(
+    graph: &DirGraph,
+    counts: IncidentCounts,
+    scale: f64,
+) -> Vec<NeighborConnection> {
+    counts
         .into_iter()
-        .map(|((ct, ot), count)| NeighborConnection {
-            connection_type: ct,
-            other_type: ot,
-            count,
-        })
-        .collect();
-    outgoing_list.sort_by(|a, b| {
+        .map(
+            |((connection_type, other_type), count)| NeighborConnection {
+                connection_type: graph.interner.resolve(connection_type).to_string(),
+                other_type: graph.interner.resolve(other_type).to_string(),
+                count: if scale == 1.0 {
+                    count
+                } else {
+                    (count as f64 * scale).round() as usize
+                },
+            },
+        )
+        .collect()
+}
+
+fn sort_by_type_pair(list: &mut [NeighborConnection]) {
+    list.sort_by(|a, b| {
         (&a.connection_type, &a.other_type).cmp(&(&b.connection_type, &b.other_type))
     });
-
-    let mut incoming_list: Vec<NeighborConnection> = incoming
-        .into_iter()
-        .map(|((ct, ot), count)| NeighborConnection {
-            connection_type: ct,
-            other_type: ot,
-            count,
-        })
-        .collect();
-    incoming_list.sort_by(|a, b| {
-        (&a.connection_type, &a.other_type).cmp(&(&b.connection_type, &b.other_type))
-    });
-
-    Ok(NeighborsSchema {
-        outgoing: outgoing_list,
-        incoming: incoming_list,
-    })
 }
 
 /// Pre-compute neighbor schemas for ALL types in a single pass over edges.
 /// Much faster than calling `compute_neighbors_schema` per type in `describe()`.
+/// Like [`count_incident_edges`], it reads connection and node types only.
 pub fn compute_all_neighbors_schemas(graph: &DirGraph) -> HashMap<String, NeighborsSchema> {
-    // Arena guard: disk-backed node/edge reads materialize into the query
-    // arena (protocol in disk/graph.rs); no-op on memory/mapped.
-    let _arena_guard = graph.graph.begin_query();
-    // Key: (source_type, conn_type, target_type) → count
-    let mut edge_counts: HashMap<(String, String, String), usize> = HashMap::new();
-
+    let mut edge_counts: FxHashMap<(InternedKey, InternedKey, InternedKey), usize> =
+        FxHashMap::default();
     let g = &graph.graph;
     for edge_ref in g.edge_references() {
         if let (Some(source), Some(target)) = (
-            graph.node_view(edge_ref.source()),
-            graph.node_view(edge_ref.target()),
+            g.node_type_of(edge_ref.source()),
+            g.node_type_of(edge_ref.target()),
         ) {
-            let conn_type = edge_ref
-                .weight()
-                .connection_type_str(&graph.interner)
-                .to_string();
-            let key = (
-                source.node_type_str(&graph.interner).to_string(),
-                conn_type,
-                target.node_type_str(&graph.interner).to_string(),
-            );
-            *edge_counts.entry(key).or_insert(0) += 1;
+            *edge_counts
+                .entry((source, edge_ref.connection_type(), target))
+                .or_insert(0) += 1;
         }
     }
 
+    let name = |key: InternedKey| graph.interner.resolve(key).to_string();
+    let empty = || NeighborsSchema {
+        outgoing: Vec::new(),
+        incoming: Vec::new(),
+    };
     let mut result: HashMap<String, NeighborsSchema> = HashMap::new();
-    for ((src_type, conn_type, tgt_type), count) in &edge_counts {
-        let schema = result
-            .entry(src_type.clone())
-            .or_insert_with(|| NeighborsSchema {
-                outgoing: Vec::new(),
-                incoming: Vec::new(),
+    for ((src_type, conn_type, tgt_type), count) in edge_counts {
+        result
+            .entry(name(src_type))
+            .or_insert_with(empty)
+            .outgoing
+            .push(NeighborConnection {
+                connection_type: name(conn_type),
+                other_type: name(tgt_type),
+                count,
             });
-        schema.outgoing.push(NeighborConnection {
-            connection_type: conn_type.clone(),
-            other_type: tgt_type.clone(),
-            count: *count,
-        });
-
-        let schema = result
-            .entry(tgt_type.clone())
-            .or_insert_with(|| NeighborsSchema {
-                outgoing: Vec::new(),
-                incoming: Vec::new(),
+        result
+            .entry(name(tgt_type))
+            .or_insert_with(empty)
+            .incoming
+            .push(NeighborConnection {
+                connection_type: name(conn_type),
+                other_type: name(src_type),
+                count,
             });
-        schema.incoming.push(NeighborConnection {
-            connection_type: conn_type.clone(),
-            other_type: src_type.clone(),
-            count: *count,
-        });
     }
 
     // Sort each type's lists for deterministic output
     for schema in result.values_mut() {
-        schema.outgoing.sort_by(|a, b| {
-            (&a.connection_type, &a.other_type).cmp(&(&b.connection_type, &b.other_type))
-        });
-        schema.incoming.sort_by(|a, b| {
-            (&a.connection_type, &a.other_type).cmp(&(&b.connection_type, &b.other_type))
-        });
+        sort_by_type_pair(&mut schema.outgoing);
+        sort_by_type_pair(&mut schema.incoming);
     }
 
     result

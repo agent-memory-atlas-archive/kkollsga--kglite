@@ -1303,7 +1303,7 @@ impl KnowledgeGraph {
             .graph
             .edges_directed(file_idx, petgraph::Direction::Outgoing)
         {
-            if edge.weight().connection_type != kglite_core::api::InternedKey::from_str("DEFINES") {
+            if edge.connection_type() != kglite_core::api::InternedKey::from_str("DEFINES") {
                 continue;
             }
             if let Some(node) = self.inner.node_view(edge.target()) {

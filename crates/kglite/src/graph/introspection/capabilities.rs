@@ -4,11 +4,12 @@
 
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
-use petgraph::Direction;
 use std::collections::{HashMap, HashSet};
 
 use super::describe::xml_escape;
-use super::schema_overview::compute_neighbors_schema;
+use super::schema_overview::{
+    compute_neighbors_schema, count_incident_edges, neighbor_connections,
+};
 use super::{NeighborConnection, NeighborsSchema};
 
 /// What one node type supports, as the four independent facts `describe()`
@@ -267,70 +268,21 @@ pub(super) fn compute_neighbors_schema_sampled(
         });
     }
 
-    let mut outgoing: HashMap<(String, String), usize> = HashMap::new();
-    let mut incoming: HashMap<(String, String), usize> = HashMap::new();
-
-    let g = &graph.graph;
-    for node_idx in node_indices.iter().take(sample_count) {
-        for edge_ref in g.edges_directed(node_idx, Direction::Outgoing) {
-            if let Some(target_node) = graph.node_view(edge_ref.target()) {
-                let key = (
-                    edge_ref
-                        .weight()
-                        .connection_type_str(&graph.interner)
-                        .to_string(),
-                    target_node.node_type_str(&graph.interner).to_string(),
-                );
-                *outgoing.entry(key).or_insert(0) += 1;
-            }
-        }
-        for edge_ref in g.edges_directed(node_idx, Direction::Incoming) {
-            if let Some(source_node) = graph.node_view(edge_ref.source()) {
-                let key = (
-                    edge_ref
-                        .weight()
-                        .connection_type_str(&graph.interner)
-                        .to_string(),
-                    source_node.node_type_str(&graph.interner).to_string(),
-                );
-                *incoming.entry(key).or_insert(0) += 1;
-            }
-        }
-    }
-
+    let (outgoing, incoming) = count_incident_edges(graph, node_indices.iter().take(sample_count));
     let scale = if sample_count < total_nodes {
         total_nodes as f64 / sample_count as f64
     } else {
         1.0
     };
-
-    let mut outgoing_list: Vec<NeighborConnection> = outgoing
-        .into_iter()
-        .map(|((ct, ot), count)| NeighborConnection {
-            connection_type: ct,
-            other_type: ot,
-            count: (count as f64 * scale).round() as usize,
-        })
-        .collect();
-    outgoing_list.sort_by(|a, b| {
+    let by_count = |a: &NeighborConnection, b: &NeighborConnection| {
         b.count
             .cmp(&a.count)
             .then_with(|| a.connection_type.cmp(&b.connection_type))
-    });
-
-    let mut incoming_list: Vec<NeighborConnection> = incoming
-        .into_iter()
-        .map(|((ct, ot), count)| NeighborConnection {
-            connection_type: ct,
-            other_type: ot,
-            count: (count as f64 * scale).round() as usize,
-        })
-        .collect();
-    incoming_list.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
-            .then_with(|| a.connection_type.cmp(&b.connection_type))
-    });
+    };
+    let mut outgoing_list = neighbor_connections(graph, outgoing, scale);
+    outgoing_list.sort_by(by_count);
+    let mut incoming_list = neighbor_connections(graph, incoming, scale);
+    incoming_list.sort_by(by_count);
 
     Ok(NeighborsSchema {
         outgoing: outgoing_list,

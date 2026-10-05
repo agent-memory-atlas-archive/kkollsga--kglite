@@ -52,13 +52,13 @@ fn is_used(graph: &DirGraph, nidx: NodeIndex) -> bool {
     let decorates = InternedKey::from_str("DECORATES");
 
     for er in graph.graph.edges_directed(nidx, Direction::Incoming) {
-        let k = er.weight().connection_type;
+        let k = er.connection_type();
         if k == calls || k == refs_fn || k == handles || k == implemented_by || k == decorates {
             return true;
         }
     }
     for er in graph.graph.edges_directed(nidx, Direction::Outgoing) {
-        if er.weight().connection_type == decorates {
+        if er.connection_type() == decorates {
             return true;
         }
     }

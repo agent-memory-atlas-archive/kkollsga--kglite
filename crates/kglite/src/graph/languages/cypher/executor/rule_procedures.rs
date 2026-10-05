@@ -172,7 +172,7 @@ pub(super) fn execute_orphan_node(
         let has_match = |dir: Direction| -> bool {
             let mut iter = graph.graph.edges_directed(nidx, dir);
             match edge_key {
-                Some(key) => iter.any(|er| er.weight().connection_type == key),
+                Some(key) => iter.any(|er| er.connection_type() == key),
                 None => iter.next().is_some(),
             }
         };
@@ -210,7 +210,7 @@ pub(super) fn execute_self_loop(
         let hit = graph
             .graph
             .edges_directed(nidx, Direction::Outgoing)
-            .any(|er| er.target() == nidx && er.weight().connection_type == edge_key);
+            .any(|er| er.target() == nidx && er.connection_type() == edge_key);
         if hit {
             rows.push(make_node_row(&yield_var, nidx));
         }
@@ -242,7 +242,7 @@ pub(super) fn execute_cycle_2step(
     let mut rows = Vec::new();
     for a in nodes.iter() {
         for er_a in graph.graph.edges_directed(a, Direction::Outgoing) {
-            if er_a.weight().connection_type != edge_key {
+            if er_a.connection_type() != edge_key {
                 continue;
             }
             let b = er_a.target();
@@ -255,7 +255,7 @@ pub(super) fn execute_cycle_2step(
             let returns = graph
                 .graph
                 .edges_directed(b, Direction::Outgoing)
-                .any(|er_b| er_b.target() == a && er_b.weight().connection_type == edge_key);
+                .any(|er_b| er_b.target() == a && er_b.connection_type() == edge_key);
             if returns {
                 let mut row = ResultRow::new();
                 row.node_bindings.insert(start_var.clone(), a);
@@ -434,14 +434,14 @@ pub(super) fn execute_inverse_violation(
     let mut rows = Vec::new();
     for a in graph.graph.node_indices() {
         for er in graph.graph.edges_directed(a, Direction::Outgoing) {
-            if er.weight().connection_type != key_a {
+            if er.connection_type() != key_a {
                 continue;
             }
             let b = er.target();
             let has_inverse = graph
                 .graph
                 .edges_directed(b, Direction::Outgoing)
-                .any(|er2| er2.target() == a && er2.weight().connection_type == key_b);
+                .any(|er2| er2.target() == a && er2.connection_type() == key_b);
             if !has_inverse {
                 let mut row = ResultRow::new();
                 row.node_bindings.insert(a_var.clone(), a);
@@ -476,12 +476,12 @@ pub(super) fn execute_transitivity_violation(
         let direct_a: std::collections::HashSet<NodeIndex> = graph
             .graph
             .edges_directed(a, Direction::Outgoing)
-            .filter(|er| er.weight().connection_type == key)
+            .filter(|er| er.connection_type() == key)
             .map(|er| er.target())
             .collect();
         for &b in &direct_a {
             for er_b in graph.graph.edges_directed(b, Direction::Outgoing) {
-                if er_b.weight().connection_type != key {
+                if er_b.connection_type() != key {
                     continue;
                 }
                 let c = er_b.target();
@@ -528,7 +528,7 @@ pub(super) fn execute_cardinality_violation(
         let count = graph
             .graph
             .edges_directed(nidx, Direction::Outgoing)
-            .filter(|er| er.weight().connection_type == edge_key)
+            .filter(|er| er.connection_type() == edge_key)
             .count();
         let too_few = count < min_count;
         let too_many = max_count.is_some_and(|m| count > m);
@@ -618,7 +618,7 @@ pub(super) fn execute_parallel_edges(
 
     let mut counts: HashMap<(NodeIndex, NodeIndex), u32> = HashMap::new();
     for er in graph.graph.edge_references() {
-        if er.weight().connection_type == key {
+        if er.connection_type() == key {
             *counts.entry((er.source(), er.target())).or_insert(0) += 1;
         }
     }
@@ -900,7 +900,7 @@ fn has_edge_of_type(
     graph
         .graph
         .edges_directed(nidx, dir)
-        .any(|er| er.weight().connection_type == edge_type_key)
+        .any(|er| er.connection_type() == edge_type_key)
 }
 
 /// `CALL outline({root, root_type?, edge, max_depth?})`
@@ -941,7 +941,7 @@ pub(super) fn execute_outline(
         rows.push(outline_result_row(graph, yield_items, nidx, depth, parent)?);
         if depth < max_depth {
             for er in graph.graph.edges_directed(nidx, Direction::Outgoing) {
-                if er.weight().connection_type == edge_key {
+                if er.connection_type() == edge_key {
                     let child = er.target();
                     if visited.insert(child) {
                         queue.push_back((child, depth + 1, Some(nidx)));

@@ -60,6 +60,8 @@ pub(crate) fn remove_scratch_dir(path: &std::path::Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod cell_undo_tests;
 #[cfg(test)]
+mod edge_type_reads_tests;
+#[cfg(test)]
 mod flush_tests;
 #[cfg(test)]
 mod index_freshness_tests;

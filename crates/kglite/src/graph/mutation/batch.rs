@@ -814,7 +814,7 @@ impl ConnectionBatchProcessor {
             let existing_edge = graph
                 .graph
                 .edges_connecting(source_idx, target_idx)
-                .find(|e| e.weight().connection_type == conn_type_key)
+                .find(|e| e.connection_type() == conn_type_key)
                 .map(|e| e.id());
 
             if existing_edge.is_some() && self.conflict_mode == ConflictHandling::Skip {

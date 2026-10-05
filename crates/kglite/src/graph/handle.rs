@@ -203,7 +203,7 @@ pub fn code_entity_context(
         let target = edge.target();
         if hops <= 1 || neighbor_indices.contains(&target) {
             outgoing_indices
-                .entry(edge.weight().connection_type_str(&dir.interner).to_string())
+                .entry(dir.interner.resolve(edge.connection_type()).to_string())
                 .or_default()
                 .push(target);
         }
@@ -215,7 +215,7 @@ pub fn code_entity_context(
         let source = edge.source();
         if hops <= 1 || neighbor_indices.contains(&source) {
             incoming_indices
-                .entry(edge.weight().connection_type_str(&dir.interner).to_string())
+                .entry(dir.interner.resolve(edge.connection_type()).to_string())
                 .or_default()
                 .push(source);
         }
@@ -229,7 +229,7 @@ pub fn code_entity_context(
                 let target = edge.target();
                 if target != target_idx && neighbor_indices.contains(&target) {
                     outgoing_indices
-                        .entry(edge.weight().connection_type_str(&dir.interner).to_string())
+                        .entry(dir.interner.resolve(edge.connection_type()).to_string())
                         .or_default()
                         .push(target);
                 }

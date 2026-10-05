@@ -353,7 +353,7 @@ fn reinstall_edge_embedding_group(
         let edges = graph
             .graph
             .edges_connecting(source, target)
-            .filter(|edge| edge.weight().connection_type == kind)
+            .filter(|edge| edge.connection_type() == kind)
             .map(|edge| edge.id())
             .collect();
         drop(guard);

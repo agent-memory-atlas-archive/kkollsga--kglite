@@ -327,7 +327,7 @@ pub fn to_gexf(graph: &DirGraph, selection: Option<&CurrentSelection>) -> Result
                 xml.push_str("        <attvalues>\n");
                 xml.push_str(&format!(
                     "          <attvalue for=\"0\" value=\"{}\"/>\n",
-                    escape_xml(edge.weight().connection_type_str(&graph.interner))?
+                    escape_xml(graph.interner.resolve(edge.connection_type()))?
                 ));
                 xml.push_str("        </attvalues>\n");
                 xml.push_str("      </edge>\n");
@@ -498,7 +498,7 @@ pub fn to_csv(
                     "{},{},{}\n",
                     source_idx.index(),
                     target_idx.index(),
-                    escape_csv(edge.weight().connection_type_str(&graph.interner))
+                    escape_csv(graph.interner.resolve(edge.connection_type()))
                 ));
             }
         }

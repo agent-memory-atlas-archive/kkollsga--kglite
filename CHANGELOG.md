@@ -48,6 +48,21 @@ before upgrading.
   relationship slots, so `MATCH` without `ORDER BY` returns rows in the same
   order. A `DELETE` of several nodes or relationships used to free their slots
   in a random order, so later creates reused different slots.
+- Disk graphs no longer load a relationship's properties to read its type.
+  Type-filtered traversals, `EXISTS`, the rule procedures, `describe()` and
+  `neighbors_schema()` did, which cost memory and time per edge. Measured on
+  a disk graph of 1M nodes and 6M edges: time is the best run (7 for
+  queries, 2 for `describe()` and `neighbors_schema()`), memory the peak
+  growth.
+
+  | Read | Before | After |
+  | --- | --- | --- |
+  | two-hop count | 987 ms, +743 MB | 200 ms, +0 MB |
+  | hop count with a peer filter | 129 ms, +84 MB | 47 ms, +0 MB |
+  | `orphan_node` with `link_type` | 1.73 s, +1.17 GB | 0.25 s, +0.39 GB |
+  | `cardinality_violation` | 637 ms, +1.33 GB | 146 ms, +0.54 GB |
+  | `describe()` | 2.2 s, +2.3 GB | 0.3 s, +0.07 GB |
+  | `neighbors_schema()` | 4.8 s, +2.5 GB | 0.9 s, +0 MB |
 
 ## [0.19.3] - 2026-10-05
 

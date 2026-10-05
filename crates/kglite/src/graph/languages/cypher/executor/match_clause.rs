@@ -1105,7 +1105,7 @@ impl<'a> CypherExecutor<'a> {
                 .graph
                 .edges_directed_filtered(hop.bound_idx, direction, hop.interned_conn)
         {
-            if !hop.conn_filter.accepts(edge_ref.weight().connection_type) {
+            if !hop.conn_filter.accepts(edge_ref.connection_type()) {
                 continue;
             }
             let other_idx = if direction == Direction::Outgoing {
@@ -1361,7 +1361,7 @@ impl<'a> CypherExecutor<'a> {
                 // post-filter on `connection_type` here. The hint is also
                 // `None` for an alternation, which the backends cannot
                 // express, so this post-filter carries it alone.
-                if !conn_filter.accepts(edge_ref.weight().connection_type) {
+                if !conn_filter.accepts(edge_ref.connection_type()) {
                     continue;
                 }
                 let other_idx = if dir == Direction::Outgoing {
@@ -1537,7 +1537,7 @@ impl<'a> CypherExecutor<'a> {
             // `edges_directed_filtered` is a hint (see storage/mod.rs) —
             // post-filter connection type for memory/mapped backends, and
             // for the alternation case the hint cannot express at all.
-            if !conn_filter1.accepts(e1_ref.weight().connection_type) {
+            if !conn_filter1.accepts(e1_ref.connection_type()) {
                 continue;
             }
             let mid_idx = if dir1 == Direction::Outgoing {
@@ -1559,7 +1559,7 @@ impl<'a> CypherExecutor<'a> {
             {
                 self.check_interrupt_periodic(work)?;
                 work = work.saturating_add(1);
-                if !conn_filter2.accepts(e2_ref.weight().connection_type) {
+                if !conn_filter2.accepts(e2_ref.connection_type()) {
                     continue;
                 }
                 if e2_ref.id() == e1_ref.id() {

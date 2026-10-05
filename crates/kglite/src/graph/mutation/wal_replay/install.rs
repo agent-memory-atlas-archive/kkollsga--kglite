@@ -243,7 +243,7 @@ fn apply_edges(
             let mut edges = graph
                 .graph
                 .edges_connecting(source, target)
-                .filter(|edge| edge.weight().connection_type == connection_type)
+                .filter(|edge| edge.connection_type() == connection_type)
                 .map(|edge| edge.id());
             let first = edges.next();
             if edges.next().is_some() {
@@ -372,7 +372,7 @@ fn replace_group(
         for edge in graph
             .graph
             .edges_connecting(source, target)
-            .filter(|e| e.weight().connection_type == kind)
+            .filter(|e| e.connection_type() == kind)
         {
             let mut properties = edge.weight().properties.clone();
             properties.sort_unstable_by_key(|(key, _)| key.as_u64());

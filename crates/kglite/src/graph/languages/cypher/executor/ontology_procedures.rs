@@ -71,7 +71,7 @@ pub(super) fn scan_endpoint_mismatch(
     let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
     for er in graph.graph.edge_references() {
-        if er.weight().connection_type != key {
+        if er.connection_type() != key {
             continue;
         }
         let subject = if check_source {
@@ -141,7 +141,7 @@ fn edge_property_findings(
     let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
     for er in graph.graph.edge_references() {
-        if er.weight().connection_type != key {
+        if er.connection_type() != key {
             continue;
         }
         let failed: Vec<String> = if required {
@@ -218,7 +218,7 @@ fn edge_type_exists(graph: &DirGraph, edge_type: &str) -> bool {
     graph
         .graph
         .edge_references()
-        .any(|er| er.weight().connection_type == key)
+        .any(|er| er.connection_type() == key)
 }
 
 fn string_params(pairs: &[(&str, &str)]) -> HashMap<String, Value> {
@@ -904,7 +904,7 @@ fn check_total(
             graph
                 .graph
                 .edge_references()
-                .filter(|er| er.weight().connection_type == key)
+                .filter(|er| er.connection_type() == key)
                 .count()
         }
         DeclaredCheck::Required | DeclaredCheck::Cardinality => {

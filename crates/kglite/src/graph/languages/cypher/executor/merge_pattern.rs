@@ -312,7 +312,7 @@ fn match_relationship_pattern(
         .edges_directed(actual_src, petgraph::Direction::Outgoing)
         .find(|e| {
             e.target() == actual_tgt
-                && e.weight().connection_type == interned_ct
+                && e.connection_type() == interned_ct
                 && edge_matches_all(e.weight(), &expected_props)
         });
 

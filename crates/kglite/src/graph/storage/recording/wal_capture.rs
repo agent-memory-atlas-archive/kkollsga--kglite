@@ -786,7 +786,7 @@ mod adjacency_probe_tests {
         let kind = InternedKey::from_str("R");
         let mut expected: Vec<GroupMember> = graph
             .edges_connecting(source, target)
-            .filter(|e| e.weight().connection_type == kind)
+            .filter(|e| e.connection_type() == kind)
             .map(|e| {
                 (
                     e.id().index(),

@@ -1979,13 +1979,13 @@ pub fn get_path_connections(graph: &DirGraph, path: &[NodeIndex]) -> Vec<Option<
             .graph
             .edges(from)
             .find(|e| e.target() == to)
-            .map(|e| e.weight().connection_type_str(&graph.interner).to_string())
+            .map(|e| graph.interner.resolve(e.connection_type()).to_string())
             .or_else(|| {
                 graph
                     .graph
                     .edges(to)
                     .find(|e| e.target() == from)
-                    .map(|e| e.weight().connection_type_str(&graph.interner).to_string())
+                    .map(|e| graph.interner.resolve(e.connection_type()).to_string())
             });
 
         connections.push(conn_type);

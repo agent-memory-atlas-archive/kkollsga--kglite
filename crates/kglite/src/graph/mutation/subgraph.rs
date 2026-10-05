@@ -62,7 +62,7 @@ pub fn expand_selection(
                 .edges_directed(node, Direction::Incoming)
                 .map(|e| (e.source(), e));
             for (far, edge) in outgoing.chain(incoming) {
-                let conn = edge.weight().connection_type;
+                let conn = edge.connection_type();
                 if !visited.contains(&far)
                     && filter.admits_hop(graph, edge.id(), conn, edge.source(), far)?
                 {
@@ -505,7 +505,7 @@ pub fn get_subgraph_stats(
         for edge in source.graph.edges(source_idx) {
             if node_set.contains(&edge.target()) {
                 edge_count += 1;
-                let conn_type = edge.weight().connection_type_str(&source.interner);
+                let conn_type = source.interner.resolve(edge.connection_type());
                 *connection_types.entry(conn_type.to_string()).or_insert(0) += 1;
             }
         }

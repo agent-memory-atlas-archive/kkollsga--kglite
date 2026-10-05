@@ -472,13 +472,7 @@ pub fn get_connections(
     let visible = |edge: &GraphEdgeRef<'_>, far| {
         valid_time.is_none_or(|filter| {
             filter
-                .admits_hop(
-                    graph,
-                    edge.id(),
-                    edge.weight().connection_type,
-                    edge.source(),
-                    far,
-                )
+                .admits_hop(graph, edge.id(), edge.connection_type(), edge.source(), far)
                 .unwrap_or(false)
         })
     };

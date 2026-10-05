@@ -1440,7 +1440,7 @@ pub fn filter_by_connection(
             .map(|v| v.into_iter().collect()),
     };
     let visible = |e: &GraphEdgeRef<'_>, far: NodeIndex| {
-        e.weight().connection_type == conn_key
+        e.connection_type() == conn_key
             && valid_time.is_none_or(|filter| {
                 filter
                     .admits_hop(graph, e.id(), conn_key, e.source(), far)

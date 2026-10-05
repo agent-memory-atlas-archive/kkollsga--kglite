@@ -131,7 +131,7 @@ fn has_duplicate_edge_pair(graph: &DirGraph, node_type: &str) -> bool {
     for node in nodes.iter().take(CONFIRM_SCAN_NODES) {
         let mut seen = HashSet::new();
         for edge in graph.graph.edges_directed(node, Direction::Outgoing) {
-            if !seen.insert((edge.weight().connection_type, edge.target())) {
+            if !seen.insert((edge.connection_type(), edge.target())) {
                 return true;
             }
         }

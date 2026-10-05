@@ -480,7 +480,7 @@ pub trait GraphRead {
     ) -> Box<dyn Iterator<Item = (NodeIndex, EdgeIndex)> + 'a> {
         let iter = self.edges_directed(node, dir).filter_map(move |er| {
             if let Some(want) = conn_type {
-                if er.weight().connection_type.as_u64() != want {
+                if er.connection_type().as_u64() != want {
                     return None;
                 }
             }

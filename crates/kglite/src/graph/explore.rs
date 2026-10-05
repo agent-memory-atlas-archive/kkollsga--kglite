@@ -284,7 +284,7 @@ fn traverse(dir: &DirGraph, seeds: &[Hit], max_depth: usize) -> Vec<Hit> {
         for nidx in &frontier {
             for direction in [Direction::Outgoing, Direction::Incoming] {
                 for er in dir.graph.edges_directed(*nidx, direction) {
-                    if !edge_keys.contains(&er.weight().connection_type) {
+                    if !edge_keys.contains(&er.connection_type()) {
                         continue;
                     }
                     let other = if direction == Direction::Outgoing {
