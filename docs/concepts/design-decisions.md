@@ -133,3 +133,17 @@ Mapped and disk modes exist for exploration beyond RAM, but the in-memory
 engine is the core product. Shared planner or executor changes must be checked
 on small in-memory graphs. Disk workarounds belong behind storage-mode or
 scale gates when a general solution would slow the default path.
+
+## Source-major edge layout
+
+Since 0.17.1 the in-memory edge arena is laid out source-major at load: a node's
+outgoing edges sit together. Outgoing scans, which most traversals and
+aggregations use, read contiguous memory and got faster at scale.
+
+The trade-off is on incoming walks that read a property of every edge, such as
+`MATCH (g:Group)<-[r]-(n) WHERE r.tag CONTAINS …`. Those edges are scattered, so
+each property read costs more. Measured on Linux x86 against 0.13.2, that step
+cost about 6% on the relationship text-filter benchmark; macOS hides most of it
+behind its larger shared cache when the query runs in parallel. A reverse-ordered
+copy for incoming walks would recover it at the price of a second edge arena,
+so it is not taken until a workload needs it.
