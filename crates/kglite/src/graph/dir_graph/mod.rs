@@ -2333,43 +2333,6 @@ impl DirGraph {
         }
     }
 
-    /// Reclaim the column rows deleted nodes left behind, without moving any
-    /// node: the commit-time counterpart of [`Self::check_auto_vacuum`] for
-    /// bindings that publish whole graphs (`Session`).
-    ///
-    /// A delete only tombstones a node's row, and rows are append-only, so a
-    /// create/delete steady state grew every type's store without bound while
-    /// the live node count stayed flat. This rebuilds the stores once the dead
-    /// rows pass the same floor (more than 100) and ratio
-    /// ([`Self::auto_vacuum_threshold`]) the vacuum trigger uses, so retention
-    /// is bounded by a fraction of the live rows and the O(live) rebuild is
-    /// amortised over the deletes that earned it. `None` disables it, as it
-    /// does the vacuum trigger.
-    ///
-    /// Unlike a vacuum no `NodeIndex` changes, so text/vector indexes, secondary
-    /// labels and selections stay valid. Skipped where a rebuild would be
-    /// wrong or wasteful: a copy-on-write overlay (its deletes flatten it, so a
-    /// delete-bearing commit is never skipped for this reason), and the mapped
-    /// and disk backends, whose stores are file-backed on purpose.
-    ///
-    /// Must run outside a statement window: it renumbers rows, which an open
-    /// undo journal still names.
-    pub fn compact_columns_if_fragmented(&mut self) -> bool {
-        let Some(threshold) = self.auto_vacuum_threshold else {
-            return false;
-        };
-        if self.graph.is_forked() || self.graph.is_mapped() || self.graph.is_disk() {
-            return false;
-        }
-        let (total, live) = self.columnar_row_census();
-        let dead = total.saturating_sub(live);
-        if dead <= 100 || (dead as f64 / total as f64) <= threshold {
-            return false;
-        }
-        self.rebuild_columns_to_heap();
-        true
-    }
-
     /// Return diagnostic information about graph storage health. A
     /// `fragmentation_ratio` above 0.3 (the auto-vacuum default) is a good
     /// point to call [`Self::vacuum`].

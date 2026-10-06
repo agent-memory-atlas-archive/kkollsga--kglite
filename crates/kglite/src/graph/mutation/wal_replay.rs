@@ -451,9 +451,10 @@ fn find_logical_node(graph: &DirGraph, node_type: &str, id: &Value) -> Option<No
 }
 
 /// A property NodeRef in an old WAL records only a physical u32 slot, without
-/// the checkpoint's slot-to-identity map. Refuse it before folding, cloning,
-/// replay mutation, or opening/truncating the sidecar. Identity fields and
-/// relationship endpoints remain logical WAL keys and are not stored payloads.
+/// the checkpoint's slot-to-identity map. [`ReplayFold::absorb`] refuses it, and
+/// the refusal surfaces before the checkpoint is cloned, replay mutates, or the
+/// sidecar is opened or truncated. Identity fields and relationship endpoints
+/// remain logical WAL keys and are not stored payloads.
 fn legacy_reference_refusal(lsn: u64) -> String {
     format!(
         "WAL frame {lsn} contains a legacy endpoint reference in stored node or relationship state. Its physical node slot has no originating identity map, so replay is refused before graph mutation or WAL repair"
