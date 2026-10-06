@@ -58,9 +58,7 @@ def test_a_refused_schema_statement_leaves_the_graph_unchanged(bolt_server):
 def test_constraints_run_in_auto_commit(bolt_server):
     with neo4j.GraphDatabase.driver(bolt_server, auth=AUTH) as driver:
         with driver.session() as session:
-            session.run(
-                "CREATE CONSTRAINT person_title_unique FOR (n:Person) REQUIRE n.title IS UNIQUE"
-            ).consume()
+            session.run("CREATE CONSTRAINT person_title_unique FOR (n:Person) REQUIRE n.title IS UNIQUE").consume()
             names = {row["name"] for row in session.run("SHOW CONSTRAINTS")}
             assert "person_title_unique" in names
             session.run("DROP CONSTRAINT person_title_unique").consume()
