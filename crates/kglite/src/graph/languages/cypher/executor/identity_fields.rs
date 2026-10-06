@@ -86,6 +86,35 @@ impl IdentityAliases {
     }
 }
 
+/// [`titles_are_ids`] per label, answered once for a `CREATE` clause rather
+/// than once per row: an untitled `UNWIND … CREATE` over a populated type paid
+/// a column-store and first-node probe on every row.
+///
+/// Only an answer read from a populated type is kept. It reads the type's
+/// first node, which no later row of the clause replaces; an empty type's
+/// answer is not kept, since the clause's own first row can settle it.
+#[derive(Default)]
+pub(super) struct TitlesAreIds {
+    by_label: Vec<(String, bool)>,
+}
+
+impl TitlesAreIds {
+    fn get(&mut self, graph: &DirGraph, label: &str, aliases: &IdentityAliases) -> bool {
+        if let Some((_, known)) = self.by_label.iter().find(|(l, _)| l == label) {
+            return *known;
+        }
+        let answer = titles_are_ids(graph, label, aliases);
+        if graph
+            .type_indices
+            .get(label)
+            .is_some_and(|nodes| !nodes.is_empty())
+        {
+            self.by_label.push((label.to_string(), answer));
+        }
+        answer
+    }
+}
+
 /// The identity fields a `CREATE` is about to write.
 pub(super) struct CreatedIdentity {
     pub(super) id: Value,
@@ -120,6 +149,7 @@ pub(super) fn create_identity(
     label: &str,
     aliases: &IdentityAliases,
     properties: &mut HashMap<String, Value>,
+    titles_are_ids: &mut TitlesAreIds,
 ) -> Result<CreatedIdentity, String> {
     // `id` stays accepted under its universal spelling on every type — the
     // documented `CREATE (n {id: 's1'})` round-trip — so a type carrying an
@@ -158,10 +188,16 @@ pub(super) fn create_identity(
     let title_supplied = supplied_title.is_some();
     let title = match supplied_title {
         Some(title) => title,
-        None if titles_are_ids(graph, label, aliases) => id.clone(),
+        None if titles_are_ids.get(graph, label, aliases) => id.clone(),
         None => {
             let label = node_pat.label.as_deref().unwrap_or("Node");
-            Value::String(format!("{label}_{}", raw_string(&id)))
+            // An integer id formats straight into the title; `raw_string`
+            // would allocate an intermediate string per row.
+            Value::String(match &id {
+                Value::UniqueId(n) => format!("{label}_{n}"),
+                Value::Int64(n) => format!("{label}_{n}"),
+                other => format!("{label}_{}", raw_string(other)),
+            })
         }
     };
 
@@ -179,9 +215,9 @@ pub(super) fn create_identity(
 /// a `<Label>_<id>` string among integer titles turned the title column into
 /// an untyped heap column. Reads one node, so the cost does not grow with the
 /// type; a type whose title column and id column are text and a number
-/// answers from the column kinds alone, since an untitled `CREATE` on the
-/// common `<Label>_<id>`-titled type runs this once per row (copying a title
-/// out on every row made a 100k-row `UNWIND … CREATE` ~12% slower).
+/// answers from the column kinds alone, without copying a title out (which
+/// made a 100k-row `UNWIND … CREATE` ~12% slower when this ran per row). A
+/// `CREATE` clause asks once per label through [`TitlesAreIds`].
 fn titles_are_ids(graph: &DirGraph, label: &str, aliases: &IdentityAliases) -> bool {
     if aliases.title_field().is_some() {
         return false;
@@ -215,37 +251,54 @@ fn titles_are_ids(graph: &DirGraph, label: &str, aliases: &IdentityAliases) -> b
 /// `title`, else `name`: `name` stays a stored property that `n.name` reads, so
 /// a pattern carrying both keeps both values. A null spelling supplies nothing
 /// and yields to a non-null one.
+///
+/// Borrows until the one value it returns is chosen, then clones it once; the
+/// declared-field arm, rare on a `CREATE`, stays out of line.
 fn supplied_title(
     label: &str,
     aliases: &IdentityAliases,
     properties: &mut HashMap<String, Value>,
 ) -> Result<Option<Value>, String> {
-    let literal = properties.get("title").cloned();
-    let declared = aliases
-        .title
-        .as_deref()
-        .and_then(|alias| properties.remove(alias).map(|value| (alias, value)));
-    let non_null = |value: &Option<Value>| value.clone().filter(|v| !matches!(v, Value::Null));
-    if let Some((alias, value)) = declared {
-        if let (false, Some(other)) = (matches!(value, Value::Null), non_null(&literal)) {
-            if value != other {
-                return Err(format!(
-                    "CREATE gives node type '{label}' two different titles: '{alias}' is its \
-                     declared title field (value {value}) and 'title' is the title spelling \
-                     every type accepts (value {other}). Both name the same field, so supply \
-                     one of them."
-                ));
-            }
+    if let Some(alias) = aliases.title.as_deref() {
+        if let Some(value) = properties.remove(alias) {
+            return declared_title(label, alias, value, properties.get("title"));
         }
-        return Ok(Some(value)
-            .filter(|v| !matches!(v, Value::Null))
-            .or(literal));
     }
-    let name = properties.get("name").cloned();
-    Ok(non_null(&literal)
-        .or_else(|| non_null(&name))
+    let present = |value: &&Value| !matches!(value, Value::Null);
+    let literal = properties.get("title");
+    let name = properties.get("name");
+    Ok(literal
+        .filter(present)
+        .or_else(|| name.filter(present))
         .or(literal)
-        .or(name))
+        .or(name)
+        .cloned())
+}
+
+/// [`supplied_title`] for a pattern carrying the type's declared title field
+/// as `value`, beside `literal`, its `title` spelling if any.
+#[cold]
+#[inline(never)]
+fn declared_title(
+    label: &str,
+    alias: &str,
+    value: Value,
+    literal: Option<&Value>,
+) -> Result<Option<Value>, String> {
+    let other = literal.filter(|v| !matches!(v, Value::Null));
+    if let (false, Some(other)) = (matches!(value, Value::Null), other) {
+        if value != *other {
+            return Err(format!(
+                "CREATE gives node type '{label}' two different titles: '{alias}' is its \
+                 declared title field (value {value}) and 'title' is the title spelling \
+                 every type accepts (value {other}). Both name the same field, so supply \
+                 one of them."
+            ));
+        }
+    }
+    Ok(Some(value)
+        .filter(|v| !matches!(v, Value::Null))
+        .or_else(|| literal.cloned()))
 }
 
 /// Refuse a `CREATE` whose identity is already taken, where identity uniqueness

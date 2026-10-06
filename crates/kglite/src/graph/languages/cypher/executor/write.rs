@@ -12,7 +12,7 @@ use super::columnar_write::{
 use super::edge_property_write::{remove_edge_property, set_edge_property};
 use super::identity_fields::{
     check_identity_uniqueness, create_identity, remove_write_field, CreatedIdentity,
-    IdentityAliases,
+    IdentityAliases, TitlesAreIds,
 };
 use super::projected_targets::{
     is_null_write_target, projected_node_target, promote_projected_relationships,
@@ -886,6 +886,7 @@ fn execute_folded_create(
     let source_rows = existing.rows;
 
     let mut new_rows = Vec::with_capacity(source_rows.len());
+    let mut titles_are_ids = TitlesAreIds::default();
 
     for row in source_rows.iter() {
         check_interrupt_row(ctx.interrupt)?;
@@ -924,7 +925,8 @@ fn execute_folded_create(
                         }
                     }
 
-                    let node_idx = create_node(graph, node_pat, &new_row, stats, ctx)?;
+                    let node_idx =
+                        create_node(graph, node_pat, &new_row, stats, ctx, &mut titles_are_ids)?;
 
                     // Recorded by position as well as by name: an anonymous
                     // endpoint has no name to record under — see
@@ -1168,6 +1170,7 @@ fn create_node(
     row: &ResultRow,
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
+    titles_are_ids: &mut TitlesAreIds,
 ) -> Result<petgraph::graph::NodeIndex, String> {
     let mut properties = evaluate_properties(graph, &node_pat.properties, row, ctx)?;
     let label = node_pat.label.clone().unwrap_or_else(|| "Node".to_string());
@@ -1186,7 +1189,14 @@ fn create_node(
         id,
         title,
         title_supplied,
-    } = create_identity(graph, node_pat, &label, &aliases, &mut properties)?;
+    } = create_identity(
+        graph,
+        node_pat,
+        &label,
+        &aliases,
+        &mut properties,
+        titles_are_ids,
+    )?;
 
     check_identity_uniqueness(graph, &label, &id)?;
 
@@ -1301,33 +1311,7 @@ fn create_node(
         );
     }
 
-    // Keep the id-index consistent. Whenever the index is already cached — and
-    // therefore complete — insert into it, so a sequential CREATE (e.g.
-    // UNWIND … CREATE) stays O(1)/node instead of paying an O(n)
-    // rebuild-per-node. When it isn't cached, invalidate for lazy rebuild: the
-    // `contains_key` guard is what stops us building a *partial* entry that
-    // `build_id_index` would later short-circuit on and trust as complete.
-    //
-    // Deliberately independent of whether a primary key is declared — the
-    // declaration governs *uniqueness enforcement*, not index freshness, and
-    // gating maintenance on it dropped an undeclared type's whole cached id
-    // index on every single CREATE. Nothing about duplicate ids is protected by
-    // invalidating: a rebuild and an incremental insert collapse a duplicate
-    // identically — and both warn, so the write that forks an id says so then,
-    // not at the next rebuild (a reload).
-    match pk_id {
-        Some(idv) if graph.id_indices.contains_key(&label) => {
-            let entry = graph.id_indices.entry_or_default(label.clone());
-            let duplicate = entry.get(&idv).is_some();
-            entry.insert(idv, node_idx);
-            if duplicate {
-                crate::graph::dir_graph::warn_on_duplicate_ids(&label, 1, 0);
-            }
-        }
-        _ => {
-            graph.id_indices.remove(&label);
-        }
-    }
+    note_created_id(graph, &label, pk_id, node_idx);
 
     graph.update_property_indices_for_add(&label, node_idx);
     // Claim the unique tuples validated above, now that the node exists.
@@ -1359,6 +1343,36 @@ fn create_node(
     stats.nodes_created += 1;
 
     Ok(node_idx)
+}
+
+/// Keep `label`'s id index consistent with the node `create_node` just made.
+/// Whenever the index is already cached — and therefore complete — insert into
+/// it, so a sequential CREATE (e.g. UNWIND … CREATE) stays O(1)/node instead of
+/// paying an O(n) rebuild-per-node. When it isn't cached, invalidate for lazy rebuild: the
+/// `contains_key` guard is what stops us building a *partial* entry that
+/// `build_id_index` would later short-circuit on and trust as complete.
+///
+/// Deliberately independent of whether a primary key is declared — the
+/// declaration governs *uniqueness enforcement*, not index freshness, and
+/// gating maintenance on it dropped an undeclared type's whole cached id
+/// index on every single CREATE. Nothing about duplicate ids is protected by
+/// invalidating: a rebuild and an incremental insert collapse a duplicate
+/// identically — and both warn, so the write that forks an id says so then,
+/// not at the next rebuild (a reload).
+fn note_created_id(graph: &mut DirGraph, label: &str, pk_id: Option<Value>, node_idx: NodeIndex) {
+    match pk_id {
+        Some(idv) if graph.id_indices.contains_key(label) => {
+            let entry = graph.id_indices.entry_or_default(label.to_string());
+            let duplicate = entry.get(&idv).is_some();
+            entry.insert(idv, node_idx);
+            if duplicate {
+                crate::graph::dir_graph::warn_on_duplicate_ids(label, 1, 0);
+            }
+        }
+        _ => {
+            graph.id_indices.remove(label);
+        }
+    }
 }
 
 /// Give the created type an entry in `node_type_metadata`, so a type whose every
