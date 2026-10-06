@@ -668,6 +668,30 @@ def test_breaking_symbols_aggregate_over_skipped_releases(ecosystem: Path, monke
     assert "RetryPolicy" not in out, out
 
 
+def _note_heading(since: tuple[int, int, int] | None, highlights: list[str], **kw: int) -> str:
+    decision = vc.NotifyDecision("downstream", True, ["x"], touched_symbols=[("RdfConfig", "src/a.rs")], since=since)
+    _, body = vc.compose_note(decision, (0, 18, 0), "2026-10-06", highlights, **kw)
+    return next(line for line in body.splitlines() if line.startswith("**What changed"))
+
+
+#: A bullet that opens with a markdown link, quoted before any subsection, so
+#: the highlight itself starts with ``[`` like a multi-release label does.
+_LINK_FIRST = "[`kglite-mcp-server`](https://example.invalid) refuses adopt_client_roots."
+
+
+@pytest.mark.parametrize("since", [None, (0, 17, 0), (0, 18, 0)])
+def test_one_release_gets_the_this_release_heading(since: tuple[int, int, int] | None) -> None:
+    """The heading follows how many releases the quote covers, not the first
+    character of the first bullet: a link-first bullet is not a release label."""
+    heading = _note_heading(since, [_LINK_FIRST])
+    assert heading.startswith("**What changed in this release"), heading
+
+
+def test_several_releases_get_the_since_heading() -> None:
+    heading = _note_heading((0, 16, 0), [f"[0.18.0] {_LINK_FIRST}", "[0.17.0] Fixed: x."], releases_covered=2)
+    assert heading.startswith("**What changed since kglite 0.16.0"), heading
+
+
 def test_a_different_release_gets_its_own_entry(ecosystem: Path) -> None:
     """The other direction of the same proof: the quote tracks the version."""
     code, out = run(ecosystem, "--upstream-version", "0.16.0", "--notify", "--dry-run")

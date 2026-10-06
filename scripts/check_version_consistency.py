@@ -1971,9 +1971,10 @@ def release_highlights(
     upstream_root: Path,
     upstream_version: tuple[int, int, int],
     since: tuple[int, int, int] | None = None,
-) -> list[str]:
+) -> tuple[list[str], int]:
     """What changed for a downstream on ``since``, condensed from the entries
-    of every release after it up to and including ``upstream_version``.
+    of every release after it up to and including ``upstream_version``, and
+    how many releases those lines cover.
 
     With ``since`` unknown or not older than the previous release, only the
     announced release's entry is quoted, unlabelled. Covering several releases,
@@ -1994,7 +1995,7 @@ def release_highlights(
             f'no "what changed" section rather than another release\'s.',
             file=sys.stderr,
         )
-        return []
+        return [], 0
     releases = [upstream_version]
     if since is not None:
         skipped = [v for v in changelog_versions(path) if since < v < upstream_version]
@@ -2012,7 +2013,7 @@ def release_highlights(
             f'the release notes will carry no "what changed" section.',
             file=sys.stderr,
         )
-    return highlights
+    return highlights, len(releases)
 
 
 def compose_note(
@@ -2020,6 +2021,7 @@ def compose_note(
     upstream_version: tuple[int, int, int],
     date: str,
     highlights: list[str],
+    releases_covered: int = 1,
 ) -> tuple[str, str]:
     """Return ``(filename, body)`` for a downstream release note.
 
@@ -2106,7 +2108,9 @@ def compose_note(
         lines.append("")
 
     if highlights and not docs_only:
-        if highlights[0].startswith("["):
+        # Decided by coverage, not by the first character of the first line: a
+        # bullet that opens with a markdown link starts with "[" too.
+        if releases_covered > 1:
             heading = (
                 f"**What changed since kglite {fmt_version(decision.since)} that can reach you** "
                 f"(lead lines of every CHANGELOG entry after it, through `[{ver}]`):"
@@ -2178,8 +2182,8 @@ def run_notify(
             print(f"  SKIP   {d.repo:<16} — {d.skip_reason}")
             continue
         root = repos[d.repo]
-        highlights = release_highlights(upstream_root, upstream_version, d.since)
-        filename, body = compose_note(d, upstream_version, date, highlights)
+        highlights, covered = release_highlights(upstream_root, upstream_version, d.since)
+        filename, body = compose_note(d, upstream_version, date, highlights, covered)
         target = root / "inbox" / "unread" / filename
         print(f"  NOTIFY {d.repo:<16} -> {target}")
         for reason in d.reasons:
