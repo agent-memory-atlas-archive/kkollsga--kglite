@@ -782,15 +782,27 @@ _CITATION_CUES = re.compile(
     r"previously|formerly|originally|earlier|historical\w*|history|no\s+longer|"
     r"already|first\s+appeared|described|correction|moved\s+from|"
     r"upgraded\s+from|bumped\s+from|ran(?:\s+against)?|tested\s+against|"
-    r"measured|benchmarked|observed|passed|fixed|until)\b",
+    r"measured|benchmarked|observed)\b",
     re.IGNORECASE,
 )
-#: Cues that make a sentence a live requirement even if it is phrased in prose.
-#: These win over the citation cues, except against an explicit version range.
+#: Record cues that are records only when anchored to the matched version.
+#: Free-standing, each opens a live instruction just as easily: "use X until the
+#: fix lands", "Known issue (fixed upstream): use X", "make sure X is installed
+#: and the smoke test passed". Anchored, each names what happened at X: "Until
+#: X it did not", "X fixed that", "passed all 39 tests against X".
+_CITATION_BEFORE_VERSION = re.compile(
+    r"(?:\buntil|\bpassed\b[^.;:]*\bagainst(?:\s+the\s+installed)?)\s+(?:[A-Za-z][\w.-]*\s+)?v?$",
+    re.IGNORECASE,
+)
+_CITATION_AFTER_VERSION = re.compile(r"^[^\s.;:]*\s+fixed\b", re.IGNORECASE)
+#: Cues that make a sentence a live requirement even if it is phrased in prose,
+#: imperatives included ("use X", "stay on X"). These win over the citation
+#: cues, except against an explicit version range.
 _DECLARATION_CUES = re.compile(
     r"\b(requires?|required|requirement|minimum|floor|pins?|pinned|depends?\s+on|"
     r"needs?|install(?:s|ing|ation)?|upgrade\s+to|bump\s+to|move\s+to|must\s+be|"
-    r"at\s+least|or\s+newer|or\s+later|supported\s+version)\b",
+    r"at\s+least|or\s+newer|or\s+later|supported\s+version|"
+    r"use|stay\s+on|stick\s+(?:to|with)|make\s+sure)\b",
     re.IGNORECASE,
 )
 #: ``0.15.8 → 0.15.11``, ``0.15.8 -> 0.15.11``, ``0.15.8 to 0.15.11``. Two
@@ -877,6 +889,10 @@ def is_version_citation(lines: list[str], index: int, match: re.Match[str]) -> b
     # 0.16.17" dates everything after the lead-in. Declaration cues above stay
     # clause-scoped, so a requirement after the colon is still a requirement.
     full_sentence = _sentence_at(context, at, r"[.!?;]\s+")
+    if _CITATION_BEFORE_VERSION.search(context[:at]):
+        return True
+    if _CITATION_AFTER_VERSION.match(context[at + match.end() - match.start() :]):
+        return True
     return bool(_CITATION_CUES.search(full_sentence) or _DATED_PROSE.search(context))
 
 

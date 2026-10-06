@@ -770,6 +770,10 @@ def test_breaking_symbols_are_scoped_to_the_release_that_broke_them(ecosystem: P
         "**The server stays up.** Until kglite 0.14.5 it did not: the deadline\nwas checked too late.",
         "The deadline was polled too late. kglite 0.14.5 fixed that, so a runaway is now a\nbounded wait.",
         "The Python acceptance suite\npassed all 39 tests against the installed kglite 0.14.5 wheel.",
+        # The anchored forms of the same cues: a fix and a measurement that
+        # name the release they belong to.
+        "The deadline bug was fixed in kglite 0.14.5.",
+        "Throughput was measured against kglite 0.14.5 on an M2.",
     ],
 )
 def test_historical_citations_are_not_flagged_as_drift(ecosystem: Path, prose: str) -> None:
@@ -798,6 +802,16 @@ def test_historical_citations_are_not_flagged_as_drift(ecosystem: Path, prose: s
         # a declaration after the colon is still a declaration.
         "Measured on a laptop: the viewer requires kglite 0.14.3.",
         "Until further notice, pin kglite 0.14.3.",
+        # `until`, `fixed` and `passed` are records only when anchored to the
+        # version: "until <version>", "<version> fixed", "passed ... against
+        # <version>". Elsewhere in a sentence they read as live instructions.
+        "Use kglite 0.14.3 until the RDF fix lands.",
+        "Stay on kglite 0.14.3 until the 0.20 series ships.",
+        "Known issue (fixed upstream): use kglite 0.14.3 for the notebook.",
+        "Make sure kglite 0.14.3 is installed and the smoke test passed.",
+        # An imperative after a record lead-in is still an instruction.
+        "Known issue (fixed in 0.14.2): use kglite 0.14.3 for the notebook.",
+        "Measured on an M2: stay on kglite 0.14.3.",
     ],
 )
 def test_declarations_are_still_flagged(ecosystem: Path, prose: str) -> None:
