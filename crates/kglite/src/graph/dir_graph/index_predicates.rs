@@ -105,15 +105,19 @@ fn text_temporal_candidates(s: &str) -> Vec<Value> {
 }
 
 /// Whether a temporal probe's [`equality_keys`] are an incomplete answer for
-/// an index holding `keys`: a stored string that parses to the probe equals it
-/// too, and no finite key set spells every such string. Scans the index's keys,
-/// so only a temporal probe pays it.
-pub(crate) fn temporal_probe_needs_scan<'a>(
+/// an index holding the keys `keys` yields: a stored string that parses to the
+/// probe equals it too, and no finite key set spells every such string.
+///
+/// `keys` is a closure so a probe that is not temporal never touches the
+/// index: walking a forked (layered) index's keys merges every level, which
+/// made each `MERGE` miss of a statement that had already created a node cost
+/// O(index).
+pub(crate) fn temporal_probe_needs_scan<'a, I: Iterator<Item = &'a Value>>(
     probe: &Value,
-    mut keys: impl Iterator<Item = &'a Value>,
+    keys: impl FnOnce() -> I,
 ) -> bool {
     matches!(probe, Value::DateTime(_) | Value::Timestamp(_))
-        && keys.any(|key| {
+        && keys().any(|key| {
             matches!(key, Value::String(s) if crate::graph::core::filtering::parses_as_temporal(s))
         })
 }

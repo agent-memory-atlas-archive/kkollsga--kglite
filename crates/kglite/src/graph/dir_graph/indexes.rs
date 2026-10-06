@@ -723,7 +723,8 @@ impl DirGraph {
         let key = (node_type.to_string(), index_key.to_string());
         let keys = predicate_queries::equality_keys(value)?;
         let index = self.property_indices.get(&key)?;
-        if predicate_queries::temporal_probe_needs_scan(value, index.iter().map(|(key, _)| key)) {
+        if predicate_queries::temporal_probe_needs_scan(value, || index.iter().map(|(key, _)| key))
+        {
             return None;
         }
         let mut hits = Vec::new();
@@ -1013,7 +1014,7 @@ impl DirGraph {
         let key = (node_type.to_string(), properties.to_vec());
         let index = self.composite_indices.get(&key)?;
         for (position, value) in values.iter().enumerate() {
-            let keys = index.iter().filter_map(|(tuple, _)| tuple.0.get(position));
+            let keys = || index.iter().filter_map(|(tuple, _)| tuple.0.get(position));
             if predicate_queries::temporal_probe_needs_scan(value, keys) {
                 return None;
             }

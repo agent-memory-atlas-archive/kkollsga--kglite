@@ -72,6 +72,8 @@ pub(crate) mod durable;
 #[cfg(test)]
 mod endpoint_contract_tests;
 pub(crate) mod execute;
+#[cfg(test)]
+mod merge_unwind_index_tests;
 pub(crate) mod noderefs;
 #[cfg(test)]
 mod param_presence_tests;

@@ -72,6 +72,23 @@ type Level<K> = HashMap<K, Option<Vec<NodeIndex>>>;
 /// to one level.
 pub(crate) const MAX_LAYER_DEPTH: usize = 32;
 
+#[cfg(test)]
+thread_local! {
+    static MERGED_ITERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_merged_iter() {
+    MERGED_ITERS.with(|n| n.set(n.get() + 1));
+}
+
+/// How many times this thread has walked a layered index through the merging
+/// [`LayeredIndex::iter`] — the O(index) read a point lookup must never pay.
+#[cfg(test)]
+pub(crate) fn merged_iters() -> usize {
+    MERGED_ITERS.with(std::cell::Cell::get)
+}
+
 /// A user index's `value -> members` map.
 ///
 /// Zero levels is the empty index; one level reads exactly like the plain
@@ -159,6 +176,8 @@ impl<K: Eq + Hash + Clone> LayeredIndex<K> {
             // of its index on every write.
             [only] => IndexIter::Flat(only.iter()),
             levels => {
+                #[cfg(test)]
+                note_merged_iter();
                 let mut seen: HashSet<&K> = HashSet::new();
                 let mut out: Vec<(&K, &Vec<NodeIndex>)> = Vec::new();
                 for level in levels.iter().rev() {

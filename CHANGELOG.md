@@ -64,6 +64,13 @@ before upgrading.
   1,500 cycles of 1,000 nodes. Each commit now rebuilds the column stores once
   dead rows pass the `auto_vacuum_threshold` ratio (default 0.3, floor 100
   rows). No node index changes, so indexes and labels stay valid.
+- `UNWIND $rows AS r MERGE (s:Label {key: r.key})` no longer costs O(index) per
+  new key inside a transaction. After the statement's first `CREATE`, every
+  later row's index lookup merged every level of the transaction's index to
+  rule out a date probe, so 40 new keys at 80,000 nodes took about 120 ms
+  against 0.4 ms for one `MERGE`. A lookup now reads the index only when the
+  probe is a date. This covers single-property and composite indexes, and
+  every `MATCH {key: …}` that uses them.
 - Restarting a durable graph no longer holds the whole write-ahead log in
   memory. Recovery decoded every frame into a list, about ten times its
   on-disk size, before folding it: a 6 MB log restarted at 90 MiB resident,
