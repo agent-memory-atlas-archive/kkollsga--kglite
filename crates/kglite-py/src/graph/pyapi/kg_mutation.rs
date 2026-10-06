@@ -1107,6 +1107,30 @@ fn apply_timeseries(
     }
 }
 
+/// The advisories a node load raises: the report's own, with its
+/// empty-interval warning replaced by `labelled` — the same count widened to
+/// the labels the load stamps — when the load stamps any. Every other
+/// advisory, such as a shadowed identity column, is kept.
+fn load_warnings(result: &NodeOperationReport, labelled: Option<String>) -> Vec<String> {
+    let Some(labelled) = labelled else {
+        return result.warnings.clone();
+    };
+    let narrow = result
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == "empty_interval_rows")
+        .map(|d| d.message.as_str());
+    std::iter::once(labelled)
+        .chain(
+            result
+                .warnings
+                .iter()
+                .filter(|w| Some(w.as_str()) != narrow)
+                .cloned(),
+        )
+        .collect()
+}
+
 /// Marshal an `add_nodes` report, warning about skipped rows unless
 /// `on_invalid` asked for silence. The counts are in the dict either way.
 fn build_node_report_dict<'py>(
@@ -1424,10 +1448,7 @@ impl KnowledgeGraph {
         self.commit_wal()?;
         self.add_report(OperationReport::NodeOperation(result.clone()));
         declared?;
-        match labelled_warning {
-            Some(warning) => crate::graph::warn_all(py, &[warning])?,
-            None => crate::graph::warn_all(py, &result.warnings)?,
-        }
+        crate::graph::warn_all(py, &load_warnings(&result, labelled_warning))?;
 
         Python::attach(|py| build_node_report_dict(py, &result, on_invalid))
     }
