@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use petgraph::graph::NodeIndex;
 
 use super::declared_type_name;
-use super::plan::{EdgeKey, NodeKey, Properties, ReplayPlan};
+use super::plan::{node_slot, EdgeKey, NodeKey, Properties, ReplayPlan};
 use super::validate::Created;
 use crate::datatypes::Value;
 use crate::graph::mutation::batch::{BatchProcessor, ConflictHandling, NodeAction};
@@ -16,6 +16,7 @@ use crate::graph::storage::{GraphRead, GraphWrite};
 use std::sync::Arc;
 
 type Row = (NodeKey, Value, Properties);
+/// Keyed by [`node_slot`], so every numeric spelling of an id finds its node.
 type Identities = HashMap<NodeKey, NodeIndex>;
 
 pub(super) fn apply(graph: &mut DirGraph, plan: &ReplayPlan) -> Result<Created, String> {
@@ -24,7 +25,7 @@ pub(super) fn apply(graph: &mut DirGraph, plan: &ReplayPlan) -> Result<Created, 
     let mut doomed = rustc_hash::FxHashSet::default();
     for ((node_type, id), state) in &plan.nodes {
         if state.reset {
-            if let Some(idx) = identities.get(&(node_type.clone(), id.clone())).copied() {
+            if let Some(idx) = identities.get(&node_slot(node_type, id)).copied() {
                 doomed.insert(idx);
             }
         }
@@ -119,7 +120,7 @@ fn upsert_rows(
                 .map(|(name, value)| (graph.interner.get_or_intern(&name), value))
                 .collect();
             let action =
-                if let Some(node_idx) = identities.get(&(node_type.clone(), id.clone())).copied() {
+                if let Some(node_idx) = identities.get(&node_slot(&node_type, &id)).copied() {
                     NodeAction::Update {
                         node_idx,
                         title: Some(title),
@@ -147,7 +148,7 @@ fn upsert_rows(
             return Err("WAL replay lost newly created node slots".into());
         }
         for (id, idx) in new_ids.into_iter().zip(new_indices) {
-            identities.insert((node_type.clone(), id), idx);
+            identities.insert(node_slot(&node_type, &id), idx);
             created.nodes.insert(idx);
         }
     }
@@ -174,7 +175,8 @@ fn vivify_legacy_endpoints(
             (key.1.clone(), key.2.clone()),
             (key.3.clone(), key.4.clone()),
         ] {
-            if seen.insert(key.clone()) && !identities.contains_key(&key) {
+            let slot = node_slot(&key.0, &key.1);
+            if seen.insert(slot.clone()) && !identities.contains_key(&slot) {
                 rows.push((
                     key.clone(),
                     key.1.clone(),
@@ -194,7 +196,7 @@ fn apply_labels(graph: &mut DirGraph, plan: &ReplayPlan, identities: &Identities
         let Some(labels) = &state.labels else {
             continue;
         };
-        let Some(idx) = identities.get(&(node_type.clone(), id.clone())).copied() else {
+        let Some(idx) = identities.get(&node_slot(node_type, id)).copied() else {
             continue;
         };
         for stale in graph.secondary_label_names(idx) {
@@ -212,8 +214,8 @@ fn apply_labels(graph: &mut DirGraph, plan: &ReplayPlan, identities: &Identities
 
 fn endpoints(identities: &Identities, key: &EdgeKey) -> Option<(NodeIndex, NodeIndex)> {
     Some((
-        *identities.get(&(key.1.clone(), key.2.clone()))?,
-        *identities.get(&(key.3.clone(), key.4.clone()))?,
+        *identities.get(&node_slot(&key.1, &key.2))?,
+        *identities.get(&node_slot(&key.3, &key.4))?,
     ))
 }
 
@@ -302,9 +304,10 @@ fn apply_edges(
     Ok(())
 }
 
-/// WAL keys use Value equality, never the query-facing numeric/prefix ID
-/// normalizer. Build once from actual stored identities; reused slots are
-/// removed from this map before any new incarnation is installed.
+/// Keys every stored id by [`node_slot`]: numeric spellings are one id, as in
+/// the id index, but a string id never matches a number. Build once from
+/// actual stored identities; reused slots are removed from this map before
+/// any new incarnation is installed.
 fn exact_identities(graph: &DirGraph, plan: &ReplayPlan) -> Identities {
     let types = plan.node_types();
     let _guard = graph.begin_read_pass();
@@ -317,7 +320,7 @@ fn exact_identities(graph: &DirGraph, plan: &ReplayPlan) -> Identities {
             if !types.contains(kind) {
                 return None;
             }
-            Some(((kind.to_string(), graph.graph.get_node_id(idx)?), idx))
+            Some((node_slot(kind, &graph.graph.get_node_id(idx)?), idx))
         })
         .collect()
 }

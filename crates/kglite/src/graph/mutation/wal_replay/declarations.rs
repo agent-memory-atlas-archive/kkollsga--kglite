@@ -51,6 +51,8 @@ struct StorePayload {
     /// `(node id, vector, source-text hash)`, in first-seen order; a repeated
     /// id replaces its entry in place, matching `set_embedding`.
     entries: Vec<(Value, Vec<f32>, Option<u64>)>,
+    /// Keyed by `canonical_id`: a widened id column logs one node under two
+    /// numeric spellings.
     slots: HashMap<Value, usize>,
 }
 
@@ -62,17 +64,21 @@ impl StorePayload {
 
     fn upsert(&mut self, id: &Value, vector: &[f32], hash: Option<u64>) {
         let entry = (id.clone(), vector.to_vec(), hash);
-        match self.slots.get(id) {
+        let key = crate::graph::schema::canonical_id(id).into_owned();
+        match self.slots.get(&key) {
             Some(&slot) => self.entries[slot] = entry,
             None => {
-                self.slots.insert(id.clone(), self.entries.len());
+                self.slots.insert(key, self.entries.len());
                 self.entries.push(entry);
             }
         }
     }
 
     fn forget(&mut self, id: &Value) {
-        let Some(slot) = self.slots.remove(id) else {
+        let Some(slot) = self
+            .slots
+            .remove(crate::graph::schema::canonical_id(id).as_ref())
+        else {
             return;
         };
         self.entries.remove(slot);
@@ -129,6 +135,7 @@ pub(super) struct Declarations {
     /// Timeseries payloads, last-writer-wins per node — each writer logs the
     /// whole series it produced, so the newest op is the whole answer.
     timeseries: Vec<((String, Value), NodeTimeseries)>,
+    /// Keyed by `plan::node_slot`.
     timeseries_slots: HashMap<(String, Value), usize>,
     /// Embedding payloads, accumulated per store — see [`StorePayload`].
     stores: Vec<((String, String), StorePayload)>,
@@ -150,8 +157,10 @@ impl Declarations {
     /// stores are keyed by physical slot, and a freed slot is handed to the
     /// next node created.
     pub fn forget_node(&mut self, node_type: &str, id: &Value) {
-        let key = (node_type.to_string(), id.clone());
-        if let Some(slot) = self.timeseries_slots.remove(&key) {
+        if let Some(slot) = self
+            .timeseries_slots
+            .remove(&super::plan::node_slot(node_type, id))
+        {
             self.timeseries.remove(slot);
             for other in self.timeseries_slots.values_mut() {
                 if *other > slot {
@@ -189,11 +198,14 @@ impl Declarations {
                 timeseries,
             } => {
                 let key = (node_type.clone(), id.clone());
-                match self.timeseries_slots.get(&key) {
+                match self
+                    .timeseries_slots
+                    .get(&super::plan::node_slot(node_type, id))
+                {
                     Some(&slot) => self.timeseries[slot].1 = timeseries.clone(),
                     None => {
                         self.timeseries_slots
-                            .insert(key.clone(), self.timeseries.len());
+                            .insert(super::plan::node_slot(node_type, id), self.timeseries.len());
                         self.timeseries.push((key, timeseries.clone()));
                     }
                 }

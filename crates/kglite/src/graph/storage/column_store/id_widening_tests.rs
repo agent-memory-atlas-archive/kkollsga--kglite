@@ -319,3 +319,145 @@ fn wal_replay_widens_the_id_column_as_the_live_graph_did() {
     let recovered = open().unwrap();
     assert_eq!(shape(&recovered.snapshot()), live);
 }
+
+/// WAL frames written after the widening name the checkpoint's `UniqueId`
+/// nodes by their `Int64` spelling. Replay keys identities numerically, so a
+/// later `SET` updates the stored node instead of creating a duplicate, and a
+/// `DETACH DELETE` removes it instead of missing it. The last transaction
+/// touches a node and widens in one commit, so its capture sees both
+/// spellings of the touched node.
+#[test]
+fn wal_replay_after_the_widening_finds_the_checkpoint_nodes() {
+    use crate::graph::io::file::{load_file, save_graph};
+    use crate::graph::wal::DurabilityLevel;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.kgl").to_string_lossy().into_owned();
+    {
+        let mut graph = DirGraph::new();
+        let mut df = DataFrame::new(Vec::new());
+        for column in ["uid", "v"] {
+            df.add_column(
+                column.into(),
+                ColumnType::UniqueId,
+                ColumnData::UniqueId((1..=5).map(Some).collect()),
+            )
+            .unwrap();
+        }
+        crate::graph::mutation::maintain::add_nodes(
+            &mut graph,
+            df,
+            "Item".into(),
+            "uid".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        save_graph(&mut Arc::new(graph), &path).unwrap();
+    }
+    let open = || Session::open_durable(load_file(&path).unwrap(), &path, DurabilityLevel::Full);
+    let state = |graph: &DirGraph| {
+        (
+            graph.column_store("Item").unwrap().id_type_str(),
+            count(
+                graph,
+                "MATCH (n:Item) WITH n ORDER BY n.uid RETURN collect([n.uid, n.v])",
+            ),
+        )
+    };
+    let live = {
+        let session = open().unwrap();
+        for query in [
+            "CREATE (:Item {uid: 6, v: 6})",
+            "MATCH (n:Item {uid: 5}) SET n.v = 55",
+            "MATCH (n:Item {uid: 2}) DETACH DELETE n",
+        ] {
+            let mut tx = session.begin();
+            let params = HashMap::new();
+            execute_mut(
+                tx.working_mut().unwrap(),
+                query,
+                &ExecuteOptions::eager(&params),
+            )
+            .unwrap();
+            assert!(matches!(
+                session.commit(tx, true),
+                CommitOutcome::Committed { .. }
+            ));
+        }
+        state(&session.snapshot())
+    };
+    let row = |id: i64, v: i64| Value::List(vec![Value::Int64(id), Value::Int64(v)]);
+    assert_eq!(
+        live,
+        (
+            Some("int64"),
+            Value::List(vec![row(1, 1), row(3, 3), row(4, 4), row(5, 55), row(6, 6)])
+        )
+    );
+    let recovered = open().unwrap();
+    assert_eq!(state(&recovered.snapshot()), live);
+}
+
+/// One transaction touches a compact-id node and then widens the column: at
+/// commit the touched node's stored id is `Int64(3)`, not the `UniqueId(3)`
+/// it was captured under. The capture must still log its new state, not a
+/// removal.
+#[test]
+fn a_transaction_that_touches_then_widens_logs_the_touched_node() {
+    use crate::graph::io::file::{load_file, save_graph};
+    use crate::graph::wal::DurabilityLevel;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.kgl").to_string_lossy().into_owned();
+    {
+        let mut graph = DirGraph::new();
+        let mut df = DataFrame::new(Vec::new());
+        df.add_column(
+            "uid".into(),
+            ColumnType::UniqueId,
+            ColumnData::UniqueId((1..=5).map(Some).collect()),
+        )
+        .unwrap();
+        crate::graph::mutation::maintain::add_nodes(
+            &mut graph,
+            df,
+            "Item".into(),
+            "uid".into(),
+            None,
+            None,
+        )
+        .unwrap();
+        save_graph(&mut Arc::new(graph), &path).unwrap();
+    }
+    let open = || Session::open_durable(load_file(&path).unwrap(), &path, DurabilityLevel::Full);
+    let read = |graph: &DirGraph| {
+        count(
+            graph,
+            "MATCH (n:Item) WITH n ORDER BY n.uid RETURN collect([n.uid, n.v])",
+        )
+    };
+    let live = {
+        let session = open().unwrap();
+        let mut tx = session.begin();
+        let params = HashMap::new();
+        for query in [
+            "MATCH (n:Item {uid: 3}) SET n.v = 33",
+            "CREATE (:Item {uid: 6, v: 6})",
+        ] {
+            execute_mut(
+                tx.working_mut().unwrap(),
+                query,
+                &ExecuteOptions::eager(&params),
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            session.commit(tx, true),
+            CommitOutcome::Committed { .. }
+        ));
+        read(&session.snapshot())
+    };
+    let recovered = open().unwrap();
+    assert_eq!(read(&recovered.snapshot()), live);
+}

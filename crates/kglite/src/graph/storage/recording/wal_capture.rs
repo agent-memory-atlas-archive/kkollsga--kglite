@@ -10,8 +10,26 @@ use crate::graph::wal::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// The id is in its `canonical_id` spelling: a statement that widens a
+/// UniqueId column re-spells every id already touched in the transaction, and
+/// a raw key would no longer match the node it named.
 type NodeKey = (InternedKey, Value);
 type GroupKey = (InternedKey, NodeKey, NodeKey);
+
+fn node_key(node_type: InternedKey, id: &Value) -> NodeKey {
+    (
+        node_type,
+        crate::graph::schema::canonical_id(id).into_owned(),
+    )
+}
+
+/// Whether `idx` still holds the logical node `key` names.
+fn holds(graph: &impl GraphRead, idx: NodeIndex, key: &NodeKey) -> bool {
+    graph.node_type_of(idx) == Some(key.0)
+        && graph
+            .get_node_id(idx)
+            .is_some_and(|id| crate::graph::schema::canonical_id(&id).as_ref() == &key.1)
+}
 
 impl<G: GraphRead> RecordingGraph<G> {
     pub(crate) fn note_wal_node_identity(
@@ -191,7 +209,7 @@ impl WalTouches {
                 let touch = remember(
                     &mut self.nodes,
                     &mut self.node_order,
-                    (*node_type, id.clone()),
+                    node_key(*node_type, id),
                     NodeTouch::default,
                 );
                 touch.idx = Some(*idx);
@@ -201,7 +219,7 @@ impl WalTouches {
                 let touch = remember(
                     &mut self.nodes,
                     &mut self.node_order,
-                    (*node_type, id.clone()),
+                    node_key(*node_type, id),
                     NodeTouch::default,
                 );
                 touch.idx = None;
@@ -217,8 +235,8 @@ impl WalTouches {
             } => {
                 self.removed_groups.insert((
                     *conn_type,
-                    (*src_type, src_id.clone()),
-                    (*tgt_type, tgt_id.clone()),
+                    node_key(*src_type, src_id),
+                    node_key(*tgt_type, tgt_id),
                 ));
             }
             RawOp::WalGroup {
@@ -233,8 +251,8 @@ impl WalTouches {
             } => {
                 let key = (
                     *conn_type,
-                    (*src_type, src_id.clone()),
-                    (*tgt_type, tgt_id.clone()),
+                    node_key(*src_type, src_id),
+                    node_key(*tgt_type, tgt_id),
                 );
                 let touch = remember(&mut self.groups, &mut self.group_order, key, || {
                     (*source, *target, base_members.clone())
@@ -259,8 +277,8 @@ impl WalTouches {
     fn merge_embedding_base(&mut self, touch: &EdgeEmbeddingBaseTouch) {
         let key = (
             touch.conn_type,
-            (touch.src_type, touch.src_id.clone()),
-            (touch.tgt_type, touch.tgt_id.clone()),
+            node_key(touch.src_type, &touch.src_id),
+            node_key(touch.tgt_type, &touch.tgt_id),
         );
         let Some(base) = self.embedding_bases.get_mut(&key) else {
             self.embedding_bases.insert(key, touch.clone());
@@ -333,14 +351,12 @@ fn emit_node_ops(
 ) {
     for key in &touches.node_order {
         let touch = &touches.nodes[key];
-        let idx = touch.idx.filter(|idx| {
-            graph.node_type_of(*idx) == Some(key.0)
-                && graph.get_node_id(*idx).as_ref() == Some(&key.1)
-        });
+        let idx = touch.idx.filter(|idx| holds(graph, *idx, key));
         if let Some(node) = idx.and_then(|idx| graph.node_view(idx)) {
             out.push(MutationOp::ReplaceNodeState {
                 node_type: interner.resolve(key.0).into(),
-                id: key.1.clone(),
+                // The stored spelling, so replay recreates the column it had.
+                id: node.id().into_owned(),
                 title: node.title().into_owned(),
                 properties: node.properties_cloned(interner).into_iter().collect(),
                 labels: labels(idx.expect("live node")),
@@ -365,8 +381,7 @@ fn endpoint(
         .nodes
         .get(key)
         .map_or(Some(hint), |touch| touch.idx)?;
-    (graph.node_type_of(idx) == Some(key.0) && graph.get_node_id(idx).as_ref() == Some(&key.1))
-        .then_some(idx)
+    holds(graph, idx, key).then_some(idx)
 }
 
 fn current_group(

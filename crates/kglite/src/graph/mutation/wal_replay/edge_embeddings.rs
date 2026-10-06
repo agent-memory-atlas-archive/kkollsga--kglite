@@ -15,6 +15,28 @@ pub(crate) struct LogicalGroupKey {
     pub tgt_id: Value,
 }
 
+impl LogicalGroupKey {
+    /// Both ids in their `canonical_id` spelling: a widened id column logs
+    /// one group under two numeric spellings, and this key is compared by
+    /// `Value` equality.
+    pub(crate) fn new(
+        conn_type: &str,
+        src_type: &str,
+        src_id: &Value,
+        tgt_type: &str,
+        tgt_id: &Value,
+    ) -> Self {
+        use crate::graph::schema::canonical_id;
+        Self {
+            conn_type: conn_type.to_string(),
+            src_type: src_type.to_string(),
+            src_id: canonical_id(src_id).into_owned(),
+            tgt_type: tgt_type.to_string(),
+            tgt_id: canonical_id(tgt_id).into_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct LogicalStoreKey {
     pub conn_type: String,
@@ -73,13 +95,7 @@ pub(super) fn event_from_op(op: &MutationOp) -> Option<OrderedEdgeEmbeddingEvent
             tgt_id,
             edges,
         } => Some(OrderedEdgeEmbeddingEvent::ReplaceTopology {
-            key: LogicalGroupKey {
-                conn_type: conn_type.clone(),
-                src_type: src_type.clone(),
-                src_id: src_id.clone(),
-                tgt_type: tgt_type.clone(),
-                tgt_id: tgt_id.clone(),
-            },
+            key: LogicalGroupKey::new(conn_type, src_type, src_id, tgt_type, tgt_id),
             edges: edges.clone(),
         }),
         MutationOp::SetEdgeEmbeddingStore {
@@ -102,13 +118,7 @@ pub(super) fn event_from_op(op: &MutationOp) -> Option<OrderedEdgeEmbeddingEvent
             member_count,
             stores,
         } => Some(OrderedEdgeEmbeddingEvent::ReplaceEmbeddings {
-            key: LogicalGroupKey {
-                conn_type: conn_type.clone(),
-                src_type: src_type.clone(),
-                src_id: src_id.clone(),
-                tgt_type: tgt_type.clone(),
-                tgt_id: tgt_id.clone(),
-            },
+            key: LogicalGroupKey::new(conn_type, src_type, src_id, tgt_type, tgt_id),
             member_count: *member_count,
             stores: stores.clone(),
         }),
@@ -120,13 +130,7 @@ pub(super) fn event_from_op(op: &MutationOp) -> Option<OrderedEdgeEmbeddingEvent
             tgt_id,
             patch,
         } => Some(OrderedEdgeEmbeddingEvent::PatchEmbeddings {
-            key: LogicalGroupKey {
-                conn_type: conn_type.clone(),
-                src_type: src_type.clone(),
-                src_id: src_id.clone(),
-                tgt_type: tgt_type.clone(),
-                tgt_id: tgt_id.clone(),
-            },
+            key: LogicalGroupKey::new(conn_type, src_type, src_id, tgt_type, tgt_id),
             patch: patch.clone(),
         }),
         _ => None,

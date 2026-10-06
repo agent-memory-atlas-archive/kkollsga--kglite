@@ -202,9 +202,10 @@ pub(crate) fn validate_durable_identities(graph: &DirGraph) -> Result<(), Durabl
         let Some(id) = graph.graph.get_node_id(idx) else {
             continue;
         };
-        if !seen.insert((kind, id.clone())) {
+        // Numeric spellings are one id, as in the id index and WAL replay.
+        if !seen.insert((kind, crate::graph::schema::canonical_id(&id).into_owned())) {
             return Err(DurableOpenError::Refused(format!(
-                "duplicate logical node identity in type '{}' with id {:?}; durability requires one node per exact (primary type, id). Open non-durably and assign distinct identities or remove duplicates before enabling durability",
+                "duplicate logical node identity in type '{}' with id {:?}; durability requires one node per (primary type, id), counting every numeric spelling of an id as one. Open non-durably and assign distinct identities or remove duplicates before enabling durability",
                 graph.interner.resolve(kind), id
             )));
         }

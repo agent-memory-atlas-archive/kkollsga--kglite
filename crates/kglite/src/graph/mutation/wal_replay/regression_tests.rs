@@ -539,30 +539,39 @@ fn exact_typed_legacy_stub_endpoint_keeps_default_title_and_provisional_marker()
 
 #[test]
 fn float_first_identity_and_existing_float_property_do_not_coerce_integers() {
-    let mut graph = DirGraph::new();
     let values = [Value::Float64(7.0), Value::Int64(7), Value::UniqueId(7)];
-    let ops: Vec<_> = values
-        .iter()
-        .map(|id| node(id.clone(), id.clone(), &[("n", id.clone())]))
-        .collect();
-    apply(&mut graph, ops.clone()).unwrap();
-    apply(&mut graph, ops).unwrap();
-    let actual: Vec<_> = graph
-        .graph
-        .node_indices()
-        .map(|idx| graph.graph.get_node_id(idx).unwrap())
-        .collect();
-    assert_eq!(actual, values);
-    for idx in graph.graph.node_indices() {
-        let id = graph.graph.get_node_id(idx).unwrap();
-        assert_eq!(graph.graph.get_node_title(idx), Some(id.clone()));
+    let op = |id: &Value| node(id.clone(), id.clone(), &[("n", id.clone())]);
+    // Each spelling is installed as logged, never coerced to another.
+    for id in &values {
+        let mut graph = DirGraph::new();
+        apply(&mut graph, vec![op(id)]).unwrap();
+        apply(&mut graph, vec![op(id)]).unwrap();
+        let idx = graph.graph.node_indices().next().unwrap();
+        assert_eq!(graph.graph.node_count(), 1);
+        assert_eq!(graph.graph.get_node_id(idx).as_ref(), Some(id));
+        // A title column holds a compact id as its `Int64` (the widening).
+        let title = match id {
+            Value::UniqueId(n) => Value::Int64(i64::from(*n)),
+            other => other.clone(),
+        };
+        assert_eq!(graph.graph.get_node_title(idx), Some(title));
         assert_eq!(
             graph
                 .graph
-                .get_node_property(idx, InternedKey::from_str("n")),
+                .get_node_property(idx, InternedKey::from_str("n"))
+                .as_ref(),
             Some(id)
         );
     }
+    // The three spellings are one id, as in the id index (a durable write
+    // refuses `7.0` beside `7`): one node, in the last logged spelling.
+    let mut graph = DirGraph::new();
+    let ops: Vec<_> = values.iter().map(op).collect();
+    apply(&mut graph, ops.clone()).unwrap();
+    apply(&mut graph, ops).unwrap();
+    assert_eq!(graph.graph.node_count(), 1);
+    let idx = graph.graph.node_indices().next().unwrap();
+    assert_eq!(graph.graph.get_node_id(idx), Some(Value::UniqueId(7)));
     let mut graph = DirGraph::new();
     apply(
         &mut graph,

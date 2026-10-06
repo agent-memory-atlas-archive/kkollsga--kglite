@@ -214,13 +214,13 @@ fn capture_edge_embedding_state(
             .graph
             .node_view(target)
             .ok_or_else(|| format!("relationship slot {} has a dead target", edge.index()))?;
-        let key = edge_embeddings::LogicalGroupKey {
-            conn_type: conn_type.to_string(),
-            src_type: source_node.node_type_str(&graph.interner).to_string(),
-            src_id: source_node.id().into_owned(),
-            tgt_type: target_node.node_type_str(&graph.interner).to_string(),
-            tgt_id: target_node.id().into_owned(),
-        };
+        let key = edge_embeddings::LogicalGroupKey::new(
+            conn_type,
+            source_node.node_type_str(&graph.interner),
+            &source_node.id(),
+            target_node.node_type_str(&graph.interner),
+            &target_node.id(),
+        );
         let group = state.groups.entry(key).or_insert_with(|| {
             let stores = matching
                 .iter()
@@ -394,7 +394,10 @@ fn find_logical_node(graph: &DirGraph, node_type: &str, id: &Value) -> Option<No
     let found = graph.graph.node_indices().find(|&node| {
         graph.graph.node_type_of(node).is_some_and(|kind| {
             graph.interner.resolve(kind) == node_type
-                && graph.graph.get_node_id(node).as_ref() == Some(id)
+                && graph.graph.get_node_id(node).is_some_and(|stored| {
+                    crate::graph::schema::canonical_id(&stored)
+                        == crate::graph::schema::canonical_id(id)
+                })
         })
     });
     drop(guard);

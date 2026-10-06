@@ -9,6 +9,28 @@ pub(super) type NodeKey = (String, Value);
 pub(super) type EdgeKey = (String, String, Value, String, Value);
 pub(super) type Properties = Vec<(String, Value)>;
 
+/// `key` with its id in the one spelling the id index treats every numeric
+/// spelling as: `UniqueId(5)`, `Int64(5)` and `Float64(5.0)` are one node. A
+/// UniqueId column widened to Int64 mid-log logs the same node under both, so
+/// any slot or identity map keyed by the raw `Value` splits it in two.
+pub(super) fn node_slot(node_type: &str, id: &Value) -> NodeKey {
+    (
+        node_type.to_string(),
+        crate::graph::schema::canonical_id(id).into_owned(),
+    )
+}
+
+fn edge_slot(key: &EdgeKey) -> EdgeKey {
+    let canonical = |id| crate::graph::schema::canonical_id(id).into_owned();
+    (
+        key.0.clone(),
+        key.1.clone(),
+        canonical(&key.2),
+        key.3.clone(),
+        canonical(&key.4),
+    )
+}
+
 #[derive(Default)]
 pub(super) struct NodeState {
     pub row: Option<(Value, Properties)>,
@@ -28,6 +50,8 @@ pub(super) struct EdgeState {
 
 #[derive(Default)]
 pub(super) struct ReplayPlan {
+    /// Keyed by the latest spelling logged for the node; the slot maps are
+    /// keyed by [`node_slot`] / `edge_slot`.
     pub nodes: Vec<(NodeKey, NodeState)>,
     node_slots: HashMap<NodeKey, usize>,
     pub edges: Vec<(EdgeKey, EdgeState)>,
@@ -60,12 +84,20 @@ impl ReplayPlan {
     }
 
     fn node_mut(&mut self, key: NodeKey) -> &mut NodeState {
-        let slot = *self.node_slots.entry(key.clone()).or_insert_with(|| {
-            let slot = self.nodes.len();
-            self.nodes.push((key, NodeState::default()));
-            slot
-        });
-        &mut self.nodes[slot].1
+        let slot_key = node_slot(&key.0, &key.1);
+        match self.node_slots.get(&slot_key) {
+            Some(&slot) => {
+                // A created node is installed under the spelling it last had.
+                self.nodes[slot].0 = key;
+                &mut self.nodes[slot].1
+            }
+            None => {
+                let slot = self.nodes.len();
+                self.node_slots.insert(slot_key, slot);
+                self.nodes.push((key, NodeState::default()));
+                &mut self.nodes[slot].1
+            }
+        }
     }
 
     fn fold_op(&mut self, op: &MutationOp) {
@@ -108,7 +140,7 @@ impl ReplayPlan {
                     tgt_id.clone(),
                 );
                 self.fold_edge(key.clone(), None);
-                let slot = self.edge_slots[&key];
+                let slot = self.edge_slots[&edge_slot(&key)];
                 self.edges[slot].1.group = Some(edges.clone());
             }
             MutationOp::UpsertNode {
@@ -198,9 +230,10 @@ impl ReplayPlan {
     }
 
     fn fold_edge(&mut self, key: EdgeKey, properties: Option<Properties>) {
+        let slot_key = edge_slot(&key);
         let prior_reset = self
             .edge_slots
-            .get(&key)
+            .get(&slot_key)
             .is_some_and(|&slot| self.edges[slot].1.reset);
         let state = EdgeState {
             reset: properties.is_none() || prior_reset,
@@ -209,23 +242,23 @@ impl ReplayPlan {
             source_generation: self.generation(&(key.1.clone(), key.2.clone())),
             target_generation: self.generation(&(key.3.clone(), key.4.clone())),
         };
-        if let Some(&slot) = self.edge_slots.get(&key) {
-            self.edges[slot].1 = state;
+        if let Some(&slot) = self.edge_slots.get(&slot_key) {
+            self.edges[slot] = (key, state);
         } else {
-            self.edge_slots.insert(key.clone(), self.edges.len());
+            self.edge_slots.insert(slot_key, self.edges.len());
             self.edges.push((key, state));
         }
     }
 
     fn generation(&self, key: &NodeKey) -> u64 {
         self.node_slots
-            .get(key)
+            .get(&node_slot(&key.0, &key.1))
             .map_or(0, |&slot| self.nodes[slot].1.generation)
     }
 
     pub fn node_removed(&self, key: &NodeKey) -> bool {
         self.node_slots
-            .get(key)
+            .get(&node_slot(&key.0, &key.1))
             .is_some_and(|&slot| self.nodes[slot].1.removed)
     }
 
