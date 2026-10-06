@@ -74,7 +74,7 @@ Important options (run `--help` on the installed version for the authority):
 | `--durability full\|normal\|off` | what an acknowledged commit survives, default `normal` (see *Durability*) |
 | `--save-on-exit` | checkpoint the served graph back to `--graph` on `SIGINT`/`SIGTERM` |
 | `--checkpoint-interval SECS` | checkpoint the served graph on a timer |
-| `--checkpoint-wal-mib MIB` | checkpoint when the log passes this size, default `32` while a log is kept, `0` disables |
+| `--checkpoint-wal-mib MIB` | checkpoint when the log passes this size, default `16` while a log is kept, `0` disables |
 | `--auth none\|basic`, `--auth-user`, `--auth-pass` | Bolt LOGON policy |
 | `--idle-timeout`, `--max-sessions`, `--max-message-size` | resource bounds |
 | `--advertise-addr HOST:PORT` | address returned to `neo4j://` routing clients |
@@ -307,7 +307,7 @@ flush the log, stamp the checkpoint position, write the file, truncate the log.
   that silently never checkpoints.
 - **`--checkpoint-wal-mib MIB`** (`KGLITE_BOLT_CHECKPOINT_WAL_MIB`) — on log
   size, and **on by default** at `full` and `normal`. Every 10 seconds the
-  server compares the sidecar with the threshold (default 32 MiB) and with the
+  server compares the sidecar with the threshold (default 16 MiB) and with the
   `.kgl`. It checkpoints when the log is at least as large as both, because a
   log bigger than the file it extends costs more to replay than to rewrite.
   `0` disables it. An explicit value is refused with `--readonly` and for
@@ -339,10 +339,12 @@ by under a hundred bytes per single-node commit. Multiply that by your commit
 rate to size it.
 
 The log is bounded by default: `--checkpoint-wal-mib` checkpoints once it
-passes 32 MiB (and the size of the `.kgl`). Set `--checkpoint-wal-mib 0` and
+passes 16 MiB (and the size of the `.kgl`). Set `--checkpoint-wal-mib 0` and
 nothing else, and the sidecar grows with uptime and a restart replays all of
-it. Replay folds the log frame by frame, so its memory follows the graph the
-log produces, not the log's length. `--checkpoint-interval` adds a timer on top.
+it. Replay folds the log frame by frame, so its memory follows the distinct
+nodes the log names, not the log's length. On macOS a 6 MB and a 56 MB log over
+a bounded set of nodes each restarted 7-9 MiB above an idle server, while a log
+that keeps creating and deleting new nodes costs up to five times its size. `--checkpoint-interval` adds a timer on top.
 Neither makes commits safer, because the log already did that. They keep
 replay time and sidecar size bounded.
 

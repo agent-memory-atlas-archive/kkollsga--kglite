@@ -31,7 +31,7 @@ before upgrading.
   applies to every library and to both `load` modes. A call in flight keeps
   its model, and a negative or non-integer value fails the boot.
 - `kglite-bolt-server` now checkpoints on its own once the write-ahead log
-  passes 32 MiB and is as large as the `.kgl`, which rewrites the file passed
+  passes 16 MiB and is as large as the `.kgl`, which rewrites the file passed
   to `--graph`. A server at the default `normal` durability with no
   `--checkpoint-interval` never folded its log, so the log grew without bound
   and every restart replayed all of it. **Do:** pass `--checkpoint-wal-mib 0`

@@ -130,7 +130,7 @@ struct Cli {
     checkpoint_interval: Option<Duration>,
 
     /// Checkpoint when the write-ahead log passes this many MiB
-    /// [default: 32 while a log is kept; `0` disables].
+    /// [default: 16 while a log is kept; `0` disables].
     ///
     /// Without a bound the log of a `normal`/`full` server only ever grows, and
     /// the next restart replays all of it. The size check runs every 10
@@ -290,12 +290,15 @@ const CHECKPOINT_WAL_MIB_ENV: &str = "KGLITE_BOLT_CHECKPOINT_WAL_MIB";
 /// The log size, in MiB, past which a server that keeps a log checkpoints on its
 /// own when `--checkpoint-wal-mib` says nothing.
 ///
-/// Measured on the edge workload (40-row upserts, about 2 KB of log per
-/// commit): 32 MiB is a restart that replays in well under a second on a Pi
-/// and a checkpoint roughly every 15,000 commits, while a graph large enough to
-/// make a save expensive also makes the log's own size floor (the `.kgl`
-/// size) the binding one.
-const DEFAULT_CHECKPOINT_WAL_MIB: u64 = 32;
+/// Measured on macOS with the edge workload (40-row upserts, about 2 KB of log
+/// per commit): restart replay costs 7-9 MiB above an idle server for a 6 MB or
+/// a 56 MB log that updates a bounded set of nodes, and up to 5x the log when the
+/// commits keep creating and deleting new nodes, because the replay plan keeps
+/// one entry per distinct node the log names. 16 MiB therefore caps a restart
+/// near 80 MiB in the worst case, at a checkpoint roughly every 8,000 commits. A
+/// graph large enough to make a save expensive makes the log's own size floor
+/// (the `.kgl` size) the binding one. Not measured on a Pi.
+const DEFAULT_CHECKPOINT_WAL_MIB: u64 = 16;
 
 /// How often the log's size is looked at: one `stat`, so cheap enough to be
 /// frequent, and short enough that a burst cannot outgrow the bound by much.
@@ -395,7 +398,7 @@ fn parse_checkpoint_wal_mib(raw: &str) -> Result<u64, String> {
     trimmed.parse().map_err(|_| {
         format!(
             "invalid checkpoint WAL size {trimmed:?}: expected a whole number of MiB \
-             (for example 32), or 0 to disable"
+             (for example 16), or 0 to disable"
         )
     })
 }
