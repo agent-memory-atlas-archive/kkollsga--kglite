@@ -50,3 +50,26 @@ def test_auto_titles_are_identical_in_every_storage_mode(tmp_path) -> None:
     assert [row["title"] for row in golden] == ["L_1", "L_3", "L_4", "L_5", "L_6", "L_s1"]
     assert _titles("mapped", tmp_path / "b") == golden
     assert _titles("disk", tmp_path / "c") == golden
+
+
+@pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+@pytest.mark.parametrize("ids", [[1, 2, 3], ["a", "b", "c"]])
+def test_a_type_titled_by_its_ids_titles_an_untitled_create_by_its_id(storage, ids, tmp_path) -> None:
+    import pandas as pd
+
+    graph = _graph(storage, tmp_path)
+    graph.add_nodes(pd.DataFrame({"id": ids}), "P", "id")
+    new = [10, 11] if isinstance(ids[0], int) else ["x", "y"]
+    graph.cypher("CREATE (:P {id: $id})", params={"id": new[0]})
+    graph.cypher("MERGE (:P {id: $id})", params={"id": new[1]})
+    rows = graph.cypher("MATCH (n:P) RETURN n.id AS id, n.title AS title").to_list()
+    assert sorted((row["id"], row["title"]) for row in rows) == sorted((i, i) for i in ids + new)
+
+
+def test_a_declared_title_field_keeps_the_label_fallback(tmp_path) -> None:
+    import pandas as pd
+
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(pd.DataFrame({"id": [1], "name": ["Ann"]}), "P", "id", node_title_field="name")
+    graph.cypher("CREATE (:P {id: 2})")
+    assert graph.cypher("MATCH (n:P {id: 2}) RETURN n.title AS t").to_list() == [{"t": "P_2"}]

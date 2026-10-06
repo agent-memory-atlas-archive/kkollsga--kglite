@@ -1,6 +1,7 @@
 //! A node has one title. `CREATE` and `MERGE`'s create arm refuse a declared
 //! title field and `title` that disagree; on a type with no declared title
-//! field, `title` is the title and `name` stays a readable property.
+//! field, `title` is the title and `name` stays a readable property. With no
+//! title, a type titled by its ids takes the id, any other `<Label>_<id>`.
 
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::dir_graph::DirGraph;
@@ -79,5 +80,92 @@ fn title_is_the_title_and_name_stays_a_property() {
             vec![Value::Int64(3), s("Cid"), s("Cid")],
             vec![Value::Int64(4), s("Dan"), s("Dan")],
         ]
+    );
+}
+
+/// A type whose titles are its ids — `add_nodes` with no title column and no
+/// `node_title_field` — titles a `CREATE` or `MERGE` with no title by its id,
+/// as `add_nodes` would have; its title column stays typed. Every storage mode.
+#[test]
+fn an_untitled_create_on_an_id_titled_type_is_titled_by_its_id() {
+    use crate::datatypes::values::{ColumnData, ColumnType};
+    use crate::graph::storage::mode::{new_dir_graph_in_mode, StorageMode};
+    for mode in [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = matches!(mode, StorageMode::Disk).then(|| dir.path());
+        let mut graph = new_dir_graph_in_mode(mode, path).unwrap();
+        let mut df = DataFrame::new(Vec::new());
+        df.add_column(
+            "id".into(),
+            ColumnType::UniqueId,
+            ColumnData::UniqueId((1..=3).map(Some).collect()),
+        )
+        .unwrap();
+        add_nodes(&mut graph, df, "P".into(), "id".into(), None, None).unwrap();
+        write(&mut graph, "CREATE (:P {id: 10})").unwrap();
+        write(&mut graph, "MERGE (:P {id: 11})").unwrap();
+        write(&mut graph, "CREATE (:P {id: 12, title: 'twelve'})").unwrap();
+        let got = rows(&graph, "MATCH (n:P) RETURN n.id, n.title ORDER BY n.id");
+        let number = |value: &Value| match *value {
+            Value::Int64(n) => n,
+            Value::UniqueId(n) => i64::from(n),
+            ref other => panic!("{mode:?}: not an integer: {other:?}"),
+        };
+        let titles: Vec<_> = got
+            .iter()
+            .map(|row| (number(&row[0]), row[1].clone()))
+            .collect();
+        assert_eq!(titles.len(), 6, "{mode:?}");
+        for (id, title) in &titles[..5] {
+            assert_eq!(number(title), *id, "{mode:?}: id {id}");
+        }
+        assert_eq!(titles[5].1, s("twelve"), "{mode:?}");
+        if matches!(mode, StorageMode::Memory) {
+            // The supplied string title demotes; the id titles before it did not.
+            let mut typed = DirGraph::new();
+            let mut df = DataFrame::new(Vec::new());
+            df.add_column(
+                "id".into(),
+                ColumnType::UniqueId,
+                ColumnData::UniqueId((1..=3).map(Some).collect()),
+            )
+            .unwrap();
+            add_nodes(&mut typed, df, "P".into(), "id".into(), None, None).unwrap();
+            write(&mut typed, "CREATE (:P {id: 10})").unwrap();
+            write(&mut typed, "MERGE (:P {id: 11})").unwrap();
+            let store = typed.column_store("P").unwrap();
+            assert_eq!(store.title_type_str(), Some("int64"));
+        }
+    }
+}
+
+/// String titles keep the `<Label>_<id>` fallback: a type titled from a
+/// declared title field, and one whose titles are text other than its ids.
+#[test]
+fn an_untitled_create_on_a_text_titled_type_keeps_the_label_fallback() {
+    let mut graph = DirGraph::new();
+    let df = DataFrame::from_cypher_rows(
+        vec!["id".into(), "label".into()],
+        vec![vec![Value::Int64(1), s("L1")]],
+    )
+    .unwrap();
+    add_nodes(
+        &mut graph,
+        df,
+        "T".into(),
+        "id".into(),
+        Some("label".into()),
+        None,
+    )
+    .unwrap();
+    write(&mut graph, "CREATE (:T {id: 2})").unwrap();
+    write(&mut graph, "CREATE (:U {id: 5, title: 'five'})").unwrap();
+    write(&mut graph, "CREATE (:U {id: 6})").unwrap();
+    assert_eq!(
+        rows(
+            &graph,
+            "MATCH (n) WHERE n.id IN [2, 6] RETURN n.title ORDER BY n.id"
+        ),
+        vec![vec![s("T_2")], vec![s("U_6")]]
     );
 }

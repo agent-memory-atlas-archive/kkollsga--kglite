@@ -1195,8 +1195,8 @@ fn create_node(
     // the value this CREATE is putting in the identity field — that spelling no
     // longer has a property key of its own, the value having been promoted.
     // The title alias answers only when the caller *supplied* the title: the
-    // `<Label>_<id>` fallback is engine-minted, and a `REQUIRE … IS NOT NULL` on
-    // the type's title column is asking the caller for a value.
+    // id or `<Label>_<id>` fallback is engine-minted, and a `REQUIRE … IS NOT
+    // NULL` on the type's title column is asking the caller for a value.
     let constraint_read = |property: &str| -> Option<Value> {
         if aliases.id_field() == Some(property) {
             return (!matches!(id, Value::Null)).then(|| id.clone());

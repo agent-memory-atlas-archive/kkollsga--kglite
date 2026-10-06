@@ -81,9 +81,14 @@ before upgrading.
   memory and disk graphs; it now holds under 1 MB, and the query takes 6–12 ms
   instead of 50–110 ms. A `WHERE` the pattern already enforces lets the scan
   stop at the limit; any other `WHERE` reads the matches a slice at a time.
-- A node created without a title is now titled `<Label>_<id>`. The title came
+- A node created without a title is now titled from its id. The title came
   from the storage slot count, so after deletes two nodes could share a
   title, and memory, mapped and disk graphs titled the same nodes differently.
+  - On a type titled by its ids (an `add_nodes` load with no `title` column
+    and no `node_title_field`), the title is the id itself. The type's titles
+    then stay one kind.
+  - On any other type, including one with text titles, the title is
+    `<Label>_<id>`.
 - `add_nodes` warns (`UserWarning`) when a column named `id` or `title` cannot
   be read back because the identity field comes from another column.
 - Creating nodes while a read view is held, after deleting nodes, no longer

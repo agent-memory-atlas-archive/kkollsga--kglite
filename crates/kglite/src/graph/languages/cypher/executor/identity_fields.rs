@@ -23,9 +23,11 @@ use std::collections::HashMap;
 
 use super::CypherExecutor;
 use crate::datatypes::values::{raw_string, Value};
+use crate::graph::core::filtering::values_equal;
 use crate::graph::languages::cypher::ast::CreateNodePattern;
 use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::schema::DirGraph;
+use crate::graph::storage::GraphRead;
 
 /// The property spellings a node type uses for its two identity fields.
 ///
@@ -88,8 +90,8 @@ impl IdentityAliases {
 pub(super) struct CreatedIdentity {
     pub(super) id: Value,
     pub(super) title: Value,
-    /// The title came from the pattern rather than from the `<Label>_<id>`
-    /// fallback. Declared constraints read it: a `REQUIRE p.name IS NOT NULL`
+    /// The title came from the pattern rather than from the id or
+    /// `<Label>_<id>` fallback. Declared constraints read it: a `REQUIRE p.name IS NOT NULL`
     /// on a type whose title column *is* `name` asks the caller for a value,
     /// and an engine-minted fallback is not one.
     pub(super) title_supplied: bool,
@@ -106,7 +108,8 @@ pub(super) struct CreatedIdentity {
 /// does not already carry, so a stored copy shadows the identity in
 /// `properties(n)` while `n.<alias>` still resolves to the identity.
 ///
-/// Absent → the title is `<Label>_<id>`, and the id is *allocated*; an
+/// Absent → the title is the id on a type titled by its ids, else
+/// `<Label>_<id>`; an absent id is *allocated*, and an
 /// allocator must never hand out a live id — see
 /// `DirGraph::next_auto_node_id` for the `node_bound()` reuse bug that replaced.
 /// A caller-supplied id is taken as given: uniqueness is opt-in (see the gates
@@ -146,22 +149,61 @@ pub(super) fn create_identity(
         None => graph.next_auto_node_id(),
     };
 
-    // Title: what the pattern supplies (see `supplied_title`), else
-    // `<Label>_<id>`. Built from the id rather than a storage slot, which every
-    // backend reuses differently after a delete: the slot gave repeated titles
-    // and titles that differed between memory, mapped and disk.
+    // Title: what the pattern supplies (see `supplied_title`), else the id on
+    // a type whose titles are its ids, else `<Label>_<id>`. Built from the id
+    // rather than a storage slot, which every backend reuses differently after
+    // a delete: the slot gave repeated titles and titles that differed between
+    // memory, mapped and disk.
     let supplied_title = supplied_title(label, aliases, properties)?;
     let title_supplied = supplied_title.is_some();
-    let title = supplied_title.unwrap_or_else(|| {
-        let label = node_pat.label.as_deref().unwrap_or("Node");
-        Value::String(format!("{label}_{}", raw_string(&id)))
-    });
+    let title = match supplied_title {
+        Some(title) => title,
+        None if titles_are_ids(graph, label, aliases) => id.clone(),
+        None => {
+            let label = node_pat.label.as_deref().unwrap_or("Node");
+            Value::String(format!("{label}_{}", raw_string(&id)))
+        }
+    };
 
     Ok(CreatedIdentity {
         id,
         title,
         title_supplied,
     })
+}
+
+/// Whether `label` is titled by its ids, as `add_nodes` titles a type loaded
+/// with no title column and no `node_title_field`: no declared title field,
+/// and the type's first node has its id as its title. An untitled `CREATE`
+/// then takes its id as the title too, so the type's titles stay one kind —
+/// a `<Label>_<id>` string among integer titles turned the title column into
+/// an untyped heap column. Reads one node, so the cost does not grow with the
+/// type; a type whose title column and id column are text and a number
+/// answers from the column kinds alone, since an untitled `CREATE` on the
+/// common `<Label>_<id>`-titled type runs this once per row (copying a title
+/// out on every row made a 100k-row `UNWIND … CREATE` ~12% slower).
+fn titles_are_ids(graph: &DirGraph, label: &str, aliases: &IdentityAliases) -> bool {
+    if aliases.title_field().is_some() {
+        return false;
+    }
+    if let Some(store) = graph.column_store(label) {
+        let text = |kind: Option<&str>| kind == Some("string");
+        let number = |kind: Option<&str>| matches!(kind, Some("int64" | "uniqueid" | "float64"));
+        let (id, title) = (store.id_type_str(), store.title_type_str());
+        if (text(title) && number(id)) || (number(title) && text(id)) {
+            return false;
+        }
+    }
+    let Some(first) = graph.type_indices.get(label).and_then(|nodes| nodes.get(0)) else {
+        return false;
+    };
+    match (
+        graph.graph.get_node_id(first),
+        graph.graph.get_node_title(first),
+    ) {
+        (Some(id), Some(title)) => values_equal(&id, &title),
+        _ => false,
+    }
 }
 
 /// The title a `CREATE` pattern supplies.

@@ -5161,7 +5161,15 @@ stored property can shadow them). Use `labels(n)` for the label set and `id(n)` 
   values for the id and its declared spelling are.
 - Otherwise `title`, then `name`. A pattern carrying both keeps both: `n.title`
   reads the title and `n.name` reads the stored `name`.
-- With no title in the pattern, `<Label>_<id>`, for example `Person_12`.
+- With no title in the pattern, the fallback depends on the type:
+
+  | Type | Title | Example |
+  |---|---|---|
+  | Titled by its ids: loaded by `add_nodes` with no `title` column and no `node_title_field` | The id | `12` |
+  | Any other type, including one with text titles | `<Label>_<id>` | `Person_12` |
+
+  A type counts as titled by its ids when it has no declared title field and
+  its first node's title equals that node's id.
 
 ### Identity (`id`) and prefixed-id datasets (`nid`)
 
