@@ -36,6 +36,18 @@ before upgrading.
   and `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
   declaration earning both an abutment and an empty-interval advisory reported
   only the abutment. **Do:** read every entry of the vectors.
+- Rust: an id or property written as a small integer may read back through
+  the `Value` API as `Value::Int64` instead of `Value::UniqueId`. It does once
+  its column also holds an `Int64`, as when a `CREATE` writes into a type
+  `add_nodes` loaded. The column used to turn into an untyped heap column
+  instead, which cannot spill to disk. Python, Bolt and the C ABI return both
+  variants as the same integer, so they see no change. **Do:** match both
+  variants, or compare the number.
+- A compact integer `add_nodes` writes into a float column now reads back as a
+  float (`7.0`), as any other integer written there already did. This reaches
+  Python only for an id loaded into a type whose ids are already floats, or a
+  column loaded with `column_types={…: 'uniqueid'}`. The value kept its
+  integer form by turning the column into an untyped heap column.
 
 ### Added
 

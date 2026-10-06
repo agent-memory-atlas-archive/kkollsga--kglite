@@ -209,11 +209,16 @@ impl TypedColumn {
             };
         }
         let copied = match self {
-            Self::Int64 { data, nulls } if matches!(value, Value::Int64(_) | Value::Null) => {
+            Self::Int64 { data, nulls }
+                if matches!(value, Value::Int64(_) | Value::UniqueId(_) | Value::Null) =>
+            {
                 scalar!(Int64, data, nulls)
             }
             Self::Float64 { data, nulls }
-                if matches!(value, Value::Float64(_) | Value::Int64(_) | Value::Null) =>
+                if matches!(
+                    value,
+                    Value::Float64(_) | Value::Int64(_) | Value::UniqueId(_) | Value::Null
+                ) =>
             {
                 scalar!(Float64, data, nulls)
             }
@@ -533,6 +538,10 @@ impl TypedColumn {
             (TypedColumn::Int64 { data, nulls }, Value::Int64(v)) => {
                 push_pair(data, *v, nulls, 0)?;
             }
+            // A `UniqueId` is a `u32`, so every one is an exact `Int64`.
+            (TypedColumn::Int64 { data, nulls }, Value::UniqueId(v)) => {
+                push_pair(data, i64::from(*v), nulls, 0)?;
+            }
             (TypedColumn::Int64 { data, nulls }, Value::Null) => {
                 push_pair(data, 0, nulls, 1)?;
             }
@@ -546,6 +555,10 @@ impl TypedColumn {
                 if exact_float(*v).is_some() =>
             {
                 push_pair(data, *v as f64, nulls, 0)?;
+            }
+            // ... and an exact `Float64` (a `u32` is below 2^53).
+            (TypedColumn::Float64 { data, nulls }, Value::UniqueId(v)) => {
+                push_pair(data, f64::from(*v), nulls, 0)?;
             }
             (TypedColumn::Float64 { data, nulls }, Value::Null) => {
                 push_pair(data, 0.0, nulls, 1)?;
@@ -803,6 +816,20 @@ impl TypedColumn {
                 data.set(idx, *v);
                 nulls.set(idx, 0);
             }
+            (TypedColumn::Int64 { data, nulls }, Value::UniqueId(v)) => {
+                if idx >= data.len() {
+                    return Err(());
+                }
+                data.set(idx, i64::from(*v));
+                nulls.set(idx, 0);
+            }
+            (TypedColumn::Float64 { data, nulls }, Value::UniqueId(v)) => {
+                if idx >= data.len() {
+                    return Err(());
+                }
+                data.set(idx, f64::from(*v));
+                nulls.set(idx, 0);
+            }
             (TypedColumn::Int64 { data, nulls }, Value::Null) => {
                 if idx >= data.len() {
                     return Err(());
@@ -949,6 +976,56 @@ impl TypedColumn {
             _ => return Err(()),
         }
         Ok(())
+    }
+
+    /// A copy of this column in a typed shape that also holds `value`, when
+    /// one exists: a `UniqueId` column meeting an `Int64` widens to `Int64`
+    /// (every `u32` is an exact `i64`). `None` for any other mismatch, which
+    /// only `Mixed` can hold.
+    ///
+    /// Without it a bulk-loaded type — whose ids `add_nodes` stores as
+    /// `UniqueId` when they fit a `u32` — demoted its id column to `Mixed` on
+    /// the first `CREATE`, which writes an `Int64` id: 32 B a row of heap that
+    /// cannot spill, and a whole-column copy on every later write under a
+    /// held view.
+    pub(super) fn widened_for(&self, value: &Value) -> Option<Self> {
+        match (self, value) {
+            (Self::UniqueId { data, nulls }, Value::Int64(_)) => {
+                note_column_copy();
+                let wide: Vec<i64> = data.as_slice().iter().map(|&v| i64::from(v)).collect();
+                Some(Self::Int64 {
+                    data: MmapOrVec::from_vec(wide),
+                    nulls: MmapOrVec::from_vec(nulls.to_vec()),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// This column re-typed so `value` can be pushed onto it, with `value`
+    /// pushed: widened where a typed shape holds it ([`Self::widened_for`]),
+    /// `Mixed` otherwise.
+    pub(super) fn retyped_with_push(&self, value: &Value) -> Self {
+        if let Some(mut wide) = self.widened_for(value) {
+            if wide.push(value).is_ok() {
+                return wide;
+            }
+        }
+        let mut mixed = self.to_mixed();
+        let _ = mixed.push(value); // `Mixed` takes every value.
+        mixed
+    }
+
+    /// This column re-typed so row `row` can be set to `value`, with it set.
+    pub(super) fn retyped_with_set(&self, row: u32, value: &Value) -> Self {
+        if let Some(mut wide) = self.widened_for(value) {
+            if wide.set(row, value).is_ok() {
+                return wide;
+            }
+        }
+        let mut mixed = self.to_mixed();
+        let _ = mixed.set(row, value);
+        mixed
     }
 
     /// Every cell of this column as a heap `Mixed` column.

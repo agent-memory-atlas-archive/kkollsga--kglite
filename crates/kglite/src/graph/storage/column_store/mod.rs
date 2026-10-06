@@ -22,6 +22,8 @@ pub(crate) use tail::RegionParts;
 #[cfg(test)]
 mod heap_tail_tests;
 #[cfg(test)]
+mod id_widening_tests;
+#[cfg(test)]
 mod tail_tests;
 #[cfg(test)]
 mod timestamp_column_tests;
@@ -380,7 +382,8 @@ impl ColumnStore {
     /// On a 50k-row type that was 1.6 MB of unspillable floor (32 B per row of
     /// `Value` enum), the dominant term in what a `set_memory_limit` could not
     /// hold; as an `Int64` column the same ids are 450 kB and spill.
-    /// A heterogeneous id set still demotes to `Mixed` through the fallback.
+    /// A `UniqueId` column meeting an `Int64` id widens to `Int64`; a
+    /// heterogeneous id set still demotes to `Mixed` through the fallback.
     pub fn push_id(&mut self, value: &Value) {
         if let Some(tail) = self.tail_for_append() {
             tail.push_id(value);
@@ -394,17 +397,17 @@ impl ColumnStore {
         );
         if col.push(value).is_err() {
             // Type mismatch or storage growth failure: this API is
-            // intentionally infallible, so fall back to a heap Mixed column.
-            let mut mixed = col.to_mixed();
-            let _ = mixed.push(value);
-            self.swap_id_column(Some(Arc::new(mixed)));
+            // intentionally infallible, so re-type the column to hold it.
+            let retyped = col.retyped_with_push(value);
+            self.swap_id_column(Some(Arc::new(retyped)));
         }
     }
 
     /// Push a node title value into the title column. Creates the column if
-    /// None: `Int64` when the first value is an integer (9 bytes a row, mmap-able
-    /// and eligible for a disk column file; a `Mixed` column is 32 and neither), `Str`
-    /// otherwise. A later value of the other kind demotes the column to `Mixed`.
+    /// None: `Int64` when the first value is an integer — a `UniqueId` too,
+    /// since the title regions of a column file hold `Int64` or `Str` only (9
+    /// bytes a row, mmap-able; a `Mixed` column is 32 and neither) — `Str`
+    /// otherwise. A later value of another kind demotes the column to `Mixed`.
     pub fn push_title(&mut self, value: &Value) {
         if let Some(tail) = self.tail_for_append() {
             tail.push_title(value);
@@ -413,7 +416,7 @@ impl ColumnStore {
         self.spillable_growth = true;
         let col = TypedColumn::make_mut_for_append(
             self.title_column.get_or_insert_with(|| {
-                if matches!(value, Value::Int64(_)) {
+                if matches!(value, Value::Int64(_) | Value::UniqueId(_)) {
                     return Arc::new(TypedColumn::from_type_str("int64"));
                 }
                 Arc::new(TypedColumn::Str {
@@ -426,10 +429,9 @@ impl ColumnStore {
             value,
         );
         if col.push(value).is_err() {
-            // Type mismatch or storage growth failure: explicit heap fallback.
-            let mut mixed = col.to_mixed();
-            let _ = mixed.push(value);
-            self.swap_title_column(Some(Arc::new(mixed)));
+            // Type mismatch or storage growth failure: re-type to hold it.
+            let retyped = col.retyped_with_push(value);
+            self.swap_title_column(Some(Arc::new(retyped)));
         }
     }
 
@@ -466,9 +468,8 @@ impl ColumnStore {
             return false;
         }
         if col.set(row_id, value).is_err() {
-            let mut mixed = col.to_mixed();
-            let _ = mixed.set(row_id, value);
-            self.swap_title_column(Some(Arc::new(mixed)));
+            let retyped = col.retyped_with_set(row_id, value);
+            self.swap_title_column(Some(Arc::new(retyped)));
         }
         true
     }
@@ -1436,9 +1437,11 @@ impl ColumnStore {
     /// Make column `slot` able to hold `value` after a push or set refused
     /// it. A column that holds no value yet — one every write so far left
     /// NULL — is replaced by an all-null column typed for `value`, so a
-    /// property's first real value decides its shape; any other column is
-    /// demoted to `Mixed`. The scan for a present value stops at the first
-    /// one, and runs only on this mismatch path.
+    /// property's first real value decides its shape; a column a typed shape
+    /// can widen into holding `value` is widened
+    /// ([`TypedColumn::widened_for`]); any other column is demoted to
+    /// `Mixed`. The scan for a present value stops at the first one, and runs
+    /// only on this mismatch path.
     fn widen_for(&mut self, slot: usize, value: &Value) {
         let column = &self.columns[slot];
         let kind = TypedColumn::type_str_for_value(value);
@@ -1450,6 +1453,11 @@ impl ColumnStore {
                 typed.push_null();
             }
             self.swap_column(slot, Arc::new(typed));
+            return;
+        }
+        if let Some(wide) = column.widened_for(value) {
+            self.spillable_growth = true;
+            self.swap_column(slot, Arc::new(wide));
             return;
         }
         self.demote_to_mixed(slot);

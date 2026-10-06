@@ -658,9 +658,14 @@ fn new_mixed_numeric_property_on_existing_type_starts_exact() {
     }
 }
 
+/// An `Int64` or `Float64` column takes a `UniqueId` as the same number and
+/// stays typed, so replay reads it back in the column's numeric kind.
 #[test]
-fn unique_id_values_into_existing_integer_or_float_columns_keep_the_variant() {
-    for old in [Value::Int64(1), Value::Float64(1.5)] {
+fn unique_id_values_into_existing_integer_or_float_columns_stay_numerically_equal() {
+    for (old, kind, written) in [
+        (Value::Int64(1), "int64", Value::Int64(7)),
+        (Value::Float64(1.5), "float64", Value::Float64(7.0)),
+    ] {
         let mut graph = DirGraph::new();
         apply(
             &mut graph,
@@ -679,8 +684,11 @@ fn unique_id_values_into_existing_integer_or_float_columns_keep_the_variant() {
             )],
         )
         .unwrap();
-        assert_eq!(value(&mut graph, 1, "n"), Some(Value::UniqueId(7)));
+        assert_eq!(value(&mut graph, 1, "n"), Some(written));
         assert_eq!(value(&mut graph, 2, "n"), Some(old));
+        let store = graph.column_store("Item").unwrap();
+        let slot = store.slot(InternedKey::from_str("n")).unwrap() as usize;
+        assert_eq!(store.column_type_str(slot), Some(kind));
     }
 }
 

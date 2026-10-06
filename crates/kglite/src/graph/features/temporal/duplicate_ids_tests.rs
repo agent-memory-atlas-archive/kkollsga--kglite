@@ -26,6 +26,15 @@ fn names(graph: &DirGraph, query: &str) -> Vec<Value> {
         .collect()
 }
 
+fn number(value: &Value) -> f64 {
+    match *value {
+        Value::Int64(n) => n as f64,
+        Value::UniqueId(n) => f64::from(n),
+        Value::Float64(n) => n,
+        ref other => panic!("not a numeric id: {other:?}"),
+    }
+}
+
 fn text(s: &str) -> Value {
     Value::String(s.into())
 }
@@ -66,11 +75,19 @@ fn versions(mode: StorageMode, dir: &tempfile::TempDir, old_id: Value, new_id: V
         .iter()
         .map(|&idx| graph.graph.get_node_id(idx).unwrap())
         .collect();
-    assert_eq!(
-        stored,
-        [old_id, new_id],
-        "{mode:?}: the kinds are stored as given"
-    );
+    // One id column holds both versions, so it stores them in one numeric
+    // kind: each reads back as the number it was given, and the column stays
+    // typed rather than demoting to `Mixed`.
+    for (stored, given) in stored.iter().zip([&old_id, &new_id]) {
+        assert_eq!(
+            number(stored),
+            number(given),
+            "{mode:?}: {stored:?} for {given:?}"
+        );
+    }
+    if let Some(store) = graph.column_store("M") {
+        assert_ne!(store.id_type_str(), Some("mixed"), "{mode:?}");
+    }
     let a = graph.type_indices.get("A").unwrap().to_vec()[0];
     assert_eq!(graph.graph.get_node_id(a), Some(Value::UniqueId(1)));
     graph
