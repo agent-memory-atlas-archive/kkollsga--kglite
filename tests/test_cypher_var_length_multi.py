@@ -160,3 +160,41 @@ def test_path_through_two_variable_length_segments(family):
         "RETURN c.title, d.title, length(px), [n IN nodes(px) | n.title] AS names"
     )
     assert _rows(family, query) == [("F", "G", 2, ["A", "F", "G"])]
+
+
+def test_common_ancestor_with_path_variables_on_comma_patterns(family):
+    # The path variable may name any comma-separated pattern, not only the first.
+    query = (
+        "MATCH (x {title:'A'}),(y {title:'B'}), px=(x)-[:FATHER|MOTHER*0..20]->(c), "
+        "py=(y)-[:FATHER|MOTHER*0..20]->(c) RETURN c.title"
+    )
+    assert _rows(family, query) == [("G",)]
+
+
+def test_each_comma_part_binds_its_own_path_variable(family):
+    query = (
+        "MATCH px=(x {title:'A'})-[*1..20]->(c), py=(y {title:'B'})-[*1..20]->(c2) "
+        "RETURN c.title, c2.title, length(px), length(py)"
+    )
+    assert _rows(family, query) == [("F", "G", 1, 2), ("F", "M", 1, 1), ("G", "G", 2, 2), ("G", "M", 2, 1)]
+
+
+def test_path_variable_on_a_later_fixed_hop_pattern(family):
+    query = (
+        "MATCH (a {title:'A'}), py=(b {title:'B'})-[:MOTHER]->(m) RETURN a.title, [n IN nodes(py) | n.title] AS names"
+    )
+    assert _rows(family, query) == [("A", ["B", "M"])]
+
+
+def test_path_variable_on_an_optional_match_comma_pattern(family):
+    query = (
+        "MATCH (a {title:'A'}) "
+        "OPTIONAL MATCH (a)-[:FATHER]->(f), py=(f)-[:FATHER]->(g) "
+        "RETURN f.title, g.title, length(py)"
+    )
+    assert _rows(family, query) == [("F", "G", 1)]
+
+
+def test_shortest_path_is_refused_on_a_later_pattern(family):
+    with pytest.raises(Exception, match="first pattern"):
+        family.cypher("MATCH (c {title:'B'}), p=shortestPath((a {title:'A'})-[*]->(g {title:'G'})) RETURN length(p)")

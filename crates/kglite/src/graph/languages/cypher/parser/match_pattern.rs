@@ -87,22 +87,42 @@ impl CypherParser {
         self.expect(&CypherToken::Match)?;
 
         let mut path_assignments = Vec::new();
+        let mut patterns = Vec::new();
 
-        // Check for path assignment: p = shortestPath(...)
-        // Pattern: Identifier Equals [Identifier("shortestPath") LParen] pattern [RParen]
-        let patterns = if self.is_path_assignment() {
-            let path_var = self.consume_identifier()?;
-            self.expect(&CypherToken::Equals)?;
+        // Each comma-separated part may be `p = pattern` (openCypher's
+        // `PatternPart`), so a path variable names its own pattern.
+        loop {
+            let pattern_index = patterns.len();
+            let assignment = if self.is_path_assignment() {
+                let path_var = self.consume_identifier()?;
+                self.expect(&CypherToken::Equals)?;
+                Some(path_var)
+            } else {
+                None
+            };
 
-            // Check for shortestPath( / allShortestPaths( wrapper
-            let is_all_shortest = self.is_all_shortest_paths_call();
-            let is_shortest = is_all_shortest || self.is_shortest_path_call();
+            // `shortestPath(` / `allShortestPaths(` wrapper
+            let is_all_shortest = assignment.is_some() && self.is_all_shortest_paths_call();
+            let is_shortest =
+                is_all_shortest || (assignment.is_some() && self.is_shortest_path_call());
             if is_shortest {
+                if pattern_index > 0 {
+                    return Err(
+                        "shortestPath() is only supported on the first pattern of a MATCH clause"
+                            .to_string(),
+                    );
+                }
                 self.advance(); // consume the wrapper identifier
                 self.expect(&CypherToken::LParen)?;
             }
 
-            let patterns = self.parse_match_patterns()?;
+            let pattern_str = self.extract_pattern_string()?;
+            if pattern_str.is_empty() {
+                return Err("Expected a pattern in MATCH clause".to_string());
+            }
+            let pattern = self
+                .parse_extracted_pattern(&pattern_str)
+                .map_err(|e| format!("Pattern parse error: {}", e))?;
 
             if is_shortest {
                 self.expect(&CypherToken::RParen)?;
@@ -111,21 +131,27 @@ impl CypherParser {
                 } else {
                     "shortestPath"
                 };
-                if let Some(pattern) = patterns.first() {
-                    validate_shortest_path_pattern(pattern, function)?;
-                }
+                validate_shortest_path_pattern(&pattern, function)?;
+            }
+            patterns.push(pattern);
+
+            if let Some(variable) = assignment {
+                path_assignments.push(PathAssignment {
+                    variable,
+                    pattern_index,
+                    is_shortest_path: is_shortest,
+                    all_shortest: is_all_shortest,
+                });
             }
 
-            path_assignments.push(PathAssignment {
-                variable: path_var,
-                pattern_index: 0,
-                is_shortest_path: is_shortest,
-                all_shortest: is_all_shortest,
-            });
-            patterns
-        } else {
-            self.parse_match_patterns()?
-        };
+            // A shortest-path search is the whole clause: the executor routes
+            // it on its own, so no comma part follows it.
+            if !is_shortest && self.check(&CypherToken::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
 
         // `Match = ['OPTIONAL'] 'MATCH' Pattern [Where]` — a WHERE directly
         // after OPTIONAL MATCH is part of *this* clause, so it filters
@@ -195,37 +221,7 @@ impl CypherParser {
         }
     }
 
-    /// Parse one or more comma-separated patterns in MATCH
-    pub(super) fn parse_match_patterns(
-        &mut self,
-    ) -> Result<Vec<crate::graph::core::pattern_matching::Pattern>, String> {
-        let mut patterns = Vec::new();
-
-        loop {
-            // Reconstruct the pattern string from tokens until we hit a comma (at top-level)
-            // or a clause boundary
-            let pattern_str = self.extract_pattern_string()?;
-            if pattern_str.is_empty() {
-                return Err("Expected a pattern in MATCH clause".to_string());
-            }
-
-            let pattern = self
-                .parse_extracted_pattern(&pattern_str)
-                .map_err(|e| format!("Pattern parse error: {}", e))?;
-            patterns.push(pattern);
-
-            // Check for comma to continue with more patterns
-            if self.check(&CypherToken::Comma) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-
-        Ok(patterns)
-    }
-
-    /// Parse patterns inside EXISTS { ... } — same as parse_match_patterns but uses
+    /// Parse patterns inside EXISTS { ... }, using
     /// extract_exists_pattern_string which stops at RBrace instead of clause boundaries.
     /// Returns the patterns plus their clause-group ids (comma-joined
     /// patterns share a group; each MATCH keyword starts a new one).

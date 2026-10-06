@@ -22,6 +22,11 @@ before upgrading.
   second pattern's path, so `length(px)` was wrong (seen as far back as
   0.18.0). A path through two variable-length segments,
   `p=(a)-[*]->(b)-[*]->(c)`, returned null.
+- A path variable is now accepted on any comma-separated pattern of a `MATCH`.
+  `MATCH (x), (y), px=(x)-[*]->(c), py=(y)-[*]->(c)` was a syntax error
+  ("Unexpected token in MATCH pattern: ="); only the first pattern could be
+  named. `shortestPath()` still applies to a clause's first pattern only, and
+  now says so on a later one.
 
 ## [0.19.4] - 2026-10-06
 

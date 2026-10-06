@@ -1425,4 +1425,26 @@ mod distinct_as_a_name {
         parse_cypher("RETURN rand() AS r").unwrap();
         parse_cypher("RETURN timestamp() AS t").unwrap();
     }
+    #[test]
+    fn a_path_variable_names_the_comma_pattern_it_precedes() {
+        let query =
+            parse_cypher("MATCH (x), px=(x)-[*1..3]->(c), py=(x)-[*1..3]->(d) RETURN c").unwrap();
+        let Clause::Match(clause) = &query.clauses[0] else {
+            panic!("expected a MATCH clause");
+        };
+        assert_eq!(clause.patterns.len(), 3);
+        let assigned: Vec<(&str, usize)> = clause
+            .path_assignments
+            .iter()
+            .map(|pa| (pa.variable.as_str(), pa.pattern_index))
+            .collect();
+        assert_eq!(assigned, [("px", 1), ("py", 2)]);
+    }
+
+    #[test]
+    fn shortest_path_stays_the_whole_first_pattern() {
+        let err = parse_cypher("MATCH (c), p=shortestPath((a)-[*]->(b)) RETURN p").unwrap_err();
+        assert!(err.to_string().contains("first pattern"), "{err}");
+        parse_cypher("MATCH p=shortestPath((a)-[*]->(b)) RETURN p").unwrap();
+    }
 }
