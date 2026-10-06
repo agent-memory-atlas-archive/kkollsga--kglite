@@ -78,3 +78,26 @@ def test_add_nodes_warns_when_an_identity_column_is_shadowed(frame, id_field, ti
     graph = kglite.KnowledgeGraph()
     with pytest.warns(UserWarning, match=f"its '{shadowed}' column is not readable"):
         graph.add_nodes(pd.DataFrame(frame), "P", id_field, title_field)
+
+
+@pytest.mark.parametrize(
+    ("frame", "id_field", "title_field", "query", "value"),
+    [
+        # `n.title` reads the `id` column, the title source.
+        ({"pid": [10], "id": ["x"]}, "pid", "id", "MATCH (n:P) RETURN n.title AS v", "x"),
+        # `n.title` is the id's declared spelling, so it reads the `title` column.
+        ({"title": ["x"], "name": ["Nan"]}, "title", "name", "MATCH (n:P) RETURN n.title AS v", "x"),
+    ],
+    ids=["id-column-is-the-title", "title-column-is-the-id"],
+)
+def test_no_shadow_warning_for_the_column_the_other_identity_reads(frame, id_field, title_field, query, value) -> None:
+    """An `id` column that is the title source (or a `title` column that is
+    the id source) is readable — through the other identity field — so the
+    load must not warn that it is not."""
+    graph = kglite.KnowledgeGraph()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        graph.add_nodes(pd.DataFrame(frame), "P", id_field, title_field)
+    messages = [str(w.message) for w in caught if "not readable" in str(w.message)]
+    assert messages == []
+    assert _rows(graph, query) == [{"v": value}]

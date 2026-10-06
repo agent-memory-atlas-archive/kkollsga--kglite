@@ -163,7 +163,9 @@ pub(super) fn resolve_node_title_field(
 /// `n.id` and `n.title` always read the node's identity fields, so a property
 /// column spelled `id` or `title` beside a different `unique_id_field` /
 /// title column is stored but answers nowhere — a silent loss the caller
-/// should hear about.
+/// should hear about. A column that is the *other* identity field's source —
+/// an `id` column the title is read from, or a `title` column the id is read
+/// from — answers through that field, so it is not reported.
 ///
 /// On a type with a declared title field, the advice differs: passing
 /// `node_title_field='title'` would not move the declared spelling, so the
@@ -177,12 +179,14 @@ pub(super) fn shadowed_identity_columns(
 ) -> Vec<Diagnostic> {
     let declared_title = graph.title_field_aliases.get(node_type).map(String::as_str);
     [
-        ("id", unique_id_field, "unique_id_field"),
-        ("title", title_field, "node_title_field"),
+        ("id", unique_id_field, title_field, "unique_id_field"),
+        ("title", title_field, unique_id_field, "node_title_field"),
     ]
     .into_iter()
-    .filter(|(field, source, _)| source != field && frame.get_column_index(field).is_some())
-    .map(|(field, source, parameter)| {
+    .filter(|(field, source, other, _)| {
+        source != field && other != field && frame.get_column_index(field).is_some()
+    })
+    .map(|(field, source, _, parameter)| {
         let message = if field == "title" && declared_title.is_some() {
             let declared = declared_title.unwrap_or_default();
             format!(
