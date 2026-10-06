@@ -98,6 +98,8 @@ def _schema_accepts(instance: Any, schema: dict[str, Any] | bool, root: dict[str
         return False
     if "enum" in schema and not any(_json_equal(instance, option) for option in schema["enum"]):
         return False
+    if "anyOf" in schema and not any(_schema_accepts(instance, option, root) for option in schema["anyOf"]):
+        return False
     if "oneOf" in schema:
         if sum(_schema_accepts(instance, option, root) for option in schema["oneOf"]) != 1:
             return False
@@ -314,3 +316,37 @@ def test_recipe_schema_acceptance_matches_structural_parser_fixtures() -> None:
 
     for fixture in invalid:
         assert not _schema_accepts(fixture, schema, schema), fixture
+
+
+def test_embedder_schema_accepts_the_keys_the_server_reads() -> None:
+    schema = _schemas()["embedder.json"]
+    accepted = [
+        {"library": "sentence-transformers", "model": "BAAI/bge-m3", "load": "lazy"},
+        {"library": "fastembed", "model": "BAAI/bge-small-en-v1.5"},
+        {"library": "fastembed-rs", "model": "BAAI/bge-m3", "load": "eager"},
+        {"factory": "mypkg.embed:build", "model": "anything"},
+        {"factory": "mypkg.embed:build"},
+    ]
+    for manifest in accepted:
+        assert _schema_accepts(manifest, schema, schema), manifest
+
+
+def test_embedder_schema_rejects_what_the_server_refuses() -> None:
+    schema = _schemas()["embedder.json"]
+    rejected = [
+        {"library": "sentence-transformers"},  # model required unless a factory builds it
+        {"library": "fastembed", "model": "m", "load": "sometimes"},  # load is lazy | eager
+        {"library": "fastembed", "model": "m", "load": True},
+        {"library": 3, "model": "m"},
+    ]
+    for manifest in rejected:
+        assert not _schema_accepts(manifest, schema, schema), manifest
+
+
+def test_embedder_schema_ignores_unknown_keys_like_the_server() -> None:
+    # The server never reads `backend`; it passes the whole mapping to the
+    # Python builder, which ignores keys it does not know. A manifest that
+    # still carries it boots, so the schema must not reject it.
+    schema = _schemas()["embedder.json"]
+    assert _schema_accepts({"backend": "fastembed", "model": "BAAI/bge-m3"}, schema, schema)
+    assert not _schema_accepts({"backend": "fastembed"}, schema, schema)
