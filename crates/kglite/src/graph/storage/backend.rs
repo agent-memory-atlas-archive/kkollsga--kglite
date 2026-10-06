@@ -472,21 +472,20 @@ impl GraphBackend {
     ///
     /// Called at handle write entry and after Session publication drops its old
     /// owner. A no-op on other variants and while a reader still holds the base.
+    ///
+    /// The fold borrows the overlay, as [`Self::flatten_fork`]'s does, and the
+    /// backend is replaced only by its result: a refused fold leaves the
+    /// overlay serving, never an empty placeholder.
     pub(crate) fn try_compact(&mut self) {
-        if let GraphBackend::Recording(rg) = self {
-            rg.inner_mut().try_compact();
-            return;
+        match self {
+            GraphBackend::Recording(rg) => rg.inner_mut().try_compact(),
+            GraphBackend::Forked(forked) => {
+                if let Some(memory) = forked.fold_in_place() {
+                    *self = GraphBackend::Memory(Arc::new(memory));
+                }
+            }
+            _ => {}
         }
-        if !matches!(self, GraphBackend::Forked(_)) {
-            return;
-        }
-        let GraphBackend::Forked(forked) = std::mem::replace(self, GraphBackend::new()) else {
-            unreachable!("just matched Forked")
-        };
-        *self = match forked.try_compact() {
-            Ok(memory) => GraphBackend::Memory(Arc::new(memory)),
-            Err(still_forked) => GraphBackend::Forked(still_forked),
-        };
     }
 
     /// Collapse an overlay to a plain `Memory` backend **unconditionally**,

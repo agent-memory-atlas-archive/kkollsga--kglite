@@ -73,10 +73,10 @@
 //!
 //! That needs a mirror whose free-list order is known, which is what
 //! [`can_fork`] checks. Edges need nothing: the overlay never allocates one.
-//! [`ForkedGraph::check_fold`] replays the appends against the fold target's
-//! mirror before anything changes, and the mirror's `debug_assert` in
-//! `note_node_added` re-checks each prediction against petgraph as the fold
-//! runs. A base that cannot be forked falls back to the deep clone, which is
+//! The fold (`Overlay::apply`) replays the appends against the fold target's
+//! mirror before anything changes, then checks each slot petgraph actually
+//! allocates and undoes the appends on a mismatch, leaving the overlay
+//! serving. A base that cannot be forked falls back to the deep clone, which is
 //! slower and never wrong — the same fail-safe direction
 //! `rollback::journal_covers` takes.
 
@@ -229,6 +229,133 @@ impl Appended {
     }
 }
 
+/// A [`ForkedGraph`]'s overlay state, borrowed apart from its base so a fold
+/// can write into the base the overlay sits on ([`ForkedGraph::fold_in_place`]).
+struct Overlay<'a> {
+    nodes: &'a mut OverlayNodes,
+    appended: &'a mut Appended,
+    column_stores: &'a mut FxHashMap<InternedKey, Arc<ColumnStore>>,
+    undo: &'a mut Option<Box<UndoJournal>>,
+}
+
+impl Overlay<'_> {
+    /// Check that folding into `target` reproduces every appended index,
+    /// without mutating anything.
+    ///
+    /// Replays the appends in allocation order against a copy of `target`'s
+    /// slot mirror: each prediction must be the index the overlay handed out,
+    /// and that index must carry its weight. A refusal here leaves both the
+    /// overlay and `target` untouched (issue #195).
+    fn check(&self, target: &MemoryGraph) -> Result<(), String> {
+        let mut mirror = target.slot_mirror.clone();
+        // What `node_bound()` would read before each replayed `add_node`.
+        let mut bound = target.inner().node_bound();
+        for idx in self.appended.in_order() {
+            if !self.nodes.holds(idx) {
+                return Err(format!("appended node {idx} has no weight in the overlay"));
+            }
+            let idx = idx as usize;
+            match mirror.predict_next_node(bound) {
+                Some(predicted) if predicted.index() == idx => {
+                    mirror.note_node_added(bound, predicted);
+                    bound = bound.max(idx + 1);
+                }
+                other => {
+                    return Err(format!(
+                        "the overlay handed out node {idx}, but the fold target \
+                         would allocate {other:?}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Replay the overlay into `target`, which must be a graph in the base's
+    /// exact pre-fork state. All or nothing: on `Err` neither the overlay nor
+    /// the node set of `target` has changed.
+    ///
+    /// **This is the fold-back path, and the slot-identity proof lives here.**
+    /// [`check`](Self::check) refuses a fold the mirror says would allocate
+    /// different slots. [`append`](Self::append) then checks each slot petgraph
+    /// actually allocates — the mirror itself could disagree with petgraph —
+    /// and undoes the appends on a mismatch: a different index would silently
+    /// mis-key every `DirGraph` index that recorded the overlay's number.
+    fn apply(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
+        self.check(target)?;
+        self.append(target)?;
+        // Then the copy-on-write weights, which are pure overwrites.
+        for (idx, data) in self.nodes.drain() {
+            if let Some(slot) = target
+                .inner_mut()
+                .node_weight_mut(NodeIndex::new(idx as usize))
+            {
+                *slot = data;
+            }
+        }
+        target.column_stores = std::mem::take(self.column_stores);
+        // The base's stores went with the assignment above, so on compaction
+        // each overlay store's columns are its own again and folding its heap
+        // tail copies the tail only (`column_store/tail.rs`, "Heap tails").
+        for store in target.column_stores.values_mut() {
+            if store.has_heap_tail() {
+                Arc::make_mut(store).fold_heap_tail();
+            }
+        }
+        target.undo = self.undo.take();
+        Ok(())
+    }
+
+    /// Add the appended nodes to `target` in allocation order, so each
+    /// `add_node` pops the slot the overlay took. A slot other than the one
+    /// handed out removes the nodes this call added, newest first — each
+    /// removal pushes its slot back on the free-list head, so the lists end
+    /// in the order they started — and returns the weights to the overlay.
+    fn append(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
+        let order: Vec<u32> = self.appended.in_order().collect();
+        for (placed, &idx) in order.iter().enumerate() {
+            let data = self
+                .nodes
+                .remove(idx)
+                .expect("check proved every appended index carries a weight");
+            let bound_before = target.inner().node_bound();
+            let actual = target.inner_mut().add_node(data);
+            if actual.index() as u32 == idx {
+                target.slot_mirror.note_node_added(bound_before, actual);
+                continue;
+            }
+            let data = target.inner_mut().remove_node(actual).expect("added above");
+            self.nodes.insert(idx, data);
+            for &earlier in order[..placed].iter().rev() {
+                let slot = NodeIndex::new(earlier as usize);
+                let data = target.inner_mut().remove_node(slot).expect("added above");
+                target
+                    .slot_mirror
+                    .note_node_removed(slot, std::iter::empty());
+                self.nodes.insert(earlier, data);
+            }
+            return Err(format!(
+                "fold-back allocated node {} where the overlay handed out {idx}; \
+                 the slot mirror disagrees with petgraph (see storage/slot_mirror.rs)",
+                actual.index()
+            ));
+        }
+        if target.undo.is_some() {
+            let added: Vec<_> = order
+                .iter()
+                .map(|&idx| NodeIndex::new(idx as usize))
+                .filter_map(|slot| Some((slot, target.inner().node_weight(slot)?.node_type)))
+                .collect();
+            let journal = target.undo.as_deref_mut().expect("checked above");
+            for (slot, kind) in added {
+                journal.note_node_added(slot, kind);
+            }
+        }
+        *self.appended = Appended::default();
+        Ok(())
+    }
+}
+
 /// Whether `base` can be shared behind an overlay rather than deep-copied.
 ///
 /// The overlay allocates by the base's slot-mirror prediction (module doc),
@@ -281,119 +408,47 @@ impl ForkedGraph {
         self.nodes.len()
     }
 
-    /// Check that folding into `target` reproduces every appended index,
-    /// without mutating anything.
-    ///
-    /// Replays the appends in allocation order against a copy of `target`'s
-    /// slot mirror: each prediction must be the index the overlay handed out,
-    /// and that index must carry its weight. A refusal here leaves both the overlay and
-    /// `target` untouched, so a caller can keep serving the overlay instead of
-    /// tearing down a half-folded backend (issue #195).
-    fn check_fold(&self, target: &MemoryGraph) -> Result<(), String> {
-        let mut mirror = target.slot_mirror.clone();
-        // What `node_bound()` would read before each replayed `add_node`.
-        let mut bound = target.inner().node_bound();
-        for idx in self.appended.in_order() {
-            if !self.nodes.holds(idx) {
-                return Err(format!("appended node {idx} has no weight in the overlay"));
-            }
-            let idx = idx as usize;
-            match mirror.predict_next_node(bound) {
-                Some(predicted) if predicted.index() == idx => {
-                    mirror.note_node_added(bound, predicted);
-                    bound = bound.max(idx + 1);
-                }
-                other => {
-                    return Err(format!(
-                        "the overlay handed out node {idx}, but the fold target \
-                         would allocate {other:?}"
-                    ));
-                }
-            }
+    /// The overlay's own state, borrowed apart from its base.
+    fn overlay(&mut self) -> Overlay<'_> {
+        Overlay {
+            nodes: &mut self.nodes,
+            appended: &mut self.appended,
+            column_stores: &mut self.column_stores,
+            undo: &mut self.undo,
         }
-        Ok(())
     }
 
-    /// Replay the overlay into `target`, which must be a graph in the base's
-    /// exact pre-fork state.
+    /// Fold into the base in place when this writer is its only holder, and
+    /// return the folded graph.
     ///
-    /// **This is the fold-back path, and the slot-identity proof lives here.**
-    /// [`check_fold`](Self::check_fold) runs first, so a fold that would
-    /// allocate different slots is refused before either side changes.
-    /// Appended nodes then go back through `GraphWrite::add_node`, whose
-    /// `SlotMirror::note_node_added` debug-asserts that petgraph allocated the
-    /// index the mirror predicted. The `assert_eq!` below is the release half
-    /// of that check: past `check_fold` it can only fire if the mirror itself
-    /// disagrees with petgraph, and a different index would silently mis-key
-    /// every `DirGraph` index that recorded the overlay's number.
-    fn apply_overlay(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
-        self.check_fold(target)?;
-        // Appended nodes first, in allocation order, so each `add_node` pops
-        // the slot the overlay took.
-        let appended = std::mem::take(&mut self.appended);
-        for idx in appended.in_order() {
-            let data = self
-                .nodes
-                .remove(idx)
-                .expect("check_fold proved every appended index carries a weight");
-            let actual = GraphWrite::add_node(target, data);
-            assert_eq!(
-                actual.index() as u32,
-                idx,
-                "fold-back allocated node {} where the overlay handed out {idx}; \
-                 the slot mirror disagrees with petgraph (see storage/slot_mirror.rs)",
-                actual.index()
-            );
-        }
-        // Then the copy-on-write weights, which are pure overwrites.
-        for (idx, data) in self.nodes.drain() {
-            if let Some(slot) = target
-                .inner_mut()
-                .node_weight_mut(NodeIndex::new(idx as usize))
-            {
-                *slot = data;
-            }
-        }
-        target.column_stores = std::mem::take(&mut self.column_stores);
-        // The base's stores went with the assignment above, so on compaction
-        // each overlay store's columns are its own again and folding its heap
-        // tail copies the tail only (`column_store/tail.rs`, "Heap tails").
-        for store in target.column_stores.values_mut() {
-            if store.has_heap_tail() {
-                Arc::make_mut(store).fold_heap_tail();
-            }
-        }
-        target.undo = self.undo.take();
-        Ok(())
-    }
-
-    /// Fold into the base when this writer is the only holder left, and return
-    /// the collapsed backend.
-    ///
-    /// `Err(self)` when a reader is still outstanding, or when the fold would
-    /// not reproduce the overlay's indices. Either way the overlay comes back
-    /// intact and keeps serving reads and writes.
+    /// `None` when a reader is still outstanding, or when the fold would not
+    /// reproduce the overlay's indices; the overlay and its base are then
+    /// unchanged and keep serving reads and writes. The base is moved out only
+    /// after the fold succeeded, so no failure leaves an empty graph behind.
     ///
     /// The reader dropping is exactly what makes `Arc::get_mut` succeed, so the
     /// common "hold a view, write, drop the view, write again" pattern
-    /// self-heals on the next write with no timer and no bookkeeping.
-    pub(crate) fn try_compact(mut self: Box<Self>) -> Result<MemoryGraph, Box<Self>> {
-        if Arc::get_mut(&mut self.base).is_none() {
-            return Err(self);
-        }
-        if self.check_fold(&self.base).is_err() {
-            return Err(self);
-        }
-        // Sole owner: take the base out and fold into it in place — no node or
-        // edge is copied, which is what makes compaction O(changes), not O(V+E).
-        let mut owned = Arc::try_unwrap(std::mem::replace(
-            &mut self.base,
-            Arc::new(MemoryGraph::new()),
-        ))
-        .unwrap_or_else(|_| unreachable!("get_mut proved unique ownership"));
-        self.apply_overlay(&mut owned)
-            .unwrap_or_else(|reason| unreachable!("check_fold passed on this base: {reason}"));
-        Ok(owned)
+    /// self-heals on the next write with no timer and no bookkeeping. Sole
+    /// owner, the fold writes into the base itself — no node or edge is
+    /// copied, which is what makes compaction O(changes), not O(V+E).
+    pub(crate) fn fold_in_place(&mut self) -> Option<MemoryGraph> {
+        let Self {
+            base,
+            nodes,
+            appended,
+            column_stores,
+            undo,
+            ..
+        } = self;
+        let target = Arc::get_mut(base)?;
+        let mut overlay = Overlay {
+            nodes,
+            appended,
+            column_stores,
+            undo,
+        };
+        overlay.apply(target).ok()?;
+        Some(std::mem::replace(target, MemoryGraph::new()))
     }
 
     /// Deep-copy the base and fold into the copy. Used when a write cannot be
@@ -406,7 +461,7 @@ impl ForkedGraph {
         #[cfg(test)]
         super::backend::note_nodes_copied(self.base.inner().node_count());
         let mut owned = self.base.deep_clone();
-        self.apply_overlay(&mut owned)?;
+        self.overlay().apply(&mut owned)?;
         Ok(owned)
     }
 
@@ -423,7 +478,7 @@ impl ForkedGraph {
             slot_mirror: self.slot_mirror.clone(),
         };
         let mut owned = self.base.deep_clone();
-        clone.apply_overlay(&mut owned)?;
+        clone.overlay().apply(&mut owned)?;
         Ok(owned)
     }
 
@@ -990,7 +1045,8 @@ mod tests {
         assert_eq!(target.inner().node_bound(), 3);
 
         let error = forked
-            .apply_overlay(&mut target)
+            .overlay()
+            .apply(&mut target)
             .expect_err("the fold must refuse a target that reuses a listed slot");
         assert!(error.contains("node 3"), "{error}");
         assert_eq!(
@@ -1003,5 +1059,51 @@ mod tests {
             GraphRead::node_weight(&forked, appended).is_some(),
             "the overlay must still serve the appended node"
         );
+    }
+
+    /// A base whose mirror disagrees with petgraph: node 1 left the petgraph
+    /// free list's head without the mirror hearing of it, so the overlay and
+    /// the fold check both expect slot 4 while `add_node` reuses slot 1.
+    fn forked_over_a_misled_mirror(interner: &mut StringInterner) -> (ForkedGraph, NodeIndex) {
+        let mut base = graph_of(4, interner);
+        base.inner_mut().remove_node(NodeIndex::new(1));
+        let mut forked = ForkedGraph::new(Arc::new(base));
+        let appended = GraphWrite::add_node(&mut forked, node(9, interner));
+        assert_eq!(appended, NodeIndex::new(4));
+        (forked, appended)
+    }
+
+    /// The fold finds the disagreement only when petgraph allocates. It must
+    /// undo its appends and leave the overlay serving, not panic half-folded.
+    #[test]
+    fn a_fold_that_petgraph_misplaces_is_undone() {
+        let mut interner = StringInterner::new();
+        let (mut forked, appended) = forked_over_a_misled_mirror(&mut interner);
+        assert!(
+            forked.fold_in_place().is_none(),
+            "the fold must refuse a misplaced slot"
+        );
+        assert_eq!(forked.appended.len(), 1, "the overlay must keep its append");
+        assert!(GraphRead::node_weight(&forked, appended).is_some());
+        assert_eq!(forked.base.inner().node_count(), 3, "the base is unchanged");
+    }
+
+    /// `GraphBackend::try_compact` on the same overlay keeps a forked backend
+    /// that reads exactly as before — never the empty placeholder a panic
+    /// mid-fold used to leave.
+    #[test]
+    fn try_compact_keeps_the_graph_when_the_fold_is_refused() {
+        use crate::graph::storage::backend::GraphBackend;
+        let mut interner = StringInterner::new();
+        let (forked, appended) = forked_over_a_misled_mirror(&mut interner);
+        let mut backend = GraphBackend::Forked(Box::new(forked));
+        let before: Vec<_> = backend.node_indices().collect();
+        let compacted =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.try_compact()));
+        assert!(compacted.is_ok(), "the refused fold panicked");
+        assert!(backend.is_forked(), "the overlay must keep serving");
+        assert_eq!(backend.node_indices().collect::<Vec<_>>(), before);
+        assert_eq!(backend.node_count(), 4);
+        assert!(backend.node_weight(appended).is_some());
     }
 }
