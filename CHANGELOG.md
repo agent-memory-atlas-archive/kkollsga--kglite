@@ -30,6 +30,14 @@ before upgrading.
   memory (about 4 GB for `sentence-transformers` with `BAAI/bge-m3`). It
   applies to every library and to both `load` modes. A call in flight keeps
   its model, and a negative or non-integer value fails the boot.
+- `kglite-bolt-server` now checkpoints on its own once the write-ahead log
+  passes 32 MiB and is as large as the `.kgl`, which rewrites the file passed
+  to `--graph`. A server at the default `normal` durability with no
+  `--checkpoint-interval` never folded its log, so the log grew without bound
+  and every restart replayed all of it. **Do:** pass `--checkpoint-wal-mib 0`
+  (or `KGLITE_BOLT_CHECKPOINT_WAL_MIB=0`) to keep the old behaviour, or another
+  size to move the bound. It does not apply at `--durability off`, with
+  `--readonly`, or for disk-mode graphs.
 
 ### Fixed
 
@@ -56,6 +64,13 @@ before upgrading.
   1,500 cycles of 1,000 nodes. Each commit now rebuilds the column stores once
   dead rows pass the `auto_vacuum_threshold` ratio (default 0.3, floor 100
   rows). No node index changes, so indexes and labels stay valid.
+- Restarting a durable graph no longer holds the whole write-ahead log in
+  memory. Recovery decoded every frame into a list, about ten times its
+  on-disk size, before folding it: a 6 MB log restarted at 90 MiB resident,
+  and a 58 MB log at 590 MiB. Frames now fold as they are read and are
+  dropped, so replay memory follows the graph the log produces, not the log's
+  length. The same read no longer loads a log whole to ask whether it holds an
+  unreplayed commit.
 
 ## [0.19.4] - 2026-10-06
 

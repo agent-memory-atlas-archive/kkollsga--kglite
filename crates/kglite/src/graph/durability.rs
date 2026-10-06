@@ -58,8 +58,8 @@ use std::sync::Arc;
 
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::handle::make_dir_graph_mut;
-use crate::graph::mutation::wal_replay::prepare_replay;
-use crate::graph::wal::{recover, recover_for_append, wal_path, DurabilityLevel, Wal, WalFrame};
+use crate::graph::mutation::wal_replay::{prepare_replay_folded, ReplayFold};
+use crate::graph::wal::{recover_for_append, recover_with, wal_path, DurabilityLevel, Wal};
 
 mod save_as;
 pub(crate) use save_as::CheckpointPermit;
@@ -132,7 +132,7 @@ pub fn open_log(
     let checkpoint_lsn = graph.checkpoint_lsn;
 
     if !level.logs() {
-        if unreplayed(&read_sidecar(&wpath)?, checkpoint_lsn) {
+        if read_sidecar(&wpath)?.unreplayed(checkpoint_lsn) {
             return Err(DurableOpenError::Refused(format!(
                 "the write-ahead log at '{}' holds commits this checkpoint does not \
                  contain, and durability level 'off' would neither replay them nor keep \
@@ -161,7 +161,10 @@ pub fn open_log(
 
     // Reject non-tail damage before replay or capture ownership changes.
     // Keep the scan's exact boundary so opening the writer need not rescan.
-    let recovered = recover_for_append(&wpath).map_err(|e| {
+    // Frames fold as they are read and are dropped, so restart memory does not
+    // scale with the length of the log.
+    let mut fold = ReplayFold::new(checkpoint_lsn);
+    let recovered = recover_for_append(&wpath, |frame| fold.absorb(&frame)).map_err(|e| {
         DurableOpenError::Io(format!(
             "failed to read the write-ahead log at '{}': {e}",
             wpath.display()
@@ -173,8 +176,8 @@ pub fn open_log(
 
     // Recovery remains unpublished until tail repair and append-open succeed.
     // Cloning the checkpoint is unnecessary when no frame changes its state.
-    let (prepared, max_lsn) = prepare_replay(graph, &recovered.frames, checkpoint_lsn)
-        .map_err(DurableOpenError::Replay)?;
+    let (prepared, max_lsn) =
+        prepare_replay_folded(graph, fold).map_err(DurableOpenError::Replay)?;
 
     if let Some(prepared) = &prepared {
         validate_durable_identities(prepared)?;
@@ -374,26 +377,46 @@ fn unrecovered_sidecar(
     checkpoint_lsn: u64,
 ) -> Result<Option<std::path::PathBuf>, DurableOpenError> {
     let wpath = wal_path(checkpoint_path);
-    let frames = read_sidecar(&wpath)?;
-    Ok(unreplayed(&frames, checkpoint_lsn).then_some(wpath))
+    Ok(read_sidecar(&wpath)?
+        .unreplayed(checkpoint_lsn)
+        .then_some(wpath))
 }
 
 /// Shared tail for every refusal: the frames are discardable only deliberately.
 const DISCARD_EXIT: &str = "or move the sidecar aside first to deliberately discard those commits.";
 
+/// What a sidecar holds, counted without keeping a frame.
+struct SidecarSummary {
+    frames: usize,
+    max_lsn: u64,
+}
+
+impl SidecarSummary {
+    /// Whether any frame is a commit a checkpoint stamped `checkpoint_lsn`
+    /// does not contain.
+    fn unreplayed(&self, checkpoint_lsn: u64) -> bool {
+        self.frames > 0 && self.max_lsn > checkpoint_lsn
+    }
+}
+
 /// Read (do not truncate) whatever the last durable owner left behind. Torn
-/// tails stop the scan; see `wal::read_frames`.
-fn read_sidecar(wpath: &Path) -> Result<Vec<WalFrame>, DurableOpenError> {
-    recover(wpath).map_err(|e| {
+/// tails stop the scan, see `wal::read_frames`.
+fn read_sidecar(wpath: &Path) -> Result<SidecarSummary, DurableOpenError> {
+    let mut summary = SidecarSummary {
+        frames: 0,
+        max_lsn: 0,
+    };
+    recover_with(wpath, |frame| {
+        summary.frames += 1;
+        summary.max_lsn = summary.max_lsn.max(frame.lsn);
+    })
+    .map_err(|e| {
         DurableOpenError::Io(format!(
             "failed to read the write-ahead log at '{}': {e}",
             wpath.display()
         ))
-    })
-}
-
-fn unreplayed(frames: &[WalFrame], checkpoint_lsn: u64) -> bool {
-    frames.iter().any(|f| f.lsn > checkpoint_lsn)
+    })?;
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -401,7 +424,7 @@ mod legacy_reference_refusal_tests {
     use super::*;
     use crate::datatypes::Value;
     use crate::graph::storage::GraphRead;
-    use crate::graph::wal::{MutationOp, SyncMode};
+    use crate::graph::wal::{MutationOp, SyncMode, WalFrame};
 
     #[test]
     fn refusal_preserves_wal_bytes_and_caller_before_tail_repair_or_wrap() {
@@ -460,6 +483,7 @@ mod recording_over_a_fork_tests {
     use crate::graph::session::execute::{execute_mut, ExecuteOptions};
     use crate::graph::storage::recording::resolve_ops;
     use crate::graph::storage::GraphRead;
+    use crate::graph::wal::WalFrame;
     use std::collections::HashMap;
 
     fn run(graph: &mut DirGraph, query: &str) {

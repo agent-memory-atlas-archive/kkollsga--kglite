@@ -93,6 +93,10 @@ Options:
   --checkpoint-interval <SECS> Save the served graph back to --graph every SECS
                                (also KGLITE_BOLT_CHECKPOINT_INTERVAL=<secs>;
                                unchanged graphs are skipped; same refusals)
+  --checkpoint-wal-mib <MIB>   Checkpoint when the write-ahead log passes MIB and is
+                               at least as large as the .kgl [default: 32 while a
+                               log is kept; 0 disables]. Also
+                               KGLITE_BOLT_CHECKPOINT_WAL_MIB=<mib>
   --durability <LEVEL>         What a committed write survives: full (power
                                loss), normal (this process dying), off — no log
                                [default: normal]. Also KGLITE_BOLT_DURABILITY=<level>;

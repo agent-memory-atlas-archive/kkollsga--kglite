@@ -62,6 +62,38 @@ pub fn apply_frames(
     Ok(lsn)
 }
 
+/// A replay folded as its frames are read: the plan plus the first refusal a
+/// frame earned. The log is never held whole — see [`ReplayFold::absorb`].
+pub(crate) struct ReplayFold {
+    plan: plan::ReplayPlan,
+    after_lsn: u64,
+    refusal: Option<String>,
+}
+
+impl ReplayFold {
+    pub(crate) fn new(after_lsn: u64) -> Self {
+        Self {
+            plan: plan::ReplayPlan::starting_after(after_lsn),
+            after_lsn,
+            refusal: None,
+        }
+    }
+
+    /// Fold `frame` in log order, then let it drop. The first frame carrying a
+    /// legacy endpoint reference is remembered and later frames are ignored, so
+    /// the refusal names the same frame a whole-log pre-pass would.
+    pub(crate) fn absorb(&mut self, frame: &WalFrame) {
+        if self.refusal.is_some() || frame.lsn <= self.after_lsn {
+            return;
+        }
+        if frame.ops.iter().any(mutation_op_has_legacy_reference) {
+            self.refusal = Some(legacy_reference_refusal(frame.lsn));
+            return;
+        }
+        self.plan.absorb(frame);
+    }
+}
+
 /// Durable open retains the workspace until its writer is opened successfully.
 /// No-op histories avoid cloning a checkpoint merely to open an empty log.
 pub(crate) fn prepare_replay(
@@ -69,8 +101,22 @@ pub(crate) fn prepare_replay(
     frames: &[WalFrame],
     after_lsn: u64,
 ) -> Result<(Option<DirGraph>, u64), String> {
-    refuse_ambiguous_legacy_references(frames, after_lsn)?;
-    let plan = plan::ReplayPlan::fold(frames, after_lsn);
+    let mut fold = ReplayFold::new(after_lsn);
+    for frame in frames {
+        fold.absorb(frame);
+    }
+    prepare_replay_folded(graph, fold)
+}
+
+/// [`prepare_replay`] over a fold the caller fed frame by frame.
+pub(crate) fn prepare_replay_folded(
+    graph: &DirGraph,
+    fold: ReplayFold,
+) -> Result<(Option<DirGraph>, u64), String> {
+    if let Some(refusal) = fold.refusal {
+        return Err(refusal);
+    }
+    let plan = fold.plan;
     if plan.is_empty() {
         return Ok((None, plan.max_lsn));
     }
@@ -408,18 +454,10 @@ fn find_logical_node(graph: &DirGraph, node_type: &str, id: &Value) -> Option<No
 /// the checkpoint's slot-to-identity map. Refuse it before folding, cloning,
 /// replay mutation, or opening/truncating the sidecar. Identity fields and
 /// relationship endpoints remain logical WAL keys and are not stored payloads.
-fn refuse_ambiguous_legacy_references(frames: &[WalFrame], after_lsn: u64) -> Result<(), String> {
-    if let Some(frame) = frames
-        .iter()
-        .filter(|frame| frame.lsn > after_lsn)
-        .find(|frame| frame.ops.iter().any(mutation_op_has_legacy_reference))
-    {
-        return Err(format!(
-            "WAL frame {} contains a legacy endpoint reference in stored node or relationship state. Its physical node slot has no originating identity map, so replay is refused before graph mutation or WAL repair",
-            frame.lsn
-        ));
-    }
-    Ok(())
+fn legacy_reference_refusal(lsn: u64) -> String {
+    format!(
+        "WAL frame {lsn} contains a legacy endpoint reference in stored node or relationship state. Its physical node slot has no originating identity map, so replay is refused before graph mutation or WAL repair"
+    )
 }
 
 fn mutation_op_has_legacy_reference(op: &MutationOp) -> bool {

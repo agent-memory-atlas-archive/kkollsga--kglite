@@ -63,24 +63,32 @@ pub(super) struct ReplayPlan {
     pub declarations: Declarations,
     pub edge_embedding_events: Vec<super::edge_embeddings::OrderedEdgeEmbeddingEvent>,
     pub max_lsn: u64,
+    /// The checkpoint's LSN: frames at or below it are not replayed.
+    after_lsn: u64,
 }
 
 impl ReplayPlan {
-    pub fn fold(frames: &[WalFrame], after: u64) -> Self {
-        let mut plan = Self {
+    pub fn starting_after(after: u64) -> Self {
+        Self {
             max_lsn: after,
+            after_lsn: after,
             ..Self::default()
-        };
-        for frame in frames.iter().filter(|frame| frame.lsn > after) {
-            plan.max_lsn = plan.max_lsn.max(frame.lsn);
-            for op in &frame.ops {
-                if let Some(event) = super::edge_embeddings::event_from_op(op) {
-                    plan.edge_embedding_events.push(event);
-                }
-                plan.fold_op(op);
-            }
         }
-        plan
+    }
+
+    /// Fold one frame into the plan, in log order. A frame at or below the
+    /// checkpoint's LSN is already in the checkpoint and changes nothing.
+    pub fn absorb(&mut self, frame: &WalFrame) {
+        if frame.lsn <= self.after_lsn {
+            return;
+        }
+        self.max_lsn = self.max_lsn.max(frame.lsn);
+        for op in &frame.ops {
+            if let Some(event) = super::edge_embeddings::event_from_op(op) {
+                self.edge_embedding_events.push(event);
+            }
+            self.fold_op(op);
+        }
     }
 
     fn node_mut(&mut self, key: NodeKey) -> &mut NodeState {

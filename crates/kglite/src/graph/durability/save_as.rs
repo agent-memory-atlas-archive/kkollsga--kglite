@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{read_sidecar, unreplayed, DurableOpenError, DISCARD_EXIT};
+use super::{read_sidecar, DurableOpenError, DISCARD_EXIT};
 use crate::graph::wal::{wal_path, DurabilityLevel, SyncMode, Wal};
 
 /// A checkpoint preparation authorizes one save against one actual WAL.
@@ -73,15 +73,15 @@ pub fn prepare_save_as_target(
     level: DurabilityLevel,
 ) -> Result<Option<Wal>, DurableOpenError> {
     let wpath = wal_path(checkpoint_path);
-    let frames = read_sidecar(&wpath)?;
-    if !frames.is_empty() {
+    let sidecar = read_sidecar(&wpath)?;
+    if sidecar.frames > 0 {
         let checkpoint_lsn = match crate::graph::io::file::checkpoint_lsn_from_file(checkpoint_path)
         {
             Ok(lsn) => lsn,
             Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
             Err(error) => return Err(DurableOpenError::Io(error.to_string())),
         };
-        if unreplayed(&frames, checkpoint_lsn) {
+        if sidecar.unreplayed(checkpoint_lsn) {
             return Err(DurableOpenError::Refused(format!(
                 "the write-ahead log at '{}' holds commits its destination checkpoint \
                  does not contain; open that destination at level 'full' or 'normal' to \
@@ -90,7 +90,7 @@ pub fn prepare_save_as_target(
             )));
         }
     }
-    if !level.logs() && frames.is_empty() {
+    if !level.logs() && sidecar.frames == 0 {
         return Ok(None);
     }
     let mut wal = Wal::open(wpath, level.sync_mode().unwrap_or(SyncMode::Barrier))

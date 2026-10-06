@@ -1,5 +1,6 @@
 //! Continuing a recovered WAL must never append behind a discarded frame.
 use super::*;
+use std::io::Cursor;
 
 fn node_frame(lsn: u64) -> WalFrame {
     WalFrame {
@@ -136,7 +137,7 @@ fn replaced_same_length_file_refuses_recovered_boundary() {
     let mut bytes = prefix(WAL_FORMAT_VERSION);
     bytes.extend_from_slice(&[1, 2]);
     std::fs::write(&path, &bytes).unwrap();
-    let recovered = recover_for_append(&path).unwrap();
+    let recovered = recover_for_append(&path, drop).unwrap();
     let old = dir.path().join("retained-old-wal");
     std::fs::rename(&path, &old).unwrap();
     std::fs::write(&path, &bytes).unwrap();
@@ -195,7 +196,7 @@ fn shared_durable_open_repairs_before_its_next_frame() {
 fn newly_appeared_file_refuses_empty_recovery() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("graph.kgl-wal");
-    let recovered = recover_for_append(&path).unwrap();
+    let recovered = recover_for_append(&path, drop).unwrap();
     let bytes = prefix(WAL_FORMAT_VERSION);
     std::fs::write(&path, &bytes).unwrap();
     assert!(Wal::open_recovered(path.clone(), SyncMode::Barrier, recovered).is_err());
@@ -287,4 +288,68 @@ fn edge_embedding_frames_round_trip_and_a_torn_one_is_discarded_whole() {
             bytes.len()
         );
     }
+}
+
+/// Recovery hands each frame to its sink before reading the next and keeps
+/// none: a decoded frame is about ten times its on-disk size, so holding the
+/// log whole is what made a 6 MB WAL cost 90 MiB at restart.
+#[test]
+fn scan_hands_frames_over_one_at_a_time_and_retains_none() {
+    struct Counting<'a> {
+        inner: Cursor<Vec<u8>>,
+        consumed: &'a std::cell::Cell<u64>,
+    }
+    impl Read for Counting<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.consumed.set(self.consumed.get() + n as u64);
+            Ok(n)
+        }
+    }
+
+    let mut bytes = WAL_MAGIC.to_vec();
+    bytes.push(WAL_FORMAT_VERSION);
+    for lsn in 1..=50 {
+        append_frame(&mut bytes, &node_frame(lsn)).unwrap();
+    }
+    let total = bytes.len() as u64;
+    let consumed = std::cell::Cell::new(0);
+    let reader = Counting {
+        inner: Cursor::new(bytes),
+        consumed: &consumed,
+    };
+    let mut seen_at = Vec::new();
+    let read = scan_frames(reader, total, |frame| {
+        seen_at.push((frame.lsn, consumed.get()));
+    })
+    .unwrap();
+
+    assert_eq!(seen_at.len(), 50);
+    assert_eq!(read.resume.valid_bytes, total);
+    assert!(
+        seen_at.windows(2).all(|pair| pair[0].1 < pair[1].1),
+        "each frame must reach the sink before the next one is read"
+    );
+    assert!(
+        seen_at[0].1 < total / 10,
+        "the first frame was delivered after {} of {total} bytes",
+        seen_at[0].1
+    );
+}
+
+#[test]
+fn recover_with_yields_what_recover_returns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("graph.kgl-wal");
+    let mut wal = Wal::open(path.clone(), SyncMode::PageCache).unwrap();
+    for lsn in 1..=5 {
+        wal.append(&node_frame(lsn)).unwrap();
+    }
+    let mut streamed = Vec::new();
+    recover_with(&path, |frame| streamed.push(frame)).unwrap();
+    assert_eq!(streamed, recover(&path).unwrap());
+    recover_with(&dir.path().join("absent-wal"), |_| {
+        panic!("no log, no frames")
+    })
+    .unwrap();
 }

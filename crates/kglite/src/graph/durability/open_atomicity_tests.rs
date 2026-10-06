@@ -1,8 +1,8 @@
 use super::*;
 use crate::datatypes::Value;
-use crate::graph::mutation::wal_replay::apply_frames;
+use crate::graph::mutation::wal_replay::{apply_frames, prepare_replay};
 use crate::graph::storage::{GraphRead, GraphWrite};
-use crate::graph::wal::MutationOp;
+use crate::graph::wal::{MutationOp, WalFrame};
 
 fn frame(id: i64) -> WalFrame {
     WalFrame {

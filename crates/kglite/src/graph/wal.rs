@@ -657,8 +657,9 @@ fn read_frames_diagnosed(
     r: impl Read,
     stream_len: u64,
 ) -> io::Result<(Vec<WalFrame>, Option<String>)> {
-    let read = scan_frames(r, stream_len)?;
-    Ok((read.frames, read.diagnostic))
+    let mut frames = Vec::new();
+    let read = scan_frames(r, stream_len, |frame| frames.push(frame))?;
+    Ok((frames, read.diagnostic))
 }
 
 #[derive(Clone, Copy)]
@@ -669,7 +670,6 @@ struct ResumePoint {
 }
 
 struct FrameScan {
-    frames: Vec<WalFrame>,
     diagnostic: Option<String>,
     resume: ResumePoint,
     non_tail_damage: bool,
@@ -691,17 +691,27 @@ impl FrameScan {
     }
 }
 
-fn scan_frames(mut r: impl Read, stream_len: u64) -> io::Result<FrameScan> {
+/// Walk the frames, handing each to `sink` in log order and dropping it once the
+/// sink returns. Nothing is retained here, so recovery's peak memory is the
+/// sink's own state plus one frame, however long the log is: a decoded frame is
+/// roughly an order of magnitude larger than its on-disk bytes, and holding every
+/// one made a 6 MB log cost 90 MiB of resident memory at restart.
+fn scan_frames(
+    mut r: impl Read,
+    stream_len: u64,
+    mut sink: impl FnMut(WalFrame),
+) -> io::Result<FrameScan> {
     let version = read_header(&mut r)?;
     let codec = wal_codec(version)?;
 
     let header_len = (WAL_MAGIC.len() + 1) as u64;
     let mut consumed: u64 = header_len;
-    let mut frames = Vec::new();
+    let mut frame_count = 0usize;
     let stopped_at = loop {
         match read_frame_step(&mut r, stream_len, consumed, codec)? {
             FrameStep::Frame(frame, frame_len) => {
-                frames.push(frame);
+                sink(frame);
+                frame_count += 1;
                 consumed += frame_len;
             }
             // A clean EOF is the normal end and says nothing.
@@ -722,10 +732,9 @@ fn scan_frames(mut r: impl Read, stream_len: u64) -> io::Result<FrameScan> {
         let trailing = resume.map_or(0, |next| {
             count_intact_frames(&mut r, stream_len, next, codec)
         });
-        recovery_diagnostic(offset, stream_len, frames.len(), trailing)
+        recovery_diagnostic(offset, stream_len, frame_count, trailing)
     });
     Ok(FrameScan {
-        frames,
         diagnostic,
         resume: ResumePoint {
             version,
@@ -918,11 +927,28 @@ pub fn recover(path: &Path) -> io::Result<Vec<WalFrame>> {
     }
 }
 
-/// Recovery plus its verified append boundary, kept internal so callers
-/// cannot manufacture a truncation point. The durable owner holds its writer
-/// lease from this scan through `open_recovered`.
+/// [`recover`] for a caller that only folds or inspects frames: each is handed
+/// to `sink` in log order and dropped, so the log is never held whole. A missing
+/// file yields no calls.
+pub(crate) fn recover_with(path: &Path, sink: impl FnMut(WalFrame)) -> io::Result<()> {
+    match File::open(path) {
+        Ok(f) => {
+            let len = f.metadata()?.len();
+            let read = scan_frames(BufReader::new(f), len, sink)?;
+            if let Some(message) = read.diagnostic {
+                eprintln!("{message}");
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The verified append boundary a recovery scan found, kept internal so
+/// callers cannot manufacture a truncation point. The durable owner holds its
+/// writer lease from this scan through `open_recovered`.
 pub(crate) struct WalRecovery {
-    pub(crate) frames: Vec<WalFrame>,
     resume: Option<RecoveredBoundary>,
 }
 
@@ -986,19 +1012,21 @@ fn verify_recovered_file(file: &File, recovered: &RecoveredBoundary) -> io::Resu
     Ok(())
 }
 
-pub(crate) fn recover_for_append(path: &Path) -> io::Result<WalRecovery> {
+/// Scan the log for append, handing each intact frame to `sink` (see
+/// [`scan_frames`]).
+pub(crate) fn recover_for_append(
+    path: &Path,
+    sink: impl FnMut(WalFrame),
+) -> io::Result<WalRecovery> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(WalRecovery {
-                frames: Vec::new(),
-                resume: None,
-            });
+            return Ok(WalRecovery { resume: None });
         }
         Err(error) => return Err(error),
     };
     let metadata = file.metadata()?;
-    let read = scan_frames(BufReader::new(&file), metadata.len())?;
+    let read = scan_frames(BufReader::new(&file), metadata.len(), sink)?;
     read.ensure_appendable()?;
     if let Some(message) = read.diagnostic {
         eprintln!("{message}");
@@ -1010,7 +1038,6 @@ pub(crate) fn recover_for_append(path: &Path) -> io::Result<WalRecovery> {
     };
     verify_recovered_file(&recovered.source, &recovered)?;
     Ok(WalRecovery {
-        frames: read.frames,
         resume: Some(recovered),
     })
 }
@@ -1111,7 +1138,7 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
         }
         None => {
             file.seek(SeekFrom::Start(0))?;
-            let read = scan_frames(BufReader::new(&mut file), file_len)?;
+            let read = scan_frames(BufReader::new(&mut file), file_len, drop)?;
             read.ensure_appendable()?;
             read.resume
         }

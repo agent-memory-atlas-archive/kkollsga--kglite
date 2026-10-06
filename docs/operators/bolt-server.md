@@ -74,6 +74,7 @@ Important options (run `--help` on the installed version for the authority):
 | `--durability full\|normal\|off` | what an acknowledged commit survives, default `normal` (see *Durability*) |
 | `--save-on-exit` | checkpoint the served graph back to `--graph` on `SIGINT`/`SIGTERM` |
 | `--checkpoint-interval SECS` | checkpoint the served graph on a timer |
+| `--checkpoint-wal-mib MIB` | checkpoint when the log passes this size, default `32` while a log is kept, `0` disables |
 | `--auth none\|basic`, `--auth-user`, `--auth-pass` | Bolt LOGON policy |
 | `--idle-timeout`, `--max-sessions`, `--max-message-size` | resource bounds |
 | `--advertise-addr HOST:PORT` | address returned to `neo4j://` routing clients |
@@ -270,7 +271,7 @@ server at `RUST_LOG=debug`. Every incoming query is logged.
 
 ### Checkpoints
 
-Three routes rewrite the served `.kgl`, and all three are the same operation:
+Four routes rewrite the served `.kgl`, and all four are the same operation:
 flush the log, stamp the checkpoint position, write the file, truncate the log.
 
 - **`CALL db.checkpoint()`** — on demand, over the wire. It is a *bolt-server
@@ -286,6 +287,15 @@ flush the log, stamp the checkpoint position, write the file, truncate the log.
   rewrite its file. A failed tick is logged as an error and the server keeps
   serving. The interval is validated at startup rather than starting a server
   that silently never checkpoints.
+- **`--checkpoint-wal-mib MIB`** (`KGLITE_BOLT_CHECKPOINT_WAL_MIB`) — on log
+  size, and **on by default** at `full` and `normal`. Every 10 seconds the
+  server compares the sidecar with the threshold (default 32 MiB) and with the
+  `.kgl`. It checkpoints when the log is at least as large as both, because a
+  log bigger than the file it extends costs more to replay than to rewrite.
+  `0` disables it. An explicit value is refused with `--readonly` and for
+  disk-mode graphs. The default does not apply there, or at `off`, where
+  there is no log. It shares the recorded version with the verb and the
+  interval task, so an unchanged graph is skipped.
 - **`--save-on-exit`** (`KGLITE_BOLT_SAVE_ON_EXIT`) — once, on `SIGINT` or
   `SIGTERM`, after periodic checkpointing has been stopped. The saved graph
   version is logged. A failed exit save is logged as an error *and* exits
@@ -310,11 +320,13 @@ Every checkpoint truncates it back to its header. Between checkpoints it grows
 by under a hundred bytes per single-node commit. Multiply that by your commit
 rate to size it.
 
-A busy server with no checkpointing configured accumulates a sidecar in
-proportion to how long it has been running. A restart pays a replay
-proportional to the same thing. `--checkpoint-interval` bounds both at once,
-which is the reason to set it. It does not make commits safer, because the log
-already did that. It keeps replay time and sidecar size bounded.
+The log is bounded by default: `--checkpoint-wal-mib` checkpoints once it
+passes 32 MiB (and the size of the `.kgl`). Set `--checkpoint-wal-mib 0` and
+nothing else, and the sidecar grows with uptime and a restart replays all of
+it. Replay folds the log frame by frame, so its memory follows the graph the
+log produces, not the log's length. `--checkpoint-interval` adds a timer on top.
+Neither makes commits safer, because the log already did that. They keep
+replay time and sidecar size bounded.
 
 Back up the sidecar with the graph, or checkpoint before copying the `.kgl`
 alone. A `.kgl` copied while a sidecar runs ahead of it is missing the commits
@@ -337,7 +349,7 @@ An explicitly requested level or feature is refused there. The *default* level
 degrades instead, so flipping the default did not turn every read-only and
 disk-mode server into a startup error:
 
-| Configuration | `--durability full`/`normal` (asked for) | `--durability` (default) | `--save-on-exit`, `--checkpoint-interval` | `CALL db.checkpoint()` |
+| Configuration | `--durability full`/`normal` (asked for) | `--durability` (default) | `--save-on-exit`, `--checkpoint-interval`, `--checkpoint-wal-mib` (asked for) | `CALL db.checkpoint()` |
 |---|---|---|---|---|
 | `.kgl`, writable | serves at that level | serves at `normal` | supported | supported |
 | `--readonly` | startup error | serves at `off`, logged | startup error | `Neo.ClientError.Security.Forbidden` |

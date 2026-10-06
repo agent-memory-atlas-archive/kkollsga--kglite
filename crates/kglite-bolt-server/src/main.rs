@@ -129,6 +129,26 @@ struct Cli {
     )]
     checkpoint_interval: Option<Duration>,
 
+    /// Checkpoint when the write-ahead log passes this many MiB
+    /// [default: 32 while a log is kept; `0` disables].
+    ///
+    /// Without a bound the log of a `normal`/`full` server only ever grows, and
+    /// the next restart replays all of it. The size check runs every 10
+    /// seconds and fires when the log is at least this large *and* at least as
+    /// large as the `.kgl` it extends: replaying a log bigger than the file it
+    /// extends costs more than loading the file. A checkpoint writes the graph
+    /// to `--graph` (fsync'd, atomic temp+rename) and truncates the log, as
+    /// `CALL db.checkpoint()` does, and a graph unchanged since the last
+    /// checkpoint is skipped.
+    ///
+    /// Independent of `--checkpoint-interval`, which checkpoints on a timer;
+    /// set both and either fires. Refused for `--readonly` and disk-mode
+    /// graphs when given explicitly; the default simply does not apply there,
+    /// or at durability `off`, which keeps no log. Also settable as
+    /// `KGLITE_BOLT_CHECKPOINT_WAL_MIB=<mib>`.
+    #[arg(long, value_name = "MIB", value_parser = parse_checkpoint_wal_mib)]
+    checkpoint_wal_mib: Option<u64>,
+
     /// The valid-time instant a statement reads when it names none, on a graph
     /// with validity declarations: `today` (the built-in default, UTC), `all`
     /// (every version) or a fixed `YYYY-MM-DD` day. A statement's own
@@ -265,6 +285,22 @@ const SAVE_ON_EXIT_ENV: &str = "KGLITE_BOLT_SAVE_ON_EXIT";
 
 const CHECKPOINT_INTERVAL_ENV: &str = "KGLITE_BOLT_CHECKPOINT_INTERVAL";
 
+const CHECKPOINT_WAL_MIB_ENV: &str = "KGLITE_BOLT_CHECKPOINT_WAL_MIB";
+
+/// The log size, in MiB, past which a server that keeps a log checkpoints on its
+/// own when `--checkpoint-wal-mib` says nothing.
+///
+/// Measured on the edge workload (40-row upserts, about 2 KB of log per
+/// commit): 32 MiB is a restart that replays in well under a second on a Pi
+/// and a checkpoint roughly every 15,000 commits, while a graph large enough to
+/// make a save expensive also makes the log's own size floor (the `.kgl`
+/// size) the binding one.
+const DEFAULT_CHECKPOINT_WAL_MIB: u64 = 32;
+
+/// How often the log's size is looked at: one `stat`, so cheap enough to be
+/// frequent, and short enough that a burst cannot outgrow the bound by much.
+const WAL_SIZE_POLL: Duration = Duration::from_secs(10);
+
 const DURABILITY_ENV: &str = "KGLITE_BOLT_DURABILITY";
 
 /// The level this server logs at when neither the flag nor the environment
@@ -350,6 +386,30 @@ fn env_checkpoint_interval() -> Result<Option<Duration>> {
     parse_checkpoint_interval(&raw)
         .map(Some)
         .map_err(|e| anyhow::anyhow!("{CHECKPOINT_INTERVAL_ENV}: {e}"))
+}
+
+/// Parse `--checkpoint-wal-mib`: a whole number of MiB, where `0` switches the
+/// size trigger off. Shared by clap and the environment mirror.
+fn parse_checkpoint_wal_mib(raw: &str) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    trimmed.parse().map_err(|_| {
+        format!(
+            "invalid checkpoint WAL size {trimmed:?}: expected a whole number of MiB \
+             (for example 32), or 0 to disable"
+        )
+    })
+}
+
+fn env_checkpoint_wal_mib() -> Result<Option<u64>> {
+    let Ok(raw) = std::env::var(CHECKPOINT_WAL_MIB_ENV) else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_checkpoint_wal_mib(&raw)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("{CHECKPOINT_WAL_MIB_ENV}: {e}"))
 }
 
 /// Parse a durability level name.
@@ -449,6 +509,13 @@ fn ensure_checkpointing_supported(
 struct Durability {
     save_on_exit: bool,
     checkpoint_interval: Option<Duration>,
+    /// Log size, in bytes, past which a checkpoint fires; `None` is off.
+    checkpoint_wal_bytes: Option<u64>,
+    /// Whether [`Self::checkpoint_wal_bytes`] was asked for (flag or
+    /// environment) rather than defaulted: an explicit request in a
+    /// configuration that cannot checkpoint is refused, the default is not
+    /// applied.
+    wal_checkpoint_requested: bool,
     /// The write-ahead level the served session logs at. Unlike the two
     /// checkpoint settings this one is not a background task but a property of
     /// the session itself, so it is resolved here and handed to startup.
@@ -481,7 +548,13 @@ impl Durability {
                 None => (DEFAULT_DURABILITY, false),
             },
         };
+        let wal_mib = match cli.checkpoint_wal_mib {
+            Some(mib) => Some(mib),
+            None => env_checkpoint_wal_mib()?,
+        };
         let mut resolved = Self {
+            checkpoint_wal_bytes: None,
+            wal_checkpoint_requested: wal_mib.is_some_and(|mib| mib > 0),
             save_on_exit: cli.save_on_exit || env_flag(SAVE_ON_EXIT_ENV).unwrap_or(false),
             checkpoint_interval: match cli.checkpoint_interval {
                 Some(interval) => Some(interval),
@@ -498,6 +571,21 @@ impl Durability {
             );
             resolved.level = DurabilityLevel::Off;
         }
+        resolved.checkpoint_wal_bytes = match wal_mib {
+            Some(0) => None,
+            Some(mib) => Some(mib.saturating_mul(1 << 20)),
+            None => resolved
+                .level
+                .logs()
+                .then_some(DEFAULT_CHECKPOINT_WAL_MIB << 20),
+        };
+        if resolved.wal_checkpoint_requested && !resolved.level.logs() {
+            tracing::info!(
+                "--checkpoint-wal-mib has no effect at durability off: there is no \
+                 write-ahead log to bound"
+            );
+            resolved.checkpoint_wal_bytes = None;
+        }
         resolved.ensure_supported(cli.readonly, None)?;
         Ok(resolved)
     }
@@ -513,6 +601,14 @@ impl Durability {
             ensure_checkpointing_supported(
                 "--checkpoint-interval",
                 CHECKPOINT_INTERVAL_ENV,
+                readonly,
+                mode,
+            )?;
+        }
+        if self.wal_checkpoint_requested && self.checkpoint_wal_bytes.is_some() {
+            ensure_checkpointing_supported(
+                "--checkpoint-wal-mib",
+                CHECKPOINT_WAL_MIB_ENV,
                 readonly,
                 mode,
             )?;
@@ -591,6 +687,61 @@ fn spawn_checkpoint_task(
                     error = %e,
                     "checkpoint-interval: save FAILED — the server keeps serving, but \
                      writes since the last successful checkpoint are not on disk"
+                ),
+            }
+        }
+    })
+}
+
+/// Whether the log has outgrown its bound: at least `threshold` bytes and at
+/// least as large as the checkpoint it extends (a missing checkpoint counts as
+/// empty, so the threshold alone decides).
+fn wal_needs_checkpoint(wal_len: u64, checkpoint_len: u64, threshold: u64) -> bool {
+    wal_len >= threshold && wal_len >= checkpoint_len
+}
+
+/// Spawn the log-size checkpoint task: look at the sidecar every `poll`
+/// ([`WAL_SIZE_POLL`] in the server) and checkpoint when [`wal_needs_checkpoint`] says so.
+///
+/// Same save, same skip rule, same lock discipline as the interval task — both
+/// go through [`checkpoint_if_changed`] — and the same failure stance: a failed
+/// checkpoint is logged at error and retried on the next poll, never fatal.
+fn spawn_wal_size_checkpoint_task(
+    session: Arc<kglite::api::session::Session>,
+    path: PathBuf,
+    state: CheckpointState,
+    threshold: u64,
+    poll: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let wal = kglite::api::durable::wal_path(&path);
+        let mut ticker = tokio::time::interval(poll);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
+            let (wal_len, checkpoint_len) = (len(&wal), len(&path));
+            if !wal_needs_checkpoint(wal_len, checkpoint_len, threshold) {
+                continue;
+            }
+            match checkpoint_if_changed(&session, &path, &state) {
+                Ok(CheckpointOutcome::Written(version)) => tracing::info!(
+                    path = %path.display(),
+                    graph_version = version,
+                    wal_bytes = wal_len,
+                    "checkpoint-wal: graph written, log truncated"
+                ),
+                Ok(CheckpointOutcome::Skipped(version)) => tracing::debug!(
+                    graph_version = version,
+                    "checkpoint-wal: skipped (graph unchanged since the last checkpoint)"
+                ),
+                Err(e) => tracing::error!(
+                    path = %path.display(),
+                    error = %e,
+                    wal_bytes = wal_len,
+                    "checkpoint-wal: save FAILED — the log keeps growing and the next \
+                     poll retries"
                 ),
             }
         }
@@ -712,6 +863,10 @@ async fn serve() -> Result<()> {
     // *default* level to `off` there, and the shutdown flush below must not
     // then call `sync()` on a session that has no log.
     durability.level = started.level;
+    if !durability.level.logs() {
+        // No log, nothing to bound: covers a default degraded to `off`.
+        durability.checkpoint_wal_bytes = None;
+    }
     // `_writer_lease` rather than `_`: a bare `_` drops it here, releasing
     // write ownership before the first client connects. This binding holds it
     // until after `BoltServer::serve` returns at shutdown.
@@ -773,6 +928,7 @@ async fn serve() -> Result<()> {
     // skip-state so `CALL db.checkpoint()` and the task agree on what is
     // already on disk.
     let checkpoint_state = backend.checkpoint_state();
+    let checkpoint_state_for_wal = Arc::clone(&checkpoint_state);
 
     let addr = SocketAddr::new(cli.bind, cli.port);
 
@@ -784,6 +940,7 @@ async fn serve() -> Result<()> {
         durability = durability.level.name(),
         save_on_exit = durability.save_on_exit,
         checkpoint_interval_secs = durability.checkpoint_interval.map(|d| d.as_secs()),
+        checkpoint_wal_bytes = durability.checkpoint_wal_bytes,
         "Bolt server starting"
     );
     let checkpoint_task = durability.checkpoint_interval.map(|interval| {
@@ -800,6 +957,21 @@ async fn serve() -> Result<()> {
         )
     });
 
+    let wal_task = durability.checkpoint_wal_bytes.map(|threshold| {
+        tracing::info!(
+            threshold_bytes = threshold,
+            path = %served_path.display(),
+            "log-size checkpointing enabled"
+        );
+        spawn_wal_size_checkpoint_task(
+            Arc::clone(&exit_session),
+            served_path.clone(),
+            checkpoint_state_for_wal,
+            threshold,
+            WAL_SIZE_POLL,
+        )
+    });
+
     let serve_result = builder
         .serve(addr)
         .await
@@ -810,7 +982,7 @@ async fn serve() -> Result<()> {
         &durability,
         &exit_session,
         &served_path,
-        checkpoint_task,
+        [checkpoint_task, wal_task],
         serve_result,
     )
     .await
@@ -872,13 +1044,13 @@ async fn finish_shutdown(
     durability: &Durability,
     exit_session: &kglite::api::session::Session,
     served_path: &Path,
-    checkpoint_task: Option<tokio::task::JoinHandle<()>>,
+    checkpoint_tasks: [Option<tokio::task::JoinHandle<()>>; 2],
     serve_result: Result<()>,
 ) -> Result<()> {
-    if let Some(task) = checkpoint_task {
+    for task in checkpoint_tasks.into_iter().flatten() {
         task.abort();
         let _ = task.await;
-        tracing::info!("checkpoint-interval: stopped");
+        tracing::info!("checkpoint task: stopped");
     }
     // At `off` there is no log to flush and calling `sync` would be an
     // error, so it is skipped rather than reported.
@@ -998,6 +1170,114 @@ mod tests {
 
     /// Zero and junk are startup errors, not a warn-and-ignore: a server that
     /// silently never checkpoints is the failure the flag exists to prevent.
+    /// The size trigger fires on the log's size alone for a small graph and on
+    /// the graph file's size for a large one, and a missing file is empty.
+    #[test]
+    fn wal_checkpoint_waits_for_the_threshold_and_the_graph_file_size() {
+        const MIB: u64 = 1 << 20;
+        let threshold = DEFAULT_CHECKPOINT_WAL_MIB * MIB;
+        assert!(!wal_needs_checkpoint(threshold - 1, 0, threshold));
+        assert!(wal_needs_checkpoint(threshold, 0, threshold));
+        assert!(wal_needs_checkpoint(threshold, threshold, threshold));
+        assert!(
+            !wal_needs_checkpoint(threshold, 10 * threshold, threshold),
+            "a log smaller than the file it extends is cheaper to replay than to rewrite"
+        );
+        assert!(wal_needs_checkpoint(
+            10 * threshold,
+            10 * threshold,
+            threshold
+        ));
+    }
+
+    /// The task folds an oversized log on its own: past the threshold the graph
+    /// reaches `--graph` and the sidecar is cut back to its header, while a log
+    /// under the threshold is left alone. Mutation-checked: dropping the
+    /// `wal_needs_checkpoint` guard checkpoints the small log too.
+    #[tokio::test]
+    async fn the_wal_size_task_checkpoints_an_oversized_log_and_only_that() {
+        use kglite::api::session::{execute_mut, CommitOutcome, ExecuteOptions};
+        use std::collections::HashMap;
+        use std::time::Instant;
+
+        let scratch = scratch_dir("walsize");
+        let path = scratch.join("graph.kgl");
+        let started = start_graph(
+            &path,
+            Some(StorageMode::Memory),
+            false,
+            DurabilityRequest {
+                level: DurabilityLevel::Normal,
+                explicit: true,
+            },
+            None,
+            &mut |_| {},
+        )
+        .expect("a durable memory graph");
+        let session = Arc::new(started.session);
+        let commit = |query: &str| {
+            let params = HashMap::new();
+            let mut tx = session.begin();
+            execute_mut(
+                tx.working_mut().expect("working copy"),
+                query,
+                &ExecuteOptions::eager(&params),
+            )
+            .expect("mutation");
+            assert!(matches!(
+                session.commit(tx, true),
+                CommitOutcome::Committed { .. }
+            ));
+        };
+        let wal = kglite::api::durable::wal_path(&path);
+        let wal_len = || std::fs::metadata(&wal).map_or(0, |m| m.len());
+        let state: CheckpointState = Arc::default();
+        let poll = Duration::from_millis(20);
+
+        commit("CREATE (:N {id: 1})");
+        let small = wal_len();
+        assert!(small > 5, "the commit must have been logged");
+        let task = spawn_wal_size_checkpoint_task(
+            Arc::clone(&session),
+            path.clone(),
+            Arc::clone(&state),
+            small + 10_000,
+            poll,
+        );
+        tokio::time::sleep(poll * 8).await;
+        assert!(
+            !path.exists(),
+            "a log under the threshold must not checkpoint"
+        );
+        assert_eq!(wal_len(), small);
+
+        for id in 2..400 {
+            commit(&format!("CREATE (:N {{id: {id}}})"));
+        }
+        assert!(wal_len() > small + 10_000, "the log must now be oversized");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while wal_len() > 5 && Instant::now() < deadline {
+            tokio::time::sleep(poll).await;
+        }
+        task.abort();
+        let _ = task.await;
+        assert!(path.exists(), "the checkpoint must have written the graph");
+        assert_eq!(
+            wal_len(),
+            5,
+            "the checkpoint must have cut the log to its header"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn checkpoint_wal_mib_accepts_whole_numbers_and_zero() {
+        assert_eq!(parse_checkpoint_wal_mib(" 64 "), Ok(64));
+        assert_eq!(parse_checkpoint_wal_mib("0"), Ok(0));
+        assert!(parse_checkpoint_wal_mib("32MiB").is_err());
+        assert!(parse_checkpoint_wal_mib("-1").is_err());
+    }
+
     #[test]
     fn checkpoint_interval_rejects_zero_and_junk() {
         let zero = parse_checkpoint_interval("0").expect_err("0 would checkpoint continuously");
