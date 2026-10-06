@@ -1031,7 +1031,7 @@ fn configure_builder(cli: &Cli, backend: KgliteBackend) -> Result<BoltServer<Kgl
 }
 
 /// The shutdown tail of [`serve`], in its load-bearing order: stop-and-JOIN
-/// the checkpoint task (abort alone only requests cancellation — a task
+/// the checkpoint tasks (abort alone only requests cancellation — a task
 /// mid-save runs synchronous code and could otherwise land a tick's save
 /// after the exit save; awaiting the aborted handle makes the exit save the
 /// last write by construction), then the log's final barrier BEFORE any
@@ -1047,10 +1047,16 @@ async fn finish_shutdown(
     checkpoint_tasks: [Option<tokio::task::JoinHandle<()>>; 2],
     serve_result: Result<()>,
 ) -> Result<()> {
-    for task in checkpoint_tasks.into_iter().flatten() {
+    let [interval_task, wal_task] = checkpoint_tasks;
+    if let Some(task) = interval_task {
         task.abort();
         let _ = task.await;
-        tracing::info!("checkpoint task: stopped");
+        tracing::info!("checkpoint-interval: stopped");
+    }
+    if let Some(task) = wal_task {
+        task.abort();
+        let _ = task.await;
+        tracing::info!("checkpoint-wal: stopped");
     }
     // At `off` there is no log to flush and calling `sync` would be an
     // error, so it is skipped rather than reported.
