@@ -114,3 +114,23 @@ def test_store_as_writers_warn_about_an_empty_interval(write) -> None:
     messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
     assert any("empty interval" in m for m in messages), messages
     assert out.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN p.vt AS vt").to_list() == [{"vt": "2010-01-01"}]
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        lambda g: g.select("P", temporal=False).calculate("n * 2", store_as="vt"),
+        lambda g: g.select("P", temporal=False).count(store_as="vt"),
+        lambda g: g.select("P", temporal=False).traverse("HAS").unique_values("bad", store_as="vt"),
+        lambda g: g.select("P", temporal=False).traverse("HAS").collect_children("bad", store_as="vt"),
+    ],
+    ids=["calculate", "count", "unique_values", "collect_children"],
+)
+def test_every_store_as_writer_refuses_with_argument_error(write) -> None:
+    """All four `store_as=` writers raise the same `ArgumentError` for a
+    refused row; `count` raised `ValueError`."""
+    g = _parent_graph()
+    g.cypher("MATCH (c:C) SET c.bad = 'not a date'")
+    with pytest.raises(kglite.ArgumentError, match="property 'vt'"):
+        write(g)
+    assert g.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN p.vt AS vt").to_list() == [{"vt": "2011-01-01"}]

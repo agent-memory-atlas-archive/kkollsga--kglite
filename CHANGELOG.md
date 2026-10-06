@@ -35,6 +35,9 @@ before upgrading.
   `update()` or `add_properties()` raises `ArgumentError` and writes nothing.
   An empty interval is written with a `UserWarning`. **Do:** write both
   bounds in one `update()` to move an interval.
+- `count(store_as=…)` raises `ArgumentError` for a write it refuses, as the
+  other `store_as=` writers do. It raised `ValueError`. **Do:** catch
+  `ArgumentError`.
 - `create_index` on a disk graph now raises `ValueError` for any column that
   is not a string column over a populated type, as Cypher `CREATE INDEX`
   already did. It reported the index as created and serving with zero

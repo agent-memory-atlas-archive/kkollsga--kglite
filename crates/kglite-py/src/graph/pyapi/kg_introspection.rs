@@ -796,18 +796,12 @@ impl KnowledgeGraph {
 
             let written =
                 kglite_core::api::mutation::update_node_properties(graph, &nodes, target_property)
-                    .map_err(|e: String| -> PyErr {
-                        crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                    })?;
-            Python::attach(|py| crate::graph::warn_all(py, &written.warnings))?;
+                    .map_err(crate::graph::store_as_refused)?;
+            slf.store_as_landed(&written.warnings)?;
 
             if !keep_selection.unwrap_or(false) {
                 slf.cursor.selection.clear();
             }
-
-            // Same as `collect_children`: the stored property is a
-            // node-property write and belongs in the log.
-            slf.commit_wal()?;
 
             // The same handle back, not a copy of it: a copy would share the
             // storage but not the write-ahead log, so `g = g.unique_values(...,
@@ -1292,15 +1286,8 @@ impl KnowledgeGraph {
 
         let result =
             kglite_core::api::mutation::update_node_properties(graph, &nodes, store_as.unwrap())
-                .map_err(|e: String| -> PyErr {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
-
-        // The `store_as` write is node properties, which the write-ahead log
-        // can express — so it has to reach the log like every other logged
-        // mutation. It never did.
-        self.commit_wal()?;
-        Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
+                .map_err(crate::graph::store_as_refused)?;
+        self.store_as_landed(&result.warnings)?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
@@ -1388,27 +1375,19 @@ impl KnowledgeGraph {
 
             match process_result {
                 Ok(kglite_core::api::fluent::EvaluationResult::Stored(report)) => {
-                    // Same as `collect_children`: the stored calculation is a
-                    // node-property write and belongs in the log.
-                    self.commit_wal()?;
-                    crate::graph::warn_all(py, &report.warnings)?;
+                    self.store_as_landed(&report.warnings)?;
                     let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
                     new_kg.add_report(OperationReport::CalculationOperation(report));
 
                     Python::attach(|py| Ok(Py::new(py, new_kg)?.into_any()))
                 }
-                Ok(_) => Err(crate::error_py::kg_to_pyerr(
-                    crate::error::KgError::Argument(
-                        "Unexpected result type when storing calculation result".to_string(),
-                    ),
+                Ok(_) => Err(crate::graph::store_as_refused(
+                    "Unexpected result type when storing calculation result".to_string(),
                 )),
-                Err(e) => {
-                    let error_msg = format!("Error evaluating expression '{}': {}", expression, e);
-                    Err(crate::error_py::kg_to_pyerr(
-                        crate::error::KgError::Argument(error_msg),
-                    ))
-                }
+                Err(e) => Err(crate::graph::store_as_refused(format!(
+                    "Error evaluating expression '{expression}': {e}"
+                ))),
             }
         } else {
             // The temporary whole-graph clone + evaluation are pure Rust —
@@ -1534,21 +1513,15 @@ impl KnowledgeGraph {
             self.check_durable_owner()?;
             let graph = get_graph_mut(&mut self.inner);
 
-            let result = match kglite_core::api::fluent::store_count_results(
+            let result = kglite_core::api::fluent::store_count_results(
                 graph,
                 &self.cursor.selection,
                 level_index,
                 use_grouping,
                 target_property,
-            ) {
-                Ok(report) => report,
-                Err(e) => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e)),
-            };
-
-            // Same as `collect_children`: the stored count is a node-property
-            // write and belongs in the log.
-            self.commit_wal()?;
-            Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
+            )
+            .map_err(crate::graph::store_as_refused)?;
+            self.store_as_landed(&result.warnings)?;
 
             let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 

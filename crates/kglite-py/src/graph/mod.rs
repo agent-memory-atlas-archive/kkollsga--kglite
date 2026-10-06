@@ -501,6 +501,15 @@ impl KnowledgeGraph {
             .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))
     }
 
+    /// The tail every `store_as=` writer (`calculate`, `count`,
+    /// `unique_values`, `collect_children`) shares once its write has landed:
+    /// log it, then raise its advisories as `UserWarning`s. Logged first, so a
+    /// warning promoted to an error cannot leave a write the log never saw.
+    pub(crate) fn store_as_landed(&mut self, warnings: &[String]) -> PyResult<()> {
+        self.commit_wal()?;
+        Python::attach(|py| warn_all(py, warnings))
+    }
+
     /// Drain the capture buffer at this commit boundary: publish its changes
     /// to the change stream, and — for a durable graph — resolve them to
     /// logical ops and append a durably-`fsync`'d WAL frame. No-op for a graph
@@ -1028,6 +1037,13 @@ pub(crate) fn parse_interval_options(
         })
         .transpose()?;
     Ok((convention, empty_when))
+}
+
+/// A `store_as=` writer's refusal — a row breaking a validity-interval
+/// declaration, or any other argument the write rejects — raised as
+/// `ArgumentError`, the same exception from all four writers.
+pub(crate) fn store_as_refused(message: String) -> PyErr {
+    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
 }
 
 /// Raise each advisory a declaration earns (abutting rows, empty intervals,
