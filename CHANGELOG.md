@@ -26,68 +26,55 @@ before upgrading.
   title from `title` before `name`. A pattern carrying both kept `name` as
   the title and lost the `title` value; now `n.title` and `n.name` read each.
   On a type with a declared title field, a different `title` value in the same
-  pattern is refused, as a different `id` already is.
+  pattern is refused, as a different `id` already is. **Do:** to keep `name`
+  as the title, leave `title` out of the pattern.
 - On a type loaded with `unique_id_field='title'`, `title` now names the
   title on every route. `n.title`, `{title: …}`, `WHERE n.title`, `SET
   n.title` and `CREATE`'s `title` key resolved to the id, while
   `properties(n).title` answered the title. **Do:** read and match the id as
   `n.id` or `{id: …}`.
+- A node created without a title is now titled from its id. The title came
+  from the storage slot count, so after deletes two nodes could share a
+  title, and memory, mapped and disk graphs titled the same nodes differently.
+  **Do:** give the node a `title` where you need a specific one.
+  - On a type titled by its ids (an `add_nodes` load with no `title` column
+    and no `node_title_field`), the title is the id itself. The type's titles
+    then stay one kind.
+  - On any other type, including one with text titles, the title is
+    `<Label>_<id>`.
 - The fluent `update()`, `add_properties()` and the `store_as=` writers
   (`calculate`, `count`, `unique_values`, `collect_children`) now judge the
   rows they leave against a validity-interval declaration, as a Cypher `SET`
   does. They wrote a bound that is not a date, or an inverted interval,
-  without a word, and every `AS OF` read of the type then raised. A refused
-  `update()` or `add_properties()` raises `ArgumentError` and writes nothing.
-  An empty interval is written with a `UserWarning`. **Do:** write both
-  bounds in one `update()` to move an interval.
+  without a word, and every `AS OF` read of the type then raised.
+  - A refused write raises `ArgumentError` and writes nothing.
+  - An empty interval is written with a `UserWarning`.
+
+  **Do:** write both bounds in one `update()` to move an interval.
 - `count(store_as=…)` raises `ArgumentError` for a write it refuses, as the
-  other `store_as=` writers do. It raised `ValueError`. **Do:** catch
-  `ArgumentError`.
+  other `store_as=` writers do. It raised `ValueError`, for example on a
+  selection with no nodes to store into. **Do:** catch `ArgumentError`.
 - `create_index` on a disk graph now raises `ValueError` for any column that
   is not a string column over a populated type, as Cypher `CREATE INDEX`
   already did. It reported the index as created and serving with zero
   entries. Its result also carries `node_type_known`: `False` when the type
   has no nodes and no schema declaration. **Do:** index a string column, or
   use a memory or mapped graph, where every property type is indexable.
-- Rust: `kglite::api::mutation::update_node_properties` now returns `Err`
-  when a value would leave a node breaking a validity-interval declaration on
-  its type, and writes nothing. It wrote the value. **Do:** handle the `Err`;
-  to move an interval, write both bounds in one
-  `update_node_property_set` call.
-- Rust: `kglite::api::temporal::DeclareReport` carries `warnings: Vec<String>`
-  and `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
-  declaration earning both an abutment and an empty-interval advisory reported
-  only the abutment. **Do:** read every entry of the vectors.
-- Rust: an id or property written as a small integer may read back through
-  the `Value` API as `Value::Int64` instead of `Value::UniqueId`. It does once
-  its column also holds an `Int64`, as when a `CREATE` writes into a type
-  `add_nodes` loaded. The column used to turn into an untyped heap column
-  instead, which cannot spill to disk. Python, Bolt and the C ABI return both
-  variants as the same integer. The one exception is the `node_id_type` and
-  `parent_id_type` columns of `CALL outline`, which name the kind and now
-  read `Int64` for such an id. **Do:** match both variants, or compare the
-  number.
+- `CALL outline` can name an id's kind `Int64` where it named `UniqueId`, in
+  its `node_id_type` and `parent_id_type` columns. It does for a small-integer
+  id once the id column also holds an `Int64`, as when a `CREATE` writes into
+  a type `add_nodes` loaded. The id itself reads back as the same integer.
+  **Do:** accept both kind names. The Rust side of this change is under
+  Rust API.
 - A compact integer `add_nodes` writes into a float column now reads back as a
   float (`7.0`), as any other integer written there already did. This reaches
   Python only for an id loaded into a type whose ids are already floats, or a
   column loaded with `column_types={…: 'uniqueid'}`. The value kept its
-  integer form by turning the column into an untyped heap column.
-
-### Added
-
-- Rust: `kglite::api::mutation::update_node_property_set` writes several
-  properties onto a set of nodes, judging their end state against the
-  validity-interval declarations once.
+  integer form by turning the column into an untyped heap column. **Do:**
+  convert with `int()` where you need the integer form.
 
 ### Fixed
 
-- Rust: `kglite::api::storage::convert_dir_graph_to_mode` now converts a
-  memory graph written to while a reader held it (a frozen view, an open
-  transaction, a held result). It refused the conversion with a message about
-  write-ahead logging, which the graph did not have.
-- The `store_as=` writers (`calculate`, `count`, `unique_values`,
-  `collect_children`) raise a `UserWarning` when they leave a row with an
-  empty validity interval, as `update()` and the loaders do.
 - A blueprint with `"valid_time_default": "today"` no longer raises the
   `default_today` note; storing any default silences it, as documented.
 - `set_temporal` and the loaders raise one `UserWarning` per advisory a
@@ -98,14 +85,6 @@ before upgrading.
   memory and disk graphs; it now holds under 1 MB, and the query takes 6–12 ms
   instead of 50–110 ms. A `WHERE` the pattern already enforces lets the scan
   stop at the limit; any other `WHERE` reads the matches a slice at a time.
-- A node created without a title is now titled from its id. The title came
-  from the storage slot count, so after deletes two nodes could share a
-  title, and memory, mapped and disk graphs titled the same nodes differently.
-  - On a type titled by its ids (an `add_nodes` load with no `title` column
-    and no `node_title_field`), the title is the id itself. The type's titles
-    then stay one kind.
-  - On any other type, including one with text titles, the title is
-    `<Label>_<id>`.
 - `add_nodes` warns (`UserWarning`) when a column named `id` or `title` cannot
   be read back because the identity field comes from another column.
 - Creating nodes while a read view is held, after deleting nodes, no longer
@@ -120,12 +99,13 @@ before upgrading.
 - A write transaction after deletes no longer copies the whole graph: 17 ms to
   0.03 ms per transaction at 1M nodes with 2,000 scattered deletes (together
   with the column change below).
-  - This now also holds for a graph loaded from `.kgl` with deleted nodes or
-    relationships, and after a storage-mode conversion. Such a graph copied
-    itself on every write under a held view and every Bolt or `begin()`
-    write transaction until `vacuum()`.
+  - This holds for a graph built in the session, for one loaded from `.kgl`
+    with deleted nodes or relationships, and after a storage-mode conversion.
+    A loaded or converted graph copied itself on every write under a held
+    view and every Bolt or `begin()` write transaction until `vacuum()`.
   - Measured on a reloaded 1M-node graph with 2,000 holes, release builds,
-    two runs: 15.5 ms to 0.025 ms per transaction or held-view write.
+    two runs: 15.5 ms to 0.025 ms per transaction, and 15.4 ms to
+    0.020–0.025 ms per write under a held view.
 - Running the same statements on two graphs now gives both the same node and
   relationship slots, so `MATCH` without `ORDER BY` returns rows in the same
   order. A `DELETE` of several nodes or relationships used to free their slots
@@ -149,8 +129,8 @@ before upgrading.
   served from the embedding store when scores tie. It used to fall back to
   scoring every relationship: 13.6–15.3 ms instead of 0.11 ms on 32,000
   relationships with duplicate vectors (7.4–8.7 ms instead of 0.011–0.029 ms
-  with an index). Which tied relationships fill the last places, and their order, is
-  unspecified; the store ranks them by relationship index.
+  with an index). Which tied relationships fill the last places, and their
+  order, is unspecified; the store ranks them by relationship index.
 - A write transaction that creates nodes of a large type no longer copies
   that type's columns. Each transaction's first `CREATE` on a type copied
   every column the committed graph shared with it. At 1M nodes,
@@ -159,6 +139,30 @@ before upgrading.
   `add_nodes` from integer ids. The new rows wait in a side store until the
   commit folds them in; while a held view such as `freeze()` delays the fold,
   reads see them there.
+
+### Rust API
+
+- `kglite::api::mutation::update_node_properties` now returns `Err` when a
+  value would leave a node breaking a validity-interval declaration on its
+  type, and writes nothing. It wrote the value. Handle the `Err`; to move an
+  interval, write both bounds in one `update_node_property_set` call.
+- `kglite::api::mutation::update_node_property_set`: new. It writes several
+  properties onto a set of nodes, judging their end state against the
+  validity-interval declarations once.
+- `kglite::api::temporal::DeclareReport` carries `warnings: Vec<String>` and
+  `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
+  declaration earning both an abutment and an empty-interval advisory reported
+  only the abutment. Read every entry of the vectors.
+- An id or property written as a small integer may read back through the
+  `Value` API as `Value::Int64` instead of `Value::UniqueId`. It does once its
+  column also holds an `Int64`. The column used to turn into an untyped heap
+  column instead, which cannot spill to disk. Python, Bolt and the C ABI
+  return both variants as the same integer. Match both variants, or compare
+  the number.
+- `kglite::api::storage::convert_dir_graph_to_mode` now converts a memory
+  graph written to while a reader held it (a frozen view, an open
+  transaction, a held result). It refused the conversion with a message about
+  write-ahead logging, which the graph did not have.
 
 ## [0.19.3] - 2026-10-05
 
