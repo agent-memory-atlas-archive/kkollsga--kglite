@@ -126,20 +126,22 @@ fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
 fn a_write_under_a_held_reader_after_a_delete_takes_the_clone_path() {
     use crate::graph::handle::make_dir_graph_mut;
     use crate::graph::storage::backend::{backend_clone_nodes, reset_backend_clone_count};
-    use crate::graph::storage::mode::{convert_dir_graph_to_mode, StorageMode};
     use std::sync::Arc;
 
     let mut writer = Arc::new(seeded());
-    // A delete puts a slot on petgraph's free list, and the storage-mode round
-    // trip rebuilds the backend from a bare `StableDiGraph` whose free-list
-    // order is not observable — so the overlay could not predict its appends,
-    // and `can_fork` refuses.
+    // A delete puts a slot on petgraph's free list, and re-adopting the bare
+    // `StableDiGraph` (`replace_heap_graph`, `MemoryGraph::from_graph`) leaves
+    // its free-list order unobservable — so the overlay could not predict its
+    // appends, and `can_fork` refuses. Loads and storage-mode conversions know
+    // the order and fork; this is the adoption path that does not.
     run(
         Arc::make_mut(&mut writer),
         "MATCH (n:Item {id: 3}) DETACH DELETE n",
     );
-    for mode in [StorageMode::Mapped, StorageMode::Memory] {
-        convert_dir_graph_to_mode(Arc::make_mut(&mut writer), mode).expect("convert");
+    {
+        let backend = &mut Arc::make_mut(&mut writer).graph;
+        let inner = backend.take_heap_graph().expect("heap backend");
+        assert!(backend.replace_heap_graph(inner));
     }
     let live_nodes = writer.graph.node_count();
 

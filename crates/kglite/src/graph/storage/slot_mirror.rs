@@ -53,6 +53,14 @@
 //! [`SlotMirror::predict_next_node`] returns `None`, and a caller that needs a
 //! prediction must fall back. Unsynced means "slower", never "wrong" — the same
 //! fail-safe direction `rollback::journal_covers` uses.
+//!
+//! A graph serde just restored is the exception with holes: petgraph's
+//! deserializer builds both free lists in one ascending scan
+//! (`StableGraph::link_edges`), each vacant slot becoming the new head, so the
+//! order is a function of which slots are vacant —
+//! [`SlotMirror::for_deserialized_graph`]. A graph whose backend is rebuilt
+//! around the same `StableDiGraph` (a storage-mode conversion) keeps the mirror
+//! it already had.
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
@@ -112,6 +120,52 @@ impl SlotMirror {
             free_nodes: Vec::new(),
             free_edges: Vec::new(),
             synced: node_count == node_bound && edge_count == edge_bound,
+        }
+    }
+
+    /// The mirror of a graph petgraph's serde `Deserialize` just built, whose
+    /// free lists `StableGraph::link_edges` linked by scanning each array in
+    /// ascending order and making every vacant slot the new head: the lists
+    /// are the vacant slots, highest first.
+    ///
+    /// The vacant slots below `node_bound()` / `edge_bound()` are observable;
+    /// a vacant slot past the bound is not, and a serializer never writes one
+    /// (`into_serializable` trims to the bounds). A crafted input could, so the
+    /// mirror syncs only once the arrays provably end at the bounds:
+    /// `capacity >= len >= bound`, so a capacity equal to the bound pins the
+    /// length. An array whose capacity exceeds its bound (serde grows the edge
+    /// array by doubling) is shrunk first; one that will not shrink to the
+    /// bound leaves the mirror unsynced, holes or not.
+    pub(crate) fn for_deserialized_graph<N, E>(
+        graph: &mut petgraph::stable_graph::StableDiGraph<N, E>,
+    ) -> Self {
+        use petgraph::visit::{EdgeIndexable, NodeIndexable};
+        let (node_bound, edge_bound) = (graph.node_bound(), graph.edge_bound());
+        if graph.capacity().0 > node_bound {
+            graph.shrink_to_fit_nodes();
+        }
+        if graph.capacity().1 > edge_bound {
+            graph.shrink_to_fit_edges();
+        }
+        if graph.capacity() != (node_bound, edge_bound) {
+            // Not `for_adopted_graph`: with no hole below the bounds it would
+            // call the lists empty, and a slot past them is the case at hand.
+            return Self {
+                free_nodes: Vec::new(),
+                free_edges: Vec::new(),
+                synced: false,
+            };
+        }
+        let free_nodes = (0..node_bound as u32)
+            .filter(|&slot| graph.node_weight(NodeIndex::new(slot as usize)).is_none())
+            .collect();
+        let free_edges = (0..edge_bound as u32)
+            .filter(|&slot| graph.edge_weight(EdgeIndex::new(slot as usize)).is_none())
+            .collect();
+        Self {
+            free_nodes,
+            free_edges,
+            synced: true,
         }
     }
 
@@ -319,6 +373,59 @@ mod tests {
         let actual = g.add_node(node(99, &mut interner));
         assert_eq!(predicted, actual, "freed node slot must be reused");
         mirror.note_node_added(bound_before, actual);
+    }
+
+    /// A graph restored by serde has free lists `link_edges` built: the
+    /// vacant slots, highest first. The mirror must predict every slot the
+    /// restored graph hands out — interior node and edge holes, then appends.
+    #[test]
+    fn a_deserialized_graph_predicts_its_free_lists() {
+        let mut g: StableDiGraph<u32, u32> = StableDiGraph::new();
+        let nodes: Vec<_> = (0..8).map(|i| g.add_node(i)).collect();
+        let edges: Vec<_> = (0..7)
+            .map(|i| g.add_edge(nodes[i], nodes[i + 1], i as u32))
+            .collect();
+        // Removal order differs from slot order, so a live graph's lists
+        // would differ from the restored one's: only the vacancy carries over.
+        for &edge in &[edges[1], edges[5], edges[3]] {
+            g.remove_edge(edge);
+        }
+        g.remove_node(nodes[2]);
+        g.remove_node(nodes[6]);
+        g.remove_node(nodes[4]);
+        let bytes = serde_json::to_vec(&g).unwrap();
+        let mut restored: StableDiGraph<u32, u32> = serde_json::from_slice(&bytes).unwrap();
+        let mut mirror = SlotMirror::for_deserialized_graph(&mut restored);
+        assert!(mirror.is_synced());
+        for i in 0..5 {
+            let bound_before = restored.node_bound();
+            let predicted = mirror.predict_next_node(bound_before).unwrap();
+            let actual = restored.add_node(100 + i);
+            assert_eq!(predicted, actual, "node insert {i}");
+            mirror.note_node_added(bound_before, actual);
+        }
+        let live: Vec<_> = restored.node_indices().collect();
+        for i in 0..6 {
+            let bound_before = restored.edge_bound();
+            let predicted = mirror.predict_next_edge(bound_before).unwrap();
+            let actual = restored.add_edge(live[i], live[i + 1], 100 + i as u32);
+            assert_eq!(predicted, actual, "edge insert {i}");
+            mirror.note_edge_added(bound_before, actual);
+        }
+    }
+
+    /// A vacant slot past the bounds is in petgraph's free list but invisible
+    /// through its API. Serde never writes one; when the arrays cannot be
+    /// shown to end at the bounds, the mirror must stay unsynced.
+    #[test]
+    fn a_vacant_slot_past_the_bound_leaves_the_mirror_unsynced() {
+        let mut g: StableDiGraph<u32, u32> = StableDiGraph::new();
+        let a = g.add_node(0);
+        let b = g.add_node(1);
+        g.add_node(2);
+        g.add_edge(a, b, 0);
+        g.remove_node(NodeIndex::new(2));
+        assert!(!SlotMirror::for_deserialized_graph(&mut g).is_synced());
     }
 
     /// A graph with holes cannot have its free-list order known, so the mirror

@@ -8,6 +8,7 @@ that silently changes them will fail the test.
 Fixtures: `bolt_server` from `tests/conftest.py`.
 """
 
+import os
 import socket
 import subprocess
 
@@ -421,3 +422,79 @@ def test_delete_all_then_create_rounds_keep_exact_counts(bolt_server_without_edg
                 typed = session.run("MATCH (n:Repro) RETURN count(n) AS c").single()["c"]
             assert keys == [f"K{i}" for i in range(size)], f"round {round_no}: {keys}"
             assert typed == size, f"round {round_no}: {typed} Repro nodes"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a graceful stop needs SIGTERM delivery")
+@pytest.mark.parametrize("batch", ["create", "merge"])
+def test_delete_all_then_create_rounds_survive_a_save_and_restart(tmp_path, batch):
+    """The #195 loop across a restart: the saved graph keeps the slots the
+    rounds vacated, and the restarted server's write transactions fork off the
+    free lists the load rebuilt. Counts must stay exact on both sides."""
+    from neo4j.exceptions import IncompleteCommit, ServiceUnavailable, SessionExpired
+
+    from tests.conftest import (
+        _BOLT_SKIP_REASON,
+        _bolt_binary_available,
+        _graceful_stop_bolt_server,
+        _spawn_bolt_server,
+        _teardown_bolt_server,
+    )
+
+    if not _bolt_binary_available():
+        pytest.skip(_BOLT_SKIP_REASON)
+    import kglite
+
+    fixture = tmp_path / "loop.kgl"
+    seed = kglite.KnowledgeGraph()
+    seed.cypher("CREATE (:Seed {k: 'seed'})")
+    seed.save(str(fixture))
+    query = {
+        "create": "UNWIND $rows AS r CREATE (:Repro {k: r.k, v: r.v})",
+        "merge": "UNWIND $rows AS r MERGE (s:Repro {k: r.k}) SET s += r",
+    }[batch]
+    size = 5
+
+    def rounds(url, numbers):
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password"), max_transaction_retry_time=0) as driver:
+
+            def write(work):
+                for _ in range(3):
+                    try:
+                        with driver.session() as session:
+                            return session.execute_write(work)
+                    except (IncompleteCommit, ServiceUnavailable, SessionExpired):
+                        continue
+                pytest.fail("the write kept failing after three retries")
+
+            for round_no in numbers:
+                write(lambda tx: tx.run("MATCH (n:Repro) WHERE n.k = 'K2' DETACH DELETE n").consume())
+                write(lambda tx: tx.run("MATCH (n) DETACH DELETE n").consume())
+                rows = [{"k": f"K{i}", "v": round_no} for i in range(size)]
+                write(lambda tx, rows=rows: tx.run(query, rows=rows).consume())
+                with driver.session() as session:
+                    keys = sorted(record["k"] for record in session.run("MATCH (n) RETURN n.k AS k"))
+                    typed = session.run("MATCH (n:Repro) RETURN count(n) AS c").single()["c"]
+                assert keys == [f"K{i}" for i in range(size)], f"round {round_no}: {keys}"
+                assert typed == size, f"round {round_no}: {typed} Repro nodes"
+
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--save-on-exit"])
+    try:
+        rounds(url, range(10))
+        # Leave interior holes in the saved graph: delete two of the five.
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                session.execute_write(
+                    lambda tx: tx.run("MATCH (n:Repro) WHERE n.k IN ['K1', 'K3'] DETACH DELETE n").consume()
+                )
+        assert _graceful_stop_bolt_server(proc) == 0
+    except BaseException:
+        _teardown_bolt_server(proc)
+        raise
+    saved = kglite.load(str(fixture))
+    assert sorted(r["k"] for r in saved.cypher("MATCH (n) RETURN n.k AS k")) == ["K0", "K2", "K4"]
+
+    proc, url = _spawn_bolt_server(fixture)
+    try:
+        rounds(url, range(10, 20))
+    finally:
+        _teardown_bolt_server(proc)

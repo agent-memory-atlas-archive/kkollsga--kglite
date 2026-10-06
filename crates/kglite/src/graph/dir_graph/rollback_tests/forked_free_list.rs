@@ -105,15 +105,111 @@ fn a_graph_forks_unless_its_free_list_order_is_unknown() {
         );
     }
 
-    // Converting rebuilds the backend from a bare `StableDiGraph`, whose
-    // free-list order is not observable: with holes, the mirror is unsynced.
-    let mut adopted = after_deletes(&DELETE_SUBSET);
-    convert_dir_graph_to_mode(&mut adopted, StorageMode::Mapped).expect("to mapped");
-    convert_dir_graph_to_mode(&mut adopted, StorageMode::Memory).expect("to memory");
+    // Converting moves the same `StableDiGraph`, free lists and all, into a
+    // new backend; the mirror moves with it.
+    let mut converted = after_deletes(&DELETE_SUBSET);
+    convert_dir_graph_to_mode(&mut converted, StorageMode::Mapped).expect("to mapped");
+    convert_dir_graph_to_mode(&mut converted, StorageMode::Memory).expect("to memory");
     assert!(
-        !forks_under_a_reader(adopted),
-        "an adopted graph with holes cannot predict its slots and must deep-copy"
+        forks_under_a_reader(converted),
+        "a storage-mode conversion keeps the free-list order it knew"
     );
+
+    // A reload knows its free lists too: serde links them in slot order.
+    for (name, order) in RELOAD_ORDERS {
+        assert!(
+            forks_under_a_reader(reloaded(&after_deletes_with_edges(order))),
+            "{name}: a graph loaded from .kgl with holes forks"
+        );
+    }
+}
+
+/// Deletes that leave a hole a save keeps (an interior node, or an edge),
+/// in orders that differ from slot order.
+const RELOAD_ORDERS: [(&str, &[&str]); 3] = [
+    ("interior nodes", &["K3", "K1"]),
+    ("interior and top", &["K1", "K4", "K2"]),
+    ("edge only", &[]),
+];
+
+/// [`after_deletes`] on a seed whose nodes carry a chain of edges, with the
+/// first edge deleted: the edge hole survives a save, as interior node holes
+/// do (a save trims only trailing holes).
+fn after_deletes_with_edges(order: &[&str]) -> DirGraph {
+    let mut graph = DirGraph::new();
+    run(&mut graph, SEED);
+    run(
+        &mut graph,
+        "MATCH (a:Repro), (b:Repro) WHERE b.k > a.k CREATE (a)-[:R]->(b)",
+    );
+    run(
+        &mut graph,
+        "MATCH (:Repro {k: 'K0'})-[r:R]->(:Repro {k: 'K1'}) DELETE r",
+    );
+    for k in order {
+        run(
+            &mut graph,
+            &format!("MATCH (n:Repro {{k: '{k}'}}) DETACH DELETE n"),
+        );
+    }
+    graph
+}
+
+fn reloaded(graph: &DirGraph) -> DirGraph {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("g.kgl").to_string_lossy().into_owned();
+    crate::graph::io::file::save_graph(&mut Arc::new(graph.clone()), &path).expect("save");
+    let loaded = crate::graph::io::file::load_file(&path).expect("load");
+    let loaded = Arc::try_unwrap(loaded)
+        .ok()
+        .expect("a fresh load is unshared");
+    // Without a hole every graph forks; the fixtures are about the holes.
+    assert!(
+        loaded.graph.node_count() < loaded.graph.node_bound()
+            || loaded.graph.edge_count() < loaded.graph.edge_bound(),
+        "precondition — the reloaded graph keeps a hole"
+    );
+    loaded
+}
+
+/// The reloaded graph forks under a reader, and every write under it lands
+/// where the same writes land on the reloaded graph without a reader —
+/// creates into the restored free lists, an edge write, and the fold.
+#[test]
+fn writes_under_a_held_reader_on_a_reloaded_graph_match_the_unforked_graph() {
+    for (name, order) in RELOAD_ORDERS {
+        let saved = after_deletes_with_edges(order);
+        let mut reference = reloaded(&saved);
+        let mut writer = Arc::new(reloaded(&saved));
+        let reader = Arc::clone(&writer);
+        let reader_before = content(&reader);
+
+        for query in [
+            CREATE_TWO,
+            "MATCH (a:Repro {k: 'A'}), (b:Repro {k: 'B'}) CREATE (a)-[:R]->(b)",
+            "UNWIND ['C', 'D', 'E'] AS k CREATE (:Repro {k: k})",
+        ] {
+            run(make_dir_graph_mut(&mut writer), query);
+            run(&mut reference, query);
+            // The first write forks off the reader. The edge write collapses
+            // the overlay into the writer's own copy, which later writes edit.
+            if query == CREATE_TWO {
+                assert!(writer.graph.is_forked(), "{name}: no overlay");
+            }
+            assert_eq!(content(&writer), content(&reference), "{name}: {query}");
+        }
+        assert_eq!(content(&reader), reader_before, "{name}: the reader moved");
+        drop(reader);
+        run(make_dir_graph_mut(&mut writer), "CREATE (:Repro {k: 'F'})");
+        run(&mut reference, "CREATE (:Repro {k: 'F'})");
+        assert!(!writer.graph.is_forked(), "{name}: the fold ran");
+        assert_eq!(
+            content(&writer),
+            content(&reference),
+            "{name}: after the fold"
+        );
+        assert_indexes_agree(&writer, name);
+    }
 }
 
 #[test]

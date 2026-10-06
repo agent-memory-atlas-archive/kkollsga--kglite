@@ -113,9 +113,14 @@ return and reproduce it at fold-back.
 
 `storage/slot_mirror.rs` mirrors petgraph's two free lists as LIFO stacks. It
 refuses to predict, rather than guessing, for a graph whose free-list order is
-not observable. That means a graph adopted by `from_graph` or restored by serde,
-unless it provably has no holes. Unsynced means *slower*, never wrong. A
+not observable. That means a graph adopted by `from_graph`, unless it provably
+has no holes. Unsynced means *slower*, never wrong. A
 `debug_assert` validates the prediction on every insert the test suites perform.
+
+Two sources do know the order. Petgraph's deserializer links both free lists in
+one ascending scan, so a `.kgl` load rebuilds the mirror from the vacant slots.
+A storage-mode conversion moves the same `StableDiGraph`, so it keeps the
+mirror it had.
 
 **The journal reverses into the delta, never the base.** Every `UndoEntry` is
 keyed on an index and replayed through the write path. On a forked graph that

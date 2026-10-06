@@ -1121,7 +1121,9 @@ impl Serialize for GraphBackend {
 impl<'de> Deserialize<'de> for GraphBackend {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let g = StableDiGraph::<NodeData, EdgeData>::deserialize(deserializer)?;
-        Ok(GraphBackend::Memory(Arc::new(MemoryGraph::from_graph(g))))
+        Ok(GraphBackend::Memory(Arc::new(
+            MemoryGraph::from_deserialized(g),
+        )))
     }
 }
 

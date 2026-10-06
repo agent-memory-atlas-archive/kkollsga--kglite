@@ -233,8 +233,9 @@ impl Appended {
 ///
 /// The overlay allocates by the base's slot-mirror prediction (module doc),
 /// so the mirror must know petgraph's free-list order. It does unless the
-/// graph was adopted with holes — loaded or rebuilt from a `StableDiGraph`
-/// whose free-list order is not observable (`SlotMirror::for_adopted_graph`).
+/// graph was adopted with holes from a `StableDiGraph` whose free-list order
+/// is not observable (`SlotMirror::for_adopted_graph`); a `.kgl` load and a
+/// storage-mode conversion know it.
 pub(crate) fn can_fork(base: &MemoryGraph) -> bool {
     base.slot_mirror.is_synced()
 }

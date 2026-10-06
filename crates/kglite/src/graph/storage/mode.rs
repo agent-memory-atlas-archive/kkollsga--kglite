@@ -240,12 +240,23 @@ pub fn convert_dir_graph_to_mode(
         .column_stores_iter()
         .map(|(k, v)| (k, std::sync::Arc::clone(v)))
         .collect();
-    let inner = match &mut graph.graph {
+    // The petgraph moves as is, free lists included, so its mirror moves with
+    // it: rebuilt from counts it would be unsynced whenever the graph has a
+    // hole, and every later write under a reader would deep-copy the graph.
+    let (inner, mirror) = match &mut graph.graph {
         GraphBackend::Memory(memory) => {
-            std::mem::take(crate::graph::storage::backend::unique_heap_backend(memory).inner_mut())
+            let memory = crate::graph::storage::backend::unique_heap_backend(memory);
+            (
+                std::mem::take(memory.inner_mut()),
+                std::mem::take(&mut memory.slot_mirror),
+            )
         }
         GraphBackend::Mapped(mapped) => {
-            std::mem::take(crate::graph::storage::backend::unique_heap_backend(mapped).inner_mut())
+            let mapped = crate::graph::storage::backend::unique_heap_backend(mapped);
+            (
+                std::mem::take(mapped.inner_mut()),
+                std::mem::take(&mut mapped.slot_mirror),
+            )
         }
         GraphBackend::Forked(_) => unreachable!("flatten_fork collapsed the overlay above"),
         GraphBackend::Disk(_) | GraphBackend::Recording(_) => {
@@ -253,9 +264,9 @@ pub fn convert_dir_graph_to_mode(
         }
     };
     graph.graph = if requested == StorageMode::Mapped {
-        GraphBackend::Mapped(std::sync::Arc::new(MappedGraph::from_graph(inner)))
+        GraphBackend::Mapped(std::sync::Arc::new(MappedGraph::with_mirror(inner, mirror)))
     } else {
-        GraphBackend::Memory(std::sync::Arc::new(MemoryGraph::from_graph(inner)))
+        GraphBackend::Memory(std::sync::Arc::new(MemoryGraph::with_mirror(inner, mirror)))
     };
     for (type_key, store) in carried_stores {
         GraphWrite::install_column_store(&mut graph.graph, type_key, store);

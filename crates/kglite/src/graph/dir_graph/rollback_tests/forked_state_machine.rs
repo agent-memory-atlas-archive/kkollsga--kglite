@@ -12,6 +12,9 @@
 //!   index, `MATCH (n:T)` and the backend agree on the count;
 //! - a held snapshot still reads exactly as when it was taken.
 //!
+//! With reloads on, a step may also save both graphs and serve the rest of
+//! the run from the reloaded files, whose free lists serde rebuilt.
+//!
 //! The generator is a fixed-seed xorshift, so a failure names its seed and
 //! step and replays exactly.
 
@@ -92,13 +95,30 @@ fn new_graph(mode: StorageMode, dir: Option<&std::path::Path>) -> DirGraph {
     new_dir_graph_in_mode(mode, dir).expect("graph in mode")
 }
 
+/// `graph` saved to a `.kgl` and loaded back.
+fn reloaded(graph: &DirGraph) -> DirGraph {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("g.kgl").to_string_lossy().into_owned();
+    crate::graph::io::file::save_graph(&mut Arc::new(graph.clone()), &path).expect("save");
+    let loaded = crate::graph::io::file::load_file(&path).expect("load");
+    Arc::try_unwrap(loaded)
+        .ok()
+        .expect("a fresh load is unshared")
+}
+
 fn run_machine(mode: StorageMode, seed: u64, steps: usize) {
+    run_machine_with(mode, seed, steps, false);
+}
+
+/// Runs the machine; returns how many reloads restored a graph with a hole.
+fn run_machine_with(mode: StorageMode, seed: u64, steps: usize, reloads: bool) -> usize {
+    let mut holed_reloads = 0;
     let dirs = (
         tempfile::tempdir().expect("tempdir"),
         tempfile::tempdir().expect("tempdir"),
     );
     let disk = matches!(mode, StorageMode::Disk);
-    let session = Session::new(new_graph(mode, disk.then(|| dirs.0.path())));
+    let mut session = Session::new(new_graph(mode, disk.then(|| dirs.0.path())));
     let mut reference = new_graph(mode, disk.then(|| dirs.1.path()));
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let mut live: Vec<String> = Vec::new();
@@ -146,6 +166,30 @@ fn run_machine(mode: StorageMode, seed: u64, steps: usize) {
                         Some((snapshot, print))
                     }
                 };
+                continue;
+            }
+            9 if reloads => {
+                held = None;
+                session = Session::new(reloaded(&session.snapshot()));
+                reference = reloaded(&reference);
+                if reference.graph.node_count() < reference.graph.node_bound()
+                    || reference.graph.edge_count() < reference.graph.edge_bound()
+                {
+                    holed_reloads += 1;
+                    let mut writer = Arc::new(reference.clone());
+                    let _reader = Arc::clone(&writer);
+                    assert!(
+                        crate::graph::handle::make_dir_graph_mut(&mut writer)
+                            .graph
+                            .is_forked(),
+                        "{context}: a reloaded graph with holes must fork"
+                    );
+                }
+                assert_eq!(
+                    content(&session.snapshot()),
+                    content(&reference),
+                    "{context}: reload"
+                );
                 continue;
             }
             _ => continue,
@@ -198,6 +242,7 @@ fn run_machine(mode: StorageMode, seed: u64, steps: usize) {
             .collect()
         };
     }
+    holed_reloads
 }
 
 #[test]
@@ -205,6 +250,16 @@ fn random_writes_in_memory_match_a_graph_that_never_forks() {
     for seed in 0..24 {
         run_machine(StorageMode::Memory, seed, 80);
     }
+}
+
+/// The same machine, with saves and reloads between writes: a reloaded graph
+/// with holes forks off its restored free lists.
+#[test]
+fn random_writes_across_reloads_match_a_graph_that_never_forks() {
+    let holed: usize = (0..24)
+        .map(|seed| run_machine_with(StorageMode::Memory, seed, 80, true))
+        .sum();
+    assert!(holed > 0, "no reload restored a hole: the test is vacuous");
 }
 
 #[test]

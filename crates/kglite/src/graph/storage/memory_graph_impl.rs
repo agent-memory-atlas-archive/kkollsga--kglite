@@ -124,6 +124,21 @@ impl MemoryGraph {
             inner.edge_count(),
             inner.edge_bound(),
         );
+        Self::with_mirror(inner, slot_mirror)
+    }
+
+    /// Wrap a graph serde just restored: its free-list order is known
+    /// ([`SlotMirror::for_deserialized_graph`]).
+    pub(crate) fn from_deserialized(mut inner: StableDiGraph<NodeData, EdgeData>) -> Self {
+        let slot_mirror = SlotMirror::for_deserialized_graph(&mut inner);
+        Self::with_mirror(inner, slot_mirror)
+    }
+
+    /// Wrap a graph whose free lists `slot_mirror` already tracks.
+    pub(crate) fn with_mirror(
+        inner: StableDiGraph<NodeData, EdgeData>,
+        slot_mirror: SlotMirror,
+    ) -> Self {
         Self {
             inner,
             column_stores: FxHashMap::default(),
@@ -208,6 +223,6 @@ impl serde::Serialize for MemoryGraph {
 
 impl<'de> serde::Deserialize<'de> for MemoryGraph {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        StableDiGraph::deserialize(de).map(MemoryGraph::from_graph)
+        StableDiGraph::deserialize(de).map(MemoryGraph::from_deserialized)
     }
 }

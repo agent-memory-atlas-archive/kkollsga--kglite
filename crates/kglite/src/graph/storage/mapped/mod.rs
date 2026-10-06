@@ -174,6 +174,6 @@ impl serde::Serialize for MappedGraph {
 
 impl<'de> serde::Deserialize<'de> for MappedGraph {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        StableDiGraph::deserialize(de).map(MappedGraph::from_graph)
+        StableDiGraph::deserialize(de).map(MappedGraph::from_deserialized)
     }
 }

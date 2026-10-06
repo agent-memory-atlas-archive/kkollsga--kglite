@@ -115,6 +115,12 @@ before upgrading.
 - A write transaction after deletes no longer copies the whole graph: 17 ms to
   0.03 ms per transaction at 1M nodes with 2,000 scattered deletes (together
   with the column change below).
+  - This now also holds for a graph loaded from `.kgl` with deleted nodes or
+    relationships, and after a storage-mode conversion. Such a graph copied
+    itself on every write under a held view and every Bolt or `begin()`
+    write transaction until `vacuum()`.
+  - Measured on a reloaded 1M-node graph with 2,000 holes, release builds,
+    two runs: 15.5 ms to 0.025 ms per transaction or held-view write.
 - Running the same statements on two graphs now gives both the same node and
   relationship slots, so `MATCH` without `ORDER BY` returns rows in the same
   order. A `DELETE` of several nodes or relationships used to free their slots
