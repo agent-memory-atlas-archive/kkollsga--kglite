@@ -52,10 +52,11 @@ extensions:
 
 ## What happens at boot
 
-1. The server parses the manifest, validates `extensions.embedder`, builds the
-   chosen `library`'s model, and registers it against the active graph.
-2. The model loads at boot. The wheel server builds the Python model then.
-   fastembed-rs lazy-loads weights on the first `text_score()` call.
+1. The server parses the manifest, validates `extensions.embedder`, and
+   registers the embedder against the active graph.
+2. By default (`load: lazy`) the model is built on the first `text_score()`
+   call, so the first query pays the load time and idle servers hold no model.
+   Set `load: eager` under `extensions.embedder` to build it at boot instead.
 3. Warm calls then run fast. fastembed-rs takes ~20 ms. sentence-transformers
    depends on the model + device.
 4. For `library: fastembed-rs`, `cooldown` seconds of inactivity release the
@@ -113,13 +114,18 @@ Tradeoffs:
 - **Boot** (`library: fastembed-rs` on the wheel / a binary without the
   feature): *"… requires `--features fastembed`"*. Use a Python `library:` on
   the wheel.
-- **Boot** (library not installed): *"`library: sentence-transformers` is not
+- **Model build** (library not installed): *"`library: sentence-transformers` is not
   installed: `pip install sentence-transformers`"*.
-- **Boot** (unknown `library:`): lists the known libraries + suggests `factory:`.
-- **Boot** (unknown `model:` for the chosen library): the library raises (e.g.
+- **Boot** (`load:` other than `lazy` or `eager`):
+  `extensions.embedder.load must be "lazy" or "eager"`.
+- **Model build** (unknown `library:`): lists the known libraries + suggests `factory:`.
+- **Model build** (unknown `model:` for the chosen library): the library raises (e.g.
   fastembed-py has no `bge-m3` → use `sentence-transformers`).
 - **Boot** (`cooldown:` negative or non-int):
   `extensions.embedder.cooldown must be a non-negative integer`.
+- **Model build** errors surface at boot with `load: eager`, and on the first
+  `text_score()` with the default `load: lazy`. The failing query reports the
+  error and the next call retries.
 - **Runtime** (`text_score()` against a node without the named property):
   returns 0.0 silently. Use `IS NOT NULL` guards if you want to filter
   explicitly.

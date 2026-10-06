@@ -36,6 +36,15 @@
       ],
       "description": "Model identifier. 'BAAI/bge-m3' routes through a direct-ONNX backend; the rest route through fastembed-python's catalog."
     },
+    "load": {
+      "type": "string",
+      "enum": [
+        "lazy",
+        "eager"
+      ],
+      "default": "lazy",
+      "description": "When the model is built. 'lazy' builds it on the first text_score() call; 'eager' builds it at boot."
+    },
     "cooldown": {
       "type": "integer",
       "minimum": 0,

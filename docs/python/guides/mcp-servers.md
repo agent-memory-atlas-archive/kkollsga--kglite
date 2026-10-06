@@ -578,7 +578,7 @@ extensions:
     model: BAAI/bge-m3
 ```
 
-A worked example is at {doc}`../examples/manifest_with_embedder`. The reference is under [`extensions:` schema reference](#extensions-schema-reference) below.
+The model loads on the first call that needs it, not at boot. Add `load: eager` to build it at boot instead. A worked example is at {doc}`../examples/manifest_with_embedder`. The reference is under [`extensions:` schema reference](#extensions-schema-reference) below.
 
 ### `extensions.value_codecs` — convert literals in/out
 
@@ -966,7 +966,7 @@ The `.env` file never overwrites existing process env. To verify, look for `load
 The embedder isn't bound. Causes, in order of likelihood:
 
 - The manifest didn't declare `extensions.embedder`. See [`extensions:` schema reference](#extensions-schema-reference).
-- The model couldn't download (network issue) or load (out-of-memory). Look for tracebacks in the server's stderr at boot.
+- The model couldn't download (network issue) or load (out-of-memory). With the default `load: lazy` the error appears on the first `text_score()` call and in the server's stderr then, and the next call retries. With `load: eager` it appears at boot.
 - The property being scored doesn't exist on the matched nodes. `text_score(n, 'summary', 'query')` returns 0.0 when `n.summary` is null. Use `WHERE n.summary IS NOT NULL` to filter first.
 
 ### Warm `text_score()` is slow (seconds, not milliseconds)
@@ -1193,6 +1193,7 @@ extensions:
   embedder:
     library: sentence-transformers  # the engine; host (Python/Rust) inferred from it
     model: BAAI/bge-m3              # required (passed to the library)
+    # load: eager                   # build the model at boot (default: lazy, on first use)
     # cooldown: 900                 # fastembed-rs only; seconds (default 900). 0 = never release.
 ```
 
@@ -1201,7 +1202,10 @@ extensions:
 | `library` | string | `fastembed` | `fastembed` / `sentence-transformers` (Python, wheel) · `fastembed-rs` (Rust, cargo). |
 | `model` | string | (required) | Passed to the chosen library; must be in *its* catalog. |
 | `factory` | string | — | `module:attr` returning an `EmbeddingModel` — any custom Python embedder. |
+| `load` | string | `lazy` | `lazy` builds the model on the first `text_score()`; `eager` builds it at boot. Any other value fails the boot. |
 | `cooldown` | int | 900 | `fastembed-rs` only; `0` disables auto-release. |
+
+With `load: lazy`, the boot still rejects an untrusted manifest, a bad mapping, a bad `load` value, a missing `model` for `fastembed-rs` and a library the server cannot host. A model that fails to build fails the query that needed it, and the next call retries. With `--vault`, the first build that embeds declared targets is the first call.
 
 The legacy `embedder:` block (top-level, 0.9.17 and earlier) is parsed by the framework but ignored. Use `extensions.embedder:` with an in-catalog model (the server's Rust fastembed backend, built via `--features fastembed`).
 

@@ -161,6 +161,95 @@ def test_python_library_embedder_powers_text_score(tmp_path: Path) -> None:
     assert "B" in first_data_line, f"exact-match node B should rank first:\n{out}"
 
 
+def _lazy_embedder_fixture(tmp_path: Path, load_line: str) -> tuple[Path, Path, Path, dict]:
+    """A graph with stored vectors plus a `factory: lazy_stub:build` manifest
+    whose builder appends a line to a marker file each time it runs."""
+    import os
+
+    (tmp_path / "lazy_stub.py").write_text(
+        "import hashlib, os\n"
+        "class Stub:\n"
+        "    dimension = 8\n"
+        "    def embed(self, texts):\n"
+        "        return [[float(b) for b in hashlib.sha256(t.encode()).digest()[:8]] for t in texts]\n"
+        "def build(model):\n"
+        "    with open(os.environ['LAZY_MARKER'], 'a') as f:\n"
+        "        f.write('built\\n')\n"
+        "    return Stub()\n",
+        encoding="utf-8",
+    )
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import lazy_stub  # type: ignore
+
+        g = kglite.KnowledgeGraph()
+        df = pd.DataFrame({"id": [1, 2], "title": ["A", "B"], "summary": ["alpha alpha", "beta beta"]})
+        g.add_nodes(df, "Doc", "id", "title")
+        g.set_embedder(lazy_stub.Stub())
+        g.embed_texts("Doc", "summary", show_progress=False)
+        kgl = tmp_path / "docs.kgl"
+        g.save(str(kgl))
+    finally:
+        sys.path.remove(str(tmp_path))
+        sys.modules.pop("lazy_stub", None)
+    manifest = tmp_path / "mcp.yaml"
+    manifest.write_text(
+        "name: lazy\ntrust:\n  allow_embedder: true\nextensions:\n  embedder:\n"
+        f"    factory: lazy_stub:build\n    model: stub\n{load_line}",
+        encoding="utf-8",
+    )
+    marker_file = tmp_path / "marker.txt"
+    env = {**os.environ, "PYTHONPATH": str(tmp_path), "LAZY_MARKER": str(marker_file)}
+    return kgl, manifest, marker_file, env
+
+
+def _spawn_wheel_env(args: list[str], env: dict) -> McpClient:
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "kglite.mcp_server", *args],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    client = McpClient(proc)
+    client.initialize()
+    return client
+
+
+def _built_count(marker_file: Path) -> int:
+    return len(marker_file.read_text(encoding="utf-8").splitlines()) if marker_file.exists() else 0
+
+
+def test_manifest_embedder_is_built_on_first_semantic_call(tmp_path: Path) -> None:
+    """The default `load: lazy` constructs the embedder through the real wheel
+    factory (`kglite._mcp_embed.build_embedder`) only on the first
+    `text_score()`, and only once."""
+    kgl, manifest, marker_file, env = _lazy_embedder_fixture(tmp_path, "")
+    client = _spawn_wheel_env(["--graph", str(kgl), "--mcp-config", str(manifest)], env)
+    query = {"query": "MATCH (d:Doc) RETURN d.title AS t, text_score(d, 'summary', 'beta beta') AS s ORDER BY s DESC"}
+    try:
+        client.list_tools()
+        client.call_tool("cypher_query", {"query": "MATCH (d:Doc) RETURN count(d) AS n"})
+        assert _built_count(marker_file) == 0, "booting and plain queries must not build the embedder"
+        out = _text_content(client.call_tool("cypher_query", query))
+        assert "error" not in out.lower()[:60], out
+        assert _built_count(marker_file) == 1
+        _text_content(client.call_tool("cypher_query", query))
+        assert _built_count(marker_file) == 1, "the embedder is built once"
+    finally:
+        client.shutdown()
+
+
+def test_manifest_embedder_load_eager_builds_at_boot(tmp_path: Path) -> None:
+    kgl, manifest, marker_file, env = _lazy_embedder_fixture(tmp_path, "    load: eager\n")
+    client = _spawn_wheel_env(["--graph", str(kgl), "--mcp-config", str(manifest)], env)
+    try:
+        client.list_tools()
+        assert _built_count(marker_file) == 1
+    finally:
+        client.shutdown()
+
+
 def test_shim_exit_code_on_bad_args(tmp_path: Path) -> None:
     """clap parses argv Rust-side; a bad flag should make the shim exit
     non-zero (the server never reaches the serve loop)."""

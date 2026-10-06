@@ -929,7 +929,9 @@ fn _run_mcp_server(
 
     // Bridge the Python factory into the libpython-free server library as a
     // Rust closure producing an `Arc<dyn Embedder>`; it re-acquires the GIL
-    // only when the server calls it, at boot.
+    // only when the server calls it: at boot for `load: eager`, otherwise on a
+    // tokio worker thread at the first embedder call (the GIL is free then, as
+    // the server runs under `py.detach`).
     let factory: Option<kglite_mcp_server::PyEmbedderFactory> = embedder_factory.map(|f| {
         Box::new(move |config_json: &str| -> Result<std::sync::Arc<dyn kglite_core::api::Embedder>, String> {
             Python::attach(|py| {

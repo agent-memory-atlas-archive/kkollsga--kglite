@@ -788,10 +788,11 @@ fn code_tools_are_dead(mode: &Mode, builtins: &tools::Builtins, graph_state: &Gr
 /// only option on the standalone libpython-free binary), anything else for a
 /// Python library built by the wheel-supplied factory. The rules, and the
 /// `trust.allow_embedder` gate they sit behind, live in
-/// [`build_embedder_from_manifest`].
+/// [`build_embedder_from_manifest`], as does `load:`, which decides whether the
+/// model is built here or on its first use.
 fn bind_manifest_embedder(
     manifest: Option<&mcp_methods::server::Manifest>,
-    py_embedder_factory: Option<&PyEmbedderFactory>,
+    py_embedder_factory: Option<&SharedEmbedderFactory>,
     graph_state: &GraphState,
 ) -> Result<()> {
     if let Some(m) = manifest {
@@ -912,7 +913,7 @@ fn boot_graph(
     workspace_graph: Option<WorkspaceGraphHooks>,
     producer_recipes: Option<recipe_queries::RecipeCatalog>,
     read_only_pin: bool,
-    py_embedder_factory: Option<&PyEmbedderFactory>,
+    py_embedder_factory: Option<&SharedEmbedderFactory>,
 ) -> Result<BootedGraph> {
     init_tracing();
     let mode = pick_mode(cli);
@@ -1055,6 +1056,7 @@ pub(crate) async fn run_async(
         producer_skills,
         producer_recipes,
     } = extensions;
+    let shared_embedder_factory = crate::embedder::share_factory(py_embedder_factory);
     let BootedGraph {
         mode,
         manifest,
@@ -1076,7 +1078,7 @@ pub(crate) async fn run_async(
         workspace_graph,
         producer_recipes,
         read_only_pin,
-        py_embedder_factory.as_ref(),
+        shared_embedder_factory.as_ref(),
     )?;
 
     // Snapshot the dynamic source-roots provider before `options` moves into

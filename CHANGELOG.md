@@ -9,6 +9,22 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- `extensions.embedder` now loads its model on the first call that needs it,
+  not at boot. The first `text_score()` pays the load time (seconds for
+  `sentence-transformers` with `BAAI/bge-m3`). A model that cannot load now
+  fails that call, not the boot. **Do:** set `extensions.embedder.load: eager`
+  to build the model at boot as before.
+
+### Added
+
+- `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still
+  checks the trust gate, the mapping shape, the `load` value and that the
+  library can be hosted. A failed lazy build is logged and retried on the
+  next call. See the
+  [MCP guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).
+
 ### Fixed
 
 - A query with two variable-length patterns now matches both. Since 0.18.1

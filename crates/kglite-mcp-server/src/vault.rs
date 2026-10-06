@@ -78,7 +78,7 @@ pub(crate) fn vault_producer(
 /// embedder: it is read at *build* time, so a rebuild picks up whatever the
 /// manifest bound, and a deployment with no `extensions.embedder` simply never
 /// embeds. `trust.allow_embedder` needs no second check here — an embedder
-/// cannot be constructed without it (`build_embedder_from_manifest`), so a
+/// cannot be registered without it (`build_embedder_from_manifest`), so a
 /// bound embedder *is* the operator's authorisation.
 pub(crate) fn vault_hooks(
     root: PathBuf,
