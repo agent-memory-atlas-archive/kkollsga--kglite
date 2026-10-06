@@ -738,93 +738,7 @@ impl BoltBackend for KgliteBackend {
             // Defensive fallthrough — was already consumed.
             return Ok(BoltDict::new());
         };
-        match self.session.commit(tx, /* check_occ = */ true) {
-            kglite::api::session::CommitOutcome::NoWritesNoOp => {
-                tracing::debug!(
-                    session_id = %session.0,
-                    tx = %transaction.0,
-                    "commit (no-op; no mutations)"
-                );
-            }
-            kglite::api::session::CommitOutcome::Committed { new_version } => {
-                tracing::debug!(
-                    session_id = %session.0,
-                    tx = %transaction.0,
-                    new_version,
-                    "commit (with mutations)"
-                );
-            }
-            // `--durability full`/`normal`: the frame could not be appended, so
-            // the engine did not publish the commit (append-then-publish — see
-            // `Session::commit`). The client must see FAILURE, because the
-            // alternative is a driver that returns success for a write the
-            // server deliberately discarded. `Backend` rather than `Query`: the
-            // statement was fine and re-running it may well work, but nothing
-            // about it can be fixed client-side, and the Neo4j taxonomy has no
-            // retriable class that means "the server's disk answered no".
-            kglite::api::session::CommitOutcome::DurabilityFailed { ref error } => {
-                tracing::error!(
-                    session_id = %session.0,
-                    tx = %transaction.0,
-                    error = %error,
-                    "commit rejected: the write could not be logged, so it was not applied"
-                );
-                return Err(BoltError::Backend(format!(
-                    "commit was NOT applied — the write-ahead log rejected it and the \
-                     server does not acknowledge writes it cannot log: {error}"
-                )));
-            }
-            kglite::api::session::CommitOutcome::ConflictDetected {
-                current_version,
-                base_version,
-            } => {
-                tracing::debug!(
-                    session_id = %session.0,
-                    tx = %transaction.0,
-                    current_version,
-                    base_version,
-                    "commit conflict — another writer committed first"
-                );
-                // `BoltError::Query` rather than `BoltError::Transaction`:
-                // boltr maps the latter to
-                // `Neo.ClientError.Transaction.TransactionStartFailed` — wrong
-                // twice over, since the transaction started fine and the
-                // `ClientError` class tells every Neo4j driver the failure is
-                // *not* retriable. A lost OCC race is the textbook retriable
-                // failure, so the code must sit in the `TransientError` class:
-                // `session.execute_write` then re-runs the unit of work on a
-                // fresh transaction (fresh base version) without the caller
-                // writing a retry loop at all. `Query` lets us set the code
-                // directly; the string itself comes from the shared taxonomy
-                // so this site and the embedded/pyo3 path cannot drift apart.
-                return Err(BoltError::Query {
-                    code: kglite::api::KgErrorCode::TransactionConflict
-                        .neo4j_status_code()
-                        .into(),
-                    message: format!(
-                        "Transaction conflict: graph was modified by another committer \
-                         since this transaction's BEGIN (base version {base_version}, \
-                         current version {current_version}). Retry the transaction."
-                    ),
-                });
-            }
-            // `CommitOutcome` is `#[non_exhaustive]`: an outcome this build
-            // does not recognise reaches the error path, never the success
-            // path. Fail closed — the engine only ever adds outcomes that mean
-            // "not published".
-            ref other => {
-                tracing::error!(
-                    session_id = %session.0,
-                    tx = %transaction.0,
-                    outcome = ?other,
-                    "commit returned an outcome this build does not recognise"
-                );
-                return Err(BoltError::Backend(
-                    "commit returned an unrecognised outcome; the transaction was not applied"
-                        .to_string(),
-                ));
-            }
-        }
+        self.publish(tx, &session.0, &transaction.0)?;
 
         Ok(BoltDict::new())
     }
@@ -1227,8 +1141,117 @@ impl KgliteBackend {
         }
     }
 
-    /// Auto-commit path. Mutations are rejected rather than supported:
-    /// drivers wrap writes in explicit transactions in practice.
+    /// Commit `tx` through the session — OCC check, durable log append, publish —
+    /// and map each outcome to what the wire must say. Shared by an explicit
+    /// `COMMIT` and the one-shot transaction an auto-commit schema statement
+    /// runs in, so the two cannot disagree about a conflict or a log failure.
+    fn publish(
+        &self,
+        tx: kglite::api::session::Transaction,
+        session_id: &str,
+        tx_id: &str,
+    ) -> Result<(), BoltError> {
+        match self.session.commit(tx, /* check_occ = */ true) {
+            kglite::api::session::CommitOutcome::NoWritesNoOp => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    "commit (no-op; no mutations)"
+                );
+            }
+            kglite::api::session::CommitOutcome::Committed { new_version } => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    new_version,
+                    "commit (with mutations)"
+                );
+            }
+            // `--durability full`/`normal`: the frame could not be appended, so
+            // the engine did not publish the commit (append-then-publish — see
+            // `Session::commit`). The client must see FAILURE, because the
+            // alternative is a driver that returns success for a write the
+            // server deliberately discarded. `Backend` rather than `Query`: the
+            // statement was fine and re-running it may well work, but nothing
+            // about it can be fixed client-side, and the Neo4j taxonomy has no
+            // retriable class that means "the server's disk answered no".
+            kglite::api::session::CommitOutcome::DurabilityFailed { ref error } => {
+                tracing::error!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    error = %error,
+                    "commit rejected: the write could not be logged, so it was not applied"
+                );
+                return Err(BoltError::Backend(format!(
+                    "commit was NOT applied — the write-ahead log rejected it and the \
+                     server does not acknowledge writes it cannot log: {error}"
+                )));
+            }
+            kglite::api::session::CommitOutcome::ConflictDetected {
+                current_version,
+                base_version,
+            } => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    current_version,
+                    base_version,
+                    "commit conflict — another writer committed first"
+                );
+                // `BoltError::Query` rather than `BoltError::Transaction`:
+                // boltr maps the latter to
+                // `Neo.ClientError.Transaction.TransactionStartFailed` — wrong
+                // twice over, since the transaction started fine and the
+                // `ClientError` class tells every Neo4j driver the failure is
+                // *not* retriable. A lost OCC race is the textbook retriable
+                // failure, so the code must sit in the `TransientError` class:
+                // `session.execute_write` then re-runs the unit of work on a
+                // fresh transaction (fresh base version) without the caller
+                // writing a retry loop at all. `Query` lets us set the code
+                // directly; the string itself comes from the shared taxonomy
+                // so this site and the embedded/pyo3 path cannot drift apart.
+                return Err(BoltError::Query {
+                    code: kglite::api::KgErrorCode::TransactionConflict
+                        .neo4j_status_code()
+                        .into(),
+                    message: format!(
+                        "Transaction conflict: graph was modified by another committer \
+                         since this transaction's BEGIN (base version {base_version}, \
+                         current version {current_version}). Retry the transaction."
+                    ),
+                });
+            }
+            // `CommitOutcome` is `#[non_exhaustive]`: an outcome this build
+            // does not recognise reaches the error path, never the success
+            // path. Fail closed — the engine only ever adds outcomes that mean
+            // "not published".
+            ref other => {
+                tracing::error!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    outcome = ?other,
+                    "commit returned an outcome this build does not recognise"
+                );
+                return Err(BoltError::Backend(
+                    "commit returned an unrecognised outcome; the transaction was not applied"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Auto-commit path. Reads run on a snapshot and schema statements run in a
+    /// one-shot transaction ([`is_schema_ddl`]); every other mutation is
+    /// rejected, because drivers wrap data writes in explicit transactions in
+    /// practice.
+    ///
+    /// Schema DDL is the exception because Neo4j *requires* it here:
+    /// `session.run("CREATE INDEX …")` is how a migration script issues it, and
+    /// an explicit write transaction is where Neo4j refuses it once the
+    /// transaction has touched data. Run as a transaction of its own, the
+    /// statement either publishes with its schema change or leaves the graph
+    /// untouched, and shares `COMMIT`'s conflict and durability handling.
     fn execute_auto_commit(
         &self,
         query: &str,
@@ -1246,14 +1269,18 @@ impl KgliteBackend {
                     "server is read-only — mutations rejected (--readonly flag)".into(),
                 ));
             }
+            if is_schema_ddl(query) {
+                return self.execute_schema_auto_commit(query, &kg_params, meta);
+            }
             // `Session` (`Neo.ClientError.Request.Invalid`), not `Forbidden`:
             // the remedy below is a client-side rewrite, so this is a
             // request-shape limitation rather than the permission refusal
             // `--readonly` and disk-mode graphs publish.
             return Err(BoltError::Session(
-                "auto-commit mutations not supported by kglite-bolt-server — \
+                "auto-commit data mutations not supported by kglite-bolt-server — \
                  wrap CREATE/SET/DELETE in an explicit transaction \
-                 (session.begin_transaction)"
+                 (session.begin_transaction or execute_write); schema statements \
+                 (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT) do run in auto-commit"
                     .into(),
             ));
         }
@@ -1263,6 +1290,23 @@ impl KgliteBackend {
         let outcome =
             kglite::api::session::execute_read(&snapshot, query, &opts).map_err(kg_to_bolt)?;
         Ok((outcome.result, "r", outcome.explain))
+    }
+
+    /// Run one schema statement as its own transaction and publish it.
+    fn execute_schema_auto_commit(
+        &self,
+        query: &str,
+        kg_params: &HashMap<String, Value>,
+        meta: &TxMeta,
+    ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
+        let opts = self.execute_opts(kg_params, meta);
+        let mut tx = self.session.begin();
+        let working = tx.working_mut().map_err(kg_to_bolt)?;
+        let outcome =
+            kglite::api::session::execute_mut(working, query, &opts).map_err(kg_to_bolt)?;
+        self.publish(tx, "auto-commit", "auto-commit")?;
+        // Neo4j's summary type for a schema write is `s`.
+        Ok((outcome.result, "s", outcome.explain))
     }
 
     /// Tx path: outer mutex only long enough to clone the per-tx Arc, then the
@@ -1332,6 +1376,29 @@ impl KgliteBackend {
 }
 
 /// The valid-time echo as `kglite.temporal` summary metadata.
+/// Whether `query` is index or constraint DDL: `CREATE`/`DROP` followed by
+/// `INDEX` or `CONSTRAINT`, with an optional index-type word between
+/// (`CREATE RANGE INDEX …`).
+///
+/// Called only on a statement the parser has already accepted as a single
+/// mutation, so the leading words are all it has to tell DDL from a data
+/// write: `CREATE (` and `DROP` of anything else never match. The engine owns
+/// what each form does, including refusing the index types it lacks.
+fn is_schema_ddl(query: &str) -> bool {
+    // Whitespace-separated, so `CREATE (index)` — a node variable that happens
+    // to be spelled `index` — is `CREATE` then `(index)`, not DDL.
+    let mut words = query.split_whitespace().map(str::to_ascii_uppercase);
+    let verb = words.next();
+    let second = words.next();
+    match (verb.as_deref(), second.as_deref()) {
+        (Some("CREATE" | "DROP"), Some("INDEX" | "CONSTRAINT")) => true,
+        (Some("CREATE"), Some("RANGE" | "TEXT" | "POINT" | "FULLTEXT" | "VECTOR" | "LOOKUP")) => {
+            words.next().as_deref() == Some("INDEX")
+        }
+        _ => false,
+    }
+}
+
 fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltValue {
     let text = |value: &str| BoltValue::String(value.to_string());
     BoltValue::Dict(BoltDict::from([
@@ -2286,6 +2353,115 @@ mod tests {
             )),
             "a refusal with a client-side remedy must not be a DatabaseError"
         );
+    }
+
+    #[test]
+    fn schema_ddl_is_told_from_data_writes_by_its_leading_words() {
+        for ddl in [
+            "CREATE INDEX FOR (n:Repro) ON (n.k)",
+            "  create index if not exists for (n:Repro) on (n.k)",
+            "CREATE RANGE INDEX idx FOR (n:Repro) ON (n.k)",
+            "CREATE CONSTRAINT FOR (n:Repro) REQUIRE n.k IS UNIQUE",
+            "DROP INDEX idx",
+            "DROP CONSTRAINT c IF EXISTS",
+            "CREATE\nINDEX FOR (n:Repro) ON (n.k)",
+        ] {
+            assert!(is_schema_ddl(ddl), "{ddl:?} is DDL");
+        }
+        for data in [
+            "CREATE (:Repro {k: 1})",
+            "CREATE (index:Repro)",
+            "CREATE (constraint)",
+            "MATCH (n) DETACH DELETE n",
+            "MERGE (:Repro {k: 1})",
+            "CREATE RANGE (n)",
+            "UNWIND [1] AS i CREATE INDEX",
+            "",
+        ] {
+            assert!(!is_schema_ddl(data), "{data:?} is not DDL");
+        }
+    }
+
+    /// Neo4j runs schema statements in auto-commit, which is where a migration
+    /// script sends them: `CREATE INDEX` must publish, show up in `SHOW
+    /// INDEXES`, and `DROP INDEX` must publish its removal. A data write on
+    /// the same path stays refused.
+    #[tokio::test]
+    async fn schema_statements_run_and_publish_in_auto_commit() {
+        let backend = memory_backend();
+        let session = SessionHandle("schema".into());
+        let run = |query: &'static str| {
+            let backend = &backend;
+            let session = &session;
+            async move {
+                backend
+                    .execute(session, query, &HashMap::new(), &BoltDict::new(), None)
+                    .await
+            }
+        };
+        let version = backend.session.version();
+
+        let created = run("CREATE INDEX FOR (n:Person) ON (n.id)")
+            .await
+            .expect("auto-commit CREATE INDEX");
+        assert_eq!(
+            created.summary.get("type"),
+            Some(&BoltValue::String("s".into())),
+            "Neo4j reports a schema write as type `s`"
+        );
+        assert!(
+            backend.session.version() > version,
+            "the index must have been published, not discarded with a dropped transaction"
+        );
+        let shown = run("SHOW INDEXES").await.expect("SHOW INDEXES");
+        assert!(
+            shown.records.iter().any(|r| r
+                .values
+                .iter()
+                .any(|v| matches!(v, BoltValue::String(s) if s == "Person.id"))),
+            "SHOW INDEXES must list the created index: {:?}",
+            shown.records
+        );
+
+        run("DROP INDEX `Person.id`")
+            .await
+            .expect("auto-commit DROP INDEX");
+        let shown = run("SHOW INDEXES").await.expect("SHOW INDEXES");
+        assert!(
+            !shown.records.iter().any(|r| r
+                .values
+                .iter()
+                .any(|v| matches!(v, BoltValue::String(s) if s == "Person.id"))),
+            "the dropped index must be gone: {:?}",
+            shown.records
+        );
+
+        let err = run("CREATE (:Person {id: 1})")
+            .await
+            .expect_err("a data write is still refused in auto-commit");
+        assert!(matches!(&err, BoltError::Session(msg) if msg.contains("explicit transaction")));
+        assert_eq!(count_nodes(&backend, "Person"), 0);
+    }
+
+    /// A schema statement that fails publishes nothing: an unsupported index
+    /// type is refused with the engine's message and the version stays put.
+    #[tokio::test]
+    async fn a_refused_schema_statement_in_auto_commit_publishes_nothing() {
+        let backend = memory_backend();
+        let session = SessionHandle("schema-refused".into());
+        let version = backend.session.version();
+        let err = backend
+            .execute(
+                &session,
+                "CREATE FULLTEXT INDEX ft FOR (n:Person) ON EACH [n.name]",
+                &HashMap::new(),
+                &BoltDict::new(),
+                None,
+            )
+            .await
+            .expect_err("full-text indexes are not supported");
+        assert!(!format!("{err:?}").is_empty());
+        assert_eq!(backend.session.version(), version);
     }
 
     /// Disk graphs are excluded: every disk save publishes a generation and

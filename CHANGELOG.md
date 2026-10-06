@@ -71,6 +71,13 @@ before upgrading.
   against 0.4 ms for one `MERGE`. A lookup now reads the index only when the
   probe is a date. This covers single-property and composite indexes, and
   every `MATCH {key: …}` that uses them.
+- `kglite-bolt-server` runs schema statements in auto-commit. `session.run("CREATE
+  INDEX …")`, `DROP INDEX`, `CREATE CONSTRAINT` and `DROP CONSTRAINT` were refused
+  with "auto-commit mutations not supported", so a script ported from Neo4j
+  failed on its first line. Each now publishes as a transaction of its own and
+  reports query type `s`; data mutations are still refused in auto-commit.
+  Inside an explicit transaction a schema statement still runs and commits with
+  the data, where Neo4j refuses the mix.
 - Restarting a durable graph no longer holds the whole write-ahead log in
   memory. Recovery decoded every frame into a list, about ten times its
   on-disk size, before folding it: a 6 MB log restarted at 90 MiB resident,

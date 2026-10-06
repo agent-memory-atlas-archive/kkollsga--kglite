@@ -112,11 +112,29 @@ every version.
 ## Transactions and errors
 
 The backend uses native KGLite sessions and transactions, not Python or the
-GIL. Reads may auto-commit. **All writes must be explicit driver
-transactions.** An auto-commit mutation is rejected rather than run. That
-covers `CREATE`/`INSERT`, `SET`/`REMOVE`, a delete form, and `MERGE`. Use the
-driver's `execute_write` equivalent; a plain `session.run` remains
-auto-commit.
+GIL. Reads and schema statements may auto-commit. **All data writes must be
+explicit driver transactions.** An auto-commit data mutation is rejected rather
+than run. That covers `CREATE`/`INSERT`, `SET`/`REMOVE`, a delete form, and
+`MERGE`. Use the driver's `execute_write` equivalent; a plain `session.run`
+remains auto-commit.
+
+### Schema statements
+
+`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT` and `DROP CONSTRAINT` run
+through a plain `session.run`, as they do on Neo4j, and publish as a
+transaction of their own. The result summary reports query type `s`. A refused
+form, such as a `FULLTEXT` index, publishes nothing.
+
+| Where | Neo4j | KGLite |
+|---|---|---|
+| `session.run` (auto-commit) | runs | runs |
+| `execute_write` / `begin_transaction`, schema only | runs | runs, commits with the transaction |
+| Same transaction writes data and schema | refused | **runs**, commits atomically |
+| `CALL db.checkpoint()` | auto-commit only | auto-commit only, refused inside a transaction |
+
+The mixed case is the one deliberate difference. A script that works on Neo4j
+works here unchanged, and a transaction that groups an index with the data it
+serves commits or rolls back as one.
 
 Concurrent writers serialize at commit. A transaction committing against a
 stale snapshot conflicts with a retriable status code. Driver-managed
