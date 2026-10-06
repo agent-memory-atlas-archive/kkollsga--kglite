@@ -2209,6 +2209,26 @@ def test_shipped_artifacts_build_on_the_pinned_toolchain() -> None:
     assert checked >= 9, f"found only {checked} toolchain installs across {SHIPPING_WORKFLOWS}; the scan is broken"
 
 
+def test_perf_ab_pin_legs_build_on_the_pinned_toolchain() -> None:
+    """perf_ab.yml's runner-host and manylinux-pin legs stand for the shipped
+    toolchain; only the declared alternative leg may differ. The workflow-level
+    pin is held equal to ci.yml by `test_ci_stable_toolchain_is_pinned`; this
+    holds each build step to that pin, which a literal would silently bypass."""
+    workflow = _load_workflow(WORKFLOWS / "perf_ab.yml")
+    toolchains = []
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            uses = step.get("uses", "")
+            if uses.startswith("dtolnay/rust-toolchain@"):
+                toolchains.append(step.get("with", {}).get("toolchain"))
+            elif uses.startswith("PyO3/maturin-action@"):
+                toolchains.append(step.get("with", {}).get("rust-toolchain"))
+    alt = "${{ env.ALT_TOOLCHAIN }}"
+    assert toolchains.count(alt) == 1, toolchains
+    pinned = [t for t in toolchains if t != alt]
+    assert len(pinned) >= 2 and all(t == PINNED_TOOLCHAIN for t in pinned), toolchains
+
+
 def test_perf_candidate_builds_like_the_published_linux_wheel() -> None:
     """The perf gate measures the build users install: the release's x86_64 gnu
     cell (manylinux2014 container, pinned toolchain), not a runner-host build
