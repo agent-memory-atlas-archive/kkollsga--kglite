@@ -142,8 +142,26 @@ aggregations use, read contiguous memory and got faster at scale.
 
 The trade-off is on incoming walks that read a property of every edge, such as
 `MATCH (g:Group)<-[r]-(n) WHERE r.tag CONTAINS …`. Those edges are scattered, so
-each property read costs more. Measured on Linux x86 against 0.13.2, that step
-cost about 6% on the relationship text-filter benchmark; macOS hides most of it
-behind its larger shared cache when the query runs in parallel. A reverse-ordered
-copy for incoming walks would recover it at the price of a second edge arena,
-so it is not taken until a workload needs it.
+each property read costs more. macOS hides most of it behind its larger shared
+cache when the query runs in parallel.
+
+The relationship text-filter benchmark, measured on one Linux runner (AMD EPYC
+7763) against 0.13.2, as min of two rounds:
+
+| Release | `CONTAINS` | `ENDS WITH` |
+| --- | --- | --- |
+| 0.17.0 | +3.5% | +3.4% |
+| 0.17.1 | +10.9% | +9.1% |
+| 0.18.1 | +14.4% | +12.6% |
+| 0.19.0 | +14.9% | +14.0% |
+| 0.19.3 | +27.3% | +24.8% |
+
+- The source-major layout is the 0.17.1 step, about 7 points.
+- Later releases add more, in smaller steps.
+- One measurement moves by about 13 points between runs on the same CPU model:
+  0.19.3 read +13.9% and +12.7% in a second run.
+- Rebuilding 0.19.3 under other toolchains and build environments gave the same
+  offset as the published wheel.
+
+A reverse-ordered copy for incoming walks would recover the layout's share at
+the price of a second edge arena, so it is not taken until a workload needs it.

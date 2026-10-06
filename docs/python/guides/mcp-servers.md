@@ -1028,6 +1028,12 @@ The matrix shows which manifest key takes effect in which CLI mode. "—" means 
 | `trust.allow_embedder` | parsed, required by `extensions.embedder` | parsed, required by matching extension | parsed, required by matching extension | parsed (no graph) | parsed (no graph) |
 | `builtins.save_graph: true` | ✓ (registers `save_graph` only; `cypher_query` stays read-only) | — (multiple graphs) | — | — | — |
 | `extensions.writable: true` | ✓ (write-enables: mutation + `save_graph` + lifecycle tools; same as `--writable`) | — (multiple graphs) | — | — | — |
+| `builtins.temp_cleanup: on_overview` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `extensions.embedder` | ✓ | ✓ (per active repo) | ✓ | — (no graph) | — |
+| `extensions.cypher_recipes` | ✓ (merged with the graph's own `KgliteRecipe` records) | ✓ (per active repo) | ✓ (merged, as `--graph`) | registers discovery/run tools, but execution needs an active graph | registers discovery/run tools, but execution needs an active graph |
+| `extensions.csv_http_server` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `extensions.value_codecs` | ✓ | ✓ | ✓ | — (no graph) | — |
+| `extensions.<other>` (passthrough) | parsed, opaque to framework | parsed, opaque | parsed, opaque | parsed, opaque | parsed, opaque |
 
 > **kglite-mcp-server refuses `adopt_client_roots`.** The key is an
 > mcp-methods fallback: it adopts a client-advertised root only when no root
@@ -1042,12 +1048,6 @@ The matrix shows which manifest key takes effect in which CLI mode. "—" means 
 >
 > `workspace.sandbox_root` is **not** affected. It is a local containment
 > boundary with no protocol dependency.
-| `builtins.temp_cleanup: on_overview` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `extensions.embedder` | ✓ | ✓ (per active repo) | ✓ | — (no graph) | — |
-| `extensions.cypher_recipes` | ✓ (merged with the graph's own `KgliteRecipe` records) | ✓ (per active repo) | ✓ (merged, as `--graph`) | registers discovery/run tools, but execution needs an active graph | registers discovery/run tools, but execution needs an active graph |
-| `extensions.csv_http_server` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `extensions.value_codecs` | ✓ | ✓ | ✓ | — (no graph) | — |
-| `extensions.<other>` (passthrough) | parsed, opaque to framework | parsed, opaque | parsed, opaque | parsed, opaque | parsed, opaque |
 
 Unknown keys at the top level (or under `builtins:` / `workspace:` / `trust:` / `tools[]`) fail validation at boot. The process exits non-zero with an `ERROR: <path>: unknown ... keys: [...]` message.
 

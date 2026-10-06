@@ -956,7 +956,7 @@ pub(super) fn write_fluent_overview(xml: &mut String, surface: DescribeSurface) 
     xml.push_str("  </group>\n");
 
     xml.push_str("  <group name=\"mutation\">\n");
-    xml.push_str("    <method sig=\"update(properties, keep_selection=None)\">Batch property update on selected nodes; properties is a {prop: value} dict.</method>\n");
+    xml.push_str("    <method sig=\"update(properties, keep_selection=None)\">Batch property update on selected nodes; properties is a {prop: value} dict. The write lands on the returned graph, not the one select() was called on. On a type with a validity-interval declaration, a bound that is not a date or an inverted interval raises ArgumentError and writes nothing.</method>\n");
     xml.push_str("  </group>\n");
 
     xml.push_str("  <group name=\"loading\">\n");
@@ -1332,7 +1332,7 @@ pub(super) fn write_fluent_topic_mutation(xml: &mut String) {
     xml.push_str("  <mutation>\n");
     xml.push_str("    <desc>Update properties on selected nodes.</desc>\n");
     xml.push_str("    <methods>\n");
-    xml.push_str("      <m sig=\"update(properties, keep_selection=None)\">Batch property update; properties is a {prop: value} dict. Existing values are overwritten — there is no conflict_handling here (that argument belongs to add_nodes()).</m>\n");
+    xml.push_str("      <m sig=\"update(properties, keep_selection=None)\">Batch property update; properties is a {prop: value} dict. Existing values are overwritten — there is no conflict_handling here (that argument belongs to add_nodes()). The write lands on the returned graph; the graph select() was called on is unchanged (use cypher SET to write in place). A bound that is not a date, or an inverted interval, on a type with a validity-interval declaration raises ArgumentError and writes nothing.</m>\n");
     xml.push_str("    </methods>\n");
     xml.push_str("    <examples>\n");
     xml.push_str("      <ex desc=\"set property\">graph.select('Person').where({'city': 'Oslo'}).update({'country': 'Norway'})</ex>\n");
@@ -1398,7 +1398,7 @@ pub(super) fn write_fluent_topic_indexes(xml: &mut String) {
     xml.push_str("  <indexes>\n");
     xml.push_str("    <desc>Create property indexes for faster lookups. Type indices are automatic.</desc>\n");
     xml.push_str("    <methods>\n");
-    xml.push_str("      <m sig=\"create_index(node_type, property)\">Equality index: fast exact-match lookup. Reports serves_lookups=false with a reason for an index no query reads - notably a structurally resolved name (name, type, node_type, label), which holds stored values only. node_type_known=false flags a type with no nodes or declaration (likely a typo). On disk, string columns only: a numeric column raises.</m>\n");
+    xml.push_str("      <m sig=\"create_index(node_type, property)\">Equality index: fast exact-match lookup. Reports serves_lookups=false with a reason for an index no query reads - notably a structurally resolved name (name, type, node_type, label), which holds stored values only. node_type_known=false flags a type with no nodes or declaration (likely a typo). On disk, string columns only: any column that is not a string column raises.</m>\n");
     xml.push_str("      <m sig=\"create_range_index(node_type, property)\">B-tree index: fast range queries (&gt;, &lt;, &gt;=, &lt;=).</m>\n");
     xml.push_str("      <m sig=\"create_composite_index(node_type, [prop1, prop2, ...])\">Multi-property index.</m>\n");
     xml.push_str("      <m sig=\"drop_index(node_type, property) / drop_range_index / drop_composite_index\">Remove indexes.</m>\n");

@@ -7452,7 +7452,8 @@ class KnowledgeGraph:
         results, at scan speed. ``reindex()`` and ``save()`` rebuild it. Results
         never depend on whether the index answered. A disk index covers
         **string columns only**: an index that would hold no values over a
-        populated type (a numeric or missing property) raises instead.
+        populated type (any column that is not a string column) raises
+        instead.
 
         Idempotent — re-creating an existing index rebuilds it without error;
         ``created`` is then ``False``. It is ``True`` only when this call made
@@ -7487,7 +7488,8 @@ class KnowledgeGraph:
                 property indexes are keyed by primary type, so such an index
                 would never be consulted. Index the nodes' primary type. Also
                 raised on a disk graph when the index would hold no values
-                over a populated type; nothing is left behind.
+                over a populated type: any column that is not a string
+                column. Nothing is left behind.
             IOError: The disk backend failed to build the index.
 
         Example:

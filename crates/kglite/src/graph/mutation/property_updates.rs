@@ -232,7 +232,8 @@ fn write_node_property(
     // and `try_index_lookup` trusts `property_indices` unconditionally — so an
     // index built before this call keeps answering with the *old* value and a
     // `MATCH (n:T {prop: <old>})` returns a node that no longer holds it.
-    // Same hazard, same remedy as the bulk loader (see `add_nodes` above).
+    // Same hazard, same remedy as the bulk loader (`add_nodes` in
+    // `maintain.rs`).
     // A no-op when the touched types carry no index.
     for node_type in node_types.keys() {
         graph.refresh_indexes_for_type(node_type);

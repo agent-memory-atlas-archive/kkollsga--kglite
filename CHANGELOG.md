@@ -33,6 +33,17 @@ before upgrading.
   `update()` or `add_properties()` raises `ArgumentError` and writes nothing.
   An empty interval is written with a `UserWarning`. **Do:** write both
   bounds in one `update()` to move an interval.
+- `create_index` on a disk graph now raises `ValueError` for any column that
+  is not a string column over a populated type, as Cypher `CREATE INDEX`
+  already did. It reported the index as created and serving with zero
+  entries. Its result also carries `node_type_known`: `False` when the type
+  has no nodes and no schema declaration. **Do:** index a string column, or
+  use a memory or mapped graph, where every property type is indexable.
+- Rust: `kglite::api::mutation::update_node_properties` now returns `Err`
+  when a value would leave a node breaking a validity-interval declaration on
+  its type, and writes nothing. It wrote the value. **Do:** handle the `Err`;
+  to move an interval, write both bounds in one
+  `update_node_property_set` call.
 - Rust: `kglite::api::temporal::DeclareReport` carries `warnings: Vec<String>`
   and `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
   declaration earning both an abutment and an empty-interval advisory reported
@@ -72,11 +83,6 @@ before upgrading.
 - `set_temporal` and the loaders raise one `UserWarning` per advisory a
   declaration earns, and a Cypher declaration reports each in
   `result.warnings`.
-- `create_index` on a disk graph now raises `ValueError` for a column it
-  cannot index (a numeric or missing property over a populated type), as
-  Cypher `CREATE INDEX` already did. It reported the index as created and
-  serving with zero entries. Its result also carries `node_type_known`:
-  `False` when the type has no nodes and no schema declaration.
 - A filtered `MATCH … WHERE … RETURN … LIMIT k` no longer holds every match
   before stopping. Returning 12,000 rows of a 1M-node type held 330–670 MB on
   memory and disk graphs; it now holds under 1 MB, and the query takes 6–12 ms
@@ -121,8 +127,8 @@ before upgrading.
   | `EXISTS` | 391–447 ms | 201–211 ms |
   | `orphan_node` with `link_type` | 1.56–1.71 s | 266–285 ms |
   | `cardinality_violation` | 583–850 ms | 160–196 ms |
-  | `describe()` | 1.86–1.89 s, +2.3–2.6 GB | 0.09–0.21 s, ~0 MB |
-  | `neighbors_schema()` | 3.8–5.3 s, +1.4–2.5 GB | 0.52–0.62 s, +0 MB |
+  | `describe()` | 1.86–7.06 s, +0.28–2.6 GB | 0.09–0.21 s, ~0 MB |
+  | `neighbors_schema()` | 3.8–14.4 s, +0.33–2.5 GB | 0.52–0.62 s, +0 MB |
 - `vector_score(r, …) ORDER BY … DESC LIMIT k` over relationships is now
   served from the embedding store when scores tie. It used to fall back to
   scoring every relationship: 13.6–15.3 ms instead of 0.11 ms on 32,000

@@ -798,10 +798,19 @@ jobs:
         id: perf_compare
         # Leg 1 is the only verdict: the candidate against the 0.13.2 wheel
         # benchmarked in this same job, on this runner, minutes earlier. That
-        # cancels most of the runner's speed, not all of it: the
-        # relationship text-filter cells run 11-17% slower against 0.13.2 on
-        # some CPU models only, so a cell near 20% can cross on one runner and
-        # not on another.
+        # cancels most of the runner's speed, not all of it.
+        #
+        # The relationship text-filter cells sit closest to the threshold.
+        # Building 0.19.3 on the runner host, in manylinux2014 on RUST_STABLE
+        # and on a second toolchain gave the same offset as the published wheel
+        # (perf_ab run 37385180539), so the build environment is not the cause.
+        # Published wheels on one AMD EPYC 7763 runner (run 37390003870), min of
+        # two rounds against 0.13.2, CONTAINS / ENDS WITH: 0.17.0 +3.5/+3.4%,
+        # 0.17.1 +10.9/+9.1%, 0.18.1 +14.4/+12.6%, 0.19.0 +14.9/+14.0%,
+        # 0.19.3 +27.3/+24.8%. The same wheel on the same CPU model read
+        # +13.9/+12.7% in the A/B run, so one measurement moves by about 13
+        # points between runs. This branch's leg 1 read about +10%. The cells
+        # stay gated: a step of that size is what the gate exists to catch.
         #
         # A first-capture failure triggers one recapture on the same runner,
         # and only a repeated failure is red. The recapture filters a one-off

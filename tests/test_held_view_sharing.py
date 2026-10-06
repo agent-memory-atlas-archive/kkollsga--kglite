@@ -312,9 +312,11 @@ _FREE_LIST_ORDERS = {
 def test_creates_after_deletes_under_a_held_view_keep_every_node(holder: str, order: str) -> None:
     """Issue #195: creates taken under a held view after deletes must all survive.
 
-    The write forks only when the free lists are empty. A fork taken with
-    vacated slots still listed made the fold-back allocate different slots than
-    the overlay had handed out: a panic, then ghost and duplicate nodes.
+    The write forks with vacated slots still listed, and the overlay allocates
+    as the graph's own add would: the free-list head first, then past the last
+    occupied slot. An overlay that allocated otherwise made the fold-back reuse
+    different slots than it had handed out: a panic, then ghost and duplicate
+    nodes.
     """
     deleted = _FREE_LIST_ORDERS[order]
     graph = kglite.KnowledgeGraph()

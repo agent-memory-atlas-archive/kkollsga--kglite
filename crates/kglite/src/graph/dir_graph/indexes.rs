@@ -234,14 +234,17 @@ impl DirGraph {
     /// wrapper `durable=True` / `cdc::enable` install — a bare `Disk` match
     /// sends every such graph down the heap path.
     ///
-    /// **Every caller that installs an equality index on behalf of a user must
-    /// route through here.** [`Self::create_index`] is the in-memory primitive
-    /// and bypasses the disk decision; calling it directly on a disk graph is
-    /// the OOM this method exists to avoid. The counterpart
-    /// [`Self::drop_index`] already routes internally.
+    /// **Every equality-index install must route through here.**
+    /// [`Self::create_index`] is the in-memory primitive and bypasses the disk
+    /// decision; calling it directly on a disk graph is the OOM this method
+    /// exists to avoid. The counterpart [`Self::drop_index`] already routes
+    /// internally.
     ///
-    /// Public deliberately (boundary principle): `kglite-py`'s `create_index`
-    /// and the Cypher `CREATE INDEX` executor need the identical decision.
+    /// This is the raw build, with no refusals. A user's request goes through
+    /// `create_property_index_checked`, which wraps it (Python `create_index`,
+    /// Cypher `CREATE INDEX`). WAL replay and the OKF loader re-install
+    /// recorded declarations through it directly, where a refusal would be
+    /// wrong.
     pub fn create_property_index_routed(
         &mut self,
         node_type: &str,
