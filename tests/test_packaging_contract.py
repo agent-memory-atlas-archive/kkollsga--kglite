@@ -51,7 +51,7 @@ def test_ci_only_installs_declared_project_extras() -> None:
     referenced: set[str] = set()
     for workflow in WORKFLOWS.glob("*.yml"):
         text = workflow.read_text(encoding="utf-8")
-        for match in re.finditer(r"\.\[([^]]+)\]", text):
+        for match in re.finditer(r"(?<!\\)\.\[([^]]+)\]", text):
             referenced.update(part.strip() for part in match.group(1).split(","))
 
     assert referenced <= declared, f"workflow references undefined project extras: {sorted(referenced - declared)}"
