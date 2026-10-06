@@ -859,9 +859,10 @@ t.valid_to = …` therefore moves an interval in one step.
 - Every writer that gives a node a declared label judges the node by that
   label's declaration too. The writers are `add_nodes(labels=[…])`, `add_label`,
   a blueprint's `labels` and ontology materialisation.
-- A fluent `update()` and the `store_as=` writers (`calculate`, `count`,
-  `unique_values`, `collect_children`) are judged the same way. An
-  `update()`'s properties are judged together, before anything is written.
+- A fluent `update()`, `add_properties()` and the `store_as=` writers
+  (`calculate`, `count`, `unique_values`, `collect_children`) are judged the
+  same way. The properties an `update()` or `add_properties()` writes onto a
+  node are judged together, before anything is written.
 - A bulk load onto a declared relationship type adds each row that differs from
   the stored relationships as a new version, rather than updating one.
   {doc}`bitemporal` shows this on a change feed.

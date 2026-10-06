@@ -4334,6 +4334,11 @@ class KnowledgeGraph:
         Returns:
             A new KnowledgeGraph with the properties added to selected nodes.
 
+        Raises:
+            ArgumentError: A node's end state breaks a validity-interval
+                declaration on its type; nothing is written. An empty
+                interval is written with a ``UserWarning``.
+
         Examples::
 
             # Copy structure name onto wells

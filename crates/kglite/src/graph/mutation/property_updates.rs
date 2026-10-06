@@ -7,7 +7,9 @@
 //! `SET` follows: a bound that is not a date, or an inverted interval, refuses
 //! the whole call; an empty interval is written and counted into one warning.
 //! Without the check these writers left rows the declaration rejects, and every
-//! `AS OF` read of the type then raised.
+//! `AS OF` read of the type then raised. The fluent `add_properties` writes
+//! through its own path (`add_properties::apply_property_updates`) and applies
+//! the same check.
 
 use std::collections::HashMap;
 

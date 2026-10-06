@@ -1699,7 +1699,8 @@ CALL db.temporal.declarations()
   - NULL bounds stay open.
   - A load judges an update row by the bounds it leaves, such as a row carrying
     only `to` against the stored `from`, under its conflict mode.
-  - A fluent `update()` and the `store_as=` writers are judged the same way.
+  - A fluent `update()`, `add_properties()` and the `store_as=` writers are
+    judged the same way.
 - **Empty intervals are kept.** A row a write leaves with `from == to` under
   `half_open` (an assignment created and cancelled on the same day) is written.
   - The statement reports one warning in `result.warnings` ("N of M rows written

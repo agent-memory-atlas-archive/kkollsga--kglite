@@ -25,13 +25,14 @@ before upgrading.
   the title and lost the `title` value; now `n.title` and `n.name` read each.
   On a type with a declared title field, a different `title` value in the same
   pattern is refused, as a different `id` already is.
-- The fluent `update()` and the `store_as=` writers (`calculate`, `count`,
-  `unique_values`, `collect_children`) now judge the rows they leave against a
-  validity-interval declaration, as a Cypher `SET` does. They wrote a bound
-  that is not a date, or an inverted interval, without a word, and every
-  `AS OF` read of the type then raised. A refused `update()` raises
-  `ArgumentError` and writes nothing. **Do:** write both bounds in one
-  `update()` to move an interval.
+- The fluent `update()`, `add_properties()` and the `store_as=` writers
+  (`calculate`, `count`, `unique_values`, `collect_children`) now judge the
+  rows they leave against a validity-interval declaration, as a Cypher `SET`
+  does. They wrote a bound that is not a date, or an inverted interval,
+  without a word, and every `AS OF` read of the type then raised. A refused
+  `update()` or `add_properties()` raises `ArgumentError` and writes nothing.
+  An empty interval is written with a `UserWarning`. **Do:** write both
+  bounds in one `update()` to move an interval.
 - Rust: `kglite::api::temporal::DeclareReport` carries `warnings: Vec<String>`
   and `diagnostics: Vec<Diagnostic>` in place of `warning` and `diagnostic`. A
   declaration earning both an abutment and an empty-interval advisory reported

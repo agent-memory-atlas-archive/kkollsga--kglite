@@ -269,7 +269,7 @@
     {
       "path": "crates/kglite/src/graph/mutation/add_properties.rs",
       "qualified_name": "crate::add_properties_aggregate",
-      "lines": 165,
+      "lines": 162,
       "branches": 36,
       "nesting": 10
     },

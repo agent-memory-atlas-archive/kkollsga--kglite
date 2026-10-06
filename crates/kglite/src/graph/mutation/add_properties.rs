@@ -18,6 +18,7 @@
 //! the indexes of each written type and publishes the version bump.
 
 use crate::datatypes::Value;
+use crate::graph::features::temporal::{check_node_update, EmptyIntervals};
 // Defined in `maintain` rather than here on purpose: it is the return type of the
 // public `kglite::api::mutation::add_properties`, and the pinned Rust API
 // baseline records that type at its canonical path. Moving the definition would
@@ -52,10 +53,7 @@ pub fn add_properties(
         .map_err(|e| format!("disk mutation lease failed: {e}"))?;
     let level_count = selection.get_level_count();
     if level_count == 0 {
-        return Ok(AddPropertiesReport {
-            nodes_updated: 0,
-            properties_set: 0,
-        });
+        return Ok(AddPropertiesReport::default());
     }
 
     let target_level = level_count - 1;
@@ -123,10 +121,7 @@ pub fn add_properties(
     let target_level_data = match selection.get_level(target_level) {
         Some(level) if !level.is_empty() => level,
         _ => {
-            return Ok(AddPropertiesReport {
-                nodes_updated: 0,
-                properties_set: 0,
-            });
+            return Ok(AddPropertiesReport::default());
         }
     };
 
@@ -200,7 +195,7 @@ pub fn add_properties(
 
     drop(collect_guard);
 
-    Ok(apply_property_updates(graph, updates))
+    apply_property_updates(graph, updates)
 }
 
 /// Apply collected per-node property writes, then refresh the secondary indexes
@@ -218,10 +213,27 @@ pub fn add_properties(
 /// One rebuild per written type, which is a no-op (three `is_empty` checks) when
 /// the type carries no index. Extracted so the two callers cannot drift: the
 /// duplicated tail is exactly how one of them lost this maintenance.
-fn apply_property_updates<I>(graph: &mut DirGraph, updates: I) -> AddPropertiesReport
+///
+/// Every node's writes are judged together against the valid-time declarations
+/// on its labels before anything is written, by the rule `update()` follows: a
+/// bound that is not a date, or an inverted interval, refuses the whole call
+/// with the graph unchanged; an empty interval is written and reported as one
+/// warning.
+fn apply_property_updates<I>(
+    graph: &mut DirGraph,
+    updates: I,
+) -> Result<AddPropertiesReport, String>
 where
     I: IntoIterator<Item = (NodeIndex, HashMap<String, Value>)>,
 {
+    let updates: Vec<(NodeIndex, HashMap<String, Value>)> = updates.into_iter().collect();
+    let mut empty = EmptyIntervals::default();
+    if graph.temporal.has_node_declarations() {
+        for (node_idx, props) in &updates {
+            let values: Vec<(&str, &Value)> = props.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            check_node_update(graph, *node_idx, &values, &mut empty)?;
+        }
+    }
     let mut nodes_updated = 0;
     let mut properties_set = 0;
     let mut touched_types: HashSet<String> = HashSet::new();
@@ -268,10 +280,11 @@ where
         graph.bump_version();
     }
 
-    AddPropertiesReport {
+    Ok(AddPropertiesReport {
         nodes_updated,
         properties_set,
-    }
+        warnings: empty.warning().into_iter().collect(),
+    })
 }
 
 fn walk_to_ancestor(
@@ -433,10 +446,7 @@ fn add_properties_aggregate(
     let target_level_data = match selection.get_level(target_level) {
         Some(level) if !level.is_empty() => level,
         _ => {
-            return Ok(AddPropertiesReport {
-                nodes_updated: 0,
-                properties_set: 0,
-            });
+            return Ok(AddPropertiesReport::default());
         }
     };
 
@@ -585,7 +595,7 @@ fn add_properties_aggregate(
 
     drop(collect_guard);
 
-    Ok(apply_property_updates(graph, updates))
+    apply_property_updates(graph, updates)
 }
 
 fn compute_aggregate(expr: &str, values: &[f64], count: usize) -> Value {

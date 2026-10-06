@@ -40,9 +40,12 @@ use std::sync::Arc;
 /// Lives here rather than beside `add_properties` itself: it is the return type
 /// of the public `kglite::api::mutation::add_properties`, and the pinned Rust API
 /// baseline records it at this canonical path.
+#[derive(Default)]
 pub struct AddPropertiesReport {
     pub nodes_updated: usize,
     pub properties_set: usize,
+    /// Advisories about the rows written, such as an empty validity interval.
+    pub warnings: Vec<String>,
 }
 
 /// Column lookup for the bulk path's constraint gates: user-facing property

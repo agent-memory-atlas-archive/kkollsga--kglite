@@ -1187,6 +1187,7 @@ impl KnowledgeGraph {
             },
         )?;
         self.commit_wal()?;
+        Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(true));
 
