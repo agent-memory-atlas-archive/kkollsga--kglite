@@ -53,7 +53,7 @@ pub fn process_equation(
     store_as: Option<&str>,
     aggregate_connections: Option<bool>,
 ) -> Result<EvaluationResult, String> {
-    // Start tracking time for reporting
+    let _arena_guard = graph.graph.begin_query(); // disk arena guard (owned)
     let start_time = Instant::now();
 
     // Track non-fatal errors that occur during processing
@@ -132,13 +132,8 @@ pub fn process_equation(
                         let node_type = sample_node.node_type_str(&graph.interner);
 
                         // Check if schema node exists for this type
-                        let schema_lookup =
-                            match TypeLookup::new(&graph.graph, "SchemaNode".to_string()) {
-                                Ok(lookup) => lookup,
-                                Err(_) => {
-                                    return Err("Could not access schema information".to_string())
-                                }
-                            };
+                        let schema_lookup = TypeLookup::new(&graph.graph, "SchemaNode".to_string())
+                            .map_err(|_| "Could not access schema information".to_string())?;
 
                         let schema_title = Value::String(node_type.to_string());
 
@@ -645,7 +640,7 @@ pub fn store_count_results(
     group_by_parent: bool,
     target_property: &str,
 ) -> Result<CalculationOperationReport, String> {
-    // Track start time for reporting
+    let _arena_guard = graph.graph.begin_query(); // disk arena guard (owned)
     let start_time = std::time::Instant::now();
 
     // Track errors

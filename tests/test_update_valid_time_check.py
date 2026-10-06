@@ -134,3 +134,41 @@ def test_every_store_as_writer_refuses_with_argument_error(write) -> None:
     with pytest.raises(kglite.ArgumentError, match="property 'vt'"):
         write(g)
     assert g.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN p.vt AS vt").to_list() == [{"vt": "2011-01-01"}]
+
+
+def _disk_parent_graph(tmp_path, declared: bool):
+    g = kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / "g"))
+    g.cypher(
+        "CREATE (p:P {id: 1, title: 'p', n: 1, vf: '2010-01-01', vt: '2011-01-01'})"
+        "-[:HAS]->(:C {id: 2, title: '2010-01-01', d: '2010-01-01', bad: 'not a date'})"
+    )
+    if declared:
+        g.cypher("CALL db.temporal.declare({node: 'P', from: 'vf', to: 'vt', convention: 'half_open'})")
+    return g
+
+
+DISK_WRITES = [
+    lambda g, prop, src: g.select("P", temporal=False).calculate(src, store_as=prop),
+    lambda g, prop, src: g.select("P", temporal=False).count(store_as=prop),
+    lambda g, prop, src: g.select("P", temporal=False).traverse("HAS").unique_values(src, store_as=prop),
+    lambda g, prop, src: g.select("P", temporal=False).traverse("HAS").collect_children(src, store_as=prop),
+]
+DISK_IDS = ["calculate", "count", "unique_values", "collect_children"]
+
+
+@pytest.mark.parametrize("write", DISK_WRITES, ids=DISK_IDS)
+def test_store_as_writers_write_on_disk_without_a_declaration(tmp_path, write) -> None:
+    g = _disk_parent_graph(tmp_path, declared=False)
+    src = "n" if write is DISK_WRITES[0] else "d"
+    out = write(g, "stored", src)
+    rows = out.cypher("MATCH (p:P) RETURN p.stored AS s").to_list()
+    assert len(rows) == 1 and rows[0]["s"] is not None, rows
+
+
+@pytest.mark.parametrize("write", DISK_WRITES, ids=DISK_IDS)
+def test_store_as_writers_are_judged_on_disk(tmp_path, write) -> None:
+    g = _disk_parent_graph(tmp_path, declared=True)
+    src = "n * 2" if write is DISK_WRITES[0] else "bad"
+    with pytest.raises(kglite.ArgumentError, match="property 'vt'"):
+        write(g, "vt", src)
+    assert g.cypher("FOR VALID_TIME ALL MATCH (p:P) RETURN p.vt AS vt").to_list() == [{"vt": "2011-01-01"}]
