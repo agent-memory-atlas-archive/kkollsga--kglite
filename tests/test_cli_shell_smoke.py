@@ -70,7 +70,7 @@ def test_export_text_subcommand(tmp_path):
     g.save(p)
     out = _run_args("export-text", p)
     assert "# N (2 node(s))" in out
-    assert "1 | N_0 | s=todo" in out
+    assert "1 | N_1 | s=todo" in out
     assert "(1)-[R]->(2)" in out
 
 
@@ -86,10 +86,10 @@ def test_diff_subcommand(tmp_path):
     g2.cypher("CREATE (:N {id: 1, s: 'done'}), (:N {id: 3})")
     g2.save(b)
     out = _run_args("diff", a, b)
-    assert "-1 | N_0 | s=todo" in out  # node 1 changed
-    assert "+1 | N_0 | s=done" in out
-    assert "-2 | N_1" in out  # node 2 removed
-    assert "+3 | N_1" in out  # node 3 added
+    assert "-1 | N_1 | s=todo" in out  # node 1 changed
+    assert "+1 | N_1 | s=done" in out
+    assert "-2 | N_2" in out  # node 2 removed
+    assert "+3 | N_3" in out  # node 3 added
 
 
 def test_query_subcommand_json(tmp_path):
@@ -294,7 +294,7 @@ def test_ready_set_subcommand(tmp_path):
         "json",
     )
     rows = json.loads(out)
-    assert rows == [{"dependency_count": 1, "id": "B", "title": "Task_1"}]
+    assert rows == [{"dependency_count": 1, "id": "B", "title": "Task_B"}]
 
 
 def test_describe_subcommand(tmp_path):
