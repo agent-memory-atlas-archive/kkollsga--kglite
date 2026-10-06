@@ -57,7 +57,7 @@ impl IdentityAliases {
             return Self::default();
         }
         Self {
-            id: graph.id_field_aliases.get(node_type).cloned(),
+            id: graph.id_alias_for_reads(node_type).map(str::to_string),
             title: graph.title_field_aliases.get(node_type).cloned(),
         }
     }

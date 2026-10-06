@@ -27,6 +27,11 @@ before upgrading.
   the title and lost the `title` value; now `n.title` and `n.name` read each.
   On a type with a declared title field, a different `title` value in the same
   pattern is refused, as a different `id` already is.
+- On a type loaded with `unique_id_field='title'`, `title` now names the
+  title on every route. `n.title`, `{title: …}`, `WHERE n.title`, `SET
+  n.title` and `CREATE`'s `title` key resolved to the id, while
+  `properties(n).title` answered the title. **Do:** read and match the id as
+  `n.id` or `{id: …}`.
 - The fluent `update()`, `add_properties()` and the `store_as=` writers
   (`calculate`, `count`, `unique_values`, `collect_children`) now judge the
   rows they leave against a validity-interval declaration, as a Cypher `SET`

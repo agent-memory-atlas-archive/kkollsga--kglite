@@ -1546,12 +1546,7 @@ impl<'a> PatternExecutor<'a> {
         if equality_props.len() == 1 {
             let (prop_name, value) = equality_props[0];
             let is_id_alias = prop_name.as_str() == "id"
-                || self
-                    .graph
-                    .id_field_aliases
-                    .get(node_type)
-                    .map(|alias| alias == prop_name.as_str())
-                    .unwrap_or(false);
+                || self.graph.id_alias_for_reads(node_type) == Some(prop_name.as_str());
             if is_id_alias {
                 if let Some(idx) = self.lookup_node_id(node_type, value) {
                     return Some(vec![idx]);

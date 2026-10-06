@@ -1446,10 +1446,8 @@ impl DirGraph {
         if self.id_field_aliases.is_empty() && self.title_field_aliases.is_empty() {
             return property;
         }
-        if let Some(alias) = self.id_field_aliases.get(node_type) {
-            if alias == property {
-                return "id";
-            }
+        if self.id_alias_for_reads(node_type) == Some(property) {
+            return "id";
         }
         if let Some(alias) = self.title_field_aliases.get(node_type) {
             if alias == property {
@@ -1457,6 +1455,21 @@ impl DirGraph {
             }
         }
         property
+    }
+
+    /// `node_type`'s id spelling as a property name addressed to a node resolves
+    /// it. A spelling of `title` (`add_nodes(df, 'P', 'title', 'name')`) routes
+    /// nothing to the id: `title` names the title field on every type, the
+    /// mirror of [`Self::declare_title_field_alias`] refusing a title spelling
+    /// of `id`. Resolving it to the id made `n.title` answer the id while
+    /// `properties(n).title` answered the title. The map still records the
+    /// spelling, because the re-declaration guard and exports name the frame's
+    /// own column with it.
+    pub(crate) fn id_alias_for_reads(&self, node_type: &str) -> Option<&str> {
+        self.id_field_aliases
+            .get(node_type)
+            .map(String::as_str)
+            .filter(|alias| *alias != "title")
     }
 
     /// Hold the disk materialization arenas for the lifetime of a direct

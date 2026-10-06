@@ -675,7 +675,7 @@ impl DirGraph {
             "title" if property == "title" => {
                 self.title_field_aliases.get(node_type).map(String::as_str)
             }
-            "id" if property == "id" => self.id_field_aliases.get(node_type).map(String::as_str),
+            "id" if property == "id" => self.id_alias_for_reads(node_type),
             // An alias spelling, whose values are filed under the canonical
             // identity field when the index was created that way round.
             "title" | "id" => Some(resolved),

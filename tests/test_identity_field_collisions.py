@@ -85,8 +85,8 @@ def test_add_nodes_warns_when_an_identity_column_is_shadowed(frame, id_field, ti
     [
         # `n.title` reads the `id` column, the title source.
         ({"pid": [10], "id": ["x"]}, "pid", "id", "MATCH (n:P) RETURN n.title AS v", "x"),
-        # `n.title` is the id's declared spelling, so it reads the `title` column.
-        ({"title": ["x"], "name": ["Nan"]}, "title", "name", "MATCH (n:P) RETURN n.title AS v", "x"),
+        # `n.id` reads the `title` column, the id source.
+        ({"title": ["x"], "name": ["Nan"]}, "title", "name", "MATCH (n:P) RETURN n.id AS v", "x"),
     ],
     ids=["id-column-is-the-title", "title-column-is-the-id"],
 )
@@ -101,3 +101,27 @@ def test_no_shadow_warning_for_the_column_the_other_identity_reads(frame, id_fie
     messages = [str(w.message) for w in caught if "not readable" in str(w.message)]
     assert messages == []
     assert _rows(graph, query) == [{"v": value}]
+
+
+def _graph(storage, tmp_path):
+    if storage == "disk":
+        return kglite.KnowledgeGraph(storage="disk", path=str(tmp_path / "g"))
+    if storage == "mapped":
+        return kglite.KnowledgeGraph(storage="mapped")
+    return kglite.KnowledgeGraph()
+
+
+@pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
+def test_title_reads_the_title_when_the_id_column_is_spelled_title(storage, tmp_path) -> None:
+    """`unique_id_field='title'` declares `title` as the id's spelling, but
+    `title` names the title field on every route: `n.title` answered the id
+    while `properties(n).title` answered the title."""
+    graph = _graph(storage, tmp_path)
+    graph.add_nodes(pd.DataFrame({"title": ["x"], "name": ["Nan"]}), "P", "title", "name")
+    read = "MATCH (n:P) RETURN n.id AS id, n.title AS t, properties(n).title AS pt, properties(n).id AS pid"
+    assert _rows(graph, read) == [{"id": "x", "t": "Nan", "pt": "Nan", "pid": "x"}]
+    assert _rows(graph, "MATCH (n:P {title: 'Nan'}) RETURN n.id AS id") == [{"id": "x"}]
+    assert _rows(graph, "MATCH (n:P) WHERE n.title = 'Nan' RETURN n.id AS id") == [{"id": "x"}]
+    assert _rows(graph, "MATCH (n:P {id: 'x'}) RETURN n.title AS t") == [{"t": "Nan"}]
+    graph.cypher("MATCH (n:P {id: 'x'}) SET n.title = 'Zed'")
+    assert _rows(graph, read) == [{"id": "x", "t": "Zed", "pt": "Zed", "pid": "x"}]
