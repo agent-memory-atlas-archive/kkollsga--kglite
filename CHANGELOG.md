@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.4] - 2026-10-06
+
 ### Breaking changes and migration
 
 - `kglite-mcp-server` now refuses `workspace.adopt_client_roots` at boot with

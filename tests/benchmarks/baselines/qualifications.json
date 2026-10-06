@@ -180,10 +180,16 @@
       "sha256": "130a62e3cb0f7180b9dfe4c452bcbbac0218d93e08e6044759102160530fa9c0",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "0_19_3_forked_cells.json with one cell renamed, measurements unchanged: test_bench_write_tx_after_deletes is now test_bench_commit_tx_after_deletes (a 'write' name component made the persistence-cell registry treat it as a persistence writer). Original evidence: 0_19_3.json plus two cells: the harness gained test_bench_write_tx_after_deletes and test_bench_scan_under_held_overlay_after_deletes (issue #195), and the exact-set CI legs need every harness cell in the reference. 2026-10-05 17:07 on Mac16,10 (M4, 16 GiB), load average 3.3-3.6 from concurrent sessions; two agreeing release runs of the phase-5 build (write_tx min 0.814/0.810 ms, scan min 9.221/9.360 ms; slower-of-two kept) against the published 0.13.2 wheel on the same interpreter (Python 3.14.3) at 38.07/37.00 ms and 11.03/10.70 ms; every other row is byte-identical to 0_19_3.json. Statistic: min.",
+    "0_19_4.json": {
+      "evidence": "Release capture 2026-10-06 12:37-12:46 on Mac16,10 (M4, 16 GiB), load average 2.7-4.8 (concurrent sessions). vs accepted 0_19_3_forked_cells_renamed.json, min statistic: no cell > +20% across 43; worst return_id_10k +6.2% and two_edge_relationship_text_filter[ENDS WITH] +6.6%; controls var_length_1_8 -1.8%, khop3_in_list -1.5%, khop3_unwind -2.7%; commit_tx_after_deletes -97.1% (issue #195). Repeat: make bench-check at load 4-10 against this capture OK, no regression > +20% across 43. bench-anchor OK, worst +7.6%.",
       "platform": "Darwin/arm64",
-      "sha256": "130a62e3cb0f7180b9dfe4c452bcbbac0218d93e08e6044759102160530fa9c0",
+      "sha256": "40d5b2b17daf372f51e394865fe4f5dce6f1a914b444ab929d669ced41f3f67d",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-06 12:37-12:46 on Mac16,10 (M4, 16 GiB), load average 2.7-4.8 (concurrent sessions). vs accepted 0_19_3_forked_cells_renamed.json, min statistic: no cell > +20% across 43; worst return_id_10k +6.2% and two_edge_relationship_text_filter[ENDS WITH] +6.6%; controls var_length_1_8 -1.8%, khop3_in_list -1.5%, khop3_unwind -2.7%; commit_tx_after_deletes -97.1% (issue #195). Repeat: make bench-check at load 4-10 against this capture OK, no regression > +20% across 43. bench-anchor OK, worst +7.6%.",
+      "platform": "Darwin/arm64",
+      "sha256": "40d5b2b17daf372f51e394865fe4f5dce6f1a914b444ab929d669ced41f3f67d",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -248,7 +254,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_3_forked_cells_renamed.json",
+    "Darwin/arm64": "0_19_4.json",
     "Linux/x86_64": "reference_0_19_3_forked_cells_renamed.linux.json"
   },
   "schema_version": 1

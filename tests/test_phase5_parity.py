@@ -97,7 +97,7 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (28_207_248, "0.19.3"),  # host release build
+    "darwin": (28_223_840, "0.19.4"),  # host release build
     "linux": (34_673_848, "0.19.3"),  # published manylinux2014 x86_64 wheel member
 }
 LINUX_SIZE_WHEEL = "kglite-0.19.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
@@ -614,6 +614,12 @@ def test_binary_size_regression():
         strict mode, the missing-endpoint policy, load-time data advisories,
         the stored valid-time default, valid_instant(), calendar date
         arithmetic, mask-based node counts and correlated lookup probes.
+
+      - 0.19.4:       28,223,840 bytes (≈26.9 MB), +16,592 (+0.06%) over
+        0.19.3: free-list slot allocation for the forked overlay, the
+        panic-safe fold, the heap-store append tail, Int64 widening of
+        unique-id columns, numeric WAL replay identity and valid-time
+        checks on every property writer.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
