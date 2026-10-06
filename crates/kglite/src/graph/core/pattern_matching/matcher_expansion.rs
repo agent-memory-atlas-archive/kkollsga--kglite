@@ -6,6 +6,7 @@
 //! inherent methods on `PatternExecutor`, so the split is a file boundary only.
 
 use super::*;
+use crate::graph::core::pattern_matching::anon_vlpath_name;
 use crate::graph::parallel::{self, ParallelInterrupt};
 
 /// How many matches one parallel job may hold unreported before it publishes
@@ -341,7 +342,7 @@ impl<'a> PatternExecutor<'a> {
             anonymous_path_var: (edge_pattern.variable.is_none()
                 && edge_pattern.needs_path_info
                 && edge_pattern.var_length.is_some())
-            .then(|| format!("__anon_vlpath_{element_index}")),
+            .then(|| anon_vlpath_name(element_index)),
             track_fixed_trail: edge_pattern.var_length.is_none() && edge_pattern.needs_path_info,
             is_last_hop,
             // Intermediate-hop overcommit: advisory, not a bound — a sparse

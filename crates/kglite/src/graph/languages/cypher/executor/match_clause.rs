@@ -6,7 +6,7 @@ use super::*;
 use crate::datatypes::values::Value;
 use crate::graph::core::pattern_matching::{
     EdgeDirection, EdgePattern, MatchBinding, NodePattern, Pattern, PatternElement, PatternMatch,
-    PropertyMatcher,
+    PropertyMatcher, ANON_VLPATH_PREFIX,
 };
 use crate::graph::core::relationship_property::edge_ref_property;
 use crate::graph::parallel::{self, ParallelInterrupt};
@@ -669,7 +669,7 @@ impl<'a> CypherExecutor<'a> {
                         "OPTIONAL MATCH",
                     )?;
                     let mut new_row = cur.clone();
-                    self.merge_match_into_row(&mut new_row, m);
+                    self.merge_match_into_row(&mut new_row, m, pi);
                     expanded.push(new_row);
                 }
             }
@@ -696,10 +696,13 @@ impl<'a> CypherExecutor<'a> {
         Ok(row_set)
     }
 
-    pub(super) fn merge_match_into_row(&self, row: &mut ResultRow, m: &PatternMatch) {
+    /// Merge `m`, the match of the pattern at `slot` of its clause, into `row`.
+    /// The pattern's internal path bindings are keyed by `slot` (see
+    /// [`path_binding::slot_key`]) so the clause's other patterns keep theirs.
+    pub(super) fn merge_match_into_row(&self, row: &mut ResultRow, m: &PatternMatch, slot: usize) {
         if let Some((source, path)) = m.exact_path.as_deref() {
             row.path_bindings.insert(
-                "__fixed_path".to_string(),
+                path_binding::slot_key(path_binding::FIXED_TRAIL, slot).into_owned(),
                 PathBinding {
                     relationship_list: false,
                     hop_incarnations: self.capture_path_incarnations(path),
@@ -733,8 +736,13 @@ impl<'a> CypherExecutor<'a> {
                 MatchBinding::VariableLengthPath {
                     source, hops, path, ..
                 } => {
+                    let key = if var.starts_with(ANON_VLPATH_PREFIX) {
+                        path_binding::slot_key(var, slot).into_owned()
+                    } else {
+                        var.clone()
+                    };
                     row.path_bindings.insert(
-                        var.clone(),
+                        key,
                         PathBinding {
                             relationship_list: true,
                             hop_incarnations: self.capture_path_incarnations(path),

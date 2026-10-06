@@ -21,6 +21,6 @@ pub mod pattern;
 pub use matcher::PatternExecutor;
 pub use parser::parse_pattern;
 pub use pattern::{
-    EdgeDirection, EdgePattern, MatchBinding, NodePattern, ParamLabel, PathHop, Pattern,
-    PatternElement, PatternMatch, PropertyMatcher,
+    anon_vlpath_name, EdgeDirection, EdgePattern, MatchBinding, NodePattern, ParamLabel, PathHop,
+    Pattern, PatternElement, PatternMatch, PropertyMatcher, ANON_VLPATH_PREFIX,
 };

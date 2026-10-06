@@ -649,6 +649,18 @@ pub enum MatchBinding {
     },
 }
 
+/// Prefix of the internal binding name an unnamed variable-length segment
+/// leaves on a match. It is not a user variable: a later pattern's segment
+/// of the same shape shares the name by design and must not be constrained
+/// by it.
+pub const ANON_VLPATH_PREFIX: &str = "__anon_vlpath_";
+
+/// Internal binding name of the unnamed variable-length segment that ends at
+/// the node at `element_index` of its pattern.
+pub fn anon_vlpath_name(element_index: usize) -> String {
+    format!("{ANON_VLPATH_PREFIX}{element_index}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,18 +6,35 @@
 //! `__fixed_path` trail (in pattern order), and each variable-length segment
 //! under its own binding — the relationship variable, or
 //! `__anon_vlpath_{i}` for an unnamed one (`i` being the element index of the
-//! node that follows the segment). A path is those pieces stitched back into
+//! node that follows the segment). A comma pattern after the first keeps its
+//! trail and segments under keys suffixed with its slot ([`slot_key`]). A path is those pieces stitched back into
 //! pattern order. The pieces are read by name, never by position: a row also
 //! holds the paths and segments of earlier clauses, and "the first path
 //! binding" was one of those whenever an earlier clause had bound one.
 
 use super::*;
 use crate::datatypes::values::RelationshipIncarnation;
-use crate::graph::core::pattern_matching::{EdgePattern, Pattern, PatternElement};
+use crate::graph::core::pattern_matching::{
+    anon_vlpath_name, EdgePattern, Pattern, PatternElement,
+};
 
 /// Row key of the fixed-hop trail the matcher records for a pattern's
 /// non-variable-length hops (see `match_clause::pattern_match_to_row`).
-const FIXED_TRAIL: &str = "__fixed_path";
+pub(super) const FIXED_TRAIL: &str = "__fixed_path";
+
+/// The row key an internal binding takes when it comes from the pattern at
+/// `slot` of its MATCH clause. Slot 0 keeps the bare name, so a clause's
+/// leading pattern and every single-pattern clause are unchanged; a later
+/// comma pattern gets its own key, because `px = ..., py = ...` would
+/// otherwise have the second pattern's trail and segments overwrite the first's
+/// before either path is assembled.
+pub(super) fn slot_key(name: &str, slot: usize) -> std::borrow::Cow<'_, str> {
+    if slot == 0 {
+        std::borrow::Cow::Borrowed(name)
+    } else {
+        std::borrow::Cow::Owned(format!("{name}@{slot}"))
+    }
+}
 
 impl<'a> CypherExecutor<'a> {
     /// Whether `pred` may read one of `clause`'s path variables, so the
@@ -54,7 +71,7 @@ impl<'a> CypherExecutor<'a> {
             let Some(pattern) = clause.patterns.get(pa.pattern_index) else {
                 continue;
             };
-            if let Some(path) = self.assemble_pattern_path(pattern, row) {
+            if let Some(path) = self.assemble_pattern_path(pattern, pa.pattern_index, row) {
                 row.path_bindings.insert(pa.variable.clone(), path);
             }
         }
@@ -76,6 +93,7 @@ impl<'a> CypherExecutor<'a> {
     pub(super) fn assemble_pattern_path(
         &self,
         pattern: &Pattern,
+        slot: usize,
         row: &ResultRow,
     ) -> Option<PathBinding> {
         let (mut fixed_edges, mut var_length_edges) = (0usize, 0usize);
@@ -92,7 +110,7 @@ impl<'a> CypherExecutor<'a> {
         // pattern's fixed hops; otherwise it is an earlier clause's.
         let fixed_trail = row
             .path_bindings
-            .get(FIXED_TRAIL)
+            .get(slot_key(FIXED_TRAIL, slot).as_ref())
             .filter(|trail| fixed_edges > 0 && trail.hops == fixed_edges);
         if var_length_edges == 0 {
             // No trail (e.g. a zero-length path): rebuild from the bindings.
@@ -110,12 +128,15 @@ impl<'a> CypherExecutor<'a> {
                     PatternElement::Node(_) => None,
                 })?;
             // The segment reads as a relationship list; the path over it does not.
-            return var_length_segment(ep, index, row).map(|segment| PathBinding {
+            return var_length_segment(ep, index, slot, row).map(|segment| PathBinding {
                 relationship_list: false,
                 ..segment.clone()
             });
         }
-        stitch_path(pattern, fixed_trail?, row)
+        if fixed_edges > 0 && fixed_trail.is_none() {
+            return None;
+        }
+        stitch_path(pattern, fixed_trail, slot, row)
     }
 }
 
@@ -123,34 +144,37 @@ impl<'a> CypherExecutor<'a> {
 fn var_length_segment<'r>(
     ep: &EdgePattern,
     element_index: usize,
+    slot: usize,
     row: &'r ResultRow,
 ) -> Option<&'r PathBinding> {
     match ep.variable.as_deref() {
         Some(name) => row.path_bindings.get(name),
         None => row
             .path_bindings
-            .get(&format!("__anon_vlpath_{}", element_index + 1)),
+            .get(slot_key(&anon_vlpath_name(element_index + 1), slot).as_ref()),
     }
 }
 
 /// A pattern mixing fixed hops and variable-length segments: take the fixed
 /// hops off `fixed_trail` in order and splice each segment in where it sits.
+/// A pattern with no fixed hop has no trail, and needs none.
 fn stitch_path(
     pattern: &Pattern,
-    fixed_trail: &PathBinding,
+    fixed_trail: Option<&PathBinding>,
+    slot: usize,
     row: &ResultRow,
 ) -> Option<PathBinding> {
     let mut source = None;
     let mut path = Vec::new();
     let mut tokens: Vec<Option<RelationshipIncarnation>> = Vec::new();
-    let mut tracked = fixed_trail.hop_incarnations.is_some();
+    let mut tracked = fixed_trail.is_some_and(|trail| trail.hop_incarnations.is_some());
     let mut fixed_pos = 0usize;
     for (index, element) in pattern.elements.iter().enumerate() {
         let PatternElement::Edge(ep) = element else {
             continue;
         };
         if ep.var_length.is_some() {
-            let segment = var_length_segment(ep, index, row)?;
+            let segment = var_length_segment(ep, index, slot, row)?;
             source.get_or_insert(segment.source);
             tracked |= segment.hop_incarnations.is_some();
             for hop_index in 0..segment.path.len() {
@@ -158,6 +182,7 @@ fn stitch_path(
             }
             path.extend_from_slice(&segment.path);
         } else {
+            let fixed_trail = fixed_trail?;
             source.get_or_insert(fixed_trail.source);
             path.push(*fixed_trail.path.get(fixed_pos)?);
             tokens.push(fixed_trail.hop_incarnation(fixed_pos));

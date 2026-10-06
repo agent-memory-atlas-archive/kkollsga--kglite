@@ -575,7 +575,7 @@ impl<'a> CypherExecutor<'a> {
                             join_work = join_work.saturating_add(1);
                             if i + 1 == total {
                                 // Last compatible match: move row instead of cloning
-                                self.merge_match_into_row(&mut existing_row, m);
+                                self.merge_match_into_row(&mut existing_row, m, pi);
                                 self.budget.reserve_rows(new_rows.len(), 1, "MATCH join")?;
                                 new_rows.push(existing_row);
                                 if enforce_rel_uniqueness {
@@ -584,7 +584,7 @@ impl<'a> CypherExecutor<'a> {
                                 break;
                             }
                             let mut new_row = existing_row.clone();
-                            self.merge_match_into_row(&mut new_row, m);
+                            self.merge_match_into_row(&mut new_row, m, pi);
                             self.budget.reserve_rows(new_rows.len(), 1, "MATCH join")?;
                             new_rows.push(new_row);
                             if enforce_rel_uniqueness {
@@ -913,7 +913,7 @@ impl<'a> CypherExecutor<'a> {
                         }
                     }
                     let mut nr = cur.clone();
-                    self.merge_match_into_row(&mut nr, m);
+                    self.merge_match_into_row(&mut nr, m, pi);
                     self.budget.reserve_rows(expanded.len(), 1, "MATCH join")?;
                     expanded.push(nr);
                 }

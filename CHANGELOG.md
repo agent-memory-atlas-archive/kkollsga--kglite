@@ -9,6 +9,20 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- A query with two variable-length patterns now matches both. Since 0.18.1
+  the second pattern returned only its zero-hop row, or nothing for `*1..`,
+  in separate `MATCH` clauses, one comma-separated `MATCH`, after `WITH`, and
+  in `OPTIONAL MATCH`, `EXISTS`, `COUNT { }` and pattern comprehensions. The
+  common-ancestor query `MATCH px=(x)-[*0..20]->(c) MATCH py=(y)-[*0..20]->(c)`
+  answered `[]`.
+- A path variable on a comma-separated pattern now holds that pattern's own
+  path. `MATCH px=(a)-[*1..20]->(c), (b)-[*1..20]->(d)` bound `px` to the
+  second pattern's path, so `length(px)` was wrong (seen as far back as
+  0.18.0). A path through two variable-length segments,
+  `p=(a)-[*]->(b)-[*]->(c)`, returned null.
+
 ## [0.19.4] - 2026-10-06
 
 ### Breaking changes and migration

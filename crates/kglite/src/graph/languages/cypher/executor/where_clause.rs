@@ -3,7 +3,7 @@ use super::*;
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::vector as vs;
 use crate::graph::core::membership::{self, MembershipSet};
-use crate::graph::core::pattern_matching::{MatchBinding, PatternMatch};
+use crate::graph::core::pattern_matching::{MatchBinding, PatternMatch, ANON_VLPATH_PREFIX};
 use crate::graph::storage::GraphRead;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,6 +11,11 @@ use std::sync::Arc;
 impl<'a> CypherExecutor<'a> {
     pub(super) fn bindings_compatible(&self, row: &ResultRow, m: &PatternMatch) -> bool {
         for (var, binding) in &m.bindings {
+            // Internal names are shared by every unnamed segment of the same
+            // shape; only a name the user wrote can pin a later pattern.
+            if var.starts_with(ANON_VLPATH_PREFIX) {
+                continue;
+            }
             if let Some(&existing_idx) = row.node_bindings.get(var) {
                 match binding {
                     MatchBinding::Node { index, .. } | MatchBinding::NodeRef(index) => {
@@ -223,7 +228,7 @@ impl<'a> CypherExecutor<'a> {
                         next_sets.push(next);
                     }
                     let mut merged = current.clone();
-                    self.merge_match_into_row(&mut merged, m);
+                    self.merge_match_into_row(&mut merged, m, 0);
                     next_rows.push(merged);
                 }
             }

@@ -3691,6 +3691,32 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (a:N {id: 1})-[:R*0..2]->(b:N) RETURN DISTINCT b.id AS i",
         None,
     ),
+    # A second variable-length segment in the same query: both unnamed
+    # segments left one internal binding name and the join read the second's
+    # as a conflict with the first's, so each query returned only its
+    # zero-hop rows. Shared by the optimizer and the executor, so the two
+    # sides agree on the wrong answer — the absolute values live in
+    # test_cypher_var_length_multi.py; the entries document the shapes.
+    (
+        "var_length_two_segments_common_target",
+        "var_length_diamond_graph",
+        "MATCH (a:N {id: 1})-[:R*1..3]->(c:N) MATCH (b:N {id: 3})-[:R*1..3]->(c) RETURN c.id AS c ORDER BY c",
+        None,
+    ),
+    (
+        "var_length_two_segments_cross_join",
+        "var_length_diamond_graph",
+        "MATCH (a:N {id: 1})-[:R*1..2]->(c) MATCH (b:N {id: 2})-[:R*1..2]->(d) "
+        "RETURN c.id AS c, d.id AS d ORDER BY c, d",
+        None,
+    ),
+    (
+        "var_length_two_segments_one_clause_with_paths",
+        "var_length_diamond_graph",
+        "MATCH p=(a:N {id: 1})-[:R*1..2]->(c), (b:N {id: 2})-[:R*1..2]->(d) "
+        "RETURN c.id AS c, d.id AS d, length(p) AS n ORDER BY c, d",
+        None,
+    ),
     (
         "var_length_second_clause_plain_projection",
         "var_length_diamond_graph",

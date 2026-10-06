@@ -190,7 +190,7 @@ impl<'a> CypherExecutor<'a> {
             self.check_interrupt_periodic(index)?;
             if let Some(name) = path_variable {
                 let path = self
-                    .assemble_pattern_path(pattern, joined)
+                    .assemble_pattern_path(pattern, 0, joined)
                     .ok_or("internal error: a pattern comprehension match has no path")?;
                 joined.path_bindings.insert(name.to_string(), path);
             }
@@ -342,7 +342,7 @@ impl<'a> CypherExecutor<'a> {
                     next_edge_sets.push(next);
                 }
                 let mut merged = current.clone();
-                self.merge_match_into_row(&mut merged, matched);
+                self.merge_match_into_row(&mut merged, matched, 0);
                 self.budget
                     .reserve_rows(next_rows.len(), 1, "COUNT subquery join")?;
                 next_rows.push(merged);
