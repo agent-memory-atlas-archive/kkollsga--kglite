@@ -125,17 +125,31 @@ pub(super) fn snapshot_node_titles(
 /// The column a node load takes its titles from, and whether those titles
 /// overwrite an existing node's on update.
 ///
-/// An explicit `node_title_field` wins. Without one, a frame carrying a
-/// `title` column titles its nodes from it: falling back to the id column
-/// there stored the `title` values as a property every read shadows with the
-/// id, so `n.title` answered the id and the column was silently lost.
+/// An explicit `node_title_field` wins. Without one, a type that already
+/// declares a title field keeps it: the frame's `title` column is an ordinary
+/// property there (reported by [`shadowed_identity_columns`]), and a frame
+/// without the declared column titles new nodes by id and leaves existing
+/// titles alone — titles never come from an undeclared column. Rebinding to
+/// `title` made `n.title` and the declared spelling answer the `title` values
+/// while `properties(n)` still held the declared column's.
+///
+/// On an undeclared type, a frame carrying a `title` column titles its nodes
+/// from it: falling back to the id column there stored the `title` values as a
+/// property every read shadows with the id, so `n.title` answered the id and
+/// the column was silently lost.
 pub(super) fn resolve_node_title_field(
+    graph: &DirGraph,
     frame: &DataFrame,
+    node_type: &str,
     unique_id_field: &str,
     node_title_field: Option<String>,
 ) -> (String, bool) {
-    match node_title_field {
-        Some(field) => (field, true),
+    if let Some(field) = node_title_field {
+        return (field, true);
+    }
+    match graph.title_field_aliases.get(node_type) {
+        Some(declared) if frame.get_column_index(declared).is_some() => (declared.clone(), true),
+        Some(_) => (unique_id_field.to_string(), false),
         None if unique_id_field != "title" && frame.get_column_index("title").is_some() => {
             ("title".to_string(), true)
         }
@@ -150,12 +164,18 @@ pub(super) fn resolve_node_title_field(
 /// column spelled `id` or `title` beside a different `unique_id_field` /
 /// title column is stored but answers nowhere — a silent loss the caller
 /// should hear about.
+///
+/// On a type with a declared title field, the advice differs: passing
+/// `node_title_field='title'` would not move the declared spelling, so the
+/// column is named as the ordinary property it is stored as.
 pub(super) fn shadowed_identity_columns(
+    graph: &DirGraph,
     frame: &DataFrame,
     node_type: &str,
     unique_id_field: &str,
     title_field: &str,
 ) -> Vec<Diagnostic> {
+    let declared_title = graph.title_field_aliases.get(node_type).map(String::as_str);
     [
         ("id", unique_id_field, "unique_id_field"),
         ("title", title_field, "node_title_field"),
@@ -163,15 +183,26 @@ pub(super) fn shadowed_identity_columns(
     .into_iter()
     .filter(|(field, source, _)| source != field && frame.get_column_index(field).is_some())
     .map(|(field, source, parameter)| {
-        Diagnostic::new(
-            DiagnosticGroup::DataShape,
-            "identity_column_shadowed",
+        let message = if field == "title" && declared_title.is_some() {
+            let declared = declared_title.unwrap_or_default();
+            format!(
+                "add_nodes: node type '{node_type}' declares '{declared}' as its title \
+                 field, so its 'title' column is not readable — it is stored as an \
+                 ordinary property, and n.title answers with the '{source}' value. \
+                 Rename the 'title' column to keep it readable."
+            )
+        } else {
             format!(
                 "add_nodes: node type '{node_type}' takes its {field} from column \
                  '{source}', so its '{field}' column is not readable — n.{field} answers \
                  with the '{source}' value. Rename the '{field}' column, or pass \
                  {parameter}='{field}'."
-            ),
+            )
+        };
+        Diagnostic::new(
+            DiagnosticGroup::DataShape,
+            "identity_column_shadowed",
+            message,
         )
     })
     .collect()

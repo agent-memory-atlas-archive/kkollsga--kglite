@@ -18,7 +18,9 @@ before upgrading.
   remove the key and set `workspace.root`; switch roots with `set_root_dir`.
 - `add_nodes` without `node_title_field` now titles nodes from the frame's
   `title` column when it has one. It used the id column, so `n.title`
-  answered the id and the `title` values were unreadable. **Do:** pass
+  answered the id and the `title` values were unreadable. A type that already
+  declares a title field keeps it: the `title` column is stored as an ordinary
+  property, with a `UserWarning`. **Do:** pass
   `node_title_field=unique_id_field` to keep id titles.
 - `CREATE` and `MERGE` on a type with no declared title field now take the
   title from `title` before `name`. A pattern carrying both kept `name` as

@@ -887,8 +887,13 @@ pub fn add_nodes(
     )?;
     let conflict_mode = parse_conflict_mode(conflict_handling.as_deref())?;
 
-    let (title_field, should_update_title) =
-        resolve_node_title_field(&df_data, &unique_id_field, node_title_field);
+    let (title_field, should_update_title) = resolve_node_title_field(
+        graph,
+        &df_data,
+        &node_type,
+        &unique_id_field,
+        node_title_field,
+    );
     check_data_validity(&df_data, &unique_id_field)?;
 
     let mut errors = Vec::new();
@@ -1048,20 +1053,16 @@ pub fn add_nodes(
 
     graph.stamp_ontology_closure_on_tail(&node_type, stats.creates);
 
-    let elapsed_ms = metrics.processing_time * 1000.0;
-
     let mut report = NodeOperationReport::new(
         "add_nodes".to_string(),
         stats.creates,
         stats.updates,
         skipped_count,
-        elapsed_ms,
-    );
-
-    if !errors.is_empty() {
-        report = report.with_errors(errors);
-    }
-    let shadowed = shadowed_identity_columns(&df_data, &node_type, &unique_id_field, &title_field);
+        metrics.processing_time * 1000.0,
+    )
+    .with_errors(errors);
+    let shadowed =
+        shadowed_identity_columns(graph, &df_data, &node_type, &unique_id_field, &title_field);
     report.warn_all(empty_intervals.diagnostic().into_iter().chain(shadowed));
     graph.bump_version();
     Ok(report)
