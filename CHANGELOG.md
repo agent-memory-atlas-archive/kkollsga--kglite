@@ -49,6 +49,13 @@ before upgrading.
   ("Unexpected token in MATCH pattern: ="); only the first pattern could be
   named. `shortestPath()` still applies to a clause's first pattern only, and
   now says so on a later one.
+- A create/delete steady state no longer grows memory without bound on
+  memory-mode graphs served through a `Session` (Bolt server, MCP server, C
+  ABI). A delete kept the deleted node's column row, so `MATCH (n) DETACH
+  DELETE n` plus a re-create leaked about 60 bytes per node: 7 to 98 MiB over
+  1,500 cycles of 1,000 nodes. Each commit now rebuilds the column stores once
+  dead rows pass the `auto_vacuum_threshold` ratio (default 0.3, floor 100
+  rows). No node index changes, so indexes and labels stay valid.
 
 ## [0.19.4] - 2026-10-06
 

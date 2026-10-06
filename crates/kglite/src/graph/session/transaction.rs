@@ -254,6 +254,7 @@ impl Session {
         if working.version() == current_version {
             return Ok(value);
         }
+        working.compact_columns_if_fragmented();
         working.set_version(current_version + 1);
         // The commit boundary: publish the fork's captured changes. An error
         // above dropped the fork with its buffer, so nothing it wrote is.
@@ -345,6 +346,11 @@ impl Session {
         let Some(mut working) = working_opt else {
             return CommitOutcome::NoWritesNoOp;
         };
+
+        // Before the lock: the rebuild is O(live rows) and needs no view of the
+        // published graph. Rows are renumbered silently, so the captured WAL
+        // ops below are unaffected.
+        working.compact_columns_if_fragmented();
 
         // Hold ONE lock guard across both the OCC check and the Arc swap so
         // check-and-swap is atomic. Reading the version via `self.version()`

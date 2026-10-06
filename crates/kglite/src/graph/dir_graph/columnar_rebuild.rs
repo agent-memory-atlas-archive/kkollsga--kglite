@@ -334,7 +334,10 @@ impl DirGraph {
             if arc_stores.contains_key(node_type) {
                 for (row_id, &idx) in type_row_owners.iter().enumerate() {
                     let row_id = row_id as u32;
-                    if let Some(node) = self.graph.node_weight_mut(idx) {
+                    // Silent: re-pointing a node at its renumbered row changes no
+                    // logical state, and a recording backend would otherwise log
+                    // every live node as an update.
+                    if let Some(node) = self.graph.node_weight_mut_silent(idx) {
                         node.properties = PropertyStorage::Columnar(ColumnarRow::new(row_id));
                         // id/title were pushed into the store's reserved
                         // __id__/__title__ columns in the first pass, so the
