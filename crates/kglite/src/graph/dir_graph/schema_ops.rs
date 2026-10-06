@@ -57,7 +57,9 @@ impl DirGraph {
     /// Whether an `incoming` Int64 value of `node_type.key`, recorded
     /// `Float64`, lands in a stored float column — which converts an integer
     /// it can hold exactly (`TypedColumn::push`), so the record stays the
-    /// float one.
+    /// float one. A heap tail holds the column of a key first written to its
+    /// rows; the base part and the tail fold into one column, so either part
+    /// holding a float column decides.
     pub(crate) fn float_column_absorbs_int(
         &self,
         node_type: &str,
@@ -70,10 +72,8 @@ impl DirGraph {
             && TypedColumn::canonical_type_str(incoming) == Some("int64")
             && self.column_store(node_type).is_some_and(|store| {
                 store
-                    .schema()
-                    .slot(InternedKey::from_str(key))
-                    .and_then(|slot| store.column_type_str(slot as usize))
-                    == Some("float64")
+                    .key_column_types(InternedKey::from_str(key))
+                    .any(|kind| kind == "float64")
             })
     }
 

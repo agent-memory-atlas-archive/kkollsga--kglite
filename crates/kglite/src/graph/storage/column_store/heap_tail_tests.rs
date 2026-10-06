@@ -195,3 +195,224 @@ fn a_held_reader_keeps_the_tail_until_it_drops_and_a_save_holds_every_row() {
     assert!(!heap_tail(&compacted));
     assert_reads(&compacted, &[id, id + 1]);
 }
+
+fn commit(session: &Session, query: &str) {
+    let mut tx = session.begin();
+    execute(tx.working_mut().unwrap(), query).unwrap();
+    assert!(matches!(
+        session.commit(tx, true),
+        CommitOutcome::Committed { .. }
+    ));
+}
+
+fn recorded(graph: &DirGraph, key: &str) -> Option<&'static str> {
+    let kind = graph.get_node_type_metadata("Item")?.get(key)?;
+    super::TypedColumn::canonical_type_str(kind)
+}
+
+/// `(live, saved and loaded, after the fold)` record of `w`.
+fn record_after(
+    session: &Session,
+    holder: Option<std::sync::Arc<DirGraph>>,
+) -> [Option<&'static str>; 3] {
+    let published = session.snapshot();
+    assert_eq!(heap_tail(&published), holder.is_some());
+    let live = recorded(&published, "w");
+    let mut bytes = Vec::new();
+    crate::graph::io::file::write_kgl_to(&published, &mut bytes).unwrap();
+    let loaded = recorded(
+        &crate::graph::io::file::load_kgl_bytes(&bytes).unwrap(),
+        "w",
+    );
+    drop((holder, published));
+    commit(session, &create(i64::from(ROWS) + 9));
+    let folded = session.snapshot();
+    assert!(!heap_tail(&folded));
+    [live, loaded, recorded(&folded, "w")]
+}
+
+/// A key first written to tail rows has its column only in the tail. An
+/// integer written after a float lands in that float column, so the type
+/// record stays `Float64` — as it does on the store without a tail.
+#[test]
+fn a_tail_only_float_key_keeps_its_float_record_after_an_integer() {
+    let id = i64::from(ROWS);
+    let run = |hold: bool| {
+        let session = seed();
+        let holder = hold.then(|| session.snapshot());
+        commit(&session, &create(id));
+        commit(&session, &create(id + 1));
+        commit(
+            &session,
+            &format!("MATCH (n:Item {{id: {id}}}) SET n.w = 1.5"),
+        );
+        commit(
+            &session,
+            &format!("MATCH (n:Item {{id: {}}}) SET n.w = 2", id + 1),
+        );
+        record_after(&session, holder)
+    };
+    let control = run(false);
+    assert_eq!(control, [Some("float64"); 3]);
+    assert_eq!(run(true), control);
+}
+
+/// The `add_nodes` route to the same record: a frame bringing the float, then
+/// one bringing an integer, both landing in the tail.
+#[test]
+fn add_nodes_into_a_tail_keeps_the_float_record_after_an_integer() {
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    let frame = |id: i64, w: Option<f64>, int_w: Option<i64>| {
+        let mut df = DataFrame::new(Vec::new());
+        df.add_column(
+            "id".into(),
+            ColumnType::Int64,
+            ColumnData::Int64(vec![Some(id)]),
+        )
+        .unwrap();
+        match (w, int_w) {
+            (Some(w), _) => df
+                .add_column(
+                    "w".into(),
+                    ColumnType::Float64,
+                    ColumnData::Float64(vec![Some(w)]),
+                )
+                .unwrap(),
+            (_, w) => df
+                .add_column("w".into(), ColumnType::Int64, ColumnData::Int64(vec![w]))
+                .unwrap(),
+        }
+        df
+    };
+    let id = i64::from(ROWS);
+    let run = |hold: bool| {
+        let session = seed();
+        let holder = hold.then(|| session.snapshot());
+        for df in [frame(id, Some(1.5), None), frame(id + 1, None, Some(2))] {
+            let mut tx = session.begin();
+            crate::graph::mutation::maintain::add_nodes(
+                tx.working_mut().unwrap(),
+                df,
+                "Item".into(),
+                "id".into(),
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(matches!(
+                session.commit(tx, true),
+                CommitOutcome::Committed { .. }
+            ));
+        }
+        record_after(&session, holder)
+    };
+    let control = run(false);
+    assert_eq!(control, [Some("float64"); 3]);
+    assert_eq!(run(true), control);
+}
+
+/// A heap tail's id column widens on its own: an `Int64` id past `u32` in a
+/// tail of a compact-id type. The store's id kind is the kind its folded
+/// column will have (`Int64`), not the base part's — an external writer
+/// opens its id column from it.
+#[test]
+fn a_widened_tail_id_column_reports_the_folded_kind() {
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    let mut graph = DirGraph::new();
+    let mut df = DataFrame::new(Vec::new());
+    df.add_column(
+        "id".into(),
+        ColumnType::UniqueId,
+        ColumnData::UniqueId((0..ROWS).map(Some).collect()),
+    )
+    .unwrap();
+    crate::graph::mutation::maintain::add_nodes(
+        &mut graph,
+        df,
+        "Item".into(),
+        "id".into(),
+        None,
+        None,
+    )
+    .unwrap();
+    let session = Session::new(graph);
+    let kind = |graph: &DirGraph| graph.column_store("Item").unwrap().id_type_str();
+    assert_eq!(kind(&session.snapshot()), Some("uniqueid"));
+    let holder = session.snapshot();
+    commit(&session, "CREATE (:Item {id: 1099511627776})");
+    let published = session.snapshot();
+    assert!(heap_tail(&published));
+    assert_eq!(kind(&published), Some("int64"));
+    drop((holder, published));
+    commit(&session, "CREATE (:Item {id: 1099511627777})");
+    let folded = session.snapshot();
+    assert!(!heap_tail(&folded));
+    assert_eq!(kind(&folded), Some("int64"));
+}
+
+/// `add_nodes` under a held reader on a large type appends into a tail: no
+/// shared column is copied, the rows and a column only they carry read back,
+/// and the fold after the reader lets go leaves no tail.
+#[test]
+fn add_nodes_under_a_held_reader_copies_no_column() {
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    let session = seed();
+    let holder = session.snapshot();
+    let ids: Vec<i64> = (0..3).map(|i| i64::from(ROWS) + i).collect();
+    let mut df = DataFrame::new(Vec::new());
+    df.add_column(
+        "id".into(),
+        ColumnType::Int64,
+        ColumnData::Int64(ids.iter().copied().map(Some).collect()),
+    )
+    .unwrap();
+    df.add_column(
+        "title".into(),
+        ColumnType::String,
+        ColumnData::String(ids.iter().map(|id| Some(format!("t{id}"))).collect()),
+    )
+    .unwrap();
+    df.add_column(
+        "fresh".into(),
+        ColumnType::Int64,
+        ColumnData::Int64(ids.iter().map(|id| Some(id * 10)).collect()),
+    )
+    .unwrap();
+    let mut tx = session.begin();
+    reset_column_clones();
+    crate::graph::mutation::maintain::add_nodes(
+        tx.working_mut().unwrap(),
+        df,
+        "Item".into(),
+        "id".into(),
+        Some("title".into()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(column_clones(), 0, "add_nodes copied a shared column");
+    assert!(heap_tail(tx.working_mut().unwrap()));
+    assert!(matches!(
+        session.commit(tx, true),
+        CommitOutcome::Committed { .. }
+    ));
+    let read = |graph: &DirGraph| {
+        (
+            one(graph, "MATCH (n:Item) RETURN count(n)"),
+            one(
+                graph,
+                "MATCH (n:Item) WHERE n.fresh IS NOT NULL RETURN collect(n.fresh)",
+            ),
+        )
+    };
+    let expected = (
+        Value::Int64(i64::from(ROWS) + 3),
+        Value::List(ids.iter().map(|id| Value::Int64(id * 10)).collect()),
+    );
+    assert_eq!(read(&session.snapshot()), expected);
+    drop(holder);
+    commit(&session, "MATCH (n:Item {id: 0}) SET n.score = 1");
+    let folded = session.snapshot();
+    assert!(!folded.graph.is_forked());
+    assert!(!heap_tail(&folded));
+    assert_eq!(read(&folded), expected);
+}

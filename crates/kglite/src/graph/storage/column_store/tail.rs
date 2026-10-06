@@ -49,6 +49,24 @@ use std::sync::Arc;
 /// the store's reads through a tail.
 pub(crate) const HEAP_TAIL_MIN_ROWS: u32 = 16_384;
 
+/// The kind of an identity column whose base part has kind `base` and whose
+/// tail has kind `tail`, as one column holding both parts' values would have
+/// it: a `UniqueId` part beside an `Int64` part widens to `Int64`
+/// (`TypedColumn::widened_for`), any other difference is `Mixed`. A part with
+/// no column (no rows yet, or no tail) contributes nothing.
+pub(super) fn whole_column_kind(
+    base: Option<&'static str>,
+    tail: Option<&'static str>,
+) -> Option<&'static str> {
+    match (base, tail) {
+        (Some(base), Some(tail)) if base != tail => Some(match (base, tail) {
+            ("uniqueid", "int64") | ("int64", "uniqueid") => "int64",
+            _ => "mixed",
+        }),
+        (base, tail) => base.or(tail),
+    }
+}
+
 /// Whether an append may start a heap tail. A clone starts `Off`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum AppendTail {
@@ -416,6 +434,27 @@ impl ColumnStore {
 
     /// Whether this is a heap store with a tail ([`Self::fold_heap_tail`]).
     #[inline]
+    /// The type tag of `key`'s column in each part of the store that has
+    /// one: the base part (its own column, else its mmap base) and the tail.
+    /// A key first written while a tail exists may live only in the tail.
+    pub(crate) fn key_column_types(
+        &self,
+        key: InternedKey,
+    ) -> impl Iterator<Item = &'static str> + '_ {
+        let own = |store: &ColumnStore| {
+            store
+                .schema
+                .slot(key)
+                .and_then(|slot| store.column_type_str(slot as usize))
+        };
+        let base = own(self).or_else(|| {
+            self.mmap_store
+                .as_ref()
+                .and_then(|base| base.column_kind(key))
+        });
+        base.into_iter().chain(self.tail.as_deref().and_then(own))
+    }
+
     pub(crate) fn has_heap_tail(&self) -> bool {
         self.mmap_store.is_none() && self.tail.is_some()
     }

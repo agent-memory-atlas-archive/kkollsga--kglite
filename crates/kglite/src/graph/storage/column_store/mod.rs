@@ -605,15 +605,11 @@ impl ColumnStore {
     /// (`save_subset_streaming_disk`'s TypeWriter) use this to open a
     /// matching column file format on the dest side.
     pub fn id_type_str(&self) -> Option<&'static str> {
-        if let Some(ref ms) = self.mmap_store {
-            let base = ms.id_kind();
-            // A tail whose ids are another kind makes the whole column mixed.
-            return Some(match self.tail.as_ref().and_then(|t| t.id_type_str()) {
-                Some(tail) if tail != base => "mixed",
-                _ => base,
-            });
-        }
-        self.id_column.as_ref().map(|c| c.type_tag())
+        let base = match self.mmap_store {
+            Some(ref ms) => Some(ms.id_kind()),
+            None => self.id_column.as_ref().map(|c| c.type_tag()),
+        };
+        tail::whole_column_kind(base, self.tail.as_ref().and_then(|t| t.id_type_str()))
     }
 
     /// Type tag of the title column, read where [`Self::get_title`] reads it: the
@@ -625,10 +621,7 @@ impl ColumnStore {
             Some(column) => Some(column.type_tag()),
             None => self.mmap_store.as_ref().map(|ms| ms.title_kind()),
         };
-        match (base, self.tail.as_ref().and_then(|t| t.title_type_str())) {
-            (Some(base), Some(tail)) if tail != base => Some("mixed"),
-            (base, _) => base,
-        }
+        tail::whole_column_kind(base, self.tail.as_ref().and_then(|t| t.title_type_str()))
     }
 
     /// Number of rows (including tombstoned), the tail's among them.
