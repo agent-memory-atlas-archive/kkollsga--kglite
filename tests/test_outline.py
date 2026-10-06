@@ -224,20 +224,23 @@ def test_outline_distinguishes_python_equal_ids_by_value_type():
     assert kglite.outline(g, 0, "DEP", root_type="R") == ("- Root\n  - Integer\n  - Float\n  - Boolean")
 
 
-def test_outline_distinguishes_unique_and_explicit_integer_ids():
+def test_outline_keeps_an_auto_id_and_an_equal_explicit_id_apart():
+    # The auto id is minted as a compact integer and the explicit one is an
+    # Int64; one id column stores both as Int64, so the token tells them apart.
     g = _unique_and_int_id_children()
     rows = g.cypher(
         "CALL outline({root: 'root', root_type: 'R', edge: 'DEP'}) "
-        "YIELD node, depth, node_id_type "
+        "YIELD node, depth, node_id_type, node_token "
         "WHERE depth = 1 "
-        "RETURN node.id AS id, node.title AS title, node_id_type "
-        "ORDER BY node_id_type"
+        "RETURN node.id AS id, node.title AS title, node_id_type, node_token "
+        "ORDER BY title"
     ).to_dicts()
-    assert rows == [
+    assert [{k: row[k] for k in ("id", "title", "node_id_type")} for row in rows] == [
+        {"id": 1, "title": "Auto", "node_id_type": "Int64"},
         {"id": 1, "title": "Explicit", "node_id_type": "Int64"},
-        {"id": 1, "title": "Auto", "node_id_type": "UniqueId"},
     ]
-    assert kglite.outline(g, "root", "DEP", root_type="R") == ("- Root\n  - Explicit\n  - Auto")
+    assert rows[0]["node_token"] != rows[1]["node_token"]
+    assert kglite.outline(g, "root", "DEP", root_type="R") == ("- Root\n  - Auto\n  - Explicit")
 
 
 def _bound_renderer_visits(monkeypatch, limit=10):

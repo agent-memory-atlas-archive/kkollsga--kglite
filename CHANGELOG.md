@@ -41,8 +41,10 @@ before upgrading.
   its column also holds an `Int64`, as when a `CREATE` writes into a type
   `add_nodes` loaded. The column used to turn into an untyped heap column
   instead, which cannot spill to disk. Python, Bolt and the C ABI return both
-  variants as the same integer, so they see no change. **Do:** match both
-  variants, or compare the number.
+  variants as the same integer. The one exception is the `node_id_type` and
+  `parent_id_type` columns of `CALL outline`, which name the kind and now
+  read `Int64` for such an id. **Do:** match both variants, or compare the
+  number.
 - A compact integer `add_nodes` writes into a float column now reads back as a
   float (`7.0`), as any other integer written there already did. This reaches
   Python only for an id loaded into a type whose ids are already floats, or a
