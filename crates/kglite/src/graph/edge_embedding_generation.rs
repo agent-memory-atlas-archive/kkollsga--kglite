@@ -203,7 +203,8 @@ pub(crate) fn generate_selected(
         .map_err(EmbedError::Output)?;
 
     let metric = resolve_generation_metric(existing, &request).map_err(EmbedError::Output)?;
-    let requested_model = service.model.model_id();
+    let requested_model =
+        crate::graph::embedder::model_id_before_load(service.model).map_err(EmbedError::Model)?;
     if request.mode != EmbedMode::All {
         if let Some(prior_model) = existing.and_then(|store| store.model_id()) {
             if requested_model.as_deref() != Some(prior_model) {
@@ -228,7 +229,8 @@ pub(crate) fn generate_selected(
             .edges()
             .any(|edge| !selected_slots.contains(&edge.index()))
     });
-    let dimension = service.model.dimension();
+    let dimension =
+        crate::graph::embedder::dimension_before_load(service.model).map_err(EmbedError::Model)?;
     if dimension == 0 {
         return Err(EmbedError::Output("embedder declared dimension 0".into()));
     }

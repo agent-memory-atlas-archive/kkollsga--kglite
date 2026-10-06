@@ -836,11 +836,12 @@ impl KnowledgeGraph {
     /// model's declared dimension — the query side of both `search_text` twins.
     pub(super) fn embed_query(&self, py: Python<'_>, query: &str) -> PyResult<Vec<f32>> {
         let model = self.get_embedder_or_error()?;
-        let model_dimension = model.dimension();
-
         model
             .load()
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+        // After `load()`: a model that builds on first use declares no width
+        // before then.
+        let model_dimension = model.dimension();
 
         // Unload regardless of success or failure — hence the `?` after it.
         let texts = vec![query.to_string()];

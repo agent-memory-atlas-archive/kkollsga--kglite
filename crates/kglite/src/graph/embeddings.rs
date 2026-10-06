@@ -1181,6 +1181,14 @@ pub fn embed_property(
             .then(|| graph.embeddings.get(&key))
             .flatten();
         if let Some(existing_model_id) = existing.and_then(|store| store.model_id.as_deref()) {
+            // `None` is a model that has not been built yet as often as one
+            // with no name; the idle shortcut below must stay load-free, so
+            // only a store with a known prior pays for the question.
+            let requested_model_id = match &requested_model_id {
+                None => crate::graph::embedder::model_id_before_load(model)
+                    .map_err(EmbedError::Model)?,
+                known => known.clone(),
+            };
             if requested_model_id.as_deref() != Some(existing_model_id) {
                 let requested = requested_model_id
                     .as_deref()
@@ -1213,6 +1221,7 @@ pub fn embed_property(
         return Ok(found.outcome(0, store_dimension.unwrap_or(0)));
     }
     model.load().map_err(EmbedError::Model)?;
+    let requested_model_id = requested_model_id.or_else(|| model.model_id());
     let dimension = model.dimension();
     if let Some(store) = store_dimension.filter(|d| *d != dimension) {
         model.unload();

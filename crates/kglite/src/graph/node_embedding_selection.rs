@@ -146,7 +146,8 @@ pub(crate) fn embed_selected_nodes(
     let model = model.ok_or_else(|| {
         EmbedError::Output("node embedding generation requires a registered embedder".into())
     })?;
-    let requested_model = model.model_id();
+    let requested_model =
+        crate::graph::embedder::model_id_before_load(model).map_err(EmbedError::Model)?;
     if mode != EmbedMode::All {
         if let Some(prior) = existing.and_then(|store| store.model_id.as_deref()) {
             if requested_model.as_deref() != Some(prior) {

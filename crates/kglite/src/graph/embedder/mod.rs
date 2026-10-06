@@ -62,3 +62,36 @@ pub trait Embedder: Send + Sync {
     /// cleanup.
     fn unload(&self) {}
 }
+
+/// The model's identity for provenance checks and store stamping, read
+/// *before* a generation pass loads the model.
+///
+/// An embedder that builds its model on first use answers `None` (and
+/// dimension 0) until that build has happened or after it failed. A `None`
+/// here therefore gets one `load()` so a build failure surfaces as itself, and
+/// a successful build is stamped instead of leaving the store unattributed.
+/// `unload()` follows so the pass's own `load()`/`unload()` pair stays the
+/// only lifecycle the backend sees; a backend that never names its model pays
+/// one extra hook pair per pass.
+pub(crate) fn model_id_before_load(model: &dyn Embedder) -> Result<Option<String>, String> {
+    if let Some(id) = model.model_id() {
+        return Ok(Some(id));
+    }
+    model.load()?;
+    let id = model.model_id();
+    model.unload();
+    Ok(id)
+}
+
+/// [`model_id_before_load`] for the declared width: a 0 gets one `load()` so a
+/// failed build is reported as itself, not as a model of width 0.
+pub(crate) fn dimension_before_load(model: &dyn Embedder) -> Result<usize, String> {
+    let dimension = model.dimension();
+    if dimension != 0 {
+        return Ok(dimension);
+    }
+    model.load()?;
+    let dimension = model.dimension();
+    model.unload();
+    Ok(dimension)
+}

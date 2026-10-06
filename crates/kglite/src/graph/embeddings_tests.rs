@@ -1661,3 +1661,130 @@ fn a_failed_statement_reverses_a_node_delete_with_its_vector_index() {
     assert_eq!(list_vector_indexes(&g), before_index);
     assert_eq!(dense_cells(&g), before_cells);
 }
+
+// ── an embedder that builds on first use reports nothing until `load()` ──────
+
+/// Answers `model_id() == None` and `dimension() == 0` until `load()` has
+/// succeeded, and fails its first `fail_loads` `load()` calls — the shape of an
+/// embedder that builds its model on first use.
+struct BuildsOnLoad {
+    fail_loads: std::sync::atomic::AtomicUsize,
+    built: std::sync::atomic::AtomicBool,
+}
+
+impl BuildsOnLoad {
+    fn new(fail_loads: usize) -> Self {
+        BuildsOnLoad {
+            fail_loads: std::sync::atomic::AtomicUsize::new(fail_loads),
+            built: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    fn built(&self) -> bool {
+        self.built.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::graph::embedder::Embedder for BuildsOnLoad {
+    fn dimension(&self) -> usize {
+        if self.built() {
+            2
+        } else {
+            0
+        }
+    }
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Ok(texts.iter().map(|_| vec![0.5, 0.5]).collect())
+    }
+    fn model_id(&self) -> Option<String> {
+        self.built().then(|| "stub".to_string())
+    }
+    fn load(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.fail_loads.load(SeqCst) > 0 {
+            self.fail_loads.fetch_sub(1, SeqCst);
+            return Err("model build failed".to_string());
+        }
+        self.built.store(true, SeqCst);
+        Ok(())
+    }
+}
+
+fn run_builds_on_load(
+    g: &mut std::sync::Arc<DirGraph>,
+    model: &BuildsOnLoad,
+    mode: EmbedMode,
+) -> Result<EmbedOutcome, EmbedError> {
+    embed_property(
+        g,
+        "Doc",
+        "summary",
+        mode,
+        model,
+        &EmbedHooks::default(),
+        None,
+    )
+}
+
+#[test]
+fn a_first_use_model_is_stamped_on_the_store_it_builds() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    let model = BuildsOnLoad::new(0);
+    run_builds_on_load(&mut g, &model, EmbedMode::Missing).expect("the pass builds the model");
+    assert_eq!(
+        store_of(&g).model_id.as_deref(),
+        Some("stub"),
+        "the store must carry the model that produced it"
+    );
+}
+
+#[test]
+fn a_failed_first_use_build_is_not_reported_as_an_unknown_model() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    embed_docs(&mut g, &StubEmbedder::new(2), EmbedMode::Missing).expect("seed store");
+    retext(&mut g, 1, "moved");
+    let err = run_builds_on_load(&mut g, &BuildsOnLoad::new(5), EmbedMode::Changed)
+        .expect_err("the build fails");
+    let text = err.to_string();
+    assert!(
+        text.contains("model build failed"),
+        "the build failure must surface as itself, got: {text}"
+    );
+    assert!(!text.contains("unknown"), "got: {text}");
+}
+
+#[test]
+fn a_first_use_model_matching_the_store_is_accepted_after_build() {
+    let mut g = std::sync::Arc::new(docs(&[1, 2]));
+    embed_docs(&mut g, &StubEmbedder::new(2), EmbedMode::Missing).expect("seed store");
+    retext(&mut g, 1, "moved");
+    run_builds_on_load(&mut g, &BuildsOnLoad::new(0), EmbedMode::Changed)
+        .expect("the same model, built on first use, must not read as a model swap");
+}
+
+#[test]
+fn the_pre_load_probes_surface_a_build_failure_and_pick_up_a_build() {
+    use crate::graph::embedder::{dimension_before_load, model_id_before_load};
+    let failing = BuildsOnLoad::new(1);
+    assert_eq!(
+        model_id_before_load(&failing).unwrap_err(),
+        "model build failed"
+    );
+    assert_eq!(
+        model_id_before_load(&failing).unwrap().as_deref(),
+        Some("stub")
+    );
+    let failing = BuildsOnLoad::new(1);
+    assert_eq!(
+        dimension_before_load(&failing).unwrap_err(),
+        "model build failed"
+    );
+    assert_eq!(dimension_before_load(&failing).unwrap(), 2);
+    // A model that already answers is never asked to load.
+    let named = StubEmbedder::new(3);
+    assert_eq!(dimension_before_load(&named).unwrap(), 3);
+    assert_eq!(
+        model_id_before_load(&named).unwrap().as_deref(),
+        Some("stub")
+    );
+    assert_eq!(named.loads(), 0);
+}
