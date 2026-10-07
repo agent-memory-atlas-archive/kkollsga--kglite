@@ -26,7 +26,9 @@ What each guard catches:
 * **Head-of-line blocking** -- with two async workers and six slow queries
   running, a ``RETURN 1`` on another connection must not wait for a whole query.
 * **Parameter decode** -- ``UNWIND $rows`` over 20k maps, message encoded once,
-  against the embedded engine given the same rows.
+  against the same query over maps the server builds itself. A second cell
+  sends twice the payload and must fail the same guard, so the cell proves it
+  separates a 2x slower decoder from noise on every run.
 * **Reader scaling** -- point lookups from four processes must outrun one
   process; a server-wide lock serialises them to 1.0x.
 
@@ -73,13 +75,20 @@ MAX_PEAK_RSS_MB = 1100 if sys.platform.startswith("linux") else 1400
 #: A `RETURN 1` during slow queries may wait this fraction of a slow query.
 MAX_PROBE_WAIT_FRACTION = 0.25
 #: Rows in the parameter-decode cell: enough that decoding, not the round
-#: trip, is most of the exchange.
+#: trip, is most of the exchange (the transport of the same bytes as one string
+#: is 0.4 ms of ~32 ms).
 PARAM_ROWS = 20_000
-#: Decoding the parameter maps may cost this multiple of the embedded engine
-#: given the same rows. Measured 4.7x on macOS; 1k rows read 2.4x on macOS and
-#: 3.0x on a Linux runner, so the ceiling leaves ~1.2x for the runner. Decoding
-#: the parameters four times reads 8.3x.
-MAX_PARAMS_VS_EMBEDDED = 7.0
+#: The same query run over parameter maps may cost this multiple of the same
+#: query over maps the server builds itself (no payload to decode). Both sides
+#: run in the one server process, interleaved, so runner speed cancels. The
+#: embedded engine was the control before and was wrong for it: it converts
+#: Python rows on the Python side, so its time moved with the interpreter
+#: (9.1-15.3 ms across runners) while the server's did not (72-80 ms), and the
+#: ratio read 5.3x to 7.9x with no code change. Measured 7.6x on macOS with
+#: under 1% spread over repeated runs; decoding twice the bytes (a 2x slower
+#: decoder) reads ~14x, so 11x leaves 45% for runner variation and still
+#: catches a 2x regression.
+MAX_PARAMS_VS_SERVER_BUILT = 11.0
 #: Four reader processes must reach this multiple of one reader's throughput.
 MIN_READER_SCALING = 1.25
 
@@ -382,31 +391,76 @@ def test_bolt_slow_queries_do_not_stall_other_connections(graph_path, embedded):
 # --- parameter decode --------------------------------------------------------
 
 
-def test_bolt_parameter_decode_stays_near_the_embedded_engine(server, embedded):
-    rows = [
-        {"id": i, "name": f"name{i}", "age": 20 + i % 60, "score": i * 0.5, "ok": i % 2 == 0} for i in range(PARAM_ROWS)
-    ]
-    query = "UNWIND $rows AS r RETURN count(r) AS c, sum(r.age) AS a"
-    embedded_s = _min_seconds(lambda: embedded.cypher(query, params={"rows": rows}), 20, 3)
-    # Encode once so the client's packing is not in the timed region.
-    run_message = chunk(pack(Struct(SIG_RUN, query, {"rows": rows}, {})))
-    pull_message = chunk(pack(Struct(SIG_PULL, {"n": -1})))
+def _param_rows(count: int) -> list[dict]:
+    return [{"id": i, "name": f"name{i}", "age": 20 + i % 60, "score": i * 0.5, "ok": i % 2 == 0} for i in range(count)]
 
+
+def _param_decode_ratio(server: _Server, embedded, decode_rows: int) -> dict:
+    """Parameter-map query vs the same query over server-built maps.
+
+    ``decode_rows`` is the payload size; the server-built control always makes
+    ``PARAM_ROWS`` maps, so a payload of twice the rows models a decoder twice
+    as slow (the red-proof mutation uses it)."""
+    rows = _param_rows(decode_rows)
+    query = "UNWIND $rows AS r RETURN count(r) AS c, sum(r.age) AS a"
+    built = (
+        f"UNWIND range(0, {PARAM_ROWS - 1}) AS i "
+        "WITH {id: i, name: 'name' + toString(i), age: 20 + i % 60, score: i * 0.5, ok: i % 2 = 0} AS r "
+        "RETURN count(r) AS c, sum(r.age) AS a"
+    )
+    # Encode once so the client's packing is not in the timed region.
+    with_params = chunk(pack(Struct(SIG_RUN, query, {"rows": rows}, {}))) + chunk(pack(Struct(SIG_PULL, {"n": -1})))
+    server_built = chunk(pack(Struct(SIG_RUN, built, {}, {}))) + chunk(pack(Struct(SIG_PULL, {"n": -1})))
     with _login(server) as conn:
 
-        def exchange():
-            conn.sock.sendall(run_message + pull_message)
+        def exchange(message: bytes) -> None:
+            conn.sock.sendall(message)
             assert conn.recv()[0] == SIG_SUCCESS
             while conn.recv()[0] == SIG_RECORD:
                 pass
 
-        bolt_s = _min_seconds(exchange, 20, 3)
-    ratio = bolt_s / embedded_s
-    _report("params", bolt_ms=bolt_s * 1e3, embedded_ms=embedded_s * 1e3, ratio=ratio, **_controls(embedded))
-    assert ratio <= MAX_PARAMS_VS_EMBEDDED, (
-        f"UNWIND over {PARAM_ROWS} parameter maps took {bolt_s * 1e3:.2f} ms over Bolt, {ratio:.1f}x the embedded "
-        f"engine ({embedded_s * 1e3:.2f} ms); limit {MAX_PARAMS_VS_EMBEDDED}x"
+        for _ in range(3):
+            exchange(with_params)
+            exchange(server_built)
+        bolt_s = built_s = float("inf")
+        for _ in range(20):  # interleaved, so a slow stretch hits both sides
+            started = time.perf_counter()
+            exchange(with_params)
+            bolt_s = min(bolt_s, time.perf_counter() - started)
+            started = time.perf_counter()
+            exchange(server_built)
+            built_s = min(built_s, time.perf_counter() - started)
+    embedded_s = _min_seconds(lambda: embedded.cypher(query, params={"rows": rows}), 5, 2)
+    return {
+        "bolt_ms": bolt_s * 1e3,
+        "server_built_ms": built_s * 1e3,
+        "ratio": bolt_s / built_s,
+        "embedded_ms": embedded_s * 1e3,  # reported, not asserted: Python-bound, see the ceiling's note
+    }
+
+
+def _assert_param_ratio(result: dict) -> None:
+    assert result["ratio"] <= MAX_PARAMS_VS_SERVER_BUILT, (
+        f"UNWIND over {PARAM_ROWS} parameter maps took {result['bolt_ms']:.2f} ms over Bolt, "
+        f"{result['ratio']:.1f}x the same query over server-built maps "
+        f"({result['server_built_ms']:.2f} ms); limit {MAX_PARAMS_VS_SERVER_BUILT}x"
     )
+
+
+def test_bolt_parameter_decode_stays_near_server_built_maps(server, embedded):
+    result = _param_decode_ratio(server, embedded, PARAM_ROWS)
+    _report("params", **result, **_controls(embedded))
+    _assert_param_ratio(result)
+
+
+def test_bolt_parameter_decode_guard_catches_a_slower_decoder(server, embedded):
+    """Red proof, run in CI: twice the payload costs a decoder twice as slow,
+    and the guard must reject it. A guard that stops separating a 2x decode
+    regression from noise fails here instead of passing silently."""
+    result = _param_decode_ratio(server, embedded, 2 * PARAM_ROWS)
+    _report("params-2x-mutation", **result)
+    with pytest.raises(AssertionError):
+        _assert_param_ratio(result)
 
 
 # --- reader scaling ----------------------------------------------------------
