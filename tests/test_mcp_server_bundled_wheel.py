@@ -225,6 +225,11 @@ def _events(marker_file: Path) -> list[str]:
     return marker_file.read_text(encoding="utf-8").splitlines() if marker_file.exists() else []
 
 
+def _rows_only(out: str) -> str:
+    """The result table without the footer, which carries a clock."""
+    return out.split("— active graph")[0]
+
+
 def _built_count(marker_file: Path) -> int:
     return _events(marker_file).count("built")
 
@@ -277,7 +282,7 @@ def test_manifest_embedder_is_freed_after_its_cooldown_and_rebuilt(tmp_path: Pat
             time.sleep(0.1)
         assert _events(marker_file) == ["built", "freed"], "the idle model must be destroyed"
         again = _text_content(client.call_tool("cypher_query", query))
-        assert again[:200] == first[:200], "the rebuilt model answers the same"
+        assert _rows_only(again) == _rows_only(first), "the rebuilt model answers the same"
         assert _events(marker_file)[:3] == ["built", "freed", "built"]
     finally:
         client.shutdown()
