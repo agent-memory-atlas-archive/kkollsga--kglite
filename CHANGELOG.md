@@ -74,6 +74,17 @@ before upgrading.
 
 - A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
   `error` now names the key in its error. It said only "unknown variant".
+
+- A `LIMIT` after a plain `WITH` now stops the `MATCH` at that many rows
+  instead of materialising every row first. The cap applies when the `WITH`
+  keeps one row per input row, with an optional literal `SKIP`
+  (`MATCH (n) WITH n LIMIT 1 RETURN n`, the relationship and path forms,
+  `WITH n, n.x AS v LIMIT k`, `WITH n SKIP s LIMIT k`). Release, 100k nodes
+  and 100k relationships, min of 15: the node form 22.5 ms to 0.22 ms, the
+  relationship form 23.2 ms to 0.21 ms, the path form 48.8 ms to 0.21 ms.
+  `WITH` clauses that aggregate, use `DISTINCT` or `ORDER BY`, or carry a
+  parameter `LIMIT` or `SKIP` are unchanged.
+
 - `kglite-bolt-server` now sets `TCP_NODELAY` on every accepted connection.
   On Linux each small Bolt reply waited for the client's delayed ACK, so every
   exchange took ~41 ms and an explicit transaction ~123 ms (measured in CI).

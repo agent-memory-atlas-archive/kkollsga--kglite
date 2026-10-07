@@ -986,6 +986,83 @@ fn test_limit_pushdown_multi_match_safety() {
     }
 }
 
+/// The first MATCH's `limit_hint` and whether a LIMIT clause survives, after
+/// the full optimizer pipeline.
+fn limit_pushdown_outcome(cypher: &str) -> (Option<usize>, bool) {
+    let mut query = parse_cypher(cypher).unwrap();
+    let graph = DirGraph::new();
+    let params = HashMap::new();
+    optimize(&mut query, &graph, &params);
+    let hint = query.clauses.iter().find_map(|c| match c {
+        Clause::Match(m) => Some(m.limit_hint),
+        _ => None,
+    });
+    (
+        // A fused query has no MATCH left; it carries no hint either.
+        hint.flatten(),
+        query.clauses.iter().any(|c| matches!(c, Clause::Limit(_))),
+    )
+}
+
+#[test]
+fn test_limit_pushdown_through_row_preserving_with() {
+    for q in [
+        "MATCH (n) WITH n LIMIT 7 RETURN n",
+        "MATCH ()-[r]->() WITH r LIMIT 7 RETURN r",
+        "MATCH p = ()-[]->() WITH p LIMIT 7 RETURN p",
+        "MATCH (n:Person) WITH n, n.age AS a LIMIT 7 RETURN n, a",
+        "MATCH (n:Person) WHERE n.age > 3 WITH n.name AS v LIMIT 7 RETURN v",
+        "MATCH (n) WITH n LIMIT 7 MATCH (n)-[:R]->(m) RETURN n, m",
+        // The filter runs after the LIMIT, so capping the MATCH is exact.
+        "MATCH (n) WITH n LIMIT 7 WHERE n.x > 1 RETURN n",
+    ] {
+        assert_eq!(
+            limit_pushdown_outcome(q),
+            (Some(7), false),
+            "WITH ... LIMIT must reach the MATCH: {q}"
+        );
+    }
+}
+
+#[test]
+fn test_limit_pushdown_through_with_skip_keeps_skip_and_adds_it_to_the_hint() {
+    let mut query = parse_cypher("MATCH (n) WITH n SKIP 3 LIMIT 4 RETURN n").unwrap();
+    let graph = DirGraph::new();
+    let params = HashMap::new();
+    optimize(&mut query, &graph, &params);
+    let hint = query.clauses.iter().find_map(|c| match c {
+        Clause::Match(m) => m.limit_hint,
+        _ => None,
+    });
+    assert_eq!(hint, Some(7), "the MATCH must produce SKIP + LIMIT rows");
+    assert!(
+        query.clauses.iter().any(|c| matches!(c, Clause::Skip(_))),
+        "the SKIP must stay in the plan"
+    );
+}
+
+#[test]
+fn test_limit_pushdown_bails_when_the_with_changes_row_count_or_order() {
+    for q in [
+        "MATCH (n) WITH DISTINCT n.x AS x LIMIT 7 RETURN x",
+        "MATCH (n) WITH n.x AS x, count(*) AS c LIMIT 7 RETURN x, c",
+        "MATCH (n) WITH count(*) AS c LIMIT 7 RETURN c",
+        "MATCH (n) WITH n ORDER BY n.x LIMIT 7 RETURN n",
+        "MATCH (n) WITH n.x AS x ORDER BY x DESC LIMIT 7 RETURN x",
+        "MATCH (n) WITH n SKIP $s LIMIT 7 RETURN n",
+        "MATCH (n) WITH n LIMIT $k RETURN n",
+        "MATCH (n) UNWIND [1, 2] AS u WITH n LIMIT 7 RETURN n",
+        "MATCH (a) MATCH (b) WITH a, b LIMIT 7 RETURN a, b",
+        "UNWIND [1, 2] AS u MATCH (n) WITH n LIMIT 7 RETURN n",
+    ] {
+        assert_eq!(
+            limit_pushdown_outcome(q).0,
+            None,
+            "must not stamp a limit_hint: {q}"
+        );
+    }
+}
+
 #[test]
 fn test_reorder_match_clauses_picks_rare_edge_first() {
     // Two MATCH clauses share `p`, both id-anchored on the other end. The

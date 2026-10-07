@@ -344,15 +344,88 @@ pub(super) fn push_limit_into_aggregate(query: &mut CypherQuery, _graph: &DirGra
     }
 }
 
-/// Precondition: a single-MATCH query whose terminal `RETURN ... LIMIT n`
-/// follows with no intervening cardinality-changing clause (a `WITH ... LIMIT`
-/// projection is not matched). Pattern: stamps `limit_hint = n` onto the MATCH
-/// so the pattern executor stops expanding once n rows exist, and removes the
-/// now-redundant LIMIT clause. Why-bail: multi-MATCH queries and
-/// correlated/filtered comma-pattern shapes interact incorrectly with the
-/// per-row `max_matches` bound and can return fewer rows than LIMIT requests
-/// (see the safety notes in the body); only the provably-safe shapes are
-/// rewritten.
+/// Where a pushable LIMIT sits relative to the MATCH at `match_idx`.
+struct LimitWindow {
+    has_where: bool,
+    /// The RETURN or WITH the LIMIT binds to.
+    projection_idx: usize,
+    /// A `SKIP` between a WITH and its LIMIT (never present for RETURN).
+    skip_idx: Option<usize>,
+    limit_idx: usize,
+}
+
+/// Match `MATCH [WHERE] RETURN LIMIT` or `MATCH [WHERE] WITH [SKIP] LIMIT`
+/// starting at `i`.
+fn find_limit_window(clauses: &[Clause], i: usize) -> Option<LimitWindow> {
+    if !matches!(clauses.get(i), Some(Clause::Match(_))) {
+        return None;
+    }
+    let has_where = matches!(clauses.get(i + 1), Some(Clause::Where(_)));
+    let projection_idx = i + 1 + usize::from(has_where);
+    match clauses.get(projection_idx)? {
+        Clause::Return(_) => matches!(clauses.get(projection_idx + 1), Some(Clause::Limit(_)))
+            .then_some(LimitWindow {
+                has_where,
+                projection_idx,
+                skip_idx: None,
+                limit_idx: projection_idx + 1,
+            }),
+        Clause::With(_) => {
+            let skip_idx = matches!(clauses.get(projection_idx + 1), Some(Clause::Skip(_)))
+                .then_some(projection_idx + 1);
+            let limit_idx = skip_idx.unwrap_or(projection_idx) + 1;
+            matches!(clauses.get(limit_idx), Some(Clause::Limit(_))).then_some(LimitWindow {
+                has_where,
+                projection_idx,
+                skip_idx,
+                limit_idx,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether the projection keeps one output row per input row, so capping the
+/// MATCH at the LIMIT yields the same rows the full projection would.
+/// Why-bail: DISTINCT and aggregates collapse rows (the first N MATCH rows
+/// can be fewer than N groups); window expressions read the whole row set; a
+/// WITH that still carries a `where_clause` (the hoist declined it)
+/// filters after the cap, so a capped MATCH could under-fill; a stamped
+/// `group_limit_hint` marks an aggregating WITH.
+fn projection_preserves_rows(clause: &Clause) -> bool {
+    use super::super::ast::{is_aggregate_expression, is_window_expression};
+    let (items, distinct, other_blocker) = match clause {
+        Clause::Return(r) => (&r.items, r.distinct, false),
+        Clause::With(w) => (
+            &w.items,
+            w.distinct,
+            w.where_clause.is_some() || w.group_limit_hint.is_some(),
+        ),
+        _ => return false,
+    };
+    !distinct
+        && !other_blocker
+        && !items.iter().any(|item| {
+            is_aggregate_expression(&item.expression) || is_window_expression(&item.expression)
+        })
+}
+
+/// Precondition: a leading `MATCH [WHERE]` whose projection and `LIMIT n`
+/// follow with no intervening cardinality-changing clause. Two shapes:
+/// `RETURN … LIMIT n` (the MATCH must also be the query's only MATCH) and
+/// `WITH … [SKIP s] LIMIT n` over a row-preserving projection (a MATCH after
+/// the LIMIT is fine: it consumes the already-capped rows, and the cap never
+/// reaches it). Pattern: stamps `limit_hint = n` (`s + n` under a SKIP, which
+/// stays in the plan) onto the MATCH so the pattern executor stops expanding
+/// once that many rows exist, and removes the now-redundant LIMIT clause.
+/// Why-bail: `WITH … ORDER BY … LIMIT` is a top-k (the WITH is not adjacent to
+/// the LIMIT, so the window does not form); an aggregating/DISTINCT/windowed
+/// projection (see `projection_preserves_rows`); a non-leading MATCH, where
+/// each upstream row gets its own capped expansion; multi-MATCH RETURN
+/// queries and correlated/filtered comma-pattern shapes, which interact
+/// incorrectly with the per-row `max_matches` bound and can return fewer rows
+/// than LIMIT requests (see the safety notes in the body); only the
+/// provably-safe shapes are rewritten.
 pub(super) fn push_limit_into_match(
     query: &mut CypherQuery,
     _graph: &DirGraph,
@@ -363,68 +436,68 @@ pub(super) fn push_limit_into_match(
     }
     let mut i = 0;
     while i + 2 < query.clauses.len() {
-        // Look for MATCH → RETURN → LIMIT  or  MATCH → WHERE → RETURN → LIMIT
-        let (has_where, return_offset, limit_offset) = if i + 3 < query.clauses.len()
-            && matches!(&query.clauses[i], Clause::Match(_))
-            && matches!(&query.clauses[i + 1], Clause::Where(_))
-            && matches!(&query.clauses[i + 2], Clause::Return(_))
-            && matches!(&query.clauses[i + 3], Clause::Limit(_))
-        {
-            (true, i + 2, i + 3)
-        } else if matches!(
-            (&query.clauses[i], &query.clauses[i + 1]),
-            (Clause::Match(_), Clause::Return(_))
-        ) && i + 2 < query.clauses.len()
-            && matches!(&query.clauses[i + 2], Clause::Limit(_))
-        {
-            (false, i + 1, i + 2)
-        } else {
+        let Some(window) = find_limit_window(&query.clauses, i) else {
             i += 1;
             continue;
         };
+        let LimitWindow {
+            has_where,
+            projection_idx: return_offset,
+            skip_idx,
+            limit_idx: limit_offset,
+        } = window;
+        let is_with = matches!(query.clauses[return_offset], Clause::With(_));
 
-        let safe = if let Clause::Return(r) = &query.clauses[return_offset] {
-            !r.distinct
-                && !r
-                    .items
-                    .iter()
-                    .any(|item| super::super::ast::is_aggregate_expression(&item.expression))
-                && !r
-                    .items
-                    .iter()
-                    .any(|item| super::super::ast::is_window_expression(&item.expression))
-        } else {
-            false
-        };
-        if !safe {
+        if !projection_preserves_rows(&query.clauses[return_offset]) {
             i += 1;
             continue;
         }
 
-        let limit_val = if let Clause::Limit(l) = &query.clauses[limit_offset] {
-            match &l.count {
-                Expression::Literal(Value::Int64(n)) if *n > 0 => Some(*n as usize),
+        let literal_count = |clause: &Clause, min: i64| -> Option<usize> {
+            let count = match clause {
+                Clause::Limit(l) => &l.count,
+                Clause::Skip(s) => &s.count,
+                _ => return None,
+            };
+            match count {
+                Expression::Literal(Value::Int64(n)) if *n >= min => Some(*n as usize),
                 _ => None,
             }
-        } else {
-            None
         };
-        let Some(limit) = limit_val else {
+        let Some(limit) = literal_count(&query.clauses[limit_offset], 1) else {
+            i += 1;
+            continue;
+        };
+        let skip = match skip_idx {
+            Some(s) => match literal_count(&query.clauses[s], 0) {
+                Some(n) => n,
+                None => {
+                    i += 1;
+                    continue;
+                }
+            },
+            None => 0,
+        };
+        let Some(hint) = limit.checked_add(skip) else {
             i += 1;
             continue;
         };
 
-        // Only push the LIMIT hint into MATCH when this is the FIRST and ONLY
-        // MATCH clause and its pattern shape cannot under-fill after an early
-        // cap. Two unsafe shapes:
+        // Only push the LIMIT hint into MATCH when this is the FIRST MATCH
+        // clause (and, for RETURN, the ONLY one) and its pattern shape cannot
+        // under-fill after an early cap. Unsafe shapes:
         //
-        // 1. Multi-MATCH (separate `MATCH ... MATCH` clauses): routes through
-        //    `execute_match`'s subsequent-MATCH path, where the per-row pattern
-        //    executor's `max_matches=remaining` interacts incorrectly with the
-        //    outer row loop and produces fewer rows than the LIMIT requests
-        //    (regression seen on 3-MATCH + WHERE on last-MATCH variable + LIMIT N
-        //    queries — see `test_limit_pushdown_multi_match_safety`).
-        // 2. Correlated/filtered multi-pattern within ONE MATCH (comma-separated patterns:
+        // 1. A MATCH that is not first: it runs once per upstream row, and
+        //    the cap would apply per row, not to the whole result.
+        // 2. Multi-MATCH under a RETURN (separate `MATCH ... MATCH` clauses):
+        //    routes through `execute_match`'s subsequent-MATCH path, where the
+        //    per-row pattern executor's `max_matches=remaining` interacts
+        //    incorrectly with the outer row loop and produces fewer rows than
+        //    the LIMIT requests (regression seen on 3-MATCH + WHERE on
+        //    last-MATCH variable + LIMIT N queries — see
+        //    `test_limit_pushdown_multi_match_safety`). A WITH-LIMIT is exempt:
+        //    every later MATCH sits behind the LIMIT and is never capped.
+        // 3. Correlated/filtered multi-pattern within ONE MATCH (comma-separated patterns:
         //    `MATCH (p)-[:T]->(q), (p)-[:T]->(r)`): same row-loop interaction
         //    surfaces because each pattern's expansion is separately bounded
         //    by the limit_hint, so the cartesian's surviving cross-product
@@ -437,11 +510,12 @@ pub(super) fn push_limit_into_match(
         // contract here). This avoids materialising millions of pairs merely
         // to return the first handful.
         let is_first_match = i == 0;
-        let only_match = !query
-            .clauses
-            .iter()
-            .skip(i + 1)
-            .any(|c| matches!(c, Clause::Match(_) | Clause::OptionalMatch(_)));
+        let only_match = is_with
+            || !query
+                .clauses
+                .iter()
+                .skip(i + 1)
+                .any(|c| matches!(c, Clause::Match(_) | Clause::OptionalMatch(_)));
         let limit_safe_pattern_shape = match &query.clauses[i] {
             Clause::Match(m) => {
                 m.patterns.len() == 1
@@ -462,7 +536,7 @@ pub(super) fn push_limit_into_match(
         // (`push_where_into_match` runs earlier in the optimizer), so the
         // hint is exact in both with-WHERE and without-WHERE cases.
         if let Clause::Match(ref mut m) = query.clauses[i] {
-            m.limit_hint = Some(limit);
+            m.limit_hint = Some(hint);
         }
         query.clauses.remove(limit_offset);
         // A surviving WHERE keeps the matcher uncapped (the executor cannot

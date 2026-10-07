@@ -190,3 +190,32 @@ def test_goldens_ended_relationships_are_not_counted(org):
     rows = org.cypher("FOR VALID_TIME AS OF date('2010-06-01') " + shape).to_list()
     # Dept 102 ended in 2003, so only the Dept 100 relationship is visible.
     assert len(rows) == 2 and {r["d"] for r in rows} == {100}, rows
+
+
+# The same cap sites behind a row-preserving WITH. Each entry is
+# (limited statement, the unlimited statement, limit).
+WITH_SHAPES = [
+    ("MATCH (e:Emp) WITH e LIMIT 3 RETURN e.id AS id", "MATCH (e:Emp) RETURN e.id AS id", 3),
+    (
+        "MATCH (e:Emp) WHERE e.team = 'a' WITH e LIMIT 2 RETURN e.id AS id",
+        "MATCH (e:Emp) WHERE e.team = 'a' RETURN e.id AS id",
+        2,
+    ),
+    (
+        "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) WITH e, d LIMIT 2 RETURN e.id AS e, d.id AS d",
+        "MATCH (e:Emp)-[:IN_DEPT]->(d:Dept) RETURN e.id AS e, d.id AS d",
+        2,
+    ),
+    ("MATCH (a)-[:MENTORS]->(b) WITH a LIMIT 3 RETURN a.id AS a", "MATCH (a)-[:MENTORS]->(b) RETURN a.id AS a", 3),
+]
+
+
+@pytest.mark.parametrize(("limited", "unlimited", "limit"), WITH_SHAPES)
+def test_with_limit_answers_as_the_guarded_matcher(org, limited, unlimited, limit):
+    for context in CONTEXTS:
+        fused = _rows(org.cypher(context + limited))
+        plain = _rows(org.cypher(context + limited, disabled_passes=[PASS]))
+        assert fused == plain, (context, limited)
+        everything = _rows(org.cypher(context + unlimited))
+        assert len(fused) == min(limit, len(everything)), (context, limited)
+        assert set(fused) <= set(everything), (context, limited)

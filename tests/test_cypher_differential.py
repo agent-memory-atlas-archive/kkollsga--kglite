@@ -3104,6 +3104,74 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     ("limit_simple", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 5", None),
     ("limit_one", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 1", None),
     ("limit_zero", "social_graph", "MATCH (p:Person) RETURN p.name AS n LIMIT 0", None),
+    # LIMIT behind a row-preserving WITH reaches the MATCH too (allowed shapes);
+    # an aggregating/DISTINCT/ORDER BY WITH must still see every row (bail shapes).
+    ("with_limit_node", "social_graph", "MATCH (p:Person) WITH p LIMIT 5 RETURN p.name AS n", None),
+    ("with_limit_projected", "social_graph", "MATCH (p:Person) WITH p, p.age AS a LIMIT 5 RETURN p.name AS n, a", None),
+    ("with_limit_alias_only", "social_graph", "MATCH (p:Person) WITH p.name AS n LIMIT 3 RETURN n", None),
+    (
+        "with_limit_rel",
+        "social_graph",
+        "MATCH (a:Person)-[r:KNOWS]->(b:Person) WITH r LIMIT 4 RETURN startNode(r).name AS s, endNode(r).name AS e",
+        None,
+    ),
+    (
+        "with_limit_path",
+        "social_graph",
+        "MATCH p = (a:Person)-[:KNOWS]->(b:Person) WITH p LIMIT 4 RETURN length(p) AS len, nodes(p)[0].name AS n",
+        None,
+    ),
+    ("with_limit_zero", "social_graph", "MATCH (p:Person) WITH p LIMIT 0 RETURN p.name AS n", None),
+    ("with_skip_limit", "social_graph", "MATCH (p:Person) WITH p SKIP 2 LIMIT 3 RETURN count(*) AS c", None),
+    (
+        "with_limit_where_subsumed",
+        "social_graph",
+        "MATCH (p:Person) WHERE p.age > 25 WITH p LIMIT 4 RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_limit_then_where",
+        "social_graph",
+        "MATCH (p:Person) WITH p LIMIT 6 WHERE p.age > 25 RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_limit_then_match",
+        "social_graph",
+        "MATCH (p:Person) WITH p LIMIT 3 MATCH (p)-[:KNOWS]->(q:Person) RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "with_limit_then_aggregate",
+        "social_graph",
+        "MATCH (p:Person) WITH p LIMIT 5 RETURN count(*) AS c, count(DISTINCT p.city) AS cities",
+        None,
+    ),
+    (
+        "with_limit_bail_aggregate",
+        "social_graph",
+        "MATCH (p:Person) WITH p.city AS city, count(*) AS c LIMIT 2 RETURN count(*) AS groups, sum(c) AS rows",
+        None,
+    ),
+    ("with_limit_bail_global_aggregate", "social_graph", "MATCH (p:Person) WITH count(*) AS c LIMIT 1 RETURN c", None),
+    (
+        "with_limit_bail_distinct",
+        "social_graph",
+        "MATCH (p:Person) WITH DISTINCT p.city AS city LIMIT 3 RETURN count(*) AS c",
+        None,
+    ),
+    (
+        "with_limit_bail_order_by",
+        "social_graph",
+        "MATCH (p:Person) WITH p ORDER BY p.age DESC, p.name LIMIT 3 RETURN p.name AS n",
+        None,
+    ),
+    (
+        "with_limit_bail_unwind_between",
+        "social_graph",
+        "MATCH (p:Person) UNWIND [1, 2] AS u WITH p, u LIMIT 5 RETURN count(*) AS c",
+        None,
+    ),
     # A filtered LIMIT: a subsumed WHERE is dropped so the scan stops at the
     # limit; a residual one drains the matcher a slice of start nodes at a time.
     (

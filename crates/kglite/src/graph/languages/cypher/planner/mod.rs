@@ -549,11 +549,11 @@ fn pass_reorder_match_patterns(query: &mut CypherQuery, ctx: &PassCtx) {
     reorder_match_patterns(query, ctx.graph, ctx.valid_counts)
 }
 
-/// **Pass:** `push_limit_into_match` — Mark the trailing `LIMIT N` as
-/// an early-stop hint on the preceding `MATCH` so the executor can
-/// short-circuit pattern expansion. WHY-BAIL: requires single-MATCH
-/// queries (multi-MATCH + WHERE on a late-bound var silently drops
-/// rows).
+/// **Pass:** `push_limit_into_match` — Mark the `LIMIT N` after a
+/// `RETURN`, or a row-preserving `WITH` (literal `SKIP s` adds to the hint),
+/// as an early-stop hint on the leading `MATCH`. WHY-BAIL: a RETURN form needs
+/// a single MATCH (multi-MATCH + WHERE on a late-bound var silently drops
+/// rows); a WITH that aggregates, is DISTINCT or windowed, or keeps a WHERE.
 fn pass_push_limit_into_match(query: &mut CypherQuery, ctx: &PassCtx) {
     push_limit_into_match(query, ctx.graph, ctx.params)
 }
