@@ -1,7 +1,7 @@
-cmpNpdidCompany,cmpLongName
-1,Hydro Operator AS
-2,Successor Petroleum AS
-3,Shell-like Operator AS
+orgId,orgLongName
+1,Lead Operator AS
+2,Successor Holdings AS
+3,Major Operator AS
 4,Late Operator ASA
 5,Former Operator AS
 6,State Partner AS

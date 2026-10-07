@@ -197,7 +197,7 @@ impl<'a> CypherExecutor<'a> {
 
     /// Resolve the first argument of a ts_*() function into the node's timeseries
     /// data, the specific channel's values, and the timeseries config.
-    /// The argument must be a PropertyAccess (e.g. `f.oil`).
+    /// The argument must be a PropertyAccess (e.g. `f.output`).
     pub(super) fn resolve_timeseries_channel<'b>(
         &'b self,
         expr: &Expression,

@@ -84,10 +84,10 @@ class TestCount:
 
 
 class TestConnectionAggregation:
-    def test_sum_connection_properties(self, petroleum_graph):
+    def test_sum_connection_properties(self, portfolio_graph):
         result = (
-            petroleum_graph.select("Prospect")
-            .traverse("BECAME_DISCOVERY")
+            portfolio_graph.select("Proposal")
+            .traverse("BECAME_INITIATIVE")
             .calculate(
                 expression="sum(share_pct)",
                 aggregate_connections=True,
@@ -95,9 +95,9 @@ class TestConnectionAggregation:
         )
         assert result is not None
 
-    def test_avg_connection_properties(self, petroleum_graph):
+    def test_avg_connection_properties(self, portfolio_graph):
         result = (
-            petroleum_graph.select("Prospect")
+            portfolio_graph.select("Proposal")
             .traverse("HAS_ESTIMATE")
             .calculate(
                 expression="avg(weight)",

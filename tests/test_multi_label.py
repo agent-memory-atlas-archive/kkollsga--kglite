@@ -291,7 +291,7 @@ def test_disk_save_load_preserves_secondary_labels(tmp_path: Path):
 
 def test_disk_save_load_no_secondaries_no_sidecar(tmp_path: Path):
     """Single-label disk graphs must not write the sidecar (zero-cost
-    invariant for the kglite-docs / Sodir / Wikidata workloads that
+    invariant for the kglite-docs / Wikidata workloads that
     don't use multi-label)."""
     import pandas as pd
 
@@ -435,7 +435,7 @@ def test_indexed_primary_hits_union_queried_secondary_carriers(storage, tmp_path
 def test_single_label_save_load_unchanged(g, tmp_path: Path):
     """Graphs without secondary labels should save/load identically to
     0.10.4 (modulo the wire-format shift; the digest already accounted
-    for it). This is the kglite-docs / Sodir / Wikidata workload."""
+    for it). This is the kglite-docs / Wikidata workload."""
     df = pd.DataFrame({"id": [1, 2, 3], "name": ["A", "B", "C"]})
     g.add_nodes(df, "Item", "id", "name")
     save_path = tmp_path / "single.kgl"

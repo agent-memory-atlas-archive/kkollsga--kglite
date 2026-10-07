@@ -850,10 +850,11 @@ fn create_edges_batch_never_links_a_neighbouring_id_past_two_pow_53() {
 /// re-load from a source type the relationship type has seen merges.
 #[test]
 fn create_edges_batch_second_source_type_keeps_its_rows() {
-    let session = seed_notes("CREATE (:Field {id: 10}), (:Licence {id: 50}), (:Company {id: 1})");
-    let licensee = |src_type: &str, src_id: i64, vf: i64| {
+    let session =
+        seed_notes("CREATE (:Project {id: 10}), (:Contract {id: 50}), (:Company {id: 1})");
+    let holder = |src_type: &str, src_id: i64, vf: i64| {
         format!(
-            r#"{{"src_id":{src_id},"src_type":"{src_type}","dst_id":1,"dst_type":"Company","type":"HAS_LICENSEE","props":{{"vf":{vf}}}}}"#
+            r#"{{"src_id":{src_id},"src_type":"{src_type}","dst_id":1,"dst_type":"Company","type":"HAS_HOLDER","props":{{"vf":{vf}}}}}"#
         )
     };
     let counts = |report: &str| {
@@ -870,25 +871,25 @@ fn create_edges_batch_second_source_type_keeps_its_rows() {
     };
 
     assert_eq!(
-        batch(&[licensee("Field", 10, 2001), licensee("Field", 10, 2005)]),
+        batch(&[holder("Project", 10, 2001), holder("Project", 10, 2005)]),
         (2, 0)
     );
     assert_eq!(
         batch(&[
-            licensee("Licence", 50, 2001),
-            licensee("Licence", 50, 2004),
-            licensee("Licence", 50, 2007),
+            holder("Contract", 50, 2001),
+            holder("Contract", 50, 2004),
+            holder("Contract", 50, 2007),
         ]),
         (3, 0)
     );
-    assert_eq!(batch(&[licensee("Licence", 50, 2010)]), (0, 1));
+    assert_eq!(batch(&[holder("Contract", 50, 2010)]), (0, 1));
     assert_eq!(
         query_rows(
             session,
-            "MATCH (s)-[r:HAS_LICENSEE]->() RETURN labels(s)[0] AS s, count(r) AS c ORDER BY s",
+            "MATCH (s)-[r:HAS_HOLDER]->() RETURN labels(s)[0] AS s, count(r) AS c ORDER BY s",
             "{}"
         ),
-        serde_json::json!([{"s": "Field", "c": 2}, {"s": "Licence", "c": 3}])
+        serde_json::json!([{"s": "Project", "c": 2}, {"s": "Contract", "c": 3}])
     );
     unsafe { kglite_session_free(session) };
 }

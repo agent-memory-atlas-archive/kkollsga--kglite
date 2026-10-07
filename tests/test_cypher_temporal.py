@@ -212,26 +212,26 @@ class TestValidDuring:
 
 
 class TestValidAtWithDatetime:
-    """petroleum_graph has Estimate nodes with DateTime date_from/date_to."""
+    """portfolio_graph has Estimate nodes with DateTime date_from/date_to."""
 
-    def test_estimate_datetime_fields(self, petroleum_graph):
+    def test_estimate_datetime_fields(self, portfolio_graph):
         """First 25 estimates: 2020-01-01 to 2020-12-31. Mid-2020 should match all 25."""
-        rows = petroleum_graph.cypher(
+        rows = portfolio_graph.cypher(
             "MATCH (e:Estimate) WHERE valid_at(e, '2020-06-15', 'date_from', 'date_to') RETURN count(*) AS n"
         )
         assert rows[0]["n"] == 25
 
-    def test_estimate_with_date_function(self, petroleum_graph):
+    def test_estimate_with_date_function(self, portfolio_graph):
         """date() function should also work."""
-        rows = petroleum_graph.cypher(
+        rows = portfolio_graph.cypher(
             "MATCH (e:Estimate) WHERE valid_at(e, date('2020-06-15'), 'date_from', 'date_to') RETURN count(*) AS n"
         )
         assert rows[0]["n"] == 25
 
-    def test_prospect_string_fields(self, petroleum_graph):
-        """Prospect date_from/date_to are strings. All 20 active mid-2022."""
-        rows = petroleum_graph.cypher(
-            "MATCH (p:Prospect) WHERE valid_at(p, '2022-06-15', 'date_from', 'date_to') RETURN count(*) AS n"
+    def test_proposal_string_fields(self, portfolio_graph):
+        """Proposal date_from/date_to are strings. All 20 active mid-2022."""
+        rows = portfolio_graph.cypher(
+            "MATCH (p:Proposal) WHERE valid_at(p, '2022-06-15', 'date_from', 'date_to') RETURN count(*) AS n"
         )
         # First 10: 2020-01-01 to 2025-12-31 ✓, Last 10: 2019-01-01 to 2023-12-31 ✓
         assert rows[0]["n"] == 20

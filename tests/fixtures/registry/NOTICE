@@ -1,7 +1,7 @@
 Registry acceptance fixtures — sources, licences and derivation
 =================================================================
 
-Used by tests/test_registry_acceptance.py and tests/test_sodir_acceptance.py.
+Used by tests/test_registry_acceptance.py and tests/test_projects_acceptance.py.
 Retrieved 2026-09-25.
 
 rvig_tabel33.csv
@@ -35,14 +35,11 @@ cbs_gebieden_2009.csv
     reduce_cbs_gebieden_2009.py in this directory from the table's
     TypedDataSet JSON.
 
-sodir/
-    Synthetic. The files follow the column layout of the Norwegian Offshore
-    Directorate's (Sodir) field and production-licence history tables
-    (field_operator_hst, field_licensee_hst, licence, licence_licensee_hst),
-    and the five field names and licence number are those of real fields,
-    but every company, share and date is invented. The fixture was built
-    synthetic because no licence statement for the Sodir data was found with
-    the local copy of the data. It is written by sodir/build_sodir_synthetic.py
-    so that its answers have the shape of the real tables' answers (partner
-    counts 4/1/4/4/2 at 2009-06-30, and 18/11/18/20/19 when two of the three
-    hops are left undated).
+projects/
+    Synthetic. The files follow the column layout of a project registry's
+    project and contract history tables (project_manager_hst,
+    project_holder_hst, contract, contract_holder_hst). Every company, share,
+    date, name and number is invented. It is written by
+    projects/build_projects_synthetic.py so that its answers have the shape
+    of such a registry's answers (partner counts 4/1/4/4/2 at 2009-06-30, and
+    18/11/18/20/19 when two of the three hops are left undated).

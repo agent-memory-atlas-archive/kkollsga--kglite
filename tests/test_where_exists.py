@@ -545,7 +545,7 @@ class TestExistsInlinePropertyRegression:
         # auto-assigns sequentially), so {id: 17764457} matches reality.
         graph.add_nodes(
             pd.DataFrame({"nid": [17764457], "name": ["Gina Krog"]}),
-            "Field",
+            "Project",
             "nid",
             "name",
         )
@@ -558,7 +558,7 @@ class TestExistsInlinePropertyRegression:
         graph.add_connections(
             pd.DataFrame({"from_id": [17764457], "to_id": [20]}),
             "P17",
-            "Field",
+            "Project",
             "from_id",
             "Country",
             "to_id",

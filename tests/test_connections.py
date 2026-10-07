@@ -581,8 +581,8 @@ class TestSharedRelationshipTypeOwnership:
     def _graph():
         g = KnowledgeGraph()
         g.add_nodes(pd.DataFrame({"id": [1], "name": ["Acme"]}), "Company", "id", "name")
-        g.add_nodes(pd.DataFrame({"id": [10], "name": ["Gullfaks"]}), "Field", "id", "name")
-        g.add_nodes(pd.DataFrame({"id": [50], "name": ["PL050"]}), "Licence", "id", "name")
+        g.add_nodes(pd.DataFrame({"id": [10], "name": ["Birch"]}), "Project", "id", "name")
+        g.add_nodes(pd.DataFrame({"id": [50], "name": ["C050"]}), "Contract", "id", "name")
         return g
 
     @staticmethod
@@ -595,73 +595,73 @@ class TestSharedRelationshipTypeOwnership:
                 "vt": [vt for _, vt in periods],
             }
         )
-        return g.add_relationships(frame, "HAS_LICENSEE", source_type, "src", "Company", "tgt")
+        return g.add_relationships(frame, "HAS_HOLDER", source_type, "src", "Company", "tgt")
 
     @staticmethod
     def _periods(g, source_type):
         rows = g.cypher(
-            f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
+            f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_HOLDER]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
         ).to_list()
         return sorted(((r["vf"], r["vt"]) for r in rows), key=lambda p: (p[0], p[1] or ""))
 
     FIELD = [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
-    LICENCE = [("2001-01-01", "2003-12-31"), ("2004-01-01", "2006-12-31"), ("2007-01-01", None)]
+    CONTRACT = [("2001-01-01", "2003-12-31"), ("2004-01-01", "2006-12-31"), ("2007-01-01", None)]
 
     def test_a_second_source_type_keeps_every_row(self):
         g = self._graph()
-        assert self._load(g, "Field", 10, self.FIELD)["connections_created"] == 2
-        report = self._load(g, "Licence", 50, self.LICENCE)
-        # Licence has no HAS_LICENSEE relationship yet, so its load owns its
+        assert self._load(g, "Project", 10, self.FIELD)["connections_created"] == 2
+        report = self._load(g, "Contract", 50, self.CONTRACT)
+        # Contract has no HAS_HOLDER relationship yet, so its load owns its
         # rows: three repeated (50, 1) pairs are three relationships, not one
         # carrying a merged ('2007-01-01', '2006-12-31') interval.
         assert (report["connections_created"], report["connections_updated"]) == (3, 0)
-        assert self._periods(g, "Licence") == self.LICENCE
-        assert self._periods(g, "Field") == self.FIELD
+        assert self._periods(g, "Contract") == self.CONTRACT
+        assert self._periods(g, "Project") == self.FIELD
 
     def test_a_same_source_reload_merges(self):
         g = self._graph()
-        self._load(g, "Field", 10, self.FIELD)
-        report = self._load(g, "Field", 10, [("2005-01-01", "2009-12-31")])
+        self._load(g, "Project", 10, self.FIELD)
+        report = self._load(g, "Project", 10, [("2005-01-01", "2009-12-31")])
         assert (report["connections_created"], report["connections_updated"]) == (0, 1)
-        assert len(self._periods(g, "Field")) == 2
+        assert len(self._periods(g, "Project")) == 2
 
     def test_a_same_source_reload_on_a_declared_type_adds_versions(self):
         g = self._graph()
-        self._load(g, "Field", 10, self.FIELD)
-        self._load(g, "Licence", 50, self.LICENCE)
+        self._load(g, "Project", 10, self.FIELD)
+        self._load(g, "Contract", 50, self.CONTRACT)
         g.cypher(
-            "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', "
+            "CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project', "
             "from: 'vf', to: 'vt', convention: 'closed'})"
         )
         report = self._load(
-            g, "Field", 10, [("2001-01-01", "2004-12-31"), ("2005-01-01", "2009-12-31"), ("2010-01-01", None)]
+            g, "Project", 10, [("2001-01-01", "2004-12-31"), ("2005-01-01", "2009-12-31"), ("2010-01-01", None)]
         )
         # The stored 2001 row is dropped as a copy; the 2005 row closing the
         # open period and the 2010 row are new versions, and the open 2005
         # version stays.
         assert (report["connections_created"], report["connections_updated"]) == (2, 0)
-        assert self._periods(g, "Field") == [
+        assert self._periods(g, "Project") == [
             ("2001-01-01", "2004-12-31"),
             ("2005-01-01", None),
             ("2005-01-01", "2009-12-31"),
             ("2010-01-01", None),
         ]
-        assert self._periods(g, "Licence") == self.LICENCE
+        assert self._periods(g, "Contract") == self.CONTRACT
 
     def test_a_replace_from_a_second_source_type_keeps_every_row(self):
         g = self._graph()
-        self._load(g, "Field", 10, self.FIELD)
+        self._load(g, "Project", 10, self.FIELD)
         frame = pd.DataFrame(
             {
                 "src": [50] * 3,
                 "tgt": [1] * 3,
-                "vf": [vf for vf, _ in self.LICENCE],
-                "vt": [vt for _, vt in self.LICENCE],
+                "vf": [vf for vf, _ in self.CONTRACT],
+                "vt": [vt for _, vt in self.CONTRACT],
             }
         )
-        g.replace_relationships(frame, "HAS_LICENSEE", "Licence", "src", "Company", "tgt")
-        assert self._periods(g, "Licence") == self.LICENCE
-        assert self._periods(g, "Field") == self.FIELD
+        g.replace_relationships(frame, "HAS_HOLDER", "Contract", "src", "Company", "tgt")
+        assert self._periods(g, "Contract") == self.CONTRACT
+        assert self._periods(g, "Project") == self.FIELD
 
     # ── a load that writes nothing claims nothing ───────────────────────
 
@@ -676,14 +676,14 @@ class TestSharedRelationshipTypeOwnership:
         ids=["zero-rows", "null-source-id", "null-target-id"],
     )
     def test_a_load_that_writes_nothing_leaves_the_first_real_load_its_rows(self, nothing):
-        """Red proof: a zero-row (or all-null-id) load recorded Field as a
-        source type, so the next Field load merged and folded its repeated
+        """Red proof: a zero-row (or all-null-id) load recorded Project as a
+        source type, so the next Project load merged and folded its repeated
         (10, 1) pair onto one relationship."""
         g = self._graph()
-        empty = g.add_relationships(self._typed_frame(*nothing), "HAS_LICENSEE", "Field", "src", "Company", "tgt")
+        empty = g.add_relationships(self._typed_frame(*nothing), "HAS_HOLDER", "Project", "src", "Company", "tgt")
         assert empty["connections_created"] == 0
         report = g.add_relationships(
-            self._typed_frame([10, 10], [1, 1]), "HAS_LICENSEE", "Field", "src", "Company", "tgt"
+            self._typed_frame([10, 10], [1, 1]), "HAS_HOLDER", "Project", "src", "Company", "tgt"
         )
         assert (report["connections_created"], report["connections_updated"]) == (2, 0)
-        assert g.cypher("MATCH (:Field)-[r:HAS_LICENSEE]->(:Company) RETURN count(r) AS n").scalar() == 2
+        assert g.cypher("MATCH (:Project)-[r:HAS_HOLDER]->(:Company) RETURN count(r) AS n").scalar() == 2

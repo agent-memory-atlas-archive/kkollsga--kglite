@@ -7,7 +7,7 @@
 **Pure-Rust knowledge graph engine** — Cypher pipeline,
 snapshot/working CoW transactions, columnar properties over memory /
 mmap / disk storage backends, optional RDF / OKF format loaders. Pre-packaged domain
-dataset loaders (SEC EDGAR, Sodir, Wikidata) live in the separate
+dataset loaders (SEC EDGAR, Wikidata) live in the separate
 kglite-datasets project. Zero PyO3 in the dependency tree; embed
 directly from any Rust binary.
 

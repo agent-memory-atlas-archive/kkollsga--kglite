@@ -51,7 +51,7 @@ kglite is the engine. Four companion projects surround it. Three build graphs it
   code graphs (14 languages, web-framework route detection). Build with it,
   query the `.kgl` here.
 - **[kglite-datasets](https://kglite-datasets.readthedocs.io)** —
-  fetch-build-cache loaders for public registries (SEC EDGAR, Wikidata, Sodir).
+  fetch-build-cache loaders for public registries (SEC EDGAR, Wikidata).
 - **[sonagram](https://sonagram.readthedocs.io)** — turns a local music
   library into a kglite knowledge graph via sonara audio analysis (tempo,
   energy, mood, key); AI agents curate playlists over it through a simple

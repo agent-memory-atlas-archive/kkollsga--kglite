@@ -134,18 +134,18 @@ pub(super) fn write_topic_match(xml: &mut String) {
     xml.push_str("    <desc>Pattern-match nodes and relationships. OPTIONAL MATCH returns nulls for non-matching patterns (left join).</desc>\n");
     xml.push_str("    <syntax>MATCH (n:Label {prop: val})-[r:TYPE]-&gt;(m)</syntax>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"all nodes of type\">MATCH (n:Field) RETURN n.name</ex>\n");
+    xml.push_str("      <ex desc=\"all nodes of type\">MATCH (n:Project) RETURN n.name</ex>\n");
     xml.push_str("      <ex desc=\"with relationship\">MATCH (a:Person)-[:KNOWS]-&gt;(b) RETURN a.name, b.name</ex>\n");
     xml.push_str("      <ex desc=\"variable-length path\">MATCH (a)-[:KNOWS*1..3]-&gt;(b) RETURN a, b</ex>\n");
-    xml.push_str("      <ex desc=\"inline property filter\">MATCH (n:Field {status: 'active'}) RETURN n</ex>\n");
-    xml.push_str("      <ex desc=\"optional match\">MATCH (a:Field) OPTIONAL MATCH (a)-[:HAS]-&gt;(b:Well) RETURN a.name, b.name</ex>\n");
+    xml.push_str("      <ex desc=\"inline property filter\">MATCH (n:Project {status: 'active'}) RETURN n</ex>\n");
+    xml.push_str("      <ex desc=\"optional match\">MATCH (a:Project) OPTIONAL MATCH (a)-[:HAS]-&gt;(b:Well) RETURN a.name, b.name</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("    <pitfall name=\"cartesian product from multiple OPTIONAL MATCH\">\n");
     xml.push_str(
         "      Multiple OPTIONAL MATCH clauses create a cross-product of all matched paths.\n",
     );
     xml.push_str(
-        "      If a node connects to 10 prospects × 5 plays × 3 licences = 150 rows per node.\n",
+        "      If a node connects to 10 proposals × 5 plays × 3 contracts = 150 rows per node.\n",
     );
     xml.push_str("      Fix: break with WITH to collapse dimensions before expanding the next.\n");
     xml.push_str("      <bad>MATCH (w:Well) OPTIONAL MATCH (w)-[:A]-&gt;(a) OPTIONAL MATCH (w)-[:B]-&gt;(b) OPTIONAL MATCH (w)-[:C]-&gt;(c) RETURN w, collect(a), collect(b), collect(c)</bad>\n");
@@ -159,7 +159,7 @@ pub(super) fn write_topic_where(xml: &mut String) {
     xml.push_str("    <desc>Filter results by predicate. Supports comparison, null checks, regex, string predicates, boolean logic.</desc>\n");
     xml.push_str("    <examples>\n");
     xml.push_str("      <ex desc=\"comparison\">WHERE n.depth &gt; 3000</ex>\n");
-    xml.push_str("      <ex desc=\"string contains\">WHERE n.name CONTAINS 'oil'</ex>\n");
+    xml.push_str("      <ex desc=\"string contains\">WHERE n.name CONTAINS 'output'</ex>\n");
     xml.push_str("      <ex desc=\"starts/ends with\">WHERE n.name STARTS WITH '35/'</ex>\n");
     xml.push_str("      <ex desc=\"regex (whole value)\">WHERE n.name =~ '35/9-.*'</ex>\n");
     xml.push_str("      <ex desc=\"null check\">WHERE n.depth IS NOT NULL</ex>\n");
@@ -174,8 +174,8 @@ pub(super) fn write_topic_filter(xml: &mut String) {
     xml.push_str("    <desc>Standalone row filter, equivalent to WITH * WHERE predicate. After OPTIONAL MATCH it removes null-extended rows whose predicate is null; an attached WHERE instead constrains the optional pattern and preserves the outer row.</desc>\n");
     xml.push_str("    <syntax>FILTER predicate</syntax>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"post-match filter\">MATCH (n:Field) FILTER n.depth &gt; 3000 RETURN n.name</ex>\n");
-    xml.push_str("      <ex desc=\"drop optional misses\">OPTIONAL MATCH (n:Field) FILTER n IS NOT NULL RETURN n</ex>\n");
+    xml.push_str("      <ex desc=\"post-match filter\">MATCH (n:Project) FILTER n.depth &gt; 3000 RETURN n.name</ex>\n");
+    xml.push_str("      <ex desc=\"drop optional misses\">OPTIONAL MATCH (n:Project) FILTER n IS NOT NULL RETURN n</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </FILTER>\n");
 }
@@ -203,9 +203,9 @@ pub(super) fn write_topic_finish(xml: &mut String) {
     xml.push_str("    <desc>Terminal alternative to RETURN. Executes the preceding read or write pipeline, preserves side effects, and returns no rows or columns.</desc>\n");
     xml.push_str("    <syntax>query FINISH</syntax>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"read without results\">MATCH (n:Field) FINISH</ex>\n");
+    xml.push_str("      <ex desc=\"read without results\">MATCH (n:Project) FINISH</ex>\n");
     xml.push_str(
-        "      <ex desc=\"write without results\">CREATE (:Field {name: 'Test'}) FINISH</ex>\n",
+        "      <ex desc=\"write without results\">CREATE (:Project {name: 'Test'}) FINISH</ex>\n",
     );
     xml.push_str("    </examples>\n");
     xml.push_str("  </FINISH>\n");
@@ -215,9 +215,9 @@ pub(super) fn write_topic_with(xml: &mut String) {
     xml.push_str("  <WITH>\n");
     xml.push_str("    <desc>Intermediate projection and aggregation. Creates a new scope — only variables listed in WITH are available in subsequent clauses.</desc>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"filter after aggregation\">MATCH (n:Field) WITH n.area AS area, count(*) AS c WHERE c &gt; 5 RETURN area, c</ex>\n");
-    xml.push_str("      <ex desc=\"pipe between matches\">MATCH (a:Field) WITH a MATCH (a)-[:HAS]-&gt;(b) RETURN a.name, b.name</ex>\n");
-    xml.push_str("      <ex desc=\"limit intermediate\">MATCH (n:Field) WITH n ORDER BY n.name LIMIT 10 RETURN n.name</ex>\n");
+    xml.push_str("      <ex desc=\"filter after aggregation\">MATCH (n:Project) WITH n.area AS area, count(*) AS c WHERE c &gt; 5 RETURN area, c</ex>\n");
+    xml.push_str("      <ex desc=\"pipe between matches\">MATCH (a:Project) WITH a MATCH (a)-[:HAS]-&gt;(b) RETURN a.name, b.name</ex>\n");
+    xml.push_str("      <ex desc=\"limit intermediate\">MATCH (n:Project) WITH n ORDER BY n.name LIMIT 10 RETURN n.name</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </WITH>\n");
 }
@@ -253,7 +253,7 @@ pub(super) fn write_topic_unwind(xml: &mut String) {
     xml.push_str("    <syntax>UNWIND expression AS variable</syntax>\n");
     xml.push_str("    <examples>\n");
     xml.push_str("      <ex desc=\"literal list\">UNWIND ['A','B','C'] AS x MATCH (n {code: x}) RETURN n</ex>\n");
-    xml.push_str("      <ex desc=\"collected list\">MATCH (n:Field) WITH collect(n.name) AS names UNWIND names AS name RETURN name</ex>\n");
+    xml.push_str("      <ex desc=\"collected list\">MATCH (n:Project) WITH collect(n.name) AS names UNWIND names AS name RETURN name</ex>\n");
     xml.push_str("      <ex desc=\"range\">UNWIND range(1, 10) AS i RETURN i</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </UNWIND>\n");
@@ -264,8 +264,8 @@ pub(super) fn write_topic_union(xml: &mut String) {
     xml.push_str("    <desc>Combine result sets from two queries. UNION removes duplicates; UNION ALL keeps all rows. Column names must match.</desc>\n");
     xml.push_str("    <syntax>query1 UNION [ALL] query2</syntax>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"basic union\">MATCH (a:Field) RETURN a.name AS name UNION MATCH (b:Discovery) RETURN b.name AS name</ex>\n");
-    xml.push_str("      <ex desc=\"union all\">MATCH (a:Field) RETURN a.name AS name UNION ALL MATCH (b:Field) RETURN b.name AS name</ex>\n");
+    xml.push_str("      <ex desc=\"basic union\">MATCH (a:Project) RETURN a.name AS name UNION MATCH (b:Initiative) RETURN b.name AS name</ex>\n");
+    xml.push_str("      <ex desc=\"union all\">MATCH (a:Project) RETURN a.name AS name UNION ALL MATCH (b:Project) RETURN b.name AS name</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </UNION>\n");
 }
@@ -286,10 +286,10 @@ pub(super) fn write_topic_create(xml: &mut String) {
     xml.push_str("    <desc>Create new nodes and relationships with properties.</desc>\n");
     xml.push_str("    <examples>\n");
     xml.push_str(
-        "      <ex desc=\"node\">CREATE (:Field {name: 'Troll', status: 'PRODUCING'})</ex>\n",
+        "      <ex desc=\"node\">CREATE (:Project {name: 'Tundra', status: 'PRODUCING'})</ex>\n",
     );
-    xml.push_str("      <ex desc=\"relationship\">MATCH (a:Field {name: 'Troll'}), (b:Company {name: 'Equinor'}) CREATE (a)-[:OPERATED_BY]-&gt;(b)</ex>\n");
-    xml.push_str("      <ex desc=\"with properties\">MATCH (a:Field), (b:Well) WHERE a.name = b.field CREATE (b)-[:BELONGS_TO {since: 2020}]-&gt;(a)</ex>\n");
+    xml.push_str("      <ex desc=\"relationship\">MATCH (a:Project {name: 'Tundra'}), (b:Company {name: 'Northwind'}) CREATE (a)-[:MANAGED_BY]-&gt;(b)</ex>\n");
+    xml.push_str("      <ex desc=\"with properties\">MATCH (a:Project), (b:Well) WHERE a.name = b.field CREATE (b)-[:BELONGS_TO {since: 2020}]-&gt;(a)</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </CREATE>\n");
 }
@@ -308,8 +308,8 @@ pub(super) fn write_topic_set(xml: &mut String) {
     xml.push_str("  <SET>\n");
     xml.push_str("    <desc>Set or update properties on existing nodes/relationships.</desc>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"set property\">MATCH (n:Field {name: 'Troll'}) SET n.status = 'SHUT DOWN'</ex>\n");
-    xml.push_str("      <ex desc=\"set multiple\">MATCH (n:Field {name: 'Troll'}) SET n.status = 'SHUT DOWN', n.end_year = 2025</ex>\n");
+    xml.push_str("      <ex desc=\"set property\">MATCH (n:Project {name: 'Tundra'}) SET n.status = 'SHUT DOWN'</ex>\n");
+    xml.push_str("      <ex desc=\"set multiple\">MATCH (n:Project {name: 'Tundra'}) SET n.status = 'SHUT DOWN', n.end_year = 2025</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </SET>\n");
 }
@@ -318,12 +318,12 @@ pub(super) fn write_topic_delete(xml: &mut String) {
     xml.push_str("  <DELETE>\n");
     xml.push_str("    <desc>Delete nodes or relationships. NODETACH DELETE explicitly uses plain DELETE semantics and refuses nodes that still have relationships; DETACH DELETE removes those relationships too. REMOVE drops individual properties or labels.</desc>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"delete node\">MATCH (n:Field {name: 'Test'}) DELETE n</ex>\n");
-    xml.push_str("      <ex desc=\"explicit non-detach\">MATCH (n:Field {name: 'Test'}) NODETACH DELETE n</ex>\n");
+    xml.push_str("      <ex desc=\"delete node\">MATCH (n:Project {name: 'Test'}) DELETE n</ex>\n");
+    xml.push_str("      <ex desc=\"explicit non-detach\">MATCH (n:Project {name: 'Test'}) NODETACH DELETE n</ex>\n");
     xml.push_str(
         "      <ex desc=\"delete relationship\">MATCH (a)-[r:OLD_REL]-&gt;(b) DELETE r</ex>\n",
     );
-    xml.push_str("      <ex desc=\"remove property\">MATCH (n:Field {name: 'Troll'}) REMOVE n.temp_flag</ex>\n");
+    xml.push_str("      <ex desc=\"remove property\">MATCH (n:Project {name: 'Tundra'}) REMOVE n.temp_flag</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </DELETE>\n");
 }
@@ -332,9 +332,9 @@ pub(super) fn write_topic_merge(xml: &mut String) {
     xml.push_str("  <MERGE>\n");
     xml.push_str("    <desc>Match existing node/relationship or create if it doesn't exist (upsert). ON CREATE SET and ON MATCH SET for conditional property updates.</desc>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"basic\">MERGE (n:Field {name: 'Troll'})</ex>\n");
-    xml.push_str("      <ex desc=\"on create\">MERGE (n:Field {name: 'Troll'}) ON CREATE SET n.created = 2025</ex>\n");
-    xml.push_str("      <ex desc=\"on match\">MERGE (n:Field {name: 'Troll'}) ON MATCH SET n.updated = 2025</ex>\n");
+    xml.push_str("      <ex desc=\"basic\">MERGE (n:Project {name: 'Tundra'})</ex>\n");
+    xml.push_str("      <ex desc=\"on create\">MERGE (n:Project {name: 'Tundra'}) ON CREATE SET n.created = 2025</ex>\n");
+    xml.push_str("      <ex desc=\"on match\">MERGE (n:Project {name: 'Tundra'}) ON MATCH SET n.updated = 2025</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </MERGE>\n");
 }
@@ -366,7 +366,7 @@ pub(super) fn write_topic_operators(xml: &mut String) {
     xml.push_str(
         "      <ex desc=\"concat with number\">RETURN n.name || '-' || n.block AS label</ex>\n",
     );
-    xml.push_str("      <ex desc=\"regex case-insensitive\">WHERE n.name =~ '(?i)troll.*'</ex>\n");
+    xml.push_str("      <ex desc=\"regex case-insensitive\">WHERE n.name =~ '(?i)tundra.*'</ex>\n");
     xml.push_str("      <ex desc=\"IN list\">WHERE n.status IN ['PRODUCING', 'SHUT DOWN']</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </operators>\n");
@@ -410,8 +410,8 @@ pub(super) fn write_topic_patterns(xml: &mut String) {
     xml.push_str("  <patterns>\n");
     xml.push_str("    <desc>Pattern syntax for matching graph structures.</desc>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"labeled node\">(n:Field)</ex>\n");
-    xml.push_str("      <ex desc=\"inline properties\">(n:Field {status: 'active'})</ex>\n");
+    xml.push_str("      <ex desc=\"labeled node\">(n:Project)</ex>\n");
+    xml.push_str("      <ex desc=\"inline properties\">(n:Project {status: 'active'})</ex>\n");
     xml.push_str("      <ex desc=\"directed relationship\">(a)-[:BELONGS_TO]-&gt;(b)</ex>\n");
     xml.push_str(
         "      <ex desc=\"variable-length\">(a)-[:KNOWS*1..3]-&gt;(b) — path length 1 to 3</ex>\n",
@@ -594,7 +594,7 @@ pub(super) fn write_topic_cluster(xml: &mut String) {
     xml.push_str("    </params>\n");
     xml.push_str("    <yields>node (the matched node), cluster (int — cluster ID; -1 = noise for DBSCAN)</yields>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"spatial DBSCAN\">MATCH (f:Field) CALL cluster({method: 'dbscan', eps: 50000, min_points: 2}) YIELD node, cluster RETURN cluster, count(*) AS n, collect(node.name) AS fields ORDER BY n DESC</ex>\n");
+    xml.push_str("      <ex desc=\"spatial DBSCAN\">MATCH (f:Project) CALL cluster({method: 'dbscan', eps: 50000, min_points: 2}) YIELD node, cluster RETURN cluster, count(*) AS n, collect(node.name) AS fields ORDER BY n DESC</ex>\n");
     xml.push_str("      <ex desc=\"property K-means\">MATCH (w:Well) CALL cluster({properties: ['depth', 'temperature'], method: 'kmeans', k: 3, normalize: true}) YIELD node, cluster RETURN cluster, collect(node.name) AS wells</ex>\n");
     xml.push_str("      <ex desc=\"spatial K-means\">MATCH (s:Station) CALL cluster({method: 'kmeans', k: 4}) YIELD node, cluster RETURN cluster, count(*) AS n</ex>\n");
     xml.push_str("    </examples>\n");
@@ -631,11 +631,11 @@ pub(super) fn write_topic_profile(xml: &mut String) {
 pub(super) fn write_topic_orphan_node(xml: &mut String) {
     xml.push_str("  <orphan_node>\n");
     xml.push_str("    <desc>Yields nodes of {type} that have zero edges in any direction. Almost always ingest artifacts.</desc>\n");
-    xml.push_str("    <syntax>CALL orphan_node({type: 'Wellbore'}) YIELD node</syntax>\n");
+    xml.push_str("    <syntax>CALL orphan_node({type: 'Site'}) YIELD node</syntax>\n");
     xml.push_str("    <yield>node — bound to the orphaned NodeIndex (use node.id, node.title, etc.)</yield>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"count orphans\">CALL orphan_node({type: 'Discovery'}) YIELD node RETURN count(node) AS c</ex>\n");
-    xml.push_str("      <ex desc=\"top-5 orphan ids\">CALL orphan_node({type: 'Wellbore'}) YIELD node RETURN node.id, node.title LIMIT 5</ex>\n");
+    xml.push_str("      <ex desc=\"count orphans\">CALL orphan_node({type: 'Initiative'}) YIELD node RETURN count(node) AS c</ex>\n");
+    xml.push_str("      <ex desc=\"top-5 orphan ids\">CALL orphan_node({type: 'Site'}) YIELD node RETURN node.id, node.title LIMIT 5</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </orphan_node>\n");
 }
@@ -667,11 +667,11 @@ pub(super) fn write_topic_cycle_2step(xml: &mut String) {
 pub(super) fn write_topic_missing_required_edge(xml: &mut String) {
     xml.push_str("  <missing_required_edge>\n");
     xml.push_str("    <desc>Yields nodes of {type} that have NO outgoing {edge}. Direction-validated: refuses to execute when {type} is on the target side of {edge} in the graph's actual schema, suggesting missing_inbound_edge instead.</desc>\n");
-    xml.push_str("    <syntax>CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node</syntax>\n");
+    xml.push_str("    <syntax>CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node</syntax>\n");
     xml.push_str("    <yield>node — bound to the violating NodeIndex</yield>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"wellbores missing licence link\">CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node RETURN count(node) AS missing</ex>\n");
-    xml.push_str("      <ex desc=\"composed: PL057 wellbores missing DRILLED_BY\">MATCH (l:Licence {title: '057'})&lt;-[:IN_LICENCE]-(w:Wellbore) WITH collect(w.id) AS pl057 CALL missing_required_edge({type: 'Wellbore', edge: 'DRILLED_BY'}) YIELD node WHERE node.id IN pl057 RETURN count(*)</ex>\n");
+    xml.push_str("      <ex desc=\"sites missing contract link\">CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node RETURN count(node) AS missing</ex>\n");
+    xml.push_str("      <ex desc=\"composed: C057 sites missing BUILT_BY\">MATCH (l:Contract {title: '057'})&lt;-[:IN_CONTRACT]-(w:Site) WITH collect(w.id) AS c057 CALL missing_required_edge({type: 'Site', edge: 'BUILT_BY'}) YIELD node WHERE node.id IN c057 RETURN count(*)</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </missing_required_edge>\n");
 }
@@ -679,10 +679,10 @@ pub(super) fn write_topic_missing_required_edge(xml: &mut String) {
 pub(super) fn write_topic_missing_inbound_edge(xml: &mut String) {
     xml.push_str("  <missing_inbound_edge>\n");
     xml.push_str("    <desc>Yields nodes of {type} that have NO incoming {edge}. Mirror of missing_required_edge with the same direction validation in reverse.</desc>\n");
-    xml.push_str("    <syntax>CALL missing_inbound_edge({type: 'Discovery', edge: 'IN_DISCOVERY'}) YIELD node</syntax>\n");
+    xml.push_str("    <syntax>CALL missing_inbound_edge({type: 'Initiative', edge: 'IN_INITIATIVE'}) YIELD node</syntax>\n");
     xml.push_str("    <yield>node — bound to the violating NodeIndex</yield>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"discoveries with no source wellbore\">CALL missing_inbound_edge({type: 'Discovery', edge: 'IN_DISCOVERY'}) YIELD node RETURN node.title</ex>\n");
+    xml.push_str("      <ex desc=\"initiatives with no source site\">CALL missing_inbound_edge({type: 'Initiative', edge: 'IN_INITIATIVE'}) YIELD node RETURN node.title</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </missing_inbound_edge>\n");
 }
@@ -690,13 +690,13 @@ pub(super) fn write_topic_missing_inbound_edge(xml: &mut String) {
 pub(super) fn write_topic_duplicate_title(xml: &mut String) {
     xml.push_str("  <duplicate_title>\n");
     xml.push_str("    <desc>Yields one row per node of {type} whose title is shared with at least one other node of the same type. Aggregate downstream to get per-group rollups.</desc>\n");
-    xml.push_str("    <syntax>CALL duplicate_title({type: 'Prospect'}) YIELD node</syntax>\n");
+    xml.push_str("    <syntax>CALL duplicate_title({type: 'Proposal'}) YIELD node</syntax>\n");
     xml.push_str(
         "    <yield>node — bound to a NodeIndex whose title appears more than once</yield>\n",
     );
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"all duplicates\">CALL duplicate_title({type: 'Prospect'}) YIELD node RETURN count(node)</ex>\n");
-    xml.push_str("      <ex desc=\"group + count\">CALL duplicate_title({type: 'Prospect'}) YIELD node WITH node.title AS title, collect(node) AS dups WITH title, size(dups) AS n WHERE n &gt; 1 RETURN title, n ORDER BY n DESC LIMIT 20</ex>\n");
+    xml.push_str("      <ex desc=\"all duplicates\">CALL duplicate_title({type: 'Proposal'}) YIELD node RETURN count(node)</ex>\n");
+    xml.push_str("      <ex desc=\"group + count\">CALL duplicate_title({type: 'Proposal'}) YIELD node WITH node.title AS title, collect(node) AS dups WITH title, size(dups) AS n WHERE n &gt; 1 RETURN title, n ORDER BY n DESC LIMIT 20</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </duplicate_title>\n");
 }
@@ -789,7 +789,7 @@ pub(super) fn write_topic_parallel_edges(xml: &mut String) {
 pub(super) fn write_topic_spatial(xml: &mut String) {
     xml.push_str("  <spatial>\n");
     xml.push_str("    <desc>Spatial functions for geographic queries. Requires set_spatial() config on the node type (location or geometry). All distance/area/perimeter results are in meters.</desc>\n");
-    xml.push_str("    <setup>Python: g.set_spatial('Field', location=('lat', 'lon')) or g.set_spatial('Area', geometry='wkt')</setup>\n");
+    xml.push_str("    <setup>Python: g.set_spatial('Project', location=('lat', 'lon')) or g.set_spatial('Area', geometry='wkt')</setup>\n");
     xml.push_str("    <note>WKT uses (longitude latitude) order per OGC standard. point(lat, lon) uses latitude-first (as does point({latitude, longitude}); point({x, y, crs: 'wgs-84'}) takes x as longitude). These conventions differ — be careful when mixing them.</note>\n");
     xml.push_str("    <functions>\n");
     xml.push_str("      <fn name=\"distance(a, b)\">Geodesic distance in meters between two spatial nodes. Returns Null if either node has no location.</fn>\n");
@@ -802,8 +802,8 @@ pub(super) fn write_topic_spatial(xml: &mut String) {
     xml.push_str("      <fn name=\"perimeter(n)\">Perimeter of node's geometry in meters.</fn>\n");
     xml.push_str("    </functions>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"distance between nodes\">MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Ekofisk'}) RETURN distance(a, b) / 1000.0 AS km</ex>\n");
-    xml.push_str("      <ex desc=\"nearest neighbors\">MATCH (a:Field {name: 'Troll'}), (b:Field) WHERE a &lt;&gt; b RETURN b.name, round(distance(a, b) / 1000.0, 1) AS km ORDER BY km LIMIT 5</ex>\n");
+    xml.push_str("      <ex desc=\"distance between nodes\">MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Ember'}) RETURN distance(a, b) / 1000.0 AS km</ex>\n");
+    xml.push_str("      <ex desc=\"nearest neighbors\">MATCH (a:Project {name: 'Tundra'}), (b:Project) WHERE a &lt;&gt; b RETURN b.name, round(distance(a, b) / 1000.0, 1) AS km ORDER BY km LIMIT 5</ex>\n");
     xml.push_str("      <ex desc=\"contains check\">MATCH (area:Block), (w:Well) WHERE contains(area, w) RETURN area.name, collect(w.name) AS wells</ex>\n");
     xml.push_str("      <ex desc=\"area calculation\">MATCH (b:Block) RETURN b.name, round(area(b) / 1e6, 1) AS km2</ex>\n");
     xml.push_str("    </examples>\n");
@@ -835,7 +835,7 @@ pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("      <ex desc=\"declared type\">MATCH (t:Team) WHERE valid_at(t, date('2010-01-01')) RETURN count(*)</ex>\n");
     xml.push_str("      <ex desc=\"node valid at date\">MATCH (e:Estimate) WHERE valid_at(e, '2020-06-15', 'date_from', 'date_to') RETURN e.title, e.value</ex>\n");
     xml.push_str("      <ex desc=\"edge valid at date\">MATCH (a)-[r:EMPLOYED_AT]->(b) WHERE valid_at(r, '2023-01-01', 'start_date', 'end_date') RETURN a.name, b.name</ex>\n");
-    xml.push_str("      <ex desc=\"range overlap\">MATCH (p:Prospect) WHERE valid_during(p, '2021-01-01', '2022-12-31', 'date_from', 'date_to') RETURN p.title</ex>\n");
+    xml.push_str("      <ex desc=\"range overlap\">MATCH (p:Proposal) WHERE valid_during(p, '2021-01-01', '2022-12-31', 'date_from', 'date_to') RETURN p.title</ex>\n");
     xml.push_str("      <ex desc=\"with date()\">MATCH (e:Estimate) WHERE valid_at(e, date('2020-06-15'), 'date_from', 'date_to') RETURN e.title</ex>\n");
     xml.push_str("      <ex desc=\"open-ended\">MATCH (c:Contract) WHERE valid_at(c, '2025-01-01', 'start_date', 'end_date') RETURN c.title -- NULL end_date = still valid</ex>\n");
     xml.push_str("    </examples>\n");
@@ -1109,7 +1109,7 @@ pub(super) fn write_fluent_topic_traversal(xml: &mut String) {
     xml.push_str("    <examples>\n");
     xml.push_str("      <ex desc=\"basic outgoing\">graph.select('Person').traverse('WORKS_AT').collect()</ex>\n");
     xml.push_str("      <ex desc=\"incoming with filter\">graph.select('Company').traverse('WORKS_AT', direction='incoming', where={'age': {'&gt;': 30}})</ex>\n");
-    xml.push_str("      <ex desc=\"target type filter\">graph.select('Well').traverse('OF_FIELD', direction='incoming', target_type='ProductionProfile')</ex>\n");
+    xml.push_str("      <ex desc=\"target type filter\">graph.select('Well').traverse('OF_PROJECT', direction='incoming', target_type='ProductionProfile')</ex>\n");
     xml.push_str("      <ex desc=\"multi-hop chain\">graph.select('Person').traverse('WORKS_AT').traverse('LOCATED_IN').collect()</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </traversal>\n");
@@ -1153,7 +1153,7 @@ pub(super) fn write_fluent_topic_spatial(xml: &mut String) {
     );
     xml.push_str("      <ex desc=\"near point (degrees)\">graph.select('City').near_point(59.91, 10.75, 0.5)</ex>\n");
     xml.push_str("      <ex desc=\"near point (meters)\">graph.select('City').near_point_m(59.91, 10.75, 50000)</ex>\n");
-    xml.push_str("      <ex desc=\"bounding box\">graph.select('Field').within_bounds(55.0, 65.0, 0.0, 15.0)</ex>\n");
+    xml.push_str("      <ex desc=\"bounding box\">graph.select('Project').within_bounds(55.0, 65.0, 0.0, 15.0)</ex>\n");
     xml.push_str("      <ex desc=\"point in polygon\">graph.select('Block').contains_point(60.5, 4.2)</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </spatial>\n");
@@ -1177,10 +1177,10 @@ pub(super) fn write_fluent_topic_temporal(xml: &mut String) {
     xml.push_str("      <rule>An unreadable bound raises, naming the step, the node and the property (select(): node '2', property 'vt': ...).</rule>\n");
     xml.push_str("    </rules>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"as of a date\">graph.date('2010-06-30').select('Field').traverse('HAS_LICENSEE')</ex>\n");
-    xml.push_str("      <ex desc=\"point in time, every version tested\">graph.select('Licence', temporal=False).valid_at('2020-06-15')</ex>\n");
-    xml.push_str("      <ex desc=\"range overlap\">graph.select('Licence', temporal=False).valid_during('2020-01-01', '2020-12-31')</ex>\n");
-    xml.push_str("      <ex desc=\"one hop at a date\">graph.select('Field', temporal=False).traverse('HAS_LICENSEE', at='2005')</ex>\n");
+    xml.push_str("      <ex desc=\"as of a date\">graph.date('2010-06-30').select('Project').traverse('HAS_HOLDER')</ex>\n");
+    xml.push_str("      <ex desc=\"point in time, every version tested\">graph.select('Contract', temporal=False).valid_at('2020-06-15')</ex>\n");
+    xml.push_str("      <ex desc=\"range overlap\">graph.select('Contract', temporal=False).valid_during('2020-01-01', '2020-12-31')</ex>\n");
+    xml.push_str("      <ex desc=\"one hop at a date\">graph.select('Project', temporal=False).traverse('HAS_HOLDER', at='2005')</ex>\n");
     xml.push_str("      <ex desc=\"named bounds\">graph.select('Contract', temporal=False).valid_at('2023-01-01', date_from_field='start_date', date_to_field='end_date')</ex>\n");
     xml.push_str("      <ex desc=\"algorithm as of a date\">graph.cypher('CALL pagerank() YIELD node, score RETURN node.title, score', valid_at='2010-06-30')</ex>\n");
     xml.push_str("    </examples>\n");
@@ -1320,10 +1320,10 @@ pub(super) fn write_fluent_topic_timeseries(xml: &mut String) {
     xml.push_str("      <m sig=\"timeseries_config(node_type=None)\">Query timeseries metadata (resolution, channels, units).</m>\n");
     xml.push_str("    </methods>\n");
     xml.push_str("    <examples>\n");
-    xml.push_str("      <ex desc=\"schema\">graph.set_timeseries('Field', resolution='month', channels=['oil', 'gas'], units={'oil': 'MSm3'})</ex>\n");
-    xml.push_str("      <ex desc=\"bulk load\">graph.add_timeseries('Field', data=prod_df, fk='field_id', time_key=['date'], channels=['oil', 'gas'])</ex>\n");
-    xml.push_str("      <ex desc=\"retrieve\">ts = graph.timeseries(123, channel='oil')</ex>\n");
-    xml.push_str("      <ex desc=\"inline loading\">graph.add_nodes(df, 'Prod', 'id', 'name', timeseries={'time': 'date', 'channels': ['oil', 'gas']})</ex>\n");
+    xml.push_str("      <ex desc=\"schema\">graph.set_timeseries('Project', resolution='month', channels=['output', 'flow'], units={'output': 'MU'})</ex>\n");
+    xml.push_str("      <ex desc=\"bulk load\">graph.add_timeseries('Project', data=prod_df, fk='field_id', time_key=['date'], channels=['output', 'flow'])</ex>\n");
+    xml.push_str("      <ex desc=\"retrieve\">ts = graph.timeseries(123, channel='output')</ex>\n");
+    xml.push_str("      <ex desc=\"inline loading\">graph.add_nodes(df, 'Prod', 'id', 'name', timeseries={'time': 'date', 'channels': ['output', 'flow']})</ex>\n");
     xml.push_str("    </examples>\n");
     xml.push_str("  </timeseries>\n");
 }

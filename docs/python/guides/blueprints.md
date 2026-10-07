@@ -734,14 +734,14 @@ one relationship type can therefore keep their bounds under different names:
 
 ```json
 {
-  "Licence": {
-    "csv": "licences.csv",
-    "pk": "licence_id",
+  "Contract": {
+    "csv": "contracts.csv",
+    "pk": "contract_id",
     "connections": {
       "junction_edges": {
-        "HAS_LICENSEE": {
-          "csv": "licence_licensees.csv",
-          "source_fk": "licence_id",
+        "HAS_HOLDER": {
+          "csv": "contract_holders.csv",
+          "source_fk": "contract_id",
           "target": "Company",
           "target_fk": "company_id",
           "properties": ["date_from", "date_to"],

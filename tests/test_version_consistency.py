@@ -788,7 +788,7 @@ def test_breaking_symbols_are_scoped_to_the_release_that_broke_them(ecosystem: P
         "kglite 0.14.5's release notes name the same three files.",
         # Measurement and test records from the 0.19.3 wave (kglite-visual and
         # codingest docs), which the notifier would have asked to renumber.
-        "**Read the counts first.** Measured on sodir\n(kglite 0.14.5): a three-hop path returns in ~1 s.",
+        "**Read the counts first.** Measured on projects\n(kglite 0.14.5): a three-hop path returns in ~1 s.",
         "Measured on a 546,850-node graph: a three-hop path previewing at **1,941,015\n"
         "rows** answers in about a second under kglite 0.14.5, truncated to the row\nceiling.",
         "**The server stays up.** Until kglite 0.14.5 it did not: the deadline\nwas checked too late.",

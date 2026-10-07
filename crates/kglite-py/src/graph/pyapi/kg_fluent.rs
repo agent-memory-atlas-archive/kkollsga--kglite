@@ -782,15 +782,15 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     print(graph.select("Discovery").show(["id", "title"]))
-    ///     # Discovery(123, Johan Sverdrup)
-    ///     # Discovery(456, Troll)
+    ///     print(graph.select("Initiative").show(["id", "title"]))
+    ///     # Initiative(123, Juniper)
+    ///     # Initiative(456, Tundra)
     ///
-    ///     print(graph.select("Discovery")
-    ///         .traverse("HAS_DEPOSIT_PROSPECT")
-    ///         .traverse("TESTED_BY_WELLBORE")
+    ///     print(graph.select("Initiative")
+    ///         .traverse("HAS_DEPOSIT_PROPOSAL")
+    ///         .traverse("TESTED_BY_SITE")
     ///         .show(["id", "title"]))
-    ///     # Discovery(123, Johan Sverdrup) -> Prospect(456, Alpha) -> Wellbore(789, W1)
+    ///     # Initiative(123, Juniper) -> Proposal(456, Alpha) -> Site(789, W1)
     ///     ```
     #[pyo3(signature = (columns=None, limit=200))]
     fn show(&self, columns: Option<Vec<String>>, limit: usize) -> PyResult<String> {

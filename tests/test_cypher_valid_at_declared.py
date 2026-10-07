@@ -99,18 +99,18 @@ def test_a_relationship_takes_its_source_types_keyed_declaration_first(storage, 
     else:
         g = kglite.KnowledgeGraph()
     g.cypher(
-        "CREATE (f:Field {name: 'f'}), (w:Well {name: 'w'}), (c:Company {name: 'c'}),"
+        "CREATE (f:Project {name: 'f'}), (w:Well {name: 'w'}), (c:Company {name: 'c'}),"
         " (f)-[:HAS {vf: date('2000-01-01'), vt: date('2010-01-01')}]->(c),"
         " (w)-[:HAS {vf: date('2000-01-01'), vt: date('2010-01-01')}]->(c)"
     ).to_list()
     g.cypher(
-        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Field', from: 'vf', to: 'vt',"
+        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Project', from: 'vf', to: 'vt',"
         " convention: 'half_open'})"
     ).to_list()
     g.cypher("CALL db.temporal.declare({relationship: 'HAS', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
     for form in ("valid_at(r, date('2010-01-01'))", "valid_at(r, date('2010-01-01'), 'vf', 'vt')"):
         rows = g.cypher(f"MATCH (s)-[r:HAS]->() WHERE {form} RETURN s.name AS s ORDER BY s").to_list()
-        # The Field edge is half-open (keyed), the Well edge closed (unkeyed).
+        # The Project edge is half-open (keyed), the Well edge closed (unkeyed).
         assert [r["s"] for r in rows] == ["w"], form
 
 

@@ -53,14 +53,14 @@ const STATUS: &str = "UNWIND [
     {id: 3, vf: '2020-01-01', vt: null}
   ] AS r CREATE (:Status {id: r.id, vf: r.vf, vt: r.vt})";
 
-/// Two sources whose licensee periods use different properties, and one
+/// Two sources whose holder periods use different properties, and one
 /// field whose second period starts the day its first ends.
-const LICENSEES: &[&str] = &[
-    "CREATE (:Field {id: 1}), (:Field {id: 2}), (:Licence {id: 10}), (:Company {id: 100})",
-    "MATCH (f:Field {id: 1}), (c:Company) CREATE (f)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(c)",
-    "MATCH (f:Field {id: 1}), (c:Company) CREATE (f)-[:HAS_LICENSEE {ff: '2009-12-31', ft: null}]->(c)",
-    "MATCH (f:Field {id: 2}), (c:Company) CREATE (f)-[:HAS_LICENSEE {ff: '2009-12-31', ft: '2011-01-01'}]->(c)",
-    "MATCH (l:Licence), (c:Company) CREATE (l)-[:HAS_LICENSEE {lf: '1990-01-01', lt: '1999-12-31'}]->(c)",
+const HOLDERS: &[&str] = &[
+    "CREATE (:Project {id: 1}), (:Project {id: 2}), (:Contract {id: 10}), (:Company {id: 100})",
+    "MATCH (f:Project {id: 1}), (c:Company) CREATE (f)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(c)",
+    "MATCH (f:Project {id: 1}), (c:Company) CREATE (f)-[:HAS_HOLDER {ff: '2009-12-31', ft: null}]->(c)",
+    "MATCH (f:Project {id: 2}), (c:Company) CREATE (f)-[:HAS_HOLDER {ff: '2009-12-31', ft: '2011-01-01'}]->(c)",
+    "MATCH (l:Contract), (c:Company) CREATE (l)-[:HAS_HOLDER {lf: '1990-01-01', lt: '1999-12-31'}]->(c)",
 ];
 
 #[test]
@@ -112,12 +112,12 @@ fn unknown_targets_and_properties_are_refused_by_name() {
         message.contains("property 'valid_from' does not exist on node label 'Status'"),
         "{message}"
     );
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     let message = err(&mut g, &rel("NOPE", None), "ff", "ft", Closed);
     assert!(message.contains("no relationship type 'NOPE'"), "{message}");
     let message = err(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Company")),
+        &rel("HAS_HOLDER", Some("Company")),
         "ff",
         "ft",
         Closed,
@@ -137,20 +137,20 @@ fn a_dirty_bound_is_refused_naming_its_element() {
     assert!(message.contains("property 'vf'"), "{message}");
     assert!(message.contains("'someday'"), "{message}");
 
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     run(
         &mut g,
-        "MATCH (f:Field {id: 2}), (c:Company) CREATE (f)-[:HAS_LICENSEE {ff: 2009, ft: null}]->(c)",
+        "MATCH (f:Project {id: 2}), (c:Company) CREATE (f)-[:HAS_HOLDER {ff: 2009, ft: null}]->(c)",
     );
     let message = err(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         Closed,
     );
     assert!(
-        message.contains("HAS_LICENSEE relationship from node '2' to node '100'"),
+        message.contains("HAS_HOLDER relationship from node '2' to node '100'"),
         "{message}"
     );
     assert!(message.contains("2009 (INTEGER)"), "{message}");
@@ -203,16 +203,16 @@ fn an_empty_half_open_row_is_accepted_with_a_warning_and_counted() {
 
 #[test]
 fn abutting_rows_are_counted_and_warned_about_only_when_closed() {
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     let report = declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         Closed,
     )
     .unwrap();
-    // Field 1's first period ends the day its second begins. Field 2's period
+    // Project 1's first period ends the day its second begins. Project 2's period
     // starts that same day, but on another source node, so it is not counted.
     assert_eq!(report.rows, 3);
     assert_eq!(report.abutting_rows, Some(1));
@@ -223,16 +223,16 @@ fn abutting_rows_are_counted_and_warned_about_only_when_closed() {
         .expect("a closed declaration with abutting rows warns");
     assert!(
         warning.starts_with(
-            "1 of 3 rows of relationship type 'HAS_LICENSEE' from source type 'Field'"
+            "1 of 3 rows of relationship type 'HAS_HOLDER' from source type 'Project'"
         ),
         "{warning}"
     );
     assert!(warning.contains("'half_open'"), "{warning}");
 
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     let report = declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         HalfOpen,
@@ -312,15 +312,15 @@ fn versions_of_one_node_id_abut_within_that_id_only() {
 
 #[test]
 fn source_keyed_declarations_coexist_and_list_in_lookup_order() {
-    let mut g = graph(LICENSEES);
-    let unkeyed = declare(&mut g, &rel("HAS_LICENSEE", None), "ff", "ft", Closed).unwrap();
+    let mut g = graph(HOLDERS);
+    let unkeyed = declare(&mut g, &rel("HAS_HOLDER", None), "ff", "ft", Closed).unwrap();
     assert_eq!(
         unkeyed.rows, 4,
         "with no keyed declaration it covers every source"
     );
     declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Licence")),
+        &rel("HAS_HOLDER", Some("Contract")),
         "lf",
         "lt",
         HalfOpen,
@@ -328,7 +328,7 @@ fn source_keyed_declarations_coexist_and_list_in_lookup_order() {
     .unwrap();
     declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         Closed,
@@ -341,13 +341,13 @@ fn source_keyed_declarations_coexist_and_list_in_lookup_order() {
     assert_eq!(
         listed,
         vec![
-            (rel("HAS_LICENSEE", Some("Field")), "ff".to_string(), Closed),
             (
-                rel("HAS_LICENSEE", Some("Licence")),
+                rel("HAS_HOLDER", Some("Contract")),
                 "lf".to_string(),
                 HalfOpen
             ),
-            (rel("HAS_LICENSEE", None), "ff".to_string(), Closed),
+            (rel("HAS_HOLDER", Some("Project")), "ff".to_string(), Closed),
+            (rel("HAS_HOLDER", None), "ff".to_string(), Closed),
         ],
         "keyed declarations list before the unkeyed fallback"
     );
@@ -459,30 +459,30 @@ fn a_secondary_label_is_a_node_target() {
 
 #[test]
 fn undeclare_removes_and_bumps_only_when_something_was_declared() {
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         Closed,
     )
     .unwrap();
     let version = g.version();
-    assert!(!undeclare(&mut g, &rel("HAS_LICENSEE", None)));
+    assert!(!undeclare(&mut g, &rel("HAS_HOLDER", None)));
     assert_eq!(g.version(), version);
-    assert!(undeclare(&mut g, &rel("HAS_LICENSEE", Some("Field"))));
+    assert!(undeclare(&mut g, &rel("HAS_HOLDER", Some("Project"))));
     assert_eq!(g.version(), version + 1);
     assert!(list(&g).is_empty());
 }
 
 #[test]
 fn a_disk_graph_is_validated_without_growing_the_edge_arena() {
-    let mut g = graph(LICENSEES);
+    let mut g = graph(HOLDERS);
     g.enable_disk_mode().unwrap();
     let report = declare(
         &mut g,
-        &rel("HAS_LICENSEE", Some("Field")),
+        &rel("HAS_HOLDER", Some("Project")),
         "ff",
         "ft",
         Closed,

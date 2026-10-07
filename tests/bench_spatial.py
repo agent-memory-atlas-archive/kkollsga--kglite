@@ -301,14 +301,14 @@ def run_benchmarks():
           """).to_list(),
     )
 
-    # -- Prospect workload shape: 263 polygons × 10K points, complex geom -
-    # Mirrors Sodir petroleum build: StructuralElement × Wellbore containment.
-    g_prospect = build_graph(263, 10_000, complex_geom=True)
-    print("\n--- Prospect shape: 263 complex areas × 10K cities (~2.6M pairs) ---")
+    # -- Proposal workload shape: 263 polygons × 10K points, complex geom -
+    # Mirrors a large registry build: StructuralElement × Site containment.
+    g_proposal = build_graph(263, 10_000, complex_geom=True)
+    print("\n--- Proposal shape: 263 complex areas × 10K cities (~2.6M pairs) ---")
 
     bench(
-        "contains prospect_shape — 2.6M pairs",
-        lambda: g_prospect.cypher("""
+        "contains proposal_shape — 2.6M pairs",
+        lambda: g_proposal.cypher("""
               MATCH (a:Area), (c:City)
               WHERE contains(a, c)
               RETURN count(*) AS matches

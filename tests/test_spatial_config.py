@@ -8,12 +8,12 @@ from kglite import KnowledgeGraph
 
 @pytest.fixture
 def field_graph():
-    """Graph with Field nodes that have lat/lon and WKT geometry."""
+    """Graph with Project nodes that have lat/lon and WKT geometry."""
     graph = KnowledgeGraph()
     df = pd.DataFrame(
         {
             "id": [1, 2, 3],
-            "name": ["Troll", "Draugen", "Asgard"],
+            "name": ["Tundra", "Delta", "Aster"],
             "latitude": [60.6, 64.4, 65.1],
             "longitude": [3.7, 7.8, 6.8],
             "wkt_polygon": [
@@ -25,7 +25,7 @@ def field_graph():
     )
     graph.add_nodes(
         df,
-        "Field",
+        "Project",
         "id",
         "name",
         column_types={
@@ -85,26 +85,26 @@ class TestSetGetSpatial:
                 "lon": [3.0],
             }
         )
-        graph.add_nodes(df, "Field", "id", "name")
-        graph.set_spatial("Field", location=("lat", "lon"))
+        graph.add_nodes(df, "Project", "id", "name")
+        graph.set_spatial("Project", location=("lat", "lon"))
 
-        config = graph.spatial("Field")
+        config = graph.spatial("Project")
         assert config is not None
         assert config["location"] == ("lat", "lon")
 
     def test_set_spatial_full(self):
         graph = KnowledgeGraph()
         df = pd.DataFrame({"id": [1], "name": ["A"]})
-        graph.add_nodes(df, "Field", "id", "name")
+        graph.add_nodes(df, "Project", "id", "name")
         graph.set_spatial(
-            "Field",
+            "Project",
             location=("lat", "lon"),
             geometry="wkt_col",
             points={"drill": ("d_lat", "d_lon")},
             shapes={"boundary": "bnd_wkt"},
         )
 
-        config = graph.spatial("Field")
+        config = graph.spatial("Project")
         assert config["location"] == ("lat", "lon")
         assert config["geometry"] == "wkt_col"
         assert config["points"] == {"drill": ("d_lat", "d_lon")}
@@ -117,7 +117,7 @@ class TestSetGetSpatial:
     def test_spatial_all(self, field_graph):
         result = field_graph.spatial()
         assert result is not None
-        assert "Field" in result
+        assert "Project" in result
 
     def test_spatial_empty_graph(self):
         graph = KnowledgeGraph()
@@ -130,13 +130,13 @@ class TestSetGetSpatial:
 class TestColumnTypesParsing:
     def test_location_via_column_types(self, field_graph):
         """Location config is set via column_types during add_nodes."""
-        config = field_graph.spatial("Field")
+        config = field_graph.spatial("Project")
         assert config is not None
         assert config["location"] == ("latitude", "longitude")
 
     def test_geometry_via_column_types(self, field_graph):
         """Geometry config is set via column_types during add_nodes."""
-        config = field_graph.spatial("Field")
+        config = field_graph.spatial("Project")
         assert config["geometry"] == "wkt_polygon"
 
     def test_named_point_via_column_types(self, well_graph):
@@ -157,7 +157,7 @@ class TestColumnTypesParsing:
         with pytest.raises(ValueError, match="Incomplete location"):
             graph.add_nodes(
                 df,
-                "Field",
+                "Project",
                 "id",
                 "name",
                 column_types={
@@ -172,7 +172,7 @@ class TestColumnTypesParsing:
         with pytest.raises(ValueError, match="Incomplete point"):
             graph.add_nodes(
                 df,
-                "Field",
+                "Project",
                 "id",
                 "name",
                 column_types={
@@ -182,7 +182,7 @@ class TestColumnTypesParsing:
 
     def test_data_stored_as_natural_types(self, field_graph):
         """Spatial columns are stored as their natural types (float/str)."""
-        rv = field_graph.cypher("MATCH (n:Field {name: 'Troll'}) RETURN n.latitude AS lat, n.wkt_polygon AS wkt")
+        rv = field_graph.cypher("MATCH (n:Project {name: 'Tundra'}) RETURN n.latitude AS lat, n.wkt_polygon AS wkt")
         row = rv[0]
         assert isinstance(row["lat"], float)
         assert isinstance(row["wkt"], str)
@@ -195,7 +195,7 @@ class TestDistanceAutoResolution:
     def test_distance_with_location_config(self, field_graph):
         """distance(a, b) auto-resolves via spatial config location."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Draugen'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Delta'})
             RETURN distance(a, b) AS dist
         """)
         dist = rv[0]["dist"]
@@ -217,7 +217,7 @@ class TestDistanceAutoResolution:
         )
         graph.add_nodes(
             df,
-            "Field",
+            "Project",
             "id",
             "name",
             column_types={
@@ -225,7 +225,7 @@ class TestDistanceAutoResolution:
             },
         )
         rv = graph.cypher("""
-            MATCH (a:Field {name: 'FieldA'}), (b:Field {name: 'FieldB'})
+            MATCH (a:Project {name: 'FieldA'}), (b:Project {name: 'FieldB'})
             RETURN distance(a, b) AS dist
         """)
         dist = rv[0]["dist"]
@@ -260,7 +260,7 @@ class TestDistanceAutoResolution:
 class TestVirtualProperties:
     def test_location_virtual_property(self, field_graph):
         """n.location returns a Point value."""
-        rv = field_graph.cypher("MATCH (n:Field {name: 'Troll'}) RETURN n.location AS loc")
+        rv = field_graph.cypher("MATCH (n:Project {name: 'Tundra'}) RETURN n.location AS loc")
         loc = rv[0]["loc"]
         # Point is returned as a dict with latitude/longitude
         assert isinstance(loc, dict)
@@ -269,7 +269,7 @@ class TestVirtualProperties:
 
     def test_geometry_virtual_property(self, field_graph):
         """n.geometry returns the WKT string from the configured geometry field."""
-        rv = field_graph.cypher("MATCH (n:Field {name: 'Troll'}) RETURN n.geometry AS geom")
+        rv = field_graph.cypher("MATCH (n:Project {name: 'Tundra'}) RETURN n.geometry AS geom")
         geom = rv[0]["geom"]
         assert isinstance(geom, str)
         assert "POLYGON" in geom
@@ -292,7 +292,7 @@ class TestVirtualProperties:
     def test_distance_with_virtual_location(self, field_graph):
         """distance(a.location, b.location) uses the explicit location virtual property."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Draugen'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Delta'})
             RETURN distance(a.location, b.location) AS dist
         """)
         dist = rv[0]["dist"]
@@ -306,7 +306,7 @@ class TestVirtualProperties:
 class TestPymethodsAutoResolution:
     def test_near_point_m_auto_resolve(self, field_graph):
         """near_point_m() works without explicit lat_field/lon_field."""
-        result = field_graph.select("Field").near_point_m(
+        result = field_graph.select("Project").near_point_m(
             center_lat=60.5,
             center_lon=3.5,
             max_distance_m=100_000.0,
@@ -315,7 +315,7 @@ class TestPymethodsAutoResolution:
 
     def test_within_bounds_auto_resolve(self, field_graph):
         """within_bounds() works without explicit lat_field/lon_field."""
-        result = field_graph.select("Field").within_bounds(
+        result = field_graph.select("Project").within_bounds(
             min_lat=59.0,
             max_lat=62.0,
             min_lon=2.0,
@@ -325,26 +325,26 @@ class TestPymethodsAutoResolution:
 
     def test_bounds_auto_resolve(self, field_graph):
         """bounds() works without explicit lat_field/lon_field."""
-        bounds = field_graph.select("Field").bounds()
+        bounds = field_graph.select("Project").bounds()
         assert bounds is not None
         assert "min_lat" in bounds
 
     def test_centroid_auto_resolve(self, field_graph):
         """centroid() works without explicit lat_field/lon_field."""
-        centroid = field_graph.select("Field").centroid()
+        centroid = field_graph.select("Project").centroid()
         assert centroid is not None
         assert "latitude" in centroid
 
     def test_intersects_geometry_auto_resolve(self, field_graph):
         """intersects_geometry() works without explicit geometry_field."""
-        result = field_graph.select("Field").intersects_geometry(
+        result = field_graph.select("Project").intersects_geometry(
             "POLYGON((2 59, 5 59, 5 62, 2 62, 2 59))",
         )
         assert result.len() >= 1
 
     def test_contains_point_auto_resolve(self, field_graph):
         """contains_point() works without explicit geometry_field."""
-        result = field_graph.select("Field").contains_point(
+        result = field_graph.select("Project").contains_point(
             lat=60.5,
             lon=3.5,
         )
@@ -358,8 +358,8 @@ class TestGeometryCentroidFallback:
     """Fluent API methods fall back to geometry centroid when location is missing."""
 
     @pytest.fixture
-    def prospect_graph(self):
-        """Graph with Prospect nodes that have only WKT geometry (no lat/lon)."""
+    def proposal_graph(self):
+        """Graph with Proposal nodes that have only WKT geometry (no lat/lon)."""
         graph = KnowledgeGraph()
         df = pd.DataFrame(
             {
@@ -374,7 +374,7 @@ class TestGeometryCentroidFallback:
         )
         graph.add_nodes(
             df,
-            "Prospect",
+            "Proposal",
             "id",
             "name",
             column_types={
@@ -383,9 +383,9 @@ class TestGeometryCentroidFallback:
         )
         return graph
 
-    def test_near_point_m_fallback(self, prospect_graph):
+    def test_near_point_m_fallback(self, proposal_graph):
         """near_point_m() uses geometry centroid when no lat/lon."""
-        result = prospect_graph.select("Prospect").near_point_m(
+        result = proposal_graph.select("Proposal").near_point_m(
             center_lat=60.5,
             center_lon=3.5,
             max_distance_m=50_000.0,
@@ -394,9 +394,9 @@ class TestGeometryCentroidFallback:
         nodes = result.collect()
         assert nodes[0]["title"] == "Alpha"
 
-    def test_within_bounds_fallback(self, prospect_graph):
+    def test_within_bounds_fallback(self, proposal_graph):
         """within_bounds() uses geometry centroid when no lat/lon."""
-        result = prospect_graph.select("Prospect").within_bounds(
+        result = proposal_graph.select("Proposal").within_bounds(
             min_lat=60.0,
             max_lat=61.0,
             min_lon=3.0,
@@ -404,17 +404,17 @@ class TestGeometryCentroidFallback:
         )
         assert result.len() == 1  # only Alpha
 
-    def test_bounds_fallback(self, prospect_graph):
+    def test_bounds_fallback(self, proposal_graph):
         """bounds() uses geometry centroids when no lat/lon."""
-        bounds = prospect_graph.select("Prospect").bounds()
+        bounds = proposal_graph.select("Proposal").bounds()
         assert bounds is not None
         # All three centroids should be included
         assert bounds["min_lat"] < 61.0
         assert bounds["max_lat"] > 65.0
 
-    def test_centroid_fallback(self, prospect_graph):
+    def test_centroid_fallback(self, proposal_graph):
         """centroid() uses geometry centroids when no lat/lon."""
-        centroid = prospect_graph.select("Prospect").centroid()
+        centroid = proposal_graph.select("Proposal").centroid()
         assert centroid is not None
         # Average of ~(60.5, 3.5), ~(64.5, 7.5), ~(65.5, 6.5)
         assert 63.0 < centroid["latitude"] < 64.0
@@ -433,7 +433,7 @@ class TestSaveLoadRoundtrip:
 
         loaded = load(path)
 
-        config = loaded.spatial("Field")
+        config = loaded.spatial("Project")
         assert config is not None
         assert config["location"] == ("latitude", "longitude")
         assert config["geometry"] == "wkt_polygon"
@@ -448,7 +448,7 @@ class TestSaveLoadRoundtrip:
         loaded = load(path)
 
         rv = loaded.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Draugen'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Delta'})
             RETURN distance(a, b) AS dist
         """)
         assert rv[0]["dist"] > 0
@@ -461,16 +461,16 @@ class TestNodeAwareSpatialFunctions:
     def test_contains_node_node(self, field_graph):
         """contains(a, b) where a has geometry and b has location."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Tundra'})
             RETURN contains(a, b) AS result
         """)
-        # Troll's location (60.6, 3.7) is inside Troll's polygon (3 60, 4 60, 4 61, 3 61)
+        # Tundra's location (60.6, 3.7) is inside Tundra's polygon (3 60, 4 60, 4 61, 3 61)
         assert rv[0]["result"] is True
 
     def test_contains_node_point(self, field_graph):
         """contains(a, point(lat, lon)) works."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'})
             RETURN contains(a, point(60.5, 3.5)) AS result
         """)
         assert rv[0]["result"] is True
@@ -478,7 +478,7 @@ class TestNodeAwareSpatialFunctions:
     def test_contains_outside_point(self, field_graph):
         """contains() returns false for point outside geometry."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'})
             RETURN contains(a, point(70.0, 10.0)) AS result
         """)
         assert rv[0]["result"] is False
@@ -496,9 +496,9 @@ class TestNodeAwareSpatialFunctions:
 
     def test_intersects_node_node(self, field_graph):
         """intersects(a, b) with geometry configs."""
-        # Troll and Draugen have non-overlapping polygons
+        # Tundra and Delta have non-overlapping polygons
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Draugen'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Delta'})
             RETURN intersects(a, b) AS result
         """)
         assert rv[0]["result"] is False
@@ -506,7 +506,7 @@ class TestNodeAwareSpatialFunctions:
     def test_intersects_self(self, field_graph):
         """intersects(a, a) should be true (same geometry)."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Tundra'})
             RETURN intersects(a, b) AS result
         """)
         assert rv[0]["result"] is True
@@ -528,14 +528,14 @@ class TestNodeAwareSpatialFunctions:
     def test_centroid_node(self, field_graph):
         """centroid(n) returns Point from geometry config."""
         rv = field_graph.cypher("""
-            MATCH (n:Field {name: 'Troll'})
+            MATCH (n:Project {name: 'Tundra'})
             RETURN centroid(n) AS c
         """)
         c = rv[0]["c"]
         assert isinstance(c, dict)
         assert "latitude" in c
         assert "longitude" in c
-        # Troll polygon: (3 60, 4 60, 4 61, 3 61) → centroid ~(60.5, 3.5)
+        # Tundra polygon: (3 60, 4 60, 4 61, 3 61) → centroid ~(60.5, 3.5)
         assert abs(c["latitude"] - 60.5) < 0.1
         assert abs(c["longitude"] - 3.5) < 0.1
 
@@ -556,7 +556,7 @@ class TestNodeAwareSpatialFunctions:
     def test_area_node(self, field_graph):
         """area(n) returns m² from geometry config."""
         rv = field_graph.cypher("""
-            MATCH (n:Field {name: 'Troll'})
+            MATCH (n:Project {name: 'Tundra'})
             RETURN area(n) AS a
         """)
         a = rv[0]["a"]
@@ -577,7 +577,7 @@ class TestNodeAwareSpatialFunctions:
     def test_perimeter_node(self, field_graph):
         """perimeter(n) returns meters from geometry config."""
         rv = field_graph.cypher("""
-            MATCH (n:Field {name: 'Troll'})
+            MATCH (n:Project {name: 'Tundra'})
             RETURN perimeter(n) AS p
         """)
         p = rv[0]["p"]
@@ -600,7 +600,7 @@ class TestGeometryAwareDistance:
     def test_distance_point_to_geometry_inside(self, field_graph):
         """distance(point(inside), a.geometry) returns 0."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'})
             RETURN distance(point(60.5, 3.5), a.geometry) AS dist
         """)
         assert rv[0]["dist"] == 0.0
@@ -608,7 +608,7 @@ class TestGeometryAwareDistance:
     def test_distance_point_to_geometry_outside(self, field_graph):
         """distance(point(outside), a.geometry) returns distance > 0."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'})
             RETURN distance(point(62.0, 5.0), a.geometry) AS dist
         """)
         assert rv[0]["dist"] > 0
@@ -616,7 +616,7 @@ class TestGeometryAwareDistance:
     def test_distance_geometry_to_geometry_self(self, field_graph):
         """distance(a.geometry, a.geometry) returns 0 (same geometry intersects itself)."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Tundra'})
             RETURN distance(a.geometry, b.geometry) AS dist
         """)
         assert rv[0]["dist"] == 0.0
@@ -624,7 +624,7 @@ class TestGeometryAwareDistance:
     def test_distance_geometry_to_geometry_separate(self, field_graph):
         """distance(a.geometry, b.geometry) returns centroid distance when separate."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Draugen'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Delta'})
             RETURN distance(a.geometry, b.geometry) AS dist
         """)
         assert rv[0]["dist"] > 0
@@ -632,10 +632,10 @@ class TestGeometryAwareDistance:
     def test_distance_node_to_geometry_mixed(self, field_graph):
         """distance(a, b.geometry) — point (location) to body (geometry)."""
         rv = field_graph.cypher("""
-            MATCH (a:Field {name: 'Troll'}), (b:Field {name: 'Troll'})
+            MATCH (a:Project {name: 'Tundra'}), (b:Project {name: 'Tundra'})
             RETURN distance(a, b.geometry) AS dist
         """)
-        # Troll's location (60.6, 3.7) is inside Troll's polygon → distance = 0
+        # Tundra's location (60.6, 3.7) is inside Tundra's polygon → distance = 0
         assert rv[0]["dist"] == 0.0
 
     def test_distance_geometry_touching(self):

@@ -2,7 +2,7 @@
 
 Currently `n.d.year` (and friends) is rejected at parse on a
 `Value::DateTime` column with "Unexpected token at start of clause:
-Dot". The Sodir prospect-graph enhance script works around this by
+Dot". The proposal-graph enhance script works around this by
 `toString()` + substring, which the agent flagged as a hack.
 
 Target behavior:
@@ -76,7 +76,7 @@ def test_datetime_time_accessors_return_zero_on_date_only(datetime_graph):
 
 
 def test_datetime_year_in_filter(datetime_graph):
-    """Decade-bucket pattern from the Sodir creaming-curve queries."""
+    """Decade-bucket pattern from creaming-curve queries."""
     rows = list(datetime_graph.cypher("MATCH (n:X) WHERE n.joined.year >= 2023 RETURN n.id AS id ORDER BY n.id"))
     assert [r["id"] for r in rows] == [1, 2]
 
@@ -187,7 +187,7 @@ def test_duration_between_cypher_md_example():
 
 
 def test_estimate_is_stale_pattern(datetime_graph):
-    """The Sodir 'estimate is stale (>5y old)' pattern, expressed
+    """The 'estimate is stale (>5y old)' pattern, expressed
     naturally with duration arithmetic instead of toString hacking."""
     rows = list(
         datetime_graph.cypher(

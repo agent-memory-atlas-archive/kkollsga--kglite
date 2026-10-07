@@ -382,7 +382,7 @@ pub(super) fn remove_write_field<'a>(
 /// name of whichever field each one addresses.
 ///
 /// A type's declared id / title spellings name the identity columns — the same
-/// resolution `MATCH (p:Prospect {npdid: 1})` applies — so a MERGE key written
+/// resolution `MATCH (p:Proposal {npdid: 1})` applies — so a MERGE key written
 /// in the type's own spelling has to reach the O(1) id probe and the identity
 /// read its caller performs. Without the resolution the scan looked for a
 /// *stored property* under that name and found none (the create arm promotes the

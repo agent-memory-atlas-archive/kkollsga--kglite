@@ -542,7 +542,7 @@ def test_no_registry_function_panics_on_zero_args():
 def test_bulk_loaded_edge_properties_are_typed():
     """add_connections must record observed property types like the Cypher
     CREATE path — pre-fix every bulk-loaded edge property registered as
-    'Unknown' (all 59 sodir rel properties showed `unknown` in G.V())."""
+    'Unknown' (all 59 relationship properties showed `unknown` in G.V())."""
     g = kglite.KnowledgeGraph()
     g.add_nodes(pd.DataFrame({"id": [1, 2], "name": ["a", "b"]}), "P", "id", "name")
     g.add_connections(

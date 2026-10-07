@@ -183,7 +183,7 @@ fn a_relationship_load_is_judged_by_its_rows() {
     let mut graph = DirGraph::new();
     run(
         &mut graph,
-        "CREATE (:Field {id: 1})-[:OP {vf: date('2000-01-01'), vt: date('2001-01-01')}]->(:Co {id: 2})",
+        "CREATE (:Project {id: 1})-[:OP {vf: date('2000-01-01'), vt: date('2001-01-01')}]->(:Co {id: 2})",
     )
     .unwrap();
     declare(
@@ -218,7 +218,7 @@ fn a_relationship_load_is_judged_by_its_rows() {
         &mut graph,
         rows,
         "OP".into(),
-        "Field".into(),
+        "Project".into(),
         "s".into(),
         "Co".into(),
         "t".into(),

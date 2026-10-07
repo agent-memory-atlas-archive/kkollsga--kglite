@@ -97,8 +97,8 @@ fn ints(values: &[i64]) -> Vec<Vec<Value>> {
     rows
 }
 
-/// Two wells, one closed in 2010, and a licence per source type: `Field`
-/// licences are keyed on `f_from`/`f_to`, every other source's on the
+/// Two wells, one closed in 2010, and a contract per source type: `Project`
+/// contracts are keyed on `f_from`/`f_to`, every other source's on the
 /// unkeyed `from`/`to`. A node carrying `Well` as a secondary label is
 /// governed by `Well`'s declaration too.
 fn registry() -> DirGraph {
@@ -106,17 +106,17 @@ fn registry() -> DirGraph {
     for query in [
         "CREATE (:Well {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}), \
          (:Well {id: 2, vf: date('2005-01-01')}), \
-         (:Field {id: 10}), (:Company {id: 20}), (:Pad {id: 30, vf: date('2012-01-01')})",
+         (:Project {id: 10}), (:Company {id: 20}), (:Pad {id: 30, vf: date('2012-01-01')})",
         "MATCH (p:Pad) SET p:Well",
-        "MATCH (f:Field), (c:Company) \
+        "MATCH (f:Project), (c:Company) \
          CREATE (f)-[:LICENSED {f_from: date('2000-01-01'), f_to: date('2004-12-31')}]->(c)",
         "MATCH (w:Well {id: 2}), (c:Company) \
          CREATE (w)-[:LICENSED {from: date('2008-01-01'), to: date('2030-01-01')}]->(c)",
-        "MATCH (w:Well {id: 1}), (f:Field) CREATE (w)-[:IN]->(f)",
-        "MATCH (w:Well {id: 2}), (f:Field) CREATE (w)-[:IN]->(f)",
+        "MATCH (w:Well {id: 1}), (f:Project) CREATE (w)-[:IN]->(f)",
+        "MATCH (w:Well {id: 2}), (f:Project) CREATE (w)-[:IN]->(f)",
         "CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', convention: 'closed'}) \
          YIELD declared RETURN declared",
-        "CALL db.temporal.declare({relationship: 'LICENSED', source_type: 'Field', \
+        "CALL db.temporal.declare({relationship: 'LICENSED', source_type: 'Project', \
          from: 'f_from', to: 'f_to', convention: 'closed'}) YIELD declared RETURN declared",
         "CALL db.temporal.declare({relationship: 'LICENSED', from: 'from', to: 'to', \
          convention: 'half_open'}) YIELD declared RETURN declared",
@@ -159,12 +159,12 @@ fn anchors_scans_and_untyped_nodes_see_only_valid_nodes() {
 fn a_hop_tests_both_endpoints_and_keys_the_relationship_on_its_source() {
     let graph = registry();
     let q = "MATCH (a)-[:LICENSED]->(c:Company) RETURN a.id";
-    // Field's keyed licence ends in 2004; Well 2's unkeyed one starts 2008.
+    // Project's keyed contract ends in 2004; Well 2's unkeyed one starts 2008.
     assert_eq!(rows(&graph, &at("2003-01-01", q)), ints(&[10]));
     assert!(rows(&graph, &at("2006-01-01", q)).is_empty());
     assert_eq!(rows(&graph, &at("2009-01-01", q)), ints(&[2]));
     // The far endpoint is tested even unnamed: Well 1 is gone by 2011.
-    let unnamed = "MATCH (f:Field)<-[:IN]-() RETURN count(*) AS c";
+    let unnamed = "MATCH (f:Project)<-[:IN]-() RETURN count(*) AS c";
     assert_eq!(rows(&graph, &at("2006-01-01", unnamed)), ints(&[2]));
     assert_eq!(rows(&graph, &at("2011-01-01", unnamed)), ints(&[1]));
     // Anchored from the other side, the untyped seed the relationship-type
@@ -189,7 +189,7 @@ fn counts_answer_with_the_guard() {
         );
     }
     // The COUNT { } shortcut takes the guarded counter.
-    let per_field = "MATCH (f:Field) RETURN COUNT { (f)<-[:IN]-(w) } AS c";
+    let per_field = "MATCH (f:Project) RETURN COUNT { (f)<-[:IN]-(w) } AS c";
     assert_eq!(rows(&graph, &at("2006-01-01", per_field)), ints(&[2]));
     assert_eq!(rows(&graph, &at("2011-01-01", per_field)), ints(&[1]));
 }
@@ -200,7 +200,7 @@ fn counts_answer_with_the_guard() {
 #[test]
 fn optional_match_and_subqueries_see_only_valid_matches() {
     let graph = registry();
-    let optional = "MATCH (f:Field) OPTIONAL MATCH (f)-[:LICENSED]->(c) RETURN f.id, c.id";
+    let optional = "MATCH (f:Project) OPTIONAL MATCH (f)-[:LICENSED]->(c) RETURN f.id, c.id";
     assert_eq!(
         rows(&graph, &at("2006-01-01", optional)),
         vec![vec![Value::Int64(10), Value::Null]]
@@ -211,9 +211,9 @@ fn optional_match_and_subqueries_see_only_valid_matches() {
     );
     for (date, want) in [("2006-01-01", 2), ("2011-01-01", 1)] {
         for query in [
-            "MATCH (f:Field) RETURN size([(f)<-[:IN]-(w) | w.id])",
-            "MATCH (f:Field) RETURN size([p = (f)<-[:IN]-(w) | length(p)])",
-            "MATCH (f:Field) RETURN COUNT { (f)<-[:IN]-(w) WHERE w.id > 0 }",
+            "MATCH (f:Project) RETURN size([(f)<-[:IN]-(w) | w.id])",
+            "MATCH (f:Project) RETURN size([p = (f)<-[:IN]-(w) | length(p)])",
+            "MATCH (f:Project) RETURN COUNT { (f)<-[:IN]-(w) WHERE w.id > 0 }",
         ] {
             assert_eq!(
                 rows(&graph, &at(date, query)),
@@ -373,7 +373,7 @@ fn an_unreadable_bound_raises() {
 #[test]
 fn inline_map_values_are_lowered_and_evaluated_under_the_filter() {
     let graph = registry();
-    let degree = "MATCH (f:Field) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id";
+    let degree = "MATCH (f:Project) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id";
     let err = error(&graph, &at("2011-01-01", degree));
     assert!(err.contains("degree()"), "{err}");
     // At 2011 only Well 2 is visible (Well 1 closed in 2010, the Pad carrier

@@ -31,7 +31,7 @@ fn wells() -> Arc<DirGraph> {
         &mut g,
         "UNWIND range(0, 11) AS i CREATE (w:Well {id: i, \
          vf: date({year: 2000 + i, month: 1, day: 1}), \
-         vt: date({year: 2000 + i, month: 12, day: 31})})-[:IN {f: date('2004-01-01'), t: null}]->(:Field {id: 100 + i})",
+         vt: date({year: 2000 + i, month: 12, day: 31})})-[:IN {f: date('2004-01-01'), t: null}]->(:Project {id: 100 + i})",
     );
     run(
         &mut g,

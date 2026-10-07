@@ -1,6 +1,6 @@
 """Tests for field alias resolution (Phase 1: Rename Hell fix).
 
-When users call add_nodes(df, 'Type', 'npdid', 'prospect_name'),
+When users call add_nodes(df, 'Type', 'npdid', 'proposal_name'),
 the original column names should still work as property accessors in Cypher queries,
 where() calls, and the fluent API.
 """
@@ -22,11 +22,11 @@ def graph_with_aliases():
     df = pd.DataFrame(
         {
             "npdid": [1, 2, 3],
-            "prospect_name": ["Alpha", "Beta", "Gamma"],
+            "proposal_name": ["Alpha", "Beta", "Gamma"],
             "status": ["active", "inactive", "active"],
         }
     )
-    g.add_nodes(df, "Prospect", "npdid", "prospect_name")
+    g.add_nodes(df, "Proposal", "npdid", "proposal_name")
     return g
 
 
@@ -50,27 +50,27 @@ class TestCypherAliasResolution:
 
     def test_cypher_alias_id_field(self, graph_with_aliases):
         """n.npdid should resolve to the id field."""
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) RETURN n.npdid ORDER BY n.npdid")
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) RETURN n.npdid ORDER BY n.npdid")
         values = [r["n.npdid"] for r in result]
         assert values == [1, 2, 3]
 
     def test_cypher_alias_title_field(self, graph_with_aliases):
-        """n.prospect_name should resolve to the title field."""
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) RETURN n.prospect_name ORDER BY n.prospect_name")
-        values = [r["n.prospect_name"] for r in result]
+        """n.proposal_name should resolve to the title field."""
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) RETURN n.proposal_name ORDER BY n.proposal_name")
+        values = [r["n.proposal_name"] for r in result]
         assert values == ["Alpha", "Beta", "Gamma"]
 
     def test_cypher_canonical_still_works(self, graph_with_aliases):
         """n.id and n.title should still work alongside aliases."""
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) RETURN n.id, n.title ORDER BY n.id")
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) RETURN n.id, n.title ORDER BY n.id")
         assert result[0]["n.id"] == 1
         assert result[0]["n.title"] == "Alpha"
 
     def test_cypher_where_with_alias(self, graph_with_aliases):
         """WHERE clause should resolve aliases."""
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 2 RETURN n.prospect_name")
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 2 RETURN n.proposal_name")
         assert len(result) == 1
-        assert result[0]["n.prospect_name"] == "Beta"
+        assert result[0]["n.proposal_name"] == "Beta"
 
     def test_cypher_no_alias_no_interference(self, graph_default_fields):
         """When fields use default names, no aliasing occurs."""
@@ -81,7 +81,7 @@ class TestCypherAliasResolution:
     def test_cypher_regular_property_unaffected(self, graph_with_aliases):
         """Regular properties (not aliased) should work normally."""
         result = graph_with_aliases.cypher(
-            "MATCH (n:Prospect) WHERE n.status = 'active' RETURN n.npdid ORDER BY n.npdid"
+            "MATCH (n:Proposal) WHERE n.status = 'active' RETURN n.npdid ORDER BY n.npdid"
         )
         values = [r["n.npdid"] for r in result]
         assert values == [1, 3]
@@ -98,47 +98,47 @@ class TestPropertiesKeysAliases:
     """
 
     def test_properties_includes_alias_columns(self, graph_with_aliases):
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN properties(n) AS p").to_list()
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN properties(n) AS p").to_list()
         props = result[0]["p"]
         assert props["npdid"] == 1
-        assert props["prospect_name"] == "Alpha"
+        assert props["proposal_name"] == "Alpha"
         # Canonical virtuals + the regular property still present.
         assert props["id"] == 1
         assert props["title"] == "Alpha"
-        assert props["type"] == "Prospect"
+        assert props["type"] == "Proposal"
         assert props["status"] == "active"
 
     def test_keys_includes_alias_columns(self, graph_with_aliases):
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN keys(n) AS k").to_list()
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN keys(n) AS k").to_list()
         keys = set(result[0]["k"])
-        assert {"id", "title", "type", "npdid", "prospect_name", "status"} <= keys
+        assert {"id", "title", "type", "npdid", "proposal_name", "status"} <= keys
 
     def test_properties_equals_return_n_properties(self, graph_with_aliases):
         """properties(n) must equal the properties dict inside RETURN n's
         node (the materialize_node_value lockstep guarantee)."""
-        node = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 2 RETURN n").to_list()[0]["n"]
-        props = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 2 RETURN properties(n) AS p").to_list()[
+        node = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 2 RETURN n").to_list()[0]["n"]
+        props = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 2 RETURN properties(n) AS p").to_list()[
             0
         ]["p"]
         assert props == node["properties"]
 
     def test_keys_equals_properties_keys(self, graph_with_aliases):
         keys = set(
-            graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 3 RETURN keys(n) AS k").to_list()[0]["k"]
+            graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 3 RETURN keys(n) AS k").to_list()[0]["k"]
         )
-        props = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 3 RETURN properties(n) AS p").to_list()[
+        props = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 3 RETURN properties(n) AS p").to_list()[
             0
         ]["p"]
         assert keys == set(props.keys())
 
     def test_map_projection_star_includes_alias_columns(self, graph_with_aliases):
         """n {.*} (MapProjection AllProperties) must also surface aliases."""
-        result = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN n {.*} AS m").to_list()
+        result = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN n {.*} AS m").to_list()
         m = result[0]["m"]
         assert m["npdid"] == 1
-        assert m["prospect_name"] == "Alpha"
+        assert m["proposal_name"] == "Alpha"
         # Matches properties(n) for the same node.
-        props = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN properties(n) AS p").to_list()[
+        props = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN properties(n) AS p").to_list()[
             0
         ]["p"]
         assert m == props
@@ -325,21 +325,21 @@ class TestFilterAliasResolution:
     def test_filter_by_alias_id(self, graph_with_aliases):
         """where({'npdid': 2}) should find the node."""
         g = graph_with_aliases
-        result = g.where({"type": "Prospect"}).where({"npdid": 2}).collect()
+        result = g.where({"type": "Proposal"}).where({"npdid": 2}).collect()
         assert len(result) == 1
         assert result[0]["title"] == "Beta"
 
     def test_filter_by_alias_title(self, graph_with_aliases):
-        """where({'prospect_name': 'Alpha'}) should find the node."""
+        """where({'proposal_name': 'Alpha'}) should find the node."""
         g = graph_with_aliases
-        result = g.where({"type": "Prospect"}).where({"prospect_name": "Alpha"}).collect()
+        result = g.where({"type": "Proposal"}).where({"proposal_name": "Alpha"}).collect()
         assert len(result) == 1
         assert result[0]["id"] == 1
 
     def test_filter_by_canonical_still_works(self, graph_with_aliases):
         """where({'id': 1}) should still work."""
         g = graph_with_aliases
-        result = g.where({"type": "Prospect"}).where({"id": 1}).collect()
+        result = g.where({"type": "Proposal"}).where({"id": 1}).collect()
         assert len(result) == 1
         assert result[0]["title"] == "Alpha"
 
@@ -357,9 +357,9 @@ class TestSaveLoadAliases:
             g2 = kglite.load(path)
 
             # Alias should work after reload
-            result = g2.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN n.prospect_name")
+            result = g2.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN n.proposal_name")
             assert len(result) == 1
-            assert result[0]["n.prospect_name"] == "Alpha"
+            assert result[0]["n.proposal_name"] == "Alpha"
         finally:
             os.unlink(path)
 
@@ -372,11 +372,11 @@ class TestMultipleNodeTypes:
         df1 = pd.DataFrame(
             {
                 "npdid": [1, 2],
-                "prospect_name": ["A", "B"],
+                "proposal_name": ["A", "B"],
                 "area": ["North", "South"],
             }
         )
-        g.add_nodes(df1, "Prospect", "npdid", "prospect_name")
+        g.add_nodes(df1, "Proposal", "npdid", "proposal_name")
 
         df2 = pd.DataFrame(
             {
@@ -388,17 +388,17 @@ class TestMultipleNodeTypes:
         g.add_nodes(df2, "Well", "well_id", "well_name")
 
         # Each type should resolve its own aliases
-        result = g.cypher("MATCH (n:Prospect) WHERE n.npdid = 1 RETURN n.prospect_name")
-        assert result[0]["n.prospect_name"] == "A"
+        result = g.cypher("MATCH (n:Proposal) WHERE n.npdid = 1 RETURN n.proposal_name")
+        assert result[0]["n.proposal_name"] == "A"
 
         result = g.cypher("MATCH (n:Well) WHERE n.well_id = 10 RETURN n.well_name")
         assert result[0]["n.well_name"] == "W1"
 
     def test_alias_does_not_cross_types(self):
-        """npdid alias on Prospect should not affect Well type."""
+        """npdid alias on Proposal should not affect Well type."""
         g = kglite.KnowledgeGraph()
         df1 = pd.DataFrame({"npdid": [1], "name": ["A"]})
-        g.add_nodes(df1, "Prospect", "npdid")
+        g.add_nodes(df1, "Proposal", "npdid")
 
         df2 = pd.DataFrame({"id": [10], "title": ["W1"], "npdid_ref": [1]})
         g.add_nodes(df2, "Well", "id", "title")
@@ -414,7 +414,7 @@ class TestDescribeAliases:
     def test_aliases_in_xml(self, graph_with_aliases):
         xml = graph_with_aliases.describe()
         assert 'id_alias="npdid"' in xml
-        assert 'title_alias="prospect_name"' in xml
+        assert 'title_alias="proposal_name"' in xml
 
     def test_no_aliases_when_default(self, graph_default_fields):
         xml = graph_default_fields.describe()
@@ -429,7 +429,7 @@ class TestDescribeAliases:
         xml = graph_with_aliases.describe()
         assert "<example query=" in xml
         # anchored on the alias (npdid), not the builtin `id`, with a value
-        assert "MATCH (n:Prospect {npdid:" in xml
+        assert "MATCH (n:Proposal {npdid:" in xml
 
     def test_schema_adapted_example_uses_id_when_no_alias(self, graph_default_fields):
         xml = graph_default_fields.describe()
@@ -481,25 +481,25 @@ class TestRepeatedAddNodesPreservesAlias:
         assert rows[0]["title"] == "Hello"
 
     def test_followup_preserves_existing_non_default_title_alias(self):
-        """If the first call registered title_alias='prospect_name', a
+        """If the first call registered title_alias='proposal_name', a
         follow-up without node_title_field must keep that alias intact."""
         g = kglite.KnowledgeGraph()
         g.add_nodes(
-            pd.DataFrame({"npdid": [1], "prospect_name": ["Alpha"], "status": ["active"]}),
-            "Prospect",
+            pd.DataFrame({"npdid": [1], "proposal_name": ["Alpha"], "status": ["active"]}),
+            "Proposal",
             "npdid",
-            "prospect_name",
+            "proposal_name",
         )
         g.add_nodes(
             pd.DataFrame({"npdid": [1], "extra": ["foo"]}),
-            "Prospect",
+            "Proposal",
             "npdid",
             conflict_handling="update",
         )
 
         xml = g.describe()
-        assert 'title_alias="prospect_name"' in xml, xml
-        rows = list(g.cypher("MATCH (n:Prospect) RETURN n.npdid AS id, n.prospect_name AS name"))
+        assert 'title_alias="proposal_name"' in xml, xml
+        rows = list(g.cypher("MATCH (n:Proposal) RETURN n.npdid AS id, n.proposal_name AS name"))
         assert rows[0]["id"] == 1
         assert rows[0]["name"] == "Alpha"
 
@@ -508,13 +508,13 @@ class TestWritePathHonoursAliases:
     """The Cypher write path resolves a type's declared identity-field
     spellings exactly as the read path does.
 
-    Until 0.16.1 it did not. `CREATE (:Prospect {npdid: 99})` stored 99 as an
+    Until 0.16.1 it did not. `CREATE (:Proposal {npdid: 99})` stored 99 as an
     ordinary property and minted a *separate* identity — and because `n.npdid`
     resolves the alias to the identity, the dot read then answered with the
     minted id while `properties(n)` still showed 99. Two routes, one node, two
-    answers. The title half was worse: `CREATE (:Prospect {prospect_name: 'C'})`
-    fabricated `Prospect_3` and served that engine-minted string back for
-    `n.prospect_name`, over the caller's own value.
+    answers. The title half was worse: `CREATE (:Proposal {proposal_name: 'C'})`
+    fabricated `Proposal_3` and served that engine-minted string back for
+    `n.proposal_name`, over the caller's own value.
 
     Every assertion below is therefore a *two-route* one: `properties(n)` (the
     materialised map) and `n.<alias>` (the dot route) must agree, and agree with
@@ -525,8 +525,8 @@ class TestWritePathHonoursAliases:
     def _both_routes(g, npdid):
         """`(properties(n), {alias: dot-read})` for one node."""
         row = g.cypher(
-            "MATCH (n:Prospect) WHERE n.npdid = $i "
-            "RETURN properties(n) AS p, n.npdid AS pid, n.prospect_name AS pname, "
+            "MATCH (n:Proposal) WHERE n.npdid = $i "
+            "RETURN properties(n) AS p, n.npdid AS pid, n.proposal_name AS pname, "
             "n.id AS id, n.title AS title",
             params={"i": npdid},
         ).to_list()
@@ -534,7 +534,7 @@ class TestWritePathHonoursAliases:
         return row[0]
 
     def test_create_promotes_both_declared_spellings(self, graph_with_aliases):
-        graph_with_aliases.cypher("CREATE (:Prospect {npdid: 99, prospect_name: 'Delta', status: 'new'})")
+        graph_with_aliases.cypher("CREATE (:Proposal {npdid: 99, proposal_name: 'Delta', status: 'new'})")
         row = self._both_routes(graph_with_aliases, 99)
 
         # The dot route and the canonical field agree…
@@ -542,7 +542,7 @@ class TestWritePathHonoursAliases:
         assert row["pname"] == "Delta" and row["title"] == "Delta"
         # …and so does the materialised map.
         assert row["p"]["npdid"] == 99
-        assert row["p"]["prospect_name"] == "Delta"
+        assert row["p"]["proposal_name"] == "Delta"
         assert row["p"]["id"] == 99
         assert row["p"]["title"] == "Delta"
         assert row["p"]["status"] == "new"
@@ -551,14 +551,14 @@ class TestWritePathHonoursAliases:
         """The `<Label>_<n>` fabrication is the last resort it always was — it
         must not override a value the caller supplied under the type's own
         title column."""
-        graph_with_aliases.cypher("CREATE (:Prospect {npdid: 50, prospect_name: 'Epsilon'})")
-        titles = graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 50}) RETURN n.title AS t").to_list()
+        graph_with_aliases.cypher("CREATE (:Proposal {npdid: 50, proposal_name: 'Epsilon'})")
+        titles = graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 50}) RETURN n.title AS t").to_list()
         assert titles == [{"t": "Epsilon"}]
         # A CREATE that supplies neither spelling still gets a fabricated title
         # rather than a null one.
-        graph_with_aliases.cypher("CREATE (:Prospect {npdid: 51})")
-        fabricated = graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 51}) RETURN n.title AS t").scalar()
-        assert isinstance(fabricated, str) and fabricated.startswith("Prospect_")
+        graph_with_aliases.cypher("CREATE (:Proposal {npdid: 51})")
+        fabricated = graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 51}) RETURN n.title AS t").scalar()
+        assert isinstance(fabricated, str) and fabricated.startswith("Proposal_")
 
     def test_the_promoted_value_is_not_also_stored_as_a_property(self, graph_with_aliases):
         """Promoted, not duplicated — `add_nodes` keeps its id/title columns out
@@ -566,16 +566,16 @@ class TestWritePathHonoursAliases:
         shadow the identity in `properties(n)` (the materialiser prefers a key
         the map already carries) while the dot route kept resolving to the
         identity, which is the disagreement this whole path closes."""
-        graph_with_aliases.cypher("CREATE (:Prospect {npdid: 60, prospect_name: 'Zeta'})")
+        graph_with_aliases.cypher("CREATE (:Proposal {npdid: 60, proposal_name: 'Zeta'})")
         # One authority for each field: rewriting the identity moves BOTH routes.
-        graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 60}) SET n.prospect_name = 'Zeta-2'")
+        graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 60}) SET n.proposal_name = 'Zeta-2'")
         row = self._both_routes(graph_with_aliases, 60)
         assert row["pname"] == "Zeta-2"
         assert row["title"] == "Zeta-2"
-        assert row["p"]["prospect_name"] == "Zeta-2"
+        assert row["p"]["proposal_name"] == "Zeta-2"
 
     def test_merge_creates_through_the_same_promotion(self, graph_with_aliases):
-        graph_with_aliases.cypher("MERGE (n:Prospect {npdid: 101}) ON CREATE SET n.status = 'fresh'")
+        graph_with_aliases.cypher("MERGE (n:Proposal {npdid: 101}) ON CREATE SET n.status = 'fresh'")
         row = self._both_routes(graph_with_aliases, 101)
         assert row["pid"] == 101 and row["id"] == 101
         assert row["p"]["npdid"] == 101
@@ -584,38 +584,38 @@ class TestWritePathHonoursAliases:
     def test_merge_matches_the_node_its_own_create_arm_made(self, graph_with_aliases):
         """The proof that the promotion is real: a second MERGE on the same
         aliased key must find the node rather than create a twin."""
-        graph_with_aliases.cypher("MERGE (n:Prospect {npdid: 102}) ON CREATE SET n.status = 'first'")
-        graph_with_aliases.cypher("MERGE (n:Prospect {npdid: 102}) ON CREATE SET n.status = 'second'")
-        rows = graph_with_aliases.cypher("MATCH (n:Prospect) WHERE n.npdid = 102 RETURN n.status AS s").to_list()
+        graph_with_aliases.cypher("MERGE (n:Proposal {npdid: 102}) ON CREATE SET n.status = 'first'")
+        graph_with_aliases.cypher("MERGE (n:Proposal {npdid: 102}) ON CREATE SET n.status = 'second'")
+        rows = graph_with_aliases.cypher("MATCH (n:Proposal) WHERE n.npdid = 102 RETURN n.status AS s").to_list()
         assert rows == [{"s": "first"}], "the second MERGE must match, not create"
 
     def test_set_on_the_title_alias_is_visible_on_both_routes(self, graph_with_aliases):
-        """It used to store an ordinary property that `n.prospect_name` — which
+        """It used to store an ordinary property that `n.proposal_name` — which
         resolves the alias to the title — could never return: the write was
         invisible on the route that asked for it."""
-        graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 1}) SET n.prospect_name = 'Alpha-2'")
+        graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 1}) SET n.proposal_name = 'Alpha-2'")
         row = self._both_routes(graph_with_aliases, 1)
         assert row["pname"] == "Alpha-2"
         assert row["title"] == "Alpha-2"
-        assert row["p"]["prospect_name"] == "Alpha-2"
+        assert row["p"]["proposal_name"] == "Alpha-2"
         assert row["p"]["title"] == "Alpha-2"
 
     def test_set_on_the_id_alias_is_refused_as_immutable(self, graph_with_aliases):
         """Same answer as the literal `SET n.id`, for the same reason: the
         identity is the row's key, not a value `add_nodes` updates."""
         with pytest.raises(Exception, match="immutable"):
-            graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 1}) SET n.npdid = 77")
-        assert graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 1}) RETURN n.npdid AS i").to_list() == [{"i": 1}]
+            graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 1}) SET n.npdid = 77")
+        assert graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 1}) RETURN n.npdid AS i").to_list() == [{"i": 1}]
 
     def test_remove_on_the_id_alias_is_refused_as_immutable(self, graph_with_aliases):
         with pytest.raises(Exception, match="immutable"):
-            graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 1}) REMOVE n.npdid")
-        assert graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 1}) RETURN n.npdid AS i").to_list() == [{"i": 1}]
+            graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 1}) REMOVE n.npdid")
+        assert graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 1}) RETURN n.npdid AS i").to_list() == [{"i": 1}]
 
     def test_remove_on_the_title_alias_clears_the_title(self, graph_with_aliases):
-        graph_with_aliases.cypher("MATCH (n:Prospect {npdid: 2}) REMOVE n.prospect_name")
+        graph_with_aliases.cypher("MATCH (n:Proposal {npdid: 2}) REMOVE n.proposal_name")
         row = graph_with_aliases.cypher(
-            "MATCH (n:Prospect) WHERE n.npdid = 2 RETURN n.prospect_name AS pname, n.title AS title"
+            "MATCH (n:Proposal) WHERE n.npdid = 2 RETURN n.proposal_name AS pname, n.title AS title"
         ).to_list()[0]
         assert row["title"] is None
         assert row["pname"] is None

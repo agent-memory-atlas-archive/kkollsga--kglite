@@ -23,7 +23,7 @@ def test_int_div_int_returns_int():
 
 
 def test_decade_bucketing_pattern():
-    """The Sodir creaming-curve query shape: bucket year into decade."""
+    """The creaming-curve query shape: bucket year into decade."""
     g = kglite.KnowledgeGraph()
     rows = list(g.cypher("RETURN 1967 / 10 * 10 AS decade"))
     assert rows[0]["decade"] == 1960

@@ -121,7 +121,7 @@ every node and relationship a statement touches:
 
 ```cypher
 FOR VALID_TIME AS OF date('1999-06-30')
-MATCH (l:Licence)-[:HAS_OPERATOR]->(c:Company)
+MATCH (l:Contract)-[:MANAGED_BY]->(c:Company)
 RETURN c.title
 ```
 
@@ -219,8 +219,8 @@ Wikidata slice, a SQL warehouse, a RAG corpus, or a parsed codebase.
   ...)` and `add_relationships(df, ...)`. Layer a graph on your warehouse.
   The agent reasons over the relationships without you writing a server. **→
   [Data Loading guide](https://kglite.readthedocs.io/en/latest/python/guides/data-loading.html).**
-- 🌐 **Public datasets.** Loaders for **SEC EDGAR** filings, **Wikidata** (the
-  full `latest-truthy` RDF dump), and **Sodir** petroleum data live in
+- 🌐 **Public datasets.** Loaders for **SEC EDGAR** filings and **Wikidata** (the
+  full `latest-truthy` RDF dump) live in
   [kglite-datasets](https://kglite-datasets.readthedocs.io), each handling the
   *fetch + build + cache* cycle. kglite's mapped and disk storage then query
   graphs that don't fit in RAM, up to the 124M-node / 861M-edge Wikidata graph
@@ -316,7 +316,7 @@ versioned on its own cadence. Three build graphs it serves; one looks at them:
   code graphs (14 languages, web-framework route detection). Build with it,
   query the `.kgl` here.
 - **[kglite-datasets](https://kglite-datasets.readthedocs.io)** carries
-  fetch-build-cache loaders for public registries (SEC EDGAR, Wikidata, Sodir).
+  fetch-build-cache loaders for public registries (SEC EDGAR, Wikidata).
 - **[sonagram](https://sonagram.readthedocs.io)** turns a local music
   library into a kglite knowledge graph via sonara audio analysis (tempo,
   energy, mood, key). AI agents curate playlists over it through a bundled
@@ -399,7 +399,7 @@ building saves a lot of argument later.
 **Valid time is a declared property of the graph, not a filter you remember to
 write. One instant governs every hop, path, algorithm and ranking in every
 binding, and recording time is modelled beside it in the same embedded engine.**
-Org charts, licence tables and price lists keep history: each fact is valid over
+Org charts, contract tables and price lists keep history: each fact is valid over
 a period, and the usual question is *"as of when?"*. Declare a type's interval
 properties once (closed or half-open). After that, one prefix, or `valid_at=` on
 any binding, answers as if the graph held only what was valid then, on every
@@ -487,9 +487,9 @@ orphan nodes, missing required edges, two-step cycles, duplicate titles,
 parallel edges, cardinality violations, more.
 
 ```python
-# Wellbores in our sodir graph that lack a production licence
+# Sites in our graph that lack a contract
 graph.cypher("""
-    CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node
+    CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node
     RETURN node.id, node.title
 """)
 ```

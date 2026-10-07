@@ -821,7 +821,7 @@ impl KnowledgeGraph {
     /// - **Comparison mode** (``method=``): spatial, semantic, or clustering.
     ///
     /// Args:
-    ///     connection_type (str): Edge type to follow (e.g. ``'HAS_LICENSEE'``).
+    ///     connection_type (str): Edge type to follow (e.g. ``'HAS_HOLDER'``).
     ///         In comparison mode, this is the target node type instead.
     ///     direction (str): ``'outgoing'``, ``'incoming'``, or ``None`` (both).
     ///     target_type (str | list[str]): Filter targets to specific node type(s).
@@ -841,12 +841,12 @@ impl KnowledgeGraph {
     /// Examples::
     ///
     /// ```text
-    /// g.select('Field').traverse('HAS_LICENSEE')
-    /// g.select('Field').traverse('OF_FIELD', direction='incoming',
+    /// g.select('Project').traverse('HAS_HOLDER')
+    /// g.select('Project').traverse('OF_PROJECT', direction='incoming',
     ///     target_type='ProductionProfile')
-    /// g.select('Field').traverse('HAS_LICENSEE',
-    ///     where={'title': 'Equinor Energy AS'})
-    /// g.select('Field').traverse('HAS_LICENSEE', at='2005')
+    /// g.select('Project').traverse('HAS_HOLDER',
+    ///     where={'title': 'Northwind Energy AS'})
+    /// g.select('Project').traverse('HAS_HOLDER', at='2005')
     /// ```
     #[pyo3(signature = (connection_type, level_index=None, direction=None, sort_target=None, limit=None, new_level=None, at=None, during=None, temporal=None, target_type=None, r#where=None, where_connection=None))]
     #[allow(clippy::too_many_arguments)]

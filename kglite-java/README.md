@@ -169,12 +169,12 @@ A statement that names no instant reads as of today on such a graph. Pass
 
 ```java
 ValidAt mid2009 = ValidAt.of(LocalDate.of(2009, 6, 30));
-graph.query("MATCH (f:Field)-[:OPERATED_BY]->(c) RETURN f.name, c.name", Map.of(), mid2009);
+graph.query("MATCH (f:Project)-[:MANAGED_BY]->(c) RETURN f.name, c.name", Map.of(), mid2009);
 
 // One snapshot for a whole report: every statement sees the same graph state.
 List<QueryResult> report = graph.queryBatch(List.of(
-        BatchQuery.of("MATCH (f:Field) RETURN count(f) AS fields"),
-        new BatchQuery("MATCH (f:Field {name: $name}) RETURN f.status", Map.of("name", "VOLVE"))),
+        BatchQuery.of("MATCH (f:Project) RETURN count(f) AS fields"),
+        new BatchQuery("MATCH (f:Project {name: $name}) RETURN f.status", Map.of("name", "ELM"))),
         mid2009);
 ```
 

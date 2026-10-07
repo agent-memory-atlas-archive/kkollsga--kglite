@@ -396,14 +396,14 @@ _DECLARATIONS = (
 
 def _licensed(periods):
     g = KnowledgeGraph()
-    g.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Field", "id", "title")
+    g.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Project", "id", "title")
     frame = pd.DataFrame(periods, columns=["src", "tgt", "vf", "vt"])
     g.add_relationships(
         frame,
         "HOLDS",
-        "Field",
+        "Project",
         "src",
-        "Field",
+        "Project",
         "tgt",
         column_types={"vf": "validFrom", "vt": "validTo"},
         convention="half_open",
@@ -419,10 +419,10 @@ def _periods(g):
 def test_extend_copies_temporal_declarations_and_keeps_parallel_periods():
     source = _licensed([(1, 2, "2000-01-01", "2005-01-01"), (1, 2, "2005-01-01", None)])
     target = KnowledgeGraph()
-    target.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Field", "id", "title")
+    target.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Project", "id", "title")
     # The target holds the type undeclared, so the source's periods merge
     # into its edge unless the declaration travels with them.
-    target.cypher("MATCH (a:Field {id: 1}), (b:Field {id: 2}) CREATE (a)-[:HOLDS {vf: date('1990-01-01')}]->(b)")
+    target.cypher("MATCH (a:Project {id: 1}), (b:Project {id: 2}) CREATE (a)-[:HOLDS {vf: date('1990-01-01')}]->(b)")
     report = target.extend(source)
     assert report["edges_created"] == 2
     assert "errors" not in report
@@ -457,7 +457,7 @@ def test_a_failed_extend_leaves_no_adopted_declaration():
     ``ArgumentError``."""
     source = _licensed([(1, 2, "2000-01-01", "2005-01-01")])
     target = KnowledgeGraph()
-    target.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Field", "id", "title")
+    target.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["F", "C"]}), "Project", "id", "title")
     target.cypher("CREATE CONSTRAINT FOR ()-[r:HOLDS]-() REQUIRE r.x IS NOT NULL")
     with pytest.raises(kglite.ConstraintViolationError, match="NOT NULL constraint on HOLDS.x"):
         target.extend(source)

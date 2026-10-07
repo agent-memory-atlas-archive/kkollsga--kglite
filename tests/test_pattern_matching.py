@@ -35,9 +35,9 @@ class TestEdgePatterns:
 
 
 class TestMultiHopPatterns:
-    def test_two_hop(self, petroleum_graph):
-        results = petroleum_graph.match_pattern(
-            "(p:Play)-[:HAS_PROSPECT]->(pr:Prospect)-[:BECAME_DISCOVERY]->(d:Discovery)"
+    def test_two_hop(self, portfolio_graph):
+        results = portfolio_graph.match_pattern(
+            "(p:Portfolio)-[:HAS_PROPOSAL]->(pr:Proposal)-[:BECAME_INITIATIVE]->(d:Initiative)"
         )
         assert len(results) > 0
         for m in results:
@@ -59,16 +59,16 @@ class TestMultiHopPatterns:
 
 
 class TestVariableLengthPaths:
-    def test_exact_hops(self, petroleum_graph):
-        results = petroleum_graph.match_pattern("(p:Play)-[:HAS_PROSPECT*1]->(pr:Prospect)")
+    def test_exact_hops(self, portfolio_graph):
+        results = portfolio_graph.match_pattern("(p:Portfolio)-[:HAS_PROPOSAL*1]->(pr:Proposal)")
         assert len(results) > 0
 
-    def test_range_hops(self, petroleum_graph):
-        results = petroleum_graph.match_pattern("(p:Play)-[*1..2]->(d)")
+    def test_range_hops(self, portfolio_graph):
+        results = portfolio_graph.match_pattern("(p:Portfolio)-[*1..2]->(d)")
         assert len(results) > 0
 
-    def test_star_only(self, petroleum_graph):
-        results = petroleum_graph.match_pattern("(p:Play)-[*]->(d:Discovery)")
+    def test_star_only(self, portfolio_graph):
+        results = portfolio_graph.match_pattern("(p:Portfolio)-[*]->(d:Initiative)")
         assert len(results) > 0
 
 

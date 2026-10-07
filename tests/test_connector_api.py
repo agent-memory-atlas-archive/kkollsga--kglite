@@ -53,13 +53,13 @@ class TestAddNodesBulk:
 
         node_specs = [
             {
-                "node_type": "Field",
+                "node_type": "Project",
                 "unique_id_field": "field_id",
                 "node_title_field": "name",
-                "data": pd.DataFrame({"field_id": [1, 2, 3], "name": ["Ekofisk", "Troll", "Snorre"]}),
+                "data": pd.DataFrame({"field_id": [1, 2, 3], "name": ["Ember", "Tundra", "Sable"]}),
             },
             {
-                "node_type": "Wellbore",
+                "node_type": "Site",
                 "unique_id_field": "wb_id",
                 "node_title_field": "name",
                 "data": pd.DataFrame({"wb_id": [10, 20], "name": ["Well-1", "Well-2"]}),
@@ -68,9 +68,9 @@ class TestAddNodesBulk:
 
         stats = graph.add_nodes_bulk(node_specs)
 
-        assert stats["Field"] == 3
-        assert stats["Wellbore"] == 2
-        assert set(graph.node_types) == {"Field", "Wellbore"}
+        assert stats["Project"] == 3
+        assert stats["Site"] == 2
+        assert set(graph.node_types) == {"Project", "Site"}
 
     def test_missing_required_field_raises_error(self):
         """Should raise error if node spec is missing required fields."""
@@ -214,27 +214,27 @@ class TestCompleteWorkflow:
 
         # Simulate data source providing node specs
         node_configs = {
-            "field": {"node_type": "Field", "unique_id_field": "fldNpdidField", "node_title_field": "fldName"},
-            "wellbore": {
-                "node_type": "Wellbore",
-                "unique_id_field": "wlbNpdidWellbore",
-                "node_title_field": "wlbWellboreName",
+            "field": {"node_type": "Project", "unique_id_field": "prjId", "node_title_field": "prjName"},
+            "site": {
+                "node_type": "Site",
+                "unique_id_field": "steId",
+                "node_title_field": "steSiteName",
             },
         }
 
         node_data = {
             "field": pd.DataFrame(
                 {
-                    "fldNpdidField": [1, 2, 3],
-                    "fldName": ["Ekofisk", "Troll", "Snorre"],
-                    "fldStatus": ["PRODUCING", "PRODUCING", "PRODUCING"],
+                    "prjId": [1, 2, 3],
+                    "prjName": ["Ember", "Tundra", "Sable"],
+                    "prjStatus": ["PRODUCING", "PRODUCING", "PRODUCING"],
                 }
             ),
-            "wellbore": pd.DataFrame(
+            "site": pd.DataFrame(
                 {
-                    "wlbNpdidWellbore": [10, 20, 30, 40],
-                    "wlbWellboreName": ["EK-1", "EK-2", "TR-1", "SN-1"],
-                    "wlbPurpose": ["PRODUCTION", "PRODUCTION", "EXPLORATION", "PRODUCTION"],
+                    "steId": [10, 20, 30, 40],
+                    "steSiteName": ["EK-1", "EK-2", "TR-1", "SN-1"],
+                    "stePurpose": ["PRODUCTION", "PRODUCTION", "EXPLORATION", "PRODUCTION"],
                 }
             ),
         }
@@ -252,22 +252,22 @@ class TestCompleteWorkflow:
 
         # Bulk load nodes
         node_stats = graph.add_nodes_bulk(node_specs)
-        assert node_stats["Field"] == 3
-        assert node_stats["Wellbore"] == 4
+        assert node_stats["Project"] == 3
+        assert node_stats["Site"] == 4
 
         # Simulate connector providing all connections
         connections = [
             {
-                "source_type": "Wellbore",
-                "target_type": "Field",
-                "connection_name": "DRILLED_ON",
+                "source_type": "Site",
+                "target_type": "Project",
+                "connection_name": "BUILT_ON",
                 "data": pd.DataFrame({"source_id": [10, 20, 30, 40], "target_id": [1, 1, 2, 3]}),
             }
         ]
 
         # Auto-load connections
         conn_stats = graph.add_connections_from_source(connections)
-        assert conn_stats["DRILLED_ON"] == 4
+        assert conn_stats["BUILT_ON"] == 4
 
         # Verify graph state
-        assert set(graph.node_types) == {"Field", "Wellbore"}
+        assert set(graph.node_types) == {"Project", "Site"}

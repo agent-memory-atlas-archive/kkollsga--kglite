@@ -626,32 +626,32 @@ def large_schema_graph():
 
 
 @pytest.fixture
-def petroleum_graph():
-    """Domain graph: Play/Prospect/Discovery/Estimate with temporal and spatial data.
+def portfolio_graph():
+    """Domain graph: Portfolio/Proposal/Initiative/Estimate with temporal and spatial data.
 
-    3 Plays with lat/lon
-    20 Prospects with status, geoprovince, lat/lon, date_from/date_to
-    10 Discoveries with resource_type, lat/lon
+    3 Portfolios with lat/lon
+    20 Proposals with status, geoprovince, lat/lon, date_from/date_to
+    10 Initiatives with resource_type, lat/lon
     50 Estimates with value, confidence, date_from/date_to (datetime)
-    Connections: HAS_PROSPECT, BECAME_DISCOVERY (share_pct), HAS_ESTIMATE (weight)
+    Connections: HAS_PROPOSAL, BECAME_INITIATIVE (share_pct), HAS_ESTIMATE (weight)
     """
     graph = KnowledgeGraph()
 
     plays = pd.DataFrame(
         {
             "play_id": [1, 2, 3],
-            "name": ["North Sea Play", "Atlantic Play", "Barents Play"],
+            "name": ["North Sea Portfolio", "Atlantic Portfolio", "Barents Portfolio"],
             "region": ["Norwegian Sea", "Atlantic", "Barents Sea"],
             "latitude": [62.0, 64.5, 71.0],
             "longitude": [5.0, 3.0, 25.0],
         }
     )
-    graph.add_nodes(plays, "Play", "play_id", "name")
+    graph.add_nodes(plays, "Portfolio", "play_id", "name")
 
-    prospects = pd.DataFrame(
+    proposals = pd.DataFrame(
         {
-            "prospect_id": list(range(100, 120)),
-            "name": [f"Prospect_{i}" for i in range(20)],
+            "proposal_id": list(range(100, 120)),
+            "name": [f"Proposal_{i}" for i in range(20)],
             "status": ["Active"] * 10 + ["Closed"] * 5 + ["Matured"] * 5,
             "geoprovince": ["N3"] * 7 + ["M3"] * 7 + ["B1"] * 6,
             "latitude": [60.0 + i * 0.5 for i in range(20)],
@@ -660,18 +660,18 @@ def petroleum_graph():
             "date_to": ["2025-12-31"] * 10 + ["2023-12-31"] * 10,
         }
     )
-    graph.add_nodes(prospects, "Prospect", "prospect_id", "name")
+    graph.add_nodes(proposals, "Proposal", "proposal_id", "name")
 
-    discoveries = pd.DataFrame(
+    initiatives = pd.DataFrame(
         {
-            "discovery_id": list(range(200, 210)),
-            "name": [f"Discovery_{i}" for i in range(10)],
-            "resource_type": ["Oil"] * 5 + ["Gas"] * 5,
+            "initiative_id": list(range(200, 210)),
+            "name": [f"Initiative_{i}" for i in range(10)],
+            "resource_type": ["Primary"] * 5 + ["Secondary"] * 5,
             "latitude": [59.0 + i * 0.4 for i in range(10)],
             "longitude": [2.0 + i * 0.2 for i in range(10)],
         }
     )
-    graph.add_nodes(discoveries, "Discovery", "discovery_id", "name")
+    graph.add_nodes(initiatives, "Initiative", "initiative_id", "name")
 
     estimates = pd.DataFrame(
         {
@@ -687,40 +687,40 @@ def petroleum_graph():
         estimates, "Estimate", "estimate_id", "name", column_types={"date_from": "datetime", "date_to": "datetime"}
     )
 
-    play_prospect = pd.DataFrame(
+    play_proposal = pd.DataFrame(
         {
             "play_id": [1] * 7 + [2] * 7 + [3] * 6,
-            "prospect_id": list(range(100, 120)),
+            "proposal_id": list(range(100, 120)),
         }
     )
-    graph.add_connections(play_prospect, "HAS_PROSPECT", "Play", "play_id", "Prospect", "prospect_id")
+    graph.add_connections(play_proposal, "HAS_PROPOSAL", "Portfolio", "play_id", "Proposal", "proposal_id")
 
-    prospect_discovery = pd.DataFrame(
+    proposal_initiative = pd.DataFrame(
         {
-            "prospect_id": [100, 101, 102, 107, 108, 109, 114, 115, 116, 117],
-            "discovery_id": list(range(200, 210)),
+            "proposal_id": [100, 101, 102, 107, 108, 109, 114, 115, 116, 117],
+            "initiative_id": list(range(200, 210)),
             "share_pct": [100.0, 75.0, 50.0, 80.0, 60.0, 40.0, 90.0, 70.0, 55.0, 45.0],
         }
     )
     graph.add_connections(
-        prospect_discovery,
-        "BECAME_DISCOVERY",
-        "Prospect",
-        "prospect_id",
-        "Discovery",
-        "discovery_id",
+        proposal_initiative,
+        "BECAME_INITIATIVE",
+        "Proposal",
+        "proposal_id",
+        "Initiative",
+        "initiative_id",
         columns=["share_pct"],
     )
 
-    prospect_estimate = pd.DataFrame(
+    proposal_estimate = pd.DataFrame(
         {
-            "prospect_id": [100 + (i % 20) for i in range(50)],
+            "proposal_id": [100 + (i % 20) for i in range(50)],
             "estimate_id": list(range(300, 350)),
             "weight": [0.5 + (i % 10) * 0.05 for i in range(50)],
         }
     )
     graph.add_connections(
-        prospect_estimate, "HAS_ESTIMATE", "Prospect", "prospect_id", "Estimate", "estimate_id", columns=["weight"]
+        proposal_estimate, "HAS_ESTIMATE", "Proposal", "proposal_id", "Estimate", "estimate_id", columns=["weight"]
     )
 
     return graph

@@ -149,7 +149,7 @@ read the files next to the graph. A sibling `<basename>_mcp.yaml` with
 
 ## Loading a Public Dataset
 
-The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) live in the
+The pre-packaged dataset loaders (SEC EDGAR, Wikidata) live in the
 companion [kglite-datasets](https://kglite-datasets.readthedocs.io) project.
 kglite loads the graphs they produce. Point KGLite at a graph one of those loaders
 built and open it like any other:

@@ -11,8 +11,8 @@ class TestExpand:
         expanded = alice.expand(hops=1)
         assert expanded.len() >= 2  # Alice + at least Bob/Charlie
 
-    def test_expand_multiple_hops(self, petroleum_graph):
-        play = petroleum_graph.select("Play").where({"title": "North Sea Play"})
+    def test_expand_multiple_hops(self, portfolio_graph):
+        play = portfolio_graph.select("Portfolio").where({"title": "North Sea Portfolio"})
         expanded = play.expand(hops=2)
         assert expanded.len() > 1
 

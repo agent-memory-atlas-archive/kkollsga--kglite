@@ -38,13 +38,13 @@ fn echo(graph: &DirGraph, query: &str) -> Option<TemporalDiagnostics> {
         .map(|echo| *echo)
 }
 
-/// Wells 1 (closed in 2010) and 2 (from 2005), a `Field` they sit in, and a
+/// Wells 1 (closed in 2010) and 2 (from 2005), a `Project` they sit in, and a
 /// declared `IN` relationship.
 fn wells() -> DirGraph {
     let mut graph = DirGraph::new();
     for query in [
         "CREATE (w1:Well {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}), \
-         (w2:Well {id: 2, vf: date('2005-01-01')}), (f:Field {id: 10}), \
+         (w2:Well {id: 2, vf: date('2005-01-01')}), (f:Project {id: 10}), \
          (w1)-[:IN {from: date('2000-01-01'), to: date('2040-01-01')}]->(f), (w2)-[:IN {from: date('2005-01-01')}]->(f)",
         "CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', convention: 'closed'}) \
          YIELD declared RETURN declared",
@@ -87,7 +87,7 @@ fn a_hop_echoes_the_relationship_target_and_a_datetime_its_time() {
     let echo = echo(
         &graph,
         "FOR VALID_TIME AS OF datetime('2003-06-30T12:30:00') \
-         MATCH (w:Well)-[:IN]->(f:Field) RETURN w.id",
+         MATCH (w:Well)-[:IN]->(f:Project) RETURN w.id",
     )
     .expect("a context echoes");
     assert_eq!(echo.instant, "2003-06-30T12:30:00");
@@ -376,7 +376,7 @@ fn a_statement_naming_no_declared_label_has_no_counts() {
     let graph = wells();
     let echo = echo(
         &graph,
-        "FOR VALID_TIME AS OF date('2003-06-30') MATCH (f:Field) RETURN f.id",
+        "FOR VALID_TIME AS OF date('2003-06-30') MATCH (f:Project) RETURN f.id",
     )
     .unwrap();
     assert!(echo.targets.is_empty());
@@ -391,9 +391,9 @@ fn a_statement_naming_no_declared_label_has_no_counts() {
 #[test]
 fn the_echo_lists_the_targets_reachable_through_secondary_labels() {
     let mut graph = wells();
-    run(&mut graph, "MATCH (f:Field) SET f:Tag");
+    run(&mut graph, "MATCH (f:Project) SET f:Tag");
     let at = "FOR VALID_TIME AS OF date('2003-06-30') ";
-    let field = echo(&graph, &format!("{at}MATCH (f:Field) RETURN f.id")).unwrap();
+    let field = echo(&graph, &format!("{at}MATCH (f:Project) RETURN f.id")).unwrap();
     assert_eq!(
         field,
         TemporalDiagnostics {
@@ -412,8 +412,8 @@ fn the_echo_lists_the_targets_reachable_through_secondary_labels() {
     let tag = echo(&graph, &format!("{at}MATCH (t:Tag) RETURN t.id")).unwrap();
     assert_eq!(tag.targets, ["(:Well)"]);
     assert_eq!(tag.hidden, [("(:Well)".to_string(), 1)].into());
-    run(&mut graph, "MATCH (f:Field) SET f:Well");
-    let field = echo(&graph, &format!("{at}MATCH (f:Field) RETURN f.id")).unwrap();
+    run(&mut graph, "MATCH (f:Project) SET f:Well");
+    let field = echo(&graph, &format!("{at}MATCH (f:Project) RETURN f.id")).unwrap();
     assert_eq!(field.targets, ["(:Well)"]);
     assert_eq!(field.route, "guarded");
 }

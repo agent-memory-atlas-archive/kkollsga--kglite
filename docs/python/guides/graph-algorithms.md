@@ -160,7 +160,7 @@ A dict silently missing its far half is a wrong answer, not a missing one.
 ```python
 paths = graph.all_paths(
     source_type='Play', source_id=1,
-    target_type='Wellbore', target_id=100,
+    target_type='Site', target_id=100,
     max_hops=4,
     max_results=100  # Prevent OOM on dense graphs
 )
@@ -312,7 +312,7 @@ General-purpose clustering via Cypher `CALL cluster()`. Reads nodes from a prece
 ```python
 # Spatial DBSCAN — auto-detects lat/lon from set_spatial() config
 result = graph.cypher("""
-    MATCH (f:Field)
+    MATCH (f:Project)
     CALL cluster({method: 'dbscan', eps: 50000, min_points: 2})
     YIELD node, cluster
     RETURN cluster, count(*) AS n, collect(node.name) AS fields
@@ -321,7 +321,7 @@ result = graph.cypher("""
 
 # Property-based K-means — cluster on explicit numeric properties
 result = graph.cypher("""
-    MATCH (w:Wellbore)
+    MATCH (w:Site)
     CALL cluster({
         properties: ['totalDepth', 'bottomHoleTemp'],
         method: 'kmeans', k: 5, normalize: true

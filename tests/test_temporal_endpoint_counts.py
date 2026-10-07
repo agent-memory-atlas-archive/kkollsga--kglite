@@ -126,28 +126,28 @@ def test_relationship_declarations_are_counted_per_source_type() -> None:
     g = kglite.KnowledgeGraph()
     g.cypher(
         """
-        CREATE (f:Field {id: 1}), (l:Licence {id: 2}), (c:Company {id: 3}),
+        CREATE (f:Project {id: 1}), (l:Contract {id: 2}), (c:Company {id: 3}),
                (f)-[:HAS {ff: date('2000-01-01'), ft: date('2001-01-01')}]->(c),
                (l)-[:HAS {lf: date('2000-01-01'), lt: date('2001-01-01')}]->(c)
         """
     ).to_list()
     g.cypher(
-        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Field', "
+        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Project', "
         "from: 'ff', to: 'ft', convention: 'closed'})"
     ).to_list()
     g.cypher("CALL db.temporal.declare({relationship: 'HAS', from: 'lf', to: 'lt', convention: 'closed'})").to_list()
-    # The unkeyed declaration judges the Licence relationship's write.
+    # The unkeyed declaration judges the Contract relationship's write.
     with pytest.raises(kglite.CypherExecutionError, match="HAS relationship from node '2' to node '3'"):
-        g.cypher("MATCH (:Licence)-[r:HAS]->() SET r.lt = date('1999-01-01')").to_list()
-    g.cypher("MATCH (:Field)-[r:HAS]->() SET r.lt = date('1999-01-01')").to_list()
+        g.cypher("MATCH (:Contract)-[r:HAS]->() SET r.lt = date('1999-01-01')").to_list()
+    g.cypher("MATCH (:Project)-[r:HAS]->() SET r.lt = date('1999-01-01')").to_list()
     rows = g.cypher(
         "CALL db.temporal.declarations() YIELD source_type, empty_rows RETURN source_type, empty_rows"
     ).to_list()
     assert rows == [
-        {"source_type": "Field", "empty_rows": 0},
+        {"source_type": "Project", "empty_rows": 0},
         {"source_type": None, "empty_rows": 0},
     ]
-    assert 'temporal="Field: ff..ft abutting=0; other sources: lf..lt abutting=0"' in g.describe()
+    assert 'temporal="Project: ff..ft abutting=0; other sources: lf..lt abutting=0"' in g.describe()
 
 
 @pytest.mark.parametrize("storage", MODES, ids=MODE_IDS)

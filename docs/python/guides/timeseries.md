@@ -7,16 +7,16 @@ Attach time-indexed numeric data directly to nodes. You do not create separate n
 Configure timeseries metadata per node type: resolution, channel names, units, and bin type.
 
 ```python
-graph.set_timeseries("Field",
+graph.set_timeseries("Project",
     resolution="month",                         # "year", "month" or "day"
-    channels=["oil", "gas"],                    # channel names
-    units={"oil": "MSm3", "gas": "BSm3"},      # optional: per-channel units
+    channels=["output", "flow"],                    # channel names
+    units={"output": "MU", "flow": "BU"},      # optional: per-channel units
     bin_type="total",                            # optional: "total", "mean", or "sample"
 )
 
-graph.timeseries_config("Field")
-# {'resolution': 'month', 'channels': ['oil', 'gas'],
-#  'units': {'oil': 'MSm3', 'gas': 'BSm3'}, 'bin_type': 'total'}
+graph.timeseries_config("Project")
+# {'resolution': 'month', 'channels': ['output', 'flow'],
+#  'units': {'output': 'MU', 'flow': 'BU'}, 'bin_type': 'total'}
 ```
 
 ## Loading data
@@ -24,19 +24,19 @@ graph.timeseries_config("Field")
 ```python
 # Bulk load from a DataFrame (most common)
 graph.add_timeseries(
-    "Field",
+    "Project",
     data=production_df,
     fk="npdid",                              # FK column → matches node.id
     time_key=["year", "month"],              # composite time key columns
-    channels={"oil": "prfOilCol", "gas": "prfGasCol"},  # channel → column
+    channels={"output": "outOutputCol", "flow": "outFlowCol"},  # channel → column
     resolution="month",                       # required if set_timeseries() wasn't called
-    units={"oil": "MSm3"},                   # optional, merged into config
+    units={"output": "MU"},                   # optional, merged into config
 )
 
 # Or manually per node
 graph.set_time_index(node_id, [[2020,1], [2020,2], [2020,3]])
-graph.add_ts_channel(node_id, "oil", [1.23, 1.18, 1.25])
-graph.add_ts_channel(node_id, "gas", [0.45, 0.42, 0.48])
+graph.add_ts_channel(node_id, "output", [1.23, 1.18, 1.25])
+graph.add_ts_channel(node_id, "flow", [0.45, 0.42, 0.48])
 ```
 
 **Validation:** `time_key` column count must match resolution depth (1 for year, 2 for month, 3 for day).
@@ -47,18 +47,18 @@ If your DataFrame has one row per time step per entity, use the `timeseries` par
 
 ```python
 prod_df = pd.DataFrame({
-    'field_id': ['Troll']*3 + ['Draugen']*3,
-    'field_name': ['Troll']*3 + ['Draugen']*3,
+    'field_id': ['Tundra']*3 + ['Delta']*3,
+    'field_name': ['Tundra']*3 + ['Delta']*3,
     'date': ['2020-01', '2020-02', '2020-03']*2,
-    'oil': [100, 110, 120, 200, 210, 220],
-    'gas': [50, 55, 60, 80, 85, 90],
+    'output': [100, 110, 120, 200, 210, 220],
+    'flow': [50, 55, 60, 80, 85, 90],
 })
 
 # Single call — creates 2 nodes with 3 time steps each
 graph.add_nodes(prod_df, 'Production', 'field_id', 'field_name',
     timeseries={
         'time': 'date',                   # date string column
-        'channels': ['oil', 'gas'],       # value columns
+        'channels': ['output', 'flow'],       # value columns
     }
 )
 ```
@@ -78,7 +78,7 @@ The `timeseries` dict accepts:
 graph.add_nodes(df, 'Production', 'field_id', 'field_name',
     timeseries={
         'time': {'year': 'ar', 'month': 'maned'},
-        'channels': ['oil', 'gas'],
+        'channels': ['output', 'flow'],
     }
 )
 ```
@@ -89,32 +89,32 @@ All `ts_*()` functions take **date strings** (`'2020'`, `'2020-2'`, `'2020-2-15'
 
 ```python
 # Aggregate monthly data by year
-graph.cypher("MATCH (f:Field) RETURN f.title, ts_sum(f.oil, '2020') AS prod")
+graph.cypher("MATCH (f:Project) RETURN f.title, ts_sum(f.output, '2020') AS prod")
 
 # Top 10 fields by production
 graph.cypher("""
-    MATCH (f:Field)
-    RETURN f.title, ts_sum(f.oil, '2020') AS prod
+    MATCH (f:Project)
+    RETURN f.title, ts_sum(f.output, '2020') AS prod
     ORDER BY prod DESC LIMIT 10
 """)
 
 # Month-level range
-graph.cypher("MATCH (f:Field) RETURN ts_avg(f.oil, '2020-1', '2020-6') AS h1_avg")
+graph.cypher("MATCH (f:Project) RETURN ts_avg(f.output, '2020-1', '2020-6') AS h1_avg")
 
 # Multi-year range
-graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, '2018', '2023') AS total")
+graph.cypher("MATCH (f:Project) RETURN ts_sum(f.output, '2018', '2023') AS total")
 
 # Exact month lookup
-graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020-3') AS march")
+graph.cypher("MATCH (f:Project) RETURN ts_at(f.output, '2020-3') AS march")
 
 # Change between periods
-graph.cypher("MATCH (f:Field) RETURN ts_delta(f.oil, '2019', '2021') AS change")
+graph.cypher("MATCH (f:Project) RETURN ts_delta(f.output, '2019', '2021') AS change")
 
 # Latest sensor reading
 graph.cypher("MATCH (s:Sensor) RETURN s.title, ts_last(s.temperature)")
 
 # Extract full series for plotting
-graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_series(f.oil, '2015', '2020')")
+graph.cypher("MATCH (f:Project {title: 'TUNDRA'}) RETURN ts_series(f.output, '2015', '2020')")
 ```
 
 ## Retrieval
@@ -122,10 +122,10 @@ graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_series(f.oil, '2015', '
 ```python
 # All channels
 graph.timeseries(node_id)
-# {'keys': [[2020,1], [2020,2], ...], 'channels': {'oil': [...], 'gas': [...]}}
+# {'keys': [[2020,1], [2020,2], ...], 'channels': {'output': [...], 'flow': [...]}}
 
 # Single channel
-graph.timeseries(node_id, channel="oil")
+graph.timeseries(node_id, channel="output")
 # {'keys': [...], 'values': [...]}
 
 # Date-string range filter

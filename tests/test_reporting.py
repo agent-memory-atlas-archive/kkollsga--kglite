@@ -24,8 +24,8 @@ class TestExplain:
         # Should show node counts at each step
         assert any(c.isdigit() for c in explanation)
 
-    def test_explain_traversal(self, petroleum_graph):
-        result = petroleum_graph.select("Play").traverse("HAS_PROSPECT")
+    def test_explain_traversal(self, portfolio_graph):
+        result = portfolio_graph.select("Portfolio").traverse("HAS_PROPOSAL")
         explanation = result.explain()
         assert "TRAVERSE" in explanation.upper() or "traverse" in explanation.lower()
 

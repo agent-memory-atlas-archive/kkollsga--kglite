@@ -661,8 +661,8 @@ fn sample_timeseries() -> crate::graph::features::timeseries::NodeTimeseries {
             chrono::NaiveDate::from_ymd_opt(2020, 2, 1).unwrap(),
         ],
         channels: std::collections::HashMap::from([
-            ("oil".to_string(), vec![1.5, 2.5]),
-            ("gas".to_string(), vec![3.5, 4.5]),
+            ("output".to_string(), vec![1.5, 2.5]),
+            ("flow".to_string(), vec![3.5, 4.5]),
         ]),
     }
 }
@@ -683,7 +683,7 @@ fn payload_ops_round_trip_through_the_file_codec() {
         },
         MutationOp::SetTimeseriesConfig {
             node_type: "Co".into(),
-            config: r#"{"resolution":"day","channels":["oil"],"units":{"oil":"MSm3"},"bin_type":"total"}"#
+            config: r#"{"resolution":"day","channels":["output"],"units":{"output":"MU"},"bin_type":"total"}"#
                 .into(),
         },
         MutationOp::SetEmbeddings {

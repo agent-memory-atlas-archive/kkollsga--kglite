@@ -102,10 +102,10 @@ The hub-aggregation pattern is the textbook fit: `count of children`, `sum of a 
 ### Cypher way — imperative `SET` per metric
 
 ```python
-# Compute three aggregates on Field nodes from their child Wells:
+# Compute three aggregates on Project nodes from their child Wells:
 # n_wells, total_production, max_depth.
 graph.cypher("""
-    MATCH (f:Field)-[:HAS_WELL]->(w:Well)
+    MATCH (f:Project)-[:HAS_WELL]->(w:Well)
     WITH f, count(w) AS n_wells,
               sum(w.production) AS total_prod,
               max(w.depth) AS max_depth
@@ -127,7 +127,7 @@ This works, with four drawbacks:
 ```python
 from kglite import Agg
 
-graph.select('Field').traverse('HAS_WELL') \
+graph.select('Project').traverse('HAS_WELL') \
     .add_properties({'Well': {
         'n_wells': Agg.count(),
         'total_production': Agg.sum('production'),

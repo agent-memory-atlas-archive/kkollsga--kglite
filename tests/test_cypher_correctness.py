@@ -786,40 +786,44 @@ class TestCollectNodePropertyAccess:
     @pytest.fixture
     def reserves_graph(self):
         g = rg.KnowledgeGraph()
-        g.cypher("CREATE (f:Field {name: 'ULA'})")
-        g.cypher("CREATE (fr:FieldReserves {title: '2025-12-31', oil: 158.185, gas: 87.706})")
-        g.cypher("CREATE (fr2:FieldReserves {title: '2024-01-01', oil: 150.0, gas: 80.0})")
-        g.cypher("MATCH (fr:FieldReserves {title: '2025-12-31'}), (f:Field {name: 'ULA'}) CREATE (fr)-[:OF_FIELD]->(f)")
-        g.cypher("MATCH (fr:FieldReserves {title: '2024-01-01'}), (f:Field {name: 'ULA'}) CREATE (fr)-[:OF_FIELD]->(f)")
+        g.cypher("CREATE (f:Project {name: 'UNA'})")
+        g.cypher("CREATE (fr:ProjectReserves {title: '2025-12-31', output: 158.185, flow: 87.706})")
+        g.cypher("CREATE (fr2:ProjectReserves {title: '2024-01-01', output: 150.0, flow: 80.0})")
+        g.cypher(
+            "MATCH (fr:ProjectReserves {title: '2025-12-31'}), (f:Project {name: 'UNA'}) CREATE (fr)-[:OF_PROJECT]->(f)"
+        )
+        g.cypher(
+            "MATCH (fr:ProjectReserves {title: '2024-01-01'}), (f:Project {name: 'UNA'}) CREATE (fr)-[:OF_PROJECT]->(f)"
+        )
         return g
 
     def test_collect_index_property_access(self, reserves_graph):
         """collect(node)[0].prop should return the actual property, not title."""
         result = reserves_graph.cypher(
-            "MATCH (fr:FieldReserves)-[:OF_FIELD]->(f:Field {name: 'ULA'}) "
+            "MATCH (fr:ProjectReserves)-[:OF_PROJECT]->(f:Project {name: 'UNA'}) "
             "WITH f, fr ORDER BY fr.title DESC "
             "WITH f, collect(fr)[0] AS lr "
-            "RETURN lr.oil AS oil, lr.gas AS gas"
+            "RETURN lr.output AS output, lr.flow AS flow"
         )
         assert len(result) == 1
-        assert result[0]["oil"] == 158.185
-        assert result[0]["gas"] == 87.706
+        assert result[0]["output"] == 158.185
+        assert result[0]["flow"] == 87.706
 
     def test_collect_index_negative(self, reserves_graph):
         """collect(node)[-1] should access the last element."""
         result = reserves_graph.cypher(
-            "MATCH (fr:FieldReserves)-[:OF_FIELD]->(f:Field {name: 'ULA'}) "
+            "MATCH (fr:ProjectReserves)-[:OF_PROJECT]->(f:Project {name: 'UNA'}) "
             "WITH f, fr ORDER BY fr.title DESC "
             "WITH f, collect(fr)[-1] AS lr "
-            "RETURN lr.oil AS oil"
+            "RETURN lr.output AS output"
         )
         assert len(result) == 1
-        assert result[0]["oil"] == 150.0
+        assert result[0]["output"] == 150.0
 
     def test_collect_index_title_still_works(self, reserves_graph):
         """collect(node)[0].title should still return the title."""
         result = reserves_graph.cypher(
-            "MATCH (fr:FieldReserves)-[:OF_FIELD]->(f:Field {name: 'ULA'}) "
+            "MATCH (fr:ProjectReserves)-[:OF_PROJECT]->(f:Project {name: 'UNA'}) "
             "WITH f, fr ORDER BY fr.title DESC "
             "WITH f, collect(fr)[0] AS lr "
             "RETURN lr.title AS t"
@@ -833,7 +837,7 @@ class TestCollectNodePropertyAccess:
         lives in `properties["title"]`.
         """
         result = reserves_graph.cypher(
-            "MATCH (fr:FieldReserves)-[:OF_FIELD]->(f:Field {name: 'ULA'}) "
+            "MATCH (fr:ProjectReserves)-[:OF_PROJECT]->(f:Project {name: 'UNA'}) "
             "WITH f, fr ORDER BY fr.title DESC "
             "WITH f, collect(fr)[0] AS lr "
             "RETURN lr"
@@ -843,13 +847,14 @@ class TestCollectNodePropertyAccess:
     def test_collect_scalar_property_unchanged(self, reserves_graph):
         """collect(node.prop)[0] should still work for scalar properties."""
         result = reserves_graph.cypher(
-            "MATCH (fr:FieldReserves)-[:OF_FIELD]->(f:Field {name: 'ULA'}) WITH f, collect(fr.oil) AS oils RETURN oils"
+            "MATCH (fr:ProjectReserves)-[:OF_PROJECT]->(f:Project {name: 'UNA'}) "
+            "WITH f, collect(fr.output) AS outputs RETURN outputs"
         )
         assert len(result) == 1
-        oils_str = result[0]["oils"]
-        # oils should be a JSON-style list string
-        assert "158.185" in str(oils_str)
-        assert "150.0" in str(oils_str)
+        outputs_str = result[0]["outputs"]
+        # outputs should be a JSON-style list string
+        assert "158.185" in str(outputs_str)
+        assert "150.0" in str(outputs_str)
 
 
 class TestLimitWithFilteringWhere:
@@ -1241,7 +1246,7 @@ class TestMapStringFieldAccess:
         return g
 
     def test_argmin_via_collect_then_filter(self, hub_graph):
-        """The original sodir-prospect cohort pattern: collect maps,
+        """The original proposal cohort pattern: collect maps,
         filter the list by aggregated min, take the first."""
         result = list(
             hub_graph.cypher("""

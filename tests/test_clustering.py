@@ -384,12 +384,12 @@ class TestDescribeCypherTiers:
     def test_tier2_no_graph_schema(self):
         """cypher=True should NOT include node types or inventory."""
         g = KnowledgeGraph()
-        g.cypher("CREATE (:Field {name: 'Troll'})")
+        g.cypher("CREATE (:Holding {name: 'Tundra'})")
         desc = g.describe(cypher=True)
         assert "<cypher>" in desc
         # Should not have graph inventory
         assert "<graph" not in desc
-        assert "Field" not in desc
+        assert "Holding" not in desc
 
     def test_tier2_has_hint_for_tier3(self):
         g = KnowledgeGraph()
@@ -540,21 +540,21 @@ class TestDescribeConnections:
     @pytest.fixture
     def connected_graph(self):
         g = KnowledgeGraph()
-        g.cypher("CREATE (:Field {name: 'Troll'})")
-        g.cypher("CREATE (:Field {name: 'Ekofisk'})")
+        g.cypher("CREATE (:Project {name: 'Tundra'})")
+        g.cypher("CREATE (:Project {name: 'Ember'})")
         g.cypher("CREATE (:Well {name: 'W1'})")
         g.cypher("CREATE (:Well {name: 'W2'})")
-        g.cypher("CREATE (:Company {name: 'Equinor'})")
+        g.cypher("CREATE (:Company {name: 'Northwind'})")
         g.cypher("""
-            MATCH (w:Well {name: 'W1'}), (f:Field {name: 'Troll'})
+            MATCH (w:Well {name: 'W1'}), (f:Project {name: 'Tundra'})
             CREATE (w)-[:BELONGS_TO {since: 1995}]->(f)
         """)
         g.cypher("""
-            MATCH (w:Well {name: 'W2'}), (f:Field {name: 'Ekofisk'})
+            MATCH (w:Well {name: 'W2'}), (f:Project {name: 'Ember'})
             CREATE (w)-[:BELONGS_TO {since: 2001}]->(f)
         """)
         g.cypher("""
-            MATCH (c:Company {name: 'Equinor'}), (f:Field {name: 'Troll'})
+            MATCH (c:Company {name: 'Northwind'}), (f:Project {name: 'Tundra'})
             CREATE (c)-[:OPERATES]->(f)
         """)
         return g
@@ -571,7 +571,7 @@ class TestDescribeConnections:
     def test_connections_overview_has_endpoints(self, connected_graph):
         desc = connected_graph.describe(connections=True)
         assert "Well" in desc
-        assert "Field" in desc
+        assert "Project" in desc
 
     def test_connections_overview_has_properties(self, connected_graph):
         desc = connected_graph.describe(connections=True)
@@ -594,7 +594,7 @@ class TestDescribeConnections:
         desc = connected_graph.describe(connections=["BELONGS_TO"])
         assert "pair" in desc
         assert "Well" in desc
-        assert "Field" in desc
+        assert "Project" in desc
         assert 'count="2"' in desc
 
     def test_type_detail_connection_counts_are_nonzero(self):

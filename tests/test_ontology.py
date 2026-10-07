@@ -771,7 +771,7 @@ def test_new_declaration_fields_persist(props_graph, tmp_path):
 
 # ---- per-source-class exemption on required_properties / property_types ----
 # (operator report 2026-08-26: 581 permanent, legitimate violations from ONE
-# source type pinned HAS_OPERATOR.required_properties at `warn` forever, so
+# source type pinned MANAGED_BY.required_properties at `warn` forever, so
 # the rule could never protect the other source types.)
 
 

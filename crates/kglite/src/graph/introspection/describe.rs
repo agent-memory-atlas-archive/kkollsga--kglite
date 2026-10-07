@@ -238,7 +238,7 @@ const MAX_CONNECTION_MAP_TYPES: usize = 50;
 
 /// Render a connection type's `properties=` attribute as `name:Type` pairs.
 ///
-/// The names alone left an agent unable to tell `OPERATED_BY.since` from an
+/// The names alone left an agent unable to tell `MANAGED_BY.since` from an
 /// int year or an ISO string, so it avoided the property rather than risk a
 /// wrong comparison. The types are already in `connection_type_metadata` —
 /// the same map `property_names` was derived from — so this costs a lookup,

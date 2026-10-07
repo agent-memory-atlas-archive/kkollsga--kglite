@@ -1,4 +1,4 @@
-fldNpdidField,cmpNpdidCompany,fldLicenseeFrom,fldLicenseeTo,fldCompanyShare
+prjId,orgId,prjHolderFrom,prjHolderTo,prjCompanyShare
 43686,1,2009-01-01,2009-11-01,70.0
 43686,6,2008-01-01,,30.0
 43686,2,2009-11-02,,70.0

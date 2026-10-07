@@ -368,7 +368,7 @@ mod tests {
     /// type carrying lat/lon columns *and* a WKT field looked geometry-only —
     /// a downstream reading the badge went to parse polygons to recover
     /// coordinates that were sitting in plain float columns next door
-    /// (measured on 37 of 38 sodir types, all of which declare both).
+    /// (measured on 37 of 38 types of a production graph, all of which declare both).
     #[test]
     fn location_and_geometry_flags_are_independent() {
         assert_eq!(caps(false, true, true, false).flags_csv(), "geo,loc");

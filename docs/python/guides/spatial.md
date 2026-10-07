@@ -15,7 +15,7 @@ This enables auto-resolution in Cypher queries and fluent API methods.
 | `shape.<name>` | 0..N | Named WKT geometries |
 
 ```python
-graph.add_nodes(df, 'Field', 'id', 'name', column_types={
+graph.add_nodes(df, 'Project', 'id', 'name', column_types={
     'latitude': 'location.lat',
     'longitude': 'location.lon',
     'wkt_polygon': 'geometry',
@@ -26,21 +26,21 @@ With spatial types declared, queries become simpler:
 
 ```python
 # Auto-resolves location fields — no lat_field/lon_field needed
-graph.select('Field').near_point_m(center_lat=60.5, center_lon=3.2, max_distance_m=50000.0)
+graph.select('Project').near_point_m(center_lat=60.5, center_lon=3.2, max_distance_m=50000.0)
 
 # Cypher distance between nodes — resolves via location, falls back to geometry centroid
 graph.cypher("""
-    MATCH (a:Field {name:'Troll'}), (b:Field {name:'Draugen'})
+    MATCH (a:Project {name:'Tundra'}), (b:Project {name:'Delta'})
     RETURN distance(a, b) AS dist_m
 """)
 
 # Node-aware spatial functions — auto-resolve geometry from spatial config
 graph.cypher("MATCH (c:City), (a:Area) WHERE contains(a, c) RETURN c.name, a.name")
-graph.cypher("MATCH (n:Field) RETURN n.name, area(n) AS m2, centroid(n) AS center")
-graph.cypher("MATCH (a:Field), (b:Field) WHERE intersects(a, b) RETURN a.name, b.name")
+graph.cypher("MATCH (n:Project) RETURN n.name, area(n) AS m2, centroid(n) AS center")
+graph.cypher("MATCH (a:Project), (b:Project) WHERE intersects(a, b) RETURN a.name, b.name")
 
 # Virtual properties
-graph.cypher("MATCH (n:Field) RETURN n.name, n.location, n.geometry")
+graph.cypher("MATCH (n:Project) RETURN n.name, n.location, n.geometry")
 ```
 
 ### Multiple Named Points and Shapes
@@ -61,7 +61,7 @@ graph.cypher("... RETURN distance(a.bottom_hole, b.bottom_hole)")
 ### Retroactive Configuration
 
 ```python
-graph.set_spatial('Field',
+graph.set_spatial('Project',
     location=('latitude', 'longitude'),
     geometry='wkt_polygon',
 )
@@ -71,12 +71,12 @@ graph.set_spatial('Field',
 
 ```python
 # With spatial config — field names auto-resolved
-graph.select('Discovery').within_bounds(
+graph.select('Initiative').within_bounds(
     min_lat=58.0, max_lat=62.0, min_lon=1.0, max_lon=5.0
 )
 
 # Without spatial config — explicit field names
-graph.select('Discovery').within_bounds(
+graph.select('Initiative').within_bounds(
     lat_field='latitude', lon_field='longitude',
     min_lat=58.0, max_lat=62.0, min_lon=1.0, max_lon=5.0
 )
@@ -85,7 +85,7 @@ graph.select('Discovery').within_bounds(
 ## Distance Queries (Geodesic)
 
 ```python
-graph.select('Wellbore').near_point_m(
+graph.select('Site').near_point_m(
     center_lat=60.5, center_lon=3.2, max_distance_m=50000.0
 )
 ```
@@ -93,7 +93,7 @@ graph.select('Wellbore').near_point_m(
 ## WKT Geometry Intersection
 
 ```python
-graph.select('Field').intersects_geometry(
+graph.select('Project').intersects_geometry(
     'POLYGON((1 58, 5 58, 5 62, 1 62, 1 58))'
 )
 ```
@@ -102,7 +102,7 @@ Accepts WKT strings or shapely geometry objects:
 
 ```python
 from shapely.geometry import box
-graph.select('Field').intersects_geometry(box(1, 58, 5, 62))
+graph.select('Project').intersects_geometry(box(1, 58, 5, 62))
 ```
 
 ## Point-in-Polygon
@@ -129,15 +129,15 @@ They return WKT, so results chain into other spatial functions or land in a GeoD
 # A 5 km exclusion zone around a platform
 graph.cypher("RETURN geom_buffer('POINT(10.7 59.9)', 5000) AS zone")
 
-# Merge two licence areas into a single operating footprint
+# Merge two contract areas into a single operating footprint
 graph.cypher("""
-    MATCH (a:Licence {id:'A'}), (b:Licence {id:'B'})
+    MATCH (a:Contract {id:'A'}), (b:Contract {id:'B'})
     RETURN geom_union(a.geometry, b.geometry) AS footprint
 """)
 
 # Catchment hull over every well in a field
 graph.cypher("""
-    MATCH (w:Wellbore)-[:IN_FIELD]->(:Field {name:'Troll'})
+    MATCH (w:Site)-[:IN_PROJECT]->(:Project {name:'Tundra'})
     WITH collect(w.geometry) AS shapes
     RETURN geom_convex_hull(shapes) AS catchment
 """)
@@ -152,6 +152,6 @@ It is accurate locally and degrades far from the centroid.
 Convert query results with WKT columns to geopandas GeoDataFrames:
 
 ```python
-rv = graph.cypher("MATCH (n:Field) RETURN n.name, n.geometry")
+rv = graph.cypher("MATCH (n:Project) RETURN n.name, n.geometry")
 gdf = rv.to_gdf(geometry_column='n.geometry', crs='EPSG:4326')
 ```

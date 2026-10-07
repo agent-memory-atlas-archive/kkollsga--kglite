@@ -763,7 +763,7 @@ mod tests {
             ("OWNS", &["KNOWS", "AUTHORED"][..]),
             ("CITES", &["KNOWS", "AUTHORED"][..]),
             ("Line", &["File", "Function", "Class", "Module"][..]),
-            ("Field", &["File", "Function", "Class", "Module"][..]),
+            ("Project", &["File", "Function", "Class", "Module"][..]),
             ("bogus_key", &["where", "node_type", "timeout_ms"][..]),
         ] {
             assert_eq!(

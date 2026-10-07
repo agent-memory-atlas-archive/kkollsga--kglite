@@ -74,17 +74,17 @@ def _load_copy(name: str, tmp_path: Path):
 
 
 @pytest.fixture
-def licensees():
-    """Fields and licences hold HAS_LICENSEE periods under different
+def holders():
+    """Projects and contracts hold HAS_HOLDER periods under different
     properties; OPERATES periods use one pair for both sources."""
     g = kglite.KnowledgeGraph()
     g.cypher(
         """
-        CREATE (f:Field {id: 1, title: 'F1', vf: '2000-01-01', vt: '2010-12-31'}),
-               (l:Licence {id: 10, title: 'L10'}),
+        CREATE (f:Project {id: 1, title: 'F1', vf: '2000-01-01', vt: '2010-12-31'}),
+               (l:Contract {id: 10, title: 'L10'}),
                (c:Company {id: 100, title: 'Acme'}),
-               (f)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(c),
-               (l)-[:HAS_LICENSEE {lf: '1990-01-01', lt: '1999-12-31'}]->(c),
+               (f)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(c),
+               (l)-[:HAS_HOLDER {lf: '1990-01-01', lt: '1999-12-31'}]->(c),
                (f)-[:OPERATES {of: '2001-01-01', ot: '2002-01-01'}]->(c),
                (l)-[:OPERATES {of: '2003-01-01', ot: null}]->(c)
         """
@@ -96,7 +96,7 @@ class TestLegacyKeysForOlderReaders:
     def test_closed_only_graph_writes_the_legacy_bytes_0_18_1_wrote(self, tmp_path):
         builder = _builder()
         g = builder._base()
-        builder._connect(g, {"lic_from": "validFrom", "lic_to": "validTo"})
+        builder._connect(g, {"ctr_from": "validFrom", "ctr_to": "validTo"})
         out = tmp_path / "closed.kgl"
         g.save(str(out))
         ours, theirs = _metadata_text(out), _metadata_text(FIXTURES / "closed.kgl")
@@ -104,28 +104,28 @@ class TestLegacyKeysForOlderReaders:
             assert _raw_key(ours, key) == _raw_key(theirs, key), key
         assert _raw_key(ours, "temporal_declarations") is not None
 
-    def test_per_source_and_half_open_declarations_stay_out_of_the_legacy_keys(self, licensees, tmp_path):
+    def test_per_source_and_half_open_declarations_stay_out_of_the_legacy_keys(self, holders, tmp_path):
         for spec in (
-            "{node: 'Field', from: 'vf', to: 'vt', convention: 'half_open'}",
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}",
-            "{relationship: 'HAS_LICENSEE', source_type: 'Licence', from: 'lf', to: 'lt', convention: 'closed'}",
-            "{relationship: 'OPERATES', source_type: 'Field', from: 'of', to: 'ot', convention: 'closed'}",
-            "{relationship: 'OPERATES', source_type: 'Licence', from: 'of', to: 'ot', convention: 'closed'}",
+            "{node: 'Project', from: 'vf', to: 'vt', convention: 'half_open'}",
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}",
+            "{relationship: 'HAS_HOLDER', source_type: 'Contract', from: 'lf', to: 'lt', convention: 'closed'}",
+            "{relationship: 'OPERATES', source_type: 'Project', from: 'of', to: 'ot', convention: 'closed'}",
+            "{relationship: 'OPERATES', source_type: 'Contract', from: 'of', to: 'ot', convention: 'closed'}",
         ):
-            licensees.cypher(f"CALL db.temporal.declare({spec})")
+            holders.cypher(f"CALL db.temporal.declare({spec})")
         out = tmp_path / "declared.kgl"
-        licensees.save(str(out))
+        holders.save(str(out))
         metadata = _metadata_text(out)
         assert _raw_key(metadata, "temporal_node_configs") == "{}"
         # Keyed configs stay out even when their properties agree (OPERATES).
         assert _raw_key(metadata, "temporal_edge_configs") == "{}"
         declared = json.loads(_raw_key(metadata, "temporal_declarations"))
-        assert {"kind": "node", "name": "Field", "convention": "half_open"}.items() <= declared[0].items()
-        assert [d.get("source_type") for d in declared if d["name"] == "HAS_LICENSEE"] == ["Field", "Licence"]
+        assert {"kind": "node", "name": "Project", "convention": "half_open"}.items() <= declared[0].items()
+        assert [d.get("source_type") for d in declared if d["name"] == "HAS_HOLDER"] == ["Contract", "Project"]
 
-    def test_a_graph_without_declarations_has_no_new_key(self, licensees, tmp_path):
+    def test_a_graph_without_declarations_has_no_new_key(self, holders, tmp_path):
         out = tmp_path / "plain.kgl"
-        licensees.save(str(out))
+        holders.save(str(out))
         metadata = _metadata_text(out)
         assert _raw_key(metadata, "temporal_declarations") is None
         assert [_raw_key(metadata, key) for key in LEGACY_KEYS] == ["{}", "{}"]
@@ -137,7 +137,7 @@ class TestLegacyFilesLoad:
         assert _declarations(g) == [
             {
                 "kind": "node",
-                "name": "Field",
+                "name": "Project",
                 "source_type": None,
                 "from": "vf",
                 "to": "vt",
@@ -147,33 +147,33 @@ class TestLegacyFilesLoad:
             },
             {
                 "kind": "relationship",
-                "name": "HAS_LICENSEE",
+                "name": "HAS_HOLDER",
                 "source_type": None,
-                "from": "lic_from",
-                "to": "lic_to",
+                "from": "ctr_from",
+                "to": "ctr_to",
                 "convention": "closed",
                 "abutting_rows": None,
                 "ambiguous": False,
             },
         ]
-        # The fluent filter still applies it: Beta's licence (2006-, open) is
+        # The fluent filter still applies it: Beta's contract (2006-, open) is
         # current in 2008, Alpha's (2001-2003) is not.
-        found = g.select("Field").valid_at("2008-06-01").traverse("HAS_LICENSEE").collect()
+        found = g.select("Project").valid_at("2008-06-01").traverse("HAS_HOLDER").collect()
         assert sorted(n["title"] for n in found) == ["Globex"]
 
     def test_identical_duplicates_read_as_one(self, tmp_path):
         g = _load_copy("identical_duplicates", tmp_path)
         rels = [d for d in _declarations(g) if d["kind"] == "relationship"]
-        assert [(d["from"], d["to"], d["ambiguous"]) for d in rels] == [("lic_from", "lic_to", False)]
+        assert [(d["from"], d["to"], d["ambiguous"]) for d in rels] == [("ctr_from", "ctr_to", False)]
 
     def test_distinct_duplicates_load_ambiguous_with_both_kept(self, tmp_path):
         g = _load_copy("distinct_duplicates", tmp_path)
         rels = [d for d in _declarations(g) if d["kind"] == "relationship"]
         assert [(d["from"], d["source_type"], d["ambiguous"]) for d in rels] == [
-            ("lic_from", None, True),
+            ("ctr_from", None, True),
             ("other_from", None, True),
         ]
-        conn = next(line for line in g.describe().splitlines() if "HAS_LICENSEE" in line and "temporal" in line)
+        conn = next(line for line in g.describe().splitlines() if "HAS_HOLDER" in line and "temporal" in line)
         assert 'temporal_ambiguous="true"' in conn
         # Re-saved, the legacy key holds both in order, as 0.18.1 wrote it.
         resaved = tmp_path / "resaved.kgl"
@@ -181,10 +181,10 @@ class TestLegacyFilesLoad:
         theirs = _metadata_text(FIXTURES / "distinct_duplicates.kgl")
         assert _raw_key(_metadata_text(resaved), "temporal_edge_configs") == _raw_key(theirs, "temporal_edge_configs")
         # Re-declaring per source resolves it.
-        g.cypher("CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE'})")
+        g.cypher("CALL db.temporal.undeclare({relationship: 'HAS_HOLDER'})")
         g.cypher(
-            "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', "
-            "from: 'lic_from', to: 'lic_to', convention: 'closed'})"
+            "CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project', "
+            "from: 'ctr_from', to: 'ctr_to', convention: 'closed'})"
         )
         assert [d["ambiguous"] for d in _declarations(g) if d["kind"] == "relationship"] == [False]
 
@@ -195,36 +195,36 @@ class TestLegacyFilesLoad:
         to pick the first declaration whose properties an edge carried."""
         g = _load_copy("distinct_duplicates", tmp_path)
         refusal = (
-            r"relationship type 'HAS_LICENSEE' holds several declarations with no source type, so which one "
+            r"relationship type 'HAS_HOLDER' holds several declarations with no source type, so which one "
             r"applies depends on declaration order; remove them with CALL db\.temporal\.undeclare\("
-            r"\{relationship: 'HAS_LICENSEE'\}\) and declare one per source type with CALL "
-            r"db\.temporal\.declare\(\{relationship: 'HAS_LICENSEE', source_type: \.\.\., \.\.\.\}\) "
+            r"\{relationship: 'HAS_HOLDER'\}\) and declare one per source type with CALL "
+            r"db\.temporal\.declare\(\{relationship: 'HAS_HOLDER', source_type: \.\.\., \.\.\.\}\) "
             r"before querying it under "
         )
-        fields = g.date("2008-06-01").select("Field")
+        fields = g.date("2008-06-01").select("Project")
         with pytest.raises(kglite.ArgumentError, match=refusal):
-            fields.traverse("HAS_LICENSEE")
+            fields.traverse("HAS_HOLDER")
         with pytest.raises(kglite.ArgumentError, match=refusal):
-            g.select("Field", temporal=False).traverse("HAS_LICENSEE", at="2008-06-01")
+            g.select("Project", temporal=False).traverse("HAS_HOLDER", at="2008-06-01")
         with pytest.raises(kglite.CypherExecutionError, match=refusal):
             g.cypher(
-                "FOR VALID_TIME AS OF date('2008-06-01') MATCH (:Field)-[:HAS_LICENSEE]->(c) RETURN c.title"
+                "FOR VALID_TIME AS OF date('2008-06-01') MATCH (:Project)-[:HAS_HOLDER]->(c) RETURN c.title"
             ).to_list()
         # A per-source declaration alone leaves the unkeyed pair, and the refusal.
         g.cypher(
-            "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', "
-            "from: 'lic_from', to: 'lic_to', convention: 'closed'})"
+            "CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project', "
+            "from: 'ctr_from', to: 'ctr_to', convention: 'closed'})"
         )
         with pytest.raises(kglite.ArgumentError, match=refusal):
-            g.date("2008-06-01").select("Field").traverse("HAS_LICENSEE")
-        # The escape hatch reads no declaration: both fields' licensees.
-        assert fields.traverse("HAS_LICENSEE", temporal=False).len() == 2
+            g.date("2008-06-01").select("Project").traverse("HAS_HOLDER")
+        # The escape hatch reads no declaration: both fields' holders.
+        assert fields.traverse("HAS_HOLDER", temporal=False).len() == 2
         # The fix the message names: undeclare the unkeyed pair (the keyed one
         # just added stays), then declare per source type.
-        g.cypher("CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE'})")
+        g.cypher("CALL db.temporal.undeclare({relationship: 'HAS_HOLDER'})")
         # A cursor holds the graph it was taken from; take a fresh one.
-        fields = g.date("2008-06-01").select("Field")
-        assert sorted(n["title"] for n in fields.traverse("HAS_LICENSEE").collect()) == ["Globex"]
+        fields = g.date("2008-06-01").select("Project")
+        assert sorted(n["title"] for n in fields.traverse("HAS_HOLDER").collect()) == ["Globex"]
 
 
 @pytest.mark.parity
@@ -234,17 +234,17 @@ def test_temporal_declarations_round_trip(mode, tmp_path):
     g = kglite.KnowledgeGraph(**kwargs[mode])
     g.cypher(
         """
-        CREATE (f:Field {id: 1, title: 'F1', vf: '2000-01-01', vt: '2010-12-31'}),
-               (l:Licence {id: 10, title: 'L10'}),
+        CREATE (f:Project {id: 1, title: 'F1', vf: '2000-01-01', vt: '2010-12-31'}),
+               (l:Contract {id: 10, title: 'L10'}),
                (c:Company {id: 100, title: 'Acme'}),
-               (f)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(c),
-               (l)-[:HAS_LICENSEE {lf: '1990-01-01', lt: '1999-12-31'}]->(c)
+               (f)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(c),
+               (l)-[:HAS_HOLDER {lf: '1990-01-01', lt: '1999-12-31'}]->(c)
         """
     )
     for spec in (
-        "{node: 'Field', from: 'vf', to: 'vt', convention: 'closed'}",
-        "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}",
-        "{relationship: 'HAS_LICENSEE', source_type: 'Licence', from: 'lf', to: 'lt', convention: 'half_open'}",
+        "{node: 'Project', from: 'vf', to: 'vt', convention: 'closed'}",
+        "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}",
+        "{relationship: 'HAS_HOLDER', source_type: 'Contract', from: 'lf', to: 'lt', convention: 'half_open'}",
     ):
         g.cypher(f"CALL db.temporal.declare({spec})")
     before = _declarations(g)

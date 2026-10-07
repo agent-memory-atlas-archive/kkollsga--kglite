@@ -236,7 +236,7 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     stats = graph.index_stats('Prospect', 'geoprovince')
+    ///     stats = graph.index_stats('Proposal', 'geoprovince')
     ///     print(f"Unique values: {stats['unique_values']}")
     ///     print(f"Total entries: {stats['total_entries']}")
     ///     ```
@@ -351,10 +351,10 @@ impl KnowledgeGraph {
     /// Example:
     ///     ```python
     ///     # Create an index for queries filtering on both 'geoprovince' and 'status'
-    ///     graph.create_composite_index('Prospect', ['geoprovince', 'status'])
+    ///     graph.create_composite_index('Proposal', ['geoprovince', 'status'])
     ///
     ///     # Now this filter is very fast:
-    ///     graph.select('Prospect').where({
+    ///     graph.select('Proposal').where({
     ///         'geoprovince': 'N3',
     ///         'status': 'Active'
     ///     })

@@ -922,7 +922,7 @@ g = kglite.KnowledgeGraph(storage="disk", path="/data/wikidata-graph/")
 g.load_ntriples("latest-truthy.nt.bz2", languages=["en"], verbose=True)
 ```
 
-(The pre-packaged dataset loaders — SEC EDGAR, Sodir, Wikidata — live in the separate kglite-datasets project. They wrap this same `load_ntriples` path with download/cooldown/resume. kglite loads the graphs they produce.)
+(The pre-packaged dataset loaders — SEC EDGAR, Wikidata — live in the separate kglite-datasets project. They wrap this same `load_ntriples` path with download/cooldown/resume. kglite loads the graphs they produce.)
 
 Then run the MCP server against the directory (not a single file):
 

@@ -392,12 +392,12 @@ class TestFKEdges:
 
 class TestSubNodes:
     def test_sub_nodes_with_parent_fk(self, tmp_path):
-        fields = pd.DataFrame({"field_id": [1, 2], "name": ["Troll", "Ekofisk"]})
+        fields = pd.DataFrame({"field_id": [1, 2], "name": ["Tundra", "Ember"]})
         reserves = pd.DataFrame(
             {
                 "field_id": [1, 1, 2],
                 "year": [2020, 2021, 2020],
-                "oil": [100.0, 110.0, 200.0],
+                "output": [100.0, 110.0, 200.0],
             }
         )
         _write_csv(tmp_path / "fields.csv", fields)
@@ -406,7 +406,7 @@ class TestSubNodes:
         bp = {
             "settings": {"root": str(tmp_path)},
             "nodes": {
-                "Field": {
+                "Project": {
                     "csv": "fields.csv",
                     "pk": "field_id",
                     "title": "name",
@@ -418,12 +418,12 @@ class TestSubNodes:
                             "pk": "auto",
                             "title": "year",
                             "parent_fk": "field_id",
-                            "properties": {"oil": "float"},
+                            "properties": {"output": "float"},
                             "skipped": ["field_id"],
                             "connections": {
                                 "fk_edges": {
-                                    "OF_FIELD": {
-                                        "target": "Field",
+                                    "OF_PROJECT": {
+                                        "target": "Project",
                                         "fk": "field_id",
                                     }
                                 }
@@ -437,14 +437,16 @@ class TestSubNodes:
         graph = from_blueprint(tmp_path / "bp.json", save=False)
 
         # Check sub-nodes created
-        result = graph.cypher("MATCH (r:Reserve) RETURN r.oil ORDER BY r.oil")
-        oils = [r["r.oil"] for r in result]
-        assert oils == [100.0, 110.0, 200.0]
+        result = graph.cypher("MATCH (r:Reserve) RETURN r.output ORDER BY r.output")
+        outputs = [r["r.output"] for r in result]
+        assert outputs == [100.0, 110.0, 200.0]
 
         # Check edges to parent
-        result = graph.cypher("MATCH (r:Reserve)-[:OF_FIELD]->(f:Field) RETURN f.title AS field, r.oil ORDER BY r.oil")
+        result = graph.cypher(
+            "MATCH (r:Reserve)-[:OF_PROJECT]->(f:Project) RETURN f.title AS field, r.output ORDER BY r.output"
+        )
         assert len(result) == 3
-        assert result[0]["field"] == "Troll"
+        assert result[0]["field"] == "Tundra"
 
 
 class TestManualNodes:
@@ -452,7 +454,7 @@ class TestManualNodes:
         fields = pd.DataFrame(
             {
                 "field_id": [1, 2, 3],
-                "name": ["Troll", "Ekofisk", "Ormen Lange"],
+                "name": ["Tundra", "Ember", "Orchid"],
                 "area": ["North Sea", "North Sea", "Norwegian Sea"],
             }
         )
@@ -467,7 +469,7 @@ class TestManualNodes:
                     "properties": {},
                     "skipped": [],
                 },
-                "Field": {
+                "Project": {
                     "csv": "fields.csv",
                     "pk": "field_id",
                     "title": "name",
@@ -494,7 +496,7 @@ class TestManualNodes:
 
         # Check FK edges to manual nodes
         result = graph.cypher(
-            "MATCH (f:Field)-[:IN_OCEAN]->(o:Ocean) RETURN f.title AS field, o.title AS ocean ORDER BY field"
+            "MATCH (f:Project)-[:IN_OCEAN]->(o:Ocean) RETURN f.title AS field, o.title AS ocean ORDER BY field"
         )
         assert len(result) == 3
 
@@ -662,15 +664,15 @@ class TestFilter:
 
 class TestTimeseries:
     def test_timeseries_sub_node(self, tmp_path):
-        fields = pd.DataFrame({"field_id": [1, 2], "name": ["Troll", "Ekofisk"]})
+        fields = pd.DataFrame({"field_id": [1, 2], "name": ["Tundra", "Ember"]})
         production = pd.DataFrame(
             {
                 "field_id": [1, 1, 1, 2, 2, 2],
-                "name": ["Troll"] * 3 + ["Ekofisk"] * 3,
-                "prfYear": [2020, 2020, 2020, 2020, 2020, 2020],
-                "prfMonth": [1, 2, 3, 1, 2, 3],
-                "prfOil": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
-                "prfGas": [0.1, 0.2, 0.3, 0.05, 0.06, 0.07],
+                "name": ["Tundra"] * 3 + ["Ember"] * 3,
+                "outYear": [2020, 2020, 2020, 2020, 2020, 2020],
+                "outMonth": [1, 2, 3, 1, 2, 3],
+                "outOutput": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
+                "outFlow": [0.1, 0.2, 0.3, 0.05, 0.06, 0.07],
             }
         )
         _write_csv(tmp_path / "fields.csv", fields)
@@ -679,7 +681,7 @@ class TestTimeseries:
         bp = {
             "settings": {"root": str(tmp_path)},
             "nodes": {
-                "Field": {
+                "Project": {
                     "csv": "fields.csv",
                     "pk": "field_id",
                     "title": "name",
@@ -695,23 +697,23 @@ class TestTimeseries:
                             "skipped": ["field_id", "name"],
                             "timeseries": {
                                 "time_key": {
-                                    "year": "prfYear",
-                                    "month": "prfMonth",
+                                    "year": "outYear",
+                                    "month": "outMonth",
                                 },
                                 "resolution": "month",
                                 "channels": {
-                                    "oil": "prfOil",
-                                    "gas": "prfGas",
+                                    "output": "outOutput",
+                                    "flow": "outFlow",
                                 },
                                 "units": {
-                                    "oil": "MSm3",
-                                    "gas": "BSm3",
+                                    "output": "MU",
+                                    "flow": "BU",
                                 },
                             },
                             "connections": {
                                 "fk_edges": {
-                                    "OF_FIELD": {
-                                        "target": "Field",
+                                    "OF_PROJECT": {
+                                        "target": "Project",
                                         "fk": "field_id",
                                     }
                                 }
@@ -726,21 +728,21 @@ class TestTimeseries:
 
         # Check timeseries data is accessible
         result = graph.cypher(
-            "MATCH (p:Production) RETURN p.title, ts_sum(p.oil, '2020') AS total_oil ORDER BY total_oil DESC"
+            "MATCH (p:Production) RETURN p.title, ts_sum(p.output, '2020') AS total_output ORDER BY total_output DESC"
         )
         assert len(result) == 2
-        # Troll: 1.0 + 1.5 + 2.0 = 4.5
-        assert result[0]["total_oil"] == pytest.approx(4.5)
-        assert result[0]["p.title"] == "Troll"
+        # Tundra: 1.0 + 1.5 + 2.0 = 4.5
+        assert result[0]["total_output"] == pytest.approx(4.5)
+        assert result[0]["p.title"] == "Tundra"
 
         # One parent edge per node, not one per CSV row, and a join through it
         # sums each parent's own series once.
-        assert graph.cypher("MATCH (:Production)-[r:OF_FIELD]->(:Field) RETURN count(r) AS c")[0]["c"] == 2
+        assert graph.cypher("MATCH (:Production)-[r:OF_PROJECT]->(:Project) RETURN count(r) AS c")[0]["c"] == 2
         joined = graph.cypher(
-            "MATCH (f:Field)<-[r:OF_FIELD]-(p:Production) "
-            "RETURN f.title AS t, count(r) AS c, ts_sum(p.oil) AS total ORDER BY t"
+            "MATCH (f:Project)<-[r:OF_PROJECT]-(p:Production) "
+            "RETURN f.title AS t, count(r) AS c, ts_sum(p.output) AS total ORDER BY t"
         ).to_list()
-        assert [(r["t"], r["c"]) for r in joined] == [("Ekofisk", 1), ("Troll", 1)]
+        assert [(r["t"], r["c"]) for r in joined] == [("Ember", 1), ("Tundra", 1)]
         assert [r["total"] for r in joined] == [pytest.approx(1.8), pytest.approx(4.5)]
 
 
@@ -1274,7 +1276,7 @@ class TestStreamingFkEdges:
             {
                 "field_id": [i % n_fields for i in range(n_reserves)],
                 "year": [2000 + (i // n_fields) for i in range(n_reserves)],
-                "oil": [100.0 + i for i in range(n_reserves)],
+                "output": [100.0 + i for i in range(n_reserves)],
             }
         )
         _write_csv(tmp_path / "fields.csv", fields)
@@ -1282,7 +1284,7 @@ class TestStreamingFkEdges:
         bp = {
             "settings": {"root": str(tmp_path)},
             "nodes": {
-                "Field": {
+                "Project": {
                     "csv": "fields.csv",
                     "pk": "field_id",
                     "title": "name",
@@ -1294,12 +1296,12 @@ class TestStreamingFkEdges:
                             "pk": "auto",
                             "title": "year",
                             "parent_fk": "field_id",
-                            "properties": {"oil": "float"},
+                            "properties": {"output": "float"},
                             "skipped": [],
                             "connections": {
                                 "fk_edges": {
-                                    "OF_FIELD": {
-                                        "target": "Field",
+                                    "OF_PROJECT": {
+                                        "target": "Project",
                                         "fk": "field_id",
                                     }
                                 }
@@ -1314,7 +1316,7 @@ class TestStreamingFkEdges:
 
         n_nodes = graph.cypher("MATCH (r:Reserve) RETURN count(r) AS n")[0]["n"]
         assert n_nodes == n_reserves
-        n_edges = graph.cypher("MATCH (r:Reserve)-[:OF_FIELD]->(f:Field) RETURN count(r) AS n")[0]["n"]
+        n_edges = graph.cypher("MATCH (r:Reserve)-[:OF_PROJECT]->(f:Project) RETURN count(r) AS n")[0]["n"]
         assert n_edges == n_reserves
 
 
@@ -1569,7 +1571,7 @@ class TestJunctionRename:
             {
                 "source_id": [1, 2],
                 "target_id": [2, 3],
-                "fldFrom": ["2001-01-01", "2002-02-02"],
+                "prjFrom": ["2001-01-01", "2002-02-02"],
             }
         )
         _write_csv(tmp_path / "knows.csv", knows)
@@ -1578,8 +1580,8 @@ class TestJunctionRename:
             "source_fk": "source_id",
             "target": "Person",
             "target_fk": "target_id",
-            "properties": ["fldFrom"],
-            "property_types": {"fldFrom": "date"},
+            "properties": ["prjFrom"],
+            "property_types": {"prjFrom": "date"},
         }
         if rename is not None:
             junction["rename"] = rename
@@ -1602,9 +1604,9 @@ class TestJunctionRename:
         return bp_path
 
     def test_rename_lands_property_under_new_name(self, tmp_path):
-        bp_path = self._bp_with_junction_props(tmp_path, rename={"fldFrom": "validFrom"})
+        bp_path = self._bp_with_junction_props(tmp_path, rename={"prjFrom": "validFrom"})
         graph = from_blueprint(bp_path, save=False)
-        rows = graph.cypher("MATCH (:Person)-[r:KNOWS]->(:Person) RETURN r.validFrom AS vf, r.fldFrom AS old").to_list()
+        rows = graph.cypher("MATCH (:Person)-[r:KNOWS]->(:Person) RETURN r.validFrom AS vf, r.prjFrom AS old").to_list()
         assert len(rows) == 2
         assert all(r["vf"] is not None for r in rows)
         assert all(r["old"] is None for r in rows)
@@ -1612,7 +1614,7 @@ class TestJunctionRename:
     def test_without_rename_csv_name_kept(self, tmp_path):
         bp_path = self._bp_with_junction_props(tmp_path)
         graph = from_blueprint(bp_path, save=False)
-        rows = graph.cypher("MATCH (:Person)-[r:KNOWS]->(:Person) RETURN r.fldFrom AS vf").to_list()
+        rows = graph.cypher("MATCH (:Person)-[r:KNOWS]->(:Person) RETURN r.prjFrom AS vf").to_list()
         assert all(r["vf"] is not None for r in rows)
 
     def test_rename_of_fk_column_reports_error(self, tmp_path, capfd):
@@ -3251,23 +3253,23 @@ class TestFeatureGoldens:
         assert graph.cypher("MATCH (i:Item) RETURN count(i) AS c").to_list()[0]["c"] == 2
 
     def test_timeseries_channels_land_and_their_source_columns_do_not(self, tmp_path):
-        _write_csv(tmp_path / "fields.csv", pd.DataFrame({"field_id": [1, 2], "name": ["Troll", "Ekofisk"]}))
+        _write_csv(tmp_path / "fields.csv", pd.DataFrame({"field_id": [1, 2], "name": ["Tundra", "Ember"]}))
         _write_csv(
             tmp_path / "production.csv",
             pd.DataFrame(
                 {
                     "field_id": [1, 1, 1, 2, 2, 2],
-                    "name": ["Troll"] * 3 + ["Ekofisk"] * 3,
-                    "prfYear": [2020] * 6,
-                    "prfMonth": [1, 2, 3, 1, 2, 3],
-                    "prfOil": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
+                    "name": ["Tundra"] * 3 + ["Ember"] * 3,
+                    "outYear": [2020] * 6,
+                    "outMonth": [1, 2, 3, 1, 2, 3],
+                    "outOutput": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
                 }
             ),
         )
         bp = {
             "settings": {"root": str(tmp_path)},
             "nodes": {
-                "Field": {
+                "Project": {
                     "csv": "fields.csv",
                     "pk": "field_id",
                     "title": "name",
@@ -3281,10 +3283,10 @@ class TestFeatureGoldens:
                             "properties": {},
                             "skipped": ["field_id", "name"],
                             "timeseries": {
-                                "time_key": {"year": "prfYear", "month": "prfMonth"},
+                                "time_key": {"year": "outYear", "month": "outMonth"},
                                 "resolution": "month",
-                                "channels": {"oil": "prfOil"},
-                                "units": {"oil": "MSm3"},
+                                "channels": {"output": "outOutput"},
+                                "units": {"output": "MU"},
                             },
                         }
                     },
@@ -3296,17 +3298,17 @@ class TestFeatureGoldens:
         # One node per pk, not one per input row.
         assert graph.cypher("MATCH (p:Production) RETURN count(p) AS c").to_list()[0]["c"] == 2
         rows = graph.cypher(
-            "MATCH (p:Production) RETURN p.title AS t, ts_sum(p.oil,'2020') AS year, "
-            "ts_sum(p.oil,'2020-02') AS feb ORDER BY t"
+            "MATCH (p:Production) RETURN p.title AS t, ts_sum(p.output,'2020') AS year, "
+            "ts_sum(p.output,'2020-02') AS feb ORDER BY t"
         ).to_list()
-        assert rows[0]["t"] == "Ekofisk"
+        assert rows[0]["t"] == "Ember"
         assert rows[0]["year"] == pytest.approx(1.8)
         assert rows[0]["feb"] == pytest.approx(0.6)
         assert rows[1]["year"] == pytest.approx(4.5)
         assert rows[1]["feb"] == pytest.approx(1.5)
         # The channel's source column and the time-key columns are consumed by
         # the timeseries, not left behind as scalar properties.
-        raw = graph.cypher("MATCH (p:Production) RETURN p.prfOil AS o, p.prfYear AS y, p.prfMonth AS m").to_list()
+        raw = graph.cypher("MATCH (p:Production) RETURN p.outOutput AS o, p.outYear AS y, p.outMonth AS m").to_list()
         assert all(r["o"] is None and r["y"] is None and r["m"] is None for r in raw)
 
 
@@ -3492,15 +3494,15 @@ class TestJunctionDedupeRegime:
 
 class TestSharedRelationshipTypeSources:
     """Two node specs feeding one relationship type through junctions, each
-    with repeated rows for one endpoint pair: fields and licences both hold
-    licensee periods. Each source node type's first load of the relationship
+    with repeated rows for one endpoint pair: fields and contracts both hold
+    holder periods. Each source node type's first load of the relationship
     type owns its rows, so the later source's periods survive as they were
     written instead of folding onto one relationship."""
 
     def _bp(self, tmp_path):
-        _write_csv(tmp_path / "company.csv", pd.DataFrame({"cid": [1], "name": ["Statoil"]}))
-        _write_csv(tmp_path / "field.csv", pd.DataFrame({"fid": [10], "fname": ["Gullfaks"]}))
-        _write_csv(tmp_path / "licence.csv", pd.DataFrame({"lid": [50], "lname": ["PL050"]}))
+        _write_csv(tmp_path / "company.csv", pd.DataFrame({"cid": [1], "name": ["Zenith"]}))
+        _write_csv(tmp_path / "field.csv", pd.DataFrame({"fid": [10], "fname": ["Birch"]}))
+        _write_csv(tmp_path / "contract.csv", pd.DataFrame({"lid": [50], "lname": ["C050"]}))
         _write_csv(
             tmp_path / "field_lic.csv",
             pd.DataFrame(
@@ -3533,17 +3535,17 @@ class TestSharedRelationshipTypeSources:
             "settings": {"root": str(tmp_path)},
             "nodes": {
                 "Company": {"csv": "company.csv", "pk": "cid", "title": "name"},
-                "Field": {
+                "Project": {
                     "csv": "field.csv",
                     "pk": "fid",
                     "title": "fname",
-                    "connections": {"junction_edges": {"HAS_LICENSEE": junction("field_lic.csv", "fid")}},
+                    "connections": {"junction_edges": {"HAS_HOLDER": junction("field_lic.csv", "fid")}},
                 },
-                "Licence": {
-                    "csv": "licence.csv",
+                "Contract": {
+                    "csv": "contract.csv",
                     "pk": "lid",
                     "title": "lname",
-                    "connections": {"junction_edges": {"HAS_LICENSEE": junction("lic_lic.csv", "lid")}},
+                    "connections": {"junction_edges": {"HAS_HOLDER": junction("lic_lic.csv", "lid")}},
                 },
             },
         }
@@ -3553,7 +3555,7 @@ class TestSharedRelationshipTypeSources:
     @staticmethod
     def _periods(graph, source_type):
         rows = graph.cypher(
-            f"MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
+            f"MATCH (:{source_type})-[r:HAS_HOLDER]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
         ).to_list()
         periods = [(str(r["vf"]), None if r["vt"] is None else str(r["vt"])) for r in rows]
         return sorted(periods, key=lambda p: (p[0], p[1] or ""))
@@ -3562,11 +3564,11 @@ class TestSharedRelationshipTypeSources:
     def test_the_later_source_keeps_its_own_periods(self, tmp_path, monkeypatch, chunk):
         monkeypatch.setenv("KGLITE_BLUEPRINT_JUNCTION_CHUNK_SIZE", chunk)
         graph = from_blueprint(self._bp(tmp_path), save=False)
-        assert self._periods(graph, "Field") == [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
-        # Three licence rows, three relationships with their true intervals —
+        assert self._periods(graph, "Project") == [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
+        # Three contract rows, three relationships with their true intervals —
         # never one relationship carrying ('2007-01-01', '2006-12-31'), an
         # interval no row held.
-        assert self._periods(graph, "Licence") == [
+        assert self._periods(graph, "Contract") == [
             ("2001-01-01", "2003-12-31"),
             ("2004-01-01", "2006-12-31"),
             ("2007-01-01", None),
@@ -3862,7 +3864,7 @@ class TestDelimitedInputs:
     @pytest.mark.parametrize(
         "preamble", [{"skip_lines": 1}, {"comment_prefix": "#"}], ids=["skip_lines", "comment_prefix"]
     )
-    def test_a_licence_preamble_is_dropped_either_way(self, tmp_path, preamble):
+    def test_a_contract_preamble_is_dropped_either_way(self, tmp_path, preamble):
         """BugSigDB writes a licence line above the header. Counting it and
         marking it are both spellings of the same drop, and the header must end
         up on the same line under either."""

@@ -9,8 +9,8 @@
 //!
 //! Deliberately independent of `DirGraph::parent_types`: that map is a
 //! *presentation* hierarchy (describe() tiering, `graph_scale`), this one is
-//! *semantic* ("kind of"). `ProspectEstimate → Prospect` is ownership and
-//! belongs there; `Licence is_a Licensable` belongs here. Neither is ever
+//! *semantic* ("kind of"). `ProposalEstimate → Proposal` is ownership and
+//! belongs there; `Contract is_a Licensable` belongs here. Neither is ever
 //! derived from the other.
 //!
 //! Like `schema_from_value`, [`ontology_from_value`] is the one external
@@ -26,10 +26,10 @@
 //!   "version": 1,
 //!   "classes": {
 //!     "Licensable": {"abstract": true, "description": "..."},
-//!     "Licence":    {"is_a": "Licensable", "by": "kind", "description": "..."}
+//!     "Contract":    {"is_a": "Licensable", "by": "kind", "description": "..."}
 //!   },
 //!   "relationships": {
-//!     "HAS_OPERATOR": {
+//!     "MANAGED_BY": {
 //!       "domain": "Licensable", "range": "Company",
 //!       "required_properties": ["validFrom"],
 //!       "property_types": {"validFrom": "date"},
@@ -38,7 +38,7 @@
 //!       "required": true, "transitive": false, "symmetric": false,
 //!       "ancestry": false,
 //!       "enforcement": "warn",
-//!       "exempt": {"required_properties": ["PetregLicence"]},
+//!       "exempt": {"required_properties": ["RegisterContract"]},
 //!       "description": "Operatorship over time"
 //!     }
 //!   }
@@ -705,7 +705,7 @@ fn exempt_from_value(
         return Err(format!(
             "relationship '{name}': 'exempt' must be a {{check: [class, ...]}} map, not a list \
              — name the check each exemption applies to, e.g. \
-             exempt: {{required_properties: ['PetregLicence']}}"
+             exempt: {{required_properties: ['RegisterContract']}}"
         ));
     }
     let per_check = as_map(value).ok_or_else(|| {
@@ -847,10 +847,10 @@ mod tests {
             r#"{"version": 1,
                 "classes": {
                   "Licensable": {"abstract": true, "description": "d"},
-                  "Licence": {"is_a": "Licensable", "by": "kind"}
+                  "Contract": {"is_a": "Licensable", "by": "kind"}
                 },
                 "relationships": {
-                  "HAS_OPERATOR": {
+                  "MANAGED_BY": {
                     "domain": "Licensable", "range": "Company",
                     "required_properties": ["validFrom"],
                     "property_types": {"validFrom": "date"},
@@ -859,24 +859,27 @@ mod tests {
                     "required": true, "transitive": false, "symmetric": false,
                     "ancestry": true,
                     "enforcement": "warn",
-                    "exempt": {"required_properties": ["Licence"]},
+                    "exempt": {"required_properties": ["Contract"]},
                     "description": "op"
                   }
                 }}"#,
         )
         .unwrap();
         assert!(store.classes["Licensable"].is_abstract);
-        assert_eq!(store.classes["Licence"].is_a.as_deref(), Some("Licensable"));
-        assert_eq!(store.ancestors("Licence"), vec!["Licensable"]);
-        let rel = &store.relationships["HAS_OPERATOR"];
+        assert_eq!(
+            store.classes["Contract"].is_a.as_deref(),
+            Some("Licensable")
+        );
+        assert_eq!(store.ancestors("Contract"), vec!["Licensable"]);
+        let rel = &store.relationships["MANAGED_BY"];
         assert_eq!(rel.enforcement, Enforcement::Warn);
         assert!(rel.ancestry && !rel.transitive);
         assert_eq!(rel.cardinality.unwrap().max, Some(1));
-        assert_eq!(rel.exempt_classes("required_properties"), ["Licence"]);
+        assert_eq!(rel.exempt_classes("required_properties"), ["Contract"]);
         assert!(rel.exempt_classes("property_types").is_empty());
         assert_eq!(
             rel.exempt_summary().as_deref(),
-            Some("required_properties: [Licence]")
+            Some("required_properties: [Contract]")
         );
         // Serde round-trip (the FileMetadata path).
         let json = serde_json::to_string(&store).unwrap();

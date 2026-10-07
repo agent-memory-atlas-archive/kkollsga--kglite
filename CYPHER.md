@@ -1381,24 +1381,24 @@ graph.cypher("""
 """)
 
 graph.cypher("""
-    MATCH (a:Field), (b:Field)
+    MATCH (a:Project), (b:Project)
     WHERE intersects(a, b) AND a <> b
     RETURN a.name, b.name
 """)
 
 graph.cypher("""
-    MATCH (n:Field)
+    MATCH (n:Project)
     RETURN n.name, area(n) AS area_m2, centroid(n) AS center
 """)
 
 # Geometry-aware distance
 graph.cypher("""
-    MATCH (a:Field), (b:Field) WHERE a <> b
+    MATCH (a:Project), (b:Project) WHERE a <> b
     RETURN a.name, b.name, distance(a.geometry, b.geometry) AS dist
 """)  # 0 if polygons touch, centroid distance otherwise
 
 graph.cypher("""
-    MATCH (n:Field)
+    MATCH (n:Project)
     WHERE distance(point(60.5, 3.5), n.geometry) < 10000.0
     RETURN n.name
 """)  # 0 if point inside polygon, closest boundary otherwise
@@ -1413,7 +1413,7 @@ graph.cypher("""
 
 # Aggregation with spatial
 graph.cypher("""
-    MATCH (a:Field), (b:Field) WHERE a <> b
+    MATCH (a:Project), (b:Project) WHERE a <> b
     RETURN avg(distance(a, b)) AS avg_dist, std(distance(a, b)) AS std_dist
 """)
 ```
@@ -1445,9 +1445,9 @@ graph.cypher("""
     RETURN geom_convex_hull(shapes) AS catchment
 """)
 
-# Union of overlapping licence areas
+# Union of overlapping contract areas
 graph.cypher("""
-    MATCH (a:Licence), (b:Licence) WHERE a.id < b.id AND intersects(a, b)
+    MATCH (a:Contract), (b:Contract) WHERE a.id < b.id AND intersects(a, b)
     RETURN geom_union(a.geometry, b.geometry) AS merged
 """)
 
@@ -1640,12 +1640,12 @@ Cypher and the fluent API both read a declaration:
 
 ```cypher
 CALL db.temporal.declare({node: 'FieldStatus', from: 'date_from', to: 'date_to', convention: 'closed'})
-CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
-                          from: 'licensee_from', to: 'licensee_to', convention: 'half_open'})
+CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project',
+                          from: 'holder_from', to: 'holder_to', convention: 'half_open'})
   YIELD declared, rows, abutting_rows
 CALL db.temporal.declare({node: 'Assignment', from: 'granted', to: 'ended', convention: 'closed',
                           empty_when: 'to_before_from'})
-CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'}) YIELD undeclared
+CALL db.temporal.undeclare({relationship: 'HAS_HOLDER', source_type: 'Project'}) YIELD undeclared
 CALL db.temporal.declarations()
   YIELD kind, name, source_type, from, to, convention, empty_when, abutting_rows,
         ambiguous, empty_rows, unreadable_rows
@@ -1788,13 +1788,13 @@ Every binding's `valid_at` writes the same prefix:
 
 ```cypher
 FOR VALID_TIME AS OF date('2010-06-30')
-MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
+MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
 ```
 
 - **What it sees.** The statement answers as if the graph held only the elements
   valid at the instant.
   - A node passes when it is valid under every declared label it carries
-    (primary or secondary), so `MATCH (n)` and `MATCH (n:Field)` agree.
+    (primary or secondary), so `MATCH (n)` and `MATCH (n:Project)` agree.
   - A relationship passes when it is valid under the declaration keyed on its
     own source node's type (else its type's unkeyed one) **and** both its
     endpoints pass, named or not.
@@ -1900,7 +1900,7 @@ MATCH (f:Field)-[l:HAS_LICENSEE]->(c:Company) RETURN f.name, c.name
   | `axis` | The temporal axis. |
   | `source` | `explicit`, `default`, `all`, or `skipped:write` / `skipped:procedure` / `skipped:valid_at` (see below). |
   | `instant` | The instant resolved (ISO; a datetime in naive UTC; `all` under `FOR VALID_TIME ALL`). |
-  | `targets` | The declared labels the filter judges for the statement's patterns across every scope, without their bounds (`(:Well)`, `[:LICENSEE]`, `[:LICENSEE from :Field]`). It includes labels widened in through secondary labels: a node must be valid under every declared label it carries, so a `(:A)` pattern lists `(:B)` too when nodes it reaches can carry a declared `B`. A statement over types nothing declared can sit on lists none and runs unfiltered. |
+  | `targets` | The declared labels the filter judges for the statement's patterns across every scope, without their bounds (`(:Well)`, `[:HOLDER]`, `[:HOLDER from :Project]`). It includes labels widened in through secondary labels: a node must be valid under every declared label it carries, so a `(:A)` pattern lists `(:B)` too when nodes it reaches can carry a declared `B`. A statement over types nothing declared can sit on lists none and runs unfiltered. |
   | `hidden` | Per target, how many rows it governs that are not valid at the instant, by that target's own bounds. A target answered by property guards has no entry. |
   | `endpoint_invalid` | Relationships valid by their own bounds but hidden because an endpoint node is not valid at the instant, in no `hidden` entry. Null when a target is answered by property guards. |
   | `route` | `guarded`; `plain` when the timeless exit ran; `view` through a `freeze(valid_at=…)` handle. |
@@ -4882,7 +4882,7 @@ naming the declaration it came from.
 
 - A `domain`/`range` naming an **abstract class** widens to the class plus its
   declared descendants. This is the union-endpoint case
-  (`HAS_OPERATOR from = six concrete types`) a flat schema cannot declare.
+  (`MANAGED_BY from = six concrete types`) a flat schema cannot declare.
 - Semantics are annotations, not axioms: the ontology never changes what a
   `MATCH` returns.
 - `cardinality`/`required` describe *outgoing* edges of the domain type.
@@ -4960,36 +4960,36 @@ NaN values are skipped in all aggregation functions.
 
 ```python
 # Aggregate monthly data by year
-graph.cypher("MATCH (f:Field) RETURN f.title, ts_sum(f.oil, '2020') AS prod")
+graph.cypher("MATCH (f:Project) RETURN f.title, ts_sum(f.output, '2020') AS prod")
 
 # Range across months
-graph.cypher("MATCH (f:Field) RETURN ts_avg(f.oil, '2020-1', '2020-6') AS h1_avg")
+graph.cypher("MATCH (f:Project) RETURN ts_avg(f.output, '2020-1', '2020-6') AS h1_avg")
 
 # Multi-year range
-graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, '2018', '2023') AS total")
+graph.cypher("MATCH (f:Project) RETURN ts_sum(f.output, '2018', '2023') AS total")
 
 # Exact month lookup
-graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020-3') AS march_prod")
+graph.cypher("MATCH (f:Project) RETURN ts_at(f.output, '2020-3') AS march_prod")
 
 # Change between two time points
-graph.cypher("MATCH (f:Field) RETURN ts_delta(f.oil, '2019', '2021') AS change")
+graph.cypher("MATCH (f:Project) RETURN ts_delta(f.output, '2019', '2021') AS change")
 
 # Top producers
 graph.cypher("""
-    MATCH (f:Field)
-    RETURN f.title, ts_sum(f.oil, '2020') AS prod
+    MATCH (f:Project)
+    RETURN f.title, ts_sum(f.output, '2020') AS prod
     ORDER BY prod DESC LIMIT 10
 """)
 
 # Filter by production threshold
 graph.cypher("""
-    MATCH (f:Field)
-    WHERE ts_sum(f.oil, '2020') > 100.0
-    RETURN f.title, ts_sum(f.oil, '2020') AS prod
+    MATCH (f:Project)
+    WHERE ts_sum(f.output, '2020') > 100.0
+    RETURN f.title, ts_sum(f.output, '2020') AS prod
 """)
 
 # Extract full series for plotting
-graph.cypher("MATCH (f:Field {title: 'TROLL'}) RETURN ts_series(f.oil, '2015', '2020') AS data")
+graph.cypher("MATCH (f:Project {title: 'TUNDRA'}) RETURN ts_series(f.output, '2015', '2020') AS data")
 
 # Latest reading
 graph.cypher("MATCH (s:Sensor) RETURN s.title, ts_last(s.temperature) AS latest")
@@ -5018,18 +5018,18 @@ With no prefix on a graph that declares validity, the instant is today. Under
 
 ```python
 # OK: year query on month data (a range: aggregates all months of 2020)
-graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, '2020')")
+graph.cypher("MATCH (f:Project) RETURN ts_sum(f.output, '2020')")
 
 # OK: month, day, date and datetime keys on month data read the containing month
-graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020-3')")
-graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, date('2020-03-15'))")
+graph.cypher("MATCH (f:Project) RETURN ts_at(f.output, '2020-3')")
+graph.cypher("MATCH (f:Project) RETURN ts_at(f.output, date('2020-03-15'))")
 
 # ERROR: a year key with ts_at on month data names twelve entries
-graph.cypher("MATCH (f:Field) RETURN ts_at(f.oil, '2020')")
+graph.cypher("MATCH (f:Project) RETURN ts_at(f.output, '2020')")
 # → "ts_at() key precision 'year' is coarser than the series resolution 'month'; …"
 
 # Range bounds are key-in-range: the 2020-02 entry (key 2020-02-01) is before 02-15
-graph.cypher("MATCH (f:Field) RETURN ts_sum(f.oil, date('2020-02-15'), date('2020-04-15'))")
+graph.cypher("MATCH (f:Project) RETURN ts_sum(f.output, date('2020-02-15'), date('2020-04-15'))")
 ```
 
 ## Naming — identifiers, reserved words & structural accessors

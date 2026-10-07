@@ -126,7 +126,7 @@ def test_binary_size_regression():
                           kglite-mcp-server binary build (ort runtime
                           + hf-hub native TLS path, ~3-4 MB);
                         * mcp-methods 0.3.x server-feature evolution;
-                        * sodir / wikidata workspace crates with
+                        * dataset-loader workspace crates with
                           their own dependency closures.
       - 0.10.26:      39,319,984 bytes (≈37.5 MB, macOS .dylib).
                       The kglite-mcp-server *library* is now bundled
@@ -149,7 +149,7 @@ def test_binary_size_regression():
                       project. Baseline deliberately recaptured downward so
                       the +10% budget guards the new, smaller binary.
       - post-0.13.4b: 18,857,776 bytes (≈18.0 MB, macOS .dylib) — the
-                      sec/sodir/wikidata dataset loaders moved to the
+                      sec/wikidata dataset loaders moved to the
                       kglite-datasets project (zip/quick-xml gone; the
                       remaining ureq/rustls belong to the bundled MCP
                       server via mcp-methods, not the engine).

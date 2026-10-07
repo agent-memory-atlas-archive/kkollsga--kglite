@@ -217,30 +217,30 @@ class TestPreBindingOptimization:
     def test_with_count_then_optional_match(self):
         """WITH aggregation -> OPTIONAL MATCH returns correct counts (the user's bug report)."""
         g = KnowledgeGraph()
-        g.cypher("CREATE (:Company {name: 'Equinor'})")
+        g.cypher("CREATE (:Company {name: 'Northwind'})")
         g.cypher("CREATE (:Company {name: 'Shell'})")
         g.cypher("CREATE (:Well {name: 'W1'})")
         g.cypher("CREATE (:Well {name: 'W2'})")
         g.cypher("CREATE (:Well {name: 'W3'})")
-        g.cypher("CREATE (:Licence {name: 'L1'})")
-        g.cypher("MATCH (c:Company {name: 'Equinor'}), (w:Well {name: 'W1'}) CREATE (w)-[:DRILLED_BY]->(c)")
-        g.cypher("MATCH (c:Company {name: 'Equinor'}), (w:Well {name: 'W2'}) CREATE (w)-[:DRILLED_BY]->(c)")
-        g.cypher("MATCH (c:Company {name: 'Shell'}), (w:Well {name: 'W3'}) CREATE (w)-[:DRILLED_BY]->(c)")
-        g.cypher("MATCH (c:Company {name: 'Equinor'}), (l:Licence {name: 'L1'}) CREATE (l)-[:LICENSED_TO]->(c)")
+        g.cypher("CREATE (:Contract {name: 'L1'})")
+        g.cypher("MATCH (c:Company {name: 'Northwind'}), (w:Well {name: 'W1'}) CREATE (w)-[:BUILT_BY]->(c)")
+        g.cypher("MATCH (c:Company {name: 'Northwind'}), (w:Well {name: 'W2'}) CREATE (w)-[:BUILT_BY]->(c)")
+        g.cypher("MATCH (c:Company {name: 'Shell'}), (w:Well {name: 'W3'}) CREATE (w)-[:BUILT_BY]->(c)")
+        g.cypher("MATCH (c:Company {name: 'Northwind'}), (l:Contract {name: 'L1'}) CREATE (l)-[:ASSIGNED_TO]->(c)")
 
         rows = g.cypher("""
-            MATCH (c:Company)<-[:DRILLED_BY]-(w:Well)
+            MATCH (c:Company)<-[:BUILT_BY]-(w:Well)
             WITH c, count(w) AS wells
-            OPTIONAL MATCH (c)<-[:LICENSED_TO]-(l:Licence)
-            WITH c, wells, count(l) AS licences
-            RETURN c.name, wells, licences ORDER BY wells DESC
+            OPTIONAL MATCH (c)<-[:ASSIGNED_TO]-(l:Contract)
+            WITH c, wells, count(l) AS contracts
+            RETURN c.name, wells, contracts ORDER BY wells DESC
         """)
-        equinor = next(r for r in rows if r["c.name"] == "Equinor")
+        equinor = next(r for r in rows if r["c.name"] == "Northwind")
         shell = next(r for r in rows if r["c.name"] == "Shell")
         assert equinor["wells"] == 2
-        assert equinor["licences"] == 1
+        assert equinor["contracts"] == 1
         assert shell["wells"] == 1
-        assert shell["licences"] == 0
+        assert shell["contracts"] == 0
 
     def test_subsequent_match_uses_bindings(self):
         """Regular MATCH after WITH should also use pre-bindings."""

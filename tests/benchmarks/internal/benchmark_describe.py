@@ -1,6 +1,6 @@
 """Benchmark describe() across graph scales.
 
-Tests performance and output size for legal, prospect, and wikidata graphs.
+Tests performance and output size for legal, proposal, and wikidata graphs.
 Run: python examples/benchmark_describe.py
 """
 
@@ -11,7 +11,7 @@ import time
 import kglite
 
 LEGAL_PATH = "/Volumes/EksternalHome/Koding/MCP servers/legal/norwegian_law.kgl"
-PROSPECT_PATH = "/Volumes/EksternalHome/Koding/MCP servers/prospect_mcp/sodir_graph.kgl"
+PROPOSAL_PATH = "/Volumes/EksternalHome/Koding/MCP servers/proposal_mcp/projects_graph.kgl"
 WIKIDATA_PATH = "/Volumes/EksternalHome/Data/Wikidata/wikidata_disk_graph"
 
 
@@ -78,9 +78,9 @@ def main():
                 print(f"  FAIL: {name} too slow: {dt:.2f}s")
                 all_pass = False
 
-    # Prospect graph
-    if os.path.exists(PROSPECT_PATH):
-        results = benchmark_graph("Prospect Graph (Medium tier, 98 types)", PROSPECT_PATH)
+    # Proposal graph
+    if os.path.exists(PROPOSAL_PATH):
+        results = benchmark_graph("Proposal Graph (Medium tier, 98 types)", PROPOSAL_PATH)
         for name, chars, dt in results:
             if chars > 100_000:
                 print(f"  FAIL: {name} output too large: {chars:,} chars")

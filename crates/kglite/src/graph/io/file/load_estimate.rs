@@ -55,7 +55,7 @@ use super::{FileMetadata, PortableColumnSection};
 // fixture declares indexes:
 //
 //   fixture          rows      cells    measured   this model   ratio
-//   sodir          546,850  7,128,312   168.3 MB     218.9 MB   1.30×
+//   projects       546,850  7,128,312   168.3 MB     218.9 MB   1.30×
 //   codebase        23,142    663,202    27.8 MB      15.6 MB   0.56×
 //   *_500k         500,000  2,500,000    86.6 MB     108.0 MB   1.25×
 //
@@ -133,7 +133,7 @@ const SCALAR_VALUE_BYTES: u64 = 16;
 /// Decompressed size of a section, as a multiple of its compressed size,
 /// ×2 (integer arithmetic: the ratio is 4.5).
 ///
-/// Measured on four real sections: sodir's largest column 3.07×, its topology
+/// Measured on four real sections: `projects`' largest column 3.07×, its topology
 /// 4.00×; `indexed_500k`'s largest column 5.87×, its topology 4.70× — inside
 /// the 2.4×–6.1× band §7 reports across every section it probed. The midpoint
 /// predicts those two column sections at 1.47× and 0.77× of their measured

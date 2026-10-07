@@ -48,11 +48,11 @@ fn node(graph: &DirGraph, title: &str) -> NodeIndex {
 #[test]
 fn a_relationship_takes_its_sources_keyed_declaration_before_the_fallback() {
     let g = graph(&[
-        "CREATE (f:Field {title: 'F'}), (l:Licence {title: 'L'}), (c:Company {title: 'C'}), \
+        "CREATE (f:Project {title: 'F'}), (l:Contract {title: 'L'}), (c:Company {title: 'C'}), \
          (f)-[:HAS {f: '2000-01-01', t: '2009-12-31'}]->(c), \
          (l)-[:HAS {f: '2000-01-01', t: '2009-12-31'}]->(c)",
         "CALL db.temporal.declare({relationship: 'HAS', from: 'f', to: 't', convention: 'closed'})",
-        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Field', from: 'f', to: 't', \
+        "CALL db.temporal.declare({relationship: 'HAS', source_type: 'Project', from: 'f', to: 't', \
          convention: 'half_open'})",
     ]);
     let filter = FluentFilter::for_traverse(
@@ -77,9 +77,9 @@ fn a_relationship_takes_its_sources_keyed_declaration_before_the_fallback() {
             .id();
         filter.admits_hop(&g, edge, conn, source, company).unwrap()
     };
-    // Field's keyed declaration is half-open: its to day is not valid.
+    // Project's keyed declaration is half-open: its to day is not valid.
     assert!(!hop_from("F"));
-    // Licence has no keyed one, so the closed fallback keeps the to day.
+    // Contract has no keyed one, so the closed fallback keeps the to day.
     assert!(hop_from("L"));
     filter.finish().unwrap();
 }

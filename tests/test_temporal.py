@@ -38,34 +38,34 @@ class TestDateTimeHandling:
 
 
 class TestValidAt:
-    def test_valid_at_basic(self, petroleum_graph):
-        result = petroleum_graph.select("Estimate").valid_at("2020-06-15")
+    def test_valid_at_basic(self, portfolio_graph):
+        result = portfolio_graph.select("Estimate").valid_at("2020-06-15")
         assert result.len() > 0
 
-    def test_valid_at_custom_fields(self, petroleum_graph):
-        result = petroleum_graph.select("Prospect").valid_at(
+    def test_valid_at_custom_fields(self, portfolio_graph):
+        result = portfolio_graph.select("Proposal").valid_at(
             "2020-06-15",
             date_from_field="date_from",
             date_to_field="date_to",
         )
         assert result.len() > 0
 
-    def test_valid_at_no_matches(self, petroleum_graph):
-        result = petroleum_graph.select("Estimate").valid_at("2000-01-01")
+    def test_valid_at_no_matches(self, portfolio_graph):
+        result = portfolio_graph.select("Estimate").valid_at("2000-01-01")
         assert result.len() == 0
 
 
 class TestValidDuring:
-    def test_valid_during_basic(self, petroleum_graph):
-        result = petroleum_graph.select("Estimate").valid_during("2020-01-01", "2020-06-30")
+    def test_valid_during_basic(self, portfolio_graph):
+        result = portfolio_graph.select("Estimate").valid_during("2020-01-01", "2020-06-30")
         assert result.len() > 0
 
-    def test_valid_during_partial_overlap(self, petroleum_graph):
-        result = petroleum_graph.select("Estimate").valid_during("2020-10-01", "2021-03-31")
+    def test_valid_during_partial_overlap(self, portfolio_graph):
+        result = portfolio_graph.select("Estimate").valid_during("2020-10-01", "2021-03-31")
         assert result.len() > 0
 
-    def test_valid_during_no_overlap(self, petroleum_graph):
-        result = petroleum_graph.select("Estimate").valid_during("2000-01-01", "2000-12-31")
+    def test_valid_during_no_overlap(self, portfolio_graph):
+        result = portfolio_graph.select("Estimate").valid_during("2000-01-01", "2000-12-31")
         assert result.len() == 0
 
 

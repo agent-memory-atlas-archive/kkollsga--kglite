@@ -85,7 +85,7 @@ pub(crate) struct GuardTemplate {
 }
 
 impl fmt::Display for GuardTemplate {
-    /// `(:Well [vf, vt] closed), [:LICENSEE from :Field [f, t] half_open]`,
+    /// `(:Well [vf, vt] closed), [:HOLDER from :Project [f, t] half_open]`,
     /// or `no declared targets`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.nodes.is_empty() && self.edges.is_empty() {
@@ -182,8 +182,8 @@ impl GuardTemplate {
         self.nodes.is_empty() && self.edges.is_empty()
     }
 
-    /// The targets as the echo names them: `(:Well)`, then `[:LICENSEE]` or
-    /// `[:LICENSEE from :Field]`, in template order.
+    /// The targets as the echo names them: `(:Well)`, then `[:HOLDER]` or
+    /// `[:HOLDER from :Project]`, in template order.
     pub(crate) fn target_names(&self) -> Vec<String> {
         let nodes = self.nodes.iter().map(|n| node_target_name(&n.label));
         let edges = self
@@ -199,8 +199,8 @@ pub(crate) fn node_target_name(label: &str) -> String {
     format!("(:{label})")
 }
 
-/// A relationship target as the echo names it: `[:LICENSEE]` or
-/// `[:LICENSEE from :Field]`.
+/// A relationship target as the echo names it: `[:HOLDER]` or
+/// `[:HOLDER from :Project]`.
 pub(crate) fn relationship_target_name(rel_type: &str, source_type: Option<&str>) -> String {
     match source_type {
         Some(source) => format!("[:{rel_type} from :{source}]"),

@@ -28,10 +28,10 @@ with a tiny `_mcp.yaml` declaring `name`,
 |---|---|
 | `MATCH (a:Area), (w:Well) WHERE contains(a, point(w.latitude, w.longitude)) RETURN count(*)` | `3` |
 | `MATCH (a:Area {id: 'north'}) RETURN centroid(a)` | `{latitude: ~61.0, longitude: ~5.0}` |
-| `MATCH (f:Field {title:'TROLL'}) RETURN ts_sum(f.oil_col, '2019')` | positive float |
-| `MATCH (f:Field {title:'TROLL'}) RETURN ts_at(f.oil_col, '2019-3')` | positive float |
-| `CALL orphan_node({type:'Wellbore'}) YIELD node RETURN count(node)` | `3` |
-| `CALL duplicate_title({type:'Prospect'}) YIELD node RETURN count(node)` | `4` |
+| `MATCH (f:Project {title:'TUNDRA'}) RETURN ts_sum(f.output_col, '2019')` | positive float |
+| `MATCH (f:Project {title:'TUNDRA'}) RETURN ts_at(f.output_col, '2019-3')` | positive float |
+| `CALL orphan_node({type:'Site'}) YIELD node RETURN count(node)` | `3` |
+| `CALL duplicate_title({type:'Proposal'}) YIELD node RETURN count(node)` | `4` |
 
 ## Use in the pre-release suite
 

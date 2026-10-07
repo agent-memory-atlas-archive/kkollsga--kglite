@@ -37,13 +37,13 @@ AS_OF = "FOR VALID_TIME AS OF date('2006-01-01') "
 
 @pytest.fixture
 def wells():
-    """`Well` and `LICENSED` are declared; `Field` holds the same bound
+    """`Well` and `LICENSED` are declared; `Project` holds the same bound
     properties undeclared."""
     graph = kglite.KnowledgeGraph()
     graph.cypher(
         "CREATE (w1:Well {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}),"
         " (w2:Well {id: 2, vf: date('2005-01-01')}),"
-        " (f:Field {id: 10, vf: date('2000-01-01')}),"
+        " (f:Project {id: 10, vf: date('2000-01-01')}),"
         " (w1)-[:LICENSED {vf: date('2000-01-01'), vt: date('2020-01-01')}]->(f)"
     ).to_list()
     graph.cypher("CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
@@ -58,7 +58,7 @@ def _plan(graph, query, **kwargs):
 
 
 def test_explain_renders_the_context_in_either_order(wells):
-    body = "MATCH (w:Well)-[l:LICENSED]->(f:Field) RETURN w.id, f.id"
+    body = "MATCH (w:Well)-[l:LICENSED]->(f:Project) RETURN w.id, f.id"
     before = _plan(wells, f"EXPLAIN {AS_OF}{body}")
     after = _plan(wells, f"{AS_OF}EXPLAIN {body}")
     assert before == after
@@ -77,14 +77,14 @@ def test_explain_renders_the_context_in_either_order(wells):
 
 
 def test_the_template_lists_only_declared_targets(wells):
-    """The declared-vs-undeclared twin: `Field` carries the same bound
+    """The declared-vs-undeclared twin: `Project` carries the same bound
     properties as `Well` but is not declared."""
-    assert _plan(wells, f"EXPLAIN {AS_OF}MATCH (f:Field) RETURN f")[0] == (
+    assert _plan(wells, f"EXPLAIN {AS_OF}MATCH (f:Project) RETURN f")[0] == (
         "ValidTimeContext axis=VALID_TIME targets=no declared targets instant: per execution"
     )
     assert (
         "targets=(:Well [vf, vt] closed) instant"
-        in _plan(wells, f"EXPLAIN {AS_OF}MATCH (w:Well), (f:Field) RETURN w, f")[0]
+        in _plan(wells, f"EXPLAIN {AS_OF}MATCH (w:Well), (f:Project) RETURN w, f")[0]
     )
 
 
@@ -97,17 +97,17 @@ AT_2012 = "FOR VALID_TIME AS OF date('2012-01-01') "
         (f"{AT_2012}MATCH (w:Well) RETURN w.id", [2]),
         (f"PROFILE {AT_2012}MATCH (w:Well) RETURN w.id", [2]),
         (f"{AT_2012}PROFILE MATCH (w:Well) RETURN w.id", [2]),
-        (f"{AT_2012}MATCH (w:Well) RETURN w.id UNION MATCH (f:Field) RETURN f.id AS `w.id`", [2, 10]),
+        (f"{AT_2012}MATCH (w:Well) RETURN w.id UNION MATCH (f:Project) RETURN f.id AS `w.id`", [2, 10]),
     ],
 )
 def test_execution_runs_under_the_filter(wells, query, ids):
-    """Well 1 closed in 2010; the undeclared Field is timeless."""
+    """Well 1 closed in 2010; the undeclared Project is timeless."""
     assert sorted(row["w.id"] for row in wells.cypher(query).to_list()) == ids
 
 
 def test_metadata_procedures_run_under_a_context(wells):
     labels = {row["label"] for row in wells.cypher(f"{AS_OF}CALL db.labels()").to_list()}
-    assert {"Well", "Field"} <= labels
+    assert {"Well", "Project"} <= labels
 
 
 @pytest.mark.parametrize(
@@ -144,13 +144,13 @@ def test_no_argument_date_is_today_at_execution(wells):
 @pytest.mark.parametrize(
     "pattern",
     [
-        "(a:Field)-[:LICENSED*2]-(b:Field)",
-        "p = shortestPath((a:Field)-[:LICENSED*]-(b:Field))",
+        "(a:Project)-[:LICENSED*2]-(b:Project)",
+        "p = shortestPath((a:Project)-[:LICENSED*]-(b:Project))",
     ],
 )
 def test_multi_hop_intermediates_reach_declared_labels(wells, pattern):
     """The hand-expanded twin lists `Well`; so must the multi-hop spelling."""
-    expanded = _plan(wells, f"EXPLAIN {AS_OF}MATCH (a:Field)-[:LICENSED]-()-[:LICENSED]-(b:Field) RETURN a")[0]
+    expanded = _plan(wells, f"EXPLAIN {AS_OF}MATCH (a:Project)-[:LICENSED]-()-[:LICENSED]-(b:Project) RETURN a")[0]
     assert "(:Well [vf, vt] closed)" in expanded
     assert "(:Well [vf, vt] closed)" in _plan(wells, f"EXPLAIN {AS_OF}MATCH {pattern} RETURN a")[0]
 

@@ -27,7 +27,7 @@ fn empty_params() -> HashMap<String, Value> {
     HashMap::new()
 }
 
-/// A graph with one node type (`Vessel`) and one edge type (`OPERATED_BY`),
+/// A graph with one node type (`Vessel`) and one edge type (`MANAGED_BY`),
 /// so both the unknown-label and unknown-relationship checks have candidates
 /// to suggest from.
 fn seeded() -> DirGraph {
@@ -36,7 +36,7 @@ fn seeded() -> DirGraph {
     let mut graph = DirGraph::new();
     execute_mut(
         &mut graph,
-        "CREATE (:Vessel {id: 1})-[:OPERATED_BY]->(:Operator {id: 2})",
+        "CREATE (:Vessel {id: 1})-[:MANAGED_BY]->(:Operator {id: 2})",
         &opts,
     )
     .expect("seed write");
@@ -72,11 +72,11 @@ fn unknown_label_reaches_diagnostics() {
 #[test]
 fn unknown_relationship_reaches_diagnostics() {
     let graph = seeded();
-    let warnings = warnings_of(&graph, "MATCH (a:Vessel)-[:OPERATED_BYY]->(b) RETURN a");
+    let warnings = warnings_of(&graph, "MATCH (a:Vessel)-[:MANAGED_BYY]->(b) RETURN a");
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("unknown relationship type 'OPERATED_BYY'")),
+            .any(|w| w.contains("unknown relationship type 'MANAGED_BYY'")),
         "{warnings:?}"
     );
 }
@@ -159,12 +159,12 @@ fn procedure_scope_warnings_reach_diagnostics() {
     let graph = seeded();
     let warnings = warnings_of(
         &graph,
-        "CALL pagerank({relationship: 'OPERATED_BYY'}) YIELD node RETURN count(*) AS c",
+        "CALL pagerank({relationship: 'MANAGED_BYY'}) YIELD node RETURN count(*) AS c",
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("unknown relationship type 'OPERATED_BYY'")),
+            .any(|w| w.contains("unknown relationship type 'MANAGED_BYY'")),
         "{warnings:?}"
     );
 }
@@ -191,13 +191,13 @@ fn a_subquery_bodys_procedure_warning_is_absorbed() {
     let graph = seeded();
     let warnings = warnings_of(
         &graph,
-        "CALL { CALL pagerank({relationship: 'OPERATED_BYY'}) YIELD node \
+        "CALL { CALL pagerank({relationship: 'MANAGED_BYY'}) YIELD node \
          RETURN count(*) AS c } RETURN c",
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("unknown relationship type 'OPERATED_BYY'")),
+            .any(|w| w.contains("unknown relationship type 'MANAGED_BYY'")),
         "{warnings:?}"
     );
 }
@@ -213,12 +213,12 @@ fn a_correlated_subquerys_warning_is_absorbed_once() {
     execute_mut(&mut graph, "CREATE (:Vessel {id: 3})", &opts).expect("second vessel");
     let warnings = warnings_of(
         &graph,
-        "MATCH (v:Vessel) CALL { WITH v CALL pagerank({relationship: 'OPERATED_BYY'}) \
+        "MATCH (v:Vessel) CALL { WITH v CALL pagerank({relationship: 'MANAGED_BYY'}) \
          YIELD node RETURN count(*) AS c } RETURN v.id, c",
     );
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
-        warnings[0].contains("unknown relationship type 'OPERATED_BYY'"),
+        warnings[0].contains("unknown relationship type 'MANAGED_BYY'"),
         "{warnings:?}"
     );
 }

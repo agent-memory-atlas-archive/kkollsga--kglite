@@ -11,7 +11,7 @@ Level 0 is a flat set of nodes of a single type.
 Each subsequent `traverse()` or `compare()` call adds a new level, building a parent → child tree:
 
 ```
-Level 0:  select('Field')         → [Field_A, Field_B]
+Level 0:  select('Project')         → [Field_A, Field_B]
 Level 1:  .traverse('HAS_WELL')   → [Well_1, Well_2, Well_3, Well_4]
 Level 2:  .traverse('HAS_LOG')    → [Log_X, Log_Y, Log_Z]
 ```
@@ -40,7 +40,7 @@ KGLite provides two ways to move between levels:
 
 ```python
 # Edge-based: follow HAS_WELL connections
-graph.select('Field').traverse('HAS_WELL')
+graph.select('Project').traverse('HAS_WELL')
 
 # Comparison-based: find wells inside structure polygons
 graph.select('Structure').compare('Well', 'contains')
@@ -61,13 +61,13 @@ from kglite import Agg, Spatial
 ### Copy properties from ancestors
 
 ```python
-# Copy 'name' and 'status' from the Field level onto Wells
-graph.select('Field').traverse('HAS_WELL') \
-    .add_properties({'Field': ['name', 'status']})
+# Copy 'name' and 'status' from the Project level onto Wells
+graph.select('Project').traverse('HAS_WELL') \
+    .add_properties({'Project': ['name', 'status']})
 
 # Rename while copying
-graph.select('Field').traverse('HAS_WELL') \
-    .add_properties({'Field': {'field_name': 'name'}})
+graph.select('Project').traverse('HAS_WELL') \
+    .add_properties({'Project': {'field_name': 'name'}})
 ```
 
 ### Aggregate across leaves
@@ -109,10 +109,10 @@ In a three-level chain (A → B → C), you can pull properties from any
 ancestor — not just the immediate parent:
 
 ```python
-graph.select('Field').traverse('HAS_BLOCK').traverse('HAS_WELL') \
+graph.select('Project').traverse('HAS_BLOCK').traverse('HAS_WELL') \
     .add_properties({
         'Block': ['block_name'],       # from level 1 (immediate parent)
-        'Field': ['field_status'],     # from level 0 (grandparent)
+        'Project': ['field_status'],     # from level 0 (grandparent)
     })
 ```
 
@@ -123,16 +123,16 @@ To see how leaves are grouped by an ancestor type, use `collect_grouped()`:
 
 ```python
 # Flat: all wells regardless of parent
-wells = graph.select('Field').traverse('HAS_WELL').collect()
+wells = graph.select('Project').traverse('HAS_WELL').collect()
 
 # Grouped by field
-grouped = graph.select('Field').traverse('HAS_WELL') \
-    .collect_grouped('Field')
-# → {'TROLL': [{...}, {...}], 'EKOFISK': [{...}]}
+grouped = graph.select('Project').traverse('HAS_WELL') \
+    .collect_grouped('Project')
+# → {'TUNDRA': [{...}, {...}], 'EMBER': [{...}]}
 
 # Include parent metadata
-grouped = graph.select('Field').traverse('HAS_WELL') \
-    .collect_grouped('Field', parent_info=True)
+grouped = graph.select('Project').traverse('HAS_WELL') \
+    .collect_grouped('Project', parent_info=True)
 ```
 
 (presentation-dictionary-keys)=
@@ -168,10 +168,10 @@ df = graph.select('Structure').compare('Well', 'contains') \
 ### Multi-hop with intermediate enrichment
 
 ```python
-graph.select('Field').traverse('HAS_BLOCK').traverse('HAS_WELL') \
+graph.select('Project').traverse('HAS_BLOCK').traverse('HAS_WELL') \
     .add_properties({
         'Block': {'block_name': 'name'},
-        'Field': {'field_name': 'name'},
+        'Project': {'field_name': 'name'},
     }) \
     .collect()
 ```
