@@ -7,9 +7,9 @@
 //! ```yaml
 //! extensions:
 //!   embedder:
-//!     backend: fastembed
+//!     library: fastembed-rs
 //!     model: BAAI/bge-m3       # or any supported model name
-//!     cooldown: 900             # seconds of idle → drop weights (0 = never)
+//!     cooldown: 600             # idle seconds → the server drops the adapter (0 = never)
 //! ```
 //!
 //! The first `embed()` call downloads ONNX weights to `~/.cache/fastembed/`

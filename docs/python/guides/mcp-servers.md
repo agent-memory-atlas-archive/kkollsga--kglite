@@ -971,9 +971,9 @@ The embedder isn't bound. Causes, in order of likelihood:
 
 ### Warm `text_score()` is slow (seconds, not milliseconds)
 
-bge-m3's cool-down may have released the ONNX session. The default `cooldown` is 900 seconds (15 min). Two fixes:
+The server drops the model after `cooldown` idle seconds (default 600), and the next `text_score()` rebuilds it. A rebuild takes seconds for bge-m3. Two fixes:
 
-- Set `extensions.embedder.cooldown: 0` in the manifest to keep the session resident forever (heavy-use mode).
+- Set `extensions.embedder.cooldown: 0` in the manifest to keep the model loaded (heavy-use mode).
 - Pick a larger value matching your usage pattern.
 
 See {doc}`../examples/manifest_with_embedder` for the tradeoff table.
@@ -1194,7 +1194,7 @@ extensions:
     library: sentence-transformers  # the engine; host (Python/Rust) inferred from it
     model: BAAI/bge-m3              # required (passed to the library)
     # load: eager                   # build the model at boot (default: lazy, on first use)
-    # cooldown: 900                 # fastembed-rs only; seconds (default 900). 0 = never release.
+    # cooldown: 1800                # idle seconds before the model is dropped (default 600). 0 = never.
 ```
 
 | Field | Type | Default | Constraint |
@@ -1203,7 +1203,9 @@ extensions:
 | `model` | string | (required) | Passed to the chosen library; must be in *its* catalog. |
 | `factory` | string | — | `module:attr` returning an `EmbeddingModel` — any custom Python embedder. |
 | `load` | string | `lazy` | `lazy` builds the model on the first `text_score()`; `eager` builds it at boot. Any other value fails the boot. |
-| `cooldown` | int | 900 | `fastembed-rs` only; `0` disables auto-release. |
+| `cooldown` | int | 600 | Idle seconds before the model is dropped; the next `text_score()` rebuilds it. `0` keeps it loaded. A negative or non-integer value fails the boot. |
+
+`cooldown` applies to every library and to both `load` modes: `load: eager` builds at boot and may still be dropped later. A background sweeper checks about every quarter of the cooldown (at most every 10 s), so the drop lands up to that much after the cooldown. A `text_score()` that is running keeps its model. The drop is logged at `info` with the idle seconds, and so is the rebuild.
 
 With `load: lazy`, the boot still rejects an untrusted manifest, a bad mapping, a bad `load` value, a missing `model` for `fastembed-rs` and a library the server cannot host. A model that fails to build fails the query that needed it, and the next call retries. With `--vault`, the first build that embeds declared targets is the first call.
 

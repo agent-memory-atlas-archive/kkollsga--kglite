@@ -99,3 +99,17 @@ impl Embedder for PyEmbedderAdapter {
         });
     }
 }
+
+impl Drop for PyEmbedderAdapter {
+    /// A `Py<T>` dropped on a thread without the GIL is only queued for release
+    /// at the next GIL acquisition, so an idle-cooldown drop from the sweeper
+    /// thread would leave the model alive until some later call. Attach here so
+    /// the reference is released now. `try_attach` is `None` once the
+    /// interpreter is finalizing; the process is exiting and the field drop
+    /// falls back to the queue.
+    fn drop(&mut self) {
+        let _ = Python::try_attach(|py| {
+            drop(std::mem::replace(&mut self.instance, py.None()));
+        });
+    }
+}

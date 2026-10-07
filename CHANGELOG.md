@@ -24,6 +24,12 @@ before upgrading.
   library can be hosted. A failed lazy build is logged and retried on the
   next call. See the
   [MCP guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).
+- `extensions.embedder.cooldown: <seconds>` (default `600`; `0` disables). The
+  server drops the model after that many idle seconds and the next
+  `text_score()` rebuilds it, so an idle session no longer holds the model in
+  memory (about 4 GB for `sentence-transformers` with `BAAI/bge-m3`). It
+  applies to every library and to both `load` modes. A call in flight keeps
+  its model, and a negative or non-integer value fails the boot.
 
 ### Fixed
 

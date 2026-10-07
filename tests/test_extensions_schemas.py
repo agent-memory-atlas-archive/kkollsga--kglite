@@ -326,6 +326,8 @@ def test_embedder_schema_accepts_the_keys_the_server_reads() -> None:
         {"library": "fastembed-rs", "model": "BAAI/bge-m3", "load": "eager"},
         {"factory": "mypkg.embed:build", "model": "anything"},
         {"factory": "mypkg.embed:build"},
+        {"library": "sentence-transformers", "model": "m", "cooldown": 0},
+        {"library": "fastembed", "model": "m", "cooldown": 1800, "load": "eager"},
     ]
     for manifest in accepted:
         assert _schema_accepts(manifest, schema, schema), manifest
@@ -338,6 +340,9 @@ def test_embedder_schema_rejects_what_the_server_refuses() -> None:
         {"library": "fastembed", "model": "m", "load": "sometimes"},  # load is lazy | eager
         {"library": "fastembed", "model": "m", "load": True},
         {"library": 3, "model": "m"},
+        {"library": "fastembed", "model": "m", "cooldown": -1},  # non-negative seconds
+        {"library": "fastembed", "model": "m", "cooldown": 1.5},
+        {"library": "fastembed", "model": "m", "cooldown": "600"},
     ]
     for manifest in rejected:
         assert not _schema_accepts(manifest, schema, schema), manifest

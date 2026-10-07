@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kglite.readthedocs.io/schemas/extensions/embedder.json",
   "title": "extensions.embedder",
-  "description": "Embedder configuration. Registers an embedder against the active graph so text_score() works inside Cypher. Requires trust.allow_embedder: true. The server reads library, model, factory and load; it hands the whole mapping to the Python builder, which ignores keys it does not know.",
+  "description": "Embedder configuration. Registers an embedder against the active graph so text_score() works inside Cypher. Requires trust.allow_embedder: true. The server reads library, model, factory, load and cooldown; it hands the whole mapping to the Python builder, which ignores keys it does not know.",
   "type": "object",
   "anyOf": [
     {
@@ -38,6 +38,12 @@
       ],
       "default": "lazy",
       "description": "When the model is built. 'lazy' builds it on the first text_score() call; 'eager' builds it at boot."
+    },
+    "cooldown": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 600,
+      "description": "Idle seconds after which the server drops the model to free its memory; the next call rebuilds it. 0 keeps the model loaded. Applies to every library and to both load modes."
     }
   }
 }

@@ -43,12 +43,19 @@ extensions:
 #   embedder:
 #     library: fastembed-rs
 #     model: BAAI/bge-m3          # 1024-d, via the Rust fastembed-rs engine
-#     cooldown: 1800              # release session after 30 min idle (default 900)
 ```
 
-> `cooldown:` (lazy session release) applies to the Rust `fastembed-rs`
-> engine. A Python library's lifecycle follows whatever the fastembed-py model
-> does: it stays resident for the server's life.
+`cooldown:` sets the idle seconds after which the server drops the model
+(default 600; `0` keeps it loaded). It applies to every library, Python or
+Rust, and to both `load:` modes.
+
+```yaml
+extensions:
+  embedder:
+    library: sentence-transformers
+    model: BAAI/bge-m3
+    cooldown: 1800                # free the model after 30 min idle
+```
 
 ## What happens at boot
 
@@ -59,9 +66,9 @@ extensions:
    Set `load: eager` under `extensions.embedder` to build it at boot instead.
 3. Warm calls then run fast. fastembed-rs takes ~20 ms. sentence-transformers
    depends on the model + device.
-4. For `library: fastembed-rs`, `cooldown` seconds of inactivity release the
-   ONNX session. RAM returns, and the next call cold-loads. `cooldown: 0`
-   keeps it resident.
+4. After `cooldown` seconds without a `text_score()`, the server drops the
+   model and its memory is released. The next call rebuilds it, as on first
+   use. `cooldown: 0` keeps it loaded.
 
 ## Calling it
 
@@ -104,7 +111,7 @@ Tradeoffs:
 - `intfloat/multilingual-e5-large` (1024-d, ~1.2 GB): multilingual
   alternative.
 
-`cooldown:` works for all of them. The warm-call savings only show up on bge-m3, because the fastembed-catalog models cache differently and don't pay the same ~1 s session-init cost.
+`cooldown:` works for all of them. The rebuild cost is largest for bge-m3, because the fastembed-catalog models don't pay the same ~1 s session-init cost.
 
 ## Failure modes
 
@@ -122,7 +129,7 @@ Tradeoffs:
 - **Model build** (unknown `model:` for the chosen library): the library raises (e.g.
   fastembed-py has no `bge-m3` → use `sentence-transformers`).
 - **Boot** (`cooldown:` negative or non-int):
-  `extensions.embedder.cooldown must be a non-negative integer`.
+  `extensions.embedder.cooldown must be a non-negative integer number of seconds`.
 - **Model build** errors surface at boot with `load: eager`, and on the first
   `text_score()` with the default `load: lazy`. The failing query reports the
   error and the next call retries.
@@ -134,7 +141,10 @@ Tradeoffs:
 
 - ONNX weights cache to `~/.cache/fastembed/` (or
   `FASTEMBED_CACHE_PATH` if set). First run downloads.
-- The cooldown timer fires lazily on the next `embed()` call. There are no
-  background threads. A long-idle server (overnight, weekend) doesn't burn CPU
-  just to release the session. It stays loaded until the next call notices the
-  idle time and releases it.
+- A single background thread checks the idle time about every quarter of the
+  `cooldown` (at most every 10 s) and drops the model once it is past it. A
+  `text_score()` in flight keeps its model, and the next call rebuilds. With
+  `cooldown: 0` the thread is not started.
+- Freed memory returns to the operating system only as far as the allocator
+  gives it back. The Python object is destroyed at the drop; a library that
+  keeps its own cache (PyTorch's allocator) may hold part of it.

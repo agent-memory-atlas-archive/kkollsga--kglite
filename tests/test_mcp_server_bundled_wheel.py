@@ -170,6 +170,11 @@ def _lazy_embedder_fixture(tmp_path: Path, load_line: str) -> tuple[Path, Path, 
         "import hashlib, os\n"
         "class Stub:\n"
         "    dimension = 8\n"
+        "    def __del__(self):\n"
+        "        path = os.environ.get('LAZY_MARKER')\n"
+        "        if path:\n"
+        "            with open(path, 'a') as f:\n"
+        "                f.write('freed\\n')\n"
         "    def embed(self, texts):\n"
         "        return [[float(b) for b in hashlib.sha256(t.encode()).digest()[:8]] for t in texts]\n"
         "def build(model):\n"
@@ -216,8 +221,12 @@ def _spawn_wheel_env(args: list[str], env: dict) -> McpClient:
     return client
 
 
+def _events(marker_file: Path) -> list[str]:
+    return marker_file.read_text(encoding="utf-8").splitlines() if marker_file.exists() else []
+
+
 def _built_count(marker_file: Path) -> int:
-    return len(marker_file.read_text(encoding="utf-8").splitlines()) if marker_file.exists() else 0
+    return _events(marker_file).count("built")
 
 
 def test_manifest_embedder_is_built_on_first_semantic_call(tmp_path: Path) -> None:
@@ -246,6 +255,44 @@ def test_manifest_embedder_load_eager_builds_at_boot(tmp_path: Path) -> None:
     try:
         client.list_tools()
         assert _built_count(marker_file) == 1
+    finally:
+        client.shutdown()
+
+
+def test_manifest_embedder_is_freed_after_its_cooldown_and_rebuilt(tmp_path: Path) -> None:
+    """After `cooldown` idle seconds the server drops the model (the Python
+    object is destroyed, not merely unreferenced from Rust) and the next
+    `text_score()` rebuilds it and answers normally."""
+    import time
+
+    kgl, manifest, marker_file, env = _lazy_embedder_fixture(tmp_path, "    cooldown: 1\n")
+    client = _spawn_wheel_env(["--graph", str(kgl), "--mcp-config", str(manifest)], env)
+    query = {"query": "MATCH (d:Doc) RETURN d.title AS t, text_score(d, 'summary', 'beta beta') AS s ORDER BY s DESC"}
+    try:
+        first = _text_content(client.call_tool("cypher_query", query))
+        assert "error" not in first.lower()[:60], first
+        assert _events(marker_file) == ["built"]
+        deadline = time.monotonic() + 15
+        while "freed" not in _events(marker_file) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert _events(marker_file) == ["built", "freed"], "the idle model must be destroyed"
+        again = _text_content(client.call_tool("cypher_query", query))
+        assert again[:200] == first[:200], "the rebuilt model answers the same"
+        assert _events(marker_file)[:3] == ["built", "freed", "built"]
+    finally:
+        client.shutdown()
+
+
+def test_manifest_embedder_cooldown_zero_keeps_the_model(tmp_path: Path) -> None:
+    import time
+
+    kgl, manifest, marker_file, env = _lazy_embedder_fixture(tmp_path, "    cooldown: 0\n")
+    client = _spawn_wheel_env(["--graph", str(kgl), "--mcp-config", str(manifest)], env)
+    query = {"query": "MATCH (d:Doc) RETURN text_score(d, 'summary', 'beta beta') AS s"}
+    try:
+        _text_content(client.call_tool("cypher_query", query))
+        time.sleep(2.5)
+        assert _events(marker_file) == ["built"]
     finally:
         client.shutdown()
 
