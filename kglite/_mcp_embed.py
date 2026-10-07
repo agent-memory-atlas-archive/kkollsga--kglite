@@ -16,6 +16,7 @@ extensions:
   embedder:
     library: sentence-transformers   # pip install sentence-transformers
     model: BAAI/bge-m3               # ← works (fastembed-py has no bge-m3)
+    # device: cpu                    # sentence-transformers only; Apple silicon defaults to cpu
 # library: fastembed              → pip install fastembed
 # factory: mypkg.embed:build      → any custom builder returning an EmbeddingModel
 ```
@@ -33,7 +34,7 @@ import json
 class _FastEmbedModel:
     """fastembed-py `TextEmbedding` → the EmbeddingModel protocol."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, cfg: dict) -> None:
         try:
             from fastembed import TextEmbedding
         except ImportError as exc:  # pragma: no cover - exercised only without fastembed
@@ -51,11 +52,34 @@ class _FastEmbedModel:
         return [[float(x) for x in vec] for vec in self._model.embed(list(texts))]
 
 
+def _default_st_device() -> str | None:
+    """`cpu` where sentence-transformers would pick Apple's `mps`, else `None`
+    (the library decides; CUDA stays automatic).
+
+    The server embeds one short query per `text_score()`, so an accelerator buys
+    ~35 ms per query but costs ~3 GB of GPU-allocator memory (in the process
+    footprint, not RSS) and a CPU-heap cache that grows ~7 MB per distinct query
+    length without bound. Measured for bge-m3: `mps` 3.8 GB at load and climbing,
+    `cpu` 0.7 GB flat at ~65 ms per query.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available() and torch.backends.mps.is_available():
+            return "cpu"
+    except Exception:  # torch layout differs: let the library choose
+        pass
+    return None
+
+
 class _SentenceTransformerModel:
     """sentence-transformers `SentenceTransformer` → the EmbeddingModel protocol.
-    Loads any HuggingFace embedding model, including `BAAI/bge-m3`."""
+    Loads any HuggingFace embedding model, including `BAAI/bge-m3`.
 
-    def __init__(self, model_name: str) -> None:
+    `device:` in the manifest block overrides the placement (`cpu`, `cuda`,
+    `mps`); without it Apple silicon runs on `cpu` (see `_default_st_device`)."""
+
+    def __init__(self, model_name: str, cfg: dict) -> None:
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -63,10 +87,43 @@ class _SentenceTransformerModel:
                 "extensions.embedder.library 'sentence-transformers' is not installed: "
                 "pip install sentence-transformers"
             ) from exc
-        self._model = SentenceTransformer(model_name)
+        device = cfg.get("device") or _default_st_device()
+        self._model = SentenceTransformer(model_name, device=device)
         self.dimension = int(self._model.get_sentence_embedding_dimension())
+        self._home = self._model.device
+        self._resident = True
+
+    def _on_cpu(self) -> bool:
+        return getattr(self._home, "type", self._home) == "cpu"
+
+    def unload(self) -> None:
+        """Give the accelerator its memory back; the weights stay in host RAM.
+
+        Dropping the model object does not release `mps` memory (measured: a
+        `del` plus `gc.collect()` left the 3 GB resident), so the weights are
+        moved to the CPU first. `embed()` and `load()` move them back."""
+        if self._resident and not self._on_cpu():
+            self._model.to("cpu")
+            self._resident = False
+            import gc
+
+            import torch
+
+            gc.collect()  # the released tensors are freed only after a collection
+
+            kind = getattr(self._home, "type", str(self._home))
+            if kind == "mps":
+                torch.mps.empty_cache()
+            elif kind == "cuda":
+                torch.cuda.empty_cache()
+
+    def load(self) -> None:
+        if not self._resident:
+            self._model.to(self._home)
+            self._resident = True
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self.load()
         return self._model.encode(list(texts)).tolist()
 
 
@@ -111,4 +168,4 @@ def build_embedder(config_json: str):
             f"(For the Rust engine use `library: fastembed-rs` on the cargo "
             f"`--features fastembed` binary.)"
         )
-    return cls(model)
+    return cls(model, cfg)

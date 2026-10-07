@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kglite.readthedocs.io/schemas/extensions/embedder.json",
   "title": "extensions.embedder",
-  "description": "Embedder configuration. Registers an embedder against the active graph so text_score() works inside Cypher. Requires trust.allow_embedder: true. The server reads library, model, factory, load and cooldown; it hands the whole mapping to the Python builder, which ignores keys it does not know.",
+  "description": "Embedder configuration. Registers an embedder against the active graph so text_score() works inside Cypher. Requires trust.allow_embedder: true. The server reads library, model, factory, load and cooldown, and the sentence-transformers wrapper reads device; the server hands the whole mapping to the Python builder, which ignores keys it does not know.",
   "type": "object",
   "anyOf": [
     {
@@ -44,6 +44,10 @@
       "minimum": 0,
       "default": 600,
       "description": "Idle seconds after which the server drops the model to free its memory; the next call rebuilds it. 0 keeps the model loaded. Applies to every library and to both load modes."
+    },
+    "device": {
+      "type": "string",
+      "description": "sentence-transformers only: where the model runs (cpu, cuda, mps). Without it Apple silicon runs on cpu, because the library's automatic mps choice holds about 3 GB of GPU memory for bge-m3 and its CPU heap grows with every distinct query length; other machines keep the library's choice."
     }
   }
 }

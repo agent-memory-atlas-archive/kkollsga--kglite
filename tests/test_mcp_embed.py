@@ -71,3 +71,98 @@ def _st_importable() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("sentence_transformers") is not None
+
+
+# --- sentence-transformers device selection and release -----------------------
+#
+# Measured on Apple silicon (bge-m3, 2026-10): the library's automatic device
+# choice is `mps`, which holds ~3 GB of GPU-allocator memory per server (counted
+# in the process footprint, not in RSS) and grows the CPU heap by several MB per
+# distinct query length (shape-keyed graph cache). `cpu` stays at ~0.7 GB flat.
+
+
+class _FakeTensorModel:
+    """Stands in for `SentenceTransformer`; records placement, never loads weights."""
+
+    instances: list = []
+
+    def __init__(self, name, device=None):
+        self.name = name
+        self.device_arg = device
+        self.device = device or "auto-device"
+        self.moves: list = []
+        type(self).instances.append(self)
+
+    def get_sentence_embedding_dimension(self):
+        return 4
+
+    def to(self, device):
+        self.moves.append(device)
+        self.device = device
+        return self
+
+    def encode(self, texts):
+        class _Out:
+            def tolist(self_inner):
+                return [[0.0, 0.0, 0.0, 0.0] for _ in texts]
+
+        return _Out()
+
+
+def _install_fake_stack(monkeypatch, *, cuda: bool, mps: bool):
+    import types
+
+    emptied: list = []
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: cuda, empty_cache=lambda: emptied.append("cuda"))
+    torch.mps = types.SimpleNamespace(empty_cache=lambda: emptied.append("mps"))
+    torch.backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: mps))
+    st = types.ModuleType("sentence_transformers")
+    _FakeTensorModel.instances = []
+    st.SentenceTransformer = _FakeTensorModel
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", st)
+    return emptied
+
+
+def _build_st(**extra):
+    return _mcp_embed.build_embedder(_cfg(library="sentence-transformers", model="m", **extra))
+
+
+def test_sentence_transformers_defaults_to_cpu_where_the_library_would_pick_mps(monkeypatch) -> None:
+    _install_fake_stack(monkeypatch, cuda=False, mps=True)
+    _build_st()
+    assert _FakeTensorModel.instances[0].device_arg == "cpu"
+
+
+def test_sentence_transformers_leaves_cuda_to_the_library(monkeypatch) -> None:
+    _install_fake_stack(monkeypatch, cuda=True, mps=False)
+    _build_st()
+    assert _FakeTensorModel.instances[0].device_arg is None
+
+
+def test_sentence_transformers_device_key_is_honoured(monkeypatch) -> None:
+    _install_fake_stack(monkeypatch, cuda=False, mps=True)
+    _build_st(device="mps")
+    assert _FakeTensorModel.instances[0].device_arg == "mps"
+
+
+def test_sentence_transformers_unload_leaves_the_accelerator_and_embed_returns(monkeypatch) -> None:
+    emptied = _install_fake_stack(monkeypatch, cuda=False, mps=True)
+    embedder = _build_st(device="mps")
+    model = _FakeTensorModel.instances[0]
+    embedder.unload()
+    assert model.moves == ["cpu"]
+    assert emptied == ["mps"]
+    embedder.unload()  # idempotent
+    assert model.moves == ["cpu"]
+    assert embedder.embed(["x"]) == [[0.0, 0.0, 0.0, 0.0]]
+    assert model.moves == ["cpu", "mps"]  # embed() puts it back on its device
+
+
+def test_sentence_transformers_unload_is_a_noop_on_cpu(monkeypatch) -> None:
+    emptied = _install_fake_stack(monkeypatch, cuda=False, mps=True)
+    embedder = _build_st()
+    embedder.unload()
+    assert _FakeTensorModel.instances[0].moves == []
+    assert emptied == []

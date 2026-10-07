@@ -328,6 +328,7 @@ def test_embedder_schema_accepts_the_keys_the_server_reads() -> None:
         {"factory": "mypkg.embed:build"},
         {"library": "sentence-transformers", "model": "m", "cooldown": 0},
         {"library": "fastembed", "model": "m", "cooldown": 1800, "load": "eager"},
+        {"library": "sentence-transformers", "model": "m", "device": "cpu"},
     ]
     for manifest in accepted:
         assert _schema_accepts(manifest, schema, schema), manifest
@@ -343,6 +344,7 @@ def test_embedder_schema_rejects_what_the_server_refuses() -> None:
         {"library": "fastembed", "model": "m", "cooldown": -1},  # non-negative seconds
         {"library": "fastembed", "model": "m", "cooldown": 1.5},
         {"library": "fastembed", "model": "m", "cooldown": "600"},
+        {"library": "sentence-transformers", "model": "m", "device": 0},
     ]
     for manifest in rejected:
         assert not _schema_accepts(manifest, schema, schema), manifest

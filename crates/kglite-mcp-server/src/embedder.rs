@@ -166,7 +166,12 @@ impl LazyEmbedder {
             }
             (state.model.take(), idle)
         };
-        // Dropped outside the lock: releasing a Python model takes the GIL.
+        // Outside the lock: both calls take the GIL for a Python model. The
+        // unload comes first because dropping a model does not return the
+        // memory of an accelerator it sits on (about 3 GB for bge-m3 on mps).
+        if let Some(model) = &model {
+            model.unload();
+        }
         drop(model);
         tracing::info!(
             embedder = %self.label,
@@ -582,6 +587,7 @@ mod embedder_tests {
     /// told to block inside `embed()`.
     struct Tracked {
         dropped: Arc<AtomicUsize>,
+        unloaded: Arc<AtomicUsize>,
         gate: Option<Arc<std::sync::Barrier>>,
     }
     impl Drop for Tracked {
@@ -603,22 +609,28 @@ mod embedder_tests {
         fn model_id(&self) -> Option<String> {
             Some("tracked".into())
         }
+        fn unload(&self) {
+            self.unloaded.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     struct Rig {
         embedder: Arc<LazyEmbedder>,
         built: Arc<AtomicUsize>,
         dropped: Arc<AtomicUsize>,
+        unloaded: Arc<AtomicUsize>,
     }
 
     fn rig(cooldown: Duration, gate: Option<Arc<std::sync::Barrier>>) -> Rig {
         let built = Arc::new(AtomicUsize::new(0));
         let dropped = Arc::new(AtomicUsize::new(0));
-        let (b, d) = (built.clone(), dropped.clone());
+        let unloaded = Arc::new(AtomicUsize::new(0));
+        let (b, d, u) = (built.clone(), dropped.clone(), unloaded.clone());
         let builder: Builder = Box::new(move || {
             b.fetch_add(1, Ordering::SeqCst);
             Ok(Arc::new(Tracked {
                 dropped: d.clone(),
+                unloaded: u.clone(),
                 gate: gate.clone(),
             }) as Arc<dyn kglite::api::Embedder>)
         });
@@ -626,6 +638,7 @@ mod embedder_tests {
             embedder: LazyEmbedder::start("test".into(), builder, cooldown),
             built,
             dropped,
+            unloaded,
         }
     }
 
@@ -646,6 +659,12 @@ mod embedder_tests {
             r.dropped.load(Ordering::SeqCst),
             1,
             "idle past cooldown must unload"
+        );
+        assert_eq!(
+            r.unloaded.load(Ordering::SeqCst),
+            1,
+            "the sweep must unload before dropping: a Python model on an accelerator \
+             keeps its device memory when merely dropped"
         );
         assert!(r.embedder.embed(&["x".into()]).is_ok());
         assert_eq!(r.built.load(Ordering::SeqCst), 2, "next call rebuilds");
