@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_ROOT = ROOT / "tests" / "cypher_contract"
@@ -18,7 +19,7 @@ RUNNER = ROOT / "tests" / "test_cypher_clean_room_contract.py"
 # script. REVIEWED_SEMANTIC_SUITES are the other independently authored
 # semantic suites that back KGLite's dialect claims. They are deliberately
 # NOT marker-scanned — several legitimately *mention* external suites in
-# negations (e.g. "not an openCypher TCK runner"), so scanning them would
+# negations (e.g. "does not consume upstream artifacts"), so scanning them would
 # false-positive; their provenance is governed by ordinary code review.
 # validate() checks both lists against reality so the boundary cannot go
 # stale silently, and tests/test_cypher_dialect_contract.py asserts the same.
@@ -39,6 +40,17 @@ REVIEWED_SEMANTIC_SUITES = (
     "scripts/cypher_conformance.py",
     "scripts/bolt_conformance.py",
 )
+# Markers that identify a test as derived from an external conformance suite.
+# Every tracked test file is scanned for them; files that name the policy in
+# negation are exempt.
+TEST_PROVENANCE_MARKERS = (
+    "openCypher TCK",
+    "Technology Compatibility Kit",
+    ".feature`",
+    "Scenario Outline:",
+    "tck/features",
+)
+PROVENANCE_SCAN_ALLOWLIST = frozenset({"scripts/check_cypher_clean_room.py"})
 FORBIDDEN_SUFFIXES = {".feature", ".gherkin"}
 FORBIDDEN_TEXT = (
     "Apache License",
@@ -66,8 +78,38 @@ def unexpected_imports(source: str, allowed: set[str]) -> set[str]:
     return unexpected
 
 
+def tracked_test_files() -> list[Path]:
+    """Tracked files under tests/ and every crates/**/tests dir or *_tests.rs."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--", "tests", "crates"], cwd=ROOT, capture_output=True, check=True
+    ).stdout.decode()
+    paths = []
+    for rel in filter(None, out.split("\0")):
+        parts = rel.split("/")
+        if parts[0] == "tests" or "tests" in parts[:-1] or parts[-1].endswith("_tests.rs"):
+            path = ROOT / rel
+            if path.is_file():
+                paths.append(path)
+    return paths
+
+
+def provenance_errors() -> list[str]:
+    errors = []
+    for path in tracked_test_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in PROVENANCE_SCAN_ALLOWLIST:
+            continue
+        text = path.read_text(errors="replace", encoding="utf-8")
+        errors.extend(
+            f"external-suite provenance marker {marker!r} in test file: {rel}"
+            for marker in TEST_PROVENANCE_MARKERS
+            if marker in text
+        )
+    return errors
+
+
 def validate() -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = provenance_errors()
     for rel in PROVENANCE_GUARDED_PATHS + REVIEWED_SEMANTIC_SUITES:
         if not (ROOT / rel).exists():
             errors.append(f"conformance-surface manifest is stale: {rel} does not exist")

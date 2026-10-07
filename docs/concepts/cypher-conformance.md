@@ -15,9 +15,9 @@ definition of Cypher.
 ## Clean-room test policy
 
 KGLite's committed compatibility cases are authored from neutral behavioral
-requirements and observed public interfaces. The repository does not vendor,
-copy, translate, execute, fetch, or depend on the Apache-licensed openCypher
-TCK, its Gherkin features, or upstream scenario text. This keeps KGLite's test
+requirements and observed public interfaces. The repository never copies,
+vendors, or translates the Apache-licensed openCypher TCK, its Gherkin features,
+or upstream scenario text, and no test is derived from them. This keeps KGLite's test
 implementation independent while preserving the externally observable
 language behavior we choose to support. The machine-readable claim boundary is
 [`tests/api-baselines/cypher-dialect.json`](../../tests/api-baselines/cypher-dialect.json).

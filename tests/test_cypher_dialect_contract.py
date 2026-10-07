@@ -179,6 +179,15 @@ def test_provenance_guard_boundary_matches_reality():
     assert "tests/test_cypher_clean_room_contract.py" in PROVENANCE_GUARDED_PATHS
 
 
+def test_provenance_scan_covers_every_tracked_test_path_and_is_clean():
+    from scripts.check_cypher_clean_room import provenance_errors, tracked_test_files
+
+    scanned = {p.relative_to(ROOT).as_posix() for p in tracked_test_files()}
+    assert "tests/test_cypher_dialect_contract.py" in scanned
+    assert any(rel.startswith("crates/") and "/tests/" in rel for rel in scanned)
+    assert provenance_errors() == []
+
+
 def test_reference_links_the_machine_readable_contract_and_names_every_extension():
     document = DOC_PATH.read_text(encoding="utf-8")
     manifest = _manifest()

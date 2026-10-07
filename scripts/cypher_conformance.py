@@ -3,8 +3,8 @@
 
 The regular test suite remains Docker-free.  This command exports KGLite's own
 fixtures to an explicitly selected Neo4j database and compares query results.
-It is an empirical compatibility oracle, not an openCypher TCK runner: it does
-not consume, translate, vendor, or depend on upstream conformance artifacts.
+It is an empirical compatibility oracle over KGLite's own fixtures; it does
+not consume, translate, or vendor upstream conformance artifacts.
 
 Run ``make neo4j-up``, then ``make neo4j-conformance``.  Exit status is zero
 only when every non-skipped case agrees.

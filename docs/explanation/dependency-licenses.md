@@ -1,11 +1,8 @@
 # Dependency license policy
 
 KGLite's source code and independently authored Cypher contract cases are MIT
-licensed. The project does not copy, translate, vendor, execute, or derive its
-tests from the Apache-licensed openCypher TCK. Compatibility behavior is
-implemented from public language descriptions and independently written cases.
+licensed.
 
-That clean-room boundary is separate from ordinary software dependencies.
 KGLite retains several reviewed permissive dependencies whose own metadata is
 Apache-2.0 or MPL-2.0, including the MCP protocol implementation. Their use
 does not change KGLite's MIT license. The locked dependency audit keeps these
