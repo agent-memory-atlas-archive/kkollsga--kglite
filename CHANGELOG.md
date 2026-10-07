@@ -45,6 +45,13 @@ before upgrading.
   includes the wait for the slot: 25 ms against 7 ms on disjoint keys. A lone
   writer is unchanged within run-to-run noise.
 
+- `kglite-bolt-server` converts a query's result rows to Bolt values by moving
+  strings, labels and property maps out of the engine's rows instead of
+  cloning them. The time before the first record is sent fell from 1.5-1.6 s to
+  1.2 s for 1M ten-property map rows, and from 126-147 ms to 86-94 ms for 100k
+  (release build, macOS loopback, load 5, two agreeing runs). Streaming time
+  and peak server memory (6.4-6.5 GB for 1M map rows) did not change.
+
 ### Added
 
 - `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still
@@ -118,6 +125,18 @@ before upgrading.
   through a result. Only RUN refreshed the idle timer, so a client sending PULL
   for longer than the timeout lost its session mid-result. Every message now
   counts as activity.
+
+- `kglite-bolt-server` no longer lets a running query stall other
+  connections. Queries ran on the server's async worker threads, so while
+  several slow queries ran, a small request on another connection waited for
+  one to finish and a new connection waited to be accepted. Query execution
+  now hands its worker's queued tasks to another thread. With 10 concurrent
+  30 ms queries, a `RETURN 1` on another connection took p50 9.7 ms / p99 56 ms
+  and a new connection p50 39 ms / p99 99 ms; now p50 0.17 ms / p99 5-6 ms and
+  p50 0.5 ms / p99 11-15 ms. At 16 concurrent queries p50 was 108 ms and 358 ms,
+  now 0.18 ms and 0.5 ms. Throughput of the concurrent queries and the ~21 us
+  small exchange are unchanged (release build, macOS loopback, load 6-11, two
+  agreeing runs).
 
 - `kglite-bolt-server` now sets `TCP_NODELAY` on every accepted connection.
   On Linux each small Bolt reply waited for the client's delayed ACK, so every

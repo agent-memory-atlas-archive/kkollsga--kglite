@@ -55,3 +55,62 @@ def test_bolt_small_exchanges_are_not_nagle_delayed(bolt_server):
     print(f"bolt latency -- {report}")
     slow = {label: ms for label, ms in results.items() if ms >= MAX_P50_MS}
     assert not slow, f"p50 over {MAX_P50_MS} ms (TCP_NODELAY missing?): {report}"
+
+
+def test_slow_queries_do_not_stall_other_connections(tmp_path, bolt_binary_path):
+    """Query execution runs off the async workers.
+
+    With two workers and six slow queries running, a small request on another
+    connection used to wait for a whole query: every worker was inside one.
+    """
+    import threading
+
+    if not bolt_binary_path.exists():
+        pytest.skip("bolt-server binary not built")
+    from tests.bolt_raw import SIG_PULL, SIG_RUN, SIG_SUCCESS, RawBolt
+    from tests.conftest import _build_bolt_fixture_graph, _spawn_bolt_server, _teardown_bolt_server
+
+    graph = tmp_path / "hol.kgl"
+    _build_bolt_fixture_graph(graph)
+    proc, url = _spawn_bolt_server(graph, env={"TOKIO_WORKER_THREADS": "2"})
+    host, port = url.removeprefix("bolt://").rsplit(":", 1)
+    slow = "UNWIND range(1, 3000000) AS x RETURN count(x) AS c"
+    durations: list[float] = []
+    started = threading.Barrier(7)
+
+    def run_slow():
+        with RawBolt(host, int(port), timeout=120) as conn:
+            conn.hello()
+            conn.logon("u", "p")
+            started.wait()
+            t0 = time.perf_counter()
+            assert conn.request(SIG_RUN, slow, {}, {}) == SIG_SUCCESS
+            conn.request(SIG_PULL, {"n": -1})
+            durations.append(time.perf_counter() - t0)
+
+    try:
+        with RawBolt(host, int(port)) as probe:
+            probe.hello()
+            probe.logon("u", "p")
+            threads = [threading.Thread(target=run_slow) for _ in range(6)]
+            for t in threads:
+                t.start()
+            started.wait()
+            time.sleep(0.05)  # the slow queries are now executing
+            waits = []
+            while any(t.is_alive() for t in threads):
+                t0 = time.perf_counter()
+                assert probe.request(SIG_RUN, "RETURN 1 AS one", {}, {}) == SIG_SUCCESS
+                probe.request(SIG_PULL, {"n": -1})
+                waits.append(time.perf_counter() - t0)
+                time.sleep(0.01)
+            for t in threads:
+                t.join()
+    finally:
+        _teardown_bolt_server(proc)
+
+    assert waits, f"no probe completed while the slow queries ran ({durations})"
+    assert min(durations) > 0.1, f"premise: the slow query must take real time, took {durations}"
+    assert max(waits) < min(durations) / 4, (
+        f"a RETURN 1 waited {max(waits) * 1000:.0f} ms behind queries that run {min(durations) * 1000:.0f} ms"
+    )

@@ -160,6 +160,59 @@ pub fn to_bolt(value: &Value) -> Result<BoltValue, BoltError> {
     }
 }
 
+/// kglite → Bolt, consuming the value: strings, labels and containers move
+/// into the Bolt value instead of being cloned, and the engine's copy is freed
+/// as the Bolt copy is built. Same mapping as [`to_bolt`], which it falls back
+/// to for the variants that own no heap data.
+pub fn to_bolt_owned(value: Value) -> Result<BoltValue, BoltError> {
+    match value {
+        Value::String(s) => Ok(BoltValue::String(s)),
+        Value::List(items) => items
+            .into_iter()
+            .map(to_bolt_owned)
+            .collect::<Result<Vec<_>, _>>()
+            .map(BoltValue::List),
+        Value::Map(entries) => props_into_bolt_dict(entries).map(BoltValue::Dict),
+        Value::Node(node) => {
+            let kglite::api::NodeValue {
+                id,
+                labels,
+                properties,
+            } = *node;
+            Ok(BoltValue::Node(BoltNode {
+                id: i64::from(id),
+                labels,
+                properties: props_into_bolt_dict(properties)?,
+                element_id: id.to_string(),
+            }))
+        }
+        Value::Relationship(rel) => {
+            let rel = *rel;
+            Ok(BoltValue::Relationship(BoltRelationship {
+                id: i64::from(rel.id),
+                start_node_id: i64::from(rel.start_id),
+                end_node_id: i64::from(rel.end_id),
+                element_id: rel.id.to_string(),
+                start_element_id: rel.start_id.to_string(),
+                end_element_id: rel.end_id.to_string(),
+                rel_type: rel.rel_type,
+                properties: props_into_bolt_dict(rel.properties)?,
+            }))
+        }
+        Value::Path(path) => path_into_bolt_path(*path).map(BoltValue::Path),
+        other => to_bolt(&other),
+    }
+}
+
+fn props_into_bolt_dict(props: kglite::datatypes::PropMap) -> Result<BoltDict, BoltError> {
+    let pairs = props.into_pairs();
+    let mut dict = HashMap::with_capacity(pairs.len());
+    for (key, value) in pairs {
+        dict.insert(key.to_string(), to_bolt_owned(value)?);
+    }
+    Ok(dict)
+}
+
 /// Convert a kglite property map to a Bolt dict. Recursive through
 /// `to_bolt` so nested lists / maps round-trip; surface conversion
 /// failure on the first bad value.
@@ -183,6 +236,76 @@ fn props_to_bolt_dict(props: &kglite::datatypes::PropMap) -> Result<BoltDict, Bo
 /// emit nodes 1:1 (no dedup) and one (signed_rel, next_node) pair
 /// per rel.
 fn path_to_bolt_path(p: &kglite::api::PathValue) -> Result<BoltPath, BoltError> {
+    let indices = path_indices(p)?;
+    let nodes: Vec<BoltNode> = p
+        .nodes
+        .iter()
+        .map(|nv| {
+            Ok::<BoltNode, BoltError>(BoltNode {
+                id: i64::from(nv.id),
+                labels: nv.labels.clone(),
+                properties: props_to_bolt_dict(&nv.properties)?,
+                element_id: nv.id.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let rels: Vec<BoltUnboundRelationship> = p
+        .rels
+        .iter()
+        .map(|rv| {
+            Ok::<BoltUnboundRelationship, BoltError>(BoltUnboundRelationship {
+                id: i64::from(rv.id),
+                rel_type: rv.rel_type.clone(),
+                properties: props_to_bolt_dict(&rv.properties)?,
+                element_id: rv.id.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(BoltPath {
+        nodes,
+        rels,
+        indices,
+    })
+}
+
+/// [`path_to_bolt_path`] consuming the path.
+fn path_into_bolt_path(p: kglite::api::PathValue) -> Result<BoltPath, BoltError> {
+    let indices = path_indices(&p)?;
+    let nodes = p
+        .nodes
+        .into_iter()
+        .map(|nv| {
+            Ok::<BoltNode, BoltError>(BoltNode {
+                id: i64::from(nv.id),
+                element_id: nv.id.to_string(),
+                labels: nv.labels,
+                properties: props_into_bolt_dict(nv.properties)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let rels = p
+        .rels
+        .into_iter()
+        .map(|rv| {
+            Ok::<BoltUnboundRelationship, BoltError>(BoltUnboundRelationship {
+                id: i64::from(rv.id),
+                element_id: rv.id.to_string(),
+                rel_type: rv.rel_type,
+                properties: props_into_bolt_dict(rv.properties)?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(BoltPath {
+        nodes,
+        rels,
+        indices,
+    })
+}
+
+/// Validate a path's shape and compute its Bolt `indices`.
+fn path_indices(p: &kglite::api::PathValue) -> Result<Vec<i64>, BoltError> {
     // Sanity check: kglite paths are linear, so |nodes| = |rels| + 1.
     if p.nodes.len() != p.rels.len() + 1 {
         return Err(BoltError::Backend(format!(
@@ -193,35 +316,6 @@ fn path_to_bolt_path(p: &kglite::api::PathValue) -> Result<BoltPath, BoltError> 
             p.rels.len()
         )));
     }
-
-    let nodes: Vec<BoltNode> = p
-        .nodes
-        .iter()
-        .map(|nv| {
-            let properties = props_to_bolt_dict(&nv.properties)?;
-            Ok::<BoltNode, BoltError>(BoltNode {
-                id: i64::from(nv.id),
-                labels: nv.labels.clone(),
-                properties,
-                element_id: nv.id.to_string(),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let rels: Vec<BoltUnboundRelationship> = p
-        .rels
-        .iter()
-        .map(|rv| {
-            let properties = props_to_bolt_dict(&rv.properties)?;
-            Ok::<BoltUnboundRelationship, BoltError>(BoltUnboundRelationship {
-                id: i64::from(rv.id),
-                rel_type: rv.rel_type.clone(),
-                properties,
-                element_id: rv.id.to_string(),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     let mut indices: Vec<i64> = Vec::with_capacity(p.rels.len() * 2);
     for (i, rel) in p.rels.iter().enumerate() {
         let node_before = &p.nodes[i];
@@ -241,12 +335,7 @@ fn path_to_bolt_path(p: &kglite::api::PathValue) -> Result<BoltPath, BoltError> 
         indices.push(signed_rel);
         indices.push((i + 1) as i64); // 0-based next-node index
     }
-
-    Ok(BoltPath {
-        nodes,
-        rels,
-        indices,
-    })
+    Ok(indices)
 }
 
 /// Bolt → kglite. Called by `execute`'s parameter decoding.
@@ -499,5 +588,116 @@ mod timestamp_representability_tests {
             from_bolt(&incompatible),
             Err(BoltError::Protocol(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod owned_conversion_tests {
+    use kglite::api::{NodeValue, PathValue, RelValue};
+    use kglite::datatypes::PropMap;
+
+    use super::*;
+
+    fn props() -> PropMap {
+        PropMap::from_pairs(vec![
+            ("name".into(), Value::String("Ada".into())),
+            (
+                "tags".into(),
+                Value::List(vec![Value::Int64(1), Value::Null]),
+            ),
+            (
+                "nested".into(),
+                Value::Map(PropMap::from_pairs(vec![(
+                    "k".into(),
+                    Value::Boolean(true),
+                )])),
+            ),
+        ])
+    }
+
+    fn node(id: u32) -> NodeValue {
+        NodeValue {
+            id,
+            labels: vec!["Person".into(), "Admin".into()],
+            properties: props(),
+        }
+    }
+
+    fn rel(id: u32, start_id: u32, end_id: u32) -> RelValue {
+        RelValue {
+            incarnation: None,
+            id,
+            start_id,
+            end_id,
+            rel_type: "KNOWS".into(),
+            properties: props(),
+        }
+    }
+
+    /// `to_bolt_owned` must produce exactly what `to_bolt` does, for every variant.
+    #[test]
+    fn owned_conversion_matches_borrowed_conversion() {
+        let values = vec![
+            Value::Null,
+            Value::Boolean(true),
+            Value::Int64(-7),
+            Value::UniqueId(9),
+            Value::Float64(1.5),
+            Value::String("text".into()),
+            Value::List(vec![
+                Value::String("a".into()),
+                Value::List(vec![Value::Int64(1)]),
+            ]),
+            Value::Map(props()),
+            Value::DateTime(chrono::NaiveDate::from_ymd_opt(2024, 2, 29).unwrap()),
+            Value::Timestamp(
+                chrono::NaiveDate::from_ymd_opt(2024, 2, 29)
+                    .unwrap()
+                    .and_hms_nano_opt(1, 2, 3, 456)
+                    .unwrap(),
+            ),
+            Value::Point { lat: 1.0, lon: 2.0 },
+            Value::Duration {
+                months: 1,
+                days: 2,
+                seconds: 3,
+            },
+            Value::Node(Box::new(node(4))),
+            Value::Relationship(Box::new(rel(5, 4, 6))),
+            Value::Path(Box::new(PathValue {
+                nodes: vec![node(2), node(1), node(3)],
+                rels: vec![rel(7, 1, 2), rel(8, 1, 3)],
+            })),
+        ];
+        for value in values {
+            assert_eq!(
+                to_bolt_owned(value.clone()).unwrap(),
+                to_bolt(&value).unwrap(),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_conversion_refuses_what_borrowed_conversion_refuses() {
+        let leap = chrono::NaiveDate::from_ymd_opt(2016, 12, 31)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap();
+        for value in [
+            Value::NodeRef(1),
+            Value::List(vec![Value::Timestamp(leap)]),
+            Value::Path(Box::new(PathValue {
+                nodes: vec![node(1)],
+                rels: vec![rel(7, 1, 2)],
+            })),
+            Value::Path(Box::new(PathValue {
+                nodes: vec![node(1), node(2)],
+                rels: vec![rel(7, 3, 4)],
+            })),
+        ] {
+            assert!(to_bolt(&value).is_err(), "{value:?}");
+            assert!(to_bolt_owned(value.clone()).is_err(), "{value:?}");
+        }
     }
 }

@@ -26,7 +26,6 @@ use kglite::api::session::CsvImportPolicy;
 use kglite::api::{cypher, Value};
 
 use crate::error_map::kg_to_bolt;
-use crate::value_adapter;
 
 /// The Neo4j server version reported by [`ServerIdentity::Neo4jCompatible`].
 ///
@@ -119,13 +118,15 @@ const COMPONENTS_EDITION: &str = "community";
 
 mod admission;
 mod intercepts;
+mod result_stream;
 #[cfg(test)]
 mod writer_queue_tests;
 mod writer_slot;
 use intercepts::{
-    checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, plan_from_explain_rows,
-    server_facts_stream, CheckpointCall, ServerFactsCall, ServerFactsVerb,
+    checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, server_facts_stream,
+    CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
+use result_stream::{decode_params, finish_stream, off_async_worker};
 use writer_slot::{ReapedHandles, WriterPermit, WriterSlot};
 pub(crate) use writer_slot::{WriteConcurrency, WriterConfig};
 
@@ -581,99 +582,21 @@ impl BoltBackend for KgliteBackend {
             return Ok(self.run_server_facts(&call));
         }
 
-        // A decode failure here is a genuine client error (bad parameter type).
-        let kg_params: HashMap<String, Value> = parameters
-            .iter()
-            .map(|(k, v)| value_adapter::from_bolt(v).map(|kv| (k.clone(), kv)))
-            .collect::<Result<HashMap<_, _>, _>>()?;
-
-        let elapsed_start = Instant::now();
-
-        let (result, type_str, explain) = if let Some(handle) = transaction.map(|t| t.0.clone()) {
+        let stream = if let Some(handle) = transaction.map(|t| t.0.clone()) {
             // Explicit tx: metadata was parsed at BEGIN and lives on the
             // TxState (Neo4j drivers send tx metadata on BEGIN only).
-            self.execute_in_tx(&handle, query, kg_params)?
+            off_async_worker(|| {
+                let kg_params = decode_params(parameters)?;
+                let started = Instant::now();
+                let (result, type_str, explain) = self.execute_in_tx(&handle, query, kg_params)?;
+                finish_stream(result, type_str, explain, started)
+            })?
         } else {
             // Auto-commit: drivers attach tx metadata to RUN's extra.
             let meta = TxMeta::from_extra(extra)?;
-            self.execute_auto_commit(query, kg_params, &meta).await?
+            self.execute_auto_commit(query, parameters, &meta).await?
         };
-
-        let elapsed_ms = elapsed_start.elapsed().as_millis() as i64;
-
-        let mut records: Vec<BoltRecord> = result
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(value_adapter::to_bolt)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(|values| BoltRecord { values })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut summary = BoltDict::from([
-            ("type".to_string(), BoltValue::String(type_str.to_string())),
-            ("t_last".to_string(), BoltValue::Integer(elapsed_ms)),
-        ]);
-
-        // EXPLAIN follows the Bolt contract: ZERO records, and the plan in
-        // the SUCCESS metadata's `plan` key. The engine answers EXPLAIN as
-        // step rows (step/operation/estimated_rows); forwarding those as
-        // records left every plan-tab consumer (Neo4j Browser, G.V()) blank
-        // and handed drivers records where the contract promises none.
-        // Retrieval execution evidence uses namespaced summary metadata;
-        // no synthetic Neo4j dbHits counters are invented.
-        if let Some(d) = &result.diagnostics {
-            if !d.retrieval.is_empty() {
-                summary.insert("kglite.retrieval".into(), retrieval_metadata(&d.retrieval));
-            }
-            if let Some(temporal) = &d.temporal {
-                summary.insert("kglite.temporal".into(), temporal_metadata(temporal));
-            }
-        }
-        let mut columns = result.columns;
-        if explain {
-            if let Some(plan) = plan_from_explain_rows(&columns, &result.rows) {
-                summary.insert("plan".to_string(), plan);
-                records.clear();
-                columns = Vec::new();
-            }
-        }
-        if let Some(stats) = &result.stats {
-            let stats_dict = BoltDict::from([
-                (
-                    "nodes-created".to_string(),
-                    BoltValue::Integer(stats.nodes_created as i64),
-                ),
-                (
-                    "nodes-deleted".to_string(),
-                    BoltValue::Integer(stats.nodes_deleted as i64),
-                ),
-                (
-                    "relationships-created".to_string(),
-                    BoltValue::Integer(stats.relationships_created as i64),
-                ),
-                (
-                    "relationships-deleted".to_string(),
-                    BoltValue::Integer(stats.relationships_deleted as i64),
-                ),
-                (
-                    "properties-set".to_string(),
-                    BoltValue::Integer(stats.properties_set as i64),
-                ),
-            ]);
-            summary.insert("stats".to_string(), BoltValue::Dict(stats_dict));
-        }
-
-        Ok(ResultStream {
-            metadata: ResultMetadata {
-                columns,
-                extra: BoltDict::new(),
-            },
-            records,
-            summary,
-        })
+        Ok(stream)
     }
 
     // ---- Transactions ----------------------------------------------------
@@ -1200,9 +1123,9 @@ impl KgliteBackend {
     async fn execute_auto_commit(
         &self,
         query: &str,
-        kg_params: HashMap<String, Value>,
+        parameters: &HashMap<String, BoltValue>,
         meta: &TxMeta,
-    ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
+    ) -> Result<ResultStream, BoltError> {
         // Pre-parse to reject auto-commit mutations with a Bolt-specific error
         // before session::execute_read rejects with a generic one. The parse
         // result is discarded; the executor's parse_cache makes the second
@@ -1215,9 +1138,12 @@ impl KgliteBackend {
                 ));
             }
             if is_schema_ddl(query) {
-                return self
+                let kg_params = decode_params(parameters)?;
+                let started = Instant::now();
+                let (result, type_str, explain) = self
                     .execute_schema_auto_commit(query, &kg_params, meta)
-                    .await;
+                    .await?;
+                return finish_stream(result, type_str, explain, started);
             }
             // `Session` (`Neo.ClientError.Request.Invalid`), not `Forbidden`:
             // the remedy below is a client-side rewrite, so this is a
@@ -1232,11 +1158,15 @@ impl KgliteBackend {
             ));
         }
 
-        let snapshot = self.session.snapshot();
-        let opts = self.execute_opts(&kg_params, meta);
-        let outcome =
-            kglite::api::session::execute_read(&snapshot, query, &opts).map_err(kg_to_bolt)?;
-        Ok((outcome.result, "r", outcome.explain))
+        off_async_worker(|| {
+            let kg_params = decode_params(parameters)?;
+            let started = Instant::now();
+            let snapshot = self.session.snapshot();
+            let opts = self.execute_opts(&kg_params, meta);
+            let outcome =
+                kglite::api::session::execute_read(&snapshot, query, &opts).map_err(kg_to_bolt)?;
+            finish_stream(outcome.result, "r", outcome.explain, started)
+        })
     }
 
     /// Run one schema statement as its own transaction and publish it.
@@ -1377,77 +1307,6 @@ fn is_schema_ddl(query: &str) -> bool {
         }
         _ => false,
     }
-}
-
-fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltValue {
-    let text = |value: &str| BoltValue::String(value.to_string());
-    BoltValue::Dict(BoltDict::from([
-        ("axis".into(), text(&echo.axis)),
-        ("source".into(), text(&echo.source)),
-        ("instant".into(), text(&echo.instant)),
-        (
-            "targets".into(),
-            BoltValue::List(echo.targets.iter().map(|t| text(t)).collect()),
-        ),
-        (
-            "hidden".into(),
-            BoltValue::Dict(
-                echo.hidden
-                    .iter()
-                    .map(|(target, count)| (target.clone(), BoltValue::Integer(*count as i64)))
-                    .collect(),
-            ),
-        ),
-        (
-            "endpoint_invalid".into(),
-            echo.endpoint_invalid
-                .map_or(BoltValue::Null, |n| BoltValue::Integer(n as i64)),
-        ),
-        ("route".into(), text(&echo.route)),
-        (
-            "retrieval".into(),
-            echo.retrieval.as_deref().map_or(BoltValue::Null, text),
-        ),
-        ("slice".into(), BoltValue::Boolean(echo.slice)),
-        (
-            "session_version".into(),
-            BoltValue::Integer(echo.session_version as i64),
-        ),
-    ]))
-}
-
-fn retrieval_metadata(records: &[kglite::api::cypher::RetrievalDiagnostics]) -> BoltValue {
-    BoltValue::List(
-        records
-            .iter()
-            .map(|r| {
-                BoltValue::Dict(BoltDict::from([
-                    (
-                        "requested_policy".into(),
-                        BoltValue::String(r.requested_policy.clone()),
-                    ),
-                    (
-                        "actual_mode".into(),
-                        BoltValue::String(r.actual_mode.clone()),
-                    ),
-                    (
-                        "fallback_reason".into(),
-                        r.fallback_reason
-                            .clone()
-                            .map(BoltValue::String)
-                            .unwrap_or(BoltValue::Null),
-                    ),
-                    (
-                        "store".into(),
-                        r.store
-                            .clone()
-                            .map(BoltValue::String)
-                            .unwrap_or(BoltValue::Null),
-                    ),
-                ]))
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]

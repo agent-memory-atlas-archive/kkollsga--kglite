@@ -870,9 +870,11 @@ fn init_tracing() {
 
 /// Build the runtime by hand rather than via `#[tokio::main]` so the worker
 /// threads get `QUERY_THREAD_STACK_SIZE` instead of tokio's 2 MiB default.
-/// Connection tasks run the Cypher pipeline inline on a worker (see
-/// `KgliteBackend::execute` in `backend.rs`), and that pipeline recurses per
-/// level of expression nesting — on a 2 MiB worker a deeply nested query overflows
+/// Connection tasks run the Cypher pipeline on a worker thread, inside
+/// `block_in_place` (see `KgliteBackend::execute` in `backend.rs`), and that
+/// pipeline recurses per level of expression nesting. `block_in_place` keeps
+/// the worker's thread, and a worker that is replaced meanwhile is a thread of
+/// this same runtime. On a 2 MiB thread a deeply nested query overflows
 /// the stack, which in Rust aborts the whole process and so disconnects every
 /// other client. The parser's nesting cap bounds the recursion; this gives
 /// that bound room to land.
