@@ -136,11 +136,11 @@ The mixed case is the one deliberate difference. A script that works on Neo4j
 works here unchanged, and a transaction that groups an index with the data it
 serves commits or rolls back as one.
 
-Concurrent writers serialize at commit. A transaction committing against a
-stale snapshot conflicts with a retriable status code. Driver-managed
-transactions (`execute_write` and its per-language equivalents) retry the unit
-of work by themselves. Hand-rolled `begin_transaction` code needs its own retry
-loop.
+Concurrent writers queue for a writer slot at BEGIN (see
+[Write concurrency](#write-concurrency)). A writer that waits too long fails
+with a retriable status code. Driver-managed transactions (`execute_write` and
+its per-language equivalents) retry the unit of work by themselves.
+Hand-rolled `begin_transaction` code needs its own retry loop.
 
 Error codes:
 
@@ -185,23 +185,68 @@ patch version. CI exercises the complete current corpus.
 
 ### Write concurrency
 
-Reads run against snapshots and do not block each other or writers. Writes are
-the serialized resource. Every write is an explicit transaction, transactions
-work independently, and they order at commit.
+A write transaction waits for the single writer slot when it begins, so
+concurrent writers queue instead of conflicting at commit. Reads never wait.
 
-A transaction whose snapshot was overtaken loses the race and conflicts with
-the retriable status code. A driver-managed transaction re-runs the unit of
-work on a fresh snapshot without your code seeing the conflict at all.
+- A write transaction is any explicit transaction not begun in read mode.
+  Drivers begin in read mode for `execute_read` (`session.begin_transaction()`
+  on a read-access session).
+- The transaction takes the slot at BEGIN and holds it until commit, rollback
+  or disconnect. It then runs on the latest graph, so its commit cannot
+  conflict.
+- Waiting writers are served in arrival order.
+- Reads (auto-commit and read-mode transactions) run on snapshots and never
+  take or wait for the slot. A snapshot never shows an uncommitted write.
+- A read-mode transaction cannot write. A mutation in one is refused with
+  `Neo.ClientError.Statement.AccessMode`.
 
-More writer clients do not create additional commit capacity. Contention shows
-up in retries and end-to-end latency. To reduce it:
+Keep write transactions short. The slot is held while your code runs between
+statements, so a write transaction that only reads blocks every other writer.
+Use `execute_read` for reads. To get more out of the single slot:
 
-- Batch related writes into one transaction, for example with `UNWIND $rows`,
-  to amortize per-transaction work.
-- Tune the driver's transaction retry budget if tail latency matters.
+- Batch related writes into one transaction, for example with `UNWIND $rows`.
+- Open the transaction, write, and commit without work in between.
+
+#### Timeouts
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--writer-wait-timeout SECS` | `20` | A BEGIN that cannot get the slot in this time fails with the retriable `Neo.TransientError.Transaction.LockAcquisitionTimeout`. `0` waits indefinitely. |
+| `--writer-idle-timeout SECS` | `10` | A holder with no activity for this long is rolled back once another writer is waiting for the slot. `0` never reclaims. |
+
+- Both accept fractions, for example `0.5`.
+- The wait default is below the 30 s default transaction retry budget of the
+  Python, Java and JavaScript drivers, so a driver-managed transaction that
+  times out still retries inside its budget.
+- The idle default is below the wait default, so a stuck holder is reclaimed
+  before the writers behind it give up.
+- A holder nobody waits on is never reclaimed.
+- A reclaimed transaction is rolled back whole. The client's next message gets
+  `Neo.ClientError.Transaction.TransactionTimedOut`, and a ROLLBACK succeeds.
+- A query that is running is never counted as idle.
+- A dropped connection, a RESET, or a failed commit releases the slot at once.
+
+A client that holds one write transaction open and waits for a second one it
+opened itself blocks until the wait timeout. Run the two on one transaction.
+
+#### Optimistic mode
+
+`--write-concurrency optimistic` restores the earlier behaviour:
+
+- Every write transaction runs on its BEGIN snapshot with no slot.
+- A transaction whose snapshot was overtaken conflicts at commit with the
+  retriable `Neo.TransientError.Transaction.Outdated`, even on disjoint keys.
+- A read-mode transaction may write, and commits under the same rule.
+- Driver-managed transactions re-run the unit of work on a conflict.
+  Hand-rolled `begin_transaction` code needs its own retry loop.
+
+Choose it only when writers rarely overlap and you want transactions to run
+in parallel until commit. Under contention it spends the writers' time on
+retries.
 
 The opt-in `tests/benchmarks/test_bench_bolt_writers.py` measures writer count,
 batch size, and durability on the current code. Correctness is pinned by
+`tests/test_bolt_server_writer_queue.py`,
 `tests/test_bolt_server_transactions.py` and
 `tests/test_bolt_server_concurrency.py`.
 

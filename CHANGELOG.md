@@ -17,6 +17,24 @@ before upgrading.
   fails that call, not the boot. **Do:** set `extensions.embedder.load: eager`
   to build the model at boot as before.
 
+- `kglite-bolt-server` now queues write transactions for a single writer slot
+  at BEGIN instead of letting them conflict at COMMIT. Concurrent writers wait
+  in arrival order and then run on the latest graph, so no write transaction
+  fails with `Neo.TransientError.Transaction.Outdated` any more. Two things
+  change for clients:
+  - A write transaction that stays open holds the slot, so write transactions
+    that only read now block other writers. A BEGIN that waits past
+    `--writer-wait-timeout` (default 20 s) fails with the retriable
+    `Neo.TransientError.Transaction.LockAcquisitionTimeout`. A holder idle past
+    `--writer-idle-timeout` (default 10 s) is rolled back once a writer is
+    waiting, and its next message gets `Neo.ClientError.Transaction.TransactionTimedOut`.
+  - A read-mode transaction (`execute_read`) can no longer write. A mutation
+    in one is refused with `Neo.ClientError.Statement.AccessMode`.
+
+  **Do:** use `execute_read` for reads and keep write transactions short. To
+  keep the earlier behaviour, start the server with
+  `--write-concurrency optimistic`.
+
 ### Added
 
 - `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still
@@ -38,6 +56,9 @@ before upgrading.
   (or `KGLITE_BOLT_CHECKPOINT_WAL_MIB=0`) to keep the old behaviour, or another
   size to move the bound. It does not apply at `--durability off`, with
   `--readonly`, or for disk-mode graphs.
+- `--write-concurrency queue|optimistic`, `--writer-wait-timeout SECS` and
+  `--writer-idle-timeout SECS` on `kglite-bolt-server`. See
+  [Write concurrency](https://kglite.readthedocs.io/en/latest/operators/bolt-server.html#write-concurrency).
 
 ### Fixed
 
