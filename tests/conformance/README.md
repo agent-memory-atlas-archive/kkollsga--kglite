@@ -22,7 +22,9 @@ surfaced that OCC commit conflicts were reporting
 `Neo.ClientError.Transaction.TransactionStartFailed` while the README promised
 a different code. The Python tests matched on message text and never noticed; a
 driver-idiomatic retry loop branches on the code, so it would have. Conflicts
-now report `Neo.TransientError.Transaction.Outdated`, and each driver's
+now report `Neo.TransientError.Transaction.Outdated` (under `--write-concurrency
+optimistic`; the default queue reports `Neo.TransientError.Transaction.LockAcquisitionTimeout`
+when a writer waits too long, pinned by `tx.writer_wait_code`), and each driver's
 retry machinery keys off that class prefix — so these suites are also where a
 driver that declines to retry it would show up.
 

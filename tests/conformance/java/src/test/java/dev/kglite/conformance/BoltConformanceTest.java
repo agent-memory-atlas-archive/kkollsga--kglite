@@ -244,20 +244,27 @@ class BoltConformanceTest {
   }
 
   @Test
-  @DisplayName("tx.occ_conflict_code — the code a retry loop branches on")
-  void txOccConflictCode() {
+  @DisplayName("tx.writer_wait_code — the code a retry loop branches on")
+  void txWriterWaitCode() {
+    // A write transaction holds the writer slot from BEGIN, so a second one
+    // queues behind it and, past --writer-wait-timeout (1 s in this harness),
+    // fails with the status code a retry loop branches on.
     try (Session sessionA = driver.session();
         Session sessionB = driver.session()) {
       Transaction txA = sessionA.beginTransaction();
-      Transaction txB = sessionB.beginTransaction();
       txA.run("CREATE (:JavaProbe {id: 10, title: 'A'})");
-      txB.run("CREATE (:JavaProbe {id: 11, title: 'B'})");
-      txA.commit();
       Neo4jException raised =
-          assertThrows(Neo4jException.class, txB::commit, "expected the stale commit to conflict");
+          assertThrows(
+              Neo4jException.class,
+              () -> {
+                Transaction txB = sessionB.beginTransaction();
+                txB.run("CREATE (:JavaProbe {id: 11, title: 'B'})").consume();
+              },
+              "expected the second writer to time out waiting for the slot");
       // The `Neo.TransientError.*` class is what makes the driver's
       // managed-transaction machinery retry instead of throwing through.
-      assertEquals("Neo.TransientError.Transaction.Outdated", raised.code());
+      assertEquals("Neo.TransientError.Transaction.LockAcquisitionTimeout", raised.code());
+      txA.commit();
     }
   }
 

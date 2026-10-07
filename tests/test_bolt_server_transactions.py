@@ -163,13 +163,13 @@ def test_readonly_server_rejects_explicit_transaction(bolt_server_readonly):
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_two_concurrent_commits_second_conflicts(bolt_server):
+def test_two_concurrent_commits_second_conflicts(bolt_server_optimistic):
     """Two sessions both BEGIN, both CREATE, both COMMIT — A wins; B's
     commit conflicts because the shared graph version moved past B's
     base_version when A committed. OCC is enforced via
     `kglite::api::session::Session::commit(tx, check_occ=true)` (Phase
     E.4, closes limitation #1 of 7)."""
-    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
+    with neo4j.GraphDatabase.driver(bolt_server_optimistic, auth=("neo4j", "password")) as driver:
         with driver.session() as session_a:
             with driver.session() as session_b:
                 tx_a = session_a.begin_transaction()
@@ -198,7 +198,7 @@ def test_two_concurrent_commits_second_conflicts(bolt_server):
             assert _count_people(session_a, "n.title = 'FromB'") == 0
 
 
-def test_managed_transaction_retries_after_conflict(bolt_server):
+def test_managed_transaction_retries_after_conflict(bolt_server_optimistic):
     """A driver-managed transaction retries an OCC conflict by itself.
 
     This is the *behavioural* half of the status-code contract pinned by
@@ -244,7 +244,7 @@ def test_managed_transaction_retries_after_conflict(bolt_server):
             session.execute_write(unit_of_work)
 
     with neo4j.GraphDatabase.driver(
-        bolt_server,
+        bolt_server_optimistic,
         auth=("neo4j", "password"),
         # Retry fast: the default 1 s initial delay doubling up to a 30 s
         # budget would make this test needlessly slow.
@@ -275,7 +275,7 @@ def test_managed_transaction_retries_after_conflict(bolt_server):
     assert max(attempts.values()) >= 2, f"no retry observed — the two transactions never contended: {attempts}"
 
 
-def test_outside_mutation_during_open_transaction(bolt_server):
+def test_outside_mutation_during_open_transaction(bolt_server_optimistic):
     """While session_a has an open tx, session_b commits an auto-commit
     mutation. session_a's tx still sees its own snapshot (pre-B), and
     its commit clobbers B (last-writer-wins). Pins current behavior."""
@@ -283,7 +283,7 @@ def test_outside_mutation_during_open_transaction(bolt_server):
     # (C.5 design — wrap writes in begin_transaction). So this test
     # uses two transactions: session_a begins, session_b begins+commits,
     # then session_a commits.
-    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
+    with neo4j.GraphDatabase.driver(bolt_server_optimistic, auth=("neo4j", "password")) as driver:
         with driver.session() as session_a:
             tx_a = session_a.begin_transaction()
             # session_b commits its own mutation

@@ -72,12 +72,13 @@ def _serve(tmp_path: Path, *extra_args: str):
     """Spawn a conformance server, yielding its URL.
 
     No `--allow-csv-import`, which the capability check in each suite relies on.
+    The writer wait is shortened to 1 s so `tx.writer_wait_code` fails fast.
     """
     if not _bolt_binary_available():
         pytest.skip(_BOLT_SKIP_REASON)
     fixture = tmp_path / "conformance.kgl"
     _build_bolt_fixture_graph(fixture)
-    proc, url = _spawn_bolt_server(fixture, extra_args=list(extra_args))
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--writer-wait-timeout", "1", *extra_args])
     try:
         yield url
     finally:

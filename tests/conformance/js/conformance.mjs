@@ -209,28 +209,31 @@ async function main() {
     );
   });
 
-  await check("tx.occ_conflict_code", async () => {
-    // Two stale-vs-fresh committers. The loser must report the documented
-    // status code, because branching on the code is how a retry loop is
-    // written.
+  await check("tx.writer_wait_code", async () => {
+    // A write transaction holds the writer slot from BEGIN, so a second one
+    // queues behind it and, past --writer-wait-timeout (1 s in this harness),
+    // fails with the status code a retry loop branches on. The code's
+    // `Neo.TransientError.*` class is what makes the driver's managed
+    // transactions retry instead of throwing through.
     const sessionA = driver.session();
     const sessionB = driver.session();
     try {
       const txA = sessionA.beginTransaction();
-      const txB = sessionB.beginTransaction();
       await txA.run("CREATE (:JsProbe {id: 10, title: 'A'})");
-      await txB.run("CREATE (:JsProbe {id: 11, title: 'B'})");
-      await txA.commit();
+      const txB = sessionB.beginTransaction();
       let raised = null;
       try {
-        await txB.commit();
+        await txB.run("CREATE (:JsProbe {id: 11, title: 'B'})");
       } catch (err) {
         raised = err;
       }
-      assert(raised !== null, "expected the stale commit to conflict");
-      // The `Neo.TransientError.*` class is what makes the driver's
-      // managed-transaction machinery retry instead of throwing through.
-      assertEqual(raised.code, "Neo.TransientError.Transaction.Outdated", "conflict code");
+      assert(raised !== null, "expected the second writer to time out waiting for the slot");
+      assertEqual(
+        raised.code,
+        "Neo.TransientError.Transaction.LockAcquisitionTimeout",
+        "wait-timeout code",
+      );
+      await txA.commit();
     } finally {
       await sessionA.close();
       await sessionB.close();

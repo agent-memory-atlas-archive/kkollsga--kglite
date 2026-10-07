@@ -354,6 +354,23 @@ def bolt_server_readonly(tmp_path):
 
 
 @pytest.fixture
+def bolt_server_optimistic(tmp_path):
+    """Spawn `kglite-bolt-server --write-concurrency optimistic`.
+
+    The default admits one write transaction at a time, so a test that needs
+    two overlapping write transactions (OCC conflict codes, stale snapshots)
+    runs against this server instead.
+    """
+    if not _bolt_binary_available():
+        pytest.skip(_BOLT_SKIP_REASON)
+    fixture_path = tmp_path / "fixture_occ.kgl"
+    _build_bolt_fixture_graph(fixture_path)
+    proc, url = _spawn_bolt_server(fixture_path, extra_args=["--write-concurrency", "optimistic"])
+    yield url
+    _teardown_bolt_server(proc)
+
+
+@pytest.fixture
 def empty_graph():
     """Empty graph for edge case testing."""
     return KnowledgeGraph()
