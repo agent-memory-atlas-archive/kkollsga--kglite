@@ -2204,58 +2204,64 @@ fn execute_merge(
             let executor = row_evaluator(graph, ctx);
             evaluate_merge_pattern(graph, &executor, &merge.pattern, &mut row_pattern, &new_row)?
         };
-        let matched = merge_pattern::try_match_merge_pattern(graph, pattern, &new_row, ctx)?;
+        let matches = merge_pattern::try_match_merge_pattern(graph, pattern, &new_row, ctx)?;
 
-        if let Some(bound_row) = matched {
-            for (var, idx) in &bound_row.node_bindings {
-                new_row.node_bindings.insert(var.clone(), *idx);
-            }
-            for (var, binding) in &bound_row.edge_bindings {
-                new_row.edge_bindings.insert(var.clone(), *binding);
-            }
+        if !matches.is_empty() {
+            // One output row per match; the pattern's bindings differ per row.
+            for bound_row in matches {
+                let mut matched_row = new_row.clone();
+                for (var, idx) in &bound_row.node_bindings {
+                    matched_row.node_bindings.insert(var.clone(), *idx);
+                }
+                for (var, binding) in &bound_row.edge_bindings {
+                    matched_row.edge_bindings.insert(var.clone(), *binding);
+                }
 
-            if let Some(ref set_items) = merge.on_match {
-                let set_clause = SetClause {
-                    items: set_items.clone(),
-                };
-                let temp_rs = ResultSet {
-                    rows: vec![new_row.clone()],
-                    columns: Vec::new(),
-                    lazy_return_items: None,
-                };
-                execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+                if let Some(ref set_items) = merge.on_match {
+                    let set_clause = SetClause {
+                        items: set_items.clone(),
+                    };
+                    let temp_rs = ResultSet {
+                        rows: vec![matched_row.clone()],
+                        columns: Vec::new(),
+                        lazy_return_items: None,
+                    };
+                    execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+                }
+                new_rows.push(matched_row);
             }
-        } else {
-            let create_clause = CreateClause {
-                patterns: vec![pattern.clone()],
+            continue;
+        }
+
+        let create_clause = CreateClause {
+            patterns: vec![pattern.clone()],
+        };
+        let temp_rs = ResultSet {
+            rows: vec![new_row.clone()],
+            columns: existing.columns.clone(),
+            lazy_return_items: None,
+        };
+        let created = execute_folded_create(graph, &create_clause, temp_rs, stats, ctx)?;
+
+        if let Some(created_row) = created.rows.into_iter().next() {
+            for (var, idx) in created_row.node_bindings {
+                new_row.node_bindings.insert(var, idx);
+            }
+            for (var, binding) in created_row.edge_bindings {
+                new_row.edge_bindings.insert(var, binding);
+            }
+        }
+
+        if let Some(ref set_items) = merge.on_create {
+            let set_clause = SetClause {
+                items: set_items.clone(),
             };
             let temp_rs = ResultSet {
                 rows: vec![new_row.clone()],
-                columns: existing.columns.clone(),
+                columns: Vec::new(),
                 lazy_return_items: None,
             };
-            let created = execute_folded_create(graph, &create_clause, temp_rs, stats, ctx)?;
-
-            if let Some(created_row) = created.rows.into_iter().next() {
-                for (var, idx) in created_row.node_bindings {
-                    new_row.node_bindings.insert(var, idx);
-                }
-                for (var, binding) in created_row.edge_bindings {
-                    new_row.edge_bindings.insert(var, binding);
-                }
-            }
-
-            if let Some(ref set_items) = merge.on_create {
-                let set_clause = SetClause {
-                    items: set_items.clone(),
-                };
-                let temp_rs = ResultSet {
-                    rows: vec![new_row.clone()],
-                    columns: Vec::new(),
-                    lazy_return_items: None,
-                };
-                execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
-            }
+            execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
         }
 
         new_rows.push(new_row);

@@ -35,6 +35,42 @@
   "tests/test_cypher_scalar_storage_golden.py::test_range_temporal_duration_and_regex_golden[disk]": {
     "owner": "storage-parity"
   },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_relationship[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_relationship[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_relationship[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_on_match_runs_for_every_matching_relationship[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_on_match_runs_for_every_matching_relationship[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_on_match_runs_for_every_matching_relationship[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_node[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_node[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_yields_one_row_per_matching_node[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_unlabelled_pairs_every_input_row_with_every_match[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_unlabelled_pairs_every_input_row_with_every_match[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_merge_unlabelled_pairs_every_input_row_with_every_match[disk]": {
+    "owner": "storage-parity"
+  },
   "tests/test_edge_cases_parity.py::test_zero_node_describe_schema_find_cypher[memory]": {
     "owner": "storage-parity"
   },

@@ -14,14 +14,16 @@ use crate::graph::schema::{canonical_id, DirGraph, EdgeData, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 
-/// Returns the bound row when the pattern already exists, `None` when it does
-/// not (the caller then CREATEs it).
+/// Every binding the pattern already has: one entry per matching node or
+/// relationship, in the order the store yields them. Empty when the pattern
+/// does not exist (the caller then CREATEs it). MERGE returns one row per
+/// match, so a caller that stopped at the first would drop the rest.
 pub(super) fn try_match_merge_pattern(
     graph: &DirGraph,
     pattern: &CreatePattern,
     row: &ResultRow,
     ctx: &super::write::WriteClauseCtx<'_>,
-) -> Result<Option<ResultRow>, String> {
+) -> Result<Vec<ResultRow>, String> {
     let executor = super::write::row_evaluator(graph, ctx);
 
     match pattern.elements.len() {
@@ -41,7 +43,7 @@ fn match_node_pattern(
     executor: &CypherExecutor<'_>,
     node_pat: &CreateNodePattern,
     row: &ResultRow,
-) -> Result<Option<ResultRow>, String> {
+) -> Result<Vec<ResultRow>, String> {
     // If variable is already bound from prior MATCH — or carried in as a
     // projected node value — it's already matched. Without the projected arm
     // `UNWIND collect(n) AS x MERGE (x)` reached the CREATE arm and duplicated
@@ -58,7 +60,7 @@ fn match_node_pattern(
             if graph.graph.node_view(existing_idx).is_some() {
                 let mut result_row = ResultRow::new();
                 result_row.node_bindings.insert(var.clone(), existing_idx);
-                return Ok(Some(result_row));
+                return Ok(vec![result_row]);
             }
         }
     }
@@ -87,7 +89,7 @@ fn match_node_pattern(
 
     if !label_has_secondary {
         match probe_node_indexes(graph, label, &wanted) {
-            IndexProbe::Matched(idx) => return Ok(Some(node_result_row(node_pat, idx))),
+            IndexProbe::Matched(found) => return Ok(node_result_rows(node_pat, &found)),
             IndexProbe::NoMatch => return refuse_duplicate_id(graph, label, &wanted),
             IndexProbe::Unindexed => {}
         }
@@ -97,16 +99,19 @@ fn match_node_pattern(
     // secondary occurrences). `nodes_with_label` unions primary + secondary
     // candidates (and is the identical `type_indices` clone when no secondary
     // labels exist).
-    for idx in graph.nodes_with_label(label) {
-        if wanted.matches(graph, idx) {
-            return Ok(Some(node_result_row(node_pat, idx)));
-        }
+    let found: Vec<NodeIndex> = graph
+        .nodes_with_label(label)
+        .into_iter()
+        .filter(|&idx| wanted.matches(graph, idx))
+        .collect();
+    if found.is_empty() {
+        return refuse_duplicate_id(graph, label, &wanted);
     }
-    refuse_duplicate_id(graph, label, &wanted)
+    Ok(node_result_rows(node_pat, &found))
 }
 
-/// The miss a node MERGE reports once no node matched: `Ok(None)` — create
-/// it — unless the pattern names an id a `label` node already holds. The id
+/// The miss a node MERGE reports once no node matched: `Ok(vec![])` — create
+/// it, an empty list — unless the pattern names an id a `label` node already holds. The id
 /// is the node's identity, so creating would give the type a second node
 /// under it; that node matched on its id but not on the pattern's other
 /// labels or properties, and the refusal names which.
@@ -114,12 +119,12 @@ fn refuse_duplicate_id(
     graph: &DirGraph,
     label: &str,
     wanted: &Candidate<'_>,
-) -> Result<Option<ResultRow>, String> {
+) -> Result<Vec<ResultRow>, String> {
     let Some((_, id)) = wanted.props.iter().find(|(key, _)| *key == "id") else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let Some(existing) = graph.lookup_by_id_readonly(label, id) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let id = match id {
         Value::String(text) => format!("'{text}'"),
@@ -162,7 +167,7 @@ fn refuse_duplicate_id(
 /// index that answered covers the whole pattern, so no scan can add a match —
 /// while `Unindexed` means no index applies and the caller must scan.
 enum IndexProbe {
-    Matched(NodeIndex),
+    Matched(Vec<NodeIndex>),
     NoMatch,
     Unindexed,
 }
@@ -177,6 +182,21 @@ struct Candidate<'a> {
 impl Candidate<'_> {
     fn matches(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
         node_matches_all(graph, idx, self.props) && self.carries_labels(graph, idx)
+    }
+
+    /// The probe verdict for an index's candidate list: every candidate that
+    /// matches, or the authoritative `NoMatch`.
+    fn probe_result(&self, graph: &DirGraph, candidates: &[NodeIndex]) -> IndexProbe {
+        let found: Vec<NodeIndex> = candidates
+            .iter()
+            .copied()
+            .filter(|&idx| self.matches(graph, idx))
+            .collect();
+        if found.is_empty() {
+            IndexProbe::NoMatch
+        } else {
+            IndexProbe::Matched(found)
+        }
     }
 
     fn carries_labels(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
@@ -195,7 +215,7 @@ fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
             let props_match =
                 expected_props.len() == 1 || node_matches_all(graph, idx, expected_props);
             if props_match && wanted.carries_labels(graph, idx) {
-                return IndexProbe::Matched(idx);
+                return IndexProbe::Matched(vec![idx]);
             }
         }
         return IndexProbe::NoMatch;
@@ -210,12 +230,7 @@ fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
     if expected_props.len() == 1 {
         let (key, ref value) = expected_props[0];
         if let Some(candidates) = graph.lookup_by_index(label, key, value) {
-            for &idx in &candidates {
-                if wanted.matches(graph, idx) {
-                    return IndexProbe::Matched(idx);
-                }
-            }
-            return IndexProbe::NoMatch;
+            return wanted.probe_result(graph, &candidates);
         }
         // No index — fall through to linear scan
     }
@@ -234,12 +249,7 @@ fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
             let names: Vec<String> = indexable.iter().map(|(k, _)| k.to_string()).collect();
             let values: Vec<Value> = indexable.iter().map(|(_, v)| (*v).clone()).collect();
             if let Some(candidates) = graph.lookup_by_composite_predicate(label, &names, &values) {
-                for &idx in &candidates {
-                    if wanted.matches(graph, idx) {
-                        return IndexProbe::Matched(idx);
-                    }
-                }
-                return IndexProbe::NoMatch;
+                return wanted.probe_result(graph, &candidates);
             }
         }
     }
@@ -268,12 +278,17 @@ fn node_matches_all(graph: &DirGraph, idx: NodeIndex, props: &[(&str, Value)]) -
     })
 }
 
-fn node_result_row(node_pat: &CreateNodePattern, idx: NodeIndex) -> ResultRow {
-    let mut result_row = ResultRow::new();
-    if let Some(ref var) = node_pat.variable {
-        result_row.node_bindings.insert(var.clone(), idx);
-    }
-    result_row
+fn node_result_rows(node_pat: &CreateNodePattern, found: &[NodeIndex]) -> Vec<ResultRow> {
+    found
+        .iter()
+        .map(|&idx| {
+            let mut result_row = ResultRow::new();
+            if let Some(ref var) = node_pat.variable {
+                result_row.node_bindings.insert(var.clone(), idx);
+            }
+            result_row
+        })
+        .collect()
 }
 
 fn match_relationship_pattern(
@@ -281,7 +296,7 @@ fn match_relationship_pattern(
     executor: &CypherExecutor<'_>,
     pattern: &CreatePattern,
     row: &ResultRow,
-) -> Result<Option<ResultRow>, String> {
+) -> Result<Vec<ResultRow>, String> {
     let source_var = create_node_variable(&pattern.elements[0]);
     let target_var = create_node_variable(&pattern.elements[2]);
 
@@ -307,31 +322,30 @@ fn match_relationship_pattern(
     // could bind the `{k:1}` member and run ON MATCH SET against it, and a
     // pattern matching no member never reached the CREATE arm.
     let expected_props = merge_expected_edge_props(executor, edge_pat, row, graph)?;
-    let matching_edge = graph
+    Ok(graph
         .graph
         .edges_directed(actual_src, petgraph::Direction::Outgoing)
-        .find(|e| {
+        .filter(|e| {
             e.target() == actual_tgt
                 && e.connection_type() == interned_ct
                 && edge_matches_all(e.weight(), &expected_props)
-        });
-
-    let Some(edge_ref) = matching_edge else {
-        return Ok(None);
-    };
-    let mut result_row = ResultRow::new();
-    if let Some(ref var) = edge_pat.variable {
-        result_row.edge_bindings.insert(
-            var.clone(),
-            EdgeBinding {
-                incarnation: None,
-                source: actual_src,
-                target: actual_tgt,
-                edge_index: edge_ref.id(),
-            },
-        );
-    }
-    Ok(Some(result_row))
+        })
+        .map(|edge_ref| {
+            let mut result_row = ResultRow::new();
+            if let Some(ref var) = edge_pat.variable {
+                result_row.edge_bindings.insert(
+                    var.clone(),
+                    EdgeBinding {
+                        incarnation: None,
+                        source: actual_src,
+                        target: actual_tgt,
+                        edge_index: edge_ref.id(),
+                    },
+                );
+            }
+            result_row
+        })
+        .collect())
 }
 
 /// One endpoint of a relationship MERGE: a live `node_bindings` entry, or the
