@@ -47,13 +47,15 @@ def _sized(tiny: int, base: int, n: int) -> bytes:
 
 
 def pack(value) -> bytes:
-    """PackStream-encode ``value`` (None, bool, int, str, list, dict, Struct)."""
+    """PackStream-encode ``value`` (None, bool, int, float, str, list, dict, Struct)."""
     if value is None:
         return b"\xc0"
     if value is True:
         return b"\xc3"
     if value is False:
         return b"\xc2"
+    if isinstance(value, float):
+        return b"\xc1" + struct.pack(">d", value)
     if isinstance(value, int):
         if -16 <= value <= 127:
             return struct.pack(">b", value)

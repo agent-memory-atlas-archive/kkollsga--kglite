@@ -873,6 +873,36 @@ jobs:
         run: |
           "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_edge_embeddings.py -m benchmark
 
+      - name: Build the Bolt server for its ratio guards
+        # The server binary is not part of the wheel. Built on the runner host:
+        # the guards below compare it with controls measured in the same
+        # process (a TCP echo, the embedded engine, the server under no load),
+        # so the toolchain's absolute speed cancels.
+        run: cargo build --release -p kglite-bolt-server
+
+      - name: Copy the Bolt harness outside the checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/kglite-bolt-harness"
+          cp tests/benchmarks/test_bench_bolt_gate.py "$RUNNER_TEMP/kglite-bolt-harness/"
+          cp tests/benchmarks/bolt_rawclient.rs "$RUNNER_TEMP/kglite-bolt-harness/"
+          cp tests/bolt_raw.py "$RUNNER_TEMP/kglite-bolt-harness/"
+
+      - name: Bolt server ratio guards
+        # Like the relationship-embedding guards: no reference wheel or
+        # committed baseline exists for the server, so each cell asserts a
+        # ratio or a ceiling against a control measured in the same process
+        # (small exchange vs a TCP echo, streaming vs the embedded engine,
+        # peak memory, a RETURN 1 beside slow queries, parameter decode,
+        # reader scaling). Run from outside the checkout so the repo's
+        # `kglite/` package cannot shadow the installed candidate wheel.
+        working-directory: ${{ runner.temp }}/kglite-bolt-harness
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+          KGLITE_BOLT_SERVER: ${{ github.workspace }}/target/release/kglite-bolt-server
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_bolt_gate.py -m benchmark -s
+
       - name: Diagnose grouped-count plans after measurement
         if: ${{ always() && steps.perf_compare.outcome != 'skipped' }}
         run: |

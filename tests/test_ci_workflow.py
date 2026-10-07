@@ -388,7 +388,13 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
     # JSON so the evidence artifact can carry all of them.
     # The fourth invocation is the relationship-embedding ratio step, guarded
     # by test_perf_gate_runs_the_relationship_embedding_ratio_guards.
-    benchmark_runs = [args for args in _pytest_invocations(perf) if "test_bench_edge_embeddings.py" not in args]
+    # The fifth is the Bolt server ratio step, guarded by
+    # test_perf_gate_runs_the_bolt_server_ratio_guards.
+    benchmark_runs = [
+        args
+        for args in _pytest_invocations(perf)
+        if "test_bench_edge_embeddings.py" not in args and "test_bench_bolt_gate.py" not in args
+    ]
     assert len(benchmark_runs) == 3, f"perf-regression runs {len(benchmark_runs)} core captures, expected 3"
     for args in benchmark_runs:
         assert "test_bench_core.py" in args
@@ -469,6 +475,38 @@ def test_perf_gate_runs_the_relationship_embedding_ratio_guards() -> None:
     assert (step.get("env") or {}).get("PYTHONPATH") == ""
     edge_runs = [args for args in _pytest_invocations(perf) if "test_bench_edge_embeddings.py" in args]
     assert len(edge_runs) == 1, f"expected exactly one relationship-embedding run, found {len(edge_runs)}"
+
+
+BOLT_RATIO_COMMAND = '"$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_bolt_gate.py -m benchmark -s'
+
+
+def test_perf_gate_runs_the_bolt_server_ratio_guards() -> None:
+    """The Bolt server cells must run, blocking, on a release-built server.
+
+    The server has no reference wheel, so its ratio guards against same-process
+    controls are the only gate it has. The step must run from outside the
+    checkout (the repo's `kglite/` would shadow the candidate wheel), against a
+    server built in release mode, and must be able to fail the job.
+    """
+    perf = _ci_job("perf-regression")
+    assert "continue-on-error" not in perf, "a job-level continue-on-error makes every step here decorative"
+    _assert_runs(perf, "cargo build --release -p kglite-bolt-server")
+    for source in (
+        "tests/benchmarks/test_bench_bolt_gate.py",
+        "tests/benchmarks/bolt_rawclient.rs",
+        "tests/bolt_raw.py",
+    ):
+        _assert_runs(perf, f'cp {source} "$RUNNER_TEMP/kglite-bolt-harness/"')
+    step = _step_running(perf, BOLT_RATIO_COMMAND)
+    assert "continue-on-error" not in step, "the Bolt ratio step must be able to fail the job"
+    assert "if" not in step, f"the Bolt ratio step runs conditionally: {step.get('if')!r}"
+    assert step.get("working-directory") == "${{ runner.temp }}/kglite-bolt-harness"
+    env = step.get("env") or {}
+    assert env.get("PYTHONPATH") == ""
+    assert env.get("KGLITE_BOLT_SERVER") == "${{ github.workspace }}/target/release/kglite-bolt-server"
+    runs = [args for args in _pytest_invocations(perf) if "test_bench_bolt_gate.py" in args]
+    assert len(runs) == 1, f"expected exactly one Bolt ratio run, found {len(runs)}"
+    assert _markers(runs[0]) == ["benchmark"]
 
 
 def test_loom_and_unsafe_jobs_use_the_intended_commands() -> None:
