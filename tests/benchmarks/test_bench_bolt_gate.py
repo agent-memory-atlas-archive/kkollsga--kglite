@@ -88,11 +88,13 @@ PARAM_ROWS = 20_000
 #:
 #: The ratio does not carry across operating systems, because the server-built
 #: control costs 4.3 ms on macOS and 16.8 ms on a Linux runner while decoding
-#: costs 32 and 79 ms. Measured: macOS 7.5-7.8x over six runs, Linux 4.7x
-#: (decoding twice the payload reads 15.1-15.8x and 9.1x). Each ceiling sits
-#: between the measured ratio and the 2x-payload ratio on its platform, about
-#: 40% clear of both, so it catches a decoder twice as slow.
-MAX_PARAMS_VS_SERVER_BUILT = 6.5 if sys.platform.startswith("linux") else 11.0
+#: costs 32 and 79 ms. Measured: macOS 7.5-7.8x over six runs, with decoding
+#: twice the payload at 15.1-15.8x; Linux 4.7x and 3.5x on two CI runs, with
+#: the doubled payload at 9.1x and 7.5x (the server-built control moved
+#: 16.8-22.9 ms between those runs, the Bolt side 79.5 ms in both). Each
+#: ceiling sits between the measured ratio and the doubled-payload ratio on
+#: its platform, about 25% clear of both, so it catches a decoder twice as slow.
+MAX_PARAMS_VS_SERVER_BUILT = 6.0 if sys.platform.startswith("linux") else 11.0
 #: Four reader processes must reach this multiple of one reader's throughput.
 MIN_READER_SCALING = 1.25
 
