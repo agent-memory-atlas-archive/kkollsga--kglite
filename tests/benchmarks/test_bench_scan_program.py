@@ -12,10 +12,7 @@ These two are not, so they live here and run under `make bench`:
   parameter validation, deliberate and not a regression to gate against a
   three-year-old wheel.
 - ``hop1_deg3_mapped`` measured ~17% slower than 0.13.2 (12.3 ms vs
-  10.52/10.34 ms on the same fixture, same machine, 2026-09-08) while it was
-  an expansion. Since 0.17.3 its ``count(*)`` shape plans as
-  ``FusedCountTypedEdge``, an O(1) cached count, so that figure no longer
-  describes what the cell times; see its docstring.
+  10.52/10.34 ms on the same fixture, same machine, 2026-09-08).
 
 The fixtures are duplicated from the core harness rather than imported: the
 core file must stay self-contained because CI copies it out of the checkout on
@@ -33,6 +30,7 @@ pytestmark = pytest.mark.benchmark
 
 HOP1_NODES = 100_000
 HOP1_DEGREE = 3
+HOP1_QUERY = "MATCH (a:Person)-[:KNOWS]->(b) RETURN sum(b.pid) AS s"
 
 
 @pytest.fixture
@@ -125,17 +123,16 @@ def test_bench_param_list_conversion(benchmark, bench_graph):
 
 @pytest.mark.benchmark
 def test_bench_hop1_deg3_mapped(benchmark, hop1_graph_mapped):
-    """Mapped twin of the core harness's `hop1_deg3_memory` — a fused count.
+    """Mapped twin of the core harness's `hop1_deg3_memory` — a real expansion.
 
-    Both cells were added to catch the 2.3x in-memory/Mapped inversion that
-    reached 0.17.0, but since 0.17.3 their ``count(*)`` shape plans as
-    ``FusedCountTypedEdge :KNOWS`` in both modes: an O(1) cached count, not a
-    1-hop expansion, so the pair cannot show that inversion. An unfused shape
-    (``RETURN sum(b.pid)``) would restore it.
+    The query sums ``b.pid`` so every edge is walked; ``count(*)`` would plan
+    as the O(1) ``FusedCountTypedEdge :KNOWS`` and hide the in-memory/Mapped
+    inversion that reached 0.17.0. ``tests/test_bench_harness_set.py`` fails
+    when the query is fused.
     """
 
     def query_and_consume():
-        return hop1_graph_mapped.cypher("MATCH (a:Person)-[:KNOWS]->(b) RETURN count(*) AS c").to_list()
+        return hop1_graph_mapped.cypher(HOP1_QUERY).to_list()
 
     result = benchmark(query_and_consume)
-    assert result == [{"c": HOP1_NODES * HOP1_DEGREE}]
+    assert result == [{"s": int(_hop1_frames()[1]["d"].sum())}]

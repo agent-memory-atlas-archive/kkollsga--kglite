@@ -7,10 +7,16 @@ until the next release captures them."""
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
+
+import pandas as pd
+import pytest
+
+from kglite import KnowledgeGraph
 
 REPO = Path(__file__).resolve().parents[1]
 HARNESS = REPO / "tests" / "benchmarks" / "test_bench_core.py"
@@ -47,3 +53,27 @@ def test_core_harness_cells_match_the_tracked_baseline():
         f"cells not in baselines/current.json: {sorted(collected - expected)}; "
         f"baseline cells missing from the harness: {sorted(expected - collected)}"
     )
+
+
+def _load_bench_module(name: str):
+    path = REPO / "tests" / "benchmarks" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_bench_guard_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("storage", [None, "mapped"])
+@pytest.mark.parametrize("harness", ["test_bench_core", "test_bench_scan_program"])
+def test_hop1_cells_run_an_unfused_expansion(harness, storage):
+    """``count(*)`` over a typed edge plans as ``FusedCountTypedEdge``, an O(1)
+    cached read; a hop1 cell on that shape times a lookup, so the perf gate
+    cannot go red for an expansion regression. The cell query must stay on a
+    shape that walks the edges."""
+    query = _load_bench_module(harness).HOP1_QUERY
+    graph = KnowledgeGraph() if storage is None else KnowledgeGraph(storage=storage)
+    graph.add_nodes(pd.DataFrame({"pid": [0, 1, 2], "name": ["a", "b", "c"]}), "Person", "pid", "name")
+    graph.add_connections(pd.DataFrame({"s": [0, 1], "d": [1, 2]}), "KNOWS", "Person", "s", "Person", "d")
+    plan = [row["operation"] for row in graph.cypher("EXPLAIN " + query).to_list()]
+    assert not any(op.startswith("Fused") for op in plan), f"{harness} hop1 query is fused: {plan}"
+    assert graph.cypher(query).to_list() == [{"s": 3}]

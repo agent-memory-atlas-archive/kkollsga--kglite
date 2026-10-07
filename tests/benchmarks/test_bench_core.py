@@ -528,6 +528,7 @@ def test_bench_grouped_count_top_k_source_property(benchmark, grouped_count_grap
 
 HOP1_NODES = 100_000
 HOP1_DEGREE = 3
+HOP1_QUERY = "MATCH (a:Person)-[:KNOWS]->(b) RETURN sum(b.pid) AS s"
 
 
 def _hop1_frames():
@@ -557,6 +558,11 @@ def _hop1_frames():
     return nodes, pd.DataFrame({"s": src, "d": dst})
 
 
+def hop1_pid_sum() -> int:
+    """Expected ``HOP1_QUERY`` result: the sum of every edge's target ``pid``."""
+    return int(_hop1_frames()[1]["d"].sum())
+
+
 def _hop1_graph(mode: str) -> KnowledgeGraph:
     nodes, edges = _hop1_frames()
     graph = KnowledgeGraph() if mode == "memory" else KnowledgeGraph(storage=mode)
@@ -572,26 +578,24 @@ def hop1_graph_memory():
 
 @pytest.mark.benchmark
 def test_bench_hop1_deg3_memory(benchmark, hop1_graph_memory):
-    """Whole-graph typed 1-hop ``count(*)``, in-memory — no longer an expansion.
+    """Whole-graph typed 1-hop expansion, in-memory.
 
-    Since 0.17.3 this shape plans as ``FusedCountTypedEdge :KNOWS`` (see
-    ``EXPLAIN``), an O(1) read of the cached per-type edge count, so the cell
-    times that lookup (~1 us), not the edge walk. The 0.13.2 wheel CI's leg 1
-    runs against, and the Linux baseline row (a scaled 0.13.2 estimate), still
-    time the full expansion, so neither leg can go red for a 1-hop expansion
-    regression. The cell was added in 0.17.1 to catch the 2.3x cross-mode
-    inversion that reached 0.17.0 (petgraph's edge arena dereferenced in
-    insertion order went superlinear while Mapped stayed flat); restoring that
-    purpose needs an unfused shape such as ``RETURN sum(b.pid)`` plus a
-    qualified recapture of both platform baselines. ``hop1_deg3_mapped`` in
-    ``test_bench_scan_program.py`` runs the same fused shape in Mapped mode.
+    The query sums ``b.pid`` so every edge is walked and its target read.
+    ``count(*)`` is not an expansion: since 0.17.3 it plans as
+    ``FusedCountTypedEdge :KNOWS``, an O(1) read of the cached per-type edge
+    count, and a cell built on it cannot go red for an expansion regression.
+    ``tests/test_bench_harness_set.py`` fails when this query is fused. The cell
+    exists for the 2.3x cross-mode inversion that reached 0.17.0 (petgraph's
+    edge arena dereferenced in insertion order went superlinear while Mapped
+    stayed flat). ``hop1_deg3_mapped`` in ``test_bench_scan_program.py`` runs
+    the same query in Mapped mode.
     """
 
     def query_and_consume():
-        return hop1_graph_memory.cypher("MATCH (a:Person)-[:KNOWS]->(b) RETURN count(*) AS c").to_list()
+        return hop1_graph_memory.cypher(HOP1_QUERY).to_list()
 
     result = benchmark(query_and_consume)
-    assert result == [{"c": HOP1_NODES * HOP1_DEGREE}]
+    assert result == [{"s": hop1_pid_sum()}]
 
 
 @pytest.mark.benchmark
