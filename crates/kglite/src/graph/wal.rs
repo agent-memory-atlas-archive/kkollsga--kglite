@@ -1149,16 +1149,15 @@ pub(crate) fn recover_for_append(
     })
 }
 
-/// Best-effort fsync of a file's parent directory, so a freshly created
-/// file's directory entry survives an OS/power crash (mirrors the
-/// directory-fsync step of `io/file.rs::write_kgl_with`). Errors are
-/// ignored: some filesystems don't support directory fsync, and the
-/// file's own contents are already synced.
-fn sync_parent_dir(path: &Path) {
-    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        if let Ok(dirfile) = File::open(dir) {
-            let _ = dirfile.sync_all();
-        }
+/// fsync a file's parent directory, so a freshly created file's directory entry
+/// survives an OS/power crash (the directory step of
+/// `io/file.rs::write_kgl_with`). Fails when the directory cannot be synced:
+/// a log whose existence is not durable cannot promise anything.
+fn sync_parent_dir(path: &Path) -> io::Result<()> {
+    crate::graph::durable_io::trace::record(|| "wal sync_dir".to_string());
+    match path.parent() {
+        Some(dir) => crate::graph::durable_io::sync_dir(dir),
+        None => Ok(()),
     }
 }
 
@@ -1173,6 +1172,7 @@ fn truncate_to_header(file: &mut File) -> io::Result<()> {
     // leave a hole in front of the header.
     file.seek(SeekFrom::Start(0))?;
     write_header(file)?;
+    crate::graph::durable_io::trace::record(|| "wal truncate+sync_all".to_string());
     file.sync_all()
 }
 
@@ -1208,7 +1208,7 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
     if file_len == 0 {
         write_header(&mut file)?;
         file.sync_all()?;
-        sync_parent_dir(path);
+        sync_parent_dir(path)?;
         return Ok(file);
     }
 
@@ -1471,6 +1471,7 @@ impl Wal {
             return Err(io::Error::other("injected barrier failure"));
         }
         if self.sync == SyncMode::Barrier {
+            crate::graph::durable_io::trace::record(|| "wal sync_data".to_string());
             self.file.sync_data()?;
         }
         Ok(())
@@ -1497,6 +1498,7 @@ impl Wal {
             return Err(io::Error::other(reason.clone()));
         }
         self.file.flush()?;
+        crate::graph::durable_io::trace::record(|| "wal sync_data".to_string());
         self.file.sync_data()
     }
 

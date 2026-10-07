@@ -939,6 +939,7 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
             .into_inner()
             .map_err(|e| io::Error::other(e.to_string()))?;
         if fsync {
+            crate::graph::durable_io::trace::record(|| "kgl temp sync_all".to_string());
             file.sync_all()?;
         }
         Ok(())
@@ -950,19 +951,19 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
         return Err(e);
     }
 
+    crate::graph::durable_io::trace::record(|| "kgl rename".to_string());
     if let Err(e) = std::fs::rename(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
 
     // fsync the directory so the rename itself is durable (the rename can
-    // otherwise be lost on a crash even though the file bytes are synced).
+    // otherwise be lost on a crash even though the file bytes are synced). A
+    // failure is the caller's to see: a durable session truncates its log only
+    // after this returns Ok.
     if fsync {
-        if let Some(d) = dir {
-            if let Ok(dirfile) = File::open(d) {
-                let _ = dirfile.sync_all();
-            }
-        }
+        crate::graph::durable_io::trace::record(|| "kgl sync_dir".to_string());
+        crate::graph::durable_io::sync_dir(dir.unwrap_or_else(|| Path::new(".")))?;
     }
     Ok(())
 }

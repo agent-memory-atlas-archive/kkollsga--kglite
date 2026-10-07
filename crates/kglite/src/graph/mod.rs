@@ -17,6 +17,7 @@ pub(crate) mod cow;
 pub mod diagnostics;
 pub mod dir_graph;
 pub mod durability;
+pub(crate) mod durable_io;
 pub(crate) mod edge_embedding_generation;
 pub(crate) mod edge_embeddings;
 pub mod embedder;

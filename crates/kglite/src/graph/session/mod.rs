@@ -63,6 +63,8 @@ pub use self::transaction::{CommitOutcome, Session, Transaction};
 #[cfg(test)]
 mod append_capacity_tests;
 #[cfg(test)]
+mod checkpoint_order_tests;
+#[cfg(test)]
 mod column_reclaim_tests;
 #[cfg(test)]
 mod compaction_tests;
