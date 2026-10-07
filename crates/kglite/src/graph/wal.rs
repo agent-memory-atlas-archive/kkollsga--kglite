@@ -590,7 +590,7 @@ fn append_frame_bounded(
     write_envelope(w, &payload)
 }
 
-fn write_envelope(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
+fn frame_bytes(payload: &[u8]) -> io::Result<Vec<u8>> {
     let len = u32::try_from(payload.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "WAL frame exceeds 4 GiB"))?;
     let crc = crc32(payload);
@@ -598,8 +598,11 @@ fn write_envelope(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
     framed.extend_from_slice(&len.to_le_bytes());
     framed.extend_from_slice(&crc.to_le_bytes());
     framed.extend_from_slice(payload);
-    w.write_all(&framed)?;
-    Ok(())
+    Ok(framed)
+}
+
+fn write_envelope(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
+    w.write_all(&frame_bytes(payload)?)
 }
 
 /// The ops of one frame, encoded as they are produced.
@@ -1291,6 +1294,25 @@ pub struct Wal {
     file: File,
     path: PathBuf,
     sync: SyncMode,
+    /// Byte length of the log up to its last complete frame: where the next
+    /// frame starts, and where a failed append is cut back to.
+    end: u64,
+    /// Set when a failed append could not be cut back: the log's tail is then
+    /// unknown, so every later append and sync refuses.
+    poisoned: Option<String>,
+    #[cfg(test)]
+    fault: Option<AppendFault>,
+}
+
+/// An injected failure for the append path, standing in for a full device or
+/// a failing barrier, which a test cannot provoke on a real file.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AppendFault {
+    /// `write` stores this many bytes of the frame, then errors.
+    ShortWrite(usize),
+    /// The frame is written whole and the barrier errors.
+    SyncError,
 }
 
 impl Wal {
@@ -1348,7 +1370,16 @@ impl Wal {
                 "WAL identity changed before append open; refusing to append",
             ));
         }
-        Ok(Self { file, path, sync })
+        let end = file.metadata()?.len();
+        Ok(Self {
+            file,
+            path,
+            sync,
+            end,
+            poisoned: None,
+            #[cfg(test)]
+            fault: None,
+        })
     }
 
     /// Append one frame — the commit point.
@@ -1357,8 +1388,13 @@ impl Wal {
     /// stable storage; under [`SyncMode::PageCache`] once the kernel has
     /// them.
     pub fn append(&mut self, frame: &WalFrame) -> io::Result<()> {
-        append_frame(&mut self.file, frame)?;
-        self.commit_point()
+        let payload = crate::serde_codec::encode_versioned(
+            crate::serde_codec::CURRENT_CODEC,
+            frame,
+            MAX_WAL_FRAME_BYTES,
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.append_payload(&payload)
     }
 
     /// Resolve `raw` against `dir` straight into one frame at `lsn` and append
@@ -1374,12 +1410,66 @@ impl Wal {
         let mut body = FrameBody::new();
         crate::graph::storage::recording::resolve_ops_into(raw, dir, &mut |op| body.push(&op));
         let payload = body.finish(lsn)?;
-        write_envelope(&mut self.file, &payload)?;
-        self.commit_point()
+        self.append_payload(&payload)
+    }
+
+    /// Write one envelope and take the commit point, leaving the log exactly as
+    /// it was if either fails.
+    ///
+    /// A frame that did not commit has no LSN and its caller sees an error, so
+    /// its bytes must not stay: the next commit would append *behind* them and
+    /// every later acknowledged frame would sit past a torn or unacknowledged
+    /// one, where recovery stops. If the log cannot be cut back it is poisoned
+    /// rather than appended to blindly.
+    fn append_payload(&mut self, payload: &[u8]) -> io::Result<()> {
+        if let Some(reason) = &self.poisoned {
+            return Err(io::Error::other(reason.clone()));
+        }
+        let framed = frame_bytes(payload)?;
+        let written = self.write_frame(&framed).and_then(|()| self.commit_point());
+        match written {
+            Ok(()) => {
+                self.end += framed.len() as u64;
+                Ok(())
+            }
+            Err(error) => {
+                if let Err(cut) = self.cut_back_to_end() {
+                    let reason = format!(
+                        "WAL append failed ({error}) and the log could not be cut back to its \
+                         last complete frame ({cut}); refusing further appends until restart"
+                    );
+                    self.poisoned = Some(reason);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn write_frame(&mut self, framed: &[u8]) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(AppendFault::ShortWrite(n)) = self.fault {
+            self.file.write_all(&framed[..n.min(framed.len())])?;
+            return Err(io::Error::other("injected short write"));
+        }
+        self.file.write_all(framed)
+    }
+
+    /// Drop everything after the last complete frame, durably under a barrier.
+    fn cut_back_to_end(&mut self) -> io::Result<()> {
+        let file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        file.set_len(self.end)?;
+        if self.sync == SyncMode::Barrier {
+            file.sync_all()?;
+        }
+        Ok(())
     }
 
     fn commit_point(&mut self) -> io::Result<()> {
         self.file.flush()?;
+        #[cfg(test)]
+        if let Some(AppendFault::SyncError) = self.fault {
+            return Err(io::Error::other("injected barrier failure"));
+        }
         if self.sync == SyncMode::Barrier {
             self.file.sync_data()?;
         }
@@ -1403,6 +1493,9 @@ impl Wal {
     ///    power-safety at a granularity finer than a whole checkpoint —
     ///    "flush at end of request", "flush before shutdown".
     pub fn sync(&mut self) -> io::Result<()> {
+        if let Some(reason) = &self.poisoned {
+            return Err(io::Error::other(reason.clone()));
+        }
         self.file.flush()?;
         self.file.sync_data()
     }
@@ -1416,7 +1509,10 @@ impl Wal {
         // append mode resolves the end of the file at write time, so the next
         // frame lands straight after the fresh header.
         let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
-        truncate_to_header(&mut file)
+        truncate_to_header(&mut file)?;
+        self.end = (WAL_MAGIC.len() + 1) as u64;
+        self.poisoned = None;
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {

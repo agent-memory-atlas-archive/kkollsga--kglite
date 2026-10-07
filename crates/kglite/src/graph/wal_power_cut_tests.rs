@@ -151,3 +151,59 @@ fn a_flipped_byte_before_more_frames_still_refuses_to_open() {
     let err = Wal::open(path, SyncMode::PageCache).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
 }
+
+fn seq_frame(lsn: u64) -> WalFrame {
+    big_frame(lsn)
+}
+
+/// A commit whose frame fails to reach the log (full device, failing barrier)
+/// is reported as failed. The frames acknowledged after it must still recover:
+/// the failed frame's bytes may not stay in front of them.
+#[test]
+fn a_failed_append_leaves_no_bytes_in_front_of_later_commits() {
+    for sync in [SyncMode::PageCache, SyncMode::Barrier] {
+        for fault in [
+            AppendFault::ShortWrite(10),
+            AppendFault::ShortWrite(200),
+            AppendFault::SyncError,
+        ] {
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("g.kgl-wal");
+            let mut wal = Wal::open(path.clone(), sync).unwrap();
+            wal.append(&seq_frame(1)).unwrap();
+            wal.fault = Some(fault);
+            wal.append(&seq_frame(2)).unwrap_err();
+            wal.fault = None;
+            // The session reuses the LSN of a frame that never committed.
+            wal.append(&seq_frame(2)).unwrap();
+            wal.append(&seq_frame(3)).unwrap();
+            drop(wal);
+            assert_eq!(
+                recover(&path).unwrap(),
+                vec![seq_frame(1), seq_frame(2), seq_frame(3)],
+                "{sync:?} {fault:?}"
+            );
+            drop(Wal::open(path, sync).unwrap());
+        }
+    }
+}
+
+/// When the failed tail cannot be removed the log stops accepting commits
+/// instead of appending behind bytes of unknown shape.
+#[test]
+fn an_uncuttable_failed_append_poisons_the_log() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("g.kgl-wal");
+    let mut wal = Wal::open(path.clone(), SyncMode::Barrier).unwrap();
+    wal.append(&seq_frame(1)).unwrap();
+    wal.fault = Some(AppendFault::ShortWrite(10));
+    std::fs::remove_file(&path).unwrap();
+    wal.append(&seq_frame(2)).unwrap_err();
+    wal.fault = None;
+    let err = wal.append(&seq_frame(2)).unwrap_err();
+    assert!(
+        err.to_string().contains("refusing further appends"),
+        "{err}"
+    );
+    assert!(wal.sync().is_err());
+}
