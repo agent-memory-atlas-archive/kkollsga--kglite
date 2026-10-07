@@ -312,6 +312,8 @@ Why: a skill body used to be copied into every tool it referenced, at `tools/lis
 
 **The nudge.** The first call in a session to a tool that advertises a lazy skill the agent has not fetched gets one extra footer line naming it (`Skill "wells" applies to this tool and has not been loaded this session — call skill("wells")`). It is silent afterwards. It comes back only if the skill's body changed under the agent or the session went quiet past that ten-minute window.
 
+The footer shares the text part of a typed tool's reply with the JSON, separated by a blank line. A scripted consumer of such a tool expects the trailer: `json.loads(part.text)` raises "Extra data" on a tool's first call. Decode the leading value with `json.JSONDecoder().raw_decode(part.text)` instead.
+
 ```{warning}
 **The nudge does not fire for `cypher_query`.** The footer is composed inside the framework's typed-tool dispatch. `cypher_query` is the one KGLite tool registered as a raw route (it needs a custom output schema), and the framework offers no way to opt in. A lazy skill that targets *only* `cypher_query` therefore never nudges. The pointer in the tool description is the agent's only cue.
 
