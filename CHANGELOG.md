@@ -86,6 +86,28 @@ before upgrading.
   (release build, macOS loopback, raw reader, min of 3 runs, two agreeing
   rounds). Small exchanges stay at ~21 us.
 
+- A write-ahead log that a power cut left with a gap now reopens. At
+  `--durability normal` a cut can persist later log pages and lose an earlier
+  one; a frame spanning the gap failed its checksum and the server refused to
+  start ("refusing to append or truncate non-tail damage"). Such a frame, when
+  it holds a page-aligned run of zeros, is now read as the torn tail and the
+  frames before it are kept. Any other checksum failure before further frames
+  still refuses.
+- A commit whose log write failed (full disk, failing barrier) no longer
+  costs the commits after it. The failed bytes stayed in the log, the next
+  commit appended behind them, and recovery stopped at the dead bytes and
+  dropped every later acknowledged commit. The log is now cut back to its last
+  whole frame, and refuses further commits if it cannot be.
+- A checkpoint whose directory sync fails now reports the error and keeps the
+  log. The failure was ignored, so the log was truncated while the rename of
+  the new `.kgl` might not have reached disk: a power cut then left the old
+  file and an empty log.
+
+  None of the three changes adds a syscall to a successful commit. Measured on
+  a Mac SSD with a release server, base vs this build, committed writes per
+  second at one writer: `full` 260.4 vs 259.8, `normal` 3845 vs 3821, with the
+  unlogged control 3981 vs 3963; at four contended writers `full` 259.4 vs 259.4.
+
 - A query with two variable-length patterns now matches both. Since 0.18.1
   the second pattern returned only its zero-hop row, or nothing for `*1..`,
   in separate `MATCH` clauses, one comma-separated `MATCH`, after `WITH`, and

@@ -288,10 +288,43 @@ reported as a failure. The server never acknowledges a write it then discards.
 What is pinned by test is the process-kill case. At `full` and at `normal`,
 committing over Bolt and then `SIGKILL`ing the server with no checkpoint of any
 kind leaves the `.kgl` byte-identical. The restarted server replays the commit
-out of the log. `off` is the control: the same write is gone. Nothing in a
-user-space test can take the page cache or the power away. The
-`full`-versus-`normal` distinction above is therefore a statement about the
-barrier each level takes, not a measured one.
+out of the log. `off` is the control: the same write is gone.
+
+A user-space test cannot take the page cache or the power away. Power loss is
+therefore pinned by crash images, not by cutting power: the engine's tests
+rebuild the files a cut can leave and run recovery over them (see *Power loss*
+below). They check the order of the barriers, not the drive.
+
+### Power loss
+
+A power cut keeps what was barriered and loses an arbitrary part of the rest.
+The server restarts in every case below and never loads a half-applied commit.
+
+| Level | After a power cut |
+|---|---|
+| `full` | Every acknowledged commit is present. At most the one commit in flight is lost, and only if it was not yet acknowledged. |
+| `normal` | The log keeps a prefix of the commits since the last checkpoint. Later commits are lost, including acknowledged ones. |
+| `off` | Everything since the last checkpoint is lost. |
+
+Rules recovery follows:
+
+- A frame is whole or discarded. A partial last frame is cut off at the next
+  open.
+- At `normal`, a cut can leave later log pages on disk and an earlier page
+  unwritten. A frame that spans the gap fails its checksum. Recovery reads a
+  checksum failure whose frame holds a page-aligned run of zero bytes as that
+  torn tail and keeps the frames before it.
+- Any other checksum failure with frames after it is damage, not a power cut.
+  The server refuses to open the log and names the offset.
+- A commit whose frame cannot be written (full disk, failing barrier) is not
+  applied, and the log is cut back to its last whole frame. If the cut-back
+  itself fails, the log refuses further commits until the server restarts.
+
+The guarantee holds only if the device honours write barriers. A drive or SD
+card that acknowledges a flush it has not performed can lose barriered data at
+any level.
+
+On a device that loses power without warning, run `--durability full`.
 
 The default is `normal`. `full` takes a device barrier for every commit while
 holding the commit lock, so it can sharply reduce write throughput and increase
@@ -372,6 +405,20 @@ flush the log, stamp the checkpoint position, write the file, truncate the log.
   racing shutdown can land after the save. The logged version is how you tell
   that apart from a save that never ran. Under a log, the commit is still in
   the sidecar and the next start replays it.
+
+A checkpoint is power-safe at every level. It orders its steps so that a cut
+between any two leaves a graph that loads:
+
+1. The log is barriered (`normal` needs this; `full` already did it).
+2. The new `.kgl` is written to a temporary file and barriered.
+3. The temporary file is renamed over the `.kgl`, and the directory is synced.
+4. The log is truncated and barriered.
+
+A cut before step 3 completes keeps the old `.kgl` and the whole log. A cut
+before step 4 completes keeps the new `.kgl` and the whole log; frames the
+`.kgl` already contains are skipped on replay. If the directory sync fails,
+the checkpoint reports the error and leaves the log untouched. A stray
+temporary file from a cut is removed at the next start.
 
 A checkpoint pauses writers and new snapshots for its duration, because
 `Session::save` holds the session lock for the full save. Readers already

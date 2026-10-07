@@ -139,7 +139,8 @@ The frame is handed to the kernel with a plain write before the call returns.
 **The page cache belongs to the kernel, not to your process.** The commit
 therefore survives your process dying by any means: an uncaught exception,
 `kill -9`, the OOM killer. It does not survive the *kernel* dying. An OS crash or
-a power cut loses commits made since the last `save()`.
+a power cut loses commits made since the last `save()`. The log still reopens
+after the cut and keeps a prefix of those commits, never a half-applied one.
 
 That is the right trade for most applications. A crashing process is the failure
 that actually happens, and a power cut is the one you keep backups for.
