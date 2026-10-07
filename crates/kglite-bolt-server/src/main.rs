@@ -28,6 +28,7 @@ mod accept;
 mod auth;
 mod backend;
 mod coalesce;
+mod discard;
 mod error_map;
 mod guard;
 mod startup;

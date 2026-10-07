@@ -92,6 +92,13 @@ before upgrading.
   `WITH` clauses that aggregate, use `DISTINCT` or `ORDER BY`, or carry a
   parameter `LIMIT` or `SKIP` are unchanged.
 
+- **`kglite-bolt-server`: consuming a result kept no summary.** `boltr` 0.2.0
+  answers DISCARD, which drivers send on `result.consume()`, with an empty
+  SUCCESS: it ignored `n` and dropped the summary, so `consume().counters`
+  read zero after a write and a partly read result lost its bookmark and
+  timings. The server now serves a DISCARD as a PULL and withholds the
+  records, so the summary, `has_more` and `n` behave as for PULL.
+
 - **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
   that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
   the connection to its ready state, and it could run queries and commit write

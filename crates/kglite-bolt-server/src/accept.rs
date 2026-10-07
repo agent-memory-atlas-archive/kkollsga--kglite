@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::coalesce::CoalescingWriter;
+use crate::discard::DiscardTracker;
 use crate::guard::{serve_connection, ConnectionContext};
 use boltr::error::BoltError;
 use boltr::server::handshake::server_handshake;
@@ -153,7 +154,9 @@ where
         Ok(version) => {
             tracing::debug!(%peer_addr, ?version, "Bolt handshake complete");
             let (reader, writer) = tokio::io::split(stream);
-            serve_connection(reader, CoalescingWriter::new(writer), ctx, peer_addr).await;
+            let discards = DiscardTracker::new();
+            let writer = CoalescingWriter::with_discards(writer, discards.clone());
+            serve_connection(reader, writer, discards, ctx, peer_addr).await;
         }
         Err(e) => tracing::debug!(%peer_addr, error = %e, "Bolt handshake failed"),
     }

@@ -38,6 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::discard::{DiscardTracker, SIG_DISCARD, SIG_PULL};
 use boltr::chunk::ChunkWriter;
 use boltr::error::BoltError;
 use boltr::message::encode::encode_server_message;
@@ -353,10 +354,13 @@ pub struct GuardedReader<R> {
     /// First two data bytes of the message: struct marker, signature.
     lead: [u8; 2],
     scanner: NestingScanner,
+    discards: Arc<DiscardTracker>,
+    /// The message being read is a DISCARD, rewritten to PULL.
+    is_discard: bool,
 }
 
 impl<R: AsyncRead + Unpin> GuardedReader<R> {
-    pub fn new(inner: R, guard: Arc<ConnGuard>) -> Self {
+    pub fn new(inner: R, guard: Arc<ConnGuard>, discards: Arc<DiscardTracker>) -> Self {
         Self {
             inner,
             guard,
@@ -367,16 +371,19 @@ impl<R: AsyncRead + Unpin> GuardedReader<R> {
             message_len: 0,
             lead: [0; 2],
             scanner: NestingScanner::new(),
+            discards,
+            is_discard: false,
         }
     }
 
-    /// Scan freshly read bytes; the violation, if any.
-    fn inspect(&mut self, mut bytes: &[u8]) -> Option<Violation> {
+    /// Scan freshly read bytes; the violation, if any. A DISCARD's signature
+    /// is rewritten to PULL in place (see `discard.rs`).
+    fn inspect(&mut self, mut bytes: &mut [u8]) -> Option<Violation> {
         while !bytes.is_empty() {
             if self.chunk_remaining == 0 {
                 self.header[self.header_len] = bytes[0];
                 self.header_len += 1;
-                bytes = &bytes[1..];
+                bytes = &mut bytes[1..];
                 if self.header_len == 2 {
                     self.header_len = 0;
                     let len = u16::from_be_bytes(self.header) as usize;
@@ -389,10 +396,14 @@ impl<R: AsyncRead + Unpin> GuardedReader<R> {
                 continue;
             }
             let take = self.chunk_remaining.min(bytes.len());
-            let (data, rest) = bytes.split_at(take);
+            let (data, rest) = bytes.split_at_mut(take);
             bytes = rest;
             self.chunk_remaining -= take;
-            for (i, byte) in data.iter().take(2).enumerate() {
+            for (i, byte) in data.iter_mut().take(2).enumerate() {
+                if self.message_len + i == 1 && self.lead[0] == 0xB1 && *byte == SIG_DISCARD {
+                    *byte = SIG_PULL;
+                    self.is_discard = true;
+                }
                 if self.message_len + i < 2 {
                     self.lead[self.message_len + i] = *byte;
                 }
@@ -417,6 +428,10 @@ impl<R: AsyncRead + Unpin> GuardedReader<R> {
             self.guard.authenticated.store(true, Ordering::Release);
         }
         self.guard.touch_session();
+        if self.message_len >= 2 {
+            self.discards.request_arrived(self.lead[1], self.is_discard);
+        }
+        self.is_discard = false;
         self.message_len = 0;
         self.scanner.reset();
     }
@@ -451,7 +466,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for GuardedReader<R> {
         let before = buf.filled().len();
         match Pin::new(&mut this.inner).poll_read(cx, buf) {
             Poll::Ready(Ok(())) => {
-                if let Some(violation) = this.inspect(&buf.filled()[before..]) {
+                if let Some(violation) = this.inspect(&mut buf.filled_mut()[before..]) {
                     buf.set_filled(before);
                     this.ended = true;
                     this.guard.record_violation(violation);
@@ -613,9 +628,11 @@ pub struct ConnectionContext<B> {
 /// Run one handshaken connection under the guards.
 ///
 /// The writer is `boltr`'s output half; the reader is the raw input half.
+/// `discards` is shared with the writer (see `discard.rs`).
 pub async fn serve_connection<R, W, B>(
     reader: R,
     mut writer: W,
+    discards: Arc<DiscardTracker>,
     ctx: &ConnectionContext<B>,
     peer_addr: std::net::SocketAddr,
 ) where
@@ -635,7 +652,7 @@ pub async fn serve_connection<R, W, B>(
     let guarded_auth = auth.clone().map(|inner| {
         Arc::new(GuardedValidator::new(inner, guard.clone())) as Arc<dyn AuthValidator>
     });
-    let mut reader = GuardedReader::new(reader, guard.clone());
+    let mut reader = GuardedReader::new(reader, guard.clone(), discards);
 
     {
         let mut conn = Connection::new(
@@ -753,5 +770,32 @@ mod tests {
         let mut s = NestingScanner::new();
         assert!(s.feed(&msg));
         assert!(s.open.is_empty());
+    }
+
+    /// A DISCARD is read as a PULL, and the writer is told it was a DISCARD.
+    #[tokio::test]
+    async fn discard_is_rewritten_to_pull_and_recorded() {
+        let guard = ConnGuard::new(false, None);
+        let tracker = DiscardTracker::new();
+        // DISCARD {n: -1}, PULL {n: 1}, GOODBYE, each as one chunk.
+        let wire: Vec<u8> = [
+            vec![0x00, 0x05, 0xB1, 0x2F, 0xA1, 0x81, b'n', 0x00, 0x00],
+            vec![0x00, 0x03, 0xB1, 0x3F, 0xA0, 0x00, 0x00],
+            vec![0x00, 0x02, 0xB0, 0x02, 0x00, 0x00],
+        ]
+        .concat();
+        // The first message above is malformed on purpose in its length only
+        // for brevity; only the leading bytes matter to the adapter.
+        let mut reader = GuardedReader::new(&wire[..], guard, tracker.clone());
+        let mut out = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut out)
+            .await
+            .unwrap();
+        assert_eq!(out[3], SIG_PULL, "DISCARD reads as PULL");
+        assert!(tracker.answering_discard());
+        tracker.response_closed();
+        assert!(!tracker.answering_discard(), "the real PULL stays a PULL");
+        tracker.response_closed();
+        assert!(!tracker.answering_discard(), "GOODBYE queued nothing");
     }
 }

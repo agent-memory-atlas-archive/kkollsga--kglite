@@ -11,12 +11,20 @@
 //! that is not a RECORD. A RECORD stream always ends in SUCCESS or FAILURE,
 //! which flushes, so nothing is held waiting for input; the buffer is also
 //! drained once it reaches [`FLUSH_CAP`], so large results stream.
+//!
+//! It also drops the RECORDs that answer a DISCARD (see `discard.rs`). That
+//! needs whole messages in the buffer, so the buffer is only drained between
+//! messages; a single message larger than [`FLUSH_CAP`] is held until it ends.
 
 use std::io;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
+use std::sync::Arc;
+
 use tokio::io::AsyncWrite;
+
+use crate::discard::DiscardTracker;
 
 /// Buffered bytes at which the writer stops holding RECORDs back.
 const FLUSH_CAP: usize = 64 * 1024;
@@ -41,24 +49,33 @@ struct Framing {
 }
 
 impl Framing {
-    fn feed(&mut self, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
+    /// No message is partially written, so the next byte starts one.
+    fn starts_message(&self) -> bool {
+        self.header_len == 0 && self.chunk_remaining == 0 && self.message_pos == 0
+    }
+
+    /// Consume bytes up to and including the end of the first message in
+    /// them; `(bytes consumed, a message ended)`.
+    fn feed_one(&mut self, bytes: &[u8]) -> (usize, bool) {
+        let mut used = 0;
+        while used < bytes.len() {
+            let rest = &bytes[used..];
             self.at_boundary = false;
             if self.chunk_remaining > 0 {
-                let n = self.chunk_remaining.min(bytes.len());
+                let n = self.chunk_remaining.min(rest.len());
                 if self.message_pos == 0 && n >= 2 {
-                    self.signature = bytes[1];
+                    self.signature = rest[1];
                 } else if self.message_pos == 1 {
-                    self.signature = bytes[0];
+                    self.signature = rest[0];
                 }
                 self.message_pos = (self.message_pos as usize + n).min(2) as u8;
                 self.chunk_remaining -= n;
-                bytes = &bytes[n..];
+                used += n;
                 continue;
             }
-            self.header[self.header_len] = bytes[0];
+            self.header[self.header_len] = rest[0];
             self.header_len += 1;
-            bytes = &bytes[1..];
+            used += 1;
             if self.header_len == 2 {
                 self.header_len = 0;
                 let len = u16::from_be_bytes(self.header) as usize;
@@ -67,11 +84,12 @@ impl Framing {
                         self.message_pos == 2 && self.signature == RECORD_SIGNATURE;
                     self.message_pos = 0;
                     self.at_boundary = true;
-                } else {
-                    self.chunk_remaining = len;
+                    return (used, true);
                 }
+                self.chunk_remaining = len;
             }
         }
+        (used, false)
     }
 
     /// True when the bytes written so far end exactly after a RECORD.
@@ -85,6 +103,9 @@ pub struct CoalescingWriter<W> {
     buf: Vec<u8>,
     sent: usize,
     framing: Framing,
+    /// Offset in `buf` where the message being written began.
+    message_start: usize,
+    discards: Option<Arc<DiscardTracker>>,
 }
 
 impl<W: AsyncWrite + Unpin> CoalescingWriter<W> {
@@ -94,6 +115,31 @@ impl<W: AsyncWrite + Unpin> CoalescingWriter<W> {
             buf: Vec::with_capacity(FLUSH_CAP),
             sent: 0,
             framing: Framing::default(),
+            message_start: 0,
+            discards: None,
+        }
+    }
+
+    /// A writer that drops the RECORDs answering requests `discards` holds as
+    /// DISCARDs.
+    pub fn with_discards(inner: W, discards: Arc<DiscardTracker>) -> Self {
+        Self {
+            discards: Some(discards),
+            ..Self::new(inner)
+        }
+    }
+
+    /// Account for one finished message just appended to `buf`.
+    fn message_written(&mut self) {
+        let Some(discards) = &self.discards else {
+            return;
+        };
+        if self.framing.last_was_record {
+            if discards.answering_discard() {
+                self.buf.truncate(self.message_start);
+            }
+        } else {
+            discards.response_closed();
         }
     }
 
@@ -122,11 +168,21 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for CoalescingWriter<W> {
         cx: &mut Context<'_>,
         data: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if self.pending() >= FLUSH_CAP {
+        if self.pending() >= FLUSH_CAP && self.framing.starts_message() {
             ready!(self.poll_drain(cx))?;
         }
-        self.buf.extend_from_slice(data);
-        self.framing.feed(data);
+        let mut rest = data;
+        while !rest.is_empty() {
+            if self.framing.starts_message() {
+                self.message_start = self.buf.len();
+            }
+            let (used, ended) = self.framing.feed_one(rest);
+            self.buf.extend_from_slice(&rest[..used]);
+            rest = &rest[used..];
+            if ended {
+                self.message_written();
+            }
+        }
         Poll::Ready(Ok(data.len()))
     }
 
@@ -284,6 +340,67 @@ mod tests {
         expected.extend([0, 0]);
         expected.extend(framed(&message(0x70, 1)));
         assert_eq!(seen.bytes, expected);
-        assert_eq!(seen.flushes, 1, "the big RECORD was held, SUCCESS flushed");
+        // A RECORD past the cap is flushed with itself: the buffer is only
+        // drained between messages, so it is still full when the flush comes.
+        assert_eq!(seen.flushes, 2, "the big RECORD and the SUCCESS");
+    }
+
+    fn discarding_writer(requests: &[(u8, bool)]) -> (ChunkWriter<CoalescingWriter<Sink>>, Sink) {
+        let tracker = DiscardTracker::new();
+        for (signature, was_discard) in requests {
+            tracker.request_arrived(*signature, *was_discard);
+        }
+        let sink = Sink::default();
+        let writer = CoalescingWriter::with_discards(sink.clone(), tracker);
+        (ChunkWriter::new(writer), sink)
+    }
+
+    #[tokio::test]
+    async fn records_answering_a_discard_are_dropped_and_the_summary_kept() {
+        // DISCARD then PULL: only the second one's RECORDs reach the socket.
+        let (mut w, sink) = discarding_writer(&[(0x3F, true), (0x3F, false)]);
+        let success = message(0x70, 4);
+        let record = message(RECORD_SIGNATURE, 3);
+        for _ in 0..5 {
+            send(&mut w, &record).await;
+        }
+        send(&mut w, &success).await;
+        for _ in 0..2 {
+            send(&mut w, &record).await;
+        }
+        send(&mut w, &success).await;
+        let mut expected = framed(&success);
+        expected.extend(framed(&record));
+        expected.extend(framed(&record));
+        expected.extend(framed(&success));
+        assert_eq!(sink.0.lock().unwrap().bytes, expected);
+    }
+
+    #[tokio::test]
+    async fn a_failure_closes_a_discard_entry() {
+        let (mut w, sink) = discarding_writer(&[(0x3F, true), (0x3F, false)]);
+        send(&mut w, &message(0x7F, 2)).await;
+        let record = message(RECORD_SIGNATURE, 3);
+        send(&mut w, &record).await;
+        send(&mut w, &message(0x70, 1)).await;
+        let seen = sink.0.lock().unwrap();
+        assert!(
+            seen.bytes
+                .windows(framed(&record).len())
+                .any(|w| w == framed(&record)),
+            "the RECORD after the discarded FAILURE is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_record_split_across_chunks_leaves_no_bytes() {
+        let (mut w, sink) = discarding_writer(&[(0x3F, true)]);
+        // Larger than the flush cap and one chunk: drained only between messages.
+        for _ in 0..4 {
+            send(&mut w, &message(RECORD_SIGNATURE, 70_000 - 2)).await;
+        }
+        send(&mut w, &message(0x70, 1)).await;
+        let seen = sink.0.lock().unwrap();
+        assert_eq!(seen.bytes, framed(&message(0x70, 1)));
     }
 }
