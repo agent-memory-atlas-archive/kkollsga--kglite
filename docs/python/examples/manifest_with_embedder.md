@@ -57,6 +57,10 @@ extensions:
     cooldown: 1800                # free the model after 30 min idle
 ```
 
+`device:` (`sentence-transformers` only) sets where the model runs: `cpu`,
+`cuda` or `mps`. Apple silicon defaults to `cpu`; the reason is in the
+{doc}`MCP guide <../guides/mcp-servers>` troubleshooting section on server memory.
+
 ## What happens at boot
 
 1. The server parses the manifest, validates `extensions.embedder`, and

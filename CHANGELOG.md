@@ -79,6 +79,7 @@ before upgrading.
 
 ### Fixed
 
+<<<<<<< HEAD
 - `MERGE` now returns one row per match. It stopped at the first, so
   `MATCH (a:A), (b:B) MERGE (a)-[r:E]->(b)` over two parallel `:E` relationships
   returned one row, and `MATCH (a) MERGE (b)` over two nodes returned two rows
@@ -102,6 +103,17 @@ before upgrading.
 - An open-ended variable-length pattern (`*`, `*N..`) now carries the warning
   that it stops at 10 hops. The cap is unchanged; write `*1..N` to go deeper.
 
+=======
+- A `sentence-transformers` embedder on Apple silicon no longer takes 4 to 10 GB
+  per server process. The library picked the `mps` GPU, which held about 3 GB for
+  `BAAI/bge-m3` (in the process footprint, not RSS) and grew the CPU heap by
+  about 7 MB per distinct query length (measured: 3.8 GB at load, 5 GB after 150
+  varied queries and climbing). The wrapper now runs on `cpu` there (0.74 GB,
+  flat; ~65 ms against ~30 ms per query). `extensions.embedder.device` (`cpu`,
+  `cuda`, `mps`) overrides it; other machines keep the library's choice. The idle
+  `cooldown` also moves an accelerator-resident model back to the CPU before
+  dropping it, because a plain drop left the GPU memory allocated.
+>>>>>>> origin/main
 - A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
   `error` now names the key in its error. It said only "unknown variant".
 

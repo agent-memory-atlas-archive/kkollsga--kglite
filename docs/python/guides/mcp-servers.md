@@ -978,6 +978,17 @@ The server drops the model after `cooldown` idle seconds (default 600), and the 
 
 See {doc}`../examples/manifest_with_embedder` for the tradeoff table.
 
+### The server's memory is several GB (sentence-transformers on Apple silicon)
+
+On Apple silicon `sentence-transformers` picks the `mps` GPU by default. That costs memory in two places, and Activity Monitor's RSS shows neither:
+
+- The weights live in GPU-allocator memory, counted in the process **footprint** (`footprint <pid>`, `IOAccelerator` rows), not in RSS. bge-m3 holds about 3 GB there.
+- The CPU heap grows about 7 MB for every distinct query length, because the GPU runtime caches a compiled graph per input shape. Query text of varying length keeps adding entries.
+
+Measured for bge-m3 on a 16 GB Apple-silicon machine: `mps` was 3.8 GB at load and 4.5 to 5.0 GB after 150 queries of varying length, still climbing. `cpu` was 0.74 GB and flat, at about 65 ms per query instead of 30 ms. The server therefore runs `sentence-transformers` on `cpu` on Apple silicon unless `extensions.embedder.device` says otherwise. Each server process holds its own model, so N sessions cost N times the model: run one server per graph where the client allows it.
+
+With an explicit `device: mps` or `device: cuda`, the idle `cooldown` moves the weights back to the CPU and releases the accelerator memory (the drop alone does not release it).
+
 ### Conda environment lifts an old `kglite-mcp-server`
 
 If `which kglite-mcp-server` resolves outside your active env, your shell PATH is finding an older install (typically from a prior `cargo install` or a different conda env). Drop the old install (`rm $(which kglite-mcp-server)` from outside the active env), or activate the right env explicitly.
@@ -1195,6 +1206,7 @@ extensions:
     model: BAAI/bge-m3              # required (passed to the library)
     # load: eager                   # build the model at boot (default: lazy, on first use)
     # cooldown: 1800                # idle seconds before the model is dropped (default 600). 0 = never.
+    # device: cpu                   # sentence-transformers only: cpu | cuda | mps
 ```
 
 | Field | Type | Default | Constraint |
@@ -1204,6 +1216,7 @@ extensions:
 | `factory` | string | — | `module:attr` returning an `EmbeddingModel` — any custom Python embedder. |
 | `load` | string | `lazy` | `lazy` builds the model on the first `text_score()`; `eager` builds it at boot. Any other value fails the boot. |
 | `cooldown` | int | 600 | Idle seconds before the model is dropped; the next `text_score()` rebuilds it. `0` keeps it loaded. A negative or non-integer value fails the boot. |
+| `device` | string | `cpu` on Apple silicon, else the library's choice | `sentence-transformers` only: `cpu`, `cuda` or `mps`. |
 
 `cooldown` applies to every library and to both `load` modes: `load: eager` builds at boot and may still be dropped later. A background sweeper checks about every quarter of the cooldown (at most every 10 s), so the drop lands up to that much after the cooldown. A `text_score()` that is running keeps its model. The drop is logged at `info` with the idle seconds, and so is the rebuild.
 
