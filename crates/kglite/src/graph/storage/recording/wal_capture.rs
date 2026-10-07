@@ -8,6 +8,7 @@ use crate::graph::wal::{
     EdgeEmbeddingStoreState, EdgeGroupEmbeddingPatchWal, EdgeGroupMemberPatchWal,
     EdgeGroupStoreWalState, EdgeVectorCellPatchWal, EdgeVectorWalState,
 };
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
 /// The id is in its `canonical_id` spelling: a statement that widens a
@@ -165,18 +166,6 @@ struct NodeTouch {
     reset: bool,
 }
 
-fn remember<'a, K: Eq + std::hash::Hash + Clone, V>(
-    map: &'a mut HashMap<K, V>,
-    order: &mut Vec<K>,
-    key: K,
-    initial: impl FnOnce() -> V,
-) -> &'a mut V {
-    if !map.contains_key(&key) {
-        order.push(key.clone());
-    }
-    map.entry(key).or_insert_with(initial)
-}
-
 type GroupTouch = (
     NodeIndex,
     NodeIndex,
@@ -185,10 +174,11 @@ type GroupTouch = (
 
 #[derive(Default)]
 struct WalTouches {
-    nodes: HashMap<NodeKey, NodeTouch>,
-    node_order: Vec<NodeKey>,
-    groups: HashMap<GroupKey, GroupTouch>,
-    group_order: Vec<GroupKey>,
+    // Insertion-ordered, so one copy of each key serves both the lookup and
+    // the emission order; a separate order list doubled the key (and its id
+    // allocation) per touched node.
+    nodes: IndexMap<NodeKey, NodeTouch>,
+    groups: IndexMap<GroupKey, GroupTouch>,
     declarations: Vec<MutationOp>,
     embedding_stores: Vec<(String, String)>,
     seen_embedding_stores: HashSet<(String, String)>,
@@ -206,22 +196,12 @@ impl WalTouches {
                 id,
                 reset,
             } => {
-                let touch = remember(
-                    &mut self.nodes,
-                    &mut self.node_order,
-                    node_key(*node_type, id),
-                    NodeTouch::default,
-                );
+                let touch = self.nodes.entry(node_key(*node_type, id)).or_default();
                 touch.idx = Some(*idx);
                 touch.reset |= *reset;
             }
             RawOp::RemoveNode { node_type, id, .. } => {
-                let touch = remember(
-                    &mut self.nodes,
-                    &mut self.node_order,
-                    node_key(*node_type, id),
-                    NodeTouch::default,
-                );
+                let touch = self.nodes.entry(node_key(*node_type, id)).or_default();
                 touch.idx = None;
                 touch.reset = true;
             }
@@ -254,9 +234,10 @@ impl WalTouches {
                     node_key(*src_type, src_id),
                     node_key(*tgt_type, tgt_id),
                 );
-                let touch = remember(&mut self.groups, &mut self.group_order, key, || {
-                    (*source, *target, base_members.clone())
-                });
+                let touch = self
+                    .groups
+                    .entry(key)
+                    .or_insert_with(|| (*source, *target, base_members.clone()));
                 touch.0 = *source;
                 touch.1 = *target;
             }
@@ -300,22 +281,24 @@ pub(super) fn resolve(
     interner: &StringInterner,
     labels: impl Fn(NodeIndex) -> Vec<String>,
     edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
-) -> Vec<MutationOp> {
+    out: &mut dyn FnMut(MutationOp),
+) {
     let mut touches = WalTouches::default();
     for op in raw {
         touches.capture(op);
     }
-    let mut out = std::mem::take(&mut touches.declarations);
-    emit_store_ops(&mut out, &touches, edge_embeddings);
-    emit_node_ops(&mut out, &touches, graph, interner, labels);
-    for key in &touches.group_order {
-        emit_group_ops(&mut out, key, &touches, graph, interner, edge_embeddings);
+    for op in std::mem::take(&mut touches.declarations) {
+        out(op);
     }
-    out
+    emit_store_ops(out, &touches, edge_embeddings);
+    emit_node_ops(out, &touches, graph, interner, labels);
+    for key in touches.groups.keys() {
+        emit_group_ops(out, key, &touches, graph, interner, edge_embeddings);
+    }
 }
 
 fn emit_store_ops(
-    out: &mut Vec<MutationOp>,
+    out: &mut dyn FnMut(MutationOp),
     touches: &WalTouches,
     edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
 ) {
@@ -334,7 +317,7 @@ fn emit_store_ops(
                     model_id: store.model_id().map(str::to_string),
                 }
             });
-        out.push(MutationOp::SetEdgeEmbeddingStore {
+        out(MutationOp::SetEdgeEmbeddingStore {
             conn_type: conn_type.clone(),
             text_column: text_column.clone(),
             state,
@@ -343,17 +326,16 @@ fn emit_store_ops(
 }
 
 fn emit_node_ops(
-    out: &mut Vec<MutationOp>,
+    out: &mut dyn FnMut(MutationOp),
     touches: &WalTouches,
     graph: &impl GraphRead,
     interner: &StringInterner,
     labels: impl Fn(NodeIndex) -> Vec<String>,
 ) {
-    for key in &touches.node_order {
-        let touch = &touches.nodes[key];
+    for (key, touch) in &touches.nodes {
         let idx = touch.idx.filter(|idx| holds(graph, *idx, key));
         if let Some(node) = idx.and_then(|idx| graph.node_view(idx)) {
-            out.push(MutationOp::ReplaceNodeState {
+            out(MutationOp::ReplaceNodeState {
                 node_type: interner.resolve(key.0).into(),
                 // The stored spelling, so replay recreates the column it had.
                 id: node.id().into_owned(),
@@ -363,7 +345,7 @@ fn emit_node_ops(
                 reset: touch.reset,
             });
         } else {
-            out.push(MutationOp::RemoveNode {
+            out(MutationOp::RemoveNode {
                 node_type: interner.resolve(key.0).into(),
                 id: key.1.clone(),
             });
@@ -413,7 +395,7 @@ fn current_group(
 }
 
 fn emit_group_ops(
-    out: &mut Vec<MutationOp>,
+    out: &mut dyn FnMut(MutationOp),
     key: &GroupKey,
     touches: &WalTouches,
     graph: &impl GraphRead,
@@ -421,7 +403,7 @@ fn emit_group_ops(
     edge_embeddings: Option<&HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>>,
 ) {
     let (member_slots, edges) = current_group(graph, interner, touches, key);
-    out.push(MutationOp::ReplaceEdgeGroup {
+    out(MutationOp::ReplaceEdgeGroup {
         conn_type: interner.resolve(key.0).into(),
         src_type: interner.resolve(key.1 .0).into(),
         src_id: key.1 .1.clone(),
@@ -459,7 +441,7 @@ fn emit_group_ops(
             owned_store_state(&matching, &member_slots),
         )
     };
-    out.push(op);
+    out(op);
 }
 
 fn matching_stores<'a>(

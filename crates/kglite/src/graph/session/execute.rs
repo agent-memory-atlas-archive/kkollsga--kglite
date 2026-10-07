@@ -516,9 +516,9 @@ fn writes_only_journaled_disk_cells(query: &CypherQuery) -> bool {
 /// - a terminal variable-only `DELETE` collects bindings and validates plain
 ///   delete edge constraints before removing anything.
 ///
-/// Both shapes are safe only on the default in-memory backend and without an
-/// execution budget, which is checked after a write. Deadline/cancellation is
-/// safe: CREATE polls immediately before insertion, and DELETE immediately
+/// Both shapes are safe only on the default in-memory backend (a `DELETE` also
+/// under the durable capture wrapper) and without an execution budget, which
+/// is checked after a write. Deadline/cancellation is safe: CREATE polls immediately before insertion, and DELETE immediately
 /// before its non-interruptible removal phase, so a deadline error from either
 /// has applied nothing — which is also why the late-statement check in
 /// `mut_statement` runs only when a checkpoint is open. Every other mutation
@@ -528,26 +528,27 @@ fn can_skip_rollback_checkpoint(
     query: &CypherQuery,
     opts: &ExecuteOptions<'_>,
 ) -> bool {
-    if !graph.graph.supports_checkpoint_free_mutation()
-        || query.profile
-        || opts.max_work_units.is_some()
-    {
+    if query.profile || opts.max_work_units.is_some() {
         return false;
     }
 
     match query.clauses.as_slice() {
-        [Clause::Create(create)] => matches!(
-            create.patterns.as_slice(),
-            [pattern] if matches!(pattern.elements.as_slice(), [CreateElement::Node(_)])
-        ),
+        [Clause::Create(create)] => {
+            graph.graph.supports_checkpoint_free_mutation()
+                && matches!(
+                    create.patterns.as_slice(),
+                    [pattern] if matches!(pattern.elements.as_slice(), [CreateElement::Node(_)])
+                )
+        }
         clauses => {
             let Some((Clause::Delete(delete), prefix)) = clauses.split_last() else {
                 return false;
             };
-            delete
-                .expressions
-                .iter()
-                .all(|expr| matches!(expr, cypher::ast::Expression::Variable(_)))
+            graph.graph.supports_checkpoint_free_delete()
+                && delete
+                    .expressions
+                    .iter()
+                    .all(|expr| matches!(expr, cypher::ast::Expression::Variable(_)))
                 && prefix
                     .iter()
                     .all(|clause| !cypher::executor::write::clause_is_mutation(clause))
@@ -1386,5 +1387,34 @@ mod version_soundness_tests {
         ));
         assert_eq!(g.graph.node_count(), 1);
         CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A terminal `DELETE` skips the undo journal under the durable capture
+    /// wrapper — the journal holds every removed node's full record until the
+    /// statement commits — while a `CREATE`, a `DELETE` behind a write, and a
+    /// profiled run keep their checkpoints.
+    #[test]
+    fn terminal_delete_skips_the_checkpoint_under_the_capture_wrapper() {
+        let params = HashMap::new();
+        let opts = ExecuteOptions::eager(&params);
+        let skips = |g: &DirGraph, q: &str| {
+            let parsed = cypher::parse_cypher(q).unwrap();
+            can_skip_rollback_checkpoint(g, &parsed, &opts)
+        };
+        let delete = "MATCH (n:Item) DETACH DELETE n";
+        let plain = DirGraph::new();
+        assert!(skips(&plain, delete), "non-vacuity: a plain graph skips");
+
+        let mut durable = DirGraph::new();
+        crate::graph::storage::recording::wrap_for_durability(&mut durable).unwrap();
+        assert!(durable.graph.is_recording());
+        assert!(skips(&durable, delete));
+        assert!(skips(&durable, "MATCH (n:Item) DELETE n"));
+        assert!(!skips(&durable, "CREATE (:Item {id: 1})"));
+        assert!(!skips(
+            &durable,
+            "MATCH (n:Item) SET n.v = 1 WITH n DETACH DELETE n"
+        ));
+        assert!(!skips(&durable, "PROFILE MATCH (n:Item) DETACH DELETE n"));
     }
 }

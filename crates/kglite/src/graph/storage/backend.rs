@@ -312,8 +312,9 @@ impl GraphBackend {
     /// The inverse of [`wrap_for_capture`](Self::wrap_for_capture), for
     /// `cdc::disable`. Capture is not free — a wrapped backend buffers a
     /// `RawOp` per mutation and gives up the checkpoint-free mutation fast path
-    /// ([`supports_checkpoint_free_mutation`](Self::supports_checkpoint_free_mutation))
-    /// — so "disable" has to actually unwrap, or it leaves a permanent tax.
+    /// ([`supports_checkpoint_free_mutation`](Self::supports_checkpoint_free_mutation),
+    /// except for a terminal `DELETE`) — so "disable" has to actually unwrap, or
+    /// it leaves a permanent tax.
     ///
     /// Refuses on a WAL-owned wrapper: unwrapping one silently stops logging,
     /// leaving the graph committing and the log still claiming to describe it.
@@ -347,13 +348,35 @@ impl GraphBackend {
     /// Whether a proven-infallible mutation may commit without a full rollback
     /// checkpoint. Recording/durable wrappers deliberately return false even
     /// when their inner backend is memory: their post-write WAL lifecycle is a
-    /// distinct boundary and keeps the conservative checkpoint path.
+    /// distinct boundary and keeps the conservative checkpoint path. Terminal
+    /// `DELETE` is the exception, see
+    /// [`supports_checkpoint_free_delete`](Self::supports_checkpoint_free_delete).
     #[inline]
     pub(crate) fn supports_checkpoint_free_mutation(&self) -> bool {
         // `Forked` answers as the `Memory` it forked from — see the variant
         // doc. Pinned by
         // `rollback_tests::forked_statements_copy_zero_nodes_except_one_flatten`.
         matches!(self, GraphBackend::Memory(_) | GraphBackend::Forked(_))
+    }
+
+    /// [`supports_checkpoint_free_mutation`](Self::supports_checkpoint_free_mutation)
+    /// for a terminal `DELETE`, which also holds under the capture wrapper.
+    ///
+    /// The checkpoint's undo journal keeps the full `NodeData` of every node
+    /// the statement removes until it commits, which for a million-node delete
+    /// is the largest allocation of the statement (~1.7 KB per node measured,
+    /// against ~120 bytes for the capture op the log needs). A delete that
+    /// cannot fail after its first removal has nothing to roll back, and the
+    /// wrapper only appends to its op buffer, so a durable graph may skip the
+    /// journal exactly as a plain in-memory one does. `CREATE` keeps the
+    /// conservative path: the durable create refuses duplicate identities
+    /// inside the write.
+    #[inline]
+    pub(crate) fn supports_checkpoint_free_delete(&self) -> bool {
+        match self {
+            GraphBackend::Recording(rg) => rg.inner().supports_checkpoint_free_mutation(),
+            other => other.supports_checkpoint_free_mutation(),
+        }
     }
 
     /// Whether this backend can capture inverse operations for a

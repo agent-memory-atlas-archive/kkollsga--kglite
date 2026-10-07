@@ -155,6 +155,18 @@ pub(crate) fn encode_versioned<T: Serialize + ?Sized>(
     postcard_v1::encode_bounded(value, limit)
 }
 
+/// Append `value`'s encoding to `out`. Postcard encodings concatenate, so a
+/// sequence encoded element by element is byte-identical to the same sequence
+/// encoded whole once its length prefix is prepended.
+pub(crate) fn append_encoded<T: Serialize + ?Sized>(
+    codec: CodecVersion,
+    value: &T,
+    out: &mut Vec<u8>,
+) -> Result<(), CodecError> {
+    let CodecVersion::PostcardV1 = codec;
+    postcard_v1::append_encoded(value, out)
+}
+
 pub(crate) fn decode_versioned_exact<'de, T: Deserialize<'de>>(
     envelope: PayloadEnvelope<'de>,
 ) -> Result<T, CodecError> {

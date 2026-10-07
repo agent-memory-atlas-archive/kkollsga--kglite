@@ -583,15 +583,84 @@ fn append_frame_bounded(
 ) -> io::Result<()> {
     let payload = crate::serde_codec::encode_versioned(codec, frame, limit)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    write_envelope(w, &payload)
+}
+
+fn write_envelope(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
     let len = u32::try_from(payload.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "WAL frame exceeds 4 GiB"))?;
-    let crc = crc32(&payload);
+    let crc = crc32(payload);
     let mut framed = Vec::with_capacity(8 + payload.len());
     framed.extend_from_slice(&len.to_le_bytes());
     framed.extend_from_slice(&crc.to_le_bytes());
-    framed.extend_from_slice(&payload);
+    framed.extend_from_slice(payload);
     w.write_all(&framed)?;
     Ok(())
+}
+
+/// The ops of one frame, encoded as they are produced.
+///
+/// Holding a commit as `Vec<MutationOp>` costs `size_of::<MutationOp>()` per
+/// op (272 bytes, whatever the variant) while a `RemoveNode` encodes to under
+/// ten, so a large delete held ~30x its encoded size just to hand it to the
+/// encoder. Encoding each op on arrival keeps the transient proportional to
+/// the log bytes. The result is byte-identical to encoding a [`WalFrame`]:
+/// postcard writes a sequence as its element count followed by the elements.
+pub(crate) struct FrameBody {
+    codec: crate::serde_codec::CodecVersion,
+    limit: u64,
+    bytes: Vec<u8>,
+    count: u64,
+    error: Option<io::Error>,
+}
+
+impl FrameBody {
+    pub(crate) fn new() -> Self {
+        Self::bounded(crate::serde_codec::CURRENT_CODEC, MAX_WAL_FRAME_BYTES)
+    }
+
+    fn bounded(codec: crate::serde_codec::CodecVersion, limit: u64) -> Self {
+        Self {
+            codec,
+            limit,
+            bytes: Vec::new(),
+            count: 0,
+            error: None,
+        }
+    }
+
+    /// Encode `op` onto the frame. The first failure (an encoder error or the
+    /// frame exceeding its size cap) is kept and reported by the append; later
+    /// ops are dropped, since the frame cannot be written anyway.
+    pub(crate) fn push(&mut self, op: &MutationOp) {
+        if self.error.is_some() {
+            return;
+        }
+        let failed = crate::serde_codec::append_encoded(self.codec, op, &mut self.bytes)
+            .err()
+            .or_else(|| {
+                let actual = self.bytes.len() as u64;
+                (actual > self.limit).then_some(crate::serde_codec::CodecError::SizeLimit {
+                    actual,
+                    limit: self.limit,
+                })
+            });
+        match failed {
+            Some(e) => self.error = Some(io::Error::new(io::ErrorKind::InvalidData, e)),
+            None => self.count += 1,
+        }
+    }
+
+    fn finish(self, lsn: u64) -> io::Result<Vec<u8>> {
+        if let Some(e) = self.error {
+            return Err(e);
+        }
+        let mut payload = Vec::with_capacity(20 + self.bytes.len());
+        crate::serde_codec::append_encoded(self.codec, &(lsn, self.count), &mut payload)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        payload.extend_from_slice(&self.bytes);
+        Ok(payload)
+    }
 }
 
 /// Read a fixed-size buffer, mapping a clean OR partial EOF to `None`
@@ -1254,6 +1323,27 @@ impl Wal {
     /// them.
     pub fn append(&mut self, frame: &WalFrame) -> io::Result<()> {
         append_frame(&mut self.file, frame)?;
+        self.commit_point()
+    }
+
+    /// Resolve `raw` against `dir` straight into one frame at `lsn` and append
+    /// it, without materialising the resolved ops. Same bytes and the same
+    /// commit point as [`append`](Self::append) of the resolved
+    /// [`WalFrame`]; see [`FrameBody`] for why it exists.
+    pub fn append_resolved(
+        &mut self,
+        lsn: u64,
+        raw: &[crate::graph::storage::recording::RawOp],
+        dir: &crate::graph::schema::DirGraph,
+    ) -> io::Result<()> {
+        let mut body = FrameBody::new();
+        crate::graph::storage::recording::resolve_ops_into(raw, dir, &mut |op| body.push(&op));
+        let payload = body.finish(lsn)?;
+        write_envelope(&mut self.file, &payload)?;
+        self.commit_point()
+    }
+
+    fn commit_point(&mut self) -> io::Result<()> {
         self.file.flush()?;
         if self.sync == SyncMode::Barrier {
             self.file.sync_data()?;
@@ -1310,3 +1400,7 @@ mod tail_tests;
 #[cfg(test)]
 #[path = "wal_v4_tests.rs"]
 mod v4_tests;
+
+#[cfg(test)]
+#[path = "wal_delete_capture_tests.rs"]
+mod delete_capture_tests;

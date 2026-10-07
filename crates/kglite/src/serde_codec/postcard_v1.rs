@@ -32,6 +32,15 @@ pub(super) fn encode_bounded<T: Serialize + ?Sized>(
     Ok(bytes)
 }
 
+pub(super) fn append_encoded<T: Serialize + ?Sized>(
+    value: &T,
+    out: &mut Vec<u8>,
+) -> Result<(), CodecError> {
+    let taken = std::mem::take(out);
+    *out = postcard::to_extend(value, taken).map_err(encode_error)?;
+    Ok(())
+}
+
 pub(super) fn decode_exact<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T, CodecError> {
     let (value, trailing) = postcard::take_from_bytes(bytes).map_err(decode_error)?;
     if !trailing.is_empty() {

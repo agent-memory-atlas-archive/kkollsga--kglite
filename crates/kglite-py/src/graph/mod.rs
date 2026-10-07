@@ -543,24 +543,15 @@ impl KnowledgeGraph {
         {
             return Err(wal_diverged_io_error());
         }
-        // Drain + resolve in a scope so the `self.inner` borrow ends before
-        // we touch the `self.lifecycle.durable` field (disjoint, but keep it clean).
-        let ops = {
-            let dir = get_graph_mut(&mut self.inner);
-            // Publishes this commit's CDC events and hands the raw ops back;
-            // yields nothing for a graph carrying no capture layer (durable
-            // state without a recording backend shouldn't happen, but reads
-            // here as nothing to flush).
-            let raw = kglite_core::api::cdc::drain_at_commit(dir);
-            if raw.is_empty() || !durable {
-                return Ok(());
-            }
-            // The whole `DirGraph`, not its backend: secondary labels and the
-            // relationship embedding stores both live above the backend, and a
-            // frame resolved without them logs vector state as absent — see
-            // `resolve_ops`.
-            kglite_core::api::durable::resolve_ops(&raw, dir)
-        };
+        let dir = get_graph_mut(&mut self.inner);
+        // Publishes this commit's CDC events and hands the raw ops back;
+        // yields nothing for a graph carrying no capture layer (durable
+        // state without a recording backend shouldn't happen, but reads
+        // here as nothing to flush).
+        let raw = kglite_core::api::cdc::drain_at_commit(dir);
+        if raw.is_empty() || !durable {
+            return Ok(());
+        }
         let ds = self
             .lifecycle
             .durable
@@ -572,8 +563,11 @@ impl KnowledgeGraph {
                 "injected write-ahead log append failure (kglite._fail_wal_append)",
             ))
         } else {
-            ds.wal
-                .append(&kglite_core::api::durable::WalFrame { lsn, ops })
+            // The whole `DirGraph`, not its backend: secondary labels and the
+            // relationship embedding stores both live above the backend, and a
+            // frame resolved without them logs vector state as absent — see
+            // `resolve_ops`.
+            ds.wal.append_resolved(lsn, &raw, dir)
         };
         match appended {
             Ok(()) => {

@@ -69,9 +69,8 @@ use std::sync::{Arc, Mutex};
 use super::transaction::Session;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::durability;
-use crate::graph::storage::recording::resolve_ops;
 use crate::graph::storage::GraphRead;
-use crate::graph::wal::{DurabilityLevel, Wal, WalFrame};
+use crate::graph::wal::{DurabilityLevel, Wal};
 
 /// Session-scoped durability state. Held by the [`Session`] rather than the
 /// graph because it owns an open `File`; see the module docs for the lock
@@ -285,14 +284,13 @@ impl Session {
         }
         // Secondary labels are read back through `working` because they are not
         // backend state — see `resolve_ops`.
-        let ops = resolve_ops(&raw, working);
         #[cfg(test)]
         if ds.fail_append {
             return Err("injected WAL append failure".to_string());
         }
         let lsn = ds.next_lsn;
         ds.wal
-            .append(&WalFrame { lsn, ops })
+            .append_resolved(lsn, &raw, working)
             .map_err(|e| e.to_string())?;
         // Only a frame that reached the log consumes its LSN.
         ds.next_lsn = lsn + 1;

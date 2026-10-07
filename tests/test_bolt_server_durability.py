@@ -813,6 +813,96 @@ def test_a_logged_commit_survives_a_sigkill_with_no_checkpoint(tmp_path, level):
         _teardown_bolt_server(restarted)
 
 
+BULK_NODES = 1500
+
+
+def _seed_bulk(url: str) -> None:
+    """Commit `BULK_NODES` `:Bulk` nodes, half of them linked in pairs, in one
+    transaction — the shape a snapshot refresh deletes and re-creates."""
+    with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+        with driver.session() as session:
+            tx = session.begin_transaction()
+            tx.run(
+                "UNWIND range(1, $n) AS i CREATE (:Bulk {id: i, k: 'k' + toString(i), v: i * 2})",
+                n=BULK_NODES,
+            )
+            tx.run("MATCH (a:Bulk), (b:Bulk) WHERE a.id % 2 = 1 AND b.id = a.id + 1 CREATE (a)-[:PAIR {w: a.id}]->(b)")
+            tx.commit()
+
+
+def _bulk_counts(url: str) -> tuple[int, int, int]:
+    """`(Bulk nodes, PAIR edges, Person nodes)` as the server answers them."""
+    with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+        with driver.session() as session:
+            nodes = session.run("MATCH (b:Bulk) RETURN count(b) AS c").single()["c"]
+            edges = session.run("MATCH (:Bulk)-[r:PAIR]->(:Bulk) RETURN count(r) AS c").single()["c"]
+            people = session.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
+            return nodes, edges, people
+
+
+@pytest.mark.parametrize("level", ["full", "normal"])
+def test_a_committed_bulk_delete_survives_a_sigkill(tmp_path, level):
+    """A DETACH DELETE of every `:Bulk` node and edge, committed in one
+    transaction, replays out of the log after a SIGKILL — nodes and edges gone,
+    the rest of the graph untouched. The delete path skips the statement undo
+    journal under the log, so this is the proof the log alone still carries it."""
+    _require_binary()
+    fixture = tmp_path / f"bulk-delete-{level}.kgl"
+    _build_bolt_fixture_graph(fixture)
+    untouched = _digest(fixture)
+
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        _seed_bulk(url)
+        assert _bulk_counts(url) == (BULK_NODES, BULK_NODES // 2, 4), "non-vacuity: the data is live"
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                tx = session.begin_transaction()
+                tx.run("MATCH (b:Bulk) DETACH DELETE b")
+                tx.commit()
+        assert _bulk_counts(url) == (0, 0, 4)
+    finally:
+        _teardown_bolt_server(proc)  # SIGKILL: no shutdown path, no exit save
+
+    assert _digest(fixture) == untouched, "no checkpoint ran: only the log can carry the delete"
+
+    restarted, restarted_url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        assert _bulk_counts(restarted_url) == (0, 0, 4), f"--durability {level} must replay the committed delete"
+    finally:
+        _teardown_bolt_server(restarted)
+
+
+@pytest.mark.parametrize("level", ["full", "normal"])
+def test_an_uncommitted_bulk_delete_is_gone_after_a_sigkill(tmp_path, level):
+    """SIGKILL with the delete executed but not committed: the restart sees
+    every node and edge the earlier commit wrote, and nothing of the delete."""
+    _require_binary()
+    fixture = tmp_path / f"bulk-midflight-{level}.kgl"
+    _build_bolt_fixture_graph(fixture)
+
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        _seed_bulk(url)
+        driver = neo4j.GraphDatabase.driver(url, auth=("neo4j", "password"))
+        session = driver.session()
+        tx = session.begin_transaction()
+        tx.run("MATCH (b:Bulk) DETACH DELETE b").consume()
+        # In the open transaction the delete is visible; nobody else sees it.
+        assert tx.run("MATCH (b:Bulk) RETURN count(b) AS c").single()["c"] == 0
+        assert _bulk_counts(url) == (BULK_NODES, BULK_NODES // 2, 4)
+    finally:
+        _teardown_bolt_server(proc)  # SIGKILL with the transaction still open
+
+    restarted, restarted_url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        assert _bulk_counts(restarted_url) == (BULK_NODES, BULK_NODES // 2, 4), (
+            f"--durability {level} must not replay a delete that never committed"
+        )
+    finally:
+        _teardown_bolt_server(restarted)
+
+
 def test_the_env_mirror_logs_the_same_way(tmp_path):
     """`KGLITE_BOLT_DURABILITY=full` does what the flag does — the spelling a
     Compose file or unit file can set."""

@@ -838,18 +838,31 @@ pub fn wrap_for_durability(
 /// Node/group slots are only hints in the v4 path; captured logical identities
 /// prevent deletion/reuse from redirecting a prior touch.
 pub fn resolve_ops(raw: &[RawOp], dir: &crate::graph::schema::DirGraph) -> Vec<MutationOp> {
-    resolve_against(
+    let mut out = Vec::with_capacity(raw.len());
+    resolve_ops_into(raw, dir, &mut |op| out.push(op));
+    out
+}
+
+/// [`resolve_ops`] handing each op to `sink` as it is produced, so a caller
+/// that encodes them never holds the whole resolved commit.
+pub fn resolve_ops_into(
+    raw: &[RawOp],
+    dir: &crate::graph::schema::DirGraph,
+    sink: &mut dyn FnMut(MutationOp),
+) {
+    resolve_against_into(
         raw,
         &dir.graph,
         &dir.interner,
         |idx| dir.secondary_label_names(idx),
         Some(&dir.edge_embeddings),
-    )
+        sink,
+    );
 }
 
-/// [`resolve_ops`] against a bare backend, for the unit tests that drive a
-/// `RecordingGraph` with no `DirGraph` above it.
-fn resolve_against(
+/// [`resolve_ops_into`] against a bare backend, for the unit tests that drive
+/// a `RecordingGraph` with no `DirGraph` above it.
+fn resolve_against_into(
     raw: &[RawOp],
     graph: &impl GraphRead,
     interner: &StringInterner,
@@ -860,7 +873,8 @@ fn resolve_against(
             crate::graph::edge_embeddings::EdgeEmbeddingStore,
         >,
     >,
-) -> Vec<MutationOp> {
+    out: &mut dyn FnMut(MutationOp),
+) {
     if raw.iter().any(|op| {
         matches!(
             op,
@@ -870,9 +884,8 @@ fn resolve_against(
                 | RawOp::WalRelationshipEmbeddingBase(_)
         )
     }) {
-        return wal_capture::resolve(raw, graph, interner, secondary_labels, edge_embeddings);
+        return wal_capture::resolve(raw, graph, interner, secondary_labels, edge_embeddings, out);
     }
-    let mut out = Vec::with_capacity(raw.len());
     for op in raw {
         match op {
             RawOp::WalNode { .. }
@@ -882,10 +895,10 @@ fn resolve_against(
             // Already resolved: nothing to read back off the graph. Reachable
             // here when a call declared something but wrote no rows, so no
             // logical-identity marker joined it in the buffer.
-            RawOp::Declaration(op) => out.push((**op).clone()),
+            RawOp::Declaration(op) => out((**op).clone()),
             RawOp::UpsertNode(idx, _, _) => {
                 if let Some(nd) = graph.node_view(*idx) {
-                    out.push(MutationOp::UpsertNode {
+                    out(MutationOp::UpsertNode {
                         node_type: nd.node_type_str(interner).to_string(),
                         id: nd.id().into_owned(),
                         title: nd.title().into_owned(),
@@ -894,7 +907,7 @@ fn resolve_against(
                 }
             }
             RawOp::RemoveNode { node_type, id, .. } => {
-                out.push(MutationOp::RemoveNode {
+                out(MutationOp::RemoveNode {
                     node_type: interner.resolve(*node_type).to_string(),
                     id: id.clone(),
                 });
@@ -907,7 +920,7 @@ fn resolve_against(
                         logical_node(graph, a, interner),
                         logical_node(graph, b, interner),
                     ) {
-                        out.push(MutationOp::UpsertEdge {
+                        out(MutationOp::UpsertEdge {
                             conn_type: ed.connection_type_str(interner).to_string(),
                             src_type: src.0,
                             src_id: src.1,
@@ -926,7 +939,7 @@ fn resolve_against(
                 tgt_id,
                 ..
             } => {
-                out.push(MutationOp::RemoveEdge {
+                out(MutationOp::RemoveEdge {
                     conn_type: interner.resolve(*conn_type).to_string(),
                     src_type: interner.resolve(*src_type).to_string(),
                     src_id: src_id.clone(),
@@ -940,7 +953,7 @@ fn resolve_against(
                 // replay. A node removed later in the batch yields `None` and
                 // is dropped — its `RemoveNode` already carries the outcome.
                 if let Some((node_type, id)) = logical_node(graph, *idx, interner) {
-                    out.push(MutationOp::SetNodeLabels {
+                    out(MutationOp::SetNodeLabels {
                         node_type,
                         id,
                         labels: secondary_labels(*idx),
@@ -949,6 +962,30 @@ fn resolve_against(
             }
         }
     }
+}
+
+#[cfg(test)]
+fn resolve_against(
+    raw: &[RawOp],
+    graph: &impl GraphRead,
+    interner: &StringInterner,
+    secondary_labels: impl Fn(NodeIndex) -> Vec<String>,
+    edge_embeddings: Option<
+        &std::collections::HashMap<
+            crate::graph::edge_embeddings::EdgeEmbeddingKey,
+            crate::graph::edge_embeddings::EdgeEmbeddingStore,
+        >,
+    >,
+) -> Vec<MutationOp> {
+    let mut out = Vec::new();
+    resolve_against_into(
+        raw,
+        graph,
+        interner,
+        secondary_labels,
+        edge_embeddings,
+        &mut |op| out.push(op),
+    );
     out
 }
 
@@ -1450,7 +1487,8 @@ impl<G: GraphWrite> GraphWrite for RecordingGraph<G> {
 
     #[inline]
     fn remove_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
-        self.note_wal_node(idx, false);
+        // No `WalNode` touch: the `RawOp::RemoveNode` pushed below already
+        // names the node's logical identity and is what the resolver reads.
         self.note_wal_incident_groups(idx);
         // Capture the logical identity before the node vanishes.
         let identity = self

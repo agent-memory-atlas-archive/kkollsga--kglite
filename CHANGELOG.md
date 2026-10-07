@@ -78,6 +78,17 @@ before upgrading.
   reports query type `s`; data mutations are still refused in auto-commit.
   Inside an explicit transaction a schema statement still runs and commits with
   the data, where Neo4j refuses the mix.
+- Deleting many nodes in one statement no longer holds about 2 KB per node
+  while the graph is durable. A terminal `DELETE` or `DETACH DELETE` on a graph
+  with a write-ahead log (the default `normal` and `full` durability) kept a
+  full copy of every removed node in the statement's undo journal, and then
+  resolved the whole commit into a list of ops before encoding it. Deleting
+  100,000 nodes through `kglite-bolt-server` peaked at 350 MiB resident, against
+  162 MiB at `--durability off`. The statement now skips the journal, as it
+  already did without a log, and the commit is encoded as it is resolved. The
+  same delete peaks at 188 MiB at `normal` and `full`. A delete behind a write
+  in the same statement keeps its journal. The log bytes and recovered state
+  are unchanged.
 - Restarting a durable graph no longer holds the whole write-ahead log in
   memory. Recovery decoded every frame into a list, about ten times its
   on-disk size, before folding it: a 6 MB log restarted at 90 MiB resident,
@@ -85,6 +96,12 @@ before upgrading.
   dropped, so replay memory follows the graph the log produces, not the log's
   length. The same read no longer loads a log whole to ask whether it holds an
   unreplayed commit.
+
+### Rust API
+
+- `Wal::append_resolved`: new method that resolves a commit's captured ops
+  straight into one frame and appends it, with the bytes `Wal::append` writes
+  for the same ops. Nothing existing changes.
 
 ## [0.19.4] - 2026-10-06
 
