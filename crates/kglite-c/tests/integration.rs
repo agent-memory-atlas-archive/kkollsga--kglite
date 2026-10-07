@@ -889,7 +889,7 @@ fn create_edges_batch_second_source_type_keeps_its_rows() {
             "MATCH (s)-[r:HAS_HOLDER]->() RETURN labels(s)[0] AS s, count(r) AS c ORDER BY s",
             "{}"
         ),
-        serde_json::json!([{"s": "Project", "c": 2}, {"s": "Contract", "c": 3}])
+        serde_json::json!([{"s": "Contract", "c": 3}, {"s": "Project", "c": 2}])
     );
     unsafe { kglite_session_free(session) };
 }
