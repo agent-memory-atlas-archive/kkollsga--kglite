@@ -60,9 +60,10 @@ boltr = { version = "0.2", features = ["tls"] }
 # fastembed 7 -> hf-hub 0.5) requires rustls ^0.23.22, and cargo unifies
 # rustls across all members.
 # The accept loop (src/accept.rs) builds its own TLS acceptor, because boltr's
-# `TlsConfig` keeps its acceptor private. Same majors boltr itself declares.
+# `TlsConfig` keeps its acceptor private. 1.10 is the floor rustls 0.23.22
+# (below) itself requires; a lower floor fails the minimal-versions resolve.
 tokio-rustls = "0.26"
-rustls-pki-types = "1.9"
+rustls-pki-types = "1.10"
 rustls = { version = "0.23.22", default-features = false, features = ["ring", "std"] }
 
 # Async trait sugar used by boltr's BoltBackend trait declaration.
