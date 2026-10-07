@@ -84,11 +84,15 @@ PARAM_ROWS = 20_000
 #: embedded engine was the control before and was wrong for it: it converts
 #: Python rows on the Python side, so its time moved with the interpreter
 #: (9.1-15.3 ms across runners) while the server's did not (72-80 ms), and the
-#: ratio read 5.3x to 7.9x with no code change. Measured 7.6x on macOS with
-#: under 1% spread over repeated runs; decoding twice the bytes (a 2x slower
-#: decoder) reads ~14x, so 11x leaves 45% for runner variation and still
-#: catches a 2x regression.
-MAX_PARAMS_VS_SERVER_BUILT = 11.0
+#: ratio read 5.3x to 7.9x with no code change.
+#:
+#: The ratio does not carry across operating systems, because the server-built
+#: control costs 4.3 ms on macOS and 16.8 ms on a Linux runner while decoding
+#: costs 32 and 79 ms. Measured: macOS 7.5-7.8x over six runs, Linux 4.7x
+#: (decoding twice the payload reads 15.1-15.8x and 9.1x). Each ceiling sits
+#: between the measured ratio and the 2x-payload ratio on its platform, about
+#: 40% clear of both, so it catches a decoder twice as slow.
+MAX_PARAMS_VS_SERVER_BUILT = 6.5 if sys.platform.startswith("linux") else 11.0
 #: Four reader processes must reach this multiple of one reader's throughput.
 MIN_READER_SCALING = 1.25
 
