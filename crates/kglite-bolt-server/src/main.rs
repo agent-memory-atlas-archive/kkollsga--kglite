@@ -29,6 +29,7 @@ mod auth;
 mod backend;
 mod coalesce;
 mod error_map;
+mod guard;
 mod startup;
 mod value_adapter;
 

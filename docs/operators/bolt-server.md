@@ -551,6 +551,22 @@ driver that enforces the check connects with compatibility off, the server logs
 a warning naming both activation routes. An operator can then diagnose it from
 the server log instead of a client stack trace.
 
+## Known limitations
+
+The server speaks Bolt through the `boltr` library (0.2.0). These defects of
+that version are visible to drivers.
+A `boltr` release that fixes them will remove the limits.
+
+| Behaviour | What a driver sees | Workaround |
+|---|---|---|
+| One open result per explicit transaction. A second RUN while the first result has unread rows is not tracked by query id. | A `ValueError` about keys and values of different length (neo4j Python driver), once a result is longer than the driver's `fetch_size`. | Read each result to the end before the next `tx.run`, or raise `fetch_size`. |
+| DISCARD ignores `n` and drops the result summary. | Consuming a partly read result returns no `counters` or bookmark. | Read the result to the end when you need its summary. |
+| A message that is invalid in the current state is answered IGNORED, not FAILURE. | None from the official drivers, which do not send such messages. | None needed. |
+
+The server guards the other `boltr` 0.2.0 defects itself: authentication
+before any query, nesting depth, message size before LOGON, session cleanup on
+disconnect and idle reaping of paging clients.
+
 ## Operations and security
 
 - **Loopback is the safe default.** If you expose the server remotely, enable

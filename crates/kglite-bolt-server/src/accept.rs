@@ -10,7 +10,8 @@
 //! Everything a connection needs after `accept` is public in `boltr`, so this
 //! module re-creates only the listener side: bind, session reaper, accept loop,
 //! shutdown, optional TLS. Per-connection work is `boltr`'s own
-//! `server_handshake` + `Connection::run`, unchanged.
+//! `server_handshake` + `Connection::run`, run under the guards in
+//! `guard.rs`.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -19,8 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::coalesce::CoalescingWriter;
+use crate::guard::{serve_connection, ConnectionContext};
 use boltr::error::BoltError;
-use boltr::server::connection::Connection;
 use boltr::server::handshake::server_handshake;
 use boltr::server::{AuthValidator, BoltBackend, SessionHandle, SessionManager};
 use rustls_pki_types::pem::PemObject;
@@ -77,6 +78,13 @@ impl<B: BoltBackend> BoltListener<B> {
         let listener = TcpListener::bind(addr).await?;
         let backend = Arc::new(self.backend);
         let sessions = Arc::new(SessionManager::new(Some(self.max_sessions)));
+        let ctx = Arc::new(ConnectionContext {
+            backend: backend.clone(),
+            sessions: sessions.clone(),
+            auth: self.auth.clone(),
+            max_message_size: self.max_message_size,
+            idle_timeout: self.idle_timeout.is_some(),
+        });
 
         let reaper = self.idle_timeout.map(|timeout| {
             let sessions = sessions.clone();
@@ -103,15 +111,7 @@ impl<B: BoltBackend> BoltListener<B> {
                 accepted = listener.accept() => match accepted {
                     Ok((stream, peer_addr)) => {
                         tune_stream(&stream, peer_addr);
-                        tokio::spawn(run_connection(
-                            stream,
-                            peer_addr,
-                            backend.clone(),
-                            sessions.clone(),
-                            self.auth.clone(),
-                            tls.clone(),
-                            self.max_message_size,
-                        ));
+                        tokio::spawn(run_connection(stream, peer_addr, ctx.clone(), tls.clone()));
                     }
                     Err(e) => tracing::warn!(error = %e, "accept error"),
                 },
@@ -132,34 +132,20 @@ impl<B: BoltBackend> BoltListener<B> {
 async fn run_connection<B: BoltBackend>(
     stream: TcpStream,
     peer_addr: SocketAddr,
-    backend: Arc<B>,
-    sessions: Arc<SessionManager>,
-    auth: Option<Arc<dyn AuthValidator>>,
+    ctx: Arc<ConnectionContext<B>>,
     tls: Option<Arc<TlsAcceptor>>,
-    max_message_size: usize,
 ) {
     match tls {
         Some(acceptor) => match acceptor.accept(stream).await {
-            Ok(stream) => {
-                handshake_and_run(stream, peer_addr, backend, sessions, auth, max_message_size)
-                    .await
-            }
+            Ok(stream) => handshake_and_run(stream, peer_addr, &ctx).await,
             Err(e) => tracing::debug!(%peer_addr, error = %e, "TLS handshake failed"),
         },
-        None => {
-            handshake_and_run(stream, peer_addr, backend, sessions, auth, max_message_size).await
-        }
+        None => handshake_and_run(stream, peer_addr, &ctx).await,
     }
 }
 
-async fn handshake_and_run<S, B>(
-    mut stream: S,
-    peer_addr: SocketAddr,
-    backend: Arc<B>,
-    sessions: Arc<SessionManager>,
-    auth: Option<Arc<dyn AuthValidator>>,
-    max_message_size: usize,
-) where
+async fn handshake_and_run<S, B>(mut stream: S, peer_addr: SocketAddr, ctx: &ConnectionContext<B>)
+where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     B: BoltBackend,
 {
@@ -167,18 +153,7 @@ async fn handshake_and_run<S, B>(
         Ok(version) => {
             tracing::debug!(%peer_addr, ?version, "Bolt handshake complete");
             let (reader, writer) = tokio::io::split(stream);
-            let mut conn = Connection::new(
-                reader,
-                CoalescingWriter::new(writer),
-                backend,
-                sessions,
-                auth,
-                peer_addr,
-                Some(max_message_size),
-            );
-            if let Err(e) = conn.run().await {
-                tracing::debug!(%peer_addr, error = %e, "Bolt connection closed");
-            }
+            serve_connection(reader, CoalescingWriter::new(writer), ctx, peer_addr).await;
         }
         Err(e) => tracing::debug!(%peer_addr, error = %e, "Bolt handshake failed"),
     }

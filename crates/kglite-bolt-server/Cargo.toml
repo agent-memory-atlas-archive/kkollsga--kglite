@@ -106,3 +106,6 @@ subtle = "2.5.0"
 # (days-since-Unix-epoch). Already transitive via kglite; pin to the
 # same version range so a workspace-level chrono bump touches us too.
 chrono = { version = "0.4.45", default-features = false }
+# `BytesMut` is the buffer type of boltr's public message encoder, which the
+# connection guards use to frame their refusal FAILURE.
+bytes = "1.5"

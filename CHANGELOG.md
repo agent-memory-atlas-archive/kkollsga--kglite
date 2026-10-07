@@ -85,6 +85,40 @@ before upgrading.
   `WITH` clauses that aggregate, use `DISTINCT` or `ORDER BY`, or carry a
   parameter `LIMIT` or `SKIP` are unchanged.
 
+- **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
+  that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
+  the connection to its ready state, and it could run queries and commit write
+  transactions without credentials (a defect in `boltr` 0.2.0, the Bolt library
+  the server uses). Servers started with `--auth basic` were affected, in every
+  release since the server shipped; `--auth none` servers accept every client
+  by design. The server now refuses every query, transaction and routing
+  request from a connection that has not completed a successful LOGON with
+  `Neo.ClientError.Security.Unauthorized`, and closes the connection on the
+  first rejected LOGON. **Do:** upgrade, and treat data on an `--auth basic`
+  server reachable by untrusted clients as exposed.
+
+- `kglite-bolt-server` no longer aborts the whole process on a deeply nested
+  PackStream value. One message of nested one-element lists overflowed the
+  decoder's stack and killed the server for every client. A message nested
+  deeper than 128 levels now gets a FAILURE and its connection is closed.
+
+- `kglite-bolt-server` now bounds what an unauthenticated client can make it
+  allocate. A decoded value costs far more memory than its wire size, and
+  `--max-message-size` (16 MiB by default) applied before LOGON. A message
+  larger than 64 KiB before a successful LOGON now gets a FAILURE and its
+  connection is closed.
+
+- `kglite-bolt-server` now closes a connection's session however the
+  connection ends. When a client vanished while a result was streaming, the
+  session stayed registered, kept its open transaction (and the writer slot),
+  and counted against `--max-sessions`; a few such disconnects locked every
+  client out.
+
+- `kglite-bolt-server --idle-timeout` no longer reaps a client that is paging
+  through a result. Only RUN refreshed the idle timer, so a client sending PULL
+  for longer than the timeout lost its session mid-result. Every message now
+  counts as activity.
+
 - `kglite-bolt-server` now sets `TCP_NODELAY` on every accepted connection.
   On Linux each small Bolt reply waited for the client's delayed ACK, so every
   exchange took ~41 ms and an explicit transaction ~123 ms (measured in CI).
