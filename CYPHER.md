@@ -2703,7 +2703,8 @@ manifest).
 
 - An explicit lower bound above 10 (`*11..`) raises the ceiling to that bound.
 - A range whose minimum exceeds its maximum (`*5..2`) is a parse error.
-- Spell out `*1..N` when you need more than 10 hops.
+- Spell out `*1..N` when you need more than 10 hops. A query with an open-ended
+  form carries a warning saying so in `ResultView.warnings`.
 - `shortestPath()` and `allShortestPaths()` are not capped (see below).
 
 ### The relationship variable is a list

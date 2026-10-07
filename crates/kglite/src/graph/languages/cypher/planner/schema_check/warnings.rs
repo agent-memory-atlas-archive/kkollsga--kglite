@@ -816,6 +816,51 @@ pub(crate) fn collect_query_warnings(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
 ) -> QueryWarnings {
+    let mut warnings = collect_schema_warnings(query, graph, params);
+    if has_open_ended_var_length(&query.clauses) {
+        warnings
+            .other
+            .push(OPEN_ENDED_VAR_LENGTH_WARNING.to_string());
+    }
+    warnings
+}
+
+const OPEN_ENDED_VAR_LENGTH_WARNING: &str = "Variable-length pattern without an upper bound \
+     (`*` or `*N..`) stops at the default ceiling of 10 hops, so longer paths are not returned. \
+     Write an explicit maximum (`*1..N`) to search deeper.";
+
+/// Whether a read `MATCH` writes an open-ended variable-length segment whose
+/// maximum the engine defaulted. `shortestPath()` / `allShortestPaths()`
+/// patterns are exempt: they treat an open form as unbounded.
+fn has_open_ended_var_length(clauses: &[Clause]) -> bool {
+    clauses.iter().any(|clause| match clause {
+        Clause::Match(m) | Clause::OptionalMatch(m) => {
+            m.patterns.iter().enumerate().any(|(index, pattern)| {
+                let shortest = m
+                    .path_assignments
+                    .iter()
+                    .any(|a| a.pattern_index == index && a.is_shortest_path);
+                !shortest
+                    && pattern.elements.iter().any(|element| {
+                        matches!(
+                            element,
+                            PatternElement::Edge(ep)
+                                if ep.var_length.is_some() && !ep.var_length_max_written
+                        )
+                    })
+            })
+        }
+        Clause::Union(u) => has_open_ended_var_length(&u.query.clauses),
+        Clause::CallSubquery { body, .. } => has_open_ended_var_length(&body.clauses),
+        _ => false,
+    })
+}
+
+fn collect_schema_warnings(
+    query: &CypherQuery,
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+) -> QueryWarnings {
     let have_node_schema =
         !graph.node_type_metadata.is_empty() || graph.type_indices.keys().next().is_some();
     let have_edge_schema = !graph.connection_type_metadata.is_empty();
