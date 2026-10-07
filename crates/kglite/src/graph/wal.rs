@@ -64,9 +64,10 @@
 //! and replay is idempotent, so a prefix is a valid earlier state rather
 //! than a corrupt one. A cut can also leave a *hole*: later pages on disk, an
 //! earlier page never written, so a frame that straddles it fails its checksum
-//! with intact frames after it. [`has_lost_page_signature`] reads a frame whose
-//! page-aligned span is zeroed as that torn tail; any other checksum failure
-//! before further frames is damage and refuses to open.
+//! with bytes after it. That is non-tail damage, and recovery never guesses at
+//! it: the writer's open copies the whole log to a `<wal>.quarantine-<UTC>`
+//! sibling (durably, never deleted), continues on the valid prefix, and reports
+//! it as a [`WalQuarantine`]. If the copy fails the open is refused.
 //!
 //! One invariant this places on the *caller*: a checkpoint must not
 //! truncate frames that are still only in the page cache, or replaying the
@@ -743,27 +744,29 @@ struct ResumePoint {
     version: u8,
     stream_len: u64,
     valid_bytes: u64,
+    /// `Some(n)` when the stop is non-tail damage: bytes that may belong to
+    /// later commits follow it, and `n` is how many complete frames provably
+    /// decode right after a checksum-failing frame (a lower bound; a zeroed
+    /// length field leaves no boundary to count from).
+    non_tail: Option<usize>,
 }
 
 struct FrameScan {
     diagnostic: Option<String>,
     resume: ResumePoint,
-    non_tail_damage: bool,
 }
 
-impl FrameScan {
-    fn ensure_appendable(&self) -> io::Result<()> {
-        if self.non_tail_damage {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "WAL corruption at byte offset {} ends before EOF ({} bytes); refusing to append \
-                     or truncate non-tail damage. Recover the sidecar or move it aside explicitly.",
-                    self.resume.valid_bytes, self.resume.stream_len
-                ),
-            ));
-        }
-        Ok(())
+/// A reader that remembers whether any byte passed through it was non-zero.
+struct NonzeroTrack<R> {
+    inner: R,
+    nonzero: bool,
+}
+
+impl<R: Read> Read for NonzeroTrack<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.nonzero |= buf[..n].iter().any(|&b| b != 0);
+        Ok(n)
     }
 }
 
@@ -783,7 +786,10 @@ fn scan_frames(
     let header_len = (WAL_MAGIC.len() + 1) as u64;
     let mut consumed: u64 = header_len;
     let mut frame_count = 0usize;
-    let stopped_at = loop {
+    // The offset of the stop, where the following frame would start if its
+    // length survived, and whether the stop was a zero-filled hole.
+    let mut stop: Option<(u64, Option<u64>, Option<bool>)> = None;
+    while stop.is_none() {
         match read_frame_step(&mut r, stream_len, consumed, codec)? {
             FrameStep::Frame(frame, frame_len) => {
                 sink(frame);
@@ -791,33 +797,48 @@ fn scan_frames(
                 consumed += frame_len;
             }
             // A clean EOF is the normal end and says nothing.
-            FrameStep::Eof => break None,
-            FrameStep::Torn => break Some((consumed, None)),
+            FrameStep::Eof => break,
+            FrameStep::Torn => stop = Some((consumed, None, None)),
+            FrameStep::Hole { crc_zero } => stop = Some((consumed, None, Some(crc_zero))),
             // The length prefix survived, so the next frame boundary is
             // known and the bytes past this frame can be probed.
-            FrameStep::Corrupt(frame_len) => break Some((consumed, Some(consumed + frame_len))),
+            FrameStep::Corrupt(frame_len) => {
+                stop = Some((consumed, Some(consumed + frame_len), None));
+            }
         }
-    };
-    // A corrupt frame with a known end before EOF is not a trailing frame,
-    // even if the following bytes do not decode. Never search payload bytes
-    // for a guessed boundary; a torn prefix supplies no next boundary at all.
-    let non_tail_damage = stopped_at
-        .and_then(|(_, next)| next)
-        .is_some_and(|next| next < stream_len);
-    let diagnostic = stopped_at.map(|(offset, resume)| {
-        let trailing = resume.map_or(0, |next| {
-            count_intact_frames(&mut r, stream_len, next, codec)
-        });
-        recovery_diagnostic(offset, stream_len, frame_count, trailing)
-    });
+    }
+    // Damage is non-tail when anything non-zero follows it: a corrupt frame
+    // ending before EOF, or a zero hole, with later bytes on disk. Zeros to
+    // the end of the file are an extended length whose data never landed,
+    // which is the torn tail of a power cut. A torn frame that runs past EOF
+    // is a tail by construction. Never search payload bytes for a guessed
+    // boundary; a torn prefix supplies no next boundary at all.
+    let mut trailing = 0;
+    let mut non_tail = None;
+    if let Some((_, next, hole)) = stop.filter(|(_, next, hole)| next.is_some() || hole.is_some()) {
+        let mut tracked = NonzeroTrack {
+            inner: &mut r,
+            nonzero: hole == Some(false),
+        };
+        if let Some(next) = next {
+            trailing = count_intact_frames(&mut tracked, stream_len, next, codec);
+        }
+        // An unreadable remainder counts as non-zero: keep the bytes.
+        let drained = io::copy(&mut tracked, &mut io::sink()).is_ok();
+        if next.is_none_or(|n| n < stream_len) && (tracked.nonzero || !drained) {
+            non_tail = Some(trailing);
+        }
+    }
+    let diagnostic =
+        stop.map(|(offset, ..)| recovery_diagnostic(offset, stream_len, frame_count, trailing));
     Ok(FrameScan {
         diagnostic,
         resume: ResumePoint {
             version,
             stream_len,
             valid_bytes: consumed,
+            non_tail,
         },
-        non_tail_damage,
     })
 }
 
@@ -837,6 +858,10 @@ enum FrameStep {
     /// short payload. There is no trustworthy next-frame boundary, so nothing
     /// beyond this point can be probed.
     Torn,
+    /// A zero length prefix: a zero-filled hole, where no frame boundary is
+    /// known. Carries whether the checksum field was zero too. Whether the
+    /// log continues past the hole is decided by the bytes that follow it.
+    Hole { crc_zero: bool },
     /// The frame's header was intact but its *contents* were not (CRC
     /// mismatch or an undecodable payload). Carries the frame's total on-disk
     /// length, which locates the following frame.
@@ -869,18 +894,15 @@ fn read_frame_step(
     let expected_crc = u32::from_le_bytes(crc_buf);
 
     if len == 0 {
-        // A run of zero bytes — the shape an OS crash leaves when a
-        // file's length was extended but its data block never reached
-        // the platter, which `DurabilityLevel::Normal` makes reachable.
-        // `crc32(b"") == 0`, so a zero prefix would otherwise pass the
-        // CRC check as a "valid" empty frame and reach the decoder.
-        // `append_frame` can never emit one (the smallest real payload
-        // is a two-byte Postcard `lsn` + `ops` pair), so treat it as the
-        // torn tail it is — by intent, rather than relying on the
-        // decoder to reject it. Deliberately `Torn` and not `Corrupt`: a
-        // hole says nothing about where the next frame starts, so the bytes
-        // after it must not be probed as if they were one.
-        return Ok(FrameStep::Torn);
+        // A run of zero bytes: what an OS crash leaves when a file's length
+        // was extended but its data never reached the disk, which
+        // `DurabilityLevel::Normal` makes reachable. `crc32(b"") == 0`, so a
+        // zero prefix would otherwise pass the CRC check as an empty frame.
+        // `append_frame` never emits one. A hole says nothing about where the
+        // next frame starts, so the bytes after it are never probed as one.
+        return Ok(FrameStep::Hole {
+            crc_zero: expected_crc == 0,
+        });
     }
     if len > stream_len.saturating_sub(after_header) {
         // Declared length exceeds the bytes that exist — torn or
@@ -893,9 +915,6 @@ fn read_frame_step(
     }
     let frame_len = 8 + len;
     if crc32(&payload) != expected_crc {
-        if has_lost_page_signature(&payload, after_header) {
-            return Ok(FrameStep::Torn);
-        }
         return Ok(FrameStep::Corrupt(frame_len));
     }
     let limits = crate::serde_codec::DecodeLimits::new(MAX_WAL_FRAME_BYTES, len);
@@ -903,34 +922,6 @@ fn read_frame_step(
         Ok(frame) => Ok(FrameStep::Frame(frame, frame_len)),
         Err(_) => Ok(FrameStep::Corrupt(frame_len)),
     }
-}
-
-/// The unit an OS crash loses unsynced file data in: one page-cache page.
-const LOST_PAGE_BYTES: u64 = 4096;
-
-/// Whether a checksum-failing frame carries the mark of a power cut rather than
-/// of bit damage: file pages that were never written out read back as zeros.
-///
-/// `payload_offset` is the payload's byte offset in the file. Lost pages are
-/// whole and page-aligned, so a frame that straddles one holds either a full
-/// aligned zero page in its middle, or a zero run that starts exactly on a page
-/// boundary and runs to the frame's end (the frame finished inside the lost
-/// page). Only unsynced frames can look like this: a barriered frame was on
-/// disk before the next one was written. Reading the damage as a torn tail
-/// therefore loses nothing a `normal` commit promised. A flipped bit does not
-/// zero a page-aligned run.
-fn has_lost_page_signature(payload: &[u8], payload_offset: u64) -> bool {
-    let end = payload_offset + payload.len() as u64;
-    let mut boundary = payload_offset.div_ceil(LOST_PAGE_BYTES) * LOST_PAGE_BYTES;
-    while boundary < end {
-        let lo = (boundary - payload_offset) as usize;
-        let hi = ((boundary + LOST_PAGE_BYTES).min(end) - payload_offset) as usize;
-        if payload[lo..hi].iter().all(|&b| b == 0) {
-            return true;
-        }
-        boundary += LOST_PAGE_BYTES;
-    }
-    false
 }
 
 /// How many complete frames sit after a corrupt one, purely to tell the
@@ -969,7 +960,7 @@ fn recovery_diagnostic(offset: u64, stream_len: u64, recovered: usize, trailing:
             "[kglite] WAL recovery stopped at a torn/corrupt frame at byte offset {offset} \
              (of {stream_len}); recovered {recovered} intact frame(s) before it. This is expected \
              after a crash mid-commit; the torn tail is discarded from recovered state. A writer repairs only a trailing \
-             frame before appending; it refuses damage with a known following frame boundary."
+             frame before appending; damage with bytes after it is quarantined instead."
         );
     }
     let discarded = stream_len.saturating_sub(offset);
@@ -977,7 +968,8 @@ fn recovery_diagnostic(offset: u64, stream_len: u64, recovered: usize, trailing:
         "[kglite] WAL recovery stopped at a corrupt frame at byte offset {offset} \
          (of {stream_len}); recovered {recovered} intact frame(s) before it. At least \
          {trailing} later frame(s) still decode cleanly, and all {discarded} byte(s) from \
-         the stop point to the end of the file are discarded: a frame's effect depends on \
+         the stop point to the end of the file are left out of the recovered state (a writer's \
+         open keeps them whole in a `.quarantine-` copy): a frame's effect depends on \
          every frame before it, so the log cannot be trusted past the corruption. This looks \
          like mid-file damage rather than a crash tail — committed work is being dropped. \
          Check the storage this log lives on, and treat the last checkpoint plus the \
@@ -1134,7 +1126,6 @@ pub(crate) fn recover_for_append(
     };
     let metadata = file.metadata()?;
     let read = scan_frames(BufReader::new(&file), metadata.len(), sink)?;
-    read.ensure_appendable()?;
     if let Some(message) = read.diagnostic {
         eprintln!("{message}");
     }
@@ -1190,7 +1181,10 @@ fn truncate_to_header(file: &mut File) -> io::Result<()> {
 /// not.
 ///
 /// The classification rules applied below are documented on [`Wal::open`].
-fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> {
+fn prepare_wal_file(
+    path: &Path,
+    boundary: &AppendBoundary,
+) -> io::Result<(File, Option<WalQuarantine>)> {
     use std::io::{Seek, SeekFrom};
     let recovered = boundary.recovered();
     let header_len = (WAL_MAGIC.len() + 1) as u64;
@@ -1209,7 +1203,7 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
         write_header(&mut file)?;
         file.sync_all()?;
         sync_parent_dir(path)?;
-        return Ok(file);
+        return Ok((file, None));
     }
 
     let mut header = [0u8; 5];
@@ -1219,7 +1213,7 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
 
     if file_len < header_len || (!magic_ok && file_len == header_len) {
         truncate_to_header(&mut file)?;
-        return Ok(file);
+        return Ok((file, None));
     }
     if !magic_ok {
         return Err(io::Error::new(
@@ -1245,10 +1239,12 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
         }
         None => {
             file.seek(SeekFrom::Start(0))?;
-            let read = scan_frames(BufReader::new(&mut file), file_len, drop)?;
-            read.ensure_appendable()?;
-            read.resume
+            scan_frames(BufReader::new(&mut file), file_len, drop)?.resume
         }
+    };
+    let quarantine = match point.non_tail {
+        Some(frames) => Some(quarantine_log(&mut file, path, point, frames)?),
+        None => None,
     };
     repair_tail(&file, point)?;
     if header[4] != WAL_FORMAT_VERSION {
@@ -1263,7 +1259,109 @@ fn prepare_wal_file(path: &Path, boundary: &AppendBoundary) -> io::Result<File> 
         file.write_all(&[WAL_FORMAT_VERSION])?;
         file.sync_data()?;
     }
-    Ok(file)
+    Ok((file, quarantine))
+}
+
+/// What a writer's open set aside instead of dropping: the original log, kept
+/// whole, when it held non-tail damage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalQuarantine {
+    /// The sibling holding a byte-for-byte copy of the log as it was found.
+    pub path: PathBuf,
+    /// Byte offset of the damage; the valid prefix ends here.
+    pub damage_offset: u64,
+    /// Bytes from the damage to the end of the log, no longer in the live log.
+    pub bytes_set_aside: u64,
+    /// Complete frames that decode right after the damage (a lower bound).
+    pub frames_set_aside: usize,
+}
+
+impl WalQuarantine {
+    /// The one-line account shown to operators.
+    pub(crate) fn message(&self) -> String {
+        format!(
+            "the write-ahead log held damage at byte offset {} with data after it; {} \
+             byte(s) (at least {} later frame(s)) were set aside, and the log continues from \
+             its valid prefix. The original log is preserved unchanged at '{}'. Commits in the \
+             set-aside bytes are not part of the served graph.",
+            self.damage_offset,
+            self.bytes_set_aside,
+            self.frames_set_aside,
+            self.path.display()
+        )
+    }
+}
+
+/// Copy the whole log to a fresh `<wal>.quarantine-<UTC>` sibling and make the
+/// copy durable (file, then directory) before the caller cuts the live log back
+/// to its valid prefix. Never overwrites, never deletes. Any failure leaves the
+/// live log untouched and refuses the open: the alternative is dropping bytes
+/// that may be committed work.
+fn quarantine_log(
+    file: &mut File,
+    path: &Path,
+    point: ResumePoint,
+    frames_set_aside: usize,
+) -> io::Result<WalQuarantine> {
+    use std::io::{Seek, SeekFrom};
+    let refuse = |why: String| {
+        io::Error::other(format!(
+            "WAL '{}' has damage at byte offset {} with data after it, and the original \
+             could not be quarantined ({why}); refusing to open rather than drop it. Free space \
+             or fix the directory and retry, or move the log aside explicitly.",
+            path.display(),
+            point.valid_bytes
+        ))
+    };
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let (mut copy, quarantine_path) = (0u32..)
+        .find_map(|attempt| {
+            let suffix = if attempt == 0 {
+                String::new()
+            } else {
+                format!("-{attempt}")
+            };
+            let candidate = path.with_file_name(format!("{name}.quarantine-{stamp}{suffix}"));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => Some(Ok((f, candidate))),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .expect("an unbounded search returns")
+        .map_err(|e| refuse(format!("creating the copy: {e}")))?;
+    let copied = (|| -> io::Result<()> {
+        file.seek(SeekFrom::Start(0))?;
+        let n = io::copy(&mut file.take(point.stream_len), &mut copy)?;
+        if n != point.stream_len {
+            return Err(io::Error::other(format!(
+                "copied {n} of {} bytes",
+                point.stream_len
+            )));
+        }
+        copy.sync_all()?;
+        sync_parent_dir(&quarantine_path)
+    })();
+    if let Err(e) = copied {
+        drop(copy);
+        let _ = std::fs::remove_file(&quarantine_path);
+        return Err(refuse(e.to_string()));
+    }
+    let report = WalQuarantine {
+        path: quarantine_path,
+        damage_offset: point.valid_bytes,
+        bytes_set_aside: point.stream_len - point.valid_bytes,
+        frames_set_aside,
+    };
+    eprintln!("[kglite] ERROR {}", report.message());
+    Ok(report)
 }
 
 /// Truncation is synced before an append handle exists, even at Normal:
@@ -1300,6 +1398,8 @@ pub struct Wal {
     /// Set when a failed append could not be cut back: the log's tail is then
     /// unknown, so every later append and sync refuses.
     poisoned: Option<String>,
+    /// Set when this open quarantined a damaged log.
+    quarantine: Option<WalQuarantine>,
     #[cfg(test)]
     fault: Option<AppendFault>,
 }
@@ -1318,8 +1418,10 @@ pub(crate) enum AppendFault {
 impl Wal {
     /// Open the WAL at `path` for appending, creating it with a fresh
     /// header if absent. Verified frames are preserved; an unreadable trailing
-    /// frame is truncated and synced before appending. A corrupt frame ending
-    /// before EOF is refused. Call [`recover`] first if its frames need replay.
+    /// frame is truncated and synced before appending. Damage with bytes after
+    /// it is copied whole to a `.quarantine-` sibling first, and the open then
+    /// continues on the valid prefix; if the copy fails the open is refused.
+    /// Call [`recover`] first if its frames need replay.
     ///
     /// The header is validated on open. A file too short to hold a full
     /// header, or a header-sized file with the wrong magic, can never
@@ -1362,7 +1464,7 @@ impl Wal {
     ) -> io::Result<Self> {
         // Maintenance uses a read/write handle: append handles cannot portably
         // truncate or seek-write. Reuse durable open's scan under its lease.
-        let maintained = prepare_wal_file(&path, &boundary)?;
+        let (maintained, quarantine) = prepare_wal_file(&path, &boundary)?;
         let file = OpenOptions::new().read(true).append(true).open(&path)?;
         if !same_open_file(&file, &maintained)? {
             return Err(io::Error::new(
@@ -1377,9 +1479,15 @@ impl Wal {
             sync,
             end,
             poisoned: None,
+            quarantine,
             #[cfg(test)]
             fault: None,
         })
+    }
+
+    /// The quarantine this open performed, if the log held non-tail damage.
+    pub(crate) fn quarantine(&self) -> Option<&WalQuarantine> {
+        self.quarantine.as_ref()
     }
 
     /// Append one frame — the commit point.

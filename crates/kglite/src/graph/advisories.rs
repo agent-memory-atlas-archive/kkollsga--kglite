@@ -18,11 +18,15 @@ use std::collections::HashSet;
 /// Most source nodes the duplicate-edge confirmation walks per type.
 const CONFIRM_SCAN_NODES: usize = 200_000;
 
+/// Code of the advisory a durable open raises when it set a damaged
+/// write-ahead log aside; `affected` holds the quarantine file's path.
+pub(crate) const WAL_QUARANTINED: &str = "wal_quarantined";
+
 /// One reason to distrust a loaded file's data shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataAdvisory {
-    /// Stable code: `folded_history_edges`, `timeseries_parent_copies` or
-    /// `implicit_parent_edge_duplicates`.
+    /// Stable code: `folded_history_edges`, `timeseries_parent_copies`,
+    /// `implicit_parent_edge_duplicates` or `wal_quarantined`.
     pub code: String,
     /// The oldest library version that wrote the file's data.
     pub writer: String,

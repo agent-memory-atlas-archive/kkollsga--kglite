@@ -165,6 +165,18 @@ pub(crate) fn start_graph(
             )
         })?;
     record(StartupStep::SessionOpened);
+    // The engine's open reports a quarantined write-ahead log as an advisory;
+    // the operator reads it here, before any client connects.
+    for advisory in kglite::api::data_advisories(&session.snapshot())
+        .iter()
+        .filter(|a| a.code == "wal_quarantined")
+    {
+        tracing::error!(
+            quarantine = ?advisory.affected,
+            "{}",
+            advisory.message
+        );
+    }
     Ok(StartedGraph {
         session,
         level,

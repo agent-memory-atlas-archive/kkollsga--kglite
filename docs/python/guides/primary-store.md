@@ -127,10 +127,12 @@ mode wherever the storage mode supports it: the default in-memory backend and
   trailing frame that replay discards rather than half-applying.
 - **What recovery reports.** It says which of two cases it found:
   - A torn tail is reported as the ordinary aftermath of a crash.
-  - A corrupt frame with intact frames *after* it is named as mid-file damage,
-    and the report says how much committed work is being discarded. The log
-    cannot be trusted past corruption, so that is a storage problem to
-    investigate rather than a routine restart.
+  - A corrupt frame with bytes *after* it is named as mid-file damage. A
+    durable open copies the whole log to a `.quarantine-` sibling, continues on
+    the frames before the damage, and lists a `wal_quarantined` advisory in
+    `graph_info()`. The copy is never deleted, and the open is refused if it
+    cannot be written. The log cannot be trusted past corruption, so that is a
+    storage problem to investigate rather than a routine restart.
 - **Coverage.** Every way of changing a graph is logged, not only Cypher:
   `add_nodes`, `add_relationships`, label changes, and committed transactions
   included.

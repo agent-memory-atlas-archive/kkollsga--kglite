@@ -311,11 +311,20 @@ Rules recovery follows:
 - A frame is whole or discarded. A partial last frame is cut off at the next
   open.
 - At `normal`, a cut can leave later log pages on disk and an earlier page
-  unwritten. A frame that spans the gap fails its checksum. Recovery reads a
-  checksum failure whose frame holds a page-aligned run of zero bytes as that
-  torn tail and keeps the frames before it.
-- Any other checksum failure with frames after it is damage, not a power cut.
-  The server refuses to open the log and names the offset.
+  unwritten. A frame that spans the gap fails its checksum with bytes after it.
+- Damage with bytes after it is quarantined, never dropped and never guessed
+  at. This covers a power-cut gap and any other checksum or length failure.
+  The server copies the whole log to `<graph>.kgl-wal.quarantine-<UTC time>`,
+  makes the copy durable, and keeps serving from the frames before the damage.
+  The copy is never deleted. The server logs an error at startup with the copy's
+  path, the byte offset of the damage and how many bytes and frames were set
+  aside, and `graph_info()` lists a `wal_quarantined` advisory. Commits inside
+  the set-aside bytes are not in the served graph; inspect the copy to recover
+  them.
+- If the copy cannot be written, the server refuses to open the log and says
+  why. Free space or fix the directory and restart.
+- A torn tail, with nothing but zeros or no bytes after the damage, is cut off
+  at the next open without a copy.
 - A commit whose frame cannot be written (full disk, failing barrier) is not
   applied, and the log is cut back to its last whole frame. If the cut-back
   itself fails, the log refuses further commits until the server restarts.

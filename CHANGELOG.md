@@ -86,13 +86,18 @@ before upgrading.
   (release build, macOS loopback, raw reader, min of 3 runs, two agreeing
   rounds). Small exchanges stay at ~21 us.
 
-- A write-ahead log that a power cut left with a gap now reopens. At
-  `--durability normal` a cut can persist later log pages and lose an earlier
-  one; a frame spanning the gap failed its checksum and the server refused to
-  start ("refusing to append or truncate non-tail damage"). Such a frame, when
-  it holds a page-aligned run of zeros, is now read as the torn tail and the
-  frames before it are kept. Any other checksum failure before further frames
-  still refuses.
+- A write-ahead log with damage before further bytes is now quarantined
+  instead of refusing to start. At `--durability normal` a power cut can
+  persist later log pages and lose an earlier one, and a frame spanning the gap
+  failed its checksum ("refusing to append or truncate non-tail damage"). A
+  durable open now copies the whole log to `<graph>.kgl-wal.quarantine-<UTC
+  time>`, makes the copy durable, and continues on the frames before the
+  damage. The copy is never deleted. The open logs an error naming the copy,
+  the byte offset and how much was set aside; `kglite-bolt-server` repeats it
+  at startup, and `graph_info()` lists a `wal_quarantined` advisory. If the
+  copy cannot be written the open is refused. A torn tail, with nothing but
+  zeros or no bytes after it, is still cut off without a copy. An undamaged log
+  opens unchanged.
 - A commit whose log write failed (full disk, failing barrier) no longer
   costs the commits after it. The failed bytes stayed in the log, the next
   commit appended behind them, and recovery stopped at the dead bytes and

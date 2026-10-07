@@ -84,25 +84,31 @@ fn resumed_appends_follow_checksum_tail_repair_and_legacy_upgrade() {
 }
 
 #[test]
-fn non_tail_damage_refuses_append_without_touching_file() {
+fn non_tail_damage_is_quarantined_and_the_valid_prefix_continues() {
     for later in [encoded_frame(3), vec![1, 2, 3]] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("graph.kgl-wal");
-        let mut bytes = prefix(MIN_READABLE_WAL_FORMAT_VERSION);
+        let intact = prefix(MIN_READABLE_WAL_FORMAT_VERSION);
+        let mut bytes = intact.clone();
         let mut bad = encoded_frame(2);
         bad[8] ^= 0xff;
         bytes.extend_from_slice(&bad);
         bytes.extend_from_slice(&later);
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(recover(&path).unwrap(), vec![node_frame(1)]);
-        let error = Wal::open(path.clone(), SyncMode::PageCache).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("refusing to append"), "{error}");
+        let mut wal = Wal::open(path.clone(), SyncMode::PageCache).unwrap();
+        let report = wal.quarantine().cloned().expect("damage is reported");
+        assert_eq!(report.damage_offset, intact.len() as u64);
+        assert_eq!(report.bytes_set_aside, (bad.len() + later.len()) as u64);
+        assert_eq!(std::fs::read(&report.path).unwrap(), bytes, "kept whole");
+        wal.append(&node_frame(2)).unwrap();
+        drop(wal);
         assert_eq!(
-            std::fs::read(path).unwrap(),
-            bytes,
-            "no truncation or legacy header upgrade"
+            recover(&path).unwrap(),
+            vec![node_frame(1), node_frame(2)],
+            "the live log is the valid prefix plus new commits"
         );
+        assert_eq!(std::fs::read(&report.path).unwrap(), bytes);
     }
 }
 
@@ -160,6 +166,7 @@ fn tail_truncation_error_is_not_reported_as_repaired() {
         version: WAL_FORMAT_VERSION,
         stream_len: bytes.len() as u64,
         valid_bytes: intact.len() as u64,
+        non_tail: None,
     };
     assert!(repair_tail(&read_only, point).is_err());
     assert_eq!(std::fs::read(path).unwrap(), bytes);

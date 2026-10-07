@@ -230,6 +230,14 @@ fn finish_recovered_open(
         *graph = Arc::new(prepared);
     }
     let dir = make_dir_graph_mut(graph);
+    if let Some(quarantine) = wal.quarantine() {
+        dir.advisories.push(crate::graph::advisories::DataAdvisory {
+            code: crate::graph::advisories::WAL_QUARANTINED.to_string(),
+            writer: dir.save_metadata.oldest_writer.clone(),
+            message: quarantine.message(),
+            affected: vec![quarantine.path.display().to_string()],
+        });
+    }
     // A preexisting CDC wrapper captured replay's writes only in the working
     // copy. Drop those historical events after writer-open, never on failure.
     if let Some(rg) = dir.graph.recording_mut() {
