@@ -1388,13 +1388,9 @@ impl Wal {
     /// stable storage; under [`SyncMode::PageCache`] once the kernel has
     /// them.
     pub fn append(&mut self, frame: &WalFrame) -> io::Result<()> {
-        let payload = crate::serde_codec::encode_versioned(
-            crate::serde_codec::CURRENT_CODEC,
-            frame,
-            MAX_WAL_FRAME_BYTES,
-        )
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.append_payload(&payload)
+        let mut framed = Vec::new();
+        append_frame(&mut framed, frame)?;
+        self.append_framed(&framed)
     }
 
     /// Resolve `raw` against `dir` straight into one frame at `lsn` and append
@@ -1410,7 +1406,7 @@ impl Wal {
         let mut body = FrameBody::new();
         crate::graph::storage::recording::resolve_ops_into(raw, dir, &mut |op| body.push(&op));
         let payload = body.finish(lsn)?;
-        self.append_payload(&payload)
+        self.append_framed(&frame_bytes(&payload)?)
     }
 
     /// Write one envelope and take the commit point, leaving the log exactly as
@@ -1421,12 +1417,11 @@ impl Wal {
     /// every later acknowledged frame would sit past a torn or unacknowledged
     /// one, where recovery stops. If the log cannot be cut back it is poisoned
     /// rather than appended to blindly.
-    fn append_payload(&mut self, payload: &[u8]) -> io::Result<()> {
+    fn append_framed(&mut self, framed: &[u8]) -> io::Result<()> {
         if let Some(reason) = &self.poisoned {
             return Err(io::Error::other(reason.clone()));
         }
-        let framed = frame_bytes(payload)?;
-        let written = self.write_frame(&framed).and_then(|()| self.commit_point());
+        let written = self.write_frame(framed).and_then(|()| self.commit_point());
         match written {
             Ok(()) => {
                 self.end += framed.len() as u64;
