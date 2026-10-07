@@ -35,6 +35,16 @@ before upgrading.
   keep the earlier behaviour, start the server with
   `--write-concurrency optimistic`.
 
+### Changed
+
+- Concurrent Bolt writers no longer retry. With 4 writers each committing 1000
+  batches of 40 rows (release build, two runs per mode), conflict retries fell
+  from 9-11 per run to 0, the slowest commit from 8-33 s to under 75 ms, and
+  throughput rose from 90-101 to 156 batches/s on disjoint keys and from
+  244-333 to 432-464 batches/s on overlapping keys. Median commit latency now
+  includes the wait for the slot: 25 ms against 7 ms on disjoint keys. A lone
+  writer is unchanged within run-to-run noise.
+
 ### Added
 
 - `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still

@@ -61,6 +61,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import shlex
 import shutil
 import threading
 import time
@@ -85,6 +86,11 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.bolt_stress]
 #: recorded row could not say which profile produced it.
 _PINNED_BINARY = os.environ.get("KGLITE_BENCH_BOLT_BINARY")
 _BENCH_BINARY = Path(_PINNED_BINARY) if _PINNED_BINARY else _BOLT_BINARY
+
+#: Server flags appended to every cell (shell-quoted), so one binary can be
+#: measured under both `--write-concurrency` modes: an A/B that changes the
+#: flag and nothing else.
+_EXTRA_SERVER_ARGS = shlex.split(os.environ.get("KGLITE_BENCH_BOLT_EXTRA_ARGS", ""))
 
 
 #: OCC conflict status code. Classification is by code — never by exception
@@ -523,7 +529,8 @@ def _run_cell(
             result.probe_ms.extend(durations)
             result.probe_errors.extend(errors)
 
-    extra_args = ["--durability", durability] if durability is not None else None
+    extra_args = ["--durability", durability] if durability is not None else []
+    extra_args += _EXTRA_SERVER_ARGS
     proc, url = _spawn_bolt_server(cell_graph, binary=_BENCH_BINARY, extra_args=extra_args)
     try:
         with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password"), **_RETRY_KW) as driver:
