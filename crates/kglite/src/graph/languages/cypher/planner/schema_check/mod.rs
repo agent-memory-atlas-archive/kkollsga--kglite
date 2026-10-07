@@ -84,6 +84,7 @@ use crate::graph::schema::{DirGraph, InternedKey};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 
+mod path_variables;
 mod type_mismatch;
 mod warnings;
 
@@ -433,6 +434,7 @@ fn validate_scope_with_globals(
     globals: &HashSet<String>,
 ) -> Result<(), SchemaError> {
     let mut scope = initial.clone();
+    let mut path_variables = path_variables::PathVariables::default();
     // Set by an aggregating RETURN, consumed by the ORDER BY that follows it.
     // Rides through a trailing SKIP/LIMIT; any other clause clears it.
     let mut aggregate_order_scope: Option<AggregateOrderScope> = None;
@@ -445,13 +447,11 @@ fn validate_scope_with_globals(
         }
         match clause {
             Clause::Match(m) | Clause::OptionalMatch(m) => {
+                path_variables.enter_match(m, &scope, globals)?;
                 for pattern in &m.patterns {
                     bind_pattern(pattern, &mut scope);
                 }
-                for path in &m.path_assignments {
-                    reject_global_redeclaration(&path.variable, globals)?;
-                    scope.insert(path.variable.clone());
-                }
+                scope.extend(m.path_assignments.iter().map(|a| a.variable.clone()));
                 // The clause's own WHERE sees this clause's pattern variables,
                 // so it is validated only after binding them.
                 if let Some(wc) = &m.where_clause {
@@ -468,6 +468,7 @@ fn validate_scope_with_globals(
             Clause::With(with_clause) => {
                 reject_global_redeclarations_in_with(with_clause, globals)?;
                 scope = scope_after_with(with_clause, scope, globals)?;
+                path_variables.project_with(with_clause);
             }
             Clause::OrderBy(order) => {
                 for item in &order.items {

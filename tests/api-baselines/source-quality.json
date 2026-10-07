@@ -235,7 +235,7 @@
       "path": "crates/kglite/src/graph/languages/cypher/planner/schema_check/mod.rs",
       "qualified_name": "crate::validate_scope_with_globals",
       "lines": 104,
-      "branches": 55,
+      "branches": 54,
       "nesting": 4
     },
     {
