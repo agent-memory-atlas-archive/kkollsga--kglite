@@ -18,6 +18,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::coalesce::CoalescingWriter;
 use boltr::error::BoltError;
 use boltr::server::connection::Connection;
 use boltr::server::handshake::server_handshake;
@@ -168,7 +169,7 @@ async fn handshake_and_run<S, B>(
             let (reader, writer) = tokio::io::split(stream);
             let mut conn = Connection::new(
                 reader,
-                writer,
+                CoalescingWriter::new(writer),
                 backend,
                 sessions,
                 auth,

@@ -79,6 +79,13 @@ before upgrading.
   the same flags, TLS, auth, idle-session reaping and graceful shutdown as
   before.
 
+- `kglite-bolt-server` now writes a streamed result in a few large writes, not
+  three small writes and a flush per row. Streaming 1M scalar rows takes
+  ~110 ms, down from ~1480 ms (and ~4430 ms with `TCP_NODELAY` alone); 100k
+  rows ~11 ms, down from ~146 ms; 10k nodes ~23 ms, down from ~39 ms
+  (release build, macOS loopback, raw reader, min of 3 runs, two agreeing
+  rounds). Small exchanges stay at ~21 us.
+
 - A query with two variable-length patterns now matches both. Since 0.18.1
   the second pattern returned only its zero-hop row, or nothing for `*1..`,
   in separate `MATCH` clauses, one comma-separated `MATCH`, after `WITH`, and

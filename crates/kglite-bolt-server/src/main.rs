@@ -27,6 +27,7 @@ use crate::startup::{start_graph, DurabilityRequest};
 mod accept;
 mod auth;
 mod backend;
+mod coalesce;
 mod error_map;
 mod startup;
 mod value_adapter;
