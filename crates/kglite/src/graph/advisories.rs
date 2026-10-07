@@ -22,11 +22,15 @@ const CONFIRM_SCAN_NODES: usize = 200_000;
 /// write-ahead log aside; `affected` holds the quarantine file's path.
 pub(crate) const WAL_QUARANTINED: &str = "wal_quarantined";
 
+/// Code of the advisory a durable open raises when it cut a non-zero log tail
+/// and saved it; `affected` holds the saved file's path.
+pub(crate) const WAL_TAIL_SAVED: &str = "wal_tail_saved";
+
 /// One reason to distrust a loaded file's data shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataAdvisory {
     /// Stable code: `folded_history_edges`, `timeseries_parent_copies`,
-    /// `implicit_parent_edge_duplicates` or `wal_quarantined`.
+    /// `implicit_parent_edge_duplicates`, `wal_quarantined` or `wal_tail_saved`.
     pub code: String,
     /// The oldest library version that wrote the file's data.
     pub writer: String,

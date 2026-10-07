@@ -323,8 +323,13 @@ Rules recovery follows:
   them.
 - If the copy cannot be written, the server refuses to open the log and says
   why. Free space or fix the directory and restart.
-- A torn tail, with nothing but zeros or no bytes after the damage, is cut off
-  at the next open without a copy.
+- A torn tail is cut off at the next open, and any non-zero byte in it is saved
+  first. The server writes exactly the cut bytes to
+  `<graph>.kgl-wal.torn-<UTC time>-at-<offset>`, logs the path, offset and byte
+  count, and `graph_info()` lists a `wal_tail_saved` advisory. A crash
+  mid-append leaves such a tail. A tail of zeros (space that was extended but
+  never written) is cut without a copy. If the copy cannot be written, the
+  server refuses to open the log.
 - A commit whose frame cannot be written (full disk, failing barrier) is not
   applied, and the log is cut back to its last whole frame. If the cut-back
   itself fails, the log refuses further commits until the server restarts.

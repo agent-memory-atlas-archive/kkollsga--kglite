@@ -67,7 +67,9 @@
 //! with bytes after it. That is non-tail damage, and recovery never guesses at
 //! it: the writer's open copies the whole log to a `<wal>.quarantine-<UTC>`
 //! sibling (durably, never deleted), continues on the valid prefix, and reports
-//! it as a [`WalQuarantine`]. If the copy fails the open is refused.
+//! it as a [`WalQuarantine`]. If the copy fails the open is refused. A cut-off
+//! tail holding any non-zero byte is first saved to `<wal>.torn-<UTC>-at-<offset>`
+//! ([`WalSavedTail`]); an all-zero tail is not.
 //!
 //! One invariant this places on the *caller*: a checkpoint must not
 //! truncate frames that are still only in the page cache, or replaying the
@@ -1184,7 +1186,7 @@ fn truncate_to_header(file: &mut File) -> io::Result<()> {
 fn prepare_wal_file(
     path: &Path,
     boundary: &AppendBoundary,
-) -> io::Result<(File, Option<WalQuarantine>)> {
+) -> io::Result<(File, Option<WalQuarantine>, Option<WalSavedTail>)> {
     use std::io::{Seek, SeekFrom};
     let recovered = boundary.recovered();
     let header_len = (WAL_MAGIC.len() + 1) as u64;
@@ -1203,7 +1205,7 @@ fn prepare_wal_file(
         write_header(&mut file)?;
         file.sync_all()?;
         sync_parent_dir(path)?;
-        return Ok((file, None));
+        return Ok((file, None, None));
     }
 
     let mut header = [0u8; 5];
@@ -1212,8 +1214,24 @@ fn prepare_wal_file(
     let magic_ok = read_len >= WAL_MAGIC.len() && header[..4] == WAL_MAGIC;
 
     if file_len < header_len || (!magic_ok && file_len == header_len) {
+        // A power cut mid-creation leaves a zero-filled or prefix-of-header
+        // stub; any other byte pattern is somebody's data and is saved first.
+        let mut expected = WAL_MAGIC.to_vec();
+        expected.push(WAL_FORMAT_VERSION);
+        let stub = &header[..read_len];
+        let saved = if stub.iter().all(|&b| b == 0) || stub == &expected[..read_len] {
+            None
+        } else {
+            let point = ResumePoint {
+                version: 0,
+                stream_len: file_len,
+                valid_bytes: 0,
+                non_tail: None,
+            };
+            save_torn_tail(&mut file, path, point)?
+        };
         truncate_to_header(&mut file)?;
-        return Ok((file, None));
+        return Ok((file, None, saved));
     }
     if !magic_ok {
         return Err(io::Error::new(
@@ -1242,9 +1260,9 @@ fn prepare_wal_file(
             scan_frames(BufReader::new(&mut file), file_len, drop)?.resume
         }
     };
-    let quarantine = match point.non_tail {
-        Some(frames) => Some(quarantine_log(&mut file, path, point, frames)?),
-        None => None,
+    let (quarantine, saved_tail) = match point.non_tail {
+        Some(frames) => (Some(quarantine_log(&mut file, path, point, frames)?), None),
+        None => (None, save_torn_tail(&mut file, path, point)?),
     };
     repair_tail(&file, point)?;
     if header[4] != WAL_FORMAT_VERSION {
@@ -1259,7 +1277,7 @@ fn prepare_wal_file(
         file.write_all(&[WAL_FORMAT_VERSION])?;
         file.sync_data()?;
     }
-    Ok((file, quarantine))
+    Ok((file, quarantine, saved_tail))
 }
 
 /// What a writer's open set aside instead of dropping: the original log, kept
@@ -1292,39 +1310,28 @@ impl WalQuarantine {
     }
 }
 
-/// Copy the whole log to a fresh `<wal>.quarantine-<UTC>` sibling and make the
-/// copy durable (file, then directory) before the caller cuts the live log back
-/// to its valid prefix. Never overwrites, never deletes. Any failure leaves the
-/// live log untouched and refuses the open: the alternative is dropping bytes
-/// that may be committed work.
-fn quarantine_log(
+/// Copy `len` bytes of `file` from `from` into a fresh `<wal>.<infix>` sibling,
+/// durably (file, then directory). Never overwrites: a taken name gets a numeric
+/// suffix. A failure removes the partial copy and returns why.
+fn copy_range_aside(
     file: &mut File,
     path: &Path,
-    point: ResumePoint,
-    frames_set_aside: usize,
-) -> io::Result<WalQuarantine> {
+    infix: &str,
+    from: u64,
+    len: u64,
+) -> Result<PathBuf, String> {
     use std::io::{Seek, SeekFrom};
-    let refuse = |why: String| {
-        io::Error::other(format!(
-            "WAL '{}' has damage at byte offset {} with data after it, and the original \
-             could not be quarantined ({why}); refusing to open rather than drop it. Free space \
-             or fix the directory and retry, or move the log aside explicitly.",
-            path.display(),
-            point.valid_bytes
-        ))
-    };
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let (mut copy, quarantine_path) = (0u32..)
+    let (mut copy, copy_path) = (0u32..)
         .find_map(|attempt| {
             let suffix = if attempt == 0 {
                 String::new()
             } else {
                 format!("-{attempt}")
             };
-            let candidate = path.with_file_name(format!("{name}.quarantine-{stamp}{suffix}"));
+            let candidate = path.with_file_name(format!("{name}.{infix}{suffix}"));
             match OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -1336,24 +1343,54 @@ fn quarantine_log(
             }
         })
         .expect("an unbounded search returns")
-        .map_err(|e| refuse(format!("creating the copy: {e}")))?;
+        .map_err(|e| format!("creating the copy: {e}"))?;
     let copied = (|| -> io::Result<()> {
-        file.seek(SeekFrom::Start(0))?;
-        let n = io::copy(&mut file.take(point.stream_len), &mut copy)?;
-        if n != point.stream_len {
-            return Err(io::Error::other(format!(
-                "copied {n} of {} bytes",
-                point.stream_len
-            )));
+        file.seek(SeekFrom::Start(from))?;
+        let n = io::copy(&mut file.take(len), &mut copy)?;
+        if n != len {
+            return Err(io::Error::other(format!("copied {n} of {len} bytes")));
         }
         copy.sync_all()?;
-        sync_parent_dir(&quarantine_path)
+        sync_parent_dir(&copy_path)
     })();
     if let Err(e) = copied {
         drop(copy);
-        let _ = std::fs::remove_file(&quarantine_path);
-        return Err(refuse(e.to_string()));
+        let _ = std::fs::remove_file(&copy_path);
+        return Err(e.to_string());
     }
+    Ok(copy_path)
+}
+
+fn utc_stamp() -> String {
+    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
+}
+
+/// Copy the whole log to a fresh `<wal>.quarantine-<UTC>` sibling before the
+/// caller cuts the live log back to its valid prefix. Any failure leaves the
+/// live log untouched and refuses the open: the alternative is dropping bytes
+/// that may be committed work.
+fn quarantine_log(
+    file: &mut File,
+    path: &Path,
+    point: ResumePoint,
+    frames_set_aside: usize,
+) -> io::Result<WalQuarantine> {
+    let quarantine_path = copy_range_aside(
+        file,
+        path,
+        &format!("quarantine-{}", utc_stamp()),
+        0,
+        point.stream_len,
+    )
+    .map_err(|why| {
+        io::Error::other(format!(
+            "WAL '{}' has damage at byte offset {} with data after it, and the original \
+             could not be quarantined ({why}); refusing to open rather than drop it. Free space \
+             or fix the directory and retry, or move the log aside explicitly.",
+            path.display(),
+            point.valid_bytes
+        ))
+    })?;
     let report = WalQuarantine {
         path: quarantine_path,
         damage_offset: point.valid_bytes,
@@ -1362,6 +1399,84 @@ fn quarantine_log(
     };
     eprintln!("[kglite] ERROR {}", report.message());
     Ok(report)
+}
+
+/// What an open saved from a cut-off tail that held non-zero bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalSavedTail {
+    /// The sibling holding exactly the discarded bytes.
+    pub path: PathBuf,
+    /// Byte offset in the log where they began.
+    pub offset: u64,
+    pub bytes: u64,
+}
+
+impl WalSavedTail {
+    pub(crate) fn message(&self) -> String {
+        format!(
+            "the write-ahead log ended in {} non-empty byte(s) at offset {} that are not a \
+             complete frame; they were cut off and saved unchanged at '{}'. A crash \
+             mid-append leaves such a tail, and an unacknowledged commit is not in the served \
+             graph.",
+            self.bytes,
+            self.offset,
+            self.path.display()
+        )
+    }
+}
+
+/// Whether any byte of `file` in `from..to` is non-zero. Read errors count as
+/// non-zero: when in doubt, keep the bytes.
+fn range_has_nonzero(file: &mut File, from: u64, to: u64) -> bool {
+    use std::io::{Seek, SeekFrom};
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return true;
+    }
+    let mut track = NonzeroTrack {
+        inner: file.take(to - from),
+        nonzero: false,
+    };
+    io::copy(&mut track, &mut io::sink()).is_err() || track.nonzero
+}
+
+/// Save the bytes the tail repair is about to cut, unless they are all zero
+/// (space that was extended but never written). Same refusal rule as
+/// [`quarantine_log`]: a failed save leaves the log untouched and refuses the
+/// open, so no non-zero byte is ever discarded without a copy.
+fn save_torn_tail(
+    file: &mut File,
+    path: &Path,
+    point: ResumePoint,
+) -> io::Result<Option<WalSavedTail>> {
+    if point.valid_bytes >= point.stream_len
+        || !range_has_nonzero(file, point.valid_bytes, point.stream_len)
+    {
+        return Ok(None);
+    }
+    let len = point.stream_len - point.valid_bytes;
+    let saved = copy_range_aside(
+        file,
+        path,
+        &format!("torn-{}-at-{}", utc_stamp(), point.valid_bytes),
+        point.valid_bytes,
+        len,
+    )
+    .map_err(|why| {
+        io::Error::other(format!(
+            "WAL '{}' ends in {len} non-empty byte(s) at offset {} that are not a complete \
+             frame, and they could not be saved ({why}); refusing to open rather than drop \
+             them. Free space or fix the directory and retry, or move the log aside explicitly.",
+            path.display(),
+            point.valid_bytes
+        ))
+    })?;
+    let report = WalSavedTail {
+        path: saved,
+        offset: point.valid_bytes,
+        bytes: len,
+    };
+    eprintln!("[kglite] WARN {}", report.message());
+    Ok(Some(report))
 }
 
 /// Truncation is synced before an append handle exists, even at Normal:
@@ -1400,6 +1515,8 @@ pub struct Wal {
     poisoned: Option<String>,
     /// Set when this open quarantined a damaged log.
     quarantine: Option<WalQuarantine>,
+    /// Set when this open cut a non-zero tail and saved it.
+    saved_tail: Option<WalSavedTail>,
     #[cfg(test)]
     fault: Option<AppendFault>,
 }
@@ -1464,7 +1581,7 @@ impl Wal {
     ) -> io::Result<Self> {
         // Maintenance uses a read/write handle: append handles cannot portably
         // truncate or seek-write. Reuse durable open's scan under its lease.
-        let (maintained, quarantine) = prepare_wal_file(&path, &boundary)?;
+        let (maintained, quarantine, saved_tail) = prepare_wal_file(&path, &boundary)?;
         let file = OpenOptions::new().read(true).append(true).open(&path)?;
         if !same_open_file(&file, &maintained)? {
             return Err(io::Error::new(
@@ -1480,6 +1597,7 @@ impl Wal {
             end,
             poisoned: None,
             quarantine,
+            saved_tail,
             #[cfg(test)]
             fault: None,
         })
@@ -1488,6 +1606,11 @@ impl Wal {
     /// The quarantine this open performed, if the log held non-tail damage.
     pub(crate) fn quarantine(&self) -> Option<&WalQuarantine> {
         self.quarantine.as_ref()
+    }
+
+    /// The tail this open saved before cutting it, if it held non-zero bytes.
+    pub(crate) fn saved_tail(&self) -> Option<&WalSavedTail> {
+        self.saved_tail.as_ref()
     }
 
     /// Append one frame — the commit point.

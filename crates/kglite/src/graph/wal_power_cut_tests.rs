@@ -70,6 +70,23 @@ fn quarantines(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     found
 }
 
+/// The `.torn-` siblings of the log in `dir`, with the log offset each began at
+/// (the `-at-<offset>` suffix of its name).
+fn torn_files(dir: &std::path::Path) -> Vec<(u64, std::path::PathBuf)> {
+    let mut found: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter_map(|p| {
+            let name = p.file_name()?.to_string_lossy().into_owned();
+            let (_, rest) = name.split_once(".torn-")?;
+            let (_, at) = rest.split_once("-at-")?;
+            Some((at.split('-').next()?.parse().ok()?, p))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// Whether an image that recovers `kept` frames must be quarantined, worked
 /// out from how the fixture was laid out rather than from the scanner: the
 /// first lost frame is followed by non-zero bytes beyond its own span, or its
@@ -86,6 +103,32 @@ fn expects_quarantine(image: &[u8], kept: usize, ends: &[usize]) -> bool {
     let nonzero = |from: usize| image.get(from..).is_some_and(|b| b.iter().any(|&x| x != 0));
     let zero_len = image.get(stop..stop + 4).is_some_and(|b| b == [0; 4]);
     nonzero(ends[kept]) || (zero_len && nonzero(stop + 4))
+}
+
+/// Assert no non-zero byte of `original` was lost by an open that has just
+/// finished: the live log is a prefix of it, and the rest is either all zero or
+/// saved exactly (in a torn file at its offset, or inside a quarantined copy of
+/// the whole log).
+fn assert_no_byte_lost(dir: &std::path::Path, path: &std::path::Path, original: &[u8], tag: &str) {
+    let live = std::fs::read(path).unwrap();
+    assert!(
+        original.starts_with(&live),
+        "{tag}: live log is not a prefix"
+    );
+    let rest = &original[live.len()..];
+    let quarantined = quarantines(dir);
+    let torn = torn_files(dir);
+    if !quarantined.is_empty() {
+        assert_eq!(quarantined.len(), 1, "{tag}");
+        assert!(torn.is_empty(), "{tag}: both kinds");
+        assert_eq!(std::fs::read(&quarantined[0]).unwrap(), original, "{tag}");
+    } else if rest.iter().any(|&b| b != 0) {
+        assert_eq!(torn.len(), 1, "{tag}: non-zero tail not saved");
+        assert_eq!(torn[0].0, live.len() as u64, "{tag}: offset");
+        assert_eq!(std::fs::read(&torn[0].1).unwrap(), rest, "{tag}");
+    } else {
+        assert!(torn.is_empty(), "{tag}: all-zero tail saved");
+    }
 }
 
 /// Whether `got` is a prefix of the frames in `full` (lsn 1..).
@@ -124,6 +167,12 @@ fn every_unsynced_page_subset_reopens_to_a_prefix() {
             let before = std::fs::read(&path).unwrap();
             match Wal::open(path.clone(), SyncMode::PageCache) {
                 Ok(mut wal) => {
+                    assert_no_byte_lost(
+                        dir.path(),
+                        &path,
+                        &before,
+                        &format!("{persisted:#b}/{extended}"),
+                    );
                     let kept = quarantines(dir.path());
                     let want = expects_quarantine(&before, recovered.len(), &ends);
                     if kept.len() != usize::from(want) {
@@ -139,6 +188,34 @@ fn every_unsynced_page_subset_reopens_to_a_prefix() {
                         assert_eq!(std::fs::read(&kept[0]).unwrap(), before, "{persisted:#b}");
                     } else {
                         assert!(wal.quarantine().is_none(), "{persisted:#b}");
+                    }
+                    // No non-zero byte of the original may exist nowhere: it is in
+                    // the live log, in the quarantine copy, or in a saved tail.
+                    let live = std::fs::read(&path).unwrap();
+                    if live != before[..live.len()] {
+                        failures.push(format!(
+                            "{persisted:#b}/{extended}: live log is not a prefix"
+                        ));
+                        continue;
+                    }
+                    let cut = &before[live.len()..];
+                    let torn = torn_files(dir.path());
+                    let covered = if cut.iter().all(|&b| b == 0) {
+                        torn.is_empty()
+                    } else if want {
+                        true // the whole original is in the quarantine, asserted above
+                    } else {
+                        torn.len() == 1
+                            && torn[0].0 == live.len() as u64
+                            && std::fs::read(&torn[0].1).unwrap() == cut
+                            && wal.saved_tail().is_some_and(|t| t.path == torn[0].1)
+                    };
+                    if !covered {
+                        failures.push(format!(
+                            "{persisted:#b}/{extended}: {} cut byte(s) kept nowhere",
+                            cut.len()
+                        ));
+                        continue;
                     }
                     let next = recovered.len() as u64 + 1;
                     wal.append(&big_frame(next)).unwrap();
@@ -193,6 +270,10 @@ fn a_multi_page_frame_with_a_lost_middle_page_is_quarantined() {
     assert_eq!(std::fs::read(&report.path).unwrap(), full);
     assert_eq!(std::fs::metadata(&path).unwrap().len(), keep as u64);
     assert_eq!(quarantines(dir.path()).len(), 1);
+    assert!(
+        torn_files(dir.path()).is_empty(),
+        "quarantine covers the tail"
+    );
 }
 
 /// Bit damage with a complete frame after it is quarantined, never dropped.
@@ -212,26 +293,30 @@ fn a_flipped_byte_before_more_frames_is_quarantined() {
     assert_eq!(recover(&path).unwrap().len(), 3);
 }
 
-/// A genuine torn tail is discarded as before: no quarantine file, no report.
+/// A torn tail is cut off with no quarantine. Its bytes are saved to a `.torn-`
+/// sibling unless they are all zero.
 #[test]
-fn a_pure_torn_tail_is_discarded_without_quarantine() {
+fn a_torn_tail_is_cut_off_and_its_nonzero_bytes_are_saved() {
     let (full, ends) = image(6);
-    let mut tails: Vec<(&str, Vec<u8>)> = Vec::new();
-    tails.push(("short frame", full[..ends[3] + 50].to_vec()));
-    tails.push(("short header", full[..ends[3] + 3].to_vec()));
+    let mut tails: Vec<(&str, Vec<u8>, bool)> = Vec::new();
+    tails.push(("short frame", full[..ends[3] + 50].to_vec(), true));
+    tails.push(("short header", full[..ends[3] + 3].to_vec(), true));
     let mut zeros = full[..ends[3]].to_vec();
     zeros.extend(std::iter::repeat_n(0u8, 3 * PAGE));
-    tails.push(("zeros to eof", zeros));
+    tails.push(("zeros to eof", zeros, false));
     let mut flipped = full[..ends[4]].to_vec();
     flipped[ends[3] + 20] ^= 0xff;
-    tails.push(("bad last frame", flipped));
-    for (name, bytes) in tails {
+    tails.push(("bad last frame", flipped, true));
+    for (name, bytes, saved) in tails {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("g.kgl-wal");
         std::fs::write(&path, &bytes).unwrap();
         let wal = Wal::open(path.clone(), SyncMode::PageCache).unwrap();
         assert!(wal.quarantine().is_none(), "{name}");
+        assert_eq!(wal.saved_tail().is_some(), saved, "{name}");
         assert!(quarantines(dir.path()).is_empty(), "{name}");
+        assert_eq!(torn_files(dir.path()).len(), usize::from(saved), "{name}");
+        assert_no_byte_lost(dir.path(), &path, &bytes, name);
         assert_eq!(recover(&path).unwrap().len(), 4, "{name}");
     }
 }
@@ -248,6 +333,7 @@ fn an_undamaged_log_is_byte_for_byte_unchanged() {
     drop(wal);
     assert_eq!(std::fs::read(&path).unwrap(), full);
     assert!(quarantines(dir.path()).is_empty());
+    assert!(torn_files(dir.path()).is_empty());
 }
 
 /// Two quarantines in the same second never overwrite each other.
@@ -379,4 +465,170 @@ fn an_uncuttable_failed_append_poisons_the_log() {
         "{err}"
     );
     assert!(wal.sync().is_err());
+}
+
+/// A tail the repair cuts is saved first whenever it holds a non-zero byte, so
+/// the open drops nothing without a trace.
+mod saved_tail {
+    use super::*;
+
+    fn open_with(bytes: &[u8]) -> (TempDir, std::path::PathBuf, Wal) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("g.kgl-wal");
+        std::fs::write(&path, bytes).unwrap();
+        let wal = Wal::open(path.clone(), SyncMode::PageCache).unwrap();
+        (dir, path, wal)
+    }
+
+    /// The length field of a frame header overwritten by a larger value reads as
+    /// a torn frame running past EOF: everything after it, later frames
+    /// included, is cut. The cut bytes must be kept.
+    #[test]
+    fn a_header_that_swallows_later_frames_is_saved() {
+        let (mut full, ends) = image(6);
+        full[ends[2] + 2] = 0x7f;
+        full[ends[2] + 3] = 0x00;
+        let (dir, path, wal) = open_with(&full);
+        assert!(wal.quarantine().is_none());
+        let saved = wal.saved_tail().expect("tail reported");
+        let cut = &full[ends[2]..];
+        assert_eq!(saved.offset, ends[2] as u64);
+        assert_eq!(saved.bytes, cut.len() as u64);
+        assert_eq!(std::fs::read(&saved.path).unwrap(), cut);
+        assert_eq!(
+            torn_files(dir.path()),
+            vec![(ends[2] as u64, saved.path.clone())]
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), ends[2] as u64);
+    }
+
+    /// A crash mid-append leaves a partial frame; it is saved, not just cut.
+    #[test]
+    fn a_partial_frame_from_a_crash_mid_append_is_saved() {
+        let (full, ends) = image(5);
+        for extra in [3usize, 8, 50, ends[4] - ends[3] - 1] {
+            let bytes = &full[..ends[3] + extra.min(full.len() - ends[3])];
+            let (dir, _path, wal) = open_with(bytes);
+            let saved = wal.saved_tail().expect("partial frame reported");
+            assert_eq!(
+                std::fs::read(&saved.path).unwrap(),
+                &bytes[ends[3]..],
+                "{extra}"
+            );
+            assert_eq!(saved.offset, ends[3] as u64);
+            assert_eq!(torn_files(dir.path()).len(), 1);
+            assert!(quarantines(dir.path()).is_empty());
+        }
+    }
+
+    /// Zero-filled or pre-allocated space is nothing to keep.
+    #[test]
+    fn an_all_zero_tail_saves_nothing() {
+        let (full, ends) = image(5);
+        let mut bytes = full[..ends[3]].to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, 2 * PAGE + 17));
+        let (dir, path, wal) = open_with(&bytes);
+        assert!(wal.saved_tail().is_none());
+        assert!(torn_files(dir.path()).is_empty());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), ends[3] as u64);
+    }
+
+    /// A header-sized stub that is neither zero nor a header prefix is data.
+    #[test]
+    fn a_foreign_stub_in_place_of_the_header_is_saved() {
+        let (dir, _path, wal) = open_with(&[1, 2, 3, 4, 5]);
+        let saved = wal.saved_tail().expect("reported");
+        assert_eq!(std::fs::read(&saved.path).unwrap(), [1, 2, 3, 4, 5]);
+        assert_eq!(saved.offset, 0);
+        drop(dir);
+        let mut prefix = WAL_MAGIC.to_vec();
+        prefix.truncate(3);
+        let (dir, _path, wal) = open_with(&prefix);
+        assert!(
+            wal.saved_tail().is_none(),
+            "a torn header write is not data"
+        );
+        assert!(torn_files(dir.path()).is_empty());
+    }
+
+    /// An undamaged log opens with no file created and no byte changed.
+    #[test]
+    fn an_undamaged_log_creates_no_file() {
+        let (full, _) = image(8);
+        let (dir, path, wal) = open_with(&full);
+        assert!(wal.saved_tail().is_none() && wal.quarantine().is_none());
+        drop(wal);
+        assert_eq!(std::fs::read(&path).unwrap(), full);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// A tail that cannot be saved refuses the open and leaves the log as found.
+    #[cfg(unix)]
+    #[test]
+    fn a_tail_that_cannot_be_saved_refuses_to_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let (full, ends) = image(5);
+        let bytes = &full[..ends[3] + 50];
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("g.kgl-wal");
+        std::fs::write(&path, bytes).unwrap();
+        let set_mode = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+        set_mode(0o555);
+        let blocked = std::fs::File::create(dir.path().join("probe")).is_err();
+        let opened = Wal::open(path.clone(), SyncMode::PageCache);
+        set_mode(0o755);
+        if !blocked {
+            return; // running as a user the mode bits do not bind
+        }
+        let error = opened.expect_err("refused");
+        assert!(error.to_string().contains("refusing to open"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "log untouched");
+        assert!(torn_files(dir.path()).is_empty());
+    }
+
+    /// Two saves in the same second never overwrite each other.
+    #[test]
+    fn saved_tail_names_do_not_collide() {
+        let (full, ends) = image(5);
+        let bytes = &full[..ends[3] + 50];
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("g.kgl-wal");
+        for round in 0..3 {
+            std::fs::write(&path, bytes).unwrap();
+            drop(Wal::open(path.clone(), SyncMode::PageCache).unwrap());
+            assert_eq!(torn_files(dir.path()).len(), round + 1);
+        }
+        for (_, saved) in torn_files(dir.path()) {
+            assert_eq!(std::fs::read(saved).unwrap(), &bytes[ends[3]..]);
+        }
+    }
+
+    /// A durable open surfaces the saved tail where `graph_info()` and
+    /// `describe()` read advisories.
+    #[test]
+    fn a_durable_open_reports_the_saved_tail_as_an_advisory() {
+        use crate::graph::dir_graph::DirGraph;
+        use crate::graph::durability::open_log;
+        use std::sync::Arc;
+        let (full, ends) = image(5);
+        let dir = TempDir::new().unwrap();
+        let checkpoint = dir.path().join("g.kgl");
+        std::fs::write(wal_path(&checkpoint), &full[..ends[3] + 50]).unwrap();
+        let mut graph = Arc::new(DirGraph::new());
+        let (wal, _) = open_log(&mut graph, &checkpoint, DurabilityLevel::Normal)
+            .unwrap()
+            .unwrap();
+        drop(wal);
+        let found = torn_files(dir.path());
+        assert_eq!(found.len(), 1);
+        let advisory = graph
+            .advisories
+            .iter()
+            .find(|a| a.code == "wal_tail_saved")
+            .expect("advisory raised");
+        assert_eq!(advisory.affected, vec![found[0].1.display().to_string()]);
+        assert!(advisory.message.contains("offset"), "{}", advisory.message);
+    }
 }

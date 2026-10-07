@@ -95,9 +95,11 @@ before upgrading.
   damage. The copy is never deleted. The open logs an error naming the copy,
   the byte offset and how much was set aside; `kglite-bolt-server` repeats it
   at startup, and `graph_info()` lists a `wal_quarantined` advisory. If the
-  copy cannot be written the open is refused. A torn tail, with nothing but
-  zeros or no bytes after it, is still cut off without a copy. An undamaged log
-  opens unchanged.
+  copy cannot be written the open is refused. A torn tail is still cut
+  off, but any non-zero byte in it is first saved unchanged to
+  `<graph>.kgl-wal.torn-<UTC time>-at-<offset>`, with the same log line and a
+  `wal_tail_saved` advisory; an open refuses if that copy cannot be written.
+  A tail of zeros is cut without a copy. An undamaged log opens unchanged.
 - A commit whose log write failed (full disk, failing barrier) no longer
   costs the commits after it. The failed bytes stayed in the log, the next
   commit appended behind them, and recovery stopped at the dead bytes and

@@ -165,18 +165,7 @@ pub(crate) fn start_graph(
             )
         })?;
     record(StartupStep::SessionOpened);
-    // The engine's open reports a quarantined write-ahead log as an advisory;
-    // the operator reads it here, before any client connects.
-    for advisory in kglite::api::data_advisories(&session.snapshot())
-        .iter()
-        .filter(|a| a.code == "wal_quarantined")
-    {
-        tracing::error!(
-            quarantine = ?advisory.affected,
-            "{}",
-            advisory.message
-        );
-    }
+    log_wal_advisories(&session);
     Ok(StartedGraph {
         session,
         level,
@@ -185,6 +174,22 @@ pub(crate) fn start_graph(
         converted_from: opened.converted_from,
         writer_lease,
     })
+}
+
+/// The engine's open reports a quarantined log or a saved torn tail as
+/// advisories; the operator reads them here, before any client connects.
+fn log_wal_advisories(session: &Session) {
+    for advisory in kglite::api::data_advisories(&session.snapshot())
+        .iter()
+        .filter(|a| a.code == "wal_quarantined" || a.code == "wal_tail_saved")
+    {
+        tracing::error!(
+            code = %advisory.code,
+            saved = ?advisory.affected,
+            "{}",
+            advisory.message
+        );
+    }
 }
 
 #[cfg(test)]
@@ -572,6 +577,113 @@ mod tests {
                 level.name()
             );
         }
+    }
+
+    /// A `Write` that appends to a shared buffer, to read what startup logged.
+    #[derive(Clone, Default)]
+    struct LogCapture(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+        type Writer = LogCapture;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Startup logs a quarantined log and a saved torn tail at error level, naming
+    /// the file the operator should look at; an undamaged log logs neither.
+    #[test]
+    fn startup_logs_the_quarantine_and_the_saved_tail() {
+        let level = DurabilityLevel::Normal;
+        let started_logs = |scratch: &ScratchDir| {
+            let capture = LogCapture::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(capture.clone())
+                .with_ansi(false)
+                .finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+            start_graph(
+                &scratch.graph_path(),
+                None,
+                false,
+                explicit(level),
+                None,
+                &mut |_| {},
+            )
+            .unwrap_or_else(|e| panic!("restart: {e:#}"));
+            let text = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+            text
+        };
+        let siblings = |scratch: &ScratchDir, infix: &str| -> Vec<String> {
+            std::fs::read_dir(&scratch.0)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(infix))
+                .collect()
+        };
+        let committed = |tag: &str| {
+            let scratch = ScratchDir::new(tag);
+            seed_graph(&scratch.graph_path(), StorageMode::Memory);
+            let first = start_graph(
+                &scratch.graph_path(),
+                None,
+                false,
+                explicit(level),
+                None,
+                &mut |_| {},
+            )
+            .expect("durable startup");
+            for id in 1..=4 {
+                commit_write(
+                    &first.session,
+                    &format!("CREATE (:Person {{id: {id}, title: 'P{id}'}})"),
+                );
+            }
+            drop(first);
+            let wal = PathBuf::from(format!("{}-wal", scratch.graph_path().display()));
+            (scratch, wal)
+        };
+
+        let (clean, _) = committed("log-clean");
+        let logs = started_logs(&clean);
+        assert!(!logs.contains("write-ahead log"), "{logs}");
+
+        let (torn, wal) = committed("log-torn");
+        let mut bytes = std::fs::read(&wal).unwrap();
+        bytes.extend_from_slice(&[0x40, 0x01, 0x00, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x07]);
+        std::fs::write(&wal, bytes).unwrap();
+        let logs = started_logs(&torn);
+        let saved = siblings(&torn, ".torn-");
+        assert_eq!(saved.len(), 1, "{saved:?}");
+        assert!(
+            logs.contains("ERROR") && logs.contains("wal_tail_saved"),
+            "{logs}"
+        );
+        assert!(logs.contains(&saved[0]), "{logs}");
+
+        let (damaged, wal) = committed("log-damaged");
+        let mut bytes = std::fs::read(&wal).unwrap();
+        let at = bytes.len() / 4;
+        bytes[at] ^= 0xff;
+        std::fs::write(&wal, bytes).unwrap();
+        let logs = started_logs(&damaged);
+        let kept = siblings(&damaged, ".quarantine-");
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!(
+            logs.contains("ERROR") && logs.contains("wal_quarantined"),
+            "{logs}"
+        );
+        assert!(logs.contains(&kept[0]), "{logs}");
     }
 
     /// The inherited half of the same rule: turning durability off over a

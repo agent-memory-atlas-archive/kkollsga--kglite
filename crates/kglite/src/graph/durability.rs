@@ -238,6 +238,14 @@ fn finish_recovered_open(
             affected: vec![quarantine.path.display().to_string()],
         });
     }
+    if let Some(saved) = wal.saved_tail() {
+        dir.advisories.push(crate::graph::advisories::DataAdvisory {
+            code: crate::graph::advisories::WAL_TAIL_SAVED.to_string(),
+            writer: dir.save_metadata.oldest_writer.clone(),
+            message: saved.message(),
+            affected: vec![saved.path.display().to_string()],
+        });
+    }
     // A preexisting CDC wrapper captured replay's writes only in the working
     // copy. Drop those historical events after writer-open, never on failure.
     if let Some(rg) = dir.graph.recording_mut() {
