@@ -25,7 +25,7 @@ What each guard catches:
   rows. Each extra copy of the result adds hundreds of MB.
 * **Head-of-line blocking** -- with two async workers and six slow queries
   running, a ``RETURN 1`` on another connection must not wait for a whole query.
-* **Parameter decode** -- ``UNWIND $rows`` over 1k maps, message encoded once,
+* **Parameter decode** -- ``UNWIND $rows`` over 20k maps, message encoded once,
   against the embedded engine given the same rows.
 * **Reader scaling** -- point lookups from four processes must outrun one
   process; a server-wide lock serialises them to 1.0x.
@@ -60,15 +60,26 @@ except ImportError:  # CI copies this file and bolt_raw.py into one directory
 pytestmark = [pytest.mark.benchmark]
 
 #: Bolt `RETURN 1` over a raw client may cost this multiple of a bare TCP echo.
-MAX_EXCHANGE_VS_ECHO = 6.0
+#: Measured 3.0x on macOS and 5.2x on a Linux runner (the Python client frames
+#: more than the echo does); a Nagle stall is >1000x, so the ceiling is set for
+#: the stall, not for drift.
+MAX_EXCHANGE_VS_ECHO = 20.0
 #: Streamed rows may cost this multiple of the embedded engine materialising them.
 MAX_STREAM_VS_EMBEDDED = {"scalar": 3.0, "map10": 8.0}
-#: Peak resident memory of the server while streaming 100k ten-property maps.
-MAX_PEAK_RSS_MB = 1300
+#: Peak resident memory of the server while streaming 100k ten-property maps:
+#: measured 843 MB on a Linux runner and 1040-1054 MB on macOS, so the ceiling
+#: is 30% over each; an extra copy of the records adds ~450 MB.
+MAX_PEAK_RSS_MB = 1100 if sys.platform.startswith("linux") else 1400
 #: A `RETURN 1` during slow queries may wait this fraction of a slow query.
 MAX_PROBE_WAIT_FRACTION = 0.25
-#: Decoding 1k parameter maps may cost this multiple of the embedded engine.
-MAX_PARAMS_VS_EMBEDDED = 3.0
+#: Rows in the parameter-decode cell: enough that decoding, not the round
+#: trip, is most of the exchange.
+PARAM_ROWS = 20_000
+#: Decoding the parameter maps may cost this multiple of the embedded engine
+#: given the same rows. Measured 4.7x on macOS; 1k rows read 2.4x on macOS and
+#: 3.0x on a Linux runner, so the ceiling leaves ~1.2x for the runner. Decoding
+#: the parameters four times reads 8.3x.
+MAX_PARAMS_VS_EMBEDDED = 7.0
 #: Four reader processes must reach this multiple of one reader's throughput.
 MIN_READER_SCALING = 1.25
 
@@ -372,9 +383,11 @@ def test_bolt_slow_queries_do_not_stall_other_connections(graph_path, embedded):
 
 
 def test_bolt_parameter_decode_stays_near_the_embedded_engine(server, embedded):
-    rows = [{"id": i, "name": f"name{i}", "age": 20 + i % 60, "score": i * 0.5, "ok": i % 2 == 0} for i in range(1000)]
+    rows = [
+        {"id": i, "name": f"name{i}", "age": 20 + i % 60, "score": i * 0.5, "ok": i % 2 == 0} for i in range(PARAM_ROWS)
+    ]
     query = "UNWIND $rows AS r RETURN count(r) AS c, sum(r.age) AS a"
-    embedded_s = _min_seconds(lambda: embedded.cypher(query, params={"rows": rows}), 40, 5)
+    embedded_s = _min_seconds(lambda: embedded.cypher(query, params={"rows": rows}), 20, 3)
     # Encode once so the client's packing is not in the timed region.
     run_message = chunk(pack(Struct(SIG_RUN, query, {"rows": rows}, {})))
     pull_message = chunk(pack(Struct(SIG_PULL, {"n": -1})))
@@ -387,11 +400,11 @@ def test_bolt_parameter_decode_stays_near_the_embedded_engine(server, embedded):
             while conn.recv()[0] == SIG_RECORD:
                 pass
 
-        bolt_s = _min_seconds(exchange, 40, 5)
+        bolt_s = _min_seconds(exchange, 20, 3)
     ratio = bolt_s / embedded_s
-    _report("params-1k", bolt_ms=bolt_s * 1e3, embedded_ms=embedded_s * 1e3, ratio=ratio, **_controls(embedded))
+    _report("params", bolt_ms=bolt_s * 1e3, embedded_ms=embedded_s * 1e3, ratio=ratio, **_controls(embedded))
     assert ratio <= MAX_PARAMS_VS_EMBEDDED, (
-        f"UNWIND over 1k parameter maps took {bolt_s * 1e3:.2f} ms over Bolt, {ratio:.1f}x the embedded "
+        f"UNWIND over {PARAM_ROWS} parameter maps took {bolt_s * 1e3:.2f} ms over Bolt, {ratio:.1f}x the embedded "
         f"engine ({embedded_s * 1e3:.2f} ms); limit {MAX_PARAMS_VS_EMBEDDED}x"
     )
 

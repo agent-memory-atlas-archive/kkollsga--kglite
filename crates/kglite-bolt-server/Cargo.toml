@@ -107,5 +107,7 @@ subtle = "2.5.0"
 # same version range so a workspace-level chrono bump touches us too.
 chrono = { version = "0.4.45", default-features = false }
 # `BytesMut` is the buffer type of boltr's public message encoder, which the
-# connection guards use to frame their refusal FAILURE.
-bytes = "1.5"
+# connection guards use to frame their refusal FAILURE. "1", like
+# kglite-mcp-server's: cargo unifies the version across the workspace, so a
+# higher floor here conflicts with the 1.0.0 that member's floor selects.
+bytes = "1"
