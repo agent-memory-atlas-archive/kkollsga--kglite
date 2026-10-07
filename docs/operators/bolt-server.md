@@ -197,6 +197,12 @@ concurrent writers queue instead of conflicting at commit. Reads never wait.
 - Waiting writers are served in arrival order.
 - Reads (auto-commit and read-mode transactions) run on snapshots and never
   take or wait for the slot. A snapshot never shows an uncommitted write.
+- An auto-commit schema statement (`CREATE`/`DROP INDEX`, `CREATE`/`DROP
+  CONSTRAINT`) takes the slot for its one-shot transaction and obeys the wait
+  timeout.
+- Automatic and periodic checkpoints never take the slot. They save only
+  committed state, so an open writer's uncommitted work is never written, and
+  they neither wait for nor delay a queued writer.
 - A read-mode transaction cannot write. A mutation in one is refused with
   `Neo.ClientError.Statement.AccessMode`.
 

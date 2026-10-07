@@ -17,11 +17,25 @@ use super::*;
 const OUTDATED: &str = "Neo.TransientError.Transaction.Outdated";
 
 fn backend(mode: WriteConcurrency, wait_ms: u64, idle_ms: u64) -> Arc<KgliteBackend> {
+    backend_at(
+        std::env::temp_dir().join("writer-queue-unused.kgl"),
+        mode,
+        wait_ms,
+        idle_ms,
+    )
+}
+
+fn backend_at(
+    path: std::path::PathBuf,
+    mode: WriteConcurrency,
+    wait_ms: u64,
+    idle_ms: u64,
+) -> Arc<KgliteBackend> {
     let graph = new_dir_graph_in_mode(StorageMode::Memory, None).expect("memory graph");
     Arc::new(
         KgliteBackend::new(
             kglite::api::session::Session::new(graph),
-            std::env::temp_dir().join("writer-queue-unused.kgl"),
+            path,
             false,
             "127.0.0.1:0".into(),
             CsvImportPolicy::Denied,
@@ -375,4 +389,131 @@ async fn read_mode_transactions_cannot_write_in_queue_mode_only() {
         .await
         .unwrap();
     run(&o, &r, "CREATE (:Item {id: 1})").expect("optimistic mode keeps today's behaviour");
+}
+
+const DDL: &str = "CREATE INDEX FOR (n:Item) ON (n.id)";
+
+async fn run_ddl(b: &KgliteBackend) -> Result<(), BoltError> {
+    b.execute(&session(9), DDL, &HashMap::new(), &BoltDict::new(), None)
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn auto_commit_schema_ddl_takes_the_writer_slot() {
+    let b = backend(WriteConcurrency::Queue, 0, 0);
+    let sa = session(1);
+    let a = b.begin_transaction(&sa, &BoltDict::new()).await.unwrap();
+    run(&b, &a, "CREATE (:Item {id: 1})").unwrap();
+
+    let b2 = Arc::clone(&b);
+    let ddl = tokio::spawn(async move { run_ddl(&b2).await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!ddl.is_finished(), "DDL must wait behind the open writer");
+
+    b.commit(&sa, &a).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), ddl)
+        .await
+        .expect("DDL proceeds once the slot frees")
+        .unwrap()
+        .expect("DDL commits without a conflict");
+    // The slot is free again afterwards.
+    let t = tokio::time::timeout(
+        Duration::from_millis(300),
+        b.begin_transaction(&session(2), &BoltDict::new()),
+    )
+    .await
+    .expect("DDL released the slot")
+    .unwrap();
+    b.rollback(&session(2), &t).await.unwrap();
+}
+
+#[tokio::test]
+async fn auto_commit_schema_ddl_times_out_like_any_writer_and_optimistic_skips_the_slot() {
+    let q = backend(WriteConcurrency::Queue, 200, 0);
+    let held = q
+        .begin_transaction(&session(1), &BoltDict::new())
+        .await
+        .unwrap();
+    let err = run_ddl(&q).await.expect_err("slot is held");
+    assert_eq!(
+        code_of(&err),
+        "Neo.TransientError.Transaction.LockAcquisitionTimeout"
+    );
+    q.rollback(&session(1), &held).await.unwrap();
+    run_ddl(&q).await.expect("slot is free");
+
+    let o = backend(WriteConcurrency::Optimistic, 200, 0);
+    let _open = o
+        .begin_transaction(&session(1), &BoltDict::new())
+        .await
+        .unwrap();
+    run_ddl(&o).await.expect("optimistic mode never waits");
+}
+
+#[tokio::test]
+async fn automatic_checkpoint_neither_waits_for_nor_blocks_the_slot_and_never_saves_uncommitted_work(
+) {
+    // A checkpoint saves the *published* graph under the session lock and
+    // never takes the slot: an open writer's uncommitted work lives in its
+    // transaction copy, outside what a save can see.
+    let path = std::env::temp_dir().join(format!(
+        "kglite-writer-queue-ckpt-{}-{}.kgl",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let b = backend_at(path.clone(), WriteConcurrency::Queue, 5_000, 0);
+    let state = b.checkpoint_state();
+    let sa = session(1);
+    let a = b.begin_transaction(&sa, &BoltDict::new()).await.unwrap();
+    run(&b, &a, "CREATE (:Item {id: 1})").unwrap();
+    let before = b.session.version();
+
+    // A second writer is queued while the checkpoint runs.
+    let b2 = Arc::clone(&b);
+    let waiter = tokio::spawn(async move {
+        let tx = b2
+            .begin_transaction(&session(2), &BoltDict::new())
+            .await
+            .unwrap();
+        b2.commit(&session(2), &tx).await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let (s, p, st) = (b.session_handle(), path.clone(), Arc::clone(&state));
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || checkpoint_if_changed(&s, &p, &st)),
+    )
+    .await
+    .expect("a checkpoint must not wait for the writer slot")
+    .unwrap()
+    .expect("checkpoint");
+    assert!(matches!(outcome, CheckpointOutcome::Written(v) if v == before));
+    assert_eq!(
+        *state.lock().unwrap(),
+        Some(before),
+        "recorded version excludes the open transaction's work"
+    );
+    assert!(
+        !waiter.is_finished(),
+        "the checkpoint must not release the queue"
+    );
+
+    b.commit(&sa, &a).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the queued writer proceeds after the holder commits")
+        .unwrap();
+    // The commit changed the graph, so the next checkpoint writes again.
+    let (s, p, st) = (b.session_handle(), path.clone(), state);
+    let next = tokio::task::spawn_blocking(move || checkpoint_if_changed(&s, &p, &st))
+        .await
+        .unwrap()
+        .expect("checkpoint");
+    assert!(matches!(next, CheckpointOutcome::Written(v) if v > before));
+    let _ = std::fs::remove_file(&path);
 }

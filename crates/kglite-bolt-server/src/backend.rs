@@ -629,7 +629,7 @@ impl BoltBackend for KgliteBackend {
         } else {
             // Auto-commit: drivers attach tx metadata to RUN's extra.
             let meta = TxMeta::from_extra(extra)?;
-            self.execute_auto_commit(query, kg_params, &meta)?
+            self.execute_auto_commit(query, kg_params, &meta).await?
         };
 
         let elapsed_ms = elapsed_start.elapsed().as_millis() as i64;
@@ -1362,7 +1362,7 @@ impl KgliteBackend {
     /// transaction has touched data. Run as a transaction of its own, the
     /// statement either publishes with its schema change or leaves the graph
     /// untouched, and shares `COMMIT`'s conflict and durability handling.
-    fn execute_auto_commit(
+    async fn execute_auto_commit(
         &self,
         query: &str,
         kg_params: HashMap<String, Value>,
@@ -1380,7 +1380,9 @@ impl KgliteBackend {
                 ));
             }
             if is_schema_ddl(query) {
-                return self.execute_schema_auto_commit(query, &kg_params, meta);
+                return self
+                    .execute_schema_auto_commit(query, &kg_params, meta)
+                    .await;
             }
             // `Session` (`Neo.ClientError.Request.Invalid`), not `Forbidden`:
             // the remedy below is a client-side rewrite, so this is a
@@ -1403,13 +1405,28 @@ impl KgliteBackend {
     }
 
     /// Run one schema statement as its own transaction and publish it.
-    fn execute_schema_auto_commit(
+    ///
+    /// In queue mode the statement takes the writer slot for its one-shot
+    /// transaction, like any other write, so it runs on the latest graph and
+    /// cannot conflict with a queued writer's commit.
+    async fn execute_schema_auto_commit(
         &self,
         query: &str,
         kg_params: &HashMap<String, Value>,
         meta: &TxMeta,
     ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
         let opts = self.execute_opts(kg_params, meta);
+        let _slot = if self.writer.config().mode == WriteConcurrency::Queue {
+            let id = self.tx_counter.fetch_add(1, Ordering::Relaxed);
+            let permit = self
+                .acquire_writer_slot(&format!("auto-commit-{id}"))
+                .await?;
+            // A running statement is never idle, whatever the idle timeout.
+            let running = permit.activity().begin_query();
+            Some((permit, running))
+        } else {
+            None
+        };
         let mut tx = self.session.begin();
         let working = tx.working_mut().map_err(kg_to_bolt)?;
         let outcome =
