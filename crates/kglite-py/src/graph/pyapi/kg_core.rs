@@ -1638,7 +1638,7 @@ impl KnowledgeGraph {
     /// Supports patterns like:
     /// - Simple node: `(p:Person)`
     /// - Single hop: `(p:Person)-[:KNOWS]->(f:Person)`
-    /// - Multi-hop: `(p:Play)-[:HAS_PROSPECT]->(pr:Prospect)-[:BECAME_DISCOVERY]->(d:Discovery)`
+    /// - Multi-hop: `(p:Portfolio)-[:HAS_PROPOSAL]->(pr:Proposal)-[:BECAME_INITIATIVE]->(d:Initiative)`
     /// - Property filters: `(p:Person {name: "Alice"})`
     /// - Edge filters: `(a)-[:KNOWS {since: 2020}]->(b)`
     /// - Bidirectional: `(a)-[:KNOWS]-(b)` (matches both directions)
@@ -1661,14 +1661,14 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     # Find all plays with their prospects
-    ///     matches = graph.match_pattern('(p:Play)-[:HAS_PROSPECT]->(pr:Prospect)')
+    ///     # Find all plays with their proposals
+    ///     matches = graph.match_pattern('(p:Portfolio)-[:HAS_PROPOSAL]->(pr:Proposal)')
     ///     for m in matches:
-    ///         print(f"Play: {m['p']['title']}, Prospect: {m['pr']['title']}")
+    ///         print(f"Portfolio: {m['p']['title']}, Proposal: {m['pr']['title']}")
     ///
-    ///     # Find discoveries from specific prospects
+    ///     # Find initiatives from specific proposals
     ///     matches = graph.match_pattern(
-    ///         '(pr:Prospect {status: "Active"})-[:BECAME_DISCOVERY]->(d:Discovery)'
+    ///         '(pr:Proposal {status: "Active"})-[:BECAME_INITIATIVE]->(d:Initiative)'
     ///     )
     ///
     ///     # Limit results

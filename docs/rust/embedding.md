@@ -202,9 +202,9 @@ abstraction guide, including the durable-session contract.
 
 ### Dataset loaders
 
-The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) are no
+The pre-packaged dataset loaders (SEC EDGAR, Wikidata) are no
 longer part of the kglite core. They live in the separate
-kglite-datasets project. The `sec` / `sodir` / `wikidata` Cargo
+kglite-datasets project. The dataset-loader Cargo
 features and `kglite::datasets::*` modules have been removed.
 
 kglite loads the graphs those loaders produce via the ordinary lifecycle

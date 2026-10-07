@@ -35,17 +35,17 @@ class TestTraversalFiltering:
         for n in nodes:
             assert n["age"] > 35
 
-    def test_where_connection_properties(self, petroleum_graph):
-        prospects = petroleum_graph.select("Prospect")
-        high_share = prospects.traverse(
-            connection_type="BECAME_DISCOVERY",
+    def test_where_connection_properties(self, portfolio_graph):
+        proposals = portfolio_graph.select("Proposal")
+        high_share = proposals.traverse(
+            connection_type="BECAME_INITIATIVE",
             where_connection={"share_pct": {">=": 70.0}},
         )
         assert high_share.len() > 0
 
-    def test_where_connection_null(self, petroleum_graph):
-        prospects = petroleum_graph.select("Prospect")
-        with_weight = prospects.traverse(
+    def test_where_connection_null(self, portfolio_graph):
+        proposals = portfolio_graph.select("Proposal")
+        with_weight = proposals.traverse(
             connection_type="HAS_ESTIMATE",
             where_connection={"weight": {"is_not_null": True}},
         )
@@ -64,11 +64,11 @@ class TestTraversalFiltering:
 
 
 class TestTraversalChaining:
-    def test_multi_hop_traversal(self, petroleum_graph):
-        plays = petroleum_graph.select("Play")
-        prospects = plays.traverse(connection_type="HAS_PROSPECT")
-        discoveries = prospects.traverse(connection_type="BECAME_DISCOVERY")
-        assert discoveries.len() > 0
+    def test_multi_hop_traversal(self, portfolio_graph):
+        plays = portfolio_graph.select("Portfolio")
+        proposals = plays.traverse(connection_type="HAS_PROPOSAL")
+        initiatives = proposals.traverse(connection_type="BECAME_INITIATIVE")
+        assert initiatives.len() > 0
 
     def test_traverse_then_filter(self, social_graph):
         person = social_graph.select("Person").where({"title": "Person_1"})

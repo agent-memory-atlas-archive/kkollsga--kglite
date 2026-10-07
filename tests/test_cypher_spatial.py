@@ -426,7 +426,7 @@ class TestSpatialJoin:
 
     def test_multi_match_with_centroid_probe(self, spatial_join_graph):
         """Multi-MATCH form: `MATCH (a:Area) MATCH (b:Area) WHERE contains(a, centroid(b))`.
-        Sodir's IN_STRUCTURAL_ELEMENT shape — fusion must wire `centroid()`
+        The IN_STRUCTURAL_ELEMENT shape — fusion must wire `centroid()`
         through `SpatialProbeKind::Centroid` and produce the same pairs as
         the brute-force two-pattern path."""
         fused = spatial_join_graph.cypher(
@@ -581,9 +581,9 @@ class TestSpatialConfigInference:
                 ],
             }
         )
-        g.add_nodes(df, "Prospect", "id", "name")  # no spatial column_types
+        g.add_nodes(df, "Proposal", "id", "name")  # no spatial column_types
         rows = list(
-            g.cypher("MATCH (a:Prospect), (b:Prospect) WHERE a.id = 1 AND b.id = 2 RETURN intersects(a, b) AS overlaps")
+            g.cypher("MATCH (a:Proposal), (b:Proposal) WHERE a.id = 1 AND b.id = 2 RETURN intersects(a, b) AS overlaps")
         )
         assert rows == [{"overlaps": True}]
 
@@ -630,12 +630,12 @@ class TestSpatialConfigInference:
         )
         g.add_nodes(
             df,
-            "Prospect",
+            "Proposal",
             "id",
             "name",
             column_types={"shape_a": "geometry"},
         )
-        rows = list(g.cypher("MATCH (a:Prospect) RETURN centroid(a) AS c"))
+        rows = list(g.cypher("MATCH (a:Proposal) RETURN centroid(a) AS c"))
         # Explicit config picks shape_a (centered at 10.5, 10.5), not wkt_geometry (0.5, 0.5)
         assert abs(rows[0]["c"]["latitude"] - 10.5) < 1e-6
         assert abs(rows[0]["c"]["longitude"] - 10.5) < 1e-6

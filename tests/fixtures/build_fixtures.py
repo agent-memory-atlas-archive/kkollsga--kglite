@@ -67,15 +67,15 @@ def build_spatial_graph() -> None:
 
 
 def build_timeseries_graph() -> None:
-    """3 Field nodes with monthly oil + gas timeseries for 2018-2020.
+    """3 Project nodes with monthly output + flow timeseries for 2018-2020.
 
-    Values seeded with random.seed(42). TROLL's 2019 oil_col sums to ~1563
+    Values seeded with random.seed(42). TUNDRA's 2019 output_col sums to ~1563
     and the March 2019 point is 177.12 — both pinned by Cat K tests.
     """
     g = kglite.KnowledgeGraph()
     random.seed(42)
     rows = []
-    for fid, fname in [("troll", "TROLL"), ("ekofisk", "EKOFISK"), ("snorre", "SNORRE")]:
+    for fid, fname in [("tundra", "TUNDRA"), ("ember", "EMBER"), ("sable", "SABLE")]:
         for year in [2018, 2019, 2020]:
             for month in range(1, 13):
                 rows.append(
@@ -84,18 +84,18 @@ def build_timeseries_graph() -> None:
                         "name": fname,
                         "year": year,
                         "month": month,
-                        "oil_col": round(random.uniform(50, 200), 2),
-                        "gas_col": round(random.uniform(10, 80), 2),
+                        "output_col": round(random.uniform(50, 200), 2),
+                        "flow_col": round(random.uniform(10, 80), 2),
                     }
                 )
     g.add_nodes(
         pd.DataFrame(rows),
-        "Field",
+        "Project",
         "id",
         "name",
         timeseries={
             "time": {"year": "year", "month": "month"},
-            "channels": ["oil_col", "gas_col"],
+            "channels": ["output_col", "flow_col"],
             "resolution": "month",
         },
     )
@@ -103,7 +103,7 @@ def build_timeseries_graph() -> None:
 
 
 def build_orphan_graph() -> None:
-    """6 Wellbores + 1 Field, 3 of the wellbores connected via IN_FIELD."""
+    """6 Sites + 1 Project, 3 of the sites connected via IN_PROJECT."""
     g = kglite.KnowledgeGraph()
     g.add_nodes(
         pd.DataFrame(
@@ -122,13 +122,13 @@ def build_orphan_graph() -> None:
                 )
             ]
         ),
-        "Wellbore",
+        "Site",
         "id",
         "name",
     )
     g.add_nodes(
         pd.DataFrame([{"id": "f1", "name": "Field_Alpha"}]),
-        "Field",
+        "Project",
         "id",
         "name",
     )
@@ -140,17 +140,17 @@ def build_orphan_graph() -> None:
                 {"src": "w3", "tgt": "f1"},
             ]
         ),
-        "IN_FIELD",
-        "Wellbore",
+        "IN_PROJECT",
+        "Site",
         "src",
-        "Field",
+        "Project",
         "tgt",
     )
     g.save(str(OUT / "graph_with_orphans.kgl"))
 
 
 def build_duplicate_graph() -> None:
-    """6 Prospects: 2 ALPHA, 2 BETA, 2 unique (GAMMA, DELTA)."""
+    """6 Proposals: 2 ALPHA, 2 BETA, 2 unique (GAMMA, DELTA)."""
     g = kglite.KnowledgeGraph()
     g.add_nodes(
         pd.DataFrame(
@@ -163,7 +163,7 @@ def build_duplicate_graph() -> None:
                 {"id": "p6", "name": "DELTA"},
             ]
         ),
-        "Prospect",
+        "Proposal",
         "id",
         "name",
     )

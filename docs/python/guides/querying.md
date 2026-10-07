@@ -88,9 +88,9 @@ on multi-level chains, property enrichment, and grouped collection.
 After traversal, `collect_grouped()` groups leaf nodes by a parent type:
 
 ```python
-grouped = graph.select('Field').traverse('HAS_WELL') \
-    .collect_grouped('Field')
-# → {'TROLL': [{...}, ...], 'EKOFISK': [{...}, ...]}
+grouped = graph.select('Project').traverse('HAS_WELL') \
+    .collect_grouped('Project')
+# → {'TUNDRA': [{...}, ...], 'EMBER': [{...}, ...]}
 ```
 
 ### Enriching with `add_properties()`
@@ -113,8 +113,8 @@ enrichment API.
 ## Set Operations
 
 ```python
-n3 = graph.select('Prospect').where({'geoprovince': 'N3'})
-m3 = graph.select('Prospect').where({'geoprovince': 'M3'})
+n3 = graph.select('Proposal').where({'geoprovince': 'N3'})
+m3 = graph.select('Proposal').where({'geoprovince': 'M3'})
 
 n3.union(m3)                    # all nodes from both (OR)
 n3.intersection(m3)             # nodes in both (AND)
@@ -230,11 +230,11 @@ For simpler pattern-based queries without full Cypher clause support:
 
 ```python
 results = graph.match_pattern(
-    '(p:Play)-[:HAS_PROSPECT]->(pr:Prospect)-[:BECAME_DISCOVERY]->(d:Discovery)'
+    '(p:Portfolio)-[:HAS_PROPOSAL]->(pr:Proposal)-[:BECAME_INITIATIVE]->(d:Initiative)'
 )
 
 for match in results:
-    print(f"Play: {match['p']['title']}, Discovery: {match['d']['title']}")
+    print(f"Portfolio: {match['p']['title']}, Initiative: {match['d']['title']}")
 
 # With property conditions
 graph.match_pattern('(u:User)-[:PURCHASED]->(p:Product {category: "Electronics"})')

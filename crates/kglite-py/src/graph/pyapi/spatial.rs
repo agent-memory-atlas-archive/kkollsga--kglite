@@ -123,8 +123,8 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     # Filter discoveries in the North Sea area
-    ///     north_sea = graph.select('Discovery').within_bounds(
+    ///     # Filter initiatives in the North Sea area
+    ///     north_sea = graph.select('Initiative').within_bounds(
     ///         min_lat=56.0, max_lat=62.0,
     ///         min_lon=0.0, max_lon=8.0
     ///     )
@@ -197,8 +197,8 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     # Find discoveries near a point (within ~50km)
-    ///     nearby = graph.select('Discovery').near_point(
+    ///     # Find initiatives near a point (within ~50km)
+    ///     nearby = graph.select('Initiative').near_point(
     ///         center_lat=60.0, center_lon=4.0,
     ///         max_distance=0.5  # ~50km
     ///     )
@@ -265,8 +265,8 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     # Find discoveries within 50km of a point
-    ///     nearby = graph.select('Discovery').near_point_m(
+    ///     # Find initiatives within 50km of a point
+    ///     nearby = graph.select('Initiative').near_point_m(
     ///         center_lat=60.0, center_lon=5.0,
     ///         max_distance_m=50000.0
     ///     )
@@ -452,7 +452,7 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     bounds = graph.select('Discovery').bounds()
+    ///     bounds = graph.select('Initiative').bounds()
     ///     print(f"Latitude: {bounds['min_lat']} to {bounds['max_lat']}")
     ///     ```
     #[pyo3(signature = (lat_field=None, lon_field=None, as_shapely=false))]
@@ -507,7 +507,7 @@ impl KnowledgeGraph {
     ///
     /// Example:
     ///     ```python
-    ///     center = graph.select('Discovery').centroid()
+    ///     center = graph.select('Initiative').centroid()
     ///     print(f"Center: {center['latitude']}, {center['longitude']}")
     ///     ```
     #[pyo3(signature = (lat_field=None, lon_field=None, as_shapely=false))]

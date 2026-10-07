@@ -7,34 +7,34 @@ from kglite import KnowledgeGraph
 
 
 @pytest.fixture
-def discovery_field_graph():
-    """Graph with Discovery nodes connected to Field nodes via EXTENDS_INTO edges.
+def initiative_project_graph():
+    """Graph with Initiative nodes connected to Project nodes via EXTENDS_INTO edges.
 
-    Discovery A -> Field 1 (share_pct=30), Field 2 (share_pct=70)  => sum=100
-    Discovery B -> Field 2 (share_pct=50), Field 3 (share_pct=50)  => sum=100
-    Discovery C -> Field 4 (share_pct=100)                         => sum=100
+    Initiative A -> Project 1 (share_pct=30), Project 2 (share_pct=70)  => sum=100
+    Initiative B -> Project 2 (share_pct=50), Project 3 (share_pct=50)  => sum=100
+    Initiative C -> Project 4 (share_pct=100)                         => sum=100
     """
     graph = KnowledgeGraph()
 
-    discoveries = pd.DataFrame(
+    initiatives = pd.DataFrame(
         {
-            "discovery_id": [1, 2, 3],
-            "name": ["Discovery A", "Discovery B", "Discovery C"],
+            "initiative_id": [1, 2, 3],
+            "name": ["Initiative A", "Initiative B", "Initiative C"],
         }
     )
     fields = pd.DataFrame(
         {
             "field_id": [101, 102, 103, 104],
-            "name": ["Field 1", "Field 2", "Field 3", "Field 4"],
+            "name": ["Project 1", "Project 2", "Project 3", "Project 4"],
         }
     )
 
-    graph.add_nodes(discoveries, "Discovery", "discovery_id", "name")
-    graph.add_nodes(fields, "Field", "field_id", "name")
+    graph.add_nodes(initiatives, "Initiative", "initiative_id", "name")
+    graph.add_nodes(fields, "Project", "field_id", "name")
 
     connections = pd.DataFrame(
         {
-            "discovery_id": [1, 1, 2, 2, 3],
+            "initiative_id": [1, 1, 2, 2, 3],
             "field_id": [101, 102, 102, 103, 104],
             "share_pct": [30.0, 70.0, 50.0, 50.0, 100.0],
         }
@@ -42,9 +42,9 @@ def discovery_field_graph():
     graph.add_connections(
         connections,
         "EXTENDS_INTO",
-        "Discovery",
-        "discovery_id",
-        "Field",
+        "Initiative",
+        "initiative_id",
+        "Project",
         "field_id",
         columns=["share_pct"],
     )
@@ -96,18 +96,18 @@ def company_license_graph():
 
 
 @pytest.fixture
-def prospect_estimate_graph():
-    """Graph with Prospect nodes connected to Estimate nodes via HAS_ESTIMATE edges.
+def proposal_estimate_graph():
+    """Graph with Proposal nodes connected to Estimate nodes via HAS_ESTIMATE edges.
 
-    Prospect A -> Est 1 (weight=0.5), Est 2 (weight=0.5) => sum=1.0
-    Prospect B -> Est 3 (weight=1.0)                      => sum=1.0
+    Proposal A -> Est 1 (weight=0.5), Est 2 (weight=0.5) => sum=1.0
+    Proposal B -> Est 3 (weight=1.0)                      => sum=1.0
     """
     graph = KnowledgeGraph()
 
-    prospects = pd.DataFrame(
+    proposals = pd.DataFrame(
         {
-            "prospect_id": [1, 2],
-            "name": ["Prospect A", "Prospect B"],
+            "proposal_id": [1, 2],
+            "name": ["Proposal A", "Proposal B"],
         }
     )
     estimates = pd.DataFrame(
@@ -117,12 +117,12 @@ def prospect_estimate_graph():
         }
     )
 
-    graph.add_nodes(prospects, "Prospect", "prospect_id", "name")
+    graph.add_nodes(proposals, "Proposal", "proposal_id", "name")
     graph.add_nodes(estimates, "Estimate", "estimate_id", "name")
 
     connections = pd.DataFrame(
         {
-            "prospect_id": [1, 1, 2],
+            "proposal_id": [1, 1, 2],
             "estimate_id": [101, 102, 103],
             "weight": [0.5, 0.5, 1.0],
         }
@@ -130,8 +130,8 @@ def prospect_estimate_graph():
     graph.add_connections(
         connections,
         "HAS_ESTIMATE",
-        "Prospect",
-        "prospect_id",
+        "Proposal",
+        "proposal_id",
         "Estimate",
         "estimate_id",
         columns=["weight"],
@@ -187,10 +187,10 @@ def parent_child_graph():
 class TestConnectionAggregation:
     """Tests for aggregate_connections=True in calculate()."""
 
-    def test_sum_connection_properties(self, discovery_field_graph):
+    def test_sum_connection_properties(self, initiative_project_graph):
         """Sum share_pct on EXTENDS_INTO edges; each discovery should total 100."""
         result = (
-            discovery_field_graph.select("Discovery")
+            initiative_project_graph.select("Initiative")
             .traverse("EXTENDS_INTO")
             .calculate("sum(share_pct)", aggregate_connections=True)
         )
@@ -212,16 +212,16 @@ class TestConnectionAggregation:
         assert any(abs(v - 40.0) < 0.01 for v in values)
         assert any(abs(v - 75.0) < 0.01 for v in values)
 
-    def test_store_connection_aggregation(self, prospect_estimate_graph):
-        """Store sum(weight) as total_weight on parent Prospect nodes."""
+    def test_store_connection_aggregation(self, proposal_estimate_graph):
+        """Store sum(weight) as total_weight on parent Proposal nodes."""
         updated_graph = (
-            prospect_estimate_graph.select("Prospect")
+            proposal_estimate_graph.select("Proposal")
             .traverse("HAS_ESTIMATE")
             .calculate("sum(weight)", store_as="total_weight", aggregate_connections=True)
         )
 
-        prospects = updated_graph.select("Prospect")
-        props = prospects.get_properties(["total_weight"])
+        proposals = updated_graph.select("Proposal")
+        props = proposals.get_properties(["total_weight"])
 
         values = [t[0] for t in props if t[0] is not None]
         assert len(values) == 2

@@ -73,7 +73,7 @@ pub(super) enum PriorCell {
 /// `StringInterner` (see [`ColumnMasterWrite::key`]); `InternedKey::from_str`
 /// only hashes, leaving `save()` unable to resolve the key back to a string at
 /// serialize time. Symptom: every Cypher-`SET` property on a 0.8.39 in-memory
-/// Sodir-scale graph survived in-memory but vanished after save+load, with
+/// large-scale graph survived in-memory but vanished after save+load, with
 /// `BUG: InternedKey N not found in StringInterner`.
 ///
 /// # Journals, and why the capture must come first

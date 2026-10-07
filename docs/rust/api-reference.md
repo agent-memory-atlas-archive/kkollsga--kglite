@@ -143,10 +143,10 @@ The canonical query and transaction pipeline for Rust-side bindings.
 
 ## Dataset loaders
 
-The pre-packaged dataset loaders (SEC EDGAR, Sodir, Wikidata) are no
+The pre-packaged dataset loaders (SEC EDGAR, Wikidata) are no
 longer part of the kglite core API surface. They live in the
 separate kglite-datasets project. `kglite::api::datasets::*` and
-the `sec` / `sodir` / `wikidata` Cargo features have been removed.
+the dataset-loader Cargo features have been removed.
 
 kglite loads the graphs those loaders produce via the ordinary
 lifecycle API. To ingest RDF directly, use the kept RDF/N-Triples

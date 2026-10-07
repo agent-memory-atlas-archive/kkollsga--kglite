@@ -29,7 +29,7 @@ The XML is structured as `<graph>` containing one `<type>` per node label, each 
   <properties>
     <prop name="branch_count" type="Int64" unique="2" vals="0|3"/>
     <prop name="docstring" type="String" unique="16" sample="Return a new ResultView..."/>
-    <prop name="module" type="String" unique="2" vals="kglite|kglite.datasets.sodir.catalog"/>
+    <prop name="module" type="String" unique="2" vals="kglite|kglite.datasets.wikidata.catalog"/>
     ...
   </properties>
   <connections>

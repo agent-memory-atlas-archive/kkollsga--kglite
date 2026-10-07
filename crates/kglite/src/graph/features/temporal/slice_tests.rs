@@ -35,7 +35,7 @@ fn fixture() -> DirGraph {
                 (w2:Well {id: 2, vf: date('2008-01-01')}),
                 (w3:Well {id: 3, vf: date('2001-01-01')}),
                 (w4:Well {id: 4, vf: date('2001-01-01'), pf: date('2010-01-01'), pt: date('2040-01-01')}),
-                (f:Field {id: 10}),
+                (f:Project {id: 10}),
                 (w1)-[:IN {eid: 1, f: date('2000-01-01'), t: date('2004-01-01')}]->(f),
                 (w2)-[:IN {eid: 2, f: date('2000-01-01')}]->(f),
                 (w3)-[:IN {eid: 3, f: date('2000-01-01')}]->(f),

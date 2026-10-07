@@ -42,8 +42,8 @@ from kglite import KnowledgeGraph, load  # noqa: E402
 # Data paths
 # ---------------------------------------------------------------------------
 LEGAL_BUILD_SCRIPT = Path("/Volumes/EksternalHome/Koding/MCP servers/legal")
-SODIR_BUILD_SCRIPT = Path("/Volumes/EksternalHome/Koding/MCP servers")
-SODIR_BLUEPRINT = str(Path(__file__).resolve().parent / "sodir_graph_config.json")
+PROJECTS_BUILD_SCRIPT = Path("/Volumes/EksternalHome/Koding/MCP servers")
+PROJECTS_BLUEPRINT = str(Path(__file__).resolve().parent / "projects_graph_config.json")
 WIKIDATA_500K = "/Volumes/EksternalHome/Data/Wikidata/test_500k.nt.zst"
 WIKIDATA_5M = "/Volumes/EksternalHome/Data/Wikidata/test_5M.nt.zst"
 WIKIDATA_50M = "/Volumes/EksternalHome/Data/Wikidata/test_50M.nt.zst"
@@ -132,19 +132,19 @@ def build_legal(mode):
         sys.path = old_path
 
 
-def build_prospect(mode):
-    """Build prospect graph from blueprint.
-    Assumes CSVs are already preprocessed (run build_sodir_graph.py once manually).
+def build_proposal(mode):
+    """Build proposal graph from blueprint.
+    Assumes CSVs are already preprocessed (run build_projects_graph.py once manually).
     """
     kwargs = {"verbose": False, "save": False}
     if mode == "disk":
-        disk_path = _save_path("prospect", mode)
+        disk_path = _save_path("proposal", mode)
         kwargs["storage"] = "disk"
         kwargs["path"] = disk_path
     elif mode == "mapped":
         kwargs["storage"] = "mapped"
 
-    return kglite.from_blueprint(SODIR_BLUEPRINT, **kwargs)
+    return kglite.from_blueprint(PROJECTS_BLUEPRINT, **kwargs)
 
 
 def build_wikidata(mode, nt_path, label):
@@ -224,18 +224,18 @@ LEGAL_QUERIES = [
     ),
 ]
 
-PROSPECT_QUERIES = [
-    ("Wellbore lookup", "MATCH (w:Wellbore) RETURN w.title ORDER BY w.title LIMIT 5", True),
-    ("Field lookup", "MATCH (f:Field) RETURN f.title ORDER BY f.title LIMIT 5", True),
+PROPOSAL_QUERIES = [
+    ("Site lookup", "MATCH (w:Site) RETURN w.title ORDER BY w.title LIMIT 5", True),
+    ("Project lookup", "MATCH (f:Project) RETURN f.title ORDER BY f.title LIMIT 5", True),
     (
-        "Licence connections",
-        "MATCH (l:Licence)-[r]->(n) RETURN l.title, type(r), n.title ORDER BY l.title, n.title LIMIT 10",
+        "Contract connections",
+        "MATCH (l:Contract)-[r]->(n) RETURN l.title, type(r), n.title ORDER BY l.title, n.title LIMIT 10",
         True,
     ),
-    ("Discovery lookup", "MATCH (d:Discovery) RETURN d.title ORDER BY d.title LIMIT 5", True),
+    ("Initiative lookup", "MATCH (d:Initiative) RETURN d.title ORDER BY d.title LIMIT 5", True),
     (
-        "Field->Wellbore hop",
-        "MATCH (f:Field)<-[:IN_FIELD]-(w:Wellbore) RETURN f.title, w.title ORDER BY f.title, w.title LIMIT 10",
+        "Project->Site hop",
+        "MATCH (f:Project)<-[:IN_PROJECT]-(w:Site) RETURN f.title, w.title ORDER BY f.title, w.title LIMIT 10",
         True,
     ),
 ]
@@ -469,13 +469,13 @@ def run(mode):
     print(f"\n  [legal] ({mode})")
     all_results.extend(run_dataset(mode, "legal", lambda: build_legal(storage), LEGAL_QUERIES))
 
-    # 2. Prospect
-    print(f"\n  [prospect] ({mode})")
-    all_results.extend(run_dataset(mode, "prospect", lambda: build_prospect(storage), PROSPECT_QUERIES))
+    # 2. Proposal
+    print(f"\n  [proposal] ({mode})")
+    all_results.extend(run_dataset(mode, "proposal", lambda: build_proposal(storage), PROPOSAL_QUERIES))
 
     # 3+. Wikidata subsets. Each entry auto-skipped if the .nt.zst file
     # is absent on the current machine, so developers without the full
-    # corpus can still run the core legal/prospect benchmarks. Nominal
+    # corpus can still run the core legal/proposal benchmarks. Nominal
     # triple counts (from `make_wikidata_subset.sh`) drive the
     # triples/s display in the comparison output.
     for label, path, nominal_triples in WIKIDATA_SUBSETS:

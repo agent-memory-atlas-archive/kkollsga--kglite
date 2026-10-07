@@ -225,23 +225,23 @@ def test_cycle_2step_yields_named_node_a_node_b(loop_graph):
 
 @pytest.fixture
 def directional_graph():
-    """Wellbore -[IN_LICENCE]-> Licence (outbound from Wellbore)."""
+    """Site -[IN_CONTRACT]-> Contract (outbound from Site)."""
     g = kglite.KnowledgeGraph()
     g.add_nodes(
         pd.DataFrame(
             [
                 {"id": "w1", "title": "W1"},
                 {"id": "w2", "title": "W2"},
-                {"id": "w3", "title": "W3-no-licence"},
+                {"id": "w3", "title": "W3-no-contract"},
             ]
         ),
-        "Wellbore",
+        "Site",
         "id",
         "title",
     )
     g.add_nodes(
         pd.DataFrame([{"id": "l1", "title": "PL001"}]),
-        "Licence",
+        "Contract",
         "id",
         "title",
     )
@@ -252,10 +252,10 @@ def directional_graph():
                 {"s": "w2", "t": "l1"},
             ]
         ),
-        "IN_LICENCE",
-        "Wellbore",
+        "IN_CONTRACT",
+        "Site",
         "s",
-        "Licence",
+        "Contract",
         "t",
     )
     return g
@@ -264,41 +264,41 @@ def directional_graph():
 def test_missing_required_edge_finds_no_outbound(directional_graph):
     rows = list(
         directional_graph.cypher(
-            "CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node RETURN node.id AS id"
+            "CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node RETURN node.id AS id"
         )
     )
     assert [r["id"] for r in rows] == ["w3"]
 
 
 def test_missing_inbound_edge_finds_no_inbound(directional_graph):
-    """All licences have inbound IN_LICENCE; an unreferenced licence wouldn't."""
+    """All contracts have inbound IN_CONTRACT; an unreferenced contract wouldn't."""
     directional_graph.add_nodes(
         pd.DataFrame([{"id": "l_orphan", "title": "PL999"}]),
-        "Licence",
+        "Contract",
         "id",
         "title",
     )
     rows = list(
         directional_graph.cypher(
-            "CALL missing_inbound_edge({type: 'Licence', edge: 'IN_LICENCE'}) YIELD node RETURN node.id AS id"
+            "CALL missing_inbound_edge({type: 'Contract', edge: 'IN_CONTRACT'}) YIELD node RETURN node.id AS id"
         )
     )
     assert [r["id"] for r in rows] == ["l_orphan"]
 
 
 def test_direction_validator_blocks_outbound_misuse(directional_graph):
-    """Calling missing_required_edge with type=Licence flips on direction validator."""
+    """Calling missing_required_edge with type=Contract flips on direction validator."""
     with pytest.raises(kglite.KgError, match="DirectionMismatch"):
         directional_graph.cypher(
-            "CALL missing_required_edge({type: 'Licence', edge: 'IN_LICENCE'}) YIELD node RETURN node"
+            "CALL missing_required_edge({type: 'Contract', edge: 'IN_CONTRACT'}) YIELD node RETURN node"
         )
 
 
 def test_direction_validator_blocks_inbound_misuse(directional_graph):
-    """Calling missing_inbound_edge with type=Wellbore flips on direction validator."""
+    """Calling missing_inbound_edge with type=Site flips on direction validator."""
     with pytest.raises(kglite.KgError, match="DirectionMismatch"):
         directional_graph.cypher(
-            "CALL missing_inbound_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node RETURN node"
+            "CALL missing_inbound_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node RETURN node"
         )
 
 
@@ -377,16 +377,16 @@ def test_call_composes_with_where_and_order_by(integrity_graph):
 
 def test_call_composes_with_match_and_aggregation(directional_graph):
     """Cross-reference query results against rule output in a single Cypher pass."""
-    # Add wellbore w4 with no IN_LICENCE so missing_required_edge has 2 hits
+    # Add site w4 with no IN_CONTRACT so missing_required_edge has 2 hits
     directional_graph.add_nodes(
         pd.DataFrame([{"id": "w4", "title": "W4"}]),
-        "Wellbore",
+        "Site",
         "id",
         "title",
     )
     rows = list(
         directional_graph.cypher(
-            "CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node "
+            "CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node "
             "WHERE node.title CONTAINS 'W' "
             "RETURN count(node) AS c"
         )

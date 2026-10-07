@@ -1399,7 +1399,7 @@ impl KnowledgeGraph {
     /// Example:
     ///     ```python
     ///     # Start with a single field and expand to include connected nodes
-    ///     expanded = graph.select('Field').where({'name': 'EKOFISK'}).expand(hops=2)
+    ///     expanded = graph.select('Project').where({'name': 'EMBER'}).expand(hops=2)
     ///     ```
     #[pyo3(signature = (hops=None))]
     fn expand(&self, hops: Option<usize>) -> PyResult<Self> {
@@ -1450,7 +1450,7 @@ impl KnowledgeGraph {
     ///     ```python
     ///     # Extract a subgraph of a specific region
     ///     subgraph = (
-    ///         graph.select('Field')
+    ///         graph.select('Project')
     ///         .where({'region': 'North Sea'})
     ///         .expand(hops=2)
     ///         .to_subgraph()

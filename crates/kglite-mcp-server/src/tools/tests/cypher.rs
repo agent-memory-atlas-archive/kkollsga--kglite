@@ -333,7 +333,7 @@ fn cdc_is_off_until_enabled_on_the_write_tool() {
     );
 }
 
-/// An `ActiveGraph` holding one `Vessel` and one `OPERATED_BY` edge, so a
+/// An `ActiveGraph` holding one `Vessel` and one `MANAGED_BY` edge, so a
 /// case-typo query has something to be suggested.
 /// The finding this phase answers: the engine diagnosed the typo, and the MCP
 /// response — the only thing an agent ever sees — said "No results."

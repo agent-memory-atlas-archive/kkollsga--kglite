@@ -20,7 +20,7 @@ python tests/benchmarks/internal/wiki_benchmark.py
 
 | Script | Probes |
 |---|---|
-| `api_benchmark.py` | Bulk-ingest throughput (uses `sodir_graph_config.json`; streams `ingest_baseline.csv`). |
+| `api_benchmark.py` | Bulk-ingest throughput (uses `projects_graph_config.json`; streams `ingest_baseline.csv`). |
 | `bench_graph_traversal.py`, `bench_algorithms_quick.py` | Traversal + graph-algorithm micro-benchmarks. |
 | `benchmark_cypher_scalability.py` | Cypher planner/executor scaling. |
 | `benchmark_storage_modes.py` | memory vs mapped vs disk. |

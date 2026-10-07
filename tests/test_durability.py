@@ -2611,19 +2611,19 @@ _EMBEDDER = """
 """
 
 _TIMESERIES = """
-        g.set_timeseries("Co", resolution="day", units={"oil": "MSm3"},
+        g.set_timeseries("Co", resolution="day", units={"output": "MU"},
                          bin_type="total")
         g.add_timeseries(
             "Co",
             data=pd.DataFrame({
                 "fk": [1, 1, 2, 2],
                 "date": ["2020-01-01", "2020-02-01", "2020-01-01", "2020-02-01"],
-                "oil": [1.0, 2.0, 3.0, 4.0],
-                "gas": [5.0, 6.0, 7.0, 8.0],
+                "output": [1.0, 2.0, 3.0, 4.0],
+                "flow": [5.0, 6.0, 7.0, 8.0],
             }),
             fk="fk",
             time_key=["date"],
-            channels=["oil", "gas"],
+            channels=["output", "flow"],
         )
 """
 
@@ -2656,11 +2656,11 @@ def _read_embeddings(g):
 def test_timeseries_survives_hard_crash(tmp_path, storage, level):
     got = _payload_case(tmp_path, storage, level, _TIMESERIES, _read_timeseries)
     series, _, index, config = got
-    assert series["channels"]["oil"] == [1.0, 2.0]
+    assert series["channels"]["output"] == [1.0, 2.0]
     assert index == ["2020-01-01", "2020-02-01"]
     assert config["Co"]["resolution"] == "day"
-    assert sorted(config["Co"]["channels"]) == ["gas", "oil"]
-    assert config["Co"]["units"] == {"oil": "MSm3"}
+    assert sorted(config["Co"]["channels"]) == ["flow", "output"]
+    assert config["Co"]["units"] == {"output": "MU"}
     assert config["Co"]["bin_type"] == "total"
 
 

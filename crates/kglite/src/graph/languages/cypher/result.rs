@@ -385,8 +385,8 @@ pub struct TemporalDiagnostics {
     /// including labels widened in through secondary labels (a `(:A)`
     /// pattern lists `(:B)` when nodes it may reach can carry a declared
     /// `B`), merged across every scope and without bounds (EXPLAIN shows only
-    /// the top scope, with bounds): `(:Well)`, `[:LICENSEE]`,
-    /// `[:LICENSEE from :Field]`.
+    /// the top scope, with bounds): `(:Well)`, `[:HOLDER]`,
+    /// `[:HOLDER from :Project]`.
     pub targets: Vec<String>,
     /// Per target in `targets`, how many of the rows it governs the context
     /// hides at the instant, judged by that target's own bounds: `(:Project)`

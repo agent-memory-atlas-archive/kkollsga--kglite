@@ -31,19 +31,19 @@ def _declare(g, spec):
 
 
 @pytest.fixture
-def licensees():
-    """Fields and licences both hold HAS_LICENSEE periods, under different
-    property names. Field 1's second period starts the day its first ends."""
+def holders():
+    """Projects and contracts both hold HAS_HOLDER periods, under different
+    property names. Project 1's second period starts the day its first ends."""
     g = kglite.KnowledgeGraph()
     g.cypher(
         """
-        CREATE (f1:Field {id: 1, title: 'F1'}), (f2:Field {id: 2, title: 'F2'}),
-               (l:Licence {id: 10, title: 'L10'}),
+        CREATE (f1:Project {id: 1, title: 'F1'}), (f2:Project {id: 2, title: 'F2'}),
+               (l:Contract {id: 10, title: 'L10'}),
                (a:Company {id: 100, title: 'Alpha'}), (b:Company {id: 200, title: 'Beta'}),
-               (f1)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(a),
-               (f1)-[:HAS_LICENSEE {ff: '2009-12-31', ft: null}]->(b),
-               (f2)-[:HAS_LICENSEE {ff: '2009-12-31', ft: '2011-01-01'}]->(a),
-               (l)-[:HAS_LICENSEE {lf: '1990-01-01', lt: '1999-12-31'}]->(b)
+               (f1)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(a),
+               (f1)-[:HAS_HOLDER {ff: '2009-12-31', ft: null}]->(b),
+               (f2)-[:HAS_HOLDER {ff: '2009-12-31', ft: '2011-01-01'}]->(a),
+               (l)-[:HAS_HOLDER {lf: '1990-01-01', lt: '1999-12-31'}]->(b)
         """
     )
     return g
@@ -83,20 +83,18 @@ class TestDeclareAndList:
         assert undeclared.to_list() == [{"undeclared": True}]
         assert _declarations(statuses) == []
 
-    def test_two_source_keys_list_separately(self, licensees):
+    def test_two_source_keys_list_separately(self, holders):
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'half_open'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'half_open'}",
         )
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Licence', from: 'lf', to: 'lt', convention: 'closed'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Contract', from: 'lf', to: 'lt', convention: 'closed'}",
         )
-        assert [
-            (r["source_type"], r["from"], r["convention"], r["abutting_rows"]) for r in _declarations(licensees)
-        ] == [
-            ("Field", "ff", "half_open", 1),
-            ("Licence", "lf", "closed", 0),
+        assert [(r["source_type"], r["from"], r["convention"], r["abutting_rows"]) for r in _declarations(holders)] == [
+            ("Contract", "lf", "closed", 0),
+            ("Project", "ff", "half_open", 1),
         ]
 
     def test_secondary_label_target(self):
@@ -113,15 +111,15 @@ class TestDeclareAndList:
         _declare(statuses, spec)
         assert _declare(statuses, spec).to_list() == [{"declared": False, "rows": 0, "abutting_rows": None}]
 
-    def test_unkeyed_declaration_is_stored_beside_keyed_ones(self, licensees):
+    def test_unkeyed_declaration_is_stored_beside_keyed_ones(self, holders):
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'half_open'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'half_open'}",
         )
-        rows = _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'lf', to: 'lt', convention: 'closed'}")
-        # Only the Licence relationship falls back to it; Field's are keyed.
+        rows = _declare(holders, "{relationship: 'HAS_HOLDER', from: 'lf', to: 'lt', convention: 'closed'}")
+        # Only the Contract relationship falls back to it; Project's are keyed.
         assert rows.to_list() == [{"declared": True, "rows": 1, "abutting_rows": 0}]
-        assert [(r["source_type"], r["from"]) for r in _declarations(licensees)] == [("Field", "ff"), (None, "lf")]
+        assert [(r["source_type"], r["from"]) for r in _declarations(holders)] == [("Project", "ff"), (None, "lf")]
 
 
 class TestRefusals:
@@ -283,12 +281,12 @@ class TestOpenEndedTypes:
             _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'closed'}")
         assert _declarations(statuses) == []
 
-    def test_dirty_bound_names_the_relationship_endpoints(self, licensees):
-        licensees.cypher("MATCH (f:Field {id: 2}), (c:Company {id: 200}) CREATE (f)-[:HAS_LICENSEE {ff: 2009}]->(c)")
-        with pytest.raises(Exception, match="HAS_LICENSEE relationship from node '2' to node '200'"):
+    def test_dirty_bound_names_the_relationship_endpoints(self, holders):
+        holders.cypher("MATCH (f:Project {id: 2}), (c:Company {id: 200}) CREATE (f)-[:HAS_HOLDER {ff: 2009}]->(c)")
+        with pytest.raises(Exception, match="HAS_HOLDER relationship from node '2' to node '200'"):
             _declare(
-                licensees,
-                "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}",
+                holders,
+                "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}",
             )
 
     def test_inverted_row_names_the_node(self, statuses):
@@ -301,14 +299,14 @@ class TestOpenEndedTypes:
         with pytest.raises(Exception, match="already declared"):
             _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'closed'}")
 
-    def test_conflict_is_per_key(self, licensees):
-        keyed = "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}"
-        _declare(licensees, keyed)
-        _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'ff', to: 'ft', convention: 'half_open'}")
-        with pytest.raises(Exception, match="from source type 'Field' is already declared"):
-            _declare(licensees, keyed.replace("'closed'", "'half_open'"))
-        with pytest.raises(Exception, match="relationship type 'HAS_LICENSEE' is already declared"):
-            _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'ff', to: 'ft', convention: 'closed'}")
+    def test_conflict_is_per_key(self, holders):
+        keyed = "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}"
+        _declare(holders, keyed)
+        _declare(holders, "{relationship: 'HAS_HOLDER', from: 'ff', to: 'ft', convention: 'half_open'}")
+        with pytest.raises(Exception, match="from source type 'Project' is already declared"):
+            _declare(holders, keyed.replace("'closed'", "'half_open'"))
+        with pytest.raises(Exception, match="relationship type 'HAS_HOLDER' is already declared"):
+            _declare(holders, "{relationship: 'HAS_HOLDER', from: 'ff', to: 'ft', convention: 'closed'}")
 
 
 class TestAbutmentWarning:
@@ -345,14 +343,14 @@ class TestHalfOpenFluent:
         got = statuses.select("Status", temporal=False).valid_at("2010-06-01").collect()
         assert [r["title"] for r in got] == ["Shut down"]
 
-    def test_traverse_uses_each_source_keys_convention(self, licensees):
+    def test_traverse_uses_each_source_keys_convention(self, holders):
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'half_open'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'half_open'}",
         )
-        field_one = licensees.select("Field").where({"title": "F1"})
-        assert _titles(field_one.traverse("HAS_LICENSEE", at="2009-12-31")) == ["Beta"]
-        assert _titles(field_one.traverse("HAS_LICENSEE", at="2009-12-30")) == ["Alpha"]
+        field_one = holders.select("Project").where({"title": "F1"})
+        assert _titles(field_one.traverse("HAS_HOLDER", at="2009-12-31")) == ["Beta"]
+        assert _titles(field_one.traverse("HAS_HOLDER", at="2009-12-30")) == ["Alpha"]
 
 
 class TestHalfOpenTimestampEnd:
@@ -403,18 +401,18 @@ class TestSetTemporalBesideDeclaration:
     """``set_temporal`` naming the properties a declaration already bounds keeps
     that declaration, convention included."""
 
-    def test_relationship_declaration_is_kept(self, licensees):
-        _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'ff', to: 'ft', convention: 'half_open'}")
-        licensees.set_temporal("HAS_LICENSEE", "ff", "ft")
-        rows = _declarations(licensees)
-        assert [(r["name"], r["source_type"], r["convention"]) for r in rows] == [("HAS_LICENSEE", None, "half_open")]
-        field_one = licensees.select("Field").where({"title": "F1"})
-        assert _titles(field_one.traverse("HAS_LICENSEE", at="2009-12-31")) == ["Beta"]
-        undeclared = licensees.cypher(
-            "CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE'}) YIELD undeclared RETURN undeclared"
+    def test_relationship_declaration_is_kept(self, holders):
+        _declare(holders, "{relationship: 'HAS_HOLDER', from: 'ff', to: 'ft', convention: 'half_open'}")
+        holders.set_temporal("HAS_HOLDER", "ff", "ft")
+        rows = _declarations(holders)
+        assert [(r["name"], r["source_type"], r["convention"]) for r in rows] == [("HAS_HOLDER", None, "half_open")]
+        field_one = holders.select("Project").where({"title": "F1"})
+        assert _titles(field_one.traverse("HAS_HOLDER", at="2009-12-31")) == ["Beta"]
+        undeclared = holders.cypher(
+            "CALL db.temporal.undeclare({relationship: 'HAS_HOLDER'}) YIELD undeclared RETURN undeclared"
         ).to_list()
         assert undeclared == [{"undeclared": True}]
-        assert _declarations(licensees) == []
+        assert _declarations(holders) == []
 
     def test_node_declaration_is_kept(self, statuses):
         _declare(statuses, "{node: 'Status', from: 'vf', to: 'vt', convention: 'half_open'}")
@@ -427,24 +425,24 @@ class TestLookupOrder:
     """A relationship takes its source's keyed declaration, and the unkeyed
     one only when its source has none."""
 
-    def test_keyed_source_and_fallback(self, licensees):
-        licensees.cypher(
-            "MATCH (l:Licence), (a:Company {id: 100}) "
-            "CREATE (l)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(a)"
+    def test_keyed_source_and_fallback(self, holders):
+        holders.cypher(
+            "MATCH (l:Contract), (a:Company {id: 100}) "
+            "CREATE (l)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(a)"
         )
         # Both declarations read ff/ft; only the convention differs, so the
-        # to day tells which one a relationship was filtered by. Licence's
+        # to day tells which one a relationship was filtered by. Contract's
         # lf/lt relationship to Beta carries neither and always passes.
-        _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'ff', to: 'ft', convention: 'closed'}")
+        _declare(holders, "{relationship: 'HAS_HOLDER', from: 'ff', to: 'ft', convention: 'closed'}")
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'half_open'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'half_open'}",
         )
-        field_one = licensees.select("Field").where({"title": "F1"})
-        assert _titles(field_one.traverse("HAS_LICENSEE", at="2009-12-31")) == ["Beta"]
-        licence = licensees.select("Licence")
-        assert _titles(licence.traverse("HAS_LICENSEE", at="2009-12-31")) == ["Alpha", "Beta"]
-        assert _titles(licence.traverse("HAS_LICENSEE", at="2010-01-01")) == ["Beta"]
+        field_one = holders.select("Project").where({"title": "F1"})
+        assert _titles(field_one.traverse("HAS_HOLDER", at="2009-12-31")) == ["Beta"]
+        contract = holders.select("Contract")
+        assert _titles(contract.traverse("HAS_HOLDER", at="2009-12-31")) == ["Alpha", "Beta"]
+        assert _titles(contract.traverse("HAS_HOLDER", at="2010-01-01")) == ["Beta"]
 
 
 def _titles(selection):
@@ -459,34 +457,34 @@ class TestDescribe:
             in statuses.describe()
         )
 
-    def test_several_relationship_declarations_print_once_each(self, licensees):
+    def test_several_relationship_declarations_print_once_each(self, holders):
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'half_open'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'half_open'}",
         )
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Licence', from: 'lf', to: 'lt', convention: 'closed'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Contract', from: 'lf', to: 'lt', convention: 'closed'}",
         )
-        xml = licensees.describe()
-        assert 'temporal="Field: ff..ft half_open abutting=1; Licence: lf..lt abutting=0"' in xml
+        xml = holders.describe()
+        assert 'temporal="Contract: lf..lt abutting=0; Project: ff..ft half_open abutting=1"' in xml
         assert "temporal_from=" not in xml
 
-    def test_fallback_prints_last_as_other_sources(self, licensees):
-        _declare(licensees, "{relationship: 'HAS_LICENSEE', from: 'lf', to: 'lt', convention: 'closed'}")
+    def test_fallback_prints_last_as_other_sources(self, holders):
+        _declare(holders, "{relationship: 'HAS_HOLDER', from: 'lf', to: 'lt', convention: 'closed'}")
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}",
         )
-        assert 'temporal="Field: ff..ft abutting=1; other sources: lf..lt abutting=0"' in licensees.describe()
+        assert 'temporal="Project: ff..ft abutting=1; other sources: lf..lt abutting=0"' in holders.describe()
 
-    def test_single_keyed_declaration_attributes(self, licensees):
+    def test_single_keyed_declaration_attributes(self, holders):
         _declare(
-            licensees,
-            "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'ff', to: 'ft', convention: 'closed'}",
+            holders,
+            "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'ff', to: 'ft', convention: 'closed'}",
         )
         assert (
-            'temporal_from="ff" temporal_to="ft" temporal_source="Field" temporal_abutting="1"' in licensees.describe()
+            'temporal_from="ff" temporal_to="ft" temporal_source="Project" temporal_abutting="1"' in holders.describe()
         )
 
 
@@ -931,13 +929,13 @@ class TestAnAmbiguousTypeKeysOnTheDeclarationARowCarries:
 
         def other(start):
             frame = pd.DataFrame({"field": [1], "company": [10], "other_from": pd.to_datetime([start])})
-            return g.add_connections(frame, "HAS_LICENSEE", "Field", "field", "Company", "company")
+            return g.add_connections(frame, "HAS_HOLDER", "Project", "field", "Company", "company")
 
         assert _counts(other("2015-01-01")) == (1, 0)
         assert _counts(other("2020-01-01")) == (1, 0)
         assert _counts(other("2020-01-01")) == (0, 0)
         rows = g.cypher(
-            "FOR VALID_TIME ALL MATCH (:Field {id: 1})-[r:HAS_LICENSEE]->(:Company {id: 10}) RETURN count(r) AS n"
+            "FOR VALID_TIME ALL MATCH (:Project {id: 1})-[r:HAS_HOLDER]->(:Company {id: 10}) RETURN count(r) AS n"
         ).to_list()
         assert rows == [{"n": 3}]
 

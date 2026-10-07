@@ -45,7 +45,7 @@ check-free-space:
 		echo "free space: WARNING — $${free_gb} GB on the build volume (< $(FREE_WARN_GB) GB). Run 'make prune-target' soon."; \
 	fi
 
-.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest
+.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts check-vocabulary neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest
 
 ## Build and install the package into the local .venv
 dev: | check-free-space
@@ -292,6 +292,12 @@ release-preflight:
 check-doc-density:
 	python3 scripts/check_doc_density.py
 
+## Example vocabulary stays domain-neutral (Project / Contract / Site ...):
+## fails on the oil-and-gas registry names those replaced. Allowlist and
+## patterns live in the script.
+check-vocabulary:
+	python3 scripts/check_neutral_vocabulary.py
+
 check-release-hygiene:
 	python3 scripts/bump_version.py --check
 	python3 scripts/check_release_hygiene.py
@@ -328,7 +334,7 @@ notify-downstream:
 ## Fast local checkpoint. Pair this with the smallest package/test filter
 ## covering the change. Policy audits, workspace clippy, stubtest, packaged-
 ## consumer verification, and the broad test matrix run in CI.
-gate: lint check-docs-facts check-release-hygiene check-skill-mirrors check-dev-docs check-doc-density
+gate: lint check-docs-facts check-release-hygiene check-skill-mirrors check-dev-docs check-doc-density check-vocabulary
 
 ## Fast formatting/static lint. Intentionally performs no Rust compilation,
 ## metadata walk, or runtime import.

@@ -10,9 +10,9 @@ from kglite import KnowledgeGraph
 
 
 class TestCrossFeatureWorkflows:
-    def test_temporal_with_spatial(self, petroleum_graph):
+    def test_temporal_with_spatial(self, portfolio_graph):
         """Combine temporal and spatial queries."""
-        valid = petroleum_graph.select("Prospect").valid_at(
+        valid = portfolio_graph.select("Proposal").valid_at(
             "2020-06-15",
             date_from_field="date_from",
             date_to_field="date_to",
@@ -27,9 +27,9 @@ class TestCrossFeatureWorkflows:
         )
         assert nearby.len() > 0
 
-    def test_pattern_match_with_filter(self, petroleum_graph):
+    def test_pattern_match_with_filter(self, portfolio_graph):
         """Pattern match then apply additional filtering."""
-        matches = petroleum_graph.match_pattern("(p:Play)-[:HAS_PROSPECT]->(pr:Prospect)")
+        matches = portfolio_graph.match_pattern("(p:Portfolio)-[:HAS_PROPOSAL]->(pr:Proposal)")
         assert len(matches) > 0
         for m in matches:
             assert "p" in m
@@ -70,16 +70,16 @@ class TestCrossFeatureWorkflows:
         cypher_result = social_graph.cypher("MATCH (a:Person)-[:WORKS_AT]->(c:Company) RETURN a.title, c.title")
         assert len(pattern_results) == len(cypher_result)
 
-    def test_full_pipeline(self, petroleum_graph):
+    def test_full_pipeline(self, portfolio_graph):
         """Full workflow: filter -> traverse -> aggregate -> export."""
-        plays = petroleum_graph.select("Play")
-        prospects = plays.traverse("HAS_PROSPECT")
-        assert prospects.len() > 0
+        plays = portfolio_graph.select("Portfolio")
+        proposals = plays.traverse("HAS_PROPOSAL")
+        assert proposals.len() > 0
 
-        explanation = prospects.explain()
+        explanation = proposals.explain()
         assert isinstance(explanation, str)
 
-        subgraph = prospects.to_subgraph()
+        subgraph = proposals.to_subgraph()
         export = subgraph.export_string(format="d3")
         assert len(export) > 0
 

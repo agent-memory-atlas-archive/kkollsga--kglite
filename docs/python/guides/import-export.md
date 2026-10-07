@@ -694,14 +694,14 @@ File versions:
 ```python
 graph.define_schema({
     'nodes': {
-        'Prospect': {
-            'required': ['npdid_prospect', 'prospect_name'],
-            'optional': ['prospect_status'],
-            'types': {'npdid_prospect': 'integer', 'prospect_name': 'string'}
+        'Proposal': {
+            'required': ['npdid_proposal', 'proposal_name'],
+            'optional': ['proposal_status'],
+            'types': {'npdid_proposal': 'integer', 'proposal_name': 'string'}
         }
     },
     'connections': {
-        'HAS_ESTIMATE': {'source': 'Prospect', 'target': 'ProspectEstimate'}
+        'HAS_ESTIMATE': {'source': 'Proposal', 'target': 'ProposalEstimate'}
     }
 })
 
@@ -730,12 +730,12 @@ This holds in every storage mode, a disk graph's persistent bundle included.
 next to each entry's `state`.
 
 ```python
-graph.create_index('Prospect', 'prospect_geoprovince')        # equality index
+graph.create_index('Proposal', 'proposal_geoprovince')        # equality index
 graph.create_range_index('Person', 'age')                      # B-Tree range index
 graph.create_composite_index('Person', ['city', 'age'])        # composite equality
 
 graph.list_indexes()
-graph.drop_index('Prospect', 'prospect_geoprovince')
+graph.drop_index('Proposal', 'proposal_geoprovince')
 ```
 
 Indexes are maintained automatically by all mutation operations.

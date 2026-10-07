@@ -39,7 +39,7 @@ def wkt_graph():
     )
     graph.add_nodes(
         df,
-        "Field",
+        "Project",
         "id",
         "name",
         column_types={
@@ -123,14 +123,14 @@ class TestNearPoint:
 class TestWKTOperations:
     def test_intersects(self, wkt_graph):
         # intersects_geometry(query_wkt, geometry_field=None)
-        result = wkt_graph.select("Field").intersects_geometry(
+        result = wkt_graph.select("Project").intersects_geometry(
             "POLYGON((2 59, 6 59, 6 63, 2 63, 2 59))",
             geometry_field="wkt_geometry",
         )
         assert result.len() >= 1
 
     def test_contains_point(self, wkt_graph):
-        result = wkt_graph.select("Field").contains_point(
+        result = wkt_graph.select("Project").contains_point(
             lat=60.0,
             lon=3.0,
             geometry_field="wkt_geometry",
@@ -143,7 +143,7 @@ class TestWKTOperations:
 
     def test_near_point_m_geometry_fallback(self, wkt_graph):
         """near_point_m falls back to geometry centroid when no lat/lon."""
-        result = wkt_graph.select("Field").near_point_m(
+        result = wkt_graph.select("Project").near_point_m(
             center_lat=60.0,
             center_lon=3.0,
             max_distance_m=500_000.0,

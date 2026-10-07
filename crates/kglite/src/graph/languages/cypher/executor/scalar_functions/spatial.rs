@@ -91,7 +91,7 @@ impl<'a> CypherExecutor<'a> {
                 // Arg 1: must be a geometry (the container).
                 // When the arg is a node-bound variable but that specific
                 // node has no geometry (e.g. partial coverage in a typed
-                // set — real-world: 312/469 AfexAreas have no
+                // set — real-world: 312/469 areas have no
                 // wkt_geometry), treat the predicate as false for this
                 // row instead of erroring out the whole query. Matches
                 // Cypher's NULL-propagation semantics: missing data ≠ true.

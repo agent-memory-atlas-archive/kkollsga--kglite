@@ -105,8 +105,8 @@ fn extract_contains_call_vars(
 /// 2. **Multi-MATCH** (`MATCH (p:T1) [WHERE pre1] MATCH (s:T2) WHERE
 ///    contains(s, centroid(p)) [AND rest]`). Probe via centroid of
 ///    the probe-side geometry. Common in point-in-polygon enrichment
-///    pipelines (Sodir prospect → structural-element classification,
-///    well → license area, …) which previously fell off the fast
+///    pipelines (proposal → structural-element classification,
+///    site → contract area, …) which previously fell off the fast
 ///    path because the planner's old gate required a single MATCH.
 ///
 /// Preconditions for the SpatialJoin rewrite (any miss → no rewrite):
@@ -293,7 +293,7 @@ fn try_fuse_spatial_multi_match(query: &mut CypherQuery, graph: &DirGraph, i: us
             return false;
         };
     // The pre-WHERE (if any) sits between the two MATCHes and references
-    // the probe in the canonical Sodir shape. If the probe is the first
+    // the probe in the canonical shape. If the probe is the first
     // MATCH, the pre-WHERE references the container instead — still
     // valid; we fold it into the residual either way.
     let _ = probe_pat_is_first;

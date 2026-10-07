@@ -77,28 +77,28 @@ fn key<'m>(metadata: &'m str, name: &str) -> Option<&'m str> {
     Some(&metadata[start..start + stream.byte_offset()])
 }
 
-const LICENSEES: &[&str] = &[
-    "CREATE (:Field {id: 1, vf: '2000-01-01', vt: '2010-12-31'}), (:Licence {id: 10}), (:Company {id: 100})",
-    "MATCH (f:Field), (c:Company) CREATE (f)-[:HAS_LICENSEE {ff: '2000-01-01', ft: '2009-12-31'}]->(c)",
-    "MATCH (l:Licence), (c:Company) CREATE (l)-[:HAS_LICENSEE {lf: '1990-01-01', lt: '1999-12-31'}]->(c)",
-    "MATCH (f:Field), (c:Company) CREATE (f)-[:OPERATES {of: '2001-01-01', ot: '2002-01-01'}]->(c)",
-    "MATCH (l:Licence), (c:Company) CREATE (l)-[:OPERATES {of: '2003-01-01', ot: null}]->(c)",
-    "MATCH (f:Field), (c:Company) CREATE (f)-[:AUDITS {af: '2001-01-01', at: '2001-06-30'}]->(c)",
+const HOLDERS: &[&str] = &[
+    "CREATE (:Project {id: 1, vf: '2000-01-01', vt: '2010-12-31'}), (:Contract {id: 10}), (:Company {id: 100})",
+    "MATCH (f:Project), (c:Company) CREATE (f)-[:HAS_HOLDER {ff: '2000-01-01', ft: '2009-12-31'}]->(c)",
+    "MATCH (l:Contract), (c:Company) CREATE (l)-[:HAS_HOLDER {lf: '1990-01-01', lt: '1999-12-31'}]->(c)",
+    "MATCH (f:Project), (c:Company) CREATE (f)-[:OPERATES {of: '2001-01-01', ot: '2002-01-01'}]->(c)",
+    "MATCH (l:Contract), (c:Company) CREATE (l)-[:OPERATES {of: '2003-01-01', ot: null}]->(c)",
+    "MATCH (f:Project), (c:Company) CREATE (f)-[:AUDITS {af: '2001-01-01', at: '2001-06-30'}]->(c)",
 ];
 
 /// Closed node; keyed closed and keyed half-open with different properties
-/// (`HAS_LICENSEE`); unkeyed closed beside keyed closed with the same
+/// (`HAS_HOLDER`); unkeyed closed beside keyed closed with the same
 /// properties (`OPERATES`); unkeyed half-open (`AUDITS`); two different
 /// unkeyed closed configs in `set_temporal` order (`SUPPLIES`).
 fn declared() -> DirGraph {
-    let mut g = graph(LICENSEES);
-    let node = TemporalTarget::Node("Field".into());
+    let mut g = graph(HOLDERS);
+    let node = TemporalTarget::Node("Project".into());
     declare(&mut g, &node, "vf", "vt", Closed).unwrap();
-    let field = rel("HAS_LICENSEE", Some("Field"));
+    let field = rel("HAS_HOLDER", Some("Project"));
     declare(&mut g, &field, "ff", "ft", Closed).unwrap();
-    let licence = rel("HAS_LICENSEE", Some("Licence"));
-    declare(&mut g, &licence, "lf", "lt", HalfOpen).unwrap();
-    for source in [None, Some("Field")] {
+    let contract = rel("HAS_HOLDER", Some("Contract"));
+    declare(&mut g, &contract, "lf", "lt", HalfOpen).unwrap();
+    for source in [None, Some("Project")] {
         declare(&mut g, &rel("OPERATES", source), "of", "ot", Closed).unwrap();
     }
     declare(&mut g, &rel("AUDITS", None), "af", "at", HalfOpen).unwrap();
@@ -114,11 +114,11 @@ fn every_declaration_is_written_under_its_own_key_in_list_order() {
         key(&json, "temporal_declarations").unwrap(),
         concat!(
             "[",
-            r#"{"abutting_rows":0,"convention":"closed","from":"vf","kind":"node","name":"Field","to":"vt"},"#,
+            r#"{"abutting_rows":0,"convention":"closed","from":"vf","kind":"node","name":"Project","to":"vt"},"#,
             r#"{"abutting_rows":0,"convention":"half_open","from":"af","kind":"relationship","name":"AUDITS","to":"at"},"#,
-            r#"{"abutting_rows":0,"convention":"closed","from":"ff","kind":"relationship","name":"HAS_LICENSEE","source_type":"Field","to":"ft"},"#,
-            r#"{"abutting_rows":0,"convention":"half_open","from":"lf","kind":"relationship","name":"HAS_LICENSEE","source_type":"Licence","to":"lt"},"#,
-            r#"{"abutting_rows":0,"convention":"closed","from":"of","kind":"relationship","name":"OPERATES","source_type":"Field","to":"ot"},"#,
+            r#"{"abutting_rows":0,"convention":"half_open","from":"lf","kind":"relationship","name":"HAS_HOLDER","source_type":"Contract","to":"lt"},"#,
+            r#"{"abutting_rows":0,"convention":"closed","from":"ff","kind":"relationship","name":"HAS_HOLDER","source_type":"Project","to":"ft"},"#,
+            r#"{"abutting_rows":0,"convention":"closed","from":"of","kind":"relationship","name":"OPERATES","source_type":"Project","to":"ot"},"#,
             r#"{"abutting_rows":0,"convention":"closed","from":"of","kind":"relationship","name":"OPERATES","to":"ot"},"#,
             r#"{"convention":"closed","from":"sf","kind":"relationship","name":"SUPPLIES","to":"st"},"#,
             r#"{"convention":"closed","from":"pf","kind":"relationship","name":"SUPPLIES","to":"pt"}"#,
@@ -132,9 +132,9 @@ fn the_legacy_keys_hold_closed_unkeyed_configs_in_order_without_new_fields() {
     let json = metadata(&encode(declared()));
     assert_eq!(
         key(&json, "temporal_node_configs").unwrap(),
-        r#"{"Field":{"valid_from":"vf","valid_to":"vt"}}"#
+        r#"{"Project":{"valid_from":"vf","valid_to":"vt"}}"#
     );
-    // HAS_LICENSEE and OPERATES: a keyed config. AUDITS: half-open.
+    // HAS_HOLDER and OPERATES: a keyed config. AUDITS: half-open.
     assert_eq!(
         key(&json, "temporal_edge_configs").unwrap(),
         r#"{"SUPPLIES":[{"valid_from":"sf","valid_to":"st"},{"valid_from":"pf","valid_to":"pt"}]}"#
@@ -143,7 +143,7 @@ fn the_legacy_keys_hold_closed_unkeyed_configs_in_order_without_new_fields() {
 
 #[test]
 fn a_graph_without_declarations_writes_no_new_key() {
-    let json = metadata(&encode(graph(LICENSEES)));
+    let json = metadata(&encode(graph(HOLDERS)));
     assert_eq!(key(&json, "temporal_declarations"), None);
     assert_eq!(key(&json, "temporal_node_configs"), Some("{}"));
     assert_eq!(key(&json, "temporal_edge_configs"), Some("{}"));
@@ -191,14 +191,14 @@ fn an_older_reader_sees_the_closed_unkeyed_mirror_and_nothing_half_open_or_keyed
         valid_to: to.into(),
     };
     assert_eq!(old.temporal_node_configs.len(), 1);
-    assert_eq!(old.temporal_node_configs["Field"], older("vf", "vt"));
+    assert_eq!(old.temporal_node_configs["Project"], older("vf", "vt"));
     assert_eq!(old.temporal_edge_configs.len(), 1);
     assert_eq!(
         old.temporal_edge_configs["SUPPLIES"],
         vec![older("sf", "st"), older("pf", "pt")],
         "both, in order, so an older build's first match is what it always was"
     );
-    for omitted in ["AUDITS", "HAS_LICENSEE", "OPERATES"] {
+    for omitted in ["AUDITS", "HAS_HOLDER", "OPERATES"] {
         assert!(
             !old.temporal_edge_configs.contains_key(omitted),
             "{omitted}"
@@ -208,8 +208,8 @@ fn an_older_reader_sees_the_closed_unkeyed_mirror_and_nothing_half_open_or_keyed
 
 #[test]
 fn a_half_open_node_declaration_is_not_mirrored() {
-    let mut g = graph(LICENSEES);
-    let node = TemporalTarget::Node("Field".into());
+    let mut g = graph(HOLDERS);
+    let node = TemporalTarget::Node("Project".into());
     declare(&mut g, &node, "vf", "vt", HalfOpen).unwrap();
     let json = metadata(&encode(g));
     assert_eq!(key(&json, "temporal_node_configs"), Some("{}"));
@@ -223,7 +223,7 @@ fn from_legacy(edges: Vec<TemporalConfig>) -> TemporalDeclarations {
         Vec::new(),
         (
             HashMap::new(),
-            HashMap::from([("HAS_LICENSEE".to_string(), edges)]),
+            HashMap::from([("HAS_HOLDER".to_string(), edges)]),
         ),
     )
 }
@@ -231,13 +231,13 @@ fn from_legacy(edges: Vec<TemporalConfig>) -> TemporalDeclarations {
 #[test]
 fn a_legacy_list_repeating_one_config_reads_as_that_config_once() {
     let store = from_legacy(vec![config("a", "b"), config("a", "b")]);
-    assert_eq!(store.edges("HAS_LICENSEE"), &[config("a", "b")]);
-    assert!(!store.is_ambiguous("HAS_LICENSEE"));
+    assert_eq!(store.edges("HAS_HOLDER"), &[config("a", "b")]);
+    assert!(!store.is_ambiguous("HAS_HOLDER"));
     let mut g = DirGraph::new();
     g.temporal = store;
     assert_eq!(
         key(&metadata(&encode(g)), "temporal_edge_configs"),
-        Some(r#"{"HAS_LICENSEE":[{"valid_from":"a","valid_to":"b"}]}"#),
+        Some(r#"{"HAS_HOLDER":[{"valid_from":"a","valid_to":"b"}]}"#),
         "written back once"
     );
 }
@@ -247,7 +247,7 @@ fn a_legacy_list_of_different_unkeyed_configs_keeps_both_and_is_ambiguous() {
     let mut g = DirGraph::new();
     g.temporal = from_legacy(vec![config("a", "b"), config("c", "d")]);
     assert_eq!(
-        g.temporal.edges("HAS_LICENSEE"),
+        g.temporal.edges("HAS_HOLDER"),
         &[config("a", "b"), config("c", "d")],
         "both kept, in their order, so the first-match choice is unchanged"
     );
@@ -260,7 +260,7 @@ fn a_legacy_list_of_different_unkeyed_configs_keeps_both_and_is_ambiguous() {
     assert_eq!(
         key(&metadata(&bytes), "temporal_edge_configs"),
         Some(
-            r#"{"HAS_LICENSEE":[{"valid_from":"a","valid_to":"b"},{"valid_from":"c","valid_to":"d"}]}"#
+            r#"{"HAS_HOLDER":[{"valid_from":"a","valid_to":"b"},{"valid_from":"c","valid_to":"d"}]}"#
         )
     );
     let loaded = load_kgl_bytes(&bytes).unwrap();
@@ -269,9 +269,9 @@ fn a_legacy_list_of_different_unkeyed_configs_keeps_both_and_is_ambiguous() {
 
 #[test]
 fn a_keyed_declaration_beside_one_unkeyed_config_is_not_ambiguous() {
-    let mut g = graph(LICENSEES);
-    legacy_push_edge(&mut g, "HAS_LICENSEE", config("ff", "ft"));
-    let keyed = rel("HAS_LICENSEE", Some("Licence"));
+    let mut g = graph(HOLDERS);
+    legacy_push_edge(&mut g, "HAS_HOLDER", config("ff", "ft"));
+    let keyed = rel("HAS_HOLDER", Some("Contract"));
     declare(&mut g, &keyed, "lf", "lt", Closed).unwrap();
     assert!(list(&g).iter().all(|info| !info.ambiguous));
 }
@@ -279,17 +279,17 @@ fn a_keyed_declaration_beside_one_unkeyed_config_is_not_ambiguous() {
 #[test]
 fn the_new_key_wins_over_the_legacy_keys_when_both_are_present() {
     let entries: Vec<PersistedDeclaration> = serde_json::from_str(
-        r#"[{"kind":"relationship","name":"HAS_LICENSEE","from":"x","to":"y","convention":"half_open"}]"#,
+        r#"[{"kind":"relationship","name":"HAS_HOLDER","from":"x","to":"y","convention":"half_open"}]"#,
     )
     .unwrap();
     let store = TemporalDeclarations::from_file(
         entries,
         (
             HashMap::new(),
-            HashMap::from([("HAS_LICENSEE".to_string(), vec![config("a", "b")])]),
+            HashMap::from([("HAS_HOLDER".to_string(), vec![config("a", "b")])]),
         ),
     );
-    let only = store.edges("HAS_LICENSEE");
+    let only = store.edges("HAS_HOLDER");
     assert_eq!(only.len(), 1);
     assert_eq!(
         (only[0].valid_from.as_str(), only[0].convention),

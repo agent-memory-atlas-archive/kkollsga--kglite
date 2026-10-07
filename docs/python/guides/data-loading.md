@@ -316,18 +316,18 @@ better off thinking of them as "facets of the parent" than as
 peer types:
 
 ```python
-graph.add_nodes(fields_df,             "Field",             "id", "name")
+graph.add_nodes(fields_df,             "Project",             "id", "name")
 graph.add_nodes(production_profiles,   "ProductionProfile", "id")
-graph.add_nodes(reserves,              "FieldReserves",     "id")
+graph.add_nodes(reserves,              "ProjectReserves",     "id")
 
-# Tell describe() these are supporting children of Field
-graph.set_parent_type("ProductionProfile", "Field")
-graph.set_parent_type("FieldReserves",     "Field")
+# Tell describe() these are supporting children of Project
+graph.set_parent_type("ProductionProfile", "Project")
+graph.set_parent_type("ProjectReserves",     "Project")
 ```
 
 This affects only `describe()` output. The supporting types drop
 out of the top-level inventory. They reappear inside the `<type
-name="Field">` block, with their capabilities (timeseries, spatial,
+name="Project">` block, with their capabilities (timeseries, spatial,
 …) bubbled up to the parent. Cypher still treats them as
 ordinary node types: `MATCH (p:ProductionProfile) ...` works
 exactly as before.
@@ -336,7 +336,7 @@ exactly as before.
 |---|---|
 | "Is Company A above Company B in the org chart?" | Edge: `PARENT_OF` |
 | "How deep is this taxonomy tree?" | Edge (variable-length `*` works on edges, not type-tiers) |
-| "Show the agent that `ProductionProfile` is really part of `Field`" | `set_parent_type` |
+| "Show the agent that `ProductionProfile` is really part of `Project`" | `set_parent_type` |
 | "Hide noisy supporting types from the inventory but keep them queryable" | `set_parent_type` |
 
 You can use both at once — they don't interact. Edges shape
@@ -374,7 +374,7 @@ load dates without declaring anything. See {doc}`valid-time`.
 ## Batch Property Updates
 
 ```python
-result = graph.select('Prospect').where({'status': 'Inactive'}).update({
+result = graph.select('Proposal').where({'status': 'Inactive'}).update({
     'is_active': False,
     'deactivation_reason': 'status_inactive'
 })
@@ -534,8 +534,8 @@ an env var:
 KGLITE_BUILD_DEBUG=1 python build_graph.py
 ```
 
-For Wikidata or Sodir specifically, the pre-packaged dataset
-loaders (SEC EDGAR, Sodir, Wikidata) live in the separate
+For Wikidata specifically, the pre-packaged dataset
+loaders (SEC EDGAR, Wikidata) live in the separate
 kglite-datasets project. They handle download, cooldown, and resume
 on top of `load_ntriples`, and kglite loads the graphs they produce.
 To fetch and build the RDF yourself, use `load_ntriples` (above) on

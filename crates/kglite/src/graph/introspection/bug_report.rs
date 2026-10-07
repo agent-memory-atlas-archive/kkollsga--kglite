@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn sanitize_preserves_normal_text() {
-        let input = "MATCH (n:Field) WHERE n.name = 'test' RETURN n";
+        let input = "MATCH (n:Project) WHERE n.name = 'test' RETURN n";
         assert_eq!(sanitize(input), input);
     }
 

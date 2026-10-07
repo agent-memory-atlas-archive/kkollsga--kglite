@@ -482,7 +482,7 @@ fn validate_iso_date(field: &str, val: &str) -> Result<(), String> {
 ///
 /// Such a value was silently ignored before 0.16.11 — the column type fell
 /// through to inference and nothing said so, which let a wrong mental model
-/// ("`property_types` renames columns") *succeed*: the sodir fleet shipped
+/// ("`property_types` renames columns") *succeed*: a production fleet shipped
 /// months of un-renamed property families that way. Warn, don't error:
 /// existing blueprints with stray values still build, but the report now
 /// names every ignored value.

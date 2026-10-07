@@ -920,7 +920,7 @@ fn metadata_declarations_replay_from_a_declaration_only_frame() {
         vec![
             MutationOp::SetTypeParent {
                 node_type: "Well".into(),
-                parent_type: Some("Field".into()),
+                parent_type: Some("Project".into()),
             },
             MutationOp::SetSchemaVersion { version: 7 },
             MutationOp::SetSpatialConfig {
@@ -933,7 +933,7 @@ fn metadata_declarations_replay_from_a_declaration_only_frame() {
         ],
     )];
     assert_eq!(apply_frames(&mut g, &frames, 0).unwrap(), 1);
-    assert_eq!(g.parent_types.get("Well"), Some(&"Field".to_string()));
+    assert_eq!(g.parent_types.get("Well"), Some(&"Project".to_string()));
     assert_eq!(g.user_schema_version, 7);
     assert_eq!(
         g.get_spatial_config("Well")
@@ -951,7 +951,7 @@ fn a_withdrawn_parent_type_replays_as_a_withdrawal() {
             1,
             vec![MutationOp::SetTypeParent {
                 node_type: "Well".into(),
-                parent_type: Some("Field".into()),
+                parent_type: Some("Project".into()),
             }],
         ),
         frame(
@@ -1139,7 +1139,7 @@ fn series(values: &[f64]) -> NodeTimeseries {
         keys: (1..=values.len())
             .map(|month| chrono::NaiveDate::from_ymd_opt(2020, month as u32, 1).unwrap())
             .collect(),
-        channels: std::collections::HashMap::from([("oil".to_string(), values.to_vec())]),
+        channels: std::collections::HashMap::from([("output".to_string(), values.to_vec())]),
     }
 }
 
@@ -1189,7 +1189,7 @@ fn timeseries_payload_replays_onto_its_logical_node() {
                 node_type: "Person".into(),
                 config: serde_json::to_string(&TimeseriesConfig {
                     resolution: "month".into(),
-                    channels: vec!["oil".into()],
+                    channels: vec!["output".into()],
                     units: std::collections::HashMap::new(),
                     bin_type: None,
                 })

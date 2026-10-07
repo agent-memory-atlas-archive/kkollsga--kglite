@@ -15,43 +15,43 @@ def temporal_graph():
     """Graph with temporal connections configured via column_types."""
     g = kglite.KnowledgeGraph()
 
-    # Fields
+    # Projects
     df_fields = pd.DataFrame(
         {
             "id": [1, 2],
             "title": ["DRAUGEN", "ORMEN LANGE"],
         }
     )
-    g.add_nodes(df_fields, "Field", "id", "title")
+    g.add_nodes(df_fields, "Project", "id", "title")
 
     # Companies
     df_companies = pd.DataFrame(
         {
             "id": [10, 20, 30],
-            "title": ["Equinor", "Shell", "BP"],
+            "title": ["Northwind", "Vertex", "Apex"],
         }
     )
     g.add_nodes(df_companies, "Company", "id", "title")
 
-    # HAS_LICENSEE connections — temporal via column_types
+    # HAS_HOLDER connections — temporal via column_types
     df_lic = pd.DataFrame(
         {
             "field_id": [1, 1, 2],
             "company_id": [10, 20, 30],
-            "fldLicenseeFrom": ["2000-01-01", "2011-01-01", "1990-01-01"],
-            "fldLicenseeTo": ["2010-12-31", "2099-12-31", None],  # None = still active
+            "prjHolderFrom": ["2000-01-01", "2011-01-01", "1990-01-01"],
+            "prjHolderTo": ["2010-12-31", "2099-12-31", None],  # None = still active
         }
     )
     g.add_connections(
         df_lic,
-        "HAS_LICENSEE",
-        source_type="Field",
+        "HAS_HOLDER",
+        source_type="Project",
         source_id_field="field_id",
         target_type="Company",
         target_id_field="company_id",
         column_types={
-            "fldLicenseeFrom": "validFrom",
-            "fldLicenseeTo": "validTo",
+            "prjHolderFrom": "validFrom",
+            "prjHolderTo": "validTo",
         },
     )
 
@@ -91,7 +91,7 @@ class TestAutoTemporalConfig:
 
     def test_auto_config_edge_type(self, temporal_graph):
         """column_types validFrom/validTo auto-configures connection temporal."""
-        result = temporal_graph.select("Field").traverse("HAS_LICENSEE").collect()
+        result = temporal_graph.select("Project").traverse("HAS_HOLDER").collect()
         # Should filter to current connections only
         assert len(result) > 0
 
@@ -115,12 +115,12 @@ class TestDateContext:
     def test_date_shift_connections(self, temporal_graph):
         """date('2005') shifts traversal to 2005 context."""
         result = (
-            temporal_graph.date("2005").select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE").collect()
+            temporal_graph.date("2005").select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER").collect()
         )
-        # In 2005, only Equinor (2000-2010) was licensee
+        # In 2005, only Northwind (2000-2010) was holder
         titles = [r["title"] for r in result]
-        assert "Equinor" in titles
-        assert "Shell" not in titles
+        assert "Northwind" in titles
+        assert "Vertex" not in titles
 
     def test_date_shift_nodes(self, temporal_node_graph):
         """date('2015') selects status valid in 2015."""
@@ -131,7 +131,7 @@ class TestDateContext:
     def test_date_year_only(self, temporal_graph):
         """date('2005') is interpreted as 2005-01-01."""
         result = (
-            temporal_graph.date("2005").select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE").collect()
+            temporal_graph.date("2005").select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER").collect()
         )
         assert len(result) >= 1
 
@@ -150,39 +150,39 @@ class TestTemporalTraverse:
 
     def test_auto_filter_current(self, temporal_graph):
         """Default traverse filters to current connections."""
-        result = temporal_graph.select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE").collect()
-        # Today > 2011, so only Shell (2011-2099)
+        result = temporal_graph.select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER").collect()
+        # Today > 2011, so only Vertex (2011-2099)
         titles = [r["title"] for r in result]
-        assert "Shell" in titles
-        assert "Equinor" not in titles
+        assert "Vertex" in titles
+        assert "Northwind" not in titles
 
     def test_temporal_false_disables(self, temporal_graph):
         """temporal=False disables filtering."""
         result = (
-            temporal_graph.select("Field")
+            temporal_graph.select("Project")
             .where({"title": "DRAUGEN"})
-            .traverse("HAS_LICENSEE", temporal=False)
+            .traverse("HAS_HOLDER", temporal=False)
             .collect()
         )
         titles = [r["title"] for r in result]
-        assert "Shell" in titles
-        assert "Equinor" in titles
+        assert "Vertex" in titles
+        assert "Northwind" in titles
 
     def test_at_override(self, temporal_graph):
         """at='2005' overrides to point-in-time."""
         result = (
-            temporal_graph.select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE", at="2005").collect()
+            temporal_graph.select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER", at="2005").collect()
         )
         titles = [r["title"] for r in result]
-        assert "Equinor" in titles
-        assert "Shell" not in titles
+        assert "Northwind" in titles
+        assert "Vertex" not in titles
 
     def test_null_valid_to_means_active(self, temporal_graph):
         """NULL valid_to = still active (open-ended)."""
-        result = temporal_graph.select("Field").where({"title": "ORMEN LANGE"}).traverse("HAS_LICENSEE").collect()
+        result = temporal_graph.select("Project").where({"title": "ORMEN LANGE"}).traverse("HAS_HOLDER").collect()
         # BP has null valid_to → always current
         titles = [r["title"] for r in result]
-        assert "BP" in titles
+        assert "Apex" in titles
 
 
 class TestTemporalSelect:
@@ -245,10 +245,10 @@ class TestSaveLoadTemporal:
             g2 = kglite.load(path)
 
             # Config should be preserved — traverse should still auto-filter
-            result = g2.select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE").collect()
+            result = g2.select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER").collect()
             titles = [r["title"] for r in result]
-            assert "Shell" in titles
-            assert "Equinor" not in titles
+            assert "Vertex" in titles
+            assert "Northwind" not in titles
         finally:
             os.unlink(path)
 
@@ -271,31 +271,31 @@ class TestDateRange:
     """date('start', 'end') range mode — overlap check."""
 
     def test_range_includes_overlapping_connections(self, temporal_graph):
-        """date('2005', '2015') includes both Equinor (2000-2010) and Shell (2011-2099)."""
+        """date('2005', '2015') includes both Northwind (2000-2010) and Vertex (2011-2099)."""
         result = (
             temporal_graph.date("2005", "2015")
-            .select("Field")
+            .select("Project")
             .where({"title": "DRAUGEN"})
-            .traverse("HAS_LICENSEE")
+            .traverse("HAS_HOLDER")
             .collect()
         )
         titles = [r["title"] for r in result]
-        assert "Equinor" in titles
-        assert "Shell" in titles
+        assert "Northwind" in titles
+        assert "Vertex" in titles
 
     def test_range_excludes_outside_connections(self, temporal_graph):
         """date('1990', '1999') excludes connections that don't overlap."""
         result = (
             temporal_graph.date("1990", "1999")
-            .select("Field")
+            .select("Project")
             .where({"title": "DRAUGEN"})
-            .traverse("HAS_LICENSEE")
+            .traverse("HAS_HOLDER")
             .collect()
         )
         titles = [r["title"] for r in result]
-        # Equinor starts 2000, Shell starts 2011 — neither overlaps 1990-1999
-        assert "Equinor" not in titles
-        assert "Shell" not in titles
+        # Northwind starts 2000, Vertex starts 2011 — neither overlaps 1990-1999
+        assert "Northwind" not in titles
+        assert "Vertex" not in titles
 
     def test_range_nodes(self, temporal_node_graph):
         """date('2005', '2015') includes overlapping node statuses."""
@@ -307,17 +307,17 @@ class TestDateRange:
         assert "Shut down" in titles
 
     def test_range_year_expansion(self, temporal_graph):
-        """End date '2010' expands to 2010-12-31 (includes Equinor ending 2010-12-31)."""
+        """End date '2010' expands to 2010-12-31 (includes Northwind ending 2010-12-31)."""
         result = (
             temporal_graph.date("2010", "2010")
-            .select("Field")
+            .select("Project")
             .where({"title": "DRAUGEN"})
-            .traverse("HAS_LICENSEE")
+            .traverse("HAS_HOLDER")
             .collect()
         )
         titles = [r["title"] for r in result]
-        # Equinor valid_to=2010-12-31, Shell valid_from=2011-01-01
-        assert "Equinor" in titles
+        # Northwind valid_to=2010-12-31, Vertex valid_from=2011-01-01
+        assert "Northwind" in titles
 
 
 class TestDateAll:
@@ -331,11 +331,11 @@ class TestDateAll:
     def test_all_disables_connection_filtering(self, temporal_graph):
         """date('all') returns all connections regardless of validity."""
         result = (
-            temporal_graph.date("all").select("Field").where({"title": "DRAUGEN"}).traverse("HAS_LICENSEE").collect()
+            temporal_graph.date("all").select("Project").where({"title": "DRAUGEN"}).traverse("HAS_HOLDER").collect()
         )
         titles = [r["title"] for r in result]
-        assert "Equinor" in titles
-        assert "Shell" in titles
+        assert "Northwind" in titles
+        assert "Vertex" in titles
 
     def test_all_then_reset(self, temporal_node_graph):
         """date('all').date() resets back to today filtering."""
@@ -361,8 +361,8 @@ class TestDescribeTemporal:
     def test_describe_shows_temporal_edge(self, temporal_graph):
         """describe() includes temporal_from/temporal_to for connection types."""
         xml = temporal_graph.describe()
-        assert 'temporal_from="fldLicenseeFrom"' in xml
-        assert 'temporal_to="fldLicenseeTo"' in xml
+        assert 'temporal_from="prjHolderFrom"' in xml
+        assert 'temporal_to="prjHolderTo"' in xml
 
 
 @pytest.fixture

@@ -1,10 +1,10 @@
 {
   "settings": {
     "input_root": "/Volumes/EksternalHome/Koding/Python/Faktasider",
-    "output_file": "sodir_graph.kgl"
+    "output_file": "projects_graph.kgl"
   },
   "nodes": {
-    "Field": {
+    "Project": {
       "csv": "sodir-data/csv/field.csv",
       "pk": "fldNpdidField",
       "title": "fldName",
@@ -44,13 +44,13 @@
             "target": "Ocean",
             "fk": "ocean_id"
           },
-          "DISCOVERY_WELLBORE": {
-            "target": "Wellbore",
+          "INITIATIVE_SITE": {
+            "target": "Site",
             "fk": "wlbNpdidWellbore"
           }
         },
         "junction_edges": {
-          "HAS_LICENSEE": {
+          "HAS_HOLDER": {
             "csv": "sodir-data/csv/field_licensee_hst.csv",
             "source_fk": "fldNpdidField",
             "target": "Company",
@@ -66,7 +66,7 @@
               "fldLicenseeTo": "validTo"
             }
           },
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/field_operator_hst.csv",
             "source_fk": "fldNpdidField",
             "target": "Company",
@@ -80,10 +80,10 @@
               "fldOperatorTo": "validTo"
             }
           },
-          "INCLUDES_DISCOVERY": {
+          "INCLUDES_INITIATIVE": {
             "csv": "sodir-data/csv/field_discoveries_incl_hst.csv",
             "source_fk": "fldNpdidField",
-            "target": "Discovery",
+            "target": "Initiative",
             "target_fk": "dscNpdidDiscovery",
             "properties": [
               "fldDiscoveryInclFromDate",
@@ -97,7 +97,7 @@
         }
       },
       "sub_nodes": {
-        "FieldReserves": {
+        "ProjectReserves": {
           "csv": "sodir-data/csv/field_reserves.csv",
           "pk": "auto",
           "title": "fldDateOffResEstDisplay",
@@ -126,14 +126,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldDescription": {
+        "ProjectDescription": {
           "csv": "sodir-data/csv/field_description.csv",
           "pk": "auto",
           "title": "fldDescriptionHeading",
@@ -151,14 +151,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldPDO": {
+        "ProjectPDO": {
           "csv": "sodir-data/csv/field_pdo_hst.csv",
           "pk": "auto",
           "title": "fldPudDescription",
@@ -176,14 +176,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldStatusHistory": {
+        "ProjectStatusHistory": {
           "csv": "sodir-data/csv/field_activity_status_hst.csv",
           "pk": "auto",
           "title": "fldStatus",
@@ -200,14 +200,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldInvestment": {
+        "ProjectInvestment": {
           "csv": "sodir-data/csv/field_investment_expected.csv",
           "pk": "auto",
           "title": "fldName",
@@ -222,14 +222,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldExtendsInto": {
+        "ProjectExtendsInto": {
           "csv": "sodir-data/csv/field_extends_into.csv",
           "pk": "auto",
           "title": "blcName",
@@ -247,14 +247,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldOwnerHistory": {
+        "ProjectOwnerHistory": {
           "csv": "sodir-data/csv/field_owner_hst.csv",
           "pk": "auto",
           "title": "fldOwnerName",
@@ -274,8 +274,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
@@ -328,14 +328,14 @@
           },
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "prfNpdidInformationCarrier"
               }
             }
           }
         },
-        "FieldReservesCompany": {
+        "ProjectReservesCompany": {
           "csv": "sodir-data/csv/field_reserves_company.csv",
           "pk": "auto",
           "title": "fldName",
@@ -366,14 +366,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
           }
         },
-        "FieldImage": {
+        "ProjectImage": {
           "csv": "sodir-data/csv/field_image.csv",
           "pk": "fldImagePK",
           "title": "fldImageTitle",
@@ -387,8 +387,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_FIELD": {
-                "target": "Field",
+              "OF_PROJECT": {
+                "target": "Project",
                 "fk": "fldNpdidField"
               }
             }
@@ -396,7 +396,7 @@
         }
       }
     },
-    "Wellbore": {
+    "Site": {
       "csv": "sodir-data/csv/wellbore.csv",
       "pk": "wlbNpdidWellbore",
       "title": "wlbWellboreName",
@@ -535,23 +535,23 @@
       ],
       "connections": {
         "fk_edges": {
-          "IN_FIELD": {
-            "target": "Field",
+          "IN_PROJECT": {
+            "target": "Project",
             "fk": "fldNpdidField"
           },
-          "IN_DISCOVERY": {
-            "target": "Discovery",
+          "IN_INITIATIVE": {
+            "target": "Initiative",
             "fk": "dscNpdidDiscovery"
           },
-          "IN_LICENCE": {
-            "target": "Licence",
+          "IN_CONTRACT": {
+            "target": "Contract",
             "fk": "prlNpdidProductionLicence"
           },
-          "DRILLED_BY": {
+          "BUILT_BY": {
             "target": "Company",
             "fk": "cmpNpdidCompany"
           },
-          "DRILLED_FROM": {
+          "BUILT_FROM": {
             "target": "Facility",
             "fk": "fclNpdidFacilityDrilling"
           },
@@ -576,10 +576,10 @@
               "lsuLevel"
             ]
           },
-          "PLAN_FOR_PROSPECT": {
+          "PLAN_FOR_PROPOSAL": {
             "csv": "sodir-data/csv-extra/wellbore_plan_prospect.csv",
             "source_fk": "npdid_planwell",
-            "target": "Prospect",
+            "target": "Proposal",
             "target_fk": "npdid_prospect",
             "properties": [
               "play",
@@ -589,7 +589,7 @@
         }
       },
       "sub_nodes": {
-        "WellboreCasing": {
+        "SiteCasing": {
           "csv": "sodir-data/csv/wellbore_casing.csv",
           "pk": "auto",
           "title": "wlbCasingType",
@@ -611,14 +611,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreCore": {
+        "SiteCore": {
           "csv": "sodir-data/csv/wellbore_core.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -641,14 +641,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreDST": {
+        "SiteDST": {
           "csv": "sodir-data/csv/wellbore_dst.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -676,14 +676,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreLog": {
+        "SiteLog": {
           "csv": "sodir-data/csv/wellbore_log.csv",
           "pk": "auto",
           "title": "wlbLogType",
@@ -700,14 +700,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreMud": {
+        "SiteMud": {
           "csv": "sodir-data/csv/wellbore_mud.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -729,14 +729,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreCorePhoto": {
+        "SiteCorePhoto": {
           "csv": "sodir-data/csv/wellbore_core_photo.csv",
           "pk": "auto",
           "title": "wlbCorePhotoTitle",
@@ -753,14 +753,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreOilSample": {
+        "SiteOilSample": {
           "csv": "sodir-data/csv/wellbore_oil_sample.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -784,14 +784,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreCO2": {
+        "SiteCO2": {
           "csv": "sodir-data/csv/wellbore_co2.csv",
           "pk": "auto",
           "title": "wlbWellboreName",
@@ -810,14 +810,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreCutting": {
+        "SiteCutting": {
           "csv": "sodir-data/csv/wellbore_cutting.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -834,14 +834,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreDocument": {
+        "SiteDocument": {
           "csv": "sodir-data/csv/wellbore_document.csv",
           "pk": "auto",
           "title": "wlbDocumentType",
@@ -860,14 +860,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellborePalySlide": {
+        "SitePalySlide": {
           "csv": "sodir-data/csv/wellbore_paly_slide.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -885,14 +885,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreThinSection": {
+        "SiteThinSection": {
           "csv": "sodir-data/csv/wellbore_thin_section.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -909,14 +909,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreHistory": {
+        "SiteHistory": {
           "csv": "sodir-data/csv/wellbore_history.csv",
           "pk": "auto",
           "title": "wlbName",
@@ -931,8 +931,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
@@ -958,14 +958,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "wlbNpdidWellbore"
               }
             }
           }
         },
-        "WellboreCasingAndLot": {
+        "SiteCasingAndLot": {
           "csv": "sodir-data/csv-extra/wellbore_casing_and_lot.csv",
           "pk": "wellbore_casing_and_lot_id",
           "title": "casing_type",
@@ -988,8 +988,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_WELLBORE": {
-                "target": "Wellbore",
+              "OF_SITE": {
+                "target": "Site",
                 "fk": "npdid_wellbore"
               }
             }
@@ -997,7 +997,7 @@
         }
       }
     },
-    "Discovery": {
+    "Initiative": {
       "csv": "sodir-data/csv/discovery.csv",
       "pk": "dscNpdidDiscovery",
       "title": "dscName",
@@ -1039,8 +1039,8 @@
       ],
       "connections": {
         "fk_edges": {
-          "IN_FIELD": {
-            "target": "Field",
+          "IN_PROJECT": {
+            "target": "Project",
             "fk": "fldNpdidField"
           },
           "OWNED_BY": {
@@ -1053,14 +1053,14 @@
           }
         },
         "junction_edges": {
-          "HAS_LICENSEE": {
+          "HAS_HOLDER": {
             "csv": "sodir-data/csv/discovery_licensee_hst.csv",
             "source_fk": "dscNpdidDiscovery",
             "target": "Company",
             "target_fk": "cmpNpdidCompany",
             "properties": []
           },
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/discovery_operator_hst.csv",
             "source_fk": "dscNpdidDiscovery",
             "target": "Company",
@@ -1074,10 +1074,10 @@
               "dscOperatorTo": "validTo"
             }
           },
-          "HAS_DEPOSIT_PROSPECT": {
+          "HAS_DEPOSIT_PROPOSAL": {
             "csv": "sodir-data/csv-extra/discovery_deposit_prospect.csv",
             "source_fk": "npdid_discovery",
-            "target": "Prospect",
+            "target": "Proposal",
             "target_fk": "npdid_prospect",
             "properties": [
               "discovery_well",
@@ -1093,7 +1093,7 @@
         }
       },
       "sub_nodes": {
-        "DiscoveryReserves": {
+        "InitiativeReserves": {
           "csv": "sodir-data/csv/discovery_reserves.csv",
           "pk": "auto",
           "title": "dscDateOffResEstDisplay",
@@ -1114,14 +1114,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_DISCOVERY": {
-                "target": "Discovery",
+              "OF_INITIATIVE": {
+                "target": "Initiative",
                 "fk": "dscNpdidDiscovery"
               }
             }
           }
         },
-        "DiscoveryDescription": {
+        "InitiativeDescription": {
           "csv": "sodir-data/csv/discovery_description.csv",
           "pk": "auto",
           "title": "dscDescriptionHeading",
@@ -1139,14 +1139,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_DISCOVERY": {
-                "target": "Discovery",
+              "OF_INITIATIVE": {
+                "target": "Initiative",
                 "fk": "dscNpdidDiscovery"
               }
             }
           }
         },
-        "DiscoveryPoly": {
+        "InitiativePoly": {
           "csv": "sodir-data/csv/discovery_poly_hst.csv",
           "pk": "auto",
           "title": "dscName",
@@ -1191,14 +1191,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_DISCOVERY": {
-                "target": "Discovery",
+              "OF_INITIATIVE": {
+                "target": "Initiative",
                 "fk": "dscNpdidDiscovery"
               }
             }
           }
         },
-        "DiscoveryMapRef": {
+        "InitiativeMapRef": {
           "csv": "sodir-data/csv/discovery_map_reference.csv",
           "pk": "auto",
           "title": "dscName",
@@ -1219,14 +1219,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_DISCOVERY": {
-                "target": "Discovery",
+              "OF_INITIATIVE": {
+                "target": "Initiative",
                 "fk": "dscNpdidDiscovery"
               }
             }
           }
         },
-        "DiscoveryExtendsInto": {
+        "InitiativeExtendsInto": {
           "csv": "sodir-data/csv/discovery_extends_into.csv",
           "pk": "auto",
           "title": "blcName",
@@ -1241,7 +1241,7 @@
             "prlFactPageUrl"
           ]
         },
-        "DiscoveryProduction": {
+        "InitiativeProduction": {
           "csv": "sodir-data/csv/profiles.csv",
           "pk": "prfNpdidInformationCarrier",
           "title": "prfInformationCarrier",
@@ -1288,8 +1288,8 @@
           },
           "connections": {
             "fk_edges": {
-              "OF_DISCOVERY": {
-                "target": "Discovery",
+              "OF_INITIATIVE": {
+                "target": "Initiative",
                 "fk": "prfNpdidInformationCarrier"
               }
             }
@@ -1297,7 +1297,7 @@
         }
       }
     },
-    "Licence": {
+    "Contract": {
       "csv": "sodir-data/csv/licence.csv",
       "pk": "prlNpdidLicence",
       "title": "prlName",
@@ -1346,13 +1346,13 @@
             "target": "Ocean",
             "fk": "ocean_id"
           },
-          "IN_LICENSING_ACTIVITY": {
-            "target": "LicensingActivity",
+          "IN_CONTRACTING_ACTIVITY": {
+            "target": "ContractingActivity",
             "fk": "lcaNpdidLicensingActivity"
           }
         },
         "junction_edges": {
-          "HAS_LICENSEE": {
+          "HAS_HOLDER": {
             "csv": "sodir-data/csv/licence_licensee_hst.csv",
             "source_fk": "prlNpdidLicence",
             "target": "Company",
@@ -1367,7 +1367,7 @@
               "prlLicenseeDateValidTo": "validTo"
             }
           },
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/licence_operator_hst.csv",
             "source_fk": "prlNpdidLicence",
             "target": "Company",
@@ -1381,7 +1381,7 @@
               "prlOperDateValidTo": "validTo"
             }
           },
-          "LICENCE_TRANSFER": {
+          "CONTRACT_TRANSFER": {
             "csv": "sodir-data/csv/licence_transfer_hst.csv",
             "source_fk": "prlNpdidLicence",
             "target": "Company",
@@ -1401,7 +1401,7 @@
         }
       },
       "sub_nodes": {
-        "LicencePhase": {
+        "ContractPhase": {
           "csv": "sodir-data/csv/licence_phase_hst.csv",
           "pk": "auto",
           "title": "prlPhase",
@@ -1423,14 +1423,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
           }
         },
-        "LicenceDocument": {
+        "ContractDocument": {
           "csv": "sodir-data/csv/licence_document.csv",
           "pk": "auto",
           "title": "prlDocumentName",
@@ -1449,14 +1449,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
           }
         },
-        "LicenceAdditionalArea": {
+        "ContractAdditionalArea": {
           "csv": "sodir-data/csv/licence_additional_area.csv",
           "pk": "auto",
           "title": "prlNameAddArea",
@@ -1472,14 +1472,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
           }
         },
-        "LicenceAreaPoly": {
+        "ContractAreaPoly": {
           "csv": "sodir-data/csv/licence_area_poly_hst.csv",
           "pk": "auto",
           "title": "prlName",
@@ -1512,14 +1512,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
           }
         },
-        "LicenceDocumentArea": {
+        "ContractDocumentArea": {
           "csv": "sodir-data/csv/licence_document_area.csv",
           "pk": "auto",
           "title": "prlDocumentName",
@@ -1544,14 +1544,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
           }
         },
-        "LicenceTask": {
+        "ContractTask": {
           "csv": "sodir-data/csv/licence_task.csv",
           "pk": "prlTaskID",
           "title": "prlTaskTypeEn",
@@ -1579,8 +1579,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_LICENCE": {
-                "target": "Licence",
+              "OF_CONTRACT": {
+                "target": "Contract",
                 "fk": "prlNpdidLicence"
               }
             }
@@ -1889,7 +1889,7 @@
         }
       }
     },
-    "Play": {
+    "Portfolio": {
       "csv": "sodir-data/csv/play.csv",
       "pk": "plyNPDID",
       "title": "plyName",
@@ -1919,7 +1919,7 @@
         }
       },
       "sub_nodes": {
-        "PlayCurrentPublic": {
+        "PortfolioCurrentPublic": {
           "csv": "sodir-data/csv-extra/play_current_public.csv",
           "pk": "auto",
           "title": "plyplayname",
@@ -1943,14 +1943,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PLAY": {
-                "target": "Play",
+              "OF_PORTFOLIO": {
+                "target": "Portfolio",
                 "fk": "npdidplay"
               }
             }
           }
         },
-        "PlayCurrentRestricted": {
+        "PortfolioCurrentRestricted": {
           "csv": "sodir-data/csv-extra/play_current_restricted.csv",
           "pk": "auto",
           "title": "plyplayname",
@@ -1971,8 +1971,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PLAY": {
-                "target": "Play",
+              "OF_PORTFOLIO": {
+                "target": "Portfolio",
                 "fk": "npdidplay"
               }
             }
@@ -2006,7 +2006,7 @@
       ],
       "connections": {
         "junction_edges": {
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/tuf_operator_hst.csv",
             "source_fk": "tufNpdidTuf",
             "target": "Company",
@@ -2038,7 +2038,7 @@
         }
       }
     },
-    "LicensingActivity": {
+    "ContractingActivity": {
       "csv": "sodir-data/csv/licensing_activity.csv",
       "pk": "lcaNpdidLicensingActivity",
       "title": "lcaName",
@@ -2119,10 +2119,10 @@
             "target_fk": "cmpNpdidCompanyDoingFor",
             "properties": []
           },
-          "COVERS_LICENCE": {
+          "COVERS_CONTRACT": {
             "csv": "sodir-data/csv/seismic_acquisition_licences.csv",
             "source_fk": "seaNpdidSurvey",
-            "target": "Licence",
+            "target": "Contract",
             "target_fk": "seaNpdidProductionLicence",
             "properties": []
           }
@@ -2398,7 +2398,7 @@
       ],
       "connections": {
         "junction_edges": {
-          "HAS_LICENSEE": {
+          "HAS_HOLDER": {
             "csv": "sodir-data/csv/business_arrangement_licensee_hst.csv",
             "source_fk": "baaNpdidBsnsArrArea",
             "target": "Company",
@@ -2413,7 +2413,7 @@
               "baaLicenseeDateValidTo": "validTo"
             }
           },
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/business_arrangement_operator.csv",
             "source_fk": "baaNpdidBsnsArrArea",
             "target": "Company",
@@ -2596,11 +2596,11 @@
         }
       }
     },
-    "PetregLicence": {
+    "RegisterContract": {
       "csv": "sodir-data/csv/petreg_licence.csv",
       "pk": "ptl_id",
       "title": "ptlName",
-      "parent": "Licence",
+      "parent": "Contract",
       "parent_fk": "prlNpdidLicence",
       "properties": {
         "ptlKind": "string",
@@ -2622,7 +2622,7 @@
       ],
       "connections": {
         "junction_edges": {
-          "HAS_LICENSEE": {
+          "HAS_HOLDER": {
             "csv": "sodir-data/csv/petreg_licence_licensee.csv",
             "source_fk": "ptl_id",
             "target": "Company",
@@ -2631,7 +2631,7 @@
               "ptlLicenseeInterest"
             ]
           },
-          "HAS_OPERATOR": {
+          "MANAGED_BY": {
             "csv": "sodir-data/csv/petreg_licence_operator.csv",
             "source_fk": "ptl_id",
             "target": "Company",
@@ -2640,14 +2640,14 @@
           }
         },
         "fk_edges": {
-          "OF_LICENCE": {
-            "target": "Licence",
+          "OF_CONTRACT": {
+            "target": "Contract",
             "fk": "prlNpdidLicence"
           }
         }
       },
       "sub_nodes": {
-        "PetregMessage": {
+        "RegisterMessage": {
           "csv": "sodir-data/csv/petreg_licence_message.csv",
           "pk": "auto",
           "title": "ptlName",
@@ -2671,8 +2671,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PETREG_LICENCE": {
-                "target": "PetregLicence",
+              "OF_PETREG_CONTRACT": {
+                "target": "RegisterContract",
                 "fk": "ptl_id"
               }
             }
@@ -2928,7 +2928,7 @@
       "spatial_only": true,
       "note": "Connect to Ocean via graph spatial operations post-load"
     },
-    "SbmPlayEstimate": {
+    "SbmPortfolioEstimate": {
       "csv": "sodir-data/csv/sbm_play_resource_estimate.csv",
       "pk": "auto",
       "title": "sbmNameEn",
@@ -2973,7 +2973,7 @@
       ],
       "connections": {}
     },
-    "LicenceAreaCount": {
+    "ContractAreaCount": {
       "csv": "sodir-data/csv/licence_area_count.csv",
       "pk": "auto",
       "title": "prlAreaLicCountLicNames",
@@ -3043,8 +3043,8 @@
       ],
       "connections": {
         "fk_edges": {
-          "IN_LICENSING_ACTIVITY": {
-            "target": "LicensingActivity",
+          "IN_CONTRACTING_ACTIVITY": {
+            "target": "ContractingActivity",
             "fk": "NPDIDLicencingActivityApaGross"
           }
         }
@@ -3073,8 +3073,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "IN_LICENSING_ACTIVITY": {
-                "target": "LicensingActivity",
+              "IN_CONTRACTING_ACTIVITY": {
+                "target": "ContractingActivity",
                 "fk": "NPDIDLicencingActivityApaGross"
               },
               "OF_APA_GROSS": {
@@ -3086,7 +3086,7 @@
         }
       }
     },
-    "Prospect": {
+    "Proposal": {
       "csv": "sodir-data/csv-extra/prospect.csv",
       "pk": "npdid_prospect",
       "title": "prospect_name",
@@ -3108,16 +3108,16 @@
       ],
       "connections": {
         "fk_edges": {
-          "IN_PLAY": {
-            "target": "Play",
+          "IN_PORTFOLIO": {
+            "target": "Portfolio",
             "fk": "npdid_play"
           }
         },
         "junction_edges": {
-          "HAS_PLAY": {
+          "HAS_PORTFOLIO": {
             "csv": "sodir-data/csv-extra/prospect_play.csv",
             "source_fk": "npdid_prospect",
-            "target": "Play",
+            "target": "Portfolio",
             "target_fk": "npdid_play",
             "properties": [
               "date_from",
@@ -3129,10 +3129,10 @@
               "date_to": "validTo"
             }
           },
-          "TESTED_BY_WELLBORE": {
+          "TESTED_BY_SITE": {
             "csv": "sodir-data/csv-extra/prospect_well.csv",
             "source_fk": "npdid_prospect",
-            "target": "Wellbore",
+            "target": "Site",
             "target_fk": "npdid_wellbore",
             "properties": [
               "date_of_completion",
@@ -3150,7 +3150,7 @@
         }
       },
       "sub_nodes": {
-        "ProspectEstimate": {
+        "ProposalEstimate": {
           "csv": "sodir-data/csv-extra/prospect_estimate.csv",
           "pk": "prospect_estimate_id",
           "title": "estimate_name",
@@ -3217,22 +3217,22 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               },
               "ESTIMATED_BY": {
                 "target": "Company",
                 "fk": "npdid_company"
               },
-              "NEAREST_WELLBORE": {
-                "target": "Wellbore",
+              "NEAREST_SITE": {
+                "target": "Site",
                 "fk": "npdid_wellbore"
               }
             }
           }
         },
-        "ProspectEstimateCase": {
+        "ProposalEstimateCase": {
           "csv": "sodir-data/csv-extra/prospect_estimate_case.csv",
           "pk": "prospect_estimate_case_id",
           "title": "detailed_estimate_desc",
@@ -3381,14 +3381,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectComments": {
+        "ProposalComments": {
           "csv": "sodir-data/csv-extra/prospect_comments.csv",
           "pk": "prospect_comments_id",
           "title": "prospect_name",
@@ -3402,14 +3402,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectStatus": {
+        "ProposalStatus": {
           "csv": "sodir-data/csv-extra/prospect_status.csv",
           "pk": "auto",
           "title": "status_en",
@@ -3424,14 +3424,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectNameHistory": {
+        "ProposalNameHistory": {
           "csv": "sodir-data/csv-extra/prospect_name_hst.csv",
           "pk": "prospect_name_hst_id",
           "title": "prospect_name",
@@ -3446,14 +3446,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectEstimateDataset": {
+        "ProposalEstimateDataset": {
           "csv": "sodir-data/csv-extra/prospect_estimate_dataset.csv",
           "pk": "prospect_estimate_dataset_id",
           "title": "dataset_name",
@@ -3469,14 +3469,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectEstimateComments": {
+        "ProposalEstimateComments": {
           "csv": "sodir-data/csv-extra/prospect_estimate_comments.csv",
           "pk": "prospect_estimate_comments_id",
           "title": "estimate_name",
@@ -3491,14 +3491,14 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }
           }
         },
-        "ProspectEstimateCmntMirror": {
+        "ProposalEstimateCmntMirror": {
           "csv": "sodir-data/csv-extra/prospect_estimate_cmnt_mirror.csv",
           "pk": "prospect_estimate_comments_id",
           "title": "estimate_name",
@@ -3513,8 +3513,8 @@
           ],
           "connections": {
             "fk_edges": {
-              "OF_PROSPECT": {
-                "target": "Prospect",
+              "OF_PROPOSAL": {
+                "target": "Proposal",
                 "fk": "npdid_prospect"
               }
             }

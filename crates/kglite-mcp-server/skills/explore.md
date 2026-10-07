@@ -68,7 +68,7 @@ otherwise turn into a chain of grep + read calls.
 - **Exact symbol lookup:** if you already have a qualified_name and want
   just that one body, `read_code_source` is one fewer hop.
 - **Non-code graphs:** explore only ranks code-graph node types. On a
-  domain graph (legal, sodir, wikidata) it emits a "no match" message
+  domain graph (legal, wikidata) it emits a "no match" message
   rather than degrade silently.
 - **Structural queries:** "find every Function that returns Result<T>" is
   a Cypher question, not an explore question.

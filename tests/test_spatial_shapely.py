@@ -42,7 +42,7 @@ def wkt_graph():
             ],
         }
     )
-    graph.add_nodes(df, "Field", "id", "name")
+    graph.add_nodes(df, "Project", "id", "name")
     return graph
 
 
@@ -52,19 +52,19 @@ def wkt_graph():
 class TestShapelyInput:
     def test_intersects_geometry_with_shapely_polygon(self, wkt_graph):
         poly = Polygon([(2, 59), (6, 59), (6, 63), (2, 63), (2, 59)])
-        result = wkt_graph.select("Field").intersects_geometry(poly)
+        result = wkt_graph.select("Project").intersects_geometry(poly)
         assert result.len() >= 1
 
     def test_intersects_geometry_wkt_string_still_works(self, wkt_graph):
         """Backwards compatibility: plain WKT strings still work."""
-        result = wkt_graph.select("Field").intersects_geometry(
+        result = wkt_graph.select("Project").intersects_geometry(
             "POLYGON((2 59, 6 59, 6 63, 2 63, 2 59))",
         )
         assert result.len() >= 1
 
     def test_intersects_geometry_with_shapely_box(self, wkt_graph):
         bbox = box(2, 59, 6, 63)
-        result = wkt_graph.select("Field").intersects_geometry(bbox)
+        result = wkt_graph.select("Project").intersects_geometry(bbox)
         assert result.len() >= 1
 
     def test_wkt_centroid_with_shapely_polygon(self, wkt_graph):
@@ -81,7 +81,7 @@ class TestShapelyInput:
 
     def test_intersects_bad_type_raises(self, wkt_graph):
         with pytest.raises(TypeError, match="WKT string or a geometry object"):
-            wkt_graph.select("Field").intersects_geometry(12345)
+            wkt_graph.select("Project").intersects_geometry(12345)
 
     def test_wkt_centroid_bad_type_raises(self, wkt_graph):
         with pytest.raises(TypeError, match="WKT string or a geometry object"):
@@ -151,7 +151,7 @@ class TestShapelyOutput:
 
 class TestToGdf:
     def test_to_gdf_from_get_nodes(self, wkt_graph):
-        rv = wkt_graph.select("Field").collect()
+        rv = wkt_graph.select("Project").collect()
         gdf = rv.to_gdf(geometry_column="geometry")
         assert isinstance(gdf, gpd.GeoDataFrame)
         assert len(gdf) == 3
@@ -161,18 +161,18 @@ class TestToGdf:
             assert isinstance(geom, Polygon)
 
     def test_to_gdf_with_crs(self, wkt_graph):
-        rv = wkt_graph.select("Field").collect()
+        rv = wkt_graph.select("Project").collect()
         gdf = rv.to_gdf(geometry_column="geometry", crs="EPSG:4326")
         assert gdf.crs is not None
         assert gdf.crs.to_epsg() == 4326
 
     def test_to_gdf_from_cypher(self, wkt_graph):
-        rv = wkt_graph.cypher("MATCH (n:Field) RETURN n.name AS name, n.geometry AS geometry")
+        rv = wkt_graph.cypher("MATCH (n:Project) RETURN n.name AS name, n.geometry AS geometry")
         gdf = rv.to_gdf(geometry_column="geometry")
         assert isinstance(gdf, gpd.GeoDataFrame)
         assert len(gdf) == 3
 
     def test_to_gdf_missing_column_raises(self, wkt_graph):
-        rv = wkt_graph.select("Field").collect()
+        rv = wkt_graph.select("Project").collect()
         with pytest.raises(KeyError):
             rv.to_gdf(geometry_column="nonexistent")

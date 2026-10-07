@@ -64,8 +64,8 @@ def _entries(caught):
 
 def _mk3_tables():
     return {
-        "company.csv": pd.DataFrame({"cid": [1, 2], "name": ["Statoil", "Equinor"]}),
-        "field.csv": pd.DataFrame({"fid": [10], "fname": ["Gullfaks"]}),
+        "company.csv": pd.DataFrame({"cid": [1, 2], "name": ["Zenith", "Northwind"]}),
+        "field.csv": pd.DataFrame({"fid": [10], "fname": ["Birch"]}),
         "status.csv": pd.DataFrame(
             {
                 "sid": [1, 2],
@@ -108,11 +108,11 @@ def _mk3_blueprint(status_temporal, operator_temporal):
     return {
         "nodes": {
             "Company": {"csv": "company.csv", "pk": "cid", "title": "name"},
-            "Field": {
+            "Project": {
                 "csv": "field.csv",
                 "pk": "fid",
                 "title": "fname",
-                "connections": {"junction_edges": {"HAS_OPERATOR": operator}},
+                "connections": {"junction_edges": {"MANAGED_BY": operator}},
             },
             "Status": status,
         }
@@ -132,16 +132,16 @@ class TestOperatorGolden:
         g, messages = _build(path, **kwargs)
         assert not [m for m in messages if "unknown key" in m], messages
 
-        assert _titles(g.date("2009-06-30").select("Field").traverse("HAS_OPERATOR")) == ["Statoil"]
+        assert _titles(g.date("2009-06-30").select("Project").traverse("MANAGED_BY")) == ["Zenith"]
         assert _titles(g.select("Status")) == ["Producing"]
         assert _titles(g.date("1985-01-01").select("Status")) == ["Approved"]
         assert _declarations(g) == [
             ("node", "Status", None, "sf", "st", "closed"),
-            ("relationship", "HAS_OPERATOR", "Field", "vf", "vt", "closed"),
+            ("relationship", "MANAGED_BY", "Project", "vf", "vt", "closed"),
         ]
         described = g.describe()
         assert 'temporal_from="sf" temporal_to="st"' in described
-        assert 'temporal_from="vf" temporal_to="vt" temporal_source="Field"' in described
+        assert 'temporal_from="vf" temporal_to="vt" temporal_source="Project"' in described
 
     def test_a_streamed_node_spec_declares_too(self, tmp_path, monkeypatch):
         monkeypatch.setenv("KGLITE_BLUEPRINT_STREAMING_THRESHOLD_MB", "0")
@@ -159,7 +159,7 @@ class TestOperatorGolden:
         typed_only = [m for m in messages if "only type the column" in m]
         assert len(typed_only) == 2, messages
         assert any(m.startswith("node 'Status'") and '"from": "sf", "to": "st"' in m for m in typed_only), typed_only
-        assert any(m.startswith("junction 'HAS_OPERATOR' (node 'Field')") for m in typed_only), typed_only
+        assert any(m.startswith("junction 'MANAGED_BY' (node 'Project')") for m in typed_only), typed_only
 
     def test_a_key_without_a_convention_declares_nothing_and_warns(self, tmp_path):
         no_convention = {"from": "sf", "to": "st"}
@@ -180,14 +180,14 @@ class TestOperatorGolden:
 
 
 class TestTwoSourceRelationship:
-    """Fields and licences both hold licensee periods, the licences under
+    """Projects and contracts both hold holder periods, the contracts under
     renamed bounds. Each source keeps its own declaration."""
 
     def _path(self, tmp_path):
         tables = {
-            "company.csv": pd.DataFrame({"cid": [1, 2], "name": ["Statoil", "Equinor"]}),
-            "field.csv": pd.DataFrame({"fid": [10], "fname": ["Gullfaks"]}),
-            "licence.csv": pd.DataFrame({"lid": [50], "lname": ["PL050"]}),
+            "company.csv": pd.DataFrame({"cid": [1, 2], "name": ["Zenith", "Northwind"]}),
+            "field.csv": pd.DataFrame({"fid": [10], "fname": ["Birch"]}),
+            "contract.csv": pd.DataFrame({"lid": [50], "lname": ["C050"]}),
             "field_lic.csv": pd.DataFrame(
                 {"fid": [10, 10], "cid": [1, 2], "vf": ["2001-01-01", "2005-01-01"], "vt": ["2004-12-31", None]}
             ),
@@ -198,13 +198,13 @@ class TestTwoSourceRelationship:
         bp = {
             "nodes": {
                 "Company": {"csv": "company.csv", "pk": "cid", "title": "name"},
-                "Field": {
+                "Project": {
                     "csv": "field.csv",
                     "pk": "fid",
                     "title": "fname",
                     "connections": {
                         "junction_edges": {
-                            "HAS_LICENSEE": {
+                            "HAS_HOLDER": {
                                 "csv": "field_lic.csv",
                                 "source_fk": "fid",
                                 "target": "Company",
@@ -216,21 +216,21 @@ class TestTwoSourceRelationship:
                         }
                     },
                 },
-                "Licence": {
-                    "csv": "licence.csv",
+                "Contract": {
+                    "csv": "contract.csv",
                     "pk": "lid",
                     "title": "lname",
                     "connections": {
                         "junction_edges": {
-                            "HAS_LICENSEE": {
+                            "HAS_HOLDER": {
                                 "csv": "lic_lic.csv",
                                 "source_fk": "lid",
                                 "target": "Company",
                                 "target_fk": "cid",
                                 "properties": ["vf", "vt"],
                                 "property_types": {"vf": "validFrom", "vt": "validTo"},
-                                "rename": {"vf": "lic_from", "vt": "lic_to"},
-                                "temporal": {"from": "lic_from", "to": "lic_to", "convention": "closed"},
+                                "rename": {"vf": "ctr_from", "vt": "ctr_to"},
+                                "temporal": {"from": "ctr_from", "to": "ctr_to", "convention": "closed"},
                             }
                         }
                     },
@@ -242,18 +242,18 @@ class TestTwoSourceRelationship:
     def test_each_source_declares_under_its_stored_names(self, tmp_path):
         g, _ = _build(self._path(tmp_path))
         assert _declarations(g) == [
-            ("relationship", "HAS_LICENSEE", "Field", "vf", "vt", "closed"),
-            ("relationship", "HAS_LICENSEE", "Licence", "lic_from", "lic_to", "closed"),
+            ("relationship", "HAS_HOLDER", "Contract", "ctr_from", "ctr_to", "closed"),
+            ("relationship", "HAS_HOLDER", "Project", "vf", "vt", "closed"),
         ]
         at_2003 = g.date("2003-01-01")
-        assert _titles(at_2003.select("Field").traverse("HAS_LICENSEE")) == ["Statoil"]
-        assert _titles(at_2003.select("Licence").traverse("HAS_LICENSEE")) == ["Equinor"]
+        assert _titles(at_2003.select("Project").traverse("HAS_HOLDER")) == ["Zenith"]
+        assert _titles(at_2003.select("Contract").traverse("HAS_HOLDER")) == ["Northwind"]
         at_1995 = g.date("1995-01-01")
-        assert _titles(at_1995.select("Licence").traverse("HAS_LICENSEE")) == ["Statoil"]
+        assert _titles(at_1995.select("Contract").traverse("HAS_HOLDER")) == ["Zenith"]
 
     def test_repeated_pairs_from_both_sources_keep_every_period(self, tmp_path):
         """Each source repeats one endpoint pair. Every source node type's
-        first load of the relationship type owns its rows, so the licence's
+        first load of the relationship type owns its rows, so the contract's
         three periods survive beside the field's two — none folds onto
         another, and no merged, inverted interval exists to refuse."""
         path = self._path(tmp_path)
@@ -270,25 +270,25 @@ class TestTwoSourceRelationship:
         ).to_csv(tmp_path / "lic_lic.csv", index=False)
         g, _ = _build(path)
         assert _declarations(g) == [
-            ("relationship", "HAS_LICENSEE", "Field", "vf", "vt", "closed"),
-            ("relationship", "HAS_LICENSEE", "Licence", "lic_from", "lic_to", "closed"),
+            ("relationship", "HAS_HOLDER", "Contract", "ctr_from", "ctr_to", "closed"),
+            ("relationship", "HAS_HOLDER", "Project", "vf", "vt", "closed"),
         ]
 
         def periods(source_type, lo, hi):
             rows = g.cypher(
-                f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_LICENSEE]->(:Company) "
+                f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_HOLDER]->(:Company) "
                 f"RETURN r.{lo} AS vf, r.{hi} AS vt"
             ).to_list()
             found = [(str(r["vf"]), None if r["vt"] is None else str(r["vt"])) for r in rows]
             return sorted(found, key=lambda p: (p[0], p[1] or ""))
 
-        assert periods("Field", "vf", "vt") == [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
-        assert periods("Licence", "lic_from", "lic_to") == [
+        assert periods("Project", "vf", "vt") == [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
+        assert periods("Contract", "ctr_from", "ctr_to") == [
             ("2001-01-01", "2003-12-31"),
             ("2004-01-01", "2006-12-31"),
             ("2007-01-01", None),
         ]
-        assert _titles(g.date("2005-06-30").select("Licence").traverse("HAS_LICENSEE")) == ["Statoil"]
+        assert _titles(g.date("2005-06-30").select("Contract").traverse("HAS_HOLDER")) == ["Zenith"]
 
 
 # ── A filtered subset of a declared type ─────────────────────────────────

@@ -16,14 +16,14 @@ fn write(graph: &mut DirGraph, query: &str) {
 }
 
 /// Wells and fields both hold `vf`/`vt`; only `Well` and `LICENSED` are
-/// declared, so `Field` and `NEAR` are the undeclared twins.
+/// declared, so `Project` and `NEAR` are the undeclared twins.
 fn graph() -> DirGraph {
     let mut graph = DirGraph::new();
     for query in [
         "CREATE (:Well {id: 1, vf: '2000-01-01', vt: '2010-01-01'}), \
          (:Well {id: 2, vf: '2005-01-01', vt: null}), \
-         (:Field {id: 10, vf: '2000-01-01', vt: null})",
-        "MATCH (w:Well {id: 1}), (f:Field) \
+         (:Project {id: 10, vf: '2000-01-01', vt: null})",
+        "MATCH (w:Well {id: 1}), (f:Project) \
          CREATE (w)-[:LICENSED {vf: '2000-01-01', vt: '2020-01-01'}]->(f), (w)-[:NEAR]->(f)",
         "CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', convention: 'closed'}) YIELD declared \
          RETURN declared",
@@ -79,21 +79,21 @@ fn template_lists_declared_targets_the_scope_reaches() {
     let graph = graph();
     let both = lowered(
         &graph,
-        &format!("{AS_OF}MATCH (w:Well), (f:Field) RETURN w, f"),
+        &format!("{AS_OF}MATCH (w:Well), (f:Project) RETURN w, f"),
         &[],
     );
     assert_eq!(template(&both), "(:Well [vf, vt] closed)");
-    let undeclared = lowered(&graph, &format!("{AS_OF}MATCH (f:Field) RETURN f"), &[]);
+    let undeclared = lowered(&graph, &format!("{AS_OF}MATCH (f:Project) RETURN f"), &[]);
     assert_eq!(template(&undeclared), "no declared targets");
     let typed = lowered(
         &graph,
-        &format!("{AS_OF}MATCH (:Field)<-[r:LICENSED]-(:Field) RETURN r"),
+        &format!("{AS_OF}MATCH (:Project)<-[r:LICENSED]-(:Project) RETURN r"),
         &[],
     );
     assert_eq!(template(&typed), "[:LICENSED [vf, vt] half_open]");
     let near = lowered(
         &graph,
-        &format!("{AS_OF}MATCH (:Field)<-[r:NEAR]-(:Field) RETURN r"),
+        &format!("{AS_OF}MATCH (:Project)<-[r:NEAR]-(:Project) RETURN r"),
         &[],
     );
     assert_eq!(template(&near), "no declared targets");
@@ -107,19 +107,19 @@ fn unconstrained_patterns_reach_every_declared_target() {
     let all = "(:Well [vf, vt] closed), [:LICENSED [vf, vt] half_open]";
     let q = lowered(&graph, &format!("{AS_OF}MATCH (a)-[r]->(b) RETURN a"), &[]);
     assert_eq!(template(&q), all);
-    let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Field) RETURN f"), &[]);
+    let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Project) RETURN f"), &[]);
     assert_eq!(template(&q), "no declared targets");
     // A pattern inside an expression counts too.
     let q = lowered(
         &graph,
-        &format!("{AS_OF}MATCH (f:Field) RETURN COUNT {{ (f)<-[:LICENSED]-() }} AS c"),
+        &format!("{AS_OF}MATCH (f:Project) RETURN COUNT {{ (f)<-[:LICENSED]-() }} AS c"),
         &[],
     );
     assert_eq!(template(&q), all);
     // `Tagged` is carried as a secondary label, so a node matched by it can
-    // have any primary type; `Field` is still only ever a primary type.
-    write(&mut graph, "MATCH (f:Field) SET f:Tagged");
-    let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Field) RETURN f"), &[]);
+    // have any primary type; `Project` is still only ever a primary type.
+    write(&mut graph, "MATCH (f:Project) SET f:Tagged");
+    let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Project) RETURN f"), &[]);
     assert_eq!(template(&q), "no declared targets");
     let q = lowered(&graph, &format!("{AS_OF}MATCH (f:Tagged) RETURN f"), &[]);
     assert_eq!(template(&q), "(:Well [vf, vt] closed)");
@@ -131,7 +131,7 @@ fn unconstrained_patterns_reach_every_declared_target() {
 fn every_scope_gets_a_template_whatever_passes_are_disabled() {
     let graph = graph();
     let text = format!(
-        "{AS_OF}MATCH (f:Field) CALL {{ MATCH (w:Well) RETURN w }} RETURN f, w \
+        "{AS_OF}MATCH (f:Project) CALL {{ MATCH (w:Well) RETURN w }} RETURN f, w \
          UNION MATCH (a)-[r:LICENSED]->(b) RETURN a AS f, b AS w"
     );
     for disabled in [&[][..], &["optimize_nested_queries"][..]] {
@@ -505,23 +505,23 @@ fn explained_targets(graph: &DirGraph, query: &str) -> String {
 fn multi_hop_segments_reach_every_declared_label() {
     let graph = graph();
     let well = "targets=(:Well [vf, vt] closed)";
-    let expanded = "MATCH (a:Field)-[:NEAR]-()-[:NEAR]-(b:Field) RETURN a";
+    let expanded = "MATCH (a:Project)-[:NEAR]-()-[:NEAR]-(b:Project) RETURN a";
     assert!(explained_targets(&graph, expanded).contains(well));
     for query in [
-        "MATCH (a:Field)-[:NEAR*2]-(b:Field) RETURN a",
-        "MATCH (a:Field)-[:NEAR*1..3]-(b:Field) RETURN a",
-        "MATCH (a:Field)-[:NEAR*]-(b:Field) RETURN a",
-        "MATCH p = shortestPath((a:Field)-[:NEAR*]-(b:Field)) RETURN p",
-        "MATCH p = allShortestPaths((a:Field)-[:NEAR*..4]-(b:Field)) RETURN p",
+        "MATCH (a:Project)-[:NEAR*2]-(b:Project) RETURN a",
+        "MATCH (a:Project)-[:NEAR*1..3]-(b:Project) RETURN a",
+        "MATCH (a:Project)-[:NEAR*]-(b:Project) RETURN a",
+        "MATCH p = shortestPath((a:Project)-[:NEAR*]-(b:Project)) RETURN p",
+        "MATCH p = allShortestPaths((a:Project)-[:NEAR*..4]-(b:Project)) RETURN p",
     ] {
         let rendered = explained_targets(&graph, query);
         assert!(rendered.contains(well), "{query}: {rendered}");
     }
     // A segment of at most one hop has no intermediate node.
     for query in [
-        "MATCH (a:Field)-[:NEAR*1]-(b:Field) RETURN a",
-        "MATCH (a:Field)-[:NEAR*0..1]-(b:Field) RETURN a",
-        "MATCH p = shortestPath((a:Field)-[:NEAR]-(b:Field)) RETURN p",
+        "MATCH (a:Project)-[:NEAR*1]-(b:Project) RETURN a",
+        "MATCH (a:Project)-[:NEAR*0..1]-(b:Project) RETURN a",
+        "MATCH p = shortestPath((a:Project)-[:NEAR]-(b:Project)) RETURN p",
     ] {
         let rendered = explained_targets(&graph, query);
         assert!(
@@ -582,7 +582,7 @@ fn topology_scalar_functions_are_refused_under_a_context() {
 fn the_transient_equality_index_declines_under_a_graph_filter() {
     let graph = graph();
     let none = HashMap::new();
-    let text = "UNWIND range(1, 80) AS i MATCH (f:Field) MATCH (w:Well {vf: f.vf}) \
+    let text = "UNWIND range(1, 80) AS i MATCH (f:Project) MATCH (w:Well {vf: f.vf}) \
                 RETURN i, w.id";
     let every = format!("FOR VALID_TIME ALL {text}");
     assert_eq!(read(&graph, &every, &none).unwrap().rows.len(), 80);
@@ -688,10 +688,10 @@ fn a_repeat_relationship_count_reads_the_masks_stored_answer() {
 fn node_counts_under_a_context_match_the_matcher_and_repeat_without_a_walk() {
     use crate::graph::languages::cypher::executor::guarded_ops::node_count_probe;
     let mut graph = graph();
-    write(&mut graph, "MATCH (f:Field) SET f:Well");
+    write(&mut graph, "MATCH (f:Project) SET f:Well");
     write(
         &mut graph,
-        "CREATE (:Well {id: 3, vf: '2012-01-01', vt: null}), (:Field {id: 11, vf: null, vt: null})",
+        "CREATE (:Well {id: 3, vf: '2012-01-01', vt: null}), (:Project {id: 11, vf: null, vt: null})",
     );
     write(&mut graph, "MATCH (w:Well {id: 2}) DETACH DELETE w");
     let none = HashMap::new();
@@ -712,7 +712,7 @@ fn node_counts_under_a_context_match_the_matcher_and_repeat_without_a_walk() {
             rows("MATCH (n) RETURN n"),
             "{instant} untyped"
         );
-        for label in ["Well", "Field"] {
+        for label in ["Well", "Project"] {
             assert_eq!(
                 one(&format!("MATCH (n:{label}) RETURN count(n)")),
                 rows(&format!("MATCH (n:{label}) RETURN n")),
@@ -751,7 +751,7 @@ fn typed_counts_without_secondary_labels_never_pass_over_the_nodes() {
     for instant in ["2001-01-01", "2011-01-01", "2013-01-01", "2015-01-01"] {
         for body in [
             "MATCH (n:Well) RETURN count(n)",
-            "MATCH (n:Well|Field) RETURN count(n)",
+            "MATCH (n:Well|Project) RETURN count(n)",
             "MATCH (n) RETURN n.type AS t, count(*) AS c",
             "MATCH (n) RETURN count(n)",
         ] {

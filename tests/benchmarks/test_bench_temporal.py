@@ -29,18 +29,18 @@ valid at ``T`` (one of five periods):
 
 * ``E`` version nodes (node-declared ``vf``/``vt``; the last period open-ended)
   joined by timeless ``R`` relationships between same-period versions.
-* SODIR-shaped: timeless ``Field`` and ``Company`` nodes, 33k ``HAS_LICENSEE``
-  and 5k ``HAS_OPERATOR`` relationships (edge-declared).
+* registry-shaped: timeless ``Project`` and ``Company`` nodes, 33k ``HAS_HOLDER``
+  and 5k ``MANAGED_BY`` relationships (edge-declared).
 * A/B cells: anchored 1-hop, open-ended node scan, var-length ``*1..3``,
-  ``shortestPath`` between anchored version sets and ``count(*)``; the SODIR
+  ``shortestPath`` between anchored version sets and ``count(*)``; the registry-shaped
   anchored 1-hop, the Q4 time-consistent 3-hop and a per-field
-  ``COUNT { }`` over the licensee hop.
+  ``COUNT { }`` over the holder hop.
 * Agent cells: ``count(*)`` per field, top-k ``ORDER BY … LIMIT``, degree count.
 * Retrieval and algorithm cells (a twin pair with text and 64-d embeddings on
   ``E``): BM25 top-10, vector top-10, PageRank and Louvain — the procedures on
   the context's valid slice, cached per segment after the first call (its
   build is ``slice_at``'s).
-* Disk: one SODIR-shaped licensee hop on a disk graph, edge-declared (the guard
+* Disk: one registry-shaped holder hop on a disk graph, edge-declared (the guard
   reads each candidate relationship's bounds) against its node-declared twin
   (the same intervals as ``Stake`` fact nodes), in the ``valid_at`` spelling
   and in the pushed comparison spelling (``x.from <= $t AND (x.to IS NULL OR
@@ -51,7 +51,7 @@ valid at ``T`` (one of five periods):
 
 ``bench_heavy`` (200k / 1M, opt-in with ``-m bench_heavy``): the same graphs at
 10× plus text and 64-d embeddings, with the full A/B set — anchored 1-hop and
-3-hop, global 1-hop, node scan, var-length, ``count(*)``, SODIR Q4, BM25
+3-hop, global 1-hop, node scan, var-length, ``count(*)``, registry Q4, BM25
 top-10, vector top-10, PageRank and Louvain.
 """
 
@@ -78,14 +78,14 @@ class Scale:
     fields: int
     companies: int
     r_edges: int
-    licensees_per_period: tuple[int, int]  # (count, how many field-periods get one extra)
+    holders_per_period: tuple[int, int]  # (count, how many field-periods get one extra)
     anchors: int
     field_anchors: int
     text: bool = False
 
 
-# 13,000 E + 1,000 Field + 6,000 Company = 20,000 nodes;
-# 62,000 R + 33,000 HAS_LICENSEE + 5,000 HAS_OPERATOR = 100,000 relationships.
+# 13,000 E + 1,000 Project + 6,000 Company = 20,000 nodes;
+# 62,000 R + 33,000 HAS_HOLDER + 5,000 MANAGED_BY = 100,000 relationships.
 DEFAULT = Scale(2_600, 1_000, 6_000, 62_000, (6, 3_000), 200, 50)
 # 10x: 200,000 nodes / 1,000,000 relationships.
 HEAVY = Scale(26_000, 10_000, 60_000, 620_000, (6, 30_000), 200, 50, text=True)
@@ -146,9 +146,9 @@ def _frames(scale: Scale) -> dict[str, pd.DataFrame]:
     fields = pd.DataFrame({"fid": np.arange(scale.fields), "name": [f"F{i}" for i in range(scale.fields)]})
     companies = pd.DataFrame({"cid": np.arange(scale.companies), "name": [f"C{i}" for i in range(scale.companies)]})
 
-    # Licensees of field f in period p: `base + j` companies, distinct across
+    # Holders of field f in period p: `base + j` companies, distinct across
     # (p, j) for one field, so no two periods share an endpoint pair.
-    per, extra = scale.licensees_per_period
+    per, extra = scale.holders_per_period
     lic_rows, op_rows = [], []
     slot = 0
     for f in range(scale.fields):
@@ -163,27 +163,27 @@ def _frames(scale: Scale) -> dict[str, pd.DataFrame]:
     lic["lf"], lic["lt"] = _bounds(lic["p"].to_numpy())
     op = pd.DataFrame(op_rows, columns=["f", "c", "p"])
     op["of"], op["ot"] = _bounds(op["p"].to_numpy())
-    return {"E": e, "R": r, "Field": fields, "Company": companies, "LIC": lic, "OP": op}
+    return {"E": e, "R": r, "Project": fields, "Company": companies, "LIC": lic, "OP": op}
 
 
 def _load(frames: dict[str, pd.DataFrame], *, declared: bool, kg: KnowledgeGraph | None = None) -> KnowledgeGraph:
     """Load the frames into `kg` (a new in-memory graph by default)."""
     kg = KnowledgeGraph() if kg is None else kg
     kg.add_nodes(frames["E"], "E", "vid", "name")
-    kg.add_nodes(frames["Field"], "Field", "fid", "name")
+    kg.add_nodes(frames["Project"], "Project", "fid", "name")
     kg.add_nodes(frames["Company"], "Company", "cid", "name")
     kg.add_connections(frames["R"], "R", "E", "s", "E", "t")
     lic = frames["LIC"][["f", "c", "share", "lf", "lt"]]
-    kg.add_connections(lic, "HAS_LICENSEE", "Field", "f", "Company", "c")
-    kg.add_connections(frames["OP"][["f", "c", "of", "ot"]], "HAS_OPERATOR", "Field", "f", "Company", "c")
+    kg.add_connections(lic, "HAS_HOLDER", "Project", "f", "Company", "c")
+    kg.add_connections(frames["OP"][["f", "c", "of", "ot"]], "MANAGED_BY", "Project", "f", "Company", "c")
     # A disk index covers string columns only and refuses the integer `eid`;
     # the disk cells scan it, as they always did (the index held nothing).
     if kg.graph_info()["storage_mode"] != "disk":
         kg.create_index("E", "eid")
     if declared:
         kg.set_temporal("E", "vf", "vt")
-        kg.set_temporal("HAS_LICENSEE", "lf", "lt")
-        kg.set_temporal("HAS_OPERATOR", "of", "ot")
+        kg.set_temporal("HAS_HOLDER", "lf", "lt")
+        kg.set_temporal("MANAGED_BY", "of", "ot")
     return kg
 
 
@@ -193,7 +193,7 @@ def _view_frames(full: KnowledgeGraph, frames: dict[str, pd.DataFrame]) -> dict[
     valid_e = {row["id"] for row in full.cypher("MATCH (a:E) WHERE valid_at(a, $t) RETURN a.id AS id", params=p)}
 
     def valid_pairs(rel: str) -> set[tuple[int, int]]:
-        q = f"MATCH (f:Field)-[r:{rel}]->(c:Company) WHERE valid_at(r, $t) RETURN f.id AS f, c.id AS c"
+        q = f"MATCH (f:Project)-[r:{rel}]->(c:Company) WHERE valid_at(r, $t) RETURN f.id AS f, c.id AS c"
         return {(row["f"], row["c"]) for row in full.cypher(q, params=p)}
 
     def keep(frame: pd.DataFrame, pairs: set[tuple[int, int]]) -> pd.DataFrame:
@@ -204,8 +204,8 @@ def _view_frames(full: KnowledgeGraph, frames: dict[str, pd.DataFrame]) -> dict[
     view["E"] = frames["E"][frames["E"]["vid"].isin(valid_e)]
     r = frames["R"]
     view["R"] = r[r["s"].isin(valid_e) & r["t"].isin(valid_e)]
-    view["LIC"] = keep(frames["LIC"], valid_pairs("HAS_LICENSEE"))
-    view["OP"] = keep(frames["OP"], valid_pairs("HAS_OPERATOR"))
+    view["LIC"] = keep(frames["LIC"], valid_pairs("HAS_HOLDER"))
+    view["OP"] = keep(frames["OP"], valid_pairs("MANAGED_BY"))
     return view
 
 
@@ -235,22 +235,22 @@ CELLS: dict[str, Cell] = {
         "MATCH p = shortestPath((a)-[:R*..6]-(b)) RETURN count(*) AS n, sum(length(p)) AS s"
     ),
     "count_star": _prefixed("MATCH (a:E) RETURN count(*) AS n"),
-    "sodir_anchored_1hop": _prefixed(
-        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids RETURN count(*) AS n"
+    "holder_anchored_1hop": _prefixed(
+        "MATCH (f:Project)-[r:HAS_HOLDER]->(c:Company) WHERE f.id IN $fids RETURN count(*) AS n"
     ),
     "count_hop": _prefixed(
-        "MATCH (f:Field) WHERE f.id IN $fids RETURN f.id AS f, COUNT { (f)-[:HAS_LICENSEE]->() } AS n"
+        "MATCH (f:Project) WHERE f.id IN $fids RETURN f.id AS f, COUNT { (f)-[:HAS_HOLDER]->() } AS n"
     ),
-    "sodir_q4_3hop": _prefixed(
-        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
-        "-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
+    "holder_q4_3hop": _prefixed(
+        "MATCH (f:Project)-[o:MANAGED_BY]->(op:Company)<-[r1:HAS_HOLDER]-(f2:Project)"
+        "-[r2:HAS_HOLDER]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
     ),
-    "agent_count_per_field": _prefixed(
-        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) RETURN f.name AS field, count(*) AS n"
+    "agent_count_per_project": _prefixed(
+        "MATCH (f:Project)-[r:HAS_HOLDER]->(c:Company) RETURN f.name AS field, count(*) AS n"
     ),
     "agent_top_k": _prefixed("MATCH (a:E) RETURN a.eid AS eid, a.score AS s ORDER BY s DESC LIMIT 10"),
     "agent_degree": _prefixed(
-        "MATCH (c:Company)<-[r:HAS_LICENSEE]-(:Field) "
+        "MATCH (c:Company)<-[r:HAS_HOLDER]-(:Project) "
         "RETURN c.name AS company, count(r) AS deg ORDER BY deg DESC, company LIMIT 10"
     ),
 }
@@ -394,7 +394,7 @@ def test_temporal_control(benchmark, pair, name):
 FLUENT_CELLS = {
     "select": lambda kg: kg.date(T).select("E").len(),
     "select_limit": lambda kg: kg.date(T).select("E", limit=100).len(),
-    "traverse": lambda kg: kg.date(T).select("Field").traverse("HAS_LICENSEE").len(),
+    "traverse": lambda kg: kg.date(T).select("Project").traverse("HAS_HOLDER").len(),
 }
 
 
@@ -559,10 +559,10 @@ DISK_GUARDS = {
 }
 DISK_SHAPES = {
     "edge_declared": (
-        "MATCH (f:Field)-[r:HAS_LICENSEE]->(c:Company) WHERE f.id IN $fids AND {g} RETURN count(*) AS n",
+        "MATCH (f:Project)-[r:HAS_HOLDER]->(c:Company) WHERE f.id IN $fids AND {g} RETURN count(*) AS n",
         "r",
     ),
-    "node_declared": ("MATCH (f:Field)-[:HOLDS]->(s:Stake) WHERE f.id IN $fids AND {g} RETURN count(*) AS n", "s"),
+    "node_declared": ("MATCH (f:Project)-[:HOLDS]->(s:Stake) WHERE f.id IN $fids AND {g} RETURN count(*) AS n", "s"),
 }
 
 
@@ -578,14 +578,14 @@ def _disk_query(shape: str, guard: str) -> str:
 def _disk_pair(path: str) -> tuple[KnowledgeGraph, dict[str, object]]:
     frames = _frames(DEFAULT)
     kg = KnowledgeGraph(storage="disk", path=path)
-    kg.add_nodes(frames["Field"], "Field", "fid", "name")
+    kg.add_nodes(frames["Project"], "Project", "fid", "name")
     kg.add_nodes(frames["Company"], "Company", "cid", "name")
     lic = frames["LIC"]
-    kg.add_connections(lic[["f", "c", "share", "lf", "lt"]], "HAS_LICENSEE", "Field", "f", "Company", "c")
+    kg.add_connections(lic[["f", "c", "share", "lf", "lt"]], "HAS_HOLDER", "Project", "f", "Company", "c")
     stakes = lic.assign(sid=np.arange(len(lic)), name=[f"S{i}" for i in range(len(lic))])
     kg.add_nodes(stakes[["sid", "name", "share", "lf", "lt"]], "Stake", "sid", "name")
-    kg.add_connections(stakes[["f", "sid"]], "HOLDS", "Field", "f", "Stake", "sid")
-    kg.set_temporal("HAS_LICENSEE", "lf", "lt")
+    kg.add_connections(stakes[["f", "sid"]], "HOLDS", "Project", "f", "Stake", "sid")
+    kg.set_temporal("HAS_HOLDER", "lf", "lt")
     kg.set_temporal("Stake", "lf", "lt")
     params = _params(DEFAULT)
     counts = {(s, g): _rows(kg, _disk_query(s, g), params) for s in DISK_SHAPES for g in [*DISK_GUARDS, "context"]}
@@ -626,7 +626,7 @@ def test_temporal_retrieval_cells_answer_like_their_views():
 HEAVY_CELLS: dict[str, Cell] = {
     **{
         name: CELLS[name]
-        for name in ("anchored_1hop", "node_scan_open", "var_length_1_3", "count_star", "sodir_q4_3hop")
+        for name in ("anchored_1hop", "node_scan_open", "var_length_1_3", "count_star", "holder_q4_3hop")
     },
     "anchored_3hop": _prefixed(
         "MATCH (a:E)-[:R]->(b:E)-[:R]->(c:E)-[:R]->(d:E) WHERE a.eid IN $ids RETURN count(*) AS n"

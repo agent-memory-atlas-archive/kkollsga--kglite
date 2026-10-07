@@ -698,7 +698,7 @@ impl PropertySink for KeySink {
 }
 
 /// Insert the hoisted id/title column back under its original df-column
-/// name (e.g. `npdid`, `prospect_name`), skipping the three reserved
+/// name (e.g. `npdid`, `proposal_name`), skipping the three reserved
 /// virtuals and any key already materialised. `value` is only evaluated
 /// when an alias actually needs inserting.
 #[inline]

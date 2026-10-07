@@ -413,7 +413,7 @@ impl<'a> CypherExecutor<'a> {
             };
             // Peer-count aggregation removes one adjacency lookup per
             // candidate. Use it only once candidate
-            // cardinality is material relative to graph size; small SODIR
+            // cardinality is material relative to graph size; small registry
             // types are much faster through direct degree probes.
             let peer_counts_worthwhile = group_candidate_count.saturating_mul(100)
                 >= self.graph.graph.edge_count();

@@ -272,7 +272,7 @@ fn date(text: &str) -> Instant {
     Instant::Date(NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap())
 }
 
-/// Three well versions, one open-ended, and a licence period per well.
+/// Three well versions, one open-ended, and a contract period per well.
 const WELLS: &[&str] = &[
     "UNWIND [
         {id: 1, vf: date('2000-01-01'), vt: date('2009-12-31')},
@@ -359,7 +359,7 @@ fn a_graph_target_counts_and_masks_what_the_evaluator_admits() {
     for idx in g.type_indices.get("Company").unwrap().iter() {
         assert!(masks.nodes.contains(idx.index()));
     }
-    // Every licence runs 2005..2015.
+    // Every contract runs 2005..2015.
     assert_eq!(masks.edges.count_ones(..), 3);
     let r = resolved(&g, date("2016-06-01"));
     assert_eq!(r.masks.unwrap().edges.count_ones(..), 0);
@@ -541,12 +541,12 @@ fn timeless_holds_only_when_every_row_is_valid() {
 fn a_node_carrying_two_declared_labels_must_be_valid_under_both() {
     let mut g = graph(&[
         "CREATE (:Asset {id: 1, af: date('2000-01-01'), at: date('2010-12-31')})",
-        "MATCH (a:Asset {id: 1}) SET a:Field, a.ff = date('2005-01-01'), a.ft = null",
+        "MATCH (a:Asset {id: 1}) SET a:Project, a.ff = date('2005-01-01'), a.ft = null",
     ]);
     declare(&mut g, &node("Asset"), "af", "at", CLOSED).unwrap();
-    declare(&mut g, &node("Field"), "ff", "ft", CLOSED).unwrap();
+    declare(&mut g, &node("Project"), "ff", "ft", CLOSED).unwrap();
     let mut template = GuardTemplate::default();
-    for label in ["Asset", "Field"] {
+    for label in ["Asset", "Project"] {
         template.nodes.push(NodeGuard {
             label: label.into(),
             bounds: GuardBounds::of(g.temporal.node(label).unwrap()),
@@ -569,7 +569,7 @@ fn a_node_carrying_two_declared_labels_must_be_valid_under_both() {
         .masks
         .is_none_or(|m| m.nodes.contains(slot))
     };
-    assert!(!valid("2003-01-01"), "Field has not started");
+    assert!(!valid("2003-01-01"), "Project has not started");
     assert!(valid("2007-01-01"));
     assert!(!valid("2012-01-01"), "Asset has ended");
 }
@@ -671,7 +671,7 @@ fn the_duplicate_id_map_holds_only_repeated_ids_and_counts_against_the_cap() {
 // --- Pinned masks and covering keys (valid-time views) -----------------
 
 /// Twelve one-year well versions (twelve segments of their own) and a
-/// licence on each, so resolves at different years never share a key.
+/// contract on each, so resolves at different years never share a key.
 fn yearly_wells() -> DirGraph {
     let mut g = graph(&[
         "UNWIND range(0, 11) AS i CREATE (:Well {id: i, \

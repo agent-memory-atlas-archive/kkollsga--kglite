@@ -187,7 +187,7 @@ fn active_with_vessel() -> ActiveGraph {
     let opts = kglite::api::session::ExecuteOptions::eager(&params);
     kglite::api::session::execute_mut(
         kglite::api::make_dir_graph_mut(active.kg.dir_mut()),
-        "CREATE (:Vessel {id: 1})-[:OPERATED_BY]->(:Operator {id: 2})",
+        "CREATE (:Vessel {id: 1})-[:MANAGED_BY]->(:Operator {id: 2})",
         &opts,
     )
     .expect("seed");

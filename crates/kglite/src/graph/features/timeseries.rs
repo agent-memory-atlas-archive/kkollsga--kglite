@@ -19,7 +19,7 @@ pub struct TimeseriesConfig {
     /// Known channel names (informational, for introspection).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<String>,
-    /// Channel name → unit string (e.g. "MSm3", "°C", "bar").
+    /// Channel name → unit string (e.g. "MU", "°C", "bar").
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub units: HashMap<String, String>,
     /// What values represent: "total" (sum over bin), "mean" (average over bin),
@@ -609,8 +609,8 @@ mod tests {
 
     #[test]
     fn test_validate_channel_length() {
-        assert!(validate_channel_length(5, 5, "oil").is_ok());
-        assert!(validate_channel_length(5, 3, "oil").is_err());
+        assert!(validate_channel_length(5, 5, "output").is_ok());
+        assert!(validate_channel_length(5, 3, "output").is_err());
     }
 
     #[test]

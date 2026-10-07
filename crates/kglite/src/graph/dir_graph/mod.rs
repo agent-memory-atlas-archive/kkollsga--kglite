@@ -339,7 +339,7 @@ pub struct DirGraph {
     /// through `DirGraph::declare_id_field_alias`.
     #[serde(default)]
     pub id_field_aliases: Arc<FxHashMap<String, String>>,
-    /// Original title field name per node type (e.g. "Person" → "prospect_name").
+    /// Original title field name per node type (e.g. "Person" → "proposal_name").
     /// Stored when the user-supplied node_title_field differs from "title" and
     /// does not name the type's identity (see
     /// `DirGraph::declare_title_field_alias`).

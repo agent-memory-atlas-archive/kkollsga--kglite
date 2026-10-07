@@ -48,7 +48,7 @@ graph.add_nodes(df, 'City', 'city_id', 'name',
     })
 
 # Geometry columns (WKT polygons)
-graph.add_nodes(df, 'Field', 'field_id', 'name',
+graph.add_nodes(df, 'Project', 'field_id', 'name',
     column_types={'wkt_geometry': 'geometry'})
 
 # Named points and shapes
@@ -65,9 +65,9 @@ graph.add_nodes(df, 'Pipeline', 'id', 'name',
 graph.add_nodes(df, 'Production', 'field_id', 'field_name',
     timeseries={
         'time': 'date',                          # or {'year': 'yr', 'month': 'mo'}
-        'channels': ['oil', 'gas', 'condensate'],
+        'channels': ['output', 'flow', 'capacity'],
         'resolution': 'month',                   # auto-detected if omitted
-        'units': {'oil': 'MSm3', 'gas': 'BSm3'},
+        'units': {'output': 'MU', 'flow': 'BU'},
     })
 
 # Load relationships (edges); add_connections and the other
@@ -395,18 +395,18 @@ graph.select('City').near_point_m(59.91, 10.75, max_distance_m=100_000)
 
 ```python
 # Point-in-polygon: which fields contain a point?
-graph.select('Field').contains_point(60.5, 3.5)
+graph.select('Project').contains_point(60.5, 3.5)
 
 # Custom geometry field
-graph.select('Field').contains_point(60.5, 3.5, geometry_field='wkt_geometry')
+graph.select('Project').contains_point(60.5, 3.5, geometry_field='wkt_geometry')
 
 # Geometry intersection: which fields overlap a query polygon?
-graph.select('Field').intersects_geometry(
+graph.select('Project').intersects_geometry(
     'POLYGON((3.0 60.0, 4.0 60.0, 4.0 61.0, 3.0 61.0, 3.0 60.0))')
 
 # Also accepts shapely geometry objects
 from shapely.geometry import box
-graph.select('Field').intersects_geometry(box(3.0, 60.0, 4.0, 61.0))
+graph.select('Project').intersects_geometry(box(3.0, 60.0, 4.0, 61.0))
 ```
 
 ### Spatial Configuration
@@ -416,7 +416,7 @@ graph.select('Field').intersects_geometry(box(3.0, 60.0, 4.0, 61.0))
 graph.set_spatial('City',
     location=('latitude', 'longitude'))
 
-graph.set_spatial('Field',
+graph.set_spatial('Project',
     geometry='wkt_geometry')
 
 # Named points and shapes
@@ -470,13 +470,13 @@ graph.timeseries_config()  # all types
 
 ```python
 # Bulk load timeseries from a DataFrame
-graph.add_timeseries('Field',
+graph.add_timeseries('Project',
     data=production_df,
     fk='field_id',                       # foreign key → node ID
     time_key=['year', 'month'],          # or ['date'] for date strings
-    channels=['oil', 'gas', 'condensate'],
+    channels=['output', 'flow', 'capacity'],
     resolution='month',                  # auto-detected if omitted
-    units={'oil': 'MSm3'})
+    units={'output': 'MU'})
 ```
 
 ### Manual Loading
@@ -518,8 +518,8 @@ The fluent API provides data loading and extraction. For aggregation (`ts_sum`, 
 ```python
 # Example: top producers in 2020
 graph.cypher("""
-    MATCH (f:Field)
-    RETURN f.title, ts_sum(f.oil, '2020') AS prod
+    MATCH (f:Project)
+    RETURN f.title, ts_sum(f.output, '2020') AS prod
     ORDER BY prod DESC LIMIT 10
 """)
 ```
@@ -690,12 +690,12 @@ graph.select('Person').traverse('WORKS_AT')
 graph.select('Person').traverse('KNOWS', direction='incoming')
 
 # Filter to specific target node type (when a connection goes to multiple types)
-graph.select('Field').traverse('OF_FIELD', direction='incoming',
+graph.select('Project').traverse('OF_PROJECT', direction='incoming',
     target_type='ProductionProfile')
 
 # Multiple target types
-graph.select('Field').traverse('OF_FIELD', direction='incoming',
-    target_type=['ProductionProfile', 'FieldReserves'])
+graph.select('Project').traverse('OF_PROJECT', direction='incoming',
+    target_type=['ProductionProfile', 'ProjectReserves'])
 
 # Filter target nodes by properties
 graph.select('Person').traverse('WORKS_AT',
@@ -717,8 +717,8 @@ companies = (graph
     .traverse('LOCATED_IN'))
 
 # Combine target_type + where + temporal
-graph.select('Field').traverse('OF_FIELD', direction='incoming',
-    target_type='Wellbore', where={'wlbTotalDepth': {'>': 5000}})
+graph.select('Project').traverse('OF_PROJECT', direction='incoming',
+    target_type='Site', where={'steTotalDepth': {'>': 5000}})
 ```
 
 ### Comparison Operations (`compare()`)
@@ -741,7 +741,7 @@ method={'type': 'contains', 'resolve': 'geometry'}       # dict with settings
 graph.select('Structure').compare('Well', 'contains')
 
 # Force polygon-in-polygon containment (target as full geometry)
-graph.select('Structure').compare('Field',
+graph.select('Structure').compare('Project',
     {'type': 'contains', 'resolve': 'geometry'})
 
 # Force geometry centroid (even if target has location fields)
@@ -756,11 +756,11 @@ graph.select('Zone').compare('Well',
 #### Spatial Intersection
 
 ```python
-# Find licences whose geometry overlaps each field (always geometry-to-geometry)
-graph.select('Field').compare('Licence', 'intersects')
+# Find contracts whose geometry overlaps each field (always geometry-to-geometry)
+graph.select('Project').compare('Contract', 'intersects')
 
 # With custom geometry field
-graph.select('Field').compare('Licence',
+graph.select('Project').compare('Contract',
     {'type': 'intersects', 'geometry': 'wkt_field'})
 ```
 
@@ -951,13 +951,13 @@ print(result[0])
 nodes = result.to_list()
 
 # Grouped by parent type — always returns dict
-grouped = graph.select('Field').traverse('HAS_WELL') \
-    .collect_grouped('Field')
-# → {'TROLL': [...], 'EKOFISK': [...]}
+grouped = graph.select('Project').traverse('HAS_WELL') \
+    .collect_grouped('Project')
+# → {'TUNDRA': [...], 'EMBER': [...]}
 
 # Include parent metadata in grouped output
-grouped = graph.select('Field').traverse('HAS_WELL') \
-    .collect_grouped('Field', parent_info=True)
+grouped = graph.select('Project').traverse('HAS_WELL') \
+    .collect_grouped('Project', parent_info=True)
 
 # Lightweight: id + title + type only
 ids = graph.select('Person').ids()
@@ -993,7 +993,7 @@ df = graph.select('Person').to_df()
 df = graph.select('Person').to_df(include_type=False, include_id=False)
 
 # GeoDataFrame (from ResultView)
-result = graph.cypher("MATCH (n:Field) RETURN n.name, n.wkt_geometry AS geometry")
+result = graph.cypher("MATCH (n:Project) RETURN n.name, n.wkt_geometry AS geometry")
 gdf = result.to_gdf(geometry_column='geometry', crs='EPSG:4326')
 ```
 
@@ -1500,14 +1500,14 @@ graph.clear_schema()
 ```python
 # XML description for AI agents (progressive disclosure)
 print(graph.describe())                              # inventory overview
-print(graph.describe(types=['Field', 'Well']))        # focused detail
+print(graph.describe(types=['Project', 'Well']))        # focused detail
 print(graph.describe(connections=True))               # all connection types
 print(graph.describe(connections=['BELONGS_TO']))      # deep-dive
 print(graph.describe(cypher=True))                    # Cypher reference
 print(graph.describe(cypher=['cluster', 'MATCH']))    # detailed topic docs
 
 # Declare child types (bubbles capabilities into parent descriptor)
-graph.set_parent_type('ProductionProfile', 'Field')
+graph.set_parent_type('ProductionProfile', 'Project')
 
 # MCP server quickstart
 print(kglite.KnowledgeGraph.explain_mcp())

@@ -338,9 +338,9 @@ pub fn parse_spatial_column_types_from_pairs(
 /// `select()` (for nodes) and `traverse()` (for connections).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TemporalConfig {
-    /// Property name holding the start date, e.g. "fldLicenseeFrom" or "date_from"
+    /// Property name holding the start date, e.g. "prjHolderFrom" or "date_from"
     pub valid_from: String,
-    /// Property name holding the end date, e.g. "fldLicenseeTo" or "date_to"
+    /// Property name holding the end date, e.g. "prjHolderTo" or "date_to"
     pub valid_to: String,
     /// Whether the `valid_to` day belongs to the interval. Omitted from the
     /// serialized form when closed, so a closed config writes the bytes a

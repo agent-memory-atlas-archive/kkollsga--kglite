@@ -738,20 +738,20 @@ Each yields composable rows: select its documented columns with `YIELD`, then us
 | `duplicate_title` | one row per node whose title is shared with another node of same type | `type` |
 
 ```cypher
-// Standalone — find Wellbores with no production licence
-CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'})
+// Standalone — find Sites with no production contract
+CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'})
 YIELD node
 RETURN node.id, node.title
 
 // Composed — cross-reference flagged nodes against a query result
-MATCH (l:Licence {title: '057'})<-[:IN_LICENCE]-(w:Wellbore)
-WITH collect(w.id) AS pl057
-CALL missing_required_edge({type: 'Wellbore', edge: 'DRILLED_BY'}) YIELD node
-WHERE node.id IN pl057
-RETURN count(node) AS pl057_missing_drilled_by
+MATCH (l:Contract {title: '057'})<-[:IN_CONTRACT]-(w:Site)
+WITH collect(w.id) AS c057
+CALL missing_required_edge({type: 'Site', edge: 'BUILT_BY'}) YIELD node
+WHERE node.id IN c057
+RETURN count(node) AS c057_missing_built_by
 
 // Aggregated duplicates — one row per group
-CALL duplicate_title({type: 'Prospect'}) YIELD node
+CALL duplicate_title({type: 'Proposal'}) YIELD node
 WITH node.title AS title, collect(node) AS dups
 WITH title, size(dups) AS dup_count
 WHERE dup_count > 1
@@ -760,7 +760,7 @@ ORDER BY dup_count DESC LIMIT 20
 ```
 
 `missing_required_edge` and `missing_inbound_edge` validate the `(type, edge)` pair against the graph's actual schema before iterating.
-For example, `missing_inbound_edge({type: 'Wellbore', edge: 'IN_LICENCE'})` raises `DirectionMismatch`, because `IN_LICENCE` flows Wellbore→Licence.
+For example, `missing_inbound_edge({type: 'Site', edge: 'IN_CONTRACT'})` raises `DirectionMismatch`, because `IN_CONTRACT` flows Site→Contract.
 The error suggests using `missing_required_edge` instead.
 
 For per-procedure docs (params, examples), drill in:

@@ -27,12 +27,12 @@ fn write_err(graph: &mut DirGraph, query: &str) -> String {
     }
 }
 
-fn licensees() -> DirGraph {
+fn holders() -> DirGraph {
     let mut graph = DirGraph::new();
     for query in [
-        "CREATE (:Field {id: 1}), (:Company {id: 100})",
-        "MATCH (f:Field), (c:Company) CREATE (f)-[:HAS_LICENSEE {vf: '2000-01-01', vt: '2009-12-31'}]->(c)",
-        "MATCH (f:Field), (c:Company) CREATE (f)-[:HAS_LICENSEE {vf: '2009-12-31', vt: null}]->(c)",
+        "CREATE (:Project {id: 1}), (:Company {id: 100})",
+        "MATCH (f:Project), (c:Company) CREATE (f)-[:HAS_HOLDER {vf: '2000-01-01', vt: '2009-12-31'}]->(c)",
+        "MATCH (f:Project), (c:Company) CREATE (f)-[:HAS_HOLDER {vf: '2009-12-31', vt: null}]->(c)",
         "CREATE (:Status {id: 1, vf: '2000-01-01', vt: '2001-01-01'})",
     ] {
         write(&mut graph, query);
@@ -50,10 +50,10 @@ fn warnings(result: &CypherResult) -> Vec<String> {
 
 #[test]
 fn declare_yields_its_report_and_declarations_lists_it() {
-    let mut graph = licensees();
+    let mut graph = holders();
     let result = write(
         &mut graph,
-        "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field', \
+        "CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project', \
          from: 'vf', to: 'vt', convention: 'half_open'}) \
          YIELD declared, rows, abutting_rows RETURN declared, rows, abutting_rows",
     );
@@ -91,8 +91,8 @@ fn declare_yields_its_report_and_declarations_lists_it() {
             ],
             vec![
                 s("relationship"),
-                s("HAS_LICENSEE"),
-                s("Field"),
+                s("HAS_HOLDER"),
+                s("Project"),
                 s("vf"),
                 s("vt"),
                 s("half_open"),
@@ -102,7 +102,7 @@ fn declare_yields_its_report_and_declarations_lists_it() {
     );
     let result = write(
         &mut graph,
-        "CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'}) \
+        "CALL db.temporal.undeclare({relationship: 'HAS_HOLDER', source_type: 'Project'}) \
          YIELD undeclared RETURN undeclared",
     );
     assert_eq!(result.rows, vec![vec![Value::Boolean(true)]]);
@@ -110,16 +110,16 @@ fn declare_yields_its_report_and_declarations_lists_it() {
 
 #[test]
 fn a_closed_declaration_with_abutting_rows_warns_in_the_diagnostics() {
-    let mut graph = licensees();
+    let mut graph = holders();
     let result = write(
         &mut graph,
-        "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', from: 'vf', to: 'vt', \
+        "CALL db.temporal.declare({relationship: 'HAS_HOLDER', from: 'vf', to: 'vt', \
          convention: 'closed'})",
     );
     let warnings = warnings(&result);
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
-        warnings[0].starts_with("1 of 2 rows of relationship type 'HAS_LICENSEE' end on the day"),
+        warnings[0].starts_with("1 of 2 rows of relationship type 'HAS_HOLDER' end on the day"),
         "{}",
         warnings[0]
     );
@@ -127,7 +127,7 @@ fn a_closed_declaration_with_abutting_rows_warns_in_the_diagnostics() {
 
 #[test]
 fn the_target_kind_and_convention_are_required() {
-    let mut graph = licensees();
+    let mut graph = holders();
     let message = write_err(
         &mut graph,
         "CALL db.temporal.declare({from: 'vf', to: 'vt', convention: 'closed'})",
@@ -135,7 +135,7 @@ fn the_target_kind_and_convention_are_required() {
     assert!(message.contains("name the target kind"), "{message}");
     let message = write_err(
         &mut graph,
-        "CALL db.temporal.declare({node: 'Status', relationship: 'HAS_LICENSEE', from: 'vf', \
+        "CALL db.temporal.declare({node: 'Status', relationship: 'HAS_HOLDER', from: 'vf', \
          to: 'vt', convention: 'closed'})",
     );
     assert!(message.contains("not both"), "{message}");
@@ -175,7 +175,7 @@ fn the_target_kind_and_convention_are_required() {
 
 #[test]
 fn a_statement_that_fails_after_declaring_leaves_no_declaration() {
-    let mut graph = licensees();
+    let mut graph = holders();
     write_err(
         &mut graph,
         "CALL db.temporal.declare({node: 'Status', from: 'vf', to: 'vt', convention: 'closed'}) \
@@ -186,7 +186,7 @@ fn a_statement_that_fails_after_declaring_leaves_no_declaration() {
 
 #[test]
 fn the_read_path_refuses_a_declaration() {
-    let graph = licensees();
+    let graph = holders();
     let params = HashMap::new();
     let message = execute_read(
         &graph,

@@ -93,7 +93,7 @@ def test_differently_named_explicit_edge_replaces_the_implicit_one(tmp_path):
 
 
 def test_timeseries_sub_node_with_only_parent_fk_gets_one_edge_per_node(tmp_path):
-    _csv(tmp_path / "fields.csv", pd.DataFrame({"field_id": [1, 2], "name": ["Troll", "Ekofisk"]}))
+    _csv(tmp_path / "fields.csv", pd.DataFrame({"field_id": [1, 2], "name": ["Tundra", "Ember"]}))
     _csv(
         tmp_path / "prod.csv",
         pd.DataFrame(
@@ -101,7 +101,7 @@ def test_timeseries_sub_node_with_only_parent_fk_gets_one_edge_per_node(tmp_path
                 "field_id": [1, 1, 1, 2, 2, 2],
                 "year": [2020] * 6,
                 "month": [1, 2, 3, 1, 2, 3],
-                "oil": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
+                "output": [1.0, 1.5, 2.0, 0.5, 0.6, 0.7],
             }
         ),
     )
@@ -114,14 +114,14 @@ def test_timeseries_sub_node_with_only_parent_fk_gets_one_edge_per_node(tmp_path
         "timeseries": {
             "time_key": {"year": "year", "month": "month"},
             "resolution": "month",
-            "channels": {"oil": "oil"},
+            "channels": {"output": "output"},
         },
     }
     nodes = {
-        "Field": {"csv": "fields.csv", "pk": "field_id", "title": "name", "sub_nodes": {"Production": sub}},
+        "Project": {"csv": "fields.csv", "pk": "field_id", "title": "name", "sub_nodes": {"Production": sub}},
     }
     g = _build(tmp_path, nodes)
-    assert _rows(g, "MATCH (p:Production)-[x:OF_FIELD]->(:Field) RETURN count(x) AS c") == [(2,)]
+    assert _rows(g, "MATCH (p:Production)-[x:OF_PROJECT]->(:Project) RETURN count(x) AS c") == [(2,)]
     assert _rows(g, "MATCH (p:Production) RETURN count(p) AS c") == [(2,)]
 
 

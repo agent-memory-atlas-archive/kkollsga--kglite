@@ -25,7 +25,7 @@ fn fixture(mode: StorageMode, dir: &tempfile::TempDir) -> DirGraph {
         "CREATE (w1:Well {id: 1, vf: date('2000-01-01'), vt: date('2009-12-31')}),
                 (w2:Well {id: 2, vf: date('2008-01-01')}),
                 (w3:Well {id: 3, vf: date('2001-01-01')}),
-                (f:Field {id: 10}),
+                (f:Project {id: 10}),
                 (w1)-[:IN {f: date('2000-01-01'), t: date('2004-01-01')}]->(f),
                 (w2)-[:IN {f: date('2000-01-01')}]->(f),
                 (w3)-[:IN {f: date('2000-01-01')}]->(f)",
@@ -206,9 +206,9 @@ fn the_disk_mask_and_slice_walks_park_no_unkept_relationship() {
     let mut g = new_dir_graph_in_mode(StorageMode::Disk, Some(dir.path())).expect("graph");
     let params: HashMap<String, Value> = HashMap::new();
     for query in [
-        "CREATE (:Field {id: 0})".to_string(),
+        "CREATE (:Project {id: 0})".to_string(),
         format!(
-            "MATCH (f:Field {{id: 0}}) UNWIND range(1, {WELLS}) AS i \
+            "MATCH (f:Project {{id: 0}}) UNWIND range(1, {WELLS}) AS i \
              CREATE (w:Well {{id: i, vf: date('2000-01-01')}})\
                     -[:IN {{f: date('2000-01-01'), t: CASE WHEN i % 100 = 0 \
                       THEN date('2030-01-01') ELSE date('2004-01-01') END}}]->(f)"

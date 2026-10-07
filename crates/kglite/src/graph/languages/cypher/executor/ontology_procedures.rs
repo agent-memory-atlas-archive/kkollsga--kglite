@@ -10,7 +10,7 @@
 //!
 //! A `domain`/`range` naming an **abstract class** widens to the class
 //! itself plus its declared descendants (that is the whole point of a
-//! supertype declaration: `HAS_OPERATOR from=Licensable` finally checkable
+//! supertype declaration: `MANAGED_BY from=Licensable` finally checkable
 //! over six concrete source types). Node-scoped checks
 //! (`missing_required_edge`, `cardinality_violation`) run once per accepted
 //! *live* type; edge-endpoint checks use one set-membership scan.

@@ -1,7 +1,7 @@
 //! GeoJSON → WKT + centroid conversion for blueprint node CSVs.
 //!
 //! Two modes:
-//! - If the CSV already has a WKT column (e.g. Sodir's `wkt_geometry`),
+//! - If the CSV already has a WKT column (e.g. a `wkt_geometry` column),
 //!   we do nothing — the value passes through as a string property.
 //! - If the CSV has a `_geometry` column containing GeoJSON strings, we
 //!   parse with the `geojson` crate, convert to `geo::Geometry`, then

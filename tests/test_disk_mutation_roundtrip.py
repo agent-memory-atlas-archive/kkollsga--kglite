@@ -446,7 +446,7 @@ def test_cypher_set_new_property_persists_through_save_reload(mode, tmp_path):
       Columnar SET writes through the graph-level `column_stores`
       master to dodge the per-node Arc-clone storm, but the master path
       computed `InternedKey::from_str(property)` without registering
-      the string with `graph.interner`. Symptom on Sodir-scale graphs:
+      the string with `graph.interner`. Symptom on large-scale graphs:
       every SET-introduced property survived in-memory but vanished
       after save+reload, accompanied by
       `BUG: InternedKey N not found in StringInterner` on stderr.
@@ -519,8 +519,8 @@ def test_disk_parallel_projection_node_weight_is_race_free(tmp_path):
     pushed onto the unguarded `Vec`. A push that triggered realloc
     invalidated `&NodeData` references held by sibling Rayon tasks,
     leaking into either silent wrong-row reads (Bug A in the 0.9.2
-    disk-mode regression report — ~13% NEAREST_AFEX_HUB and ~2%
-    IN_AFEX_AREA edges silently dropped on the Sodir prospect graph)
+    disk-mode regression report — ~13% NEAREST_HUB and ~2%
+    IN_AREA edges silently dropped on a large proposal graph)
     or use-after-free segfaults (Bug B in the same report — `BUG:
     InternedKey N not found in StringInterner` on stderr).
 
@@ -705,9 +705,9 @@ def test_register_new_conn_type_preserves_existing_type_lookups(tmp_path):
     `has_connection_type("EXISTING")` returned False, and every typed
     MATCH (`MATCH (a)-[:EXISTING]->(b)`) returned 0 rows because the
     pattern matcher's early-exit "skip iteration when the conn type
-    doesn't exist" check fired. Surfaced on the Sodir
+    doesn't exist" check fired. Surfaced on a large
     load-then-enhance flow: stages that traverse FK edges
-    (`OF_DISCOVERY`, `OF_FIELD`, `OF_PROSPECT`, `IN_PLAY`) all
+    (`OF_INITIATIVE`, `OF_PROJECT`, `OF_PROPOSAL`, `IN_PORTFOLIO`) all
     silently produced 0 rows after the first `add_connections` of the
     re-enhance pass.
 

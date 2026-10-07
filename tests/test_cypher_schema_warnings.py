@@ -527,10 +527,10 @@ def _pseudo_graph() -> kglite.KnowledgeGraph:
     )
     g.add_timeseries(
         "Profile",
-        data=pd.DataFrame({"id": [1, 1, 1], "year": [2000, 2000, 2001], "month": [1, 2, 1], "oil": [1.0, 2.0, 3.0]}),
+        data=pd.DataFrame({"id": [1, 1, 1], "year": [2000, 2000, 2001], "month": [1, 2, 1], "output": [1.0, 2.0, 3.0]}),
         fk="id",
         time_key=["year", "month"],
-        channels=["oil"],
+        channels=["output"],
         resolution="month",
     )
     return g
@@ -544,24 +544,24 @@ def test_timeseries_channel_and_spatial_properties_are_not_reported_absent():
         if locked:
             g.lock_schema()
         for ret, expected in (
-            ("ts_sum(p.oil, '2000')", 3.0),
-            ("ts_at(p.oil, '2000-1')", 1.0),
-            ("ts_last(p.oil)", 3.0),
+            ("ts_sum(p.output, '2000')", 3.0),
+            ("ts_at(p.output, '2000-1')", 1.0),
+            ("ts_last(p.output)", 3.0),
             ("p.location", {"latitude": 60.0, "longitude": 5.0}),
             ("p.geometry", "POINT(5 60)"),
         ):
             result = g.cypher(f"MATCH (p:Profile) RETURN {ret} AS v")
             assert result.to_dicts() == [{"v": expected}], (locked, ret)
             assert result.warnings == [], (locked, ret, result.warnings)
-        series = g.cypher("MATCH (p:Profile) RETURN ts_series(p.oil, '2000', '2001') AS v")
+        series = g.cypher("MATCH (p:Profile) RETURN ts_series(p.output, '2000', '2001') AS v")
         assert len(series.to_dicts()[0]["v"]) == 3
         assert series.warnings == [], (locked, series.warnings)
 
 
 def test_typos_and_a_plain_channel_read_still_warn_and_lock_refuses_them():
-    """A bare `p.oil` is null (a channel exists only inside `ts_*`), so its
+    """A bare `p.output` is null (a channel exists only inside `ts_*`), so its
     warning is true; a typo beside a real channel is still a typo."""
-    for expr, name in (("p.oil", "oil"), ("p.nonexistent", "nonexistent")):
+    for expr, name in (("p.output", "output"), ("p.nonexistent", "nonexistent")):
         g = _pseudo_graph()
         result = g.cypher(f"MATCH (p:Profile) RETURN {expr} AS v")
         assert any(f"'{name}' which no Profile node has" in w for w in result.warnings), (expr, result.warnings)
@@ -572,4 +572,4 @@ def test_typos_and_a_plain_channel_read_still_warn_and_lock_refuses_them():
             assert f"Unknown property '{name}'" in str(exc), expr
         else:
             raise AssertionError(f"locked schema accepted {expr}")
-    assert _pseudo_graph().cypher("MATCH (p:Profile) RETURN p.oil AS v").to_dicts() == [{"v": None}]
+    assert _pseudo_graph().cypher("MATCH (p:Profile) RETURN p.output AS v").to_dicts() == [{"v": None}]

@@ -295,7 +295,7 @@ pub(super) fn new_lease_cell() -> LeaseCell {
 //    `UnsafeCell<Vec<NodeData>>` and races were silent: a sibling Rayon task's
 //    `arena.push` realloc invalidated references already returned to other
 //    tasks, surfacing as either wrong-row reads on disk-mode aggregations
-//    (Bug A in the 0.9.2 disk regression — ~13% NEAREST_AFEX_HUB edges
+//    (Bug A in the 0.9.2 disk regression — ~13% NEAREST_HUB edges
 //    silently lost) or use-after-free segfaults with `BUG: InternedKey N not
 //    found in StringInterner` on stderr (Bug B in the same report).
 //

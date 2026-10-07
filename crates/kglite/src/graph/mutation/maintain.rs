@@ -53,7 +53,7 @@ pub struct AddPropertiesReport {
 /// hit instead of repeated `get_column_index` string scans.
 ///
 /// The identity and title columns are handled by the caller's closure (they may
-/// be named `npdid` / `prospect_name` rather than `id` / `title`), so this only
+/// be named `npdid` / `proposal_name` rather than `id` / `title`), so this only
 /// covers ordinary property columns.
 struct ConstraintColumns {
     by_name: HashMap<String, usize>,

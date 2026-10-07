@@ -59,7 +59,7 @@ The model wrapper works with any provider: OpenAI, Cohere, local sentence-transf
 ## Tips for Agent Prompts
 
 1. **Start with `describe()`**. It gives the agent an inventory of types with capability flags, a connection map, and non-standard Cypher extensions.
-2. **Drill into types with `describe(types=['Field'])`**. It shows properties, connections, timeseries/spatial config, supporting children, and sample nodes.
+2. **Drill into types with `describe(types=['Project'])`**. It shows properties, connections, timeseries/spatial config, supporting children, and sample nodes.
 3. **Use `properties(type)`** for deeper column discovery. It shows types, nullability, unique counts, and sample values.
 4. **Use `sample(type, n=3)`** before writing queries. The agent sees real data shapes.
 5. **Prefer Cypher** over the fluent API in agent contexts. It is closer to natural language and easier for LLMs to generate.
@@ -85,15 +85,15 @@ Each procedure binds `node` (or `node_a, node_b` for `cycle_2step`). The agent c
 
 ```python
 graph.cypher("""
-    MATCH (l:Licence {title: '057'})<-[:IN_LICENCE]-(w:Wellbore)
-    WITH collect(w.id) AS pl057
-    CALL missing_required_edge({type: 'Wellbore', edge: 'DRILLED_BY'}) YIELD node
-    WHERE node.id IN pl057
-    RETURN count(*) AS pl057_missing_drilled_by
+    MATCH (l:Contract {title: '057'})<-[:IN_CONTRACT]-(w:Site)
+    WITH collect(w.id) AS c057
+    CALL missing_required_edge({type: 'Site', edge: 'BUILT_BY'}) YIELD node
+    WHERE node.id IN c057
+    RETURN count(*) AS c057_missing_built_by
 """)
 ```
 
-`missing_required_edge` and `missing_inbound_edge` validate the `(type, edge)` direction against the graph's actual schema. If the agent picks the wrong direction, they raise `DirectionMismatch` with a fix-suggesting message. An example is asking for inbound `IN_LICENCE` on a `Wellbore` when the edge flows outward.
+`missing_required_edge` and `missing_inbound_edge` validate the `(type, edge)` direction against the graph's actual schema. If the agent picks the wrong direction, they raise `DirectionMismatch` with a fix-suggesting message. An example is asking for inbound `IN_CONTRACT` on a `Site` when the edge flows outward.
 
 See [Cypher → Structural-validator CALL procedures](cypher.md#structural-validator-call-procedures) for more examples. Use `describe(cypher=['orphan_node'])` for per-procedure details.
 
@@ -105,7 +105,7 @@ See [Cypher → Structural-validator CALL procedures](cypher.md#structural-valid
   - Core/supporting type tiers hide child types behind `+N` suffixes.
   - For small graphs (≤15 types), full detail is inlined automatically.
   - The `<extensions>` block carries `<algorithms>` and `<rules>` hint lines. They point the agent at the available `CALL` procedures (graph algorithms + structural validators).
-- **Focused mode** (`describe(types=['Field'])`): detailed properties with types, connection topology, timeseries/spatial config, supporting children, and sample nodes.
+- **Focused mode** (`describe(types=['Project'])`): detailed properties with types, connection topology, timeseries/spatial config, supporting children, and sample nodes.
 - **Cypher reference** (`describe(cypher=True)`): the full language reference, including supported clauses, operators, built-in functions, predicates, and the structural-validator catalogue. Drill into a single procedure with `describe(cypher=['orphan_node'])`.
 
 ### Reading the XML
@@ -117,7 +117,7 @@ These attributes matter when you paste `describe()` into a prompt.
   - The local `pip install kglite` can be on a different version from the MCP-server-side binary. The schema you read comes from the server's binary, not your local one.
   - Surface this if you see a schema/query mismatch.
 - **`id_alias="…"` / `title_alias="…"`** on a `<type>` element.
-  - They are set when `add_nodes(...)` was called with a `unique_id_field` other than `"id"` (e.g. `"npdid"`) or a `node_title_field` other than `"title"` (e.g. `"prospect_name"`).
+  - They are set when `add_nodes(...)` was called with a `unique_id_field` other than `"id"` (e.g. `"npdid"`) or a `node_title_field` other than `"title"` (e.g. `"proposal_name"`).
   - The alias tells the agent that `n.npdid` and `n.id` resolve to the same field. The agent can use whichever name appears in the source data.
   - Both forms work in `MATCH` / `WHERE`. Result rows always come back keyed under the canonical `id` / `title`.
 - **`revs="…"`** on the `<active_graph …/>` header (MCP code-graph sessions).

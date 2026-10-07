@@ -18,7 +18,7 @@ impl KnowledgeGraph {
     ///
     /// `resolution` declares the time granularity: "year", "month", or "day".
     /// `channels` lists known channel names (informational).
-    /// `units` maps channel names to unit strings (e.g. {"oil": "MSm3"}).
+    /// `units` maps channel names to unit strings (e.g. {"output": "MU"}).
     /// `bin_type` describes what values represent: "total", "mean", or "sample".
     #[pyo3(signature = (node_type, *, resolution, channels=None, units=None, bin_type=None))]
     fn set_timeseries(
@@ -139,8 +139,8 @@ impl KnowledgeGraph {
     /// - A single column name (as 1-element list): `["date"]` — parsed as date strings
     ///
     /// `channels` accepts either:
-    /// - a list of column names (used as channel names): `["oil", "gas"]`
-    /// - a dict mapping channel names to column names: `{"oil": "prfOilCol"}`
+    /// - a list of column names (used as channel names): `["output", "flow"]`
+    /// - a dict mapping channel names to column names: `{"output": "outOutputCol"}`
     ///
     /// `units` optionally maps channel names to unit strings, merged into config.
     #[pyo3(signature = (node_type, *, data, fk, time_key, channels, resolution=None, units=None))]

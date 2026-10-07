@@ -282,13 +282,13 @@ fn edge_specs_legal_batch_matches_add_connections_counts() {
 // a group whose source type the edge type has no edge from yet writes one
 // edge per spec; a group from a source type it has seen merges.
 
-fn licensee(source_type: &str, source_id: i64, from: i64) -> EdgeSpec {
+fn holder(source_type: &str, source_id: i64, from: i64) -> EdgeSpec {
     EdgeSpec {
         source_type: source_type.to_string(),
         source_id: Value::Int64(source_id),
         target_type: "Company".to_string(),
         target_id: Value::Int64(1),
-        edge_type: "HAS_LICENSEE".to_string(),
+        edge_type: "HAS_HOLDER".to_string(),
         properties: HashMap::from([("vf".to_string(), Value::Int64(from))]),
     }
 }
@@ -314,18 +314,18 @@ fn edge_specs_a_second_source_type_owns_its_rows_in_every_storage_mode() {
         let path = (mode == StorageMode::Disk).then_some(tmp.path());
         let mut graph = new_dir_graph_in_mode(mode, path).unwrap();
         add_typed(&mut graph, "Company", 1);
-        add_typed(&mut graph, "Field", 10);
-        add_typed(&mut graph, "Licence", 50);
+        add_typed(&mut graph, "Project", 10);
+        add_typed(&mut graph, "Contract", 50);
 
         // The type's first appearance, from two source types in one call:
         // each group owns its repeated pair.
         let first = add_edges_from_specs(
             &mut graph,
             vec![
-                licensee("Field", 10, 2001),
-                licensee("Field", 10, 2005),
-                licensee("Licence", 50, 2001),
-                licensee("Licence", 50, 2004),
+                holder("Project", 10, 2001),
+                holder("Project", 10, 2005),
+                holder("Contract", 50, 2001),
+                holder("Contract", 50, 2004),
             ],
         )
         .unwrap();
@@ -340,7 +340,7 @@ fn edge_specs_a_second_source_type_owns_its_rows_in_every_storage_mode() {
         add_typed(&mut graph, "Block", 70);
         let block = add_edges_from_specs(
             &mut graph,
-            vec![licensee("Block", 70, 2001), licensee("Block", 70, 2002)],
+            vec![holder("Block", 70, 2001), holder("Block", 70, 2002)],
         )
         .unwrap();
         assert_eq!(
@@ -350,7 +350,7 @@ fn edge_specs_a_second_source_type_owns_its_rows_in_every_storage_mode() {
         );
 
         // A re-load from a source type it has seen merges.
-        let reload = add_edges_from_specs(&mut graph, vec![licensee("Licence", 50, 2007)]).unwrap();
+        let reload = add_edges_from_specs(&mut graph, vec![holder("Contract", 50, 2007)]).unwrap();
         assert_eq!(
             (reload.connections_created, reload.connections_updated),
             (0, 1),

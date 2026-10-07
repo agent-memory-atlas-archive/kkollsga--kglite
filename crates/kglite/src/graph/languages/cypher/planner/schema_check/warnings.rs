@@ -1341,7 +1341,7 @@ mod tests {
             "Person".to_string(),
             TimeseriesConfig {
                 resolution: "month".to_string(),
-                channels: vec!["oil".to_string()],
+                channels: vec!["output".to_string()],
                 ..Default::default()
             },
         );
@@ -1360,16 +1360,16 @@ mod tests {
     /// A timeseries channel is readable as the first argument of a `ts_*`
     /// function and a configured spatial property is readable anywhere; both
     /// returned real values while the lint called them all-null (and a locked
-    /// schema refused them). A plain `p.oil` really is null, so it still warns.
+    /// schema refused them). A plain `p.output` really is null, so it still warns.
     #[test]
     fn pseudo_properties_are_not_reported_as_absent() {
         let g = graph_with_pseudo_properties();
         for ok in [
-            "RETURN ts_series(p.oil, '2000', '2001')",
-            "RETURN ts_at(p.oil, '2000-1')",
-            "RETURN ts_sum(p.oil, '2000')",
-            "RETURN ts_last(p.oil)",
-            "WHERE ts_sum(p.oil, '2000') > 1 RETURN p",
+            "RETURN ts_series(p.output, '2000', '2001')",
+            "RETURN ts_at(p.output, '2000-1')",
+            "RETURN ts_sum(p.output, '2000')",
+            "RETURN ts_last(p.output)",
+            "WHERE ts_sum(p.output, '2000') > 1 RETURN p",
             "RETURN p.location",
             "RETURN p.geometry",
             "RETURN p.home",
@@ -1383,10 +1383,10 @@ mod tests {
             assert!(strict_read_error(&found, &g).is_none(), "{ok}: locked");
         }
         for bad in [
-            "RETURN p.oil",
+            "RETURN p.output",
             "RETURN ts_sum(p.oill, '2000')",
             "RETURN ts_sum(p.nonexistent, '2000')",
-            "RETURN coalesce(p.oil, 0)",
+            "RETURN coalesce(p.output, 0)",
             "RETURN p.nonexistent",
             "RETURN p.locaton",
         ] {

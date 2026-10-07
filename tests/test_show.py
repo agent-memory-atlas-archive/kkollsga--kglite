@@ -7,20 +7,20 @@ import kglite
 
 
 @pytest.fixture
-def discovery_graph():
-    """Graph with Discovery -> Prospect -> Wellbore chains."""
+def initiative_graph():
+    """Graph with Initiative -> Proposal -> Site chains."""
     g = kglite.KnowledgeGraph()
-    # Discoveries
-    df_disc = pd.DataFrame(
+    # Initiatives
+    df_init = pd.DataFrame(
         {
             "id": [1, 2, 3],
-            "title": ["Johan Sverdrup", "Troll", "Ekofisk"],
+            "title": ["Juniper", "Tundra", "Ember"],
             "status": ["producing", "producing", "producing"],
         }
     )
-    g.add_nodes(df_disc, "Discovery", "id", "title")
+    g.add_nodes(df_init, "Initiative", "id", "title")
 
-    # Prospects
+    # Proposals
     df_pros = pd.DataFrame(
         {
             "id": [10, 20, 30],
@@ -28,9 +28,9 @@ def discovery_graph():
             "area": ["North Sea", "North Sea", "Barents"],
         }
     )
-    g.add_nodes(df_pros, "Prospect", "id", "title")
+    g.add_nodes(df_pros, "Proposal", "id", "title")
 
-    # Wellbores
+    # Sites
     df_well = pd.DataFrame(
         {
             "id": [100, 200, 300],
@@ -38,16 +38,16 @@ def discovery_graph():
             "depth": [1500, 2500, 3500],
         }
     )
-    g.add_nodes(df_well, "Wellbore", "id", "title")
+    g.add_nodes(df_well, "Site", "id", "title")
 
-    # Discovery -> Prospect connections
-    g.cypher("MATCH (d:Discovery {id: 1}), (p:Prospect {id: 10}) CREATE (d)-[:HAS_PROSPECT]->(p)")
-    g.cypher("MATCH (d:Discovery {id: 1}), (p:Prospect {id: 20}) CREATE (d)-[:HAS_PROSPECT]->(p)")
-    g.cypher("MATCH (d:Discovery {id: 2}), (p:Prospect {id: 30}) CREATE (d)-[:HAS_PROSPECT]->(p)")
-    # Prospect -> Wellbore connections
-    g.cypher("MATCH (p:Prospect {id: 10}), (w:Wellbore {id: 100}) CREATE (p)-[:TESTED_BY]->(w)")
-    g.cypher("MATCH (p:Prospect {id: 20}), (w:Wellbore {id: 200}) CREATE (p)-[:TESTED_BY]->(w)")
-    g.cypher("MATCH (p:Prospect {id: 30}), (w:Wellbore {id: 300}) CREATE (p)-[:TESTED_BY]->(w)")
+    # Initiative -> Proposal connections
+    g.cypher("MATCH (d:Initiative {id: 1}), (p:Proposal {id: 10}) CREATE (d)-[:HAS_PROPOSAL]->(p)")
+    g.cypher("MATCH (d:Initiative {id: 1}), (p:Proposal {id: 20}) CREATE (d)-[:HAS_PROPOSAL]->(p)")
+    g.cypher("MATCH (d:Initiative {id: 2}), (p:Proposal {id: 30}) CREATE (d)-[:HAS_PROPOSAL]->(p)")
+    # Proposal -> Site connections
+    g.cypher("MATCH (p:Proposal {id: 10}), (w:Site {id: 100}) CREATE (p)-[:TESTED_BY]->(w)")
+    g.cypher("MATCH (p:Proposal {id: 20}), (w:Site {id: 200}) CREATE (p)-[:TESTED_BY]->(w)")
+    g.cypher("MATCH (p:Proposal {id: 30}), (w:Site {id: 300}) CREATE (p)-[:TESTED_BY]->(w)")
 
     return g
 
@@ -55,38 +55,38 @@ def discovery_graph():
 class TestShowSingleLevel:
     """show() on a selection without traversals."""
 
-    def test_basic_id_title(self, discovery_graph):
-        output = discovery_graph.select("Discovery").show(["id", "title"])
-        assert "Discovery(1, Johan Sverdrup)" in output
-        assert "Discovery(2, Troll)" in output
-        assert "Discovery(3, Ekofisk)" in output
+    def test_basic_id_title(self, initiative_graph):
+        output = initiative_graph.select("Initiative").show(["id", "title"])
+        assert "Initiative(1, Juniper)" in output
+        assert "Initiative(2, Tundra)" in output
+        assert "Initiative(3, Ember)" in output
 
-    def test_single_column(self, discovery_graph):
-        output = discovery_graph.select("Discovery").show(["id"])
-        assert "Discovery(1)" in output
-        assert "Discovery(2)" in output
+    def test_single_column(self, initiative_graph):
+        output = initiative_graph.select("Initiative").show(["id"])
+        assert "Initiative(1)" in output
+        assert "Initiative(2)" in output
 
-    def test_default_columns(self, discovery_graph):
+    def test_default_columns(self, initiative_graph):
         """Default columns are id and title."""
-        output = discovery_graph.select("Discovery").show()
-        assert "Discovery(1, Johan Sverdrup)" in output
+        output = initiative_graph.select("Initiative").show()
+        assert "Initiative(1, Juniper)" in output
 
-    def test_extra_property(self, discovery_graph):
-        output = discovery_graph.select("Discovery").show(["title", "status"])
-        assert "Discovery(Johan Sverdrup, producing)" in output
+    def test_extra_property(self, initiative_graph):
+        output = initiative_graph.select("Initiative").show(["title", "status"])
+        assert "Initiative(Juniper, producing)" in output
 
-    def test_missing_property_skipped(self, discovery_graph):
+    def test_missing_property_skipped(self, initiative_graph):
         """Properties not on a type are silently skipped."""
-        output = discovery_graph.select("Discovery").show(["id", "nonexistent"])
-        assert "Discovery(1)" in output
+        output = initiative_graph.select("Initiative").show(["id", "nonexistent"])
+        assert "Initiative(1)" in output
 
-    def test_empty_selection(self, discovery_graph):
-        output = discovery_graph.select("NonExistent").show()
+    def test_empty_selection(self, initiative_graph):
+        output = initiative_graph.select("NonExistent").show()
         assert "empty" in output.lower()
 
-    def test_limit(self, discovery_graph):
-        output = discovery_graph.select("Discovery").show(["id"], limit=2)
-        lines = [line for line in output.strip().split("\n") if line.startswith("Discovery")]
+    def test_limit(self, initiative_graph):
+        output = initiative_graph.select("Initiative").show(["id"], limit=2)
+        lines = [line for line in output.strip().split("\n") if line.startswith("Initiative")]
         assert len(lines) == 2
         assert "... and 1 more" in output
 
@@ -94,34 +94,34 @@ class TestShowSingleLevel:
 class TestShowMultiLevel:
     """show() after traverse() — displays traversal chains."""
 
-    def test_two_level_chain(self, discovery_graph):
-        output = discovery_graph.select("Discovery").traverse("HAS_PROSPECT").show(["id", "title"])
-        # Discovery 1 connects to Prospect 10 and 20
-        assert "Discovery(1, Johan Sverdrup) -> Prospect(" in output
-        # Discovery 2 connects to Prospect 30
-        assert "Discovery(2, Troll) -> Prospect(30, Gamma)" in output
+    def test_two_level_chain(self, initiative_graph):
+        output = initiative_graph.select("Initiative").traverse("HAS_PROPOSAL").show(["id", "title"])
+        # Initiative 1 connects to Proposal 10 and 20
+        assert "Initiative(1, Juniper) -> Proposal(" in output
+        # Initiative 2 connects to Proposal 30
+        assert "Initiative(2, Tundra) -> Proposal(30, Gamma)" in output
 
-    def test_three_level_chain(self, discovery_graph):
+    def test_three_level_chain(self, initiative_graph):
         output = (
-            discovery_graph.select("Discovery").traverse("HAS_PROSPECT").traverse("TESTED_BY").show(["id", "title"])
+            initiative_graph.select("Initiative").traverse("HAS_PROPOSAL").traverse("TESTED_BY").show(["id", "title"])
         )
-        # Full chain: Discovery -> Prospect -> Wellbore
+        # Full chain: Initiative -> Proposal -> Site
         assert "->" in output
-        # Should contain wellbore info
-        assert "Wellbore(" in output
+        # Should contain site info
+        assert "Site(" in output
 
-    def test_single_column_chain(self, discovery_graph):
-        output = discovery_graph.select("Discovery").traverse("HAS_PROSPECT").show(["id"])
-        assert "Discovery(1) -> Prospect(" in output
+    def test_single_column_chain(self, initiative_graph):
+        output = initiative_graph.select("Initiative").traverse("HAS_PROPOSAL").show(["id"])
+        assert "Initiative(1) -> Proposal(" in output
 
-    def test_dead_end_omitted(self, discovery_graph):
+    def test_dead_end_omitted(self, initiative_graph):
         """Roots with no traversal results are omitted."""
-        output = discovery_graph.select("Discovery").traverse("HAS_PROSPECT").show(["id"])
-        # Discovery 3 has no HAS_PROSPECT connections → not in output
-        assert "Discovery(3)" not in output
+        output = initiative_graph.select("Initiative").traverse("HAS_PROPOSAL").show(["id"])
+        # Initiative 3 has no HAS_PROPOSAL connections → not in output
+        assert "Initiative(3)" not in output
 
-    def test_chain_limit(self, discovery_graph):
-        output = discovery_graph.select("Discovery").traverse("HAS_PROSPECT").show(["id"], limit=1)
+    def test_chain_limit(self, initiative_graph):
+        output = initiative_graph.select("Initiative").traverse("HAS_PROPOSAL").show(["id"], limit=1)
         chain_lines = [line for line in output.strip().split("\n") if "->" in line]
         assert len(chain_lines) == 1
 
@@ -144,15 +144,15 @@ class TestShowWithAliases:
 
     def test_alias_id(self):
         g = kglite.KnowledgeGraph()
-        df = pd.DataFrame({"npdid": [1, 2], "prospect_name": ["A", "B"]})
-        g.add_nodes(df, "Prospect", "npdid", "prospect_name")
-        output = g.select("Prospect").show(["npdid"])
-        assert "Prospect(1)" in output
-        assert "Prospect(2)" in output
+        df = pd.DataFrame({"npdid": [1, 2], "proposal_name": ["A", "B"]})
+        g.add_nodes(df, "Proposal", "npdid", "proposal_name")
+        output = g.select("Proposal").show(["npdid"])
+        assert "Proposal(1)" in output
+        assert "Proposal(2)" in output
 
     def test_alias_title(self):
         g = kglite.KnowledgeGraph()
-        df = pd.DataFrame({"npdid": [1], "prospect_name": ["Alpha"]})
-        g.add_nodes(df, "Prospect", "npdid", "prospect_name")
-        output = g.select("Prospect").show(["prospect_name"])
-        assert "Prospect(Alpha)" in output
+        df = pd.DataFrame({"npdid": [1], "proposal_name": ["Alpha"]})
+        g.add_nodes(df, "Proposal", "npdid", "proposal_name")
+        output = g.select("Proposal").show(["proposal_name"])
+        assert "Proposal(Alpha)" in output

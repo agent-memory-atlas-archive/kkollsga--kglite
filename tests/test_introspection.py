@@ -1461,7 +1461,7 @@ class TestDescribeTokenBudget:
         assert "coverage" not in city.attrib
 
     def test_connection_properties_are_typed(self, social_graph):
-        """`OPERATED_BY.since` unqualified could be an int year or an ISO string."""
+        """`MANAGED_BY.since` unqualified could be an int year or an ISO string."""
         root = ET.fromstring(social_graph.describe())
         knows = root.find("connections/conn[@type='KNOWS']")
         assert "since:Int64" in knows.attrib["properties"]

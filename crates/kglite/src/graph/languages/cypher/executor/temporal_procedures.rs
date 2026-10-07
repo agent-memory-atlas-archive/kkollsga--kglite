@@ -2,12 +2,12 @@
 //! `kglite::api::temporal`.
 //!
 //! ```text
-//! CALL db.temporal.declare({node: 'Field', from: 'vf', to: 'vt', convention: 'closed'})
-//! CALL db.temporal.declare({relationship: 'HAS_LICENSEE', source_type: 'Field',
+//! CALL db.temporal.declare({node: 'Project', from: 'vf', to: 'vt', convention: 'closed'})
+//! CALL db.temporal.declare({relationship: 'HAS_HOLDER', source_type: 'Project',
 //!                           from: 'vf', to: 'vt', convention: 'half_open'})
-//! CALL db.temporal.declare({node: 'Licence', from: 'vf', to: 'vt', convention: 'closed',
+//! CALL db.temporal.declare({node: 'Contract', from: 'vf', to: 'vt', convention: 'closed',
 //!                           empty_when: 'to_before_from'})
-//! CALL db.temporal.undeclare({relationship: 'HAS_LICENSEE', source_type: 'Field'})
+//! CALL db.temporal.undeclare({relationship: 'HAS_HOLDER', source_type: 'Project'})
 //! CALL db.temporal.declarations()
 //! ```
 

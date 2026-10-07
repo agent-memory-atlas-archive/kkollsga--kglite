@@ -53,9 +53,7 @@ def build_tiny_graph(target_path: Path) -> None:
             "title": [f"Company{i}" for i in range(50)],
             "industry": [["tech", "finance", "energy", "biotech"][i % 4] for i in range(50)],
             "description": [
-                "develops machine learning infrastructure"
-                if i % 2 == 0
-                else "operates oil and gas exploration platforms"
+                "develops machine learning infrastructure" if i % 2 == 0 else "operates data-collection platforms"
                 for i in range(50)
             ],
         }

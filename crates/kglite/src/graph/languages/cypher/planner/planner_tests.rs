@@ -463,7 +463,7 @@ fn test_comparison_range_merge() {
 
 #[test]
 fn test_correlated_nodeprop_pushdown() {
-    // The classic shape from the sodir-prospect build: a correlated equality
+    // The classic shape from the large proposal build: a correlated equality
     // across two separate MATCH clauses.
     let mut query =
         parse_cypher("MATCH (a:A) MATCH (b:B) WHERE b.x = a.y RETURN a.id, b.id").unwrap();

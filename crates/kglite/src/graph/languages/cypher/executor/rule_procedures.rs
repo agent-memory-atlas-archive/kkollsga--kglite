@@ -267,7 +267,7 @@ pub(super) fn execute_cycle_2step(
     Ok(rows)
 }
 
-/// `CALL missing_required_edge({type: 'Wellbore', edge: 'IN_LICENCE'}) YIELD node`
+/// `CALL missing_required_edge({type: 'Site', edge: 'IN_CONTRACT'}) YIELD node`
 ///
 /// Yields one row per node of `type` that has **no outgoing** edge of
 /// `edge`. Refuses to execute when the graph's actual schema for `edge`
@@ -303,7 +303,7 @@ pub(super) fn execute_missing_required_edge(
     Ok(rows)
 }
 
-/// `CALL missing_inbound_edge({type: 'Discovery', edge: 'IN_DISCOVERY'}) YIELD node`
+/// `CALL missing_inbound_edge({type: 'Initiative', edge: 'IN_INITIATIVE'}) YIELD node`
 ///
 /// Mirror of [`execute_missing_required_edge`]: yields nodes of `type`
 /// with no **incoming** edge of `edge`.
@@ -337,13 +337,13 @@ pub(super) fn execute_missing_inbound_edge(
     Ok(rows)
 }
 
-/// `CALL duplicate_title({type: 'Prospect'}) YIELD node`
+/// `CALL duplicate_title({type: 'Proposal'}) YIELD node`
 ///
 /// Yields one row per node of `type` whose title is shared with at least
 /// one other node of the same type. Agents can aggregate downstream:
 ///
 /// ```cypher
-/// CALL duplicate_title({type: 'Prospect'}) YIELD node
+/// CALL duplicate_title({type: 'Proposal'}) YIELD node
 /// WITH node.title AS t, collect(node) AS dups
 /// WHERE size(dups) > 1
 /// RETURN t, size(dups) AS count
@@ -501,7 +501,7 @@ pub(super) fn execute_transitivity_violation(
     Ok(rows)
 }
 
-/// `CALL cardinality_violation({type: 'Wellbore', edge: 'IN_LICENCE', min: 1, max: 1}) YIELD node, count`
+/// `CALL cardinality_violation({type: 'Site', edge: 'IN_CONTRACT', min: 1, max: 1}) YIELD node, count`
 ///
 /// Yields nodes of `type` whose outgoing edge count of `edge` falls
 /// outside `[min, max]`. Either bound is optional (`min` defaults to 0,
@@ -672,7 +672,7 @@ pub(super) fn execute_null_property(
     Ok(rows)
 }
 
-/// `CALL kg_knn({lat: 60.4, lon: 5.3, target_type: 'Field', k: 5}) YIELD node, distance_m`
+/// `CALL kg_knn({lat: 60.4, lon: 5.3, target_type: 'Project', k: 5}) YIELD node, distance_m`
 ///
 /// Returns the *k* nodes of `target_type` closest (geodesic) to a given
 /// `(lat, lon)` coordinate, by scanning every node of the type and keeping

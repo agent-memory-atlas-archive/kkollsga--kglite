@@ -40,10 +40,10 @@ def profile(graph, query, **kwargs):
 
 
 @pytest.fixture
-def sodir():
+def ledger():
     """Wells (declared, one closed in 2010, one carrying the declared
     secondary label `Pad` whose own interval opens in 2012), an undeclared
-    `Field`, and `HAS_LICENSEE` keyed per source type: from a `Field` it is
+    `Project`, and `HAS_HOLDER` keyed per source type: from a `Project` it is
     governed by `f_from`/`f_to` (closed), from anything else by the unkeyed
     `from`/`to` (half-open)."""
     graph = kglite.KnowledgeGraph()
@@ -51,109 +51,109 @@ def sodir():
         "CREATE (w1:Well {id: 1, vf: date('2000-01-01'), vt: date('2010-01-01')}),"
         " (w2:Well {id: 2, vf: date('2005-01-01')}),"
         " (w3:Well {id: 3, vf: date('2001-01-01'), p_from: date('2012-01-01'), p_to: date('2030-01-01')}),"
-        " (f:Field {id: 10}), (c:Company {id: 20}),"
+        " (f:Project {id: 10}), (c:Company {id: 20}),"
         " (w1)-[:IN]->(f), (w2)-[:IN]->(f), (w3)-[:IN]->(f),"
-        " (f)-[:HAS_LICENSEE {f_from: date('2000-01-01'), f_to: date('2004-12-31')}]->(c),"
-        " (w2)-[:HAS_LICENSEE {from: date('2008-01-01'), to: date('2030-01-01')}]->(c)"
+        " (f)-[:HAS_HOLDER {f_from: date('2000-01-01'), f_to: date('2004-12-31')}]->(c),"
+        " (w2)-[:HAS_HOLDER {from: date('2008-01-01'), to: date('2030-01-01')}]->(c)"
     ).to_list()
     graph.cypher("MATCH (w:Well {id: 3}) SET w:Pad").to_list()
     for declaration in (
         "{node: 'Well', from: 'vf', to: 'vt', convention: 'closed'}",
         "{node: 'Pad', from: 'p_from', to: 'p_to', convention: 'closed'}",
-        "{relationship: 'HAS_LICENSEE', source_type: 'Field', from: 'f_from', to: 'f_to', convention: 'closed'}",
-        "{relationship: 'HAS_LICENSEE', from: 'from', to: 'to', convention: 'half_open'}",
+        "{relationship: 'HAS_HOLDER', source_type: 'Project', from: 'f_from', to: 'f_to', convention: 'closed'}",
+        "{relationship: 'HAS_HOLDER', from: 'from', to: 'to', convention: 'half_open'}",
     ):
         graph.cypher(f"CALL db.temporal.declare({declaration})").to_list()
     return graph
 
 
-def test_node_scan_and_anchored_hop(sodir):
-    assert ids(sodir, at("2003-01-01", "MATCH (w:Well) RETURN w.id")) == [1]
-    assert ids(sodir, at("2011-01-01", "MATCH (w:Well) RETURN w.id")) == [2]
+def test_node_scan_and_anchored_hop(ledger):
+    assert ids(ledger, at("2003-01-01", "MATCH (w:Well) RETURN w.id")) == [1]
+    assert ids(ledger, at("2011-01-01", "MATCH (w:Well) RETURN w.id")) == [2]
     # Both endpoints of an anchored hop, the far one unnamed.
-    body = "MATCH (f:Field)<-[:IN]-() RETURN count(*) AS c"
-    assert ids(sodir, at("2006-01-01", body)) == [2]
-    assert ids(sodir, at("2011-01-01", body)) == [1]
-    assert ids(sodir, at("2013-01-01", body)) == [2]
+    body = "MATCH (f:Project)<-[:IN]-() RETURN count(*) AS c"
+    assert ids(ledger, at("2006-01-01", body)) == [2]
+    assert ids(ledger, at("2011-01-01", body)) == [1]
+    assert ids(ledger, at("2013-01-01", body)) == [2]
 
 
-def test_untyped_nodes_pass_every_declared_label_they_carry(sodir):
+def test_untyped_nodes_pass_every_declared_label_they_carry(ledger):
     """`MATCH (n)` and `MATCH (n:Well)` agree: well 3 is valid as a Well from
     2001 but as a Pad only from 2012, so it is invisible until then."""
     for date, want in [("2006-01-01", [1, 2, 10, 20]), ("2013-01-01", [2, 3, 10, 20])]:
-        assert ids(sodir, at(date, "MATCH (n) RETURN n.id")) == want
+        assert ids(ledger, at(date, "MATCH (n) RETURN n.id")) == want
         wells = [i for i in want if i < 10]
-        assert ids(sodir, at(date, "MATCH (n:Well) RETURN n.id")) == wells
-        assert ids(sodir, at(date, "MATCH (n:Pad) RETURN n.id")) == [i for i in wells if i == 3]
+        assert ids(ledger, at(date, "MATCH (n:Well) RETURN n.id")) == wells
+        assert ids(ledger, at(date, "MATCH (n:Pad) RETURN n.id")) == [i for i in wells if i == 3]
 
 
-def test_a_relationship_is_keyed_on_its_own_source_type(sodir):
-    body = "MATCH (a)-[:HAS_LICENSEE]->(c:Company) RETURN a.id"
-    assert ids(sodir, at("2003-01-01", body)) == [10]  # the Field licence, keyed
-    assert ids(sodir, at("2006-01-01", body)) == []
-    assert ids(sodir, at("2009-01-01", body)) == [2]  # the Well licence, unkeyed
+def test_a_relationship_is_keyed_on_its_own_source_type(ledger):
+    body = "MATCH (a)-[:HAS_HOLDER]->(c:Company) RETURN a.id"
+    assert ids(ledger, at("2003-01-01", body)) == [10]  # the Project contract, keyed
+    assert ids(ledger, at("2006-01-01", body)) == []
+    assert ids(ledger, at("2009-01-01", body)) == [2]  # the Well contract, unkeyed
     # Walked from the target side, the rule still keys on the source.
-    back = "MATCH (c:Company)<-[:HAS_LICENSEE]-(a) RETURN a.id"
-    assert ids(sodir, at("2003-01-01", back)) == [10]
-    assert ids(sodir, at("2009-01-01", back)) == [2]
+    back = "MATCH (c:Company)<-[:HAS_HOLDER]-(a) RETURN a.id"
+    assert ids(ledger, at("2003-01-01", back)) == [10]
+    assert ids(ledger, at("2009-01-01", back)) == [2]
 
 
-def test_readmitted_fusions_answer_under_the_guard(sodir):
+def test_readmitted_fusions_answer_under_the_guard(ledger):
     date = "2011-01-01"
-    rows, plan = profile(sodir, at(date, "MATCH (w:Well) RETURN count(w) AS c"))
+    rows, plan = profile(ledger, at(date, "MATCH (w:Well) RETURN count(w) AS c"))
     assert rows == [{"c": 1}] and plan == ["FusedCountTypedNode :Well"]
-    rows, plan = profile(sodir, at(date, "MATCH (n) RETURN count(n) AS c"))
+    rows, plan = profile(ledger, at(date, "MATCH (n) RETURN count(n) AS c"))
     assert rows == [{"c": 3}] and plan == ["FusedCountAll"]
-    rows, _ = profile(sodir, at(date, "MATCH ()-[r:IN]->() RETURN count(*) AS c"))
+    rows, _ = profile(ledger, at(date, "MATCH ()-[r:IN]->() RETURN count(*) AS c"))
     assert rows == [{"c": 1}]
-    rows, plan = profile(sodir, at(date, "MATCH (w:Well) RETURN w.id AS id ORDER BY id DESC LIMIT 5"))
+    rows, plan = profile(ledger, at(date, "MATCH (w:Well) RETURN w.id AS id ORDER BY id DESC LIMIT 5"))
     assert rows == [{"id": 2}] and plan[0].startswith("FusedNodeScanTopK")
-    rows, plan = profile(sodir, at(date, "MATCH (w:Well) RETURN w.id AS id, count(*) AS c"))
+    rows, plan = profile(ledger, at(date, "MATCH (w:Well) RETURN w.id AS id, count(*) AS c"))
     assert rows == [{"id": 2, "c": 1}] and plan[0].startswith("FusedNodeScanAggregate")
     # The heap over matcher rows: a two-node pattern, so no node-scan fusion.
-    rows = sodir.cypher(at("2013-01-01", "MATCH (w:Well)-[:IN]->(f) RETURN w.id AS id ORDER BY id LIMIT 1")).to_list()
+    rows = ledger.cypher(at("2013-01-01", "MATCH (w:Well)-[:IN]->(f) RETURN w.id AS id ORDER BY id LIMIT 1")).to_list()
     assert rows == [{"id": 2}]
-    explained = [r["operation"] for r in sodir.cypher(f"EXPLAIN {at(date, 'MATCH (w:Well) RETURN count(w) AS c')}")]
+    explained = [r["operation"] for r in ledger.cypher(f"EXPLAIN {at(date, 'MATCH (w:Well) RETURN count(w) AS c')}")]
     assert "OptimizerPass fuse_count_short_circuits" in explained
     # The fused aggregate masks its group nodes and counts through the guarded
     # per-node counters.
-    rows, plan = profile(sodir, at(date, "MATCH (w:Well)-[:IN]->(f) RETURN f.id AS f, count(w) AS c"))
+    rows, plan = profile(ledger, at(date, "MATCH (w:Well)-[:IN]->(f) RETURN f.id AS f, count(w) AS c"))
     assert rows == [{"f": 10, "c": 1}] and "FusedMatchReturnAggregate" in plan
 
 
-def test_profile_rows_match_the_plain_context_rows(sodir):
-    query = at("2006-01-01", "MATCH (w:Well)-[:IN]->(f:Field) RETURN w.id AS id")
-    plain = sodir.cypher(query).to_list()
-    result = sodir.cypher(f"PROFILE {query}")
+def test_profile_rows_match_the_plain_context_rows(ledger):
+    query = at("2006-01-01", "MATCH (w:Well)-[:IN]->(f:Project) RETURN w.id AS id")
+    plain = ledger.cypher(query).to_list()
+    result = ledger.cypher(f"PROFILE {query}")
     assert sorted(r["id"] for r in result.to_list()) == sorted(r["id"] for r in plain) == [1, 2]
     match_step = next(step for step in result.profile if step["clause"].startswith("Match"))
     assert match_step["rows_out"] == 2
 
 
-def test_count_subquery_and_exists_are_guarded(sodir):
-    body = "MATCH (f:Field) RETURN COUNT { (f)<-[:IN]-(w) } AS c"
-    assert ids(sodir, at("2006-01-01", body)) == [2]
-    assert ids(sodir, at("2011-01-01", body)) == [1]
-    exists = "MATCH (c:Company) WHERE EXISTS { (c)<-[:HAS_LICENSEE]-() } RETURN c.id"
-    assert ids(sodir, at("2006-01-01", exists)) == []
-    assert ids(sodir, at("2009-01-01", exists)) == [20]
+def test_count_subquery_and_exists_are_guarded(ledger):
+    body = "MATCH (f:Project) RETURN COUNT { (f)<-[:IN]-(w) } AS c"
+    assert ids(ledger, at("2006-01-01", body)) == [2]
+    assert ids(ledger, at("2011-01-01", body)) == [1]
+    exists = "MATCH (c:Company) WHERE EXISTS { (c)<-[:HAS_HOLDER]-() } RETURN c.id"
+    assert ids(ledger, at("2006-01-01", exists)) == []
+    assert ids(ledger, at("2009-01-01", exists)) == [20]
 
 
-def test_an_element_id_anchor_on_an_invisible_node_matches_nothing(sodir):
-    element = sodir.cypher(every("MATCH (w:Well {id: 1}) RETURN elementId(w) AS e")).to_list()[0]["e"]
+def test_an_element_id_anchor_on_an_invisible_node_matches_nothing(ledger):
+    element = ledger.cypher(every("MATCH (w:Well {id: 1}) RETURN elementId(w) AS e")).to_list()[0]["e"]
     body = "MATCH (w:Well) WHERE elementId(w) = $e RETURN w.id"
-    assert ids(sodir, at("2003-01-01", body), params={"e": element}) == [1]
-    assert ids(sodir, at("2011-01-01", body), params={"e": element}) == []
+    assert ids(ledger, at("2003-01-01", body), params={"e": element}) == [1]
+    assert ids(ledger, at("2011-01-01", body), params={"e": element}) == []
 
 
-def test_a_transient_index_join_sees_only_valid_nodes(sodir):
+def test_a_transient_index_join_sees_only_valid_nodes(ledger):
     """80 driving rows probe the wells by a per-row key: the join the
     transient equality index serves unguarded runs through the matcher."""
     body = "UNWIND range(1, 80) AS i WITH 1 + i % 2 AS k MATCH (w:Well {id: k}) RETURN count(*) AS c"
-    assert ids(sodir, every(body)) == [80]
-    assert ids(sodir, at("2006-01-01", body)) == [80]
-    assert ids(sodir, at("2003-01-01", body)) == [40]
-    assert ids(sodir, at("2011-01-01", body)) == [40]
+    assert ids(ledger, every(body)) == [80]
+    assert ids(ledger, at("2006-01-01", body)) == [80]
+    assert ids(ledger, at("2003-01-01", body)) == [40]
+    assert ids(ledger, at("2011-01-01", body)) == [40]
 
 
 def test_id_seeks_find_the_version_valid_at_the_instant():
@@ -282,34 +282,36 @@ def test_an_id_seek_after_a_reload_follows_the_reloaded_node_order(storage, tmp_
         "MATCH (w:Well {id: $k}) RETURN count(w)",
         "MATCH (w:Well {id: $k}) RETURN w.id ORDER BY w.id LIMIT 1",
         "MATCH (w:Well {id: $k})-[:IN]->(f) RETURN f.id",
-        "MATCH (f:Field) OPTIONAL MATCH (w:Well {id: $k})-[:IN]->(f) RETURN w.id",
-        "MATCH (f:Field) RETURN COUNT { (w:Well {id: $k})-[:IN]->(f) }",
-        "MATCH (f:Field) WHERE EXISTS { (:Well {id: $k})-[:IN]->(f) } RETURN f.id",
-        "MATCH (f:Field) RETURN [(w:Well {id: $k})-[:IN]->(f) | w.id]",
-        "MATCH (w:Well {id: $k})-[:IN*1..2]-(x:Field) RETURN x.id",
+        "MATCH (f:Project) OPTIONAL MATCH (w:Well {id: $k})-[:IN]->(f) RETURN w.id",
+        "MATCH (f:Project) RETURN COUNT { (w:Well {id: $k})-[:IN]->(f) }",
+        "MATCH (f:Project) WHERE EXISTS { (:Well {id: $k})-[:IN]->(f) } RETURN f.id",
+        "MATCH (f:Project) RETURN [(w:Well {id: $k})-[:IN]->(f) | w.id]",
+        "MATCH (w:Well {id: $k})-[:IN*1..2]-(x:Project) RETURN x.id",
         "MATCH p = shortestPath((w:Well {id: $k})-[*]-(c:Company)) RETURN length(p)",
-        "MATCH (a:Field) MATCH (w:Well {id: $k}) RETURN w.id",
+        "MATCH (a:Project) MATCH (w:Well {id: $k}) RETURN w.id",
     ],
 )
-def test_an_inline_map_expression_answers_as_its_value_under_a_context(sodir, body):
+def test_an_inline_map_expression_answers_as_its_value_under_a_context(ledger, body):
     """A statement under a context keeps its inline-map expressions (they are
     not folded at plan time without the filter): each shape answers as the
     same statement with the value written as a literal."""
     for date in ("2003-01-01", "2011-01-01"):
         for k in (1, 2):
-            want = sodir.cypher(at(date, body.replace("$k", str(k)))).to_list()
-            got = sodir.cypher(at(date, body.replace("$k", f"{k - 1} + 1"))).to_list()
+            want = ledger.cypher(at(date, body.replace("$k", str(k)))).to_list()
+            got = ledger.cypher(at(date, body.replace("$k", f"{k - 1} + 1"))).to_list()
             assert got == want, (date, k, body)
 
 
-def test_a_count_in_an_inline_map_counts_only_valid_nodes(sodir):
+def test_a_count_in_an_inline_map_counts_only_valid_nodes(ledger):
     # At 2011 one Well is valid (Well 1 closed in 2010, the Pad carrier opens
     # in 2012), so the count is 1 and the company id 20; unguarded it is 3.
     body = "MATCH (c:Company {id: COUNT { (:Well) } + 19}) RETURN c.id"
-    assert ids(sodir, at("2011-01-01", body)) == [20]
-    assert ids(sodir, body) == []
+    assert ids(ledger, at("2011-01-01", body)) == [20]
+    assert ids(ledger, body) == []
     with pytest.raises(kglite.KgError, match=r"degree\(\)"):
-        sodir.cypher(at("2011-01-01", "MATCH (f:Field) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id")).to_list()
+        ledger.cypher(
+            at("2011-01-01", "MATCH (f:Project) MATCH (c:Company {id: degree(f) + 17}) RETURN c.id")
+        ).to_list()
 
 
 @pytest.mark.parametrize(
@@ -342,39 +344,39 @@ def test_a_wrong_typed_bound_raises():
         graph.cypher(at("2006-01-01", "MATCH (s:Site) RETURN s.id")).to_list()
 
 
-def test_the_plan_cache_never_carries_an_instant(sodir):
+def test_the_plan_cache_never_carries_an_instant(ledger):
     body = "MATCH (w:Well) RETURN w.id"
     # One text, two parameter values: two answers.
     query = f"FOR VALID_TIME AS OF $t {body}"
-    assert ids(sodir, query, params={"t": dt.date(2003, 1, 1)}) == [1]
-    assert ids(sodir, query, params={"t": dt.date(2011, 1, 1)}) == [2]
+    assert ids(ledger, query, params={"t": dt.date(2003, 1, 1)}) == [1]
+    assert ids(ledger, query, params={"t": dt.date(2011, 1, 1)}) == [2]
     # Two literal instants: two plans, two answers, each repeatable.
     for _ in range(2):
-        assert ids(sodir, at("2003-01-01", body)) == [1]
-        assert ids(sodir, at("2011-01-01", body)) == [2]
+        assert ids(ledger, at("2003-01-01", body)) == [1]
+        assert ids(ledger, at("2011-01-01", body)) == [2]
     # A declaration between executions changes the answer.
-    sodir.cypher("CALL db.temporal.undeclare({node: 'Well'})").to_list()
-    assert ids(sodir, at("2011-01-01", body)) == [1, 2]
+    ledger.cypher("CALL db.temporal.undeclare({node: 'Well'})").to_list()
+    assert ids(ledger, at("2011-01-01", body)) == [1, 2]
 
 
-def test_an_open_transaction_sees_its_own_declaration_and_writes(sodir):
-    body = "MATCH (f:Field) RETURN f.id"
-    with sodir.begin() as tx:
-        tx.cypher("MATCH (f:Field) SET f.vf = date('2015-01-01'), f.vt = date('2030-01-01')").to_list()
-        tx.cypher("CALL db.temporal.declare({node: 'Field', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
+def test_an_open_transaction_sees_its_own_declaration_and_writes(ledger):
+    body = "MATCH (f:Project) RETURN f.id"
+    with ledger.begin() as tx:
+        tx.cypher("MATCH (f:Project) SET f.vf = date('2015-01-01'), f.vt = date('2030-01-01')").to_list()
+        tx.cypher("CALL db.temporal.declare({node: 'Project', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
         assert sorted(r["f.id"] for r in tx.cypher(at("2011-01-01", body)).to_list()) == []
         assert sorted(r["f.id"] for r in tx.cypher(at("2016-01-01", body)).to_list()) == [10]
         # The committed graph has neither the write nor the declaration yet.
-        assert ids(sodir, at("2011-01-01", body)) == [10]
+        assert ids(ledger, at("2011-01-01", body)) == [10]
         tx.commit()
-    assert ids(sodir, at("2011-01-01", body)) == []
-    assert ids(sodir, at("2016-01-01", body)) == [10]
+    assert ids(ledger, at("2011-01-01", body)) == []
+    assert ids(ledger, at("2016-01-01", body)) == [10]
 
 
-def test_valid_at_runs_the_query_as_of_the_date(sodir):
-    assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at="2003-01-01") == [1]
-    assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at=dt.date(2011, 1, 1)) == [2]
-    assert ids(sodir, "MATCH (w:Well) RETURN w.id", valid_at=dt.datetime(2011, 1, 1, 12)) == [2]
+def test_valid_at_runs_the_query_as_of_the_date(ledger):
+    assert ids(ledger, "MATCH (w:Well) RETURN w.id", valid_at="2003-01-01") == [1]
+    assert ids(ledger, "MATCH (w:Well) RETURN w.id", valid_at=dt.date(2011, 1, 1)) == [2]
+    assert ids(ledger, "MATCH (w:Well) RETURN w.id", valid_at=dt.datetime(2011, 1, 1, 12)) == [2]
 
 
 # ── Variable-length relationships, OPTIONAL MATCH, subqueries, shortestPath ──
@@ -537,12 +539,12 @@ def test_all_shortest_paths_skip_invisible_parallel_relationships(network):
     assert ids(network, at("2003-01-01", four)) == [["xy1"]]
 
 
-def test_optional_match_pads_nulls_when_every_match_is_invisible(sodir):
-    body = "MATCH (f:Field) OPTIONAL MATCH (f)-[:HAS_LICENSEE]->(c) RETURN f.id AS f, c.id AS c"
-    assert sodir.cypher(at("2006-01-01", body)).to_list() == [{"f": 10, "c": None}]
-    assert sodir.cypher(at("2003-01-01", body)).to_list() == [{"f": 10, "c": 20}]
-    wells = "MATCH (f:Field) OPTIONAL MATCH (f)<-[:IN]-(w:Well) RETURN f.id AS f, collect(w.id) AS w"
-    assert sodir.cypher(at("2011-01-01", wells)).to_list() == [{"f": 10, "w": [2]}]
+def test_optional_match_pads_nulls_when_every_match_is_invisible(ledger):
+    body = "MATCH (f:Project) OPTIONAL MATCH (f)-[:HAS_HOLDER]->(c) RETURN f.id AS f, c.id AS c"
+    assert ledger.cypher(at("2006-01-01", body)).to_list() == [{"f": 10, "c": None}]
+    assert ledger.cypher(at("2003-01-01", body)).to_list() == [{"f": 10, "c": 20}]
+    wells = "MATCH (f:Project) OPTIONAL MATCH (f)<-[:IN]-(w:Well) RETURN f.id AS f, collect(w.id) AS w"
+    assert ledger.cypher(at("2011-01-01", wells)).to_list() == [{"f": 10, "w": [2]}]
 
 
 @pytest.mark.parametrize("storage", [None, "mapped"])
@@ -550,45 +552,45 @@ def test_count_subquery_equals_the_guarded_match_count(storage):
     """Memory takes the incident-relationship count, mapped the row join."""
     graph = kglite.KnowledgeGraph(storage=storage) if storage else kglite.KnowledgeGraph()
     graph.cypher(
-        "CREATE (f:Field {id: 10}), (c1:Company {id: 20}), (c2:Company {id: 21}),"
+        "CREATE (f:Project {id: 10}), (c1:Company {id: 20}), (c2:Company {id: 21}),"
         " (c3:Company {id: 22, vf: date('2007-01-01'), vt: date('2100-01-01')}),"
-        " (f)-[:HAS_LICENSEE {lf: date('2000-01-01'), lt: date('2005-01-01')}]->(c1),"
-        " (f)-[:HAS_LICENSEE {lf: date('2004-01-01')}]->(c2),"
-        " (f)-[:HAS_LICENSEE {lf: date('2004-01-01')}]->(c3)"
+        " (f)-[:HAS_HOLDER {lf: date('2000-01-01'), lt: date('2005-01-01')}]->(c1),"
+        " (f)-[:HAS_HOLDER {lf: date('2004-01-01')}]->(c2),"
+        " (f)-[:HAS_HOLDER {lf: date('2004-01-01')}]->(c3)"
     ).to_list()
     graph.cypher("CALL db.temporal.declare({node: 'Company', from: 'vf', to: 'vt', convention: 'closed'})").to_list()
     graph.cypher(
-        "CALL db.temporal.declare({relationship: 'HAS_LICENSEE', from: 'lf', to: 'lt', convention: 'half_open'})"
+        "CALL db.temporal.declare({relationship: 'HAS_HOLDER', from: 'lf', to: 'lt', convention: 'half_open'})"
     ).to_list()
-    counted = "MATCH (f:Field) RETURN count { (f)-[:HAS_LICENSEE]->() } AS n"
-    matched = "MATCH (f:Field)-[:HAS_LICENSEE]->() RETURN count(*) AS n"
+    counted = "MATCH (f:Project) RETURN count { (f)-[:HAS_HOLDER]->() } AS n"
+    matched = "MATCH (f:Project)-[:HAS_HOLDER]->() RETURN count(*) AS n"
     for date, want in [("2003-01-01", 1), ("2004-06-01", 2), ("2008-01-01", 2), ("1990-01-01", 0)]:
         assert ids(graph, at(date, counted)) == ids(graph, at(date, matched)) == [want], date
     assert ids(graph, every(counted)) == [3]
 
 
-def test_pattern_comprehensions_collect_only_valid_matches(sodir):
-    names = "MATCH (f:Field) RETURN [(f)<--(w) | w.id] AS ws"
-    paths = "MATCH (f:Field) RETURN [p = (f)<-[:IN]-(w) | length(p)] AS ls"
-    collected = "MATCH (f:Field)<--(w) RETURN collect(w.id) AS ws"
-    assert sorted(ids(sodir, every(names))[0]) == [1, 2, 3]
+def test_pattern_comprehensions_collect_only_valid_matches(ledger):
+    names = "MATCH (f:Project) RETURN [(f)<--(w) | w.id] AS ws"
+    paths = "MATCH (f:Project) RETURN [p = (f)<-[:IN]-(w) | length(p)] AS ls"
+    collected = "MATCH (f:Project)<--(w) RETURN collect(w.id) AS ws"
+    assert sorted(ids(ledger, every(names))[0]) == [1, 2, 3]
     for date, want in [("2006-01-01", [1, 2]), ("2011-01-01", [2]), ("2013-01-01", [2, 3])]:
-        assert sorted(ids(sodir, at(date, names))[0]) == sorted(ids(sodir, at(date, collected))[0]) == want
-        assert ids(sodir, at(date, paths))[0] == [1] * len(want)
-    licensees = "MATCH (f:Field) RETURN [(f)-->(c) | c.id] AS cs"
-    assert ids(sodir, at("2006-01-01", licensees)) == [[]]
-    assert ids(sodir, at("2003-01-01", licensees)) == [[20]]
+        assert sorted(ids(ledger, at(date, names))[0]) == sorted(ids(ledger, at(date, collected))[0]) == want
+        assert ids(ledger, at(date, paths))[0] == [1] * len(want)
+    holders = "MATCH (f:Project) RETURN [(f)-->(c) | c.id] AS cs"
+    assert ids(ledger, at("2006-01-01", holders)) == [[]]
+    assert ids(ledger, at("2003-01-01", holders)) == [[20]]
 
 
-def test_exists_answers_under_the_guard_on_the_join_route(sodir):
-    exists = "MATCH (f:Field) WHERE EXISTS { MATCH (f)-[:HAS_LICENSEE]->(c) WHERE c.id > 0 } RETURN f.id"
-    assert ids(sodir, at("2006-01-01", exists)) == []
-    assert ids(sodir, at("2003-01-01", exists)) == [10]
+def test_exists_answers_under_the_guard_on_the_join_route(ledger):
+    exists = "MATCH (f:Project) WHERE EXISTS { MATCH (f)-[:HAS_HOLDER]->(c) WHERE c.id > 0 } RETURN f.id"
+    assert ids(ledger, at("2006-01-01", exists)) == []
+    assert ids(ledger, at("2003-01-01", exists)) == [10]
 
 
 def test_gullfaks_q4_by_var_length_equals_the_written_out_hops():
-    """The SODIR-shaped benchmark fixture at a small scale: the partners of a
-    field's operator, `(op)<-[:HAS_LICENSEE]-(f2)-[:HAS_LICENSEE]->(p)`, as
+    """The registry-shaped benchmark fixture at a small scale: the partners of a
+    field's operator, `(op)<-[:HAS_HOLDER]-(f2)-[:HAS_HOLDER]->(p)`, as
     one undirected two-hop segment answers what the written-out hops do,
     with and without the context."""
     from tests.benchmarks import test_bench_temporal as bench
@@ -597,11 +599,11 @@ def test_gullfaks_q4_by_var_length_equals_the_written_out_hops():
     graph = bench._load(bench._frames(scale), declared=True)
     params = bench._params(scale)
     hops = (
-        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)<-[r1:HAS_LICENSEE]-(f2:Field)"
-        "-[r2:HAS_LICENSEE]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
+        "MATCH (f:Project)-[o:MANAGED_BY]->(op:Company)<-[r1:HAS_HOLDER]-(f2:Project)"
+        "-[r2:HAS_HOLDER]->(p:Company) WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
     )
     segment = (
-        "MATCH (f:Field)-[o:HAS_OPERATOR]->(op:Company)-[:HAS_LICENSEE*2..2]-(p:Company) "
+        "MATCH (f:Project)-[o:MANAGED_BY]->(op:Company)-[:HAS_HOLDER*2..2]-(p:Company) "
         "WHERE f.id IN $fids AND p <> op RETURN count(*) AS n"
     )
     for prefix in ("", bench.AS_OF_T):
@@ -618,7 +620,7 @@ def current_only():
     """Every declared row valid today: open-ended, started in the past."""
     graph = kglite.KnowledgeGraph()
     graph.cypher(
-        "CREATE (f:Field {id: 10}),"
+        "CREATE (f:Project {id: 10}),"
         " (:Well {id: 1, vf: date('2000-01-01'), vt: date('2999-12-31')})"
         "-[:IN {since: date('2001-01-01'), until: date('2999-12-31')}]->(f),"
         " (:Well {id: 2, vf: date('2005-01-01')})-[:IN {since: date('2006-01-01')}]->(f)"

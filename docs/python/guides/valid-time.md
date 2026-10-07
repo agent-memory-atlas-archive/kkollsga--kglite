@@ -9,7 +9,7 @@ A *valid-time* graph holds history. Each version of a node or relationship
 carries the period during which it was true, such as:
 
 - a team membership, from one transfer to the next;
-- a licensee's share, from one sale to the next;
+- a holder's share, from one sale to the next;
 - a price, from one list to the next.
 
 KGLite asks such a graph **as of an instant**. It answers as if the graph held
@@ -109,7 +109,7 @@ Where the convention comes from:
 
 If a source ends one period on the day the next begins, the data is half-open.
 Examples are a transfer that writes the new team's start as the old team's end,
-a licence table and a price list. Declared `closed`, such data counts both
+a contract table and a price list. Declared `closed`, such data counts both
 sides of every boundary, and the load warns:
 
 ```python

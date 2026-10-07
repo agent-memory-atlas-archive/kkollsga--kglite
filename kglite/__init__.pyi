@@ -593,7 +593,7 @@ class ResultView:
           scope, including labels widened in through secondary labels — a
           ``(:A)`` pattern lists ``(:B)`` too when the nodes it may reach can
           carry a declared ``B`` — without bounds: ``'(:Well)'``,
-          ``'[:LICENSEE from :Field]'``); ``hidden`` (per target in ``targets``,
+          ``'[:HOLDER from :Project]'``); ``hidden`` (per target in ``targets``,
           how many of the rows it governs are not valid at the instant, by
           that target's own bounds — ``{'(:Project)': 1212,
           '[:FUNDED_BY from :Project]': 30411}``; a target answered by
@@ -2289,11 +2289,11 @@ class KnowledgeGraph:
                   or a dict mapping ``year``/``month``/``day``
                   to column names (e.g. ``{'year': 'ar', 'month': 'maned'}``).
                 - ``channels`` (required): list of column names for timeseries
-                  data (e.g. ``['oil', 'gas', 'condensate']``).
+                  data (e.g. ``['output', 'flow', 'capacity']``).
                 - ``resolution`` (optional): ``'year'``, ``'month'``, or ``'day'``.
                   Auto-detected from time format if omitted.
                 - ``units`` (optional): dict mapping channel names to unit strings
-                  (e.g. ``{'oil': 'MSm3'}``).
+                  (e.g. ``{'output': 'MU'}``).
             labels: Optional secondary labels to apply to every node in
                 the batch. ``add_nodes(df, 'Agent', 'id', 'name',
                 labels=['Reviewer'])`` creates ``Agent``-typed nodes
@@ -2366,7 +2366,7 @@ class KnowledgeGraph:
             graph.add_nodes(df, 'Production', 'field_id', 'field_name',
                 timeseries={
                     'time': 'date',
-                    'channels': ['oil', 'gas', 'condensate', 'oe'],
+                    'channels': ['output', 'flow', 'capacity', 'oe'],
                 })
         """
         ...
@@ -2423,7 +2423,7 @@ class KnowledgeGraph:
         Example (query with extra properties)::
 
             graph.add_relationships(
-                None, 'HC_IN_FORMATION', 'Discovery', 'src', 'Stratigraphy', 'tgt',
+                None, 'HC_IN_FORMATION', 'Initiative', 'src', 'Stratigraphy', 'tgt',
                 query='MATCH ... RETURN d.id AS src, s.id AS tgt',
                 extra_properties={'hc_rank': 1},
             )
@@ -3247,13 +3247,13 @@ class KnowledgeGraph:
         Examples::
 
             # Group wells by their parent field
-            graph.select('Field').traverse('HAS_WELL') \\
-                .collect_grouped('Field')
-            # → {'TROLL': [...], 'EKOFISK': [...]}
+            graph.select('Project').traverse('HAS_WELL') \\
+                .collect_grouped('Project')
+            # → {'TUNDRA': [...], 'EMBER': [...]}
 
             # Include parent metadata
-            graph.select('Field').traverse('HAS_WELL') \\
-                .collect_grouped('Field', parent_info=True)
+            graph.select('Project').traverse('HAS_WELL') \\
+                .collect_grouped('Project', parent_info=True)
         """
         ...
 
@@ -3317,14 +3317,14 @@ class KnowledgeGraph:
 
         Example::
 
-            print(graph.select("Discovery").show(["id", "title"]))
-            # Discovery(123, Johan Sverdrup)
+            print(graph.select("Initiative").show(["id", "title"]))
+            # Initiative(123, Juniper)
 
-            print(graph.select("Discovery")
-                .traverse("IN_FIELD")
-                .traverse("DISCOVERY_WELLBORE")
+            print(graph.select("Initiative")
+                .traverse("IN_PROJECT")
+                .traverse("INITIATIVE_SITE")
                 .show(["id"]))
-            # Discovery(123) -> Field(456) -> Wellbore(789)
+            # Initiative(123) -> Project(456) -> Site(789)
         """
         ...
 
@@ -4081,7 +4081,7 @@ class KnowledgeGraph:
         For spatial, semantic, or clustering operations, use ``compare()`` instead.
 
         Args:
-            connection_type: Edge type to follow (e.g. ``'HAS_LICENSEE'``).
+            connection_type: Edge type to follow (e.g. ``'HAS_HOLDER'``).
             direction: ``'outgoing'``, ``'incoming'``, or ``None`` (both).
             target_type: Filter targets to specific node type(s). Accepts a
                 string or list of strings. Useful when a connection type
@@ -4123,27 +4123,27 @@ class KnowledgeGraph:
         Examples::
 
             # Follow edges
-            graph.select('Field').traverse('HAS_LICENSEE')
+            graph.select('Project').traverse('HAS_HOLDER')
 
             # Filter to specific target type
-            graph.select('Field').traverse('OF_FIELD', direction='incoming',
+            graph.select('Project').traverse('OF_PROJECT', direction='incoming',
                 target_type='ProductionProfile')
 
             # Multiple target types
-            graph.select('Field').traverse('OF_FIELD', direction='incoming',
-                target_type=['ProductionProfile', 'FieldReserves'])
+            graph.select('Project').traverse('OF_PROJECT', direction='incoming',
+                target_type=['ProductionProfile', 'ProjectReserves'])
 
             # Filter target node properties
-            graph.select('Field').traverse('HAS_LICENSEE',
-                where={'title': 'Equinor Energy AS'})
+            graph.select('Project').traverse('HAS_HOLDER',
+                where={'title': 'Northwind Energy AS'})
 
             # Filter edge properties
             graph.select('Person').traverse('RATED',
                 where_connection={'score': {'>': 4}})
 
             # Temporal filtering
-            graph.select('Field').traverse('HAS_LICENSEE', at='2005')
-            graph.select('Field').traverse('HAS_LICENSEE',
+            graph.select('Project').traverse('HAS_HOLDER', at='2005')
+            graph.select('Project').traverse('HAS_HOLDER',
                 during=('2000', '2010'))
         """
         ...
@@ -4531,8 +4531,8 @@ class KnowledgeGraph:
 
         Example::
 
-            graph.set_parent_type('ProductionProfile', 'Field')
-            graph.set_parent_type('FieldReserves', 'Field')
+            graph.set_parent_type('ProductionProfile', 'Project')
+            graph.set_parent_type('ProjectReserves', 'Project')
         """
         ...
 
@@ -4561,7 +4561,7 @@ class KnowledgeGraph:
           (``properties="since:Int64"``). Adapts to graph scale:
           small graphs get full inline detail, extreme-scale graphs get
           a statistical summary with search hints.
-        - ``describe(types=['Field', 'Well'])`` — Focused detail for
+        - ``describe(types=['Project', 'Well'])`` — Focused detail for
           specific types with properties, connections, and samples. Each
           type carries a schema-adapted ``<example>`` query anchored on its
           real identifier property (its id alias, else ``id``) with a
@@ -5631,15 +5631,15 @@ class KnowledgeGraph:
             g.define_ontology({
                 "classes": {
                     "Licensable": {"abstract": True, "description": "..."},
-                    "Licence": {"is_a": "Licensable"},
+                    "Contract": {"is_a": "Licensable"},
                 },
                 "relationships": {
-                    "HAS_OPERATOR": {
+                    "MANAGED_BY": {
                         "domain": "Licensable", "range": "Company",
                         "required_properties": ["validFrom"],
                         "cardinality": {"min": 0, "max": 1},
                         "required": True, "enforcement": "warn",
-                        "exempt": {"required_properties": ["PetregLicence"]},
+                        "exempt": {"required_properties": ["RegisterContract"]},
                         "ancestry": False,
                     },
                 },
@@ -8201,7 +8201,7 @@ class KnowledgeGraph:
 
         Args:
             type_name: Node type (e.g. ``'FieldStatus'``) or relationship type
-                (e.g. ``'HAS_LICENSEE'``).
+                (e.g. ``'HAS_HOLDER'``).
             valid_from: Property name holding the start date. NULL is open.
             valid_to: Property name holding the end date. NULL is open.
             convention: ``'closed'`` (the ``valid_to`` day is still valid) or
@@ -8568,7 +8568,7 @@ class KnowledgeGraph:
                 Determines key depth (year=1, month=2, day=3).
             channels: Optional list of known channel names.
             units: Optional map of channel name to unit string,
-                e.g. ``{'oil': 'MSm3', 'temperature': '°C'}``.
+                e.g. ``{'output': 'MU', 'temperature': '°C'}``.
             bin_type: What values represent — ``'total'``, ``'mean'``,
                 or ``'sample'``. None if unspecified.
         """
@@ -8616,7 +8616,7 @@ class KnowledgeGraph:
 
         Args:
             node_id: The node's unique ID.
-            channel_name: Channel name (e.g. ``'oil'``, ``'temperature'``).
+            channel_name: Channel name (e.g. ``'output'``, ``'temperature'``).
             values: Float values aligned with the time index.
         """
         ...
