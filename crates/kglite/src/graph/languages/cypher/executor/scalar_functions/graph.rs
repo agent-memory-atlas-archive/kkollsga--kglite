@@ -147,7 +147,10 @@ impl<'a> CypherExecutor<'a> {
     /// the token-only shape a retired binding materialises as: resolve it
     /// through the live slot only while that slot is still the relationship
     /// the value was bound to.
-    fn relationship_value_type(&self, rel: &crate::datatypes::values::RelValue) -> Option<String> {
+    pub(in crate::graph::languages::cypher) fn relationship_value_type(
+        &self,
+        rel: &crate::datatypes::values::RelValue,
+    ) -> Option<String> {
         if !rel.rel_type.is_empty() {
             return Some(rel.rel_type.clone());
         }
@@ -155,12 +158,16 @@ impl<'a> CypherExecutor<'a> {
         self.current_edge_type(&edge)
     }
 
-    /// The type of the live edge a binding names; `None` once the slot has
-    /// been retired since the bind (deleted, or deleted and reused by another
-    /// relationship — reading it then would report the replacement).
-    fn current_edge_type(&self, edge: &EdgeBinding) -> Option<String> {
+    /// The type of the edge a binding names. A slot retired since the bind
+    /// (deleted, or deleted and reused by another relationship) answers with
+    /// the type recorded at the delete, never the replacement's; `None` when
+    /// the retirement recorded none.
+    pub(in crate::graph::languages::cypher) fn current_edge_type(
+        &self,
+        edge: &EdgeBinding,
+    ) -> Option<String> {
         if !self.relationship_binding_is_current(edge) {
-            return None;
+            return self.retired_edge_type(edge);
         }
         let edge_data = self.graph.graph.edge_weight(edge.edge_index)?;
         Some(
@@ -168,6 +175,17 @@ impl<'a> CypherExecutor<'a> {
                 .connection_type_str(&self.graph.interner)
                 .to_string(),
         )
+    }
+
+    fn retired_edge_type(&self, edge: &EdgeBinding) -> Option<String> {
+        let token = edge.incarnation?;
+        let key = self
+            .relationship_identities
+            .as_ref()?
+            .lock()
+            .expect("identity lock")
+            .retired_type(edge.edge_index, token)?;
+        Some(self.graph.interner.resolve(key).to_string())
     }
 
     /// `type(r)` for a binding or a relationship value.
@@ -248,7 +266,20 @@ impl<'a> CypherExecutor<'a> {
                         return Ok(Some(Value::List(items)));
                     }
                 }
-                Ok(Value::Null)
+                // A path carried as a value (list-comprehension variable,
+                // `WITH`/`UNWIND` alias, `collect(p)[i]`).
+                match args.first() {
+                    Some(arg) => match self.evaluate_expression(arg, row)? {
+                        Value::Path(path) => Ok(Value::List(
+                            path.nodes
+                                .into_iter()
+                                .map(|n| Value::Node(Box::new(n)))
+                                .collect(),
+                        )),
+                        _ => Ok(Value::Null),
+                    },
+                    None => Ok(Value::Null),
+                }
             }
             "relationships" | "rels" => {
                 // relationships(p) — list of relationships in a path.
@@ -267,7 +298,18 @@ impl<'a> CypherExecutor<'a> {
                         return Ok(Some(Value::List(items)));
                     }
                 }
-                Ok(Value::Null)
+                match args.first() {
+                    Some(arg) => match self.evaluate_expression(arg, row)? {
+                        Value::Path(path) => Ok(Value::List(
+                            path.rels
+                                .into_iter()
+                                .map(|r| Value::Relationship(Box::new(r)))
+                                .collect(),
+                        )),
+                        _ => Ok(Value::Null),
+                    },
+                    None => Ok(Value::Null),
+                }
             }
             "type" => Ok(self.eval_type_fn(args, row).unwrap_or(Value::Null)),
             "elementid" => Ok(self.eval_element_id(args, row).unwrap_or(Value::Null)),
@@ -426,6 +468,7 @@ impl<'a> CypherExecutor<'a> {
                 // map; a relationship binding or value → its map plus `type`.
                 match self.evaluate_expression(arg, row) {
                     Ok(Value::Node(nv)) => Ok(Value::Map(nv.properties)),
+                    Ok(Value::Map(map)) => Ok(Value::Map(map)),
                     Ok(Value::Relationship(rel)) => Ok(self
                         .relationship_value_properties(&rel)
                         .map_or(Value::Null, Value::Map)),

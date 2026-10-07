@@ -706,19 +706,39 @@ impl<'a> CypherExecutor<'a> {
         }
     }
 
-    /// `WHERE n:Label` — true iff `variable` is bound to a node carrying
-    /// `label` as its primary type OR a secondary label. An unbound binding
-    /// (`OPTIONAL MATCH` that did not match) or a non-node binding is false,
-    /// never an error.
-    fn row_binding_has_label(&self, row: &ResultRow, variable: &str, label: &str) -> bool {
-        let Some(&idx) = row.node_bindings.get(variable) else {
-            return false;
-        };
-        if self.graph.graph.node_view(idx).is_none() {
-            return false;
+    /// `n:Label` / `r:TYPE` — three-valued. A node binding is true iff it
+    /// carries `label` as its primary type or a secondary label; a
+    /// relationship binding is true iff its type is `label`. A variable that
+    /// is null (an `OPTIONAL MATCH` that did not match) answers `None`, as
+    /// every predicate over null does. Any other bound value is false, never
+    /// an error.
+    fn row_binding_label_check(
+        &self,
+        row: &ResultRow,
+        variable: &str,
+        label: &str,
+    ) -> Option<bool> {
+        if let Some(&idx) = row.node_bindings.get(variable) {
+            if self.graph.graph.node_view(idx).is_none() {
+                return Some(false);
+            }
+            return Some(
+                self.graph
+                    .node_has_label(idx, crate::graph::schema::InternedKey::from_str(label)),
+            );
         }
-        self.graph
-            .node_has_label(idx, crate::graph::schema::InternedKey::from_str(label))
+        if let Some(edge) = row.edge_bindings.get(variable) {
+            return Some(self.current_edge_type(edge).is_some_and(|t| t == label));
+        }
+        match row.projected.get(variable) {
+            Some(Value::Node(node)) => Some(node.labels.iter().any(|l| l == label)),
+            Some(Value::Relationship(rel)) => Some(
+                self.relationship_value_type(rel)
+                    .is_some_and(|t| t == label),
+            ),
+            _ if super::projected_targets::is_null_write_target(row, variable) => None,
+            _ => Some(false),
+        }
     }
 
     /// Three-valued predicate evaluator implementing openCypher NULL
@@ -793,7 +813,7 @@ impl<'a> CypherExecutor<'a> {
             Predicate::Not(inner) => Ok(self.evaluate_predicate_tristate(inner, row)?.map(|b| !b)),
             Predicate::LabelCheck {
                 variable, label, ..
-            } => Ok(Some(self.row_binding_has_label(row, variable, label))),
+            } => Ok(self.row_binding_label_check(row, variable, label)),
             Predicate::IsNull(expr) => {
                 let val = self.evaluate_expression(expr, row)?;
                 Ok(Some(matches!(val, Value::Null)))
@@ -817,7 +837,7 @@ impl<'a> CypherExecutor<'a> {
                 }
                 match (&val, &pat) {
                     (Value::String(s), Value::String(p)) => Ok(Some(s.starts_with(p.as_str()))),
-                    _ => Ok(Some(false)),
+                    _ => Ok(None),
                 }
             }
             Predicate::EndsWith { expr, pattern } => {
@@ -828,7 +848,7 @@ impl<'a> CypherExecutor<'a> {
                 }
                 match (&val, &pat) {
                     (Value::String(s), Value::String(p)) => Ok(Some(s.ends_with(p.as_str()))),
-                    _ => Ok(Some(false)),
+                    _ => Ok(None),
                 }
             }
             Predicate::Contains { expr, pattern } => {
@@ -839,7 +859,7 @@ impl<'a> CypherExecutor<'a> {
                 }
                 match (&val, &pat) {
                     (Value::String(s), Value::String(p)) => Ok(Some(s.contains(p.as_str()))),
-                    _ => Ok(Some(false)),
+                    _ => Ok(None),
                 }
             }
             Predicate::Exists {

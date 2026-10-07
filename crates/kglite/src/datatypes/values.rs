@@ -190,6 +190,14 @@ impl RelationshipIncarnation {
             generation,
         }
     }
+
+    pub(crate) fn statement_nonce(&self) -> u64 {
+        self.statement_nonce
+    }
+
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

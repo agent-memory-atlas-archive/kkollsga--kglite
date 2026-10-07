@@ -81,3 +81,66 @@ def test_merge_unlabelled_pairs_every_input_row_with_every_match(scalar_graph):
     _rows(scalar_graph, "CREATE (), ()")
     assert _rows(scalar_graph, "MATCH (a) MERGE (b) RETURN count(*) AS c") == [{"c": 4}]
     assert _rows(scalar_graph, "MATCH (n) RETURN count(n) AS c") == [{"c": 2}]
+
+
+def test_path_functions_accept_a_path_carried_as_a_value(scalar_graph):
+    _rows(scalar_graph, "CREATE (:A {id: 1})-[:T]->(:B {id: 2})")
+    query = (
+        "MATCH p = (:A)-[:T]->(:B) RETURN "
+        "[x IN [p] | [n IN nodes(x) | n.id]] AS ids, "
+        "[x IN [p] | size(relationships(x))] AS rels, "
+        "[x IN [p] | length(x)] AS hops, "
+        "[x IN [p] | type(relationships(x)[0])] AS types"
+    )
+    expected = [{"ids": [[1, 2]], "rels": [1], "hops": [1], "types": ["T"]}]
+    assert _rows(scalar_graph, query) == expected
+    assert _rows(scalar_graph, query, disable_optimizer=True) == expected
+    carried = "MATCH p = (:A)-[:T]->(:B) UNWIND [p] AS q RETURN size(nodes(q)) AS n, size(relationships(q)) AS r"
+    assert _rows(scalar_graph, carried) == [{"n": 2, "r": 1}]
+
+
+def test_label_predicates_cover_relationships_and_null(scalar_graph):
+    _rows(scalar_graph, "CREATE (:A {id: 1})-[:T]->(:B {id: 2}), (:A {id: 3})")
+    rel = "MATCH (:A)-[r]->(:B) RETURN r:T AS is_t, r:U AS is_u"
+    assert _rows(scalar_graph, rel) == [{"is_t": True, "is_u": False}]
+    assert _rows(scalar_graph, rel, disable_optimizer=True) == [{"is_t": True, "is_u": False}]
+    optional = (
+        "MATCH (a:A) OPTIONAL MATCH (a)-[:T]->(m:B) RETURN a.id AS id, m:B AS has_b, NOT m:B AS not_b ORDER BY id"
+    )
+    expected = [{"id": 1, "has_b": True, "not_b": False}, {"id": 3, "has_b": None, "not_b": None}]
+    assert _rows(scalar_graph, optional) == expected
+    assert _rows(scalar_graph, "MATCH (a:A) OPTIONAL MATCH (a)-[:T]->(m) WHERE m:B RETURN count(m) AS c") == [{"c": 1}]
+    assert _rows(scalar_graph, "MATCH ()-[r:T]->() WHERE r:T RETURN count(r) AS c") == [{"c": 1}]
+    assert _rows(scalar_graph, "MATCH ()-[r:T]->() WHERE r:U RETURN count(r) AS c") == [{"c": 0}]
+
+
+def test_string_predicates_on_non_strings_are_null(scalar_graph):
+    query = (
+        "RETURN 1 CONTAINS 'a' AS c1, 'a' CONTAINS 1 AS c2, [1] STARTS WITH 'a' AS s1, "
+        "1 ENDS WITH 'a' AS e1, 'abc' CONTAINS 'b' AS ok, null CONTAINS 'a' AS n"
+    )
+    expected = {"c1": None, "c2": None, "s1": None, "e1": None, "ok": True, "n": None}
+    assert _rows(scalar_graph, query) == [expected]
+    assert _rows(scalar_graph, query, disable_optimizer=True) == [expected]
+    # A null predicate keeps no row in either direction.
+    assert _rows(scalar_graph, "UNWIND [1, 'a'] AS v WITH v WHERE v CONTAINS 'a' RETURN v") == [{"v": "a"}]
+    assert _rows(scalar_graph, "UNWIND [1, 'a'] AS v WITH v WHERE NOT v CONTAINS 'a' RETURN v") == []
+
+
+def test_properties_of_a_map_is_the_map(scalar_graph):
+    query = "RETURN properties({a: 1, b: 'x'}) AS m, properties(null) AS n"
+    assert _rows(scalar_graph, query) == [{"m": {"a": 1, "b": "x"}, "n": None}]
+
+
+def test_deleted_relationship_keeps_its_type_within_the_statement(scalar_graph):
+    _rows(scalar_graph, "CREATE (:A {id: 1})-[:T]->(:B {id: 2})")
+    deleted = "MATCH (:A)-[r]->(:B) DELETE r RETURN type(r) AS t, r:T AS is_t"
+    assert _rows(scalar_graph, deleted) == [{"t": "T", "is_t": True}]
+    assert _rows(scalar_graph, "MATCH ()-[r]->() RETURN count(r) AS c") == [{"c": 0}]
+    _rows(scalar_graph, "CREATE (:A {id: 5})-[:U]->(:B {id: 6})")
+    carried = "MATCH (:A {id: 5})-[r]->() WITH r DELETE r RETURN type(r) AS t"
+    assert _rows(scalar_graph, carried) == [{"t": "U"}]
+    # A slot freed by the delete and reused by a CREATE keeps reporting the new type.
+    reuse = "MATCH (a:A {id: 5})-[r]->() DELETE r CREATE (a)-[s:V]->(a) RETURN type(s) AS t"
+    _rows(scalar_graph, "CREATE (:A {id: 5})-[:U]->(:B {id: 6})")
+    assert _rows(scalar_graph, reuse) == [{"t": "V"}]

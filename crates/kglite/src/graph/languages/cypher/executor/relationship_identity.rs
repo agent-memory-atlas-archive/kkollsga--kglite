@@ -1,4 +1,5 @@
 use crate::datatypes::values::RelationshipIncarnation;
+use crate::graph::schema::InternedKey;
 use petgraph::graph::EdgeIndex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,6 +11,10 @@ static NEXT_STATEMENT_NONCE: AtomicU64 = AtomicU64::new(1);
 pub(super) struct StatementRelationshipIdentities {
     nonce: u64,
     generations: HashMap<EdgeIndex, u32>,
+    /// The type of each relationship this statement deleted, keyed by the
+    /// slot and the generation it held while alive, so a binding captured
+    /// before the delete can still name its type afterwards.
+    retired_types: HashMap<(EdgeIndex, u32), InternedKey>,
 }
 
 impl StatementRelationshipIdentities {
@@ -18,6 +23,7 @@ impl StatementRelationshipIdentities {
         Self {
             nonce,
             generations: HashMap::new(),
+            retired_types: HashMap::new(),
         }
     }
 
@@ -31,12 +37,34 @@ impl StatementRelationshipIdentities {
     /// Retire every binding captured before this deletion. Call immediately
     /// before physical removal, so a CREATE that reuses the slot captures the
     /// incremented generation and remains valid.
-    pub(super) fn invalidate(&mut self, edge: EdgeIndex) -> Result<(), String> {
+    /// `connection_type` is the type the relationship holds right now; it is
+    /// kept for [`Self::retired_type`].
+    pub(super) fn invalidate(
+        &mut self,
+        edge: EdgeIndex,
+        connection_type: Option<InternedKey>,
+    ) -> Result<(), String> {
         let generation = self.generations.entry(edge).or_default();
+        if let Some(connection_type) = connection_type {
+            self.retired_types
+                .insert((edge, *generation), connection_type);
+        }
         *generation = generation
             .checked_add(1)
             .ok_or_else(|| format!("relationship slot {} incarnation overflow", edge.index()))?;
         Ok(())
+    }
+
+    /// The type a token's relationship had when this statement deleted it.
+    pub(super) fn retired_type(
+        &self,
+        edge: EdgeIndex,
+        token: RelationshipIncarnation,
+    ) -> Option<InternedKey> {
+        if token.statement_nonce() != self.nonce {
+            return None;
+        }
+        self.retired_types.get(&(edge, token.generation())).copied()
     }
 
     pub(super) fn accepts(&self, edge: EdgeIndex, token: RelationshipIncarnation) -> bool {
@@ -53,11 +81,24 @@ mod tests {
         let edge = EdgeIndex::new(4);
         let mut ids = StatementRelationshipIdentities::new();
         let stale = ids.capture(edge);
-        ids.invalidate(edge).unwrap();
+        ids.invalidate(edge, None).unwrap();
         let fresh = ids.capture(edge);
         assert!(!ids.accepts(edge, stale));
         assert!(ids.accepts(edge, fresh));
         assert_ne!(stale, fresh);
+    }
+
+    #[test]
+    fn retired_type_survives_invalidation_for_the_old_token_only() {
+        let edge = EdgeIndex::new(2);
+        let mut ids = StatementRelationshipIdentities::new();
+        let before = ids.capture(edge);
+        let ty = InternedKey::from_str("KNOWS");
+        ids.invalidate(edge, Some(ty)).unwrap();
+        assert_eq!(ids.retired_type(edge, before), Some(ty));
+        assert_eq!(ids.retired_type(edge, ids.capture(edge)), None);
+        let other = StatementRelationshipIdentities::new();
+        assert_eq!(other.retired_type(edge, before), None);
     }
 
     #[test]

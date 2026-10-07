@@ -826,6 +826,41 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *CHAIN_COUNT_QUERIES,
+    # Relationship-type and null-variable label predicates, and string
+    # predicates over non-string operands, through WHERE pushdown and RETURN.
+    (
+        "label_predicate_on_relationship_where",
+        "small_graph",
+        "MATCH (a:Person)-[r]->(b:Person) WHERE r:KNOWS RETURN a.name AS a, b.name AS b ORDER BY a, b",
+        None,
+    ),
+    (
+        "label_predicate_on_relationship_return",
+        "small_graph",
+        "MATCH (a:Person)-[r]->(b:Person) RETURN r:KNOWS AS k, r:OTHER AS o, count(*) AS c ORDER BY k, o",
+        None,
+    ),
+    (
+        "label_predicate_on_unmatched_optional",
+        "small_graph",
+        "MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) WHERE b.age > 40 "
+        "RETURN a.name AS a, b:Person AS has, NOT b:Person AS lacks ORDER BY a",
+        None,
+    ),
+    (
+        "string_predicates_on_non_strings",
+        "small_graph",
+        "MATCH (a:Person) RETURN a.name AS n, a.age CONTAINS 'a' AS c, NOT a.age STARTS WITH 'a' AS s ORDER BY n",
+        None,
+    ),
+    (
+        "path_function_over_comprehension_variable",
+        "small_graph",
+        "MATCH p = (a:Person)-[:KNOWS]->(b:Person) "
+        "RETURN a.name AS a, [x IN [p] | size(nodes(x))] AS n, "
+        "[x IN [p] | size(relationships(x))] AS r ORDER BY a, b.name",
+        None,
+    ),
     (
         "merge_relationship_matches_every_parallel_member",
         "small_graph",

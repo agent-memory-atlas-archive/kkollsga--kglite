@@ -86,4 +86,4 @@ def test_retired_binding_does_not_report_the_replacement(tmp_path):
         "RETURN type(r) AS t, startNode(r).id AS s, endNode(r).id AS e, "
         "properties(r) AS p, type(fresh) AS ft, id(r) = id(fresh) AS reused"
     ).to_list()
-    assert rows == [{"t": None, "s": None, "e": None, "p": None, "ft": "OTHER", "reused": True}]
+    assert rows == [{"t": "CLAIMS", "s": None, "e": None, "p": None, "ft": "OTHER", "reused": True}]

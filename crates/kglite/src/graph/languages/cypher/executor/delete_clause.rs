@@ -376,7 +376,11 @@ pub(super) fn invalidate_deleted_relationships(
         }
     }
     for edge in edges {
-        identities.invalidate(edge)?;
+        let connection_type = graph
+            .graph
+            .edge_weight(edge)
+            .map(|weight| weight.connection_type);
+        identities.invalidate(edge, connection_type)?;
     }
     Ok(())
 }

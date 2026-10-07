@@ -79,6 +79,29 @@ before upgrading.
 
 ### Fixed
 
+- `MERGE` now returns one row per match. It stopped at the first, so
+  `MATCH (a:A), (b:B) MERGE (a)-[r:E]->(b)` over two parallel `:E` relationships
+  returned one row, and `MATCH (a) MERGE (b)` over two nodes returned two rows
+  instead of four. `ON MATCH SET` now runs for every matched row, not only the
+  first.
+
+- `nodes(p)`, `relationships(p)` and `length(p)` now work on a path held as a
+  value, such as a list-comprehension variable (`[x IN [p] | nodes(x)]`). It
+  returned `null`.
+
+- `r:TYPE` on a relationship now tests its type. It was false for every row.
+  A label test on a null variable (`m:Q` after an unmatched `OPTIONAL MATCH`) is
+  now `null`, not `false`.
+
+- `STARTS WITH`, `ENDS WITH` and `CONTAINS` with a non-string operand now answer
+  `null`, not `false`.
+
+- `properties(map)` returns the map, not `null`. `type(r)` and `r:TYPE` after
+  `DELETE r` in the same statement still report the relationship's type.
+
+- An open-ended variable-length pattern (`*`, `*N..`) now carries the warning
+  that it stops at 10 hops. The cap is unchanged; write `*1..N` to go deeper.
+
 - A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
   `error` now names the key in its error. It said only "unknown variant".
 

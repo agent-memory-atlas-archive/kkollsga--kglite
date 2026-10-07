@@ -167,8 +167,8 @@ fn stale_binding_does_not_read_the_reused_slot() {
     assert_eq!(result.rows[0][3], Value::String("OTHER".into()));
     assert_eq!(
         result.rows[0][..3],
-        [Value::Null, Value::Null, Value::Null],
-        "{result:?}"
+        [Value::String("CLAIMS".into()), Value::Null, Value::Null],
+        "type is the one recorded at the delete; endpoints are not readable: {result:?}"
     );
 }
 

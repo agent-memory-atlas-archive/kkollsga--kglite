@@ -71,6 +71,51 @@
   "tests/test_cypher_scalar_storage_golden.py::test_merge_unlabelled_pairs_every_input_row_with_every_match[disk]": {
     "owner": "storage-parity"
   },
+  "tests/test_cypher_scalar_storage_golden.py::test_path_functions_accept_a_path_carried_as_a_value[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_path_functions_accept_a_path_carried_as_a_value[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_path_functions_accept_a_path_carried_as_a_value[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_label_predicates_cover_relationships_and_null[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_label_predicates_cover_relationships_and_null[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_label_predicates_cover_relationships_and_null[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_string_predicates_on_non_strings_are_null[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_string_predicates_on_non_strings_are_null[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_string_predicates_on_non_strings_are_null[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_properties_of_a_map_is_the_map[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_properties_of_a_map_is_the_map[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_properties_of_a_map_is_the_map[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_deleted_relationship_keeps_its_type_within_the_statement[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_deleted_relationship_keeps_its_type_within_the_statement[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_deleted_relationship_keeps_its_type_within_the_statement[disk]": {
+    "owner": "storage-parity"
+  },
   "tests/test_edge_cases_parity.py::test_zero_node_describe_schema_find_cypher[memory]": {
     "owner": "storage-parity"
   },
