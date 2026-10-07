@@ -248,7 +248,7 @@ def test_temporal_declarations_round_trip(mode, tmp_path):
     ):
         g.cypher(f"CALL db.temporal.declare({spec})")
     before = _declarations(g)
-    assert [d["convention"] for d in before] == ["closed", "closed", "half_open"]
+    assert [d["convention"] for d in before] == ["closed", "half_open", "closed"]
     assert all(d["abutting_rows"] == 0 for d in before)
     out = tmp_path / ("saved" if mode == "disk" else "saved.kgl")
     g.save(str(out))
