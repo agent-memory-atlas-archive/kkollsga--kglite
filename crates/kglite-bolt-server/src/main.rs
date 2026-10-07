@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use boltr::server::BoltServer;
 use clap::{Parser, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
@@ -25,6 +24,7 @@ use crate::backend::{
 };
 use crate::startup::{start_graph, DurabilityRequest};
 
+mod accept;
 mod auth;
 mod backend;
 mod error_map;
@@ -800,13 +800,13 @@ fn spawn_wal_size_checkpoint_task(
     })
 }
 
-/// Read `--tls-cert` + `--tls-key` into a boltr TLS configuration, so drivers
-/// can connect via `bolt+s://` or `neo4j+s://`.
+/// Read `--tls-cert` + `--tls-key` into a TLS acceptor, so drivers can connect
+/// via `bolt+s://` or `neo4j+s://`.
 ///
 /// The cert/key are read once at startup; reloading requires a restart. For HA
 /// setups the typical pattern is a reverse proxy (nginx, Caddy) terminating
 /// TLS instead.
-fn read_tls_config(cert_path: &Path, key_path: &Path) -> Result<boltr::server::TlsConfig> {
+fn read_tls_config(cert_path: &Path, key_path: &Path) -> Result<tokio_rustls::TlsAcceptor> {
     // rustls 0.23+ requires a process-wide crypto provider. The result is
     // ignored because a duplicate installation is benign (only the first wins).
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -814,7 +814,7 @@ fn read_tls_config(cert_path: &Path, key_path: &Path) -> Result<boltr::server::T
         .with_context(|| format!("reading TLS cert {}", cert_path.display()))?;
     let key_pem = std::fs::read(key_path)
         .with_context(|| format!("reading TLS key {}", key_path.display()))?;
-    boltr::server::TlsConfig::from_pem(&cert_pem, &key_pem)
+    accept::tls_acceptor_from_pem(&cert_pem, &key_pem)
         .map_err(|e| anyhow::anyhow!("invalid TLS cert/key: {}", e))
 }
 
@@ -921,7 +921,7 @@ async fn serve() -> Result<()> {
     }
     // `_writer_lease` rather than `_`: a bare `_` drops it here, releasing
     // write ownership before the first client connects. This binding holds it
-    // until after `BoltServer::serve` returns at shutdown.
+    // until after the accept loop returns at shutdown.
     let _writer_lease = started.writer_lease;
     tracing::info!(
         disposition = match started.disposition {
@@ -992,7 +992,7 @@ async fn serve() -> Result<()> {
 
     let addr = SocketAddr::new(cli.bind, cli.port);
 
-    let builder = configure_builder(&cli, backend)?;
+    let listener = configure_listener(&cli, backend)?;
 
     tracing::info!(
         %addr,
@@ -1032,10 +1032,10 @@ async fn serve() -> Result<()> {
         )
     });
 
-    let serve_result = builder
+    let serve_result = listener
         .serve(addr)
         .await
-        .map_err(|e| anyhow::anyhow!("BoltServer::serve failed: {}", e));
+        .map_err(|e| anyhow::anyhow!("Bolt accept loop failed: {}", e));
 
     tracing::info!("Bolt server stopped");
     finish_shutdown(
@@ -1048,26 +1048,16 @@ async fn serve() -> Result<()> {
     .await
 }
 
-/// Everything between `BoltServer::builder` and `serve`. Split from [`serve`]
-/// purely to keep each half readable; the ordering of these calls carries no
-/// invariants.
-fn configure_builder(cli: &Cli, backend: KgliteBackend) -> Result<BoltServer<KgliteBackend>> {
-    let mut builder = BoltServer::builder(backend)
-        .max_sessions(cli.max_sessions)
-        .max_message_size(cli.max_message_size)
-        // One-shot, and there is no second chance: tokio installs its signal
-        // handlers for the life of the process and never restores the default,
-        // so a second SIGINT/SIGTERM after this future has fired is swallowed
-        // rather than aborting. SIGKILL is the only escape from a shutdown
-        // that hangs.
-        .shutdown(shutdown_signal());
-
-    if let Some(secs) = cli.idle_timeout {
-        builder = builder.idle_timeout(Duration::from_secs(secs));
-    }
-
+/// Everything between the parsed flags and the accept loop. Split from
+/// [`serve`] purely to keep each half readable; the ordering of these calls
+/// carries no invariants.
+fn configure_listener(
+    cli: &Cli,
+    backend: KgliteBackend,
+) -> Result<accept::BoltListener<KgliteBackend>> {
+    let mut tls = None;
     if let (Some(cert_path), Some(key_path)) = (cli.tls_cert.as_ref(), cli.tls_key.as_ref()) {
-        builder = builder.tls(read_tls_config(cert_path, key_path)?);
+        tls = Some(read_tls_config(cert_path, key_path)?);
         tracing::info!(
             cert = %cert_path.display(),
             key = %key_path.display(),
@@ -1077,6 +1067,7 @@ fn configure_builder(cli: &Cli, backend: KgliteBackend) -> Result<BoltServer<Kgl
 
     // `--auth none` leaves the validator unset — boltr accepts any LOGON
     // credentials in that mode.
+    let mut auth: Option<Arc<dyn boltr::server::AuthValidator>> = None;
     if matches!(cli.auth, AuthScheme::Basic) {
         let user = cli.auth_user.clone().ok_or_else(|| {
             anyhow::anyhow!("--auth basic requires both --auth-user and --auth-pass")
@@ -1084,10 +1075,24 @@ fn configure_builder(cli: &Cli, backend: KgliteBackend) -> Result<BoltServer<Kgl
         let pass = cli.auth_pass.clone().ok_or_else(|| {
             anyhow::anyhow!("--auth basic requires both --auth-user and --auth-pass")
         })?;
-        builder = builder.auth(crate::auth::BasicAuthValidator::new(user, pass));
+        auth = Some(Arc::new(crate::auth::BasicAuthValidator::new(user, pass)));
         tracing::info!(user = %cli.auth_user.as_deref().unwrap_or(""), "wired --auth basic validator");
     }
-    Ok(builder)
+
+    Ok(accept::BoltListener {
+        backend,
+        auth,
+        tls,
+        idle_timeout: cli.idle_timeout.map(Duration::from_secs),
+        max_sessions: cli.max_sessions,
+        max_message_size: cli.max_message_size,
+        // One-shot, and there is no second chance: tokio installs its signal
+        // handlers for the life of the process and never restores the default,
+        // so a second SIGINT/SIGTERM after this future has fired is swallowed
+        // rather than aborting. SIGKILL is the only escape from a shutdown
+        // that hangs.
+        shutdown: Box::pin(shutdown_signal()),
+    })
 }
 
 /// The shutdown tail of [`serve`], in its load-bearing order: stop-and-JOIN

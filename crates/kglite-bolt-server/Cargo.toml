@@ -59,6 +59,10 @@ boltr = { version = "0.2", features = ["tls"] }
 # server's own need: ureq 3 (reached via kglite's `fastembed` feature ->
 # fastembed 7 -> hf-hub 0.5) requires rustls ^0.23.22, and cargo unifies
 # rustls across all members.
+# The accept loop (src/accept.rs) builds its own TLS acceptor, because boltr's
+# `TlsConfig` keeps its acceptor private. Same majors boltr itself declares.
+tokio-rustls = "0.26"
+rustls-pki-types = "1.9"
 rustls = { version = "0.23.22", default-features = false, features = ["ring", "std"] }
 
 # Async trait sugar used by boltr's BoltBackend trait declaration.

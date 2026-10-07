@@ -72,6 +72,13 @@ before upgrading.
 
 ### Fixed
 
+- `kglite-bolt-server` now sets `TCP_NODELAY` on every accepted connection.
+  On Linux each small Bolt reply waited for the client's delayed ACK, so every
+  exchange took ~41 ms and an explicit transaction ~123 ms (measured in CI).
+  They now take ~1 ms and ~2 ms. The server owns its accept loop for this, with
+  the same flags, TLS, auth, idle-session reaping and graceful shutdown as
+  before.
+
 - A query with two variable-length patterns now matches both. Since 0.18.1
   the second pattern returned only its zero-hop row, or nothing for `*1..`,
   in separate `MATCH` clauses, one comma-separated `MATCH`, after `WITH`, and

@@ -2038,9 +2038,11 @@ dependencies = [
  "clap",
  "kglite",
  "rustls",
+ "rustls-pki-types",
  "sha2",
  "subtle",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-subscriber",
 ]

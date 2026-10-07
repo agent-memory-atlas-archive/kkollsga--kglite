@@ -132,7 +132,7 @@ pub(crate) use writer_slot::{WriteConcurrency, WriterConfig};
 /// Bolt backend wrapping a loaded kglite graph.
 ///
 /// One instance is constructed at server boot and shared across all
-/// connections via `Arc` inside `BoltServer::serve`.
+/// connections via `Arc` inside the accept loop (`accept.rs`).
 ///
 /// **State model**:
 /// - `session` holds the canonical shared `Arc<DirGraph>`. Auto-commit
@@ -366,7 +366,7 @@ impl KgliteBackend {
     }
 
     /// The shared session, cloned out so a caller can still reach the served
-    /// graph after the backend is moved into `BoltServer::serve` — which is
+    /// graph after the backend is moved into the accept loop — which is
     /// the only way to run a save *after* the accept loop has finished.
     pub(crate) fn session_handle(&self) -> Arc<kglite::api::session::Session> {
         Arc::clone(&self.session)
