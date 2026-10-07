@@ -72,6 +72,8 @@ before upgrading.
 
 ### Fixed
 
+- A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
+  `error` now names the key in its error. It said only "unknown variant".
 - `kglite-bolt-server` now sets `TCP_NODELAY` on every accepted connection.
   On Linux each small Bolt reply waited for the client's delayed ACK, so every
   exchange took ~41 ms and an explicit transaction ~123 ms (measured in CI).

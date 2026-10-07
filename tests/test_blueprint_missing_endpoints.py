@@ -156,8 +156,11 @@ def test_settings_default_applies_and_the_edge_overrides_it(tmp_path):
     assert _count(graph, "FOR VALID_TIME ALL MATCH (d:Department) RETURN count(d) AS n") == 2
     graph, _ = _build(tmp_path, _person(), settings={"on_missing_endpoint": "drop"})
     assert _count(graph, "MATCH (t:Team) WHERE t.id = 't9' RETURN count(t) AS n") == 0
-    with pytest.raises(ValueError, match="unknown variant `sometimes`, expected one of `auto`, `vivify`"):
+    # The refusal names the key, so a spec with several policy sites says which one is wrong.
+    with pytest.raises(ValueError, match="on_missing_endpoint 'sometimes'.*auto, vivify, drop, error"):
         _build(tmp_path, _person(), settings={"on_missing_endpoint": "sometimes"})
+    with pytest.raises(ValueError, match="on_missing_endpoint 'sometimes'.*auto, vivify, drop, error"):
+        _build(tmp_path, _person(dept_edge={"on_missing_endpoint": "sometimes"}))
 
 
 def test_strict_stubs_catches_dropped_endpoints(tmp_path):

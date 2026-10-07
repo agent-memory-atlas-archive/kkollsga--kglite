@@ -98,8 +98,7 @@ pub struct Settings {
 /// `Auto`, the default, is per endpoint type: a type the build declares
 /// valid-time on drops the row, because a stub of it would be valid at every
 /// instant; any other type gets a provisional stub node, as it always has.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OnMissingEndpoint {
     #[default]
     Auto,
@@ -109,6 +108,23 @@ pub enum OnMissingEndpoint {
     Drop,
     /// Fail the build on the first such row.
     Error,
+}
+
+// Hand-written so a refused value names its key; the derived error says only
+// "unknown variant", which cannot tell the settings default from an edge's own.
+impl<'de> Deserialize<'de> for OnMissingEndpoint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "auto" => Ok(Self::Auto),
+            "vivify" => Ok(Self::Vivify),
+            "drop" => Ok(Self::Drop),
+            "error" => Ok(Self::Error),
+            other => Err(serde::de::Error::custom(format!(
+                "invalid on_missing_endpoint '{other}': expected one of auto, vivify, drop, error"
+            ))),
+        }
+    }
 }
 
 /// One declared input: where its rows come from and how to read them.
