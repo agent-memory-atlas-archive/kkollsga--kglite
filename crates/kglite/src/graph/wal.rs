@@ -62,7 +62,11 @@
 //! never a *hole*: [`read_frames`] stops at the first frame it cannot
 //! verify, so recovery always yields a **prefix**. Frames are per-commit
 //! and replay is idempotent, so a prefix is a valid earlier state rather
-//! than a corrupt one.
+//! than a corrupt one. A cut can also leave a *hole*: later pages on disk, an
+//! earlier page never written, so a frame that straddles it fails its checksum
+//! with intact frames after it. [`has_lost_page_signature`] reads a frame whose
+//! page-aligned span is zeroed as that torn tail; any other checksum failure
+//! before further frames is damage and refuses to open.
 //!
 //! One invariant this places on the *caller*: a checkpoint must not
 //! truncate frames that are still only in the page cache, or replaying the
@@ -886,6 +890,9 @@ fn read_frame_step(
     }
     let frame_len = 8 + len;
     if crc32(&payload) != expected_crc {
+        if has_lost_page_signature(&payload, after_header) {
+            return Ok(FrameStep::Torn);
+        }
         return Ok(FrameStep::Corrupt(frame_len));
     }
     let limits = crate::serde_codec::DecodeLimits::new(MAX_WAL_FRAME_BYTES, len);
@@ -893,6 +900,34 @@ fn read_frame_step(
         Ok(frame) => Ok(FrameStep::Frame(frame, frame_len)),
         Err(_) => Ok(FrameStep::Corrupt(frame_len)),
     }
+}
+
+/// The unit an OS crash loses unsynced file data in: one page-cache page.
+const LOST_PAGE_BYTES: u64 = 4096;
+
+/// Whether a checksum-failing frame carries the mark of a power cut rather than
+/// of bit damage: file pages that were never written out read back as zeros.
+///
+/// `payload_offset` is the payload's byte offset in the file. Lost pages are
+/// whole and page-aligned, so a frame that straddles one holds either a full
+/// aligned zero page in its middle, or a zero run that starts exactly on a page
+/// boundary and runs to the frame's end (the frame finished inside the lost
+/// page). Only unsynced frames can look like this: a barriered frame was on
+/// disk before the next one was written. Reading the damage as a torn tail
+/// therefore loses nothing a `normal` commit promised. A flipped bit does not
+/// zero a page-aligned run.
+fn has_lost_page_signature(payload: &[u8], payload_offset: u64) -> bool {
+    let end = payload_offset + payload.len() as u64;
+    let mut boundary = payload_offset.div_ceil(LOST_PAGE_BYTES) * LOST_PAGE_BYTES;
+    while boundary < end {
+        let lo = (boundary - payload_offset) as usize;
+        let hi = ((boundary + LOST_PAGE_BYTES).min(end) - payload_offset) as usize;
+        if payload[lo..hi].iter().all(|&b| b == 0) {
+            return true;
+        }
+        boundary += LOST_PAGE_BYTES;
+    }
+    false
 }
 
 /// How many complete frames sit after a corrupt one, purely to tell the
@@ -1404,3 +1439,7 @@ mod v4_tests;
 #[cfg(test)]
 #[path = "wal_delete_capture_tests.rs"]
 mod delete_capture_tests;
+
+#[cfg(test)]
+#[path = "wal_power_cut_tests.rs"]
+mod power_cut_tests;
