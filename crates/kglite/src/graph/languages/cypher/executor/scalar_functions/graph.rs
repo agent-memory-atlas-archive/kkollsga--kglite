@@ -238,6 +238,66 @@ impl<'a> CypherExecutor<'a> {
         Some(Value::NodeRef(node.index() as u32))
     }
 
+    /// `nodes(p)`: the nodes of a path binding (source, intermediates,
+    /// target), as full node values, or of a path carried as a value
+    /// (list-comprehension variable, `WITH`/`UNWIND` alias).
+    fn eval_path_nodes(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
+        if let Some(Expression::Variable(var)) = args.first() {
+            if let Some(path) = row.path_bindings.get(var) {
+                let mut items: Vec<Value> = Vec::with_capacity(path.path.len() + 1);
+                if let Some(src) = materialize_node_value(path.source, self.graph) {
+                    items.push(Value::Node(Box::new(src)));
+                }
+                for hop in &path.path {
+                    if let Some(node) = materialize_node_value(hop.node, self.graph) {
+                        items.push(Value::Node(Box::new(node)));
+                    }
+                }
+                return Ok(Value::List(items));
+            }
+        }
+        match args.first().map(|arg| self.evaluate_expression(arg, row)) {
+            Some(Ok(Value::Path(path))) => Ok(Value::List(
+                path.nodes
+                    .into_iter()
+                    .map(|n| Value::Node(Box::new(n)))
+                    .collect(),
+            )),
+            Some(Err(e)) => Err(e),
+            _ => Ok(Value::Null),
+        }
+    }
+
+    /// `relationships(p)`: the relationships of a path binding, using the exact
+    /// edge recorded for each hop, or of a path carried as a value.
+    fn eval_path_relationships(
+        &self,
+        args: &[Expression],
+        row: &ResultRow,
+    ) -> Result<Value, String> {
+        if let Some(Expression::Variable(var)) = args.first() {
+            if let Some(path) = row.path_bindings.get(var) {
+                let mut items: Vec<Value> = Vec::with_capacity(path.path.len());
+                for index in 0..path.path.len() {
+                    if let Some(rel) = self.materialize_path_relationship(path, index) {
+                        items.push(Value::Relationship(Box::new(rel)));
+                    }
+                }
+                return Ok(Value::List(items));
+            }
+        }
+        match args.first().map(|arg| self.evaluate_expression(arg, row)) {
+            Some(Ok(Value::Path(path))) => Ok(Value::List(
+                path.rels
+                    .into_iter()
+                    .map(|r| Value::Relationship(Box::new(r)))
+                    .collect(),
+            )),
+            Some(Err(e)) => Err(e),
+            _ => Ok(Value::Null),
+        }
+    }
+
     pub(super) fn eval_graph_fn(
         &self,
         name: &str,
@@ -245,72 +305,8 @@ impl<'a> CypherExecutor<'a> {
         row: &ResultRow,
     ) -> Result<Option<Value>, String> {
         let result: Result<Value, String> = match name {
-            "nodes" => {
-                // nodes(p) returns the list of nodes in a path
-                // (source + intermediates + target).
-                //
-                // Emits `Value::List(Vec<Value::Node>)`. Each element is a
-                // full NodeValue (id, labels, properties) mirroring what
-                // `RETURN n` would emit.
-                if let Some(Expression::Variable(var)) = args.first() {
-                    if let Some(path) = row.path_bindings.get(var) {
-                        let mut items: Vec<Value> = Vec::with_capacity(path.path.len() + 1);
-                        if let Some(src) = materialize_node_value(path.source, self.graph) {
-                            items.push(Value::Node(Box::new(src)));
-                        }
-                        for hop in &path.path {
-                            if let Some(node) = materialize_node_value(hop.node, self.graph) {
-                                items.push(Value::Node(Box::new(node)));
-                            }
-                        }
-                        return Ok(Some(Value::List(items)));
-                    }
-                }
-                // A path carried as a value (list-comprehension variable,
-                // `WITH`/`UNWIND` alias, `collect(p)[i]`).
-                match args.first() {
-                    Some(arg) => match self.evaluate_expression(arg, row)? {
-                        Value::Path(path) => Ok(Value::List(
-                            path.nodes
-                                .into_iter()
-                                .map(|n| Value::Node(Box::new(n)))
-                                .collect(),
-                        )),
-                        _ => Ok(Value::Null),
-                    },
-                    None => Ok(Value::Null),
-                }
-            }
-            "relationships" | "rels" => {
-                // relationships(p) — list of relationships in a path.
-                //
-                // Emits `Value::List(Vec<Value::Relationship>)`.
-                // Each element is a full RelValue (id, start, end, type,
-                // properties), using the exact edge recorded for each hop.
-                if let Some(Expression::Variable(var)) = args.first() {
-                    if let Some(path) = row.path_bindings.get(var) {
-                        let mut items: Vec<Value> = Vec::with_capacity(path.path.len());
-                        for index in 0..path.path.len() {
-                            if let Some(rel) = self.materialize_path_relationship(path, index) {
-                                items.push(Value::Relationship(Box::new(rel)));
-                            }
-                        }
-                        return Ok(Some(Value::List(items)));
-                    }
-                }
-                match args.first() {
-                    Some(arg) => match self.evaluate_expression(arg, row)? {
-                        Value::Path(path) => Ok(Value::List(
-                            path.rels
-                                .into_iter()
-                                .map(|r| Value::Relationship(Box::new(r)))
-                                .collect(),
-                        )),
-                        _ => Ok(Value::Null),
-                    },
-                    None => Ok(Value::Null),
-                }
-            }
+            "nodes" => self.eval_path_nodes(args, row),
+            "relationships" | "rels" => self.eval_path_relationships(args, row),
             "type" => Ok(self.eval_type_fn(args, row).unwrap_or(Value::Null)),
             "elementid" => Ok(self.eval_element_id(args, row).unwrap_or(Value::Null)),
             "id" => return self.eval_id_fn(args, row),

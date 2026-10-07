@@ -155,13 +155,6 @@
       "nesting": 4
     },
     {
-      "path": "crates/kglite/src/graph/languages/cypher/executor/scalar_functions/graph.rs",
-      "qualified_name": "crate::CypherExecutor<'a>::eval_graph_fn",
-      "lines": 223,
-      "branches": 48,
-      "nesting": 5
-    },
-    {
       "path": "crates/kglite/src/graph/languages/cypher/executor/scalar_functions/numeric.rs",
       "qualified_name": "crate::CypherExecutor<'a>::eval_numeric_fn",
       "lines": 190,
