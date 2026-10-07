@@ -118,10 +118,15 @@ impl ServerIdentity {
 const COMPONENTS_EDITION: &str = "community";
 
 mod intercepts;
+#[cfg(test)]
+mod writer_queue_tests;
+mod writer_slot;
 use intercepts::{
     checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, plan_from_explain_rows,
     server_facts_stream, CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
+use writer_slot::{ReapedHandles, WriterPermit, WriterSlot};
+pub(crate) use writer_slot::{WriteConcurrency, WriterConfig};
 
 /// Bolt backend wrapping a loaded kglite graph.
 ///
@@ -149,8 +154,12 @@ use intercepts::{
 ///   working copy under the per-tx mutex — no contention with other
 ///   sessions until commit.
 /// - Commit takes the session mutex briefly to validate the transaction's
-///   base version and swap its working graph. Concurrent writers use
-///   optimistic concurrency control, so a stale transaction conflicts.
+///   base version and swap its working graph.
+/// - **`--write-concurrency queue`** (default): a write-mode transaction takes
+///   the process-wide [`WriterSlot`] at BEGIN and holds it until its `TxState`
+///   is dropped, so writers run one at a time on the latest graph and COMMIT
+///   cannot conflict. Read-mode transactions and auto-commit reads never take
+///   it. **`optimistic`**: no slot; a stale transaction conflicts at COMMIT.
 ///
 /// **`--readonly`**: rejects `begin_transaction` outright, and the
 /// auto-commit mutation gate in `execute` is unchanged. A read-only
@@ -195,6 +204,10 @@ pub struct KgliteBackend {
     /// The `--auth-user` value, when `--auth basic` is configured;
     /// `dbms.showCurrentUser()` answers from it.
     auth_user: Option<String>,
+    /// Writer admission: the slot every queue-mode write transaction holds.
+    writer: Arc<WriterSlot>,
+    /// Transactions an idle reclaim discarded; see [`ReapedHandles`].
+    reaped: ReapedHandles,
 }
 
 /// Per-Bolt-transaction state: the canonical snapshot/working CoW
@@ -210,6 +223,12 @@ struct TxState {
     /// Metadata parsed from the BEGIN `extra` dict, applied to every query
     /// executed inside this transaction.
     meta: TxMeta,
+    /// The writer slot, held for this transaction's lifetime in queue mode.
+    /// Dropping the state (commit, rollback, RESET, connection close,
+    /// reclaim) releases it.
+    writer: Option<WriterPermit>,
+    /// BEGIN carried `mode: "r"`.
+    read_only: bool,
 }
 
 /// kglite transaction metadata parsed from a BEGIN (or auto-commit RUN)
@@ -333,6 +352,49 @@ impl KgliteBackend {
             csv_import,
             identity,
             auth_user,
+            writer: WriterSlot::new(WriterConfig::default()),
+            reaped: ReapedHandles::default(),
+        }
+    }
+
+    /// Replace the default writer admission settings (queue, 20 s wait,
+    /// 10 s idle). A builder because `new` is already at the argument limit.
+    pub fn with_writer_config(mut self, config: WriterConfig) -> Self {
+        self.writer = WriterSlot::new(config);
+        self
+    }
+
+    /// Discard the transaction `handle` because it sat idle while writers
+    /// queued behind it. Dropping its `TxState` releases the slot.
+    fn reclaim_idle_writer(&self, handle: &str) {
+        let removed = {
+            let mut txs = self.transactions.lock().unwrap_or_else(|p| p.into_inner());
+            txs.remove(handle)
+        };
+        if removed.is_some() {
+            self.reaped.record(handle);
+            tracing::warn!(
+                tx = %handle,
+                "rolled back an idle write transaction: writers were waiting and it had \
+                 no activity past --writer-idle-timeout"
+            );
+        }
+    }
+
+    /// The error for a message on a transaction that no longer exists:
+    /// specific when an idle reclaim discarded it, otherwise `unknown`.
+    fn missing_tx_error(&self, handle: &str, otherwise: String) -> BoltError {
+        if self.reaped.contains(handle) {
+            BoltError::Query {
+                code: "Neo.ClientError.Transaction.TransactionTimedOut".into(),
+                message: format!(
+                    "transaction {handle} was rolled back: it was idle past \
+                     --writer-idle-timeout while other writers were waiting for the \
+                     writer slot. Nothing it wrote was applied."
+                ),
+            }
+        } else {
+            BoltError::Transaction(otherwise)
         }
     }
 
@@ -661,12 +723,22 @@ impl BoltBackend for KgliteBackend {
             ));
         }
         let meta = TxMeta::from_extra(extra)?;
+        let read_only = matches!(extra.get("mode"), Some(BoltValue::String(m)) if m == "r");
         let id = self.tx_counter.fetch_add(1, Ordering::Relaxed);
         let handle = TransactionHandle(format!("tx-{id}"));
+        // Queue mode: a write transaction waits for the slot *before* taking
+        // its snapshot, so it starts on the latest graph.
+        let writer = if !read_only && self.writer.config().mode == WriteConcurrency::Queue {
+            Some(self.acquire_writer_slot(&handle.0).await?)
+        } else {
+            None
+        };
         let state = TxState {
             inner: Some(self.session.begin()),
             session_id: session.0.clone(),
             meta,
+            writer,
+            read_only,
         };
         // Brief outer-mutex hold to insert. The Arc wrapping the
         // inner Mutex<TxState> is created here so concurrent
@@ -694,10 +766,10 @@ impl BoltBackend for KgliteBackend {
         let state_arc = {
             let mut txs = self.transactions.lock().unwrap_or_else(|p| p.into_inner());
             txs.remove(&transaction.0).ok_or_else(|| {
-                BoltError::Transaction(format!(
-                    "commit: unknown transaction handle: {}",
-                    transaction.0
-                ))
+                self.missing_tx_error(
+                    &transaction.0,
+                    format!("commit: unknown transaction handle: {}", transaction.0),
+                )
             })?
         };
 
@@ -750,12 +822,18 @@ impl BoltBackend for KgliteBackend {
     ) -> Result<(), BoltError> {
         let state_arc = {
             let mut txs = self.transactions.lock().unwrap_or_else(|p| p.into_inner());
-            txs.remove(&transaction.0).ok_or_else(|| {
-                BoltError::Transaction(format!(
-                    "rollback: unknown transaction handle: {}",
-                    transaction.0
-                ))
-            })?
+            match txs.remove(&transaction.0) {
+                Some(state_arc) => state_arc,
+                // Already rolled back by an idle reclaim: ROLLBACK is the
+                // outcome the client asked for.
+                None if self.reaped.contains(&transaction.0) => return Ok(()),
+                None => {
+                    return Err(BoltError::Transaction(format!(
+                        "rollback: unknown transaction handle: {}",
+                        transaction.0
+                    )))
+                }
+            }
         };
 
         let (session_id, had_mutations) = {
@@ -1241,6 +1319,38 @@ impl KgliteBackend {
         Ok(())
     }
 
+    /// Wait for the writer slot for transaction `handle`, mapping a wait
+    /// timeout to the retriable `LockAcquisitionTimeout` failure.
+    async fn acquire_writer_slot(&self, handle: &str) -> Result<WriterPermit, BoltError> {
+        let started = Instant::now();
+        let permit = self
+            .writer
+            .acquire(handle, |holder| self.reclaim_idle_writer(holder))
+            .await
+            .map_err(|timed_out| {
+                tracing::warn!(
+                    tx = %handle,
+                    waited_ms = timed_out.waited.as_millis() as u64,
+                    "write transaction gave up waiting for the writer slot"
+                );
+                BoltError::Query {
+                    code: "Neo.TransientError.Transaction.LockAcquisitionTimeout".into(),
+                    message: format!(
+                        "Could not begin a write transaction: another write transaction held \
+                         the writer slot for {:.1}s (--writer-wait-timeout). Retry the \
+                         transaction.",
+                        timed_out.waited.as_secs_f64()
+                    ),
+                }
+            })?;
+        tracing::debug!(
+            tx = %handle,
+            waited_ms = started.elapsed().as_millis() as u64,
+            "acquired the writer slot"
+        );
+        Ok(permit)
+    }
+
     /// Auto-commit path. Reads run on a snapshot and schema statements run in a
     /// one-shot transaction ([`is_schema_ddl`]); every other mutation is
     /// rejected, because drivers wrap data writes in explicit transactions in
@@ -1328,16 +1438,23 @@ impl KgliteBackend {
             let txs = self.transactions.lock().unwrap_or_else(|p| p.into_inner());
             txs.get(handle)
                 .ok_or_else(|| {
-                    BoltError::Transaction(format!("unknown transaction handle: {handle}"))
+                    self.missing_tx_error(handle, format!("unknown transaction handle: {handle}"))
                 })
                 .map(Arc::clone)?
         }; // outer mutex released here
 
-        // Step 2: Take inner per-tx mutex for the entire pipeline.
+        // Step 2: Take inner per-tx mutex for the entire pipeline. The
+        // in-flight mark is taken first so a query queued on the mutex also
+        // protects the transaction from an idle reclaim.
+        let _in_flight = state_arc
+            .try_lock()
+            .ok()
+            .and_then(|s| s.writer.as_ref().map(|w| w.activity().begin_query()));
         let mut state = state_arc.lock().unwrap_or_else(|p| p.into_inner());
         // Clone the BEGIN-time metadata out before mutably borrowing the
         // inner tx (small: an optional set + two optional strings).
         let meta = state.meta.clone();
+        let read_only = state.read_only;
         let tx_inner = state.inner.as_mut().ok_or_else(|| {
             BoltError::Transaction(format!("tx {handle} already committed or rolled back"))
         })?;
@@ -1355,6 +1472,17 @@ impl KgliteBackend {
         }
 
         let opts = self.execute_opts(&kg_params, &meta);
+
+        if is_mutation && read_only && self.writer.config().mode == WriteConcurrency::Queue {
+            // A read-mode transaction holds no writer slot; letting it commit
+            // would let it overtake slot holders and conflict them.
+            return Err(BoltError::Query {
+                code: "Neo.ClientError.Statement.AccessMode".into(),
+                message: "Writing in read access mode not allowed: this transaction was begun \
+                          with mode \"r\" (session.execute_read). Use a write transaction."
+                    .into(),
+            });
+        }
 
         if is_mutation {
             // Materialize working on first mutation via session::Transaction.

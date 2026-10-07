@@ -21,6 +21,7 @@ use kglite::api::storage::StorageMode;
 
 use crate::backend::{
     checkpoint_if_changed, CheckpointOutcome, CheckpointState, KgliteBackend, ServerIdentity,
+    WriteConcurrency, WriterConfig,
 };
 use crate::startup::{start_graph, DurabilityRequest};
 
@@ -240,6 +241,30 @@ struct Cli {
     #[arg(long, requires = "auth_user")]
     auth_pass: Option<String>,
 
+    /// How write transactions are admitted.
+    ///
+    /// `queue` (default): a write transaction (Bolt BEGIN without `mode: "r"`)
+    /// waits for the single writer slot at BEGIN and holds it until COMMIT,
+    /// ROLLBACK or disconnect, so writers run one at a time and never
+    /// conflict at COMMIT. Reads never wait. `optimistic`: every write
+    /// transaction runs on its BEGIN snapshot and a stale one fails at COMMIT
+    /// with a retriable `Neo.TransientError.Transaction.Outdated`.
+    #[arg(long, value_enum, default_value_t = WriteConcurrencyArg::Queue)]
+    write_concurrency: WriteConcurrencyArg,
+
+    /// Seconds a write transaction waits at BEGIN for the writer slot before
+    /// failing with the retriable `Neo.TransientError.Transaction.LockAcquisitionTimeout`.
+    /// 0 waits indefinitely. Applies to `--write-concurrency queue`.
+    #[arg(long, value_name = "SECS", default_value_t = 20.0, value_parser = parse_timeout_secs)]
+    writer_wait_timeout: f64,
+
+    /// Seconds of inactivity after which a write transaction holding the
+    /// writer slot is rolled back, once another writer is waiting for it. The
+    /// client's next message gets `Neo.ClientError.Transaction.TransactionTimedOut`.
+    /// 0 never reclaims. Applies to `--write-concurrency queue`.
+    #[arg(long, value_name = "SECS", default_value_t = 10.0, value_parser = parse_timeout_secs)]
+    writer_idle_timeout: f64,
+
     /// Per-session idle timeout in seconds. Disabled by default.
     #[arg(long, value_name = "SECS")]
     idle_timeout: Option<u64>,
@@ -277,6 +302,30 @@ struct Cli {
     /// See `--tls-cert` for the wire-scheme details.
     #[arg(long, value_name = "PATH", requires = "tls_cert")]
     tls_key: Option<PathBuf>,
+}
+
+/// `--write-concurrency` values.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum WriteConcurrencyArg {
+    Queue,
+    Optimistic,
+}
+
+/// A non-negative, finite number of seconds (fractions allowed).
+fn parse_timeout_secs(raw: &str) -> Result<f64, String> {
+    let secs: f64 = raw
+        .parse()
+        .map_err(|_| format!("{raw:?} is not a number of seconds"))?;
+    if secs.is_finite() && secs >= 0.0 {
+        Ok(secs)
+    } else {
+        Err(format!("{raw:?} must be a non-negative number of seconds"))
+    }
+}
+
+/// 0 means "no timeout".
+fn timeout_from_secs(secs: f64) -> Option<Duration> {
+    (secs > 0.0).then(|| Duration::from_secs_f64(secs))
 }
 
 const NEO4J_COMPAT_ENV: &str = "KGLITE_BOLT_NEO4J_COMPAT";
@@ -920,7 +969,15 @@ async fn serve() -> Result<()> {
         csv_import,
         identity,
         cli.auth_user.clone(),
-    );
+    )
+    .with_writer_config(WriterConfig {
+        mode: match cli.write_concurrency {
+            WriteConcurrencyArg::Queue => WriteConcurrency::Queue,
+            WriteConcurrencyArg::Optimistic => WriteConcurrency::Optimistic,
+        },
+        wait_timeout: timeout_from_secs(cli.writer_wait_timeout),
+        idle_timeout: timeout_from_secs(cli.writer_idle_timeout),
+    });
     // Keep the served graph reachable after the backend moves into the server:
     // the exit hook below runs once the accept loop is done, while
     // `_writer_lease` is still held, so the save cannot race another process
@@ -1335,6 +1392,36 @@ mod tests {
     /// and the operator who asked for one has misunderstood the deployment.
     /// `off` beside `--readonly` stays legal, which is why this is a check on
     /// the *level* rather than a clap `conflicts_with` on the argument.
+    #[test]
+    fn writer_admission_flags_default_to_queue_and_accept_fractions() {
+        let cli = Cli::parse_from(["kglite-bolt-server", "--graph", "g.kgl"]);
+        assert!(matches!(cli.write_concurrency, WriteConcurrencyArg::Queue));
+        assert_eq!(cli.writer_wait_timeout, 20.0);
+        assert_eq!(cli.writer_idle_timeout, 10.0);
+        let cli = Cli::parse_from([
+            "kglite-bolt-server",
+            "--graph",
+            "g.kgl",
+            "--write-concurrency",
+            "optimistic",
+            "--writer-wait-timeout",
+            "0.5",
+            "--writer-idle-timeout",
+            "0",
+        ]);
+        assert!(matches!(
+            cli.write_concurrency,
+            WriteConcurrencyArg::Optimistic
+        ));
+        assert_eq!(
+            timeout_from_secs(cli.writer_wait_timeout),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(timeout_from_secs(cli.writer_idle_timeout), None);
+        assert!(parse_timeout_secs("-1").is_err());
+        assert!(parse_timeout_secs("nan").is_err());
+    }
+
     #[test]
     fn a_logging_level_is_refused_for_a_readonly_server() {
         for level in [DurabilityLevel::Full, DurabilityLevel::Normal] {
