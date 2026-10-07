@@ -383,7 +383,7 @@ impl DirGraph {
     ///
     /// Must run outside a statement window: it renumbers rows, which an open
     /// undo journal still names.
-    pub fn compact_columns_if_fragmented(&mut self) -> bool {
+    pub(crate) fn compact_columns_if_fragmented(&mut self) -> bool {
         let Some(threshold) = self.auto_vacuum_threshold else {
             return false;
         };
