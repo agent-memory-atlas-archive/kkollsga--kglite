@@ -15,12 +15,15 @@ reuse the JSON-RPC stdio client from the smoke module.
 
 from __future__ import annotations
 
+import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import Optional
 
 import pandas as pd
+import pytest
 
 import kglite
 from tests.test_mcp_server_smoke import McpClient, _text_content
@@ -433,3 +436,66 @@ def test_selftest_path_without_producer_fails_hydration(tmp_path: Path) -> None:
     assert "✓ workspace activation" in out
     assert "✗ graph hydrates: No active graph" in out
     assert "Selftest FAILED" in out
+
+
+@pytest.mark.skipif(importlib.util.find_spec("torch") is None, reason="needs torch (not installed here or in CI)")
+def test_python_embedder_lazy_torch_import_survives_repeat_calls(tmp_path: Path) -> None:
+    """A Python embedder that first imports torch inside `embed()` and retains a
+    tensor must keep answering when the server runs on one Tokio worker.
+
+    torch wheels whose bundled pybind11 predates 3.0.2 (torch < 2.13) cache the
+    PyThreadState of the temporary attachment that ran the lazy import, then
+    reuse that stale pointer on a later callback; the second query segfaulted
+    the child (-11). Success is every response arriving and a clean exit.
+    """
+    (tmp_path / "torch_embed.py").write_text(
+        "class TorchEmbedder:\n"
+        "    dimension = 8\n"
+        "    tensor = None\n"
+        "    def embed(self, texts):\n"
+        "        import torch\n"
+        "        if self.tensor is None:\n"
+        "            self.tensor = torch.ones(8)\n"
+        "        return [self.tensor.to('cpu').tolist() for _ in texts]\n"
+        "def build(model):\n"
+        "    return TorchEmbedder()\n",
+        encoding="utf-8",
+    )
+    g = kglite.KnowledgeGraph()
+    df = pd.DataFrame({"id": [1, 2], "title": ["A", "B"], "summary": ["alpha alpha", "beta beta"]})
+    g.add_nodes(df, "Doc", "id", "title")
+
+    class _Stored:
+        dimension = 8
+
+        def embed(self, texts):
+            return [[float(i + 1)] * 8 for i, _ in enumerate(texts)]
+
+    g.set_embedder(_Stored())
+    g.embed_texts("Doc", "summary", show_progress=False)
+    kgl = tmp_path / "docs.kgl"
+    g.save(str(kgl))
+    manifest = tmp_path / "mcp.yaml"
+    manifest.write_text(
+        "name: torch\ntrust:\n  allow_embedder: true\nextensions:\n  embedder:\n"
+        "    factory: torch_embed:build\n    model: stub\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(tmp_path), os.environ.get("PYTHONPATH", "")])),
+        "TOKIO_WORKER_THREADS": "1",
+    }
+    client = _spawn_wheel_env(["--graph", str(kgl), "--mcp-config", str(manifest)], env)
+    try:
+        for i in range(5):
+            out = _text_content(
+                client.call_tool(
+                    "cypher_query",
+                    {"query": "MATCH (d:Doc) RETURN d.title AS t, text_score(d, 'summary', 'probe') AS s ORDER BY t"},
+                )
+            )
+            assert "2 row(s)" in out, f"query {i} did not return both rows:\n{out}"
+    finally:
+        client.shutdown()
+    assert client.proc.returncode == 0, f"server exited {client.proc.returncode}"
