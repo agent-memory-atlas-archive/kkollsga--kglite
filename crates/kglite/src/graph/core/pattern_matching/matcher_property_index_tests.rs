@@ -177,34 +177,74 @@ fn closure_probe_declines_when_a_member_is_unindexed() {
     );
 }
 
-/// `name` resolves through the **structural soft-alias fallback** (a node
-/// with no stored `name` answers with its title), but `create_index` builds
-/// only from the stored property. The index is therefore a *subset* of what a
-/// scan matches, and must never be read as authoritative — neither for a
+/// `label` resolves through the **structural soft-alias fallback** (a node
+/// with no stored `label` answers with its type string), and an index over it
+/// holds stored values alone. It is therefore a *subset* of what a scan
+/// matches, and must never be read as authoritative — neither for a
 /// proven-empty nor for a closure union.
 #[test]
-fn a_soft_alias_index_never_proves_a_miss_or_covers_a_closure() {
+fn a_type_string_alias_index_never_proves_a_miss_or_covers_a_closure() {
     let mut graph = DirGraph::new();
-    run(&mut graph, "CREATE (:T {id: 1, name: 'Ann'})");
-    // No stored `name`; `n.name` still resolves to 'Ann' through the title.
-    run(&mut graph, "CREATE (:T {id: 2, title: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 1, label: 'Ann'})");
+    // No stored `label`; `n.label` still resolves to 'T' through the type.
+    run(&mut graph, "CREATE (:T {id: 2})");
     assert_eq!(
-        rows(&graph, "MATCH (n:T {name: 'Ann'}) RETURN n.id"),
-        2,
-        "precondition: both nodes match before any index exists"
+        rows(&graph, "MATCH (n:T {label: 'T'}) RETURN n.id"),
+        1,
+        "precondition: the unlabelled node matches before any index exists"
     );
 
-    graph.create_index("T", "name");
+    graph.create_index("T", "label");
     assert_eq!(
-        rows(&graph, "MATCH (n:T {name: 'Ann'}) RETURN n.id"),
-        2,
+        rows(&graph, "MATCH (n:T {label: 'T'}) RETURN n.id"),
+        1,
         "creating an index must not change the answer"
     );
     assert_eq!(
-        lookup(&graph, "T", &eq_props("name", s("absent"))),
+        lookup(&graph, "T", &eq_props("label", s("absent"))),
         None,
-        "a soft-alias index cannot prove a miss: the scan sees values it never indexed"
+        "a type-string alias index cannot prove a miss: the scan sees values it never indexed"
     );
+}
+
+/// `name` resolves through the title for a node with no stored `name`, and the
+/// index files such a node under its title, so it holds exactly the values a
+/// scan compares: a lookup is answered, a miss is proven, and the answer is
+/// the scan's.
+#[test]
+fn a_name_index_holds_the_titles_of_nodes_that_store_no_name() {
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:T {id: 1, name: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 2, title: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 3, title: 'Bo', name: 'Cy'})");
+
+    graph.create_index("T", "name");
+    assert!(graph.index_serves_lookups("T", "name"));
+    let hits = |graph: &DirGraph, value: &str| {
+        lookup(graph, "T", &eq_props("name", s(value))).map(|nodes| nodes.len())
+    };
+    assert_eq!(hits(&graph, "Ann"), Some(2));
+    assert_eq!(
+        hits(&graph, "Cy"),
+        Some(1),
+        "a stored name wins over the title"
+    );
+    assert_eq!(
+        hits(&graph, "Bo"),
+        Some(0),
+        "the shadowed title is not a name"
+    );
+    assert_eq!(hits(&graph, "absent"), Some(0));
+    for (value, expected) in [("Ann", 2), ("Cy", 1), ("Bo", 0), ("absent", 0)] {
+        assert_eq!(
+            rows(
+                &graph,
+                &format!("MATCH (n:T {{name: '{value}'}}) RETURN n.id")
+            ),
+            expected,
+            "the scan agrees on {value}"
+        );
+    }
 }
 
 /// The sound per-type alias family is the **registered** id/title alias, not
@@ -287,6 +327,110 @@ fn a_soft_alias_disk_bundle_never_answers_a_lookup() {
         graph.index_not_serving_reason("C", "label").is_some(),
         "and the caller is owed the reason"
     );
+}
+
+/// Writes keep the buckets equal to the scan's value-space, and the lookup
+/// keeps answering from the index (`Some`) rather than falling back to a scan:
+/// a retitle moves a node that stores no `name`, leaves one that stores it, and
+/// `SET n.name` / `REMOVE n.name` move the title index with it.
+#[test]
+fn a_name_index_is_maintained_through_title_and_name_writes() {
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:T {id: 1, name: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 2, title: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 3, title: 'Bo', name: 'Cy'})");
+    graph.create_index("T", "name");
+    graph.create_index("T", "title");
+    let name_hits = |graph: &DirGraph, value: &str| {
+        lookup(graph, "T", &eq_props("name", s(value))).map(|nodes| nodes.len())
+    };
+    let title_hits = |graph: &DirGraph, value: &str| {
+        lookup(graph, "T", &eq_props("title", s(value))).map(|nodes| nodes.len())
+    };
+
+    run(&mut graph, "MATCH (n:T {id: 2}) SET n.title = 'Eve'");
+    assert_eq!(name_hits(&graph, "Ann"), Some(1));
+    assert_eq!(name_hits(&graph, "Eve"), Some(1), "the retitled node moved");
+    run(&mut graph, "MATCH (n:T {id: 3}) SET n.title = 'Fay'");
+    assert_eq!(
+        name_hits(&graph, "Fay"),
+        Some(0),
+        "a stored name shadows the title"
+    );
+    assert_eq!(name_hits(&graph, "Cy"), Some(1));
+
+    run(&mut graph, "MATCH (n:T {id: 1}) SET n.name = 'Gus'");
+    assert_eq!(name_hits(&graph, "Ann"), Some(0));
+    assert_eq!(name_hits(&graph, "Gus"), Some(1));
+    assert_eq!(
+        title_hits(&graph, "Gus"),
+        Some(1),
+        "SET name sets the title"
+    );
+    assert_eq!(title_hits(&graph, "Ann"), Some(0));
+
+    run(&mut graph, "MATCH (n:T {id: 3}) REMOVE n.name");
+    assert_eq!(name_hits(&graph, "Cy"), Some(0));
+    assert_eq!(
+        name_hits(&graph, "Fay"),
+        Some(0),
+        "REMOVE clears the title too"
+    );
+    assert_eq!(title_hits(&graph, "Fay"), Some(0));
+
+    for (value, expected) in [("Eve", 1), ("Gus", 1), ("Cy", 0)] {
+        assert_eq!(
+            rows(
+                &graph,
+                &format!("MATCH (n:T {{name: '{value}'}}) RETURN n.id")
+            ),
+            expected,
+            "the scan agrees on {value}"
+        );
+    }
+}
+
+/// The disk twin of `a_name_index_holds_the_titles_of_nodes_that_store_no_name`:
+/// the typed `name` bundle files a row with no stored `name` under its title,
+/// so the matcher reads it (`Some`, not a scan) and its answer is the scan's,
+/// including the proven miss and the row whose stored `name` shadows its title.
+#[test]
+fn a_disk_name_bundle_answers_for_nodes_that_store_no_name() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:T {id: 1, name: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 2, title: 'Ann'})");
+    run(&mut graph, "CREATE (:T {id: 3, title: 'Bo', name: 'Cy'})");
+    graph.enable_disk_mode().unwrap();
+    graph.save_disk(dir.path().to_str().unwrap()).unwrap();
+
+    let (_unique, persistent) = graph.create_property_index_routed("T", "name").unwrap();
+    assert!(persistent, "a disk create_index builds the mmap bundle");
+    assert!(graph.index_serves_lookups("T", "name"));
+    assert_eq!(graph.index_not_serving_reason("T", "name"), None);
+
+    for (value, expected) in [("Ann", 2), ("Cy", 1), ("Bo", 0), ("absent", 0)] {
+        assert_eq!(
+            lookup(&graph, "T", &eq_props("name", s(value))).map(|nodes| nodes.len()),
+            Some(expected),
+            "the bundle answers {value} without a scan"
+        );
+        assert_eq!(
+            rows(
+                &graph,
+                &format!("MATCH (n:T {{name: '{value}'}}) RETURN n.id")
+            ),
+            expected,
+            "and the query result is the scan's for {value}"
+        );
+    }
+
+    // A write moves the graph under the snapshot: it declines rather than
+    // answers from a bundle that no longer covers the type.
+    run(&mut graph, "MATCH (n:T {id: 2}) SET n.title = 'Dee'");
+    assert_eq!(lookup(&graph, "T", &eq_props("name", s("Ann"))), None);
+    assert_eq!(rows(&graph, "MATCH (n:T {name: 'Ann'}) RETURN n.id"), 1);
+    assert_eq!(rows(&graph, "MATCH (n:T {name: 'Dee'}) RETURN n.id"), 1);
 }
 
 /// The cross-type arms consult a bundle named by an *alias family member*, so

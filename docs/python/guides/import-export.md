@@ -721,13 +721,16 @@ Two index types:
 Both also accelerate Cypher `WHERE` clauses. Composite indexes support multi-property equality.
 
 `create_index()` reports `serves_lookups` beside `created`, because the two are
-not the same question. An index on `name`, `type`, `node_type` or `label` is
-built but never read. Those names resolve *structurally*: a node with no such
-stored property answers with its title or its node type. The index therefore
-holds a subset of what a `MATCH` compares against, and the matcher scans instead.
-This holds in every storage mode, a disk graph's persistent bundle included.
-`not_serving` carries the explanation, and `list_indexes()` repeats the answer
-next to each entry's `state`.
+not the same question. An index on `type`, `node_type` or `label` is built but
+never read. A node with no such stored property answers with its node type, so
+the index holds a subset of what a `MATCH` compares against, and the matcher
+scans instead. This holds in every storage mode, a disk graph's persistent
+bundle included. `not_serving` carries the explanation, and `list_indexes()`
+repeats the answer next to each entry's `state`. `CREATE INDEX` on those names
+returns the same explanation as a warning.
+
+An index on `name` is read: a node with no stored `name` is filed under its
+title, which is what `n.name` returns for it.
 
 ```python
 graph.create_index('Proposal', 'proposal_geoprovince')        # equality index

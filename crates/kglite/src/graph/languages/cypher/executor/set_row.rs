@@ -114,6 +114,10 @@ struct LandedPropertyWrite<'a> {
     /// were resolved. Differs from `property` only for a title alias.
     write_field: &'a str,
     old_value: Option<&'a Value>,
+    /// The title before the write, read only when a `name` write (which sets
+    /// both the title and a stored `name`) will move it between the title
+    /// index's buckets.
+    old_title: Option<&'a Value>,
     value: &'a Value,
     constraint_plan: &'a crate::graph::dir_graph::constraints::PropertyWritePlan,
     /// What this row still owes, after the memos have answered everything that
@@ -236,11 +240,12 @@ pub(super) fn apply_node_property_set<'a>(
     // consumer is the bucket move in `update_property_indices_for_set`, and on
     // a type carrying no index that move is a provable no-op — so there the
     // read (a columnar cell fetch and a `Value` clone, per row) buys nothing.
-    let old_value = if facts.maintains_indexes {
+    let (old_value, old_title) = if facts.maintains_indexes {
         let _arena_guard = graph.graph.begin_query();
         let Some(node) = graph.node_view(node_idx) else {
             return Ok(());
         };
+        let old_title = (write_field == "name").then(|| node.title().into_owned());
         // For `name` (the canonical title-alias name in Cypher), the value is
         // stored on `node.title`, not in the property map.
         // `get_field_ref("name")` returns None for graphs where "name" isn't
@@ -249,7 +254,7 @@ pub(super) fn apply_node_property_set<'a>(
         // `dir_graph.rs::create_index`'s alias-resolution path). Falling back
         // to the title keeps index auto-maintenance consistent with how those
         // indexes were populated.
-        match write_field {
+        let old_value = match write_field {
             // `title()`, not the raw inline field: these indexes are built
             // from `get_node_title`.
             "name" => node
@@ -258,9 +263,10 @@ pub(super) fn apply_node_property_set<'a>(
                 .or_else(|| Some(node.title().into_owned())),
             "title" => Some(node.title().into_owned()),
             _ => node.get_field_ref(write_field).map(Cow::into_owned),
-        }
+        };
+        (old_value, old_title)
     } else {
-        None
+        (None, None)
     };
 
     // Role-scoped write guard: reject SET on a node type outside the active
@@ -347,6 +353,7 @@ pub(super) fn apply_node_property_set<'a>(
             property,
             write_field,
             old_value: old_value.as_ref(),
+            old_title: old_title.as_ref(),
             value: &value,
             constraint_plan: &constraint_plan,
             owed,
@@ -404,6 +411,26 @@ fn finish_node_property_write(
             write.old_value,
             write.value,
         );
+        // A `name` write sets the title as well, and a `title` write changes
+        // what a node with no stored `name` answers to `name`; the call above
+        // moved the node within the index of the field the statement spelled.
+        if write.write_field == "name" {
+            if let Some(old_title) = write.old_title.filter(|old| *old != write.value) {
+                graph.update_property_indices_for_set(
+                    write.node_type,
+                    write.node_idx,
+                    "title",
+                    Some(old_title),
+                    write.value,
+                );
+            }
+        } else if write.write_field == "title" {
+            graph.update_name_index_for_title_write(
+                write.node_type,
+                write.node_idx,
+                write.old_value,
+            );
+        }
     }
 
     // `write_field` is the alias-resolved spelling the value actually landed

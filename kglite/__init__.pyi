@@ -7462,13 +7462,17 @@ class KnowledgeGraph:
         ``serves_lookups`` says whether queries will actually read what was
         built, and ``not_serving`` carries the reason when they will not.
         ``created=True`` only means an index now exists. The case worth knowing
-        is a **structurally resolved** property name — ``name``, ``type``,
-        ``node_type`` and ``label``, where a node with no such stored property
-        answers with its title or its node type instead. An index over those
+        is ``type``, ``node_type`` and ``label``, where a node with no such
+        stored property answers with its node type instead. An index over those
         holds the stored values only, so it is a subset of what a ``MATCH``
-        resolves; on memory and mapped graphs the matcher refuses to read it
-        (and scans, which is correct but unaccelerated). Index the property the
-        values are really stored under, or match on the title / node type.
+        resolves; the matcher refuses to read it (and scans, which is correct
+        but unaccelerated). Index the property the values are really stored
+        under, or match on the node type.
+
+        ``name`` is served: a node with no stored ``name`` answers with its
+        title, and the index files it under that title. The same holds for a
+        declared title field (``node_title_field='label'``) and for a declared
+        id field.
 
         Args:
             node_type: Node type to index.
@@ -7494,8 +7498,8 @@ class KnowledgeGraph:
 
         Example:
             ```python
-            graph.create_index('Star', 'name')['not_serving']
-            # "'name' is resolved structurally on Star: a node carrying no ..."
+            graph.create_index('Star', 'label')['not_serving']
+            # "'label' is resolved structurally on Star: a node carrying no ..."
             ```
         """
         ...
@@ -7577,8 +7581,8 @@ class KnowledgeGraph:
         are not included.
 
         ``serves_lookups`` is ``False`` for an entry queries will not read: a
-        ``DEFERRED`` one, which is not built yet, and one on a structurally
-        resolved name (``name``, ``type``, ``node_type``, ``label``) — see
+        ``DEFERRED`` one, which is not built yet, and one on ``type``,
+        ``node_type`` or ``label``, which resolve to the node type — see
         :meth:`create_index` for why. ``state`` answers only whether the index
         was built.
 

@@ -4358,6 +4358,22 @@ pastes straight in.
 - The descriptor form (`DROP INDEX FOR …`) is a KGLite extension that sidesteps
   naming entirely.
 
+#### Indexes on `name`, titles and ids
+
+A property index serves the lookup that resolves to the same value, so these
+indexes are read:
+
+- `CREATE INDEX FOR (n:L) ON (n.name)`. A node with no stored `name` answers
+  `n.name` with its title, and the index files it under that title. A stored
+  `name` wins over the title, as it does in a scan.
+- An index on `title`, on a type's declared title field (`node_title_field`),
+  or on its declared id field.
+
+`type`, `node_type` and `label` answer the node type for a node that stores none.
+An index over them would hold a subset of what a query compares, so lookups scan
+and `CREATE INDEX` returns a warning saying so. On a disk graph the index is a
+snapshot: after a write it declines until `reindex()` or `save()`.
+
 One canonical name can cover several structures. A property carrying a hash
 index, a B-tree index and a BM25 text index shows three `SHOW INDEXES` rows
 sharing a `name`, distinguished by `type` (`PROPERTY`, `RANGE`, `FULLTEXT`).

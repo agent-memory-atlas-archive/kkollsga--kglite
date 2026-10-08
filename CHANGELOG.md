@@ -222,6 +222,24 @@ before upgrading.
 
 ### Fixed
 
+- An index on `name` is read by lookups. `n.name` answers a node's title when the
+  node stores no `name`, but the index held stored values only, so `MATCH (n:P
+  {name: $v})` and `MERGE (n:P {name: $v})` scanned the type after `CREATE INDEX
+  FOR (n:P) ON (n.name)` (20,000 nodes, release build: 0.64 ms a lookup
+  before, 0.004 ms after). The index now files a node with no stored `name` under
+  its title and follows every write to either field, in memory, mapped and disk
+  graphs. A disk graph's `name` bundle is a snapshot, so it declines after a
+  write until `reindex()` or `save()`.
+
+- `CREATE INDEX` on `type`, `node_type` or `label` warns that no query reads it.
+  Those names answer the node type for a node that stores none, so the index
+  holds a subset of what a lookup compares; the statement reported success and
+  said nothing.
+
+- `SET n.name` and `REMOVE n.name` / `REMOVE n.title` left an index on `title`
+  holding the old title, and `REMOVE n.name` left a `name` index holding the
+  wrong bucket when the node stored a `name` different from its title.
+
 - `r['type']` on a relationship returns its type, as `keys(r)` implies. It was
   null, so `[k IN keys(r) | r[k]]` carried a null for `type`.
 

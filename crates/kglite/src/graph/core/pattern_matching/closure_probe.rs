@@ -58,8 +58,8 @@ pub(crate) fn live_closure_members<'a>(graph: &'a DirGraph, node_type: &'a str) 
 /// - at least one live member exists (see [`live_closure_members`]).
 /// - every live member resolves every property in `props`: an equality index
 ///   that can answer a point lookup of it (`index_answers_point_lookup` —
-///   alias-aware, and excluding the soft-alias names whose index contents are
-///   a subset of what a scan matches), or `prop` being that member's id field
+///   alias-aware, and excluding the type-string names (`type`, `node_type`,
+///   `label`) whose index contents are a subset of what a scan matches), or `prop` being that member's id field
 ///   (canonical `id`, or its `id_field_aliases` entry). Coverage must be
 ///   total — a partial union would silently drop rows.
 ///

@@ -176,7 +176,7 @@ fn string_index_expands_existing_wrapper_equivalence() {
 }
 
 #[test]
-fn soft_alias_ranges_decline_despite_stored_property_hits() {
+fn type_string_alias_ranges_decline_despite_stored_property_hits() {
     let mut graph = indexed(vec![Value::String("Ann".into())]);
     let index = graph
         .range_indices
@@ -184,10 +184,10 @@ fn soft_alias_ranges_decline_despite_stored_property_hits() {
         .unwrap();
     graph
         .range_indices
-        .insert(("N".into(), "name".into()), index);
+        .insert(("N".into(), "label".into()), index);
     let lower = Value::String("A".into());
     assert!(graph
-        .lookup_range("N", "name", Included(&lower), Unbounded)
+        .lookup_range("N", "label", Included(&lower), Unbounded)
         .is_none());
 }
 
@@ -309,7 +309,7 @@ fn composite_predicate_probe_cap_is_all_or_nothing() {
 }
 
 #[test]
-fn composite_predicate_keeps_registered_aliases_and_declines_soft_aliases() {
+fn composite_predicate_keeps_registered_aliases_and_declines_type_string_aliases() {
     let names = vec!["rid".into(), "title_alias".into()];
     let values = vec![Value::Int64(1), Value::String("Oslo".into())];
     let mut graph = composite_indexed(&names, vec![values.clone()]);
@@ -320,7 +320,7 @@ fn composite_predicate_keeps_registered_aliases_and_declines_soft_aliases() {
         slots(graph.lookup_by_composite_predicate("N", &names, &values)),
         vec![0]
     );
-    let names = vec!["name".into(), "v".into()];
+    let names = vec!["label".into(), "v".into()];
     let values = vec![Value::String("Oslo".into()), Value::Boolean(true)];
     let graph = composite_indexed(&names, vec![values.clone()]);
     assert!(graph

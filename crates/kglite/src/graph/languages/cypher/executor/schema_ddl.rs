@@ -281,6 +281,37 @@ pub(crate) fn execute_schema_mutation(
     Ok(())
 }
 
+/// The warning a `CREATE INDEX` that just succeeded owes when no query will
+/// read what it built, so the statement does not report success for a no-op.
+/// `None` for every other command and for an index that serves.
+pub(crate) fn created_index_warning(graph: &DirGraph, command: &SchemaCommand) -> Option<String> {
+    let SchemaCommand::CreateIndex(create) = command else {
+        return None;
+    };
+    let label = node_label(&create.target, "CREATE INDEX").ok()?;
+    match create.properties.as_slice() {
+        [property] => graph
+            .index_not_serving_reason(&label, property)
+            .map(|reason| {
+                format!(
+                    "CREATE INDEX on {label}.{property} was created but queries will not read \
+                     it: {reason}"
+                )
+            }),
+        properties => {
+            let structural = properties
+                .iter()
+                .find(|property| graph.resolves_to_type_string(&label, property))?;
+            Some(format!(
+                "CREATE INDEX on {label}.({}) was created but queries will not read it: \
+                 '{structural}' resolves to the node type on a node that stores no \
+                 '{structural}', which the index does not hold. Lookups scan.",
+                properties.join(",")
+            ))
+        }
+    }
+}
+
 fn dispatch_schema_mutation(
     graph: &mut DirGraph,
     command: &SchemaCommand,

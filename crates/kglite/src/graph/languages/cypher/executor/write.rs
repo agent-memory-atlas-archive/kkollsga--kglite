@@ -562,6 +562,10 @@ fn run_clause_pipeline(
             // never reach this arm.
             Clause::Schema(command) => {
                 schema_ddl::execute_schema_mutation(graph, command, stats, interrupt)?;
+                if let Some(warning) = schema_ddl::created_index_warning(graph, command) {
+                    let mut target = ctx.diagnostics.lock().unwrap_or_else(|e| e.into_inner());
+                    super::retrieval_diagnostics::record_warning(&mut target.warnings, warning);
+                }
             }
             _ => {
                 wrote = false;
@@ -1500,6 +1504,43 @@ fn existing_property_keys(
     }
 }
 
+/// Clear a node's title and stored `name` together, as `REMOVE n.name` /
+/// `REMOVE n.title` do. Returns the removed title and `(title, name)` as they
+/// stood before: `name` is the stored property if the node has one and the
+/// title otherwise, so the two can sit in different index buckets.
+fn clear_name_and_title(
+    graph: &mut crate::graph::dir_graph::DirGraph,
+    node_idx: NodeIndex,
+) -> (Option<Value>, (Option<Value>, Option<Value>)) {
+    let old = graph.graph.get_node_title(node_idx).unwrap_or(Value::Null);
+    let title = (!matches!(old, Value::Null)).then_some(old);
+    let key = InternedKey::from_str("name");
+    let stored_name = graph
+        .graph
+        .get_node_property(node_idx, key)
+        .filter(|value| !matches!(value, Value::Null));
+    let name = stored_name.or_else(|| title.clone());
+    GraphWrite::set_node_title(&mut graph.graph, node_idx, Value::Null);
+    GraphWrite::remove_node_property(&mut graph.graph, node_idx, key);
+    (title.clone(), (title, name))
+}
+
+/// Vacate the buckets a [`clear_name_and_title`] left a node in: its `name`
+/// from the `name` indexes and its title from the title indexes.
+fn refile_cleared_name_title(
+    graph: &mut crate::graph::dir_graph::DirGraph,
+    node_type: &str,
+    node_idx: NodeIndex,
+    (title, name): &(Option<Value>, Option<Value>),
+) {
+    if let Some(name) = name {
+        graph.update_property_indices_for_remove(node_type, node_idx, "name", name);
+    }
+    if let Some(title) = title {
+        graph.update_property_indices_for_remove(node_type, node_idx, "title", title);
+    }
+}
+
 /// Write one property straight onto a node, bypassing the columnar master fast
 /// path.
 ///
@@ -2106,6 +2147,11 @@ fn execute_remove(
                         }
                     }
 
+                    // `(title, name)` as they stood before a `name` / `title`
+                    // removal, which clears both: `name` is the stored property
+                    // if the node has one and the title otherwise, so the two
+                    // can sit in different buckets.
+                    let mut cleared_name_title: Option<(Option<Value>, Option<Value>)> = None;
                     let removed_value = if let Some(prior) = cleared_via_master {
                         prior
                     } else if graph.graph.node_weight(node_idx).is_some() {
@@ -2116,11 +2162,9 @@ fn execute_remove(
                             // through the same backend seam a `SET` writes it
                             // through, so the removal reaches the store instead
                             // of nulling an already-null field.
-                            let old = graph.graph.get_node_title(node_idx).unwrap_or(Value::Null);
-                            GraphWrite::set_node_title(&mut graph.graph, node_idx, Value::Null);
-                            let key = InternedKey::from_str("name");
-                            GraphWrite::remove_node_property(&mut graph.graph, node_idx, key);
-                            (!matches!(old, Value::Null)).then_some(old)
+                            let (removed, cleared) = clear_name_and_title(graph, node_idx);
+                            cleared_name_title = Some(cleared);
+                            removed
                         } else {
                             // The backend picks the right removal semantics per
                             // storage: disk stages a `Null` write so its flush
@@ -2134,14 +2178,19 @@ fn execute_remove(
 
                     // Composite maintenance reads the current tuple from disk columns.
                     flush_disk_item_writes(graph);
+                    if let Some(cleared) = &cleared_name_title {
+                        refile_cleared_name_title(graph, &node_type_str, node_idx, cleared);
+                    }
                     if let Some(old_val) = removed_value {
                         stats.properties_removed += 1;
-                        graph.update_property_indices_for_remove(
-                            &node_type_str,
-                            node_idx,
-                            property,
-                            &old_val,
-                        );
+                        if cleared_name_title.is_none() {
+                            graph.update_property_indices_for_remove(
+                                &node_type_str,
+                                node_idx,
+                                property,
+                                &old_val,
+                            );
+                        }
                         // Stripping the indexed property is a content change
                         // like any other; the next refresh will find no string
                         // and drop the document.

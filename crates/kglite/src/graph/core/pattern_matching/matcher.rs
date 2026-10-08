@@ -1621,10 +1621,9 @@ impl<'a> PatternExecutor<'a> {
     ///
     /// Every probe is gated on
     /// [`DirGraph::persistent_index_answers_point_lookup`], the disk mirror of
-    /// the soft-alias exclusion `lookup_by_index` applies in memory: a bundle
-    /// over a structurally-resolved name (`name`/`type`/`node_type`/`label`)
-    /// holds stored values alone and is a strict subset of what a scan
-    /// matches.
+    /// the exclusion `lookup_by_index` applies in memory: a bundle over a
+    /// type-string name (`type`/`node_type`/`label`) holds stored values alone
+    /// and is a strict subset of what a scan matches.
     fn try_persistent_index_lookup(
         &self,
         node_type: &str,

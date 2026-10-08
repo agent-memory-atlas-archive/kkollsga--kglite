@@ -323,9 +323,15 @@ impl MappedGraph {
                 return MappedPropertyIndex::default();
             }
             // Regular property lookup via InternedKey hash.
-            if let Some(Value::String(s)) = nd.properties.get_value(prop_key) {
-                entries.push((s, idx));
-                continue;
+            match nd.properties.get_value(prop_key) {
+                Some(Value::String(s)) => {
+                    entries.push((s, idx));
+                    continue;
+                }
+                // A stored non-string `name` is what `{name: …}` compares; the
+                // title is only the fallback for a node that stores none.
+                Some(stored) if property == "name" && !matches!(stored, Value::Null) => continue,
+                _ => {}
             }
             // Title/id aliases: pull from the dedicated slots.
             if is_title_alias {

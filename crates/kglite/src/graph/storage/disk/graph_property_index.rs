@@ -68,6 +68,11 @@ struct IndexedColumn<'a> {
     /// title column and `n.title` reads it, so the property column goes stale
     /// and must not be indexed.
     is_title: bool,
+    /// The property is `name`: a row with no stored `name` is matched through
+    /// its title (`NodeView::resolved_field`), so the title *string* is the
+    /// row's value — not the id fallback `title_or_id` adds, which a scan
+    /// never sees.
+    falls_back_to_title: bool,
 }
 
 impl<'a> IndexedColumn<'a> {
@@ -83,6 +88,7 @@ impl<'a> IndexedColumn<'a> {
             slot,
             is_column: store.has_property_column(key),
             is_title: key == InternedKey::from_str("title"),
+            falls_back_to_title: key == InternedKey::from_str("name"),
         }
     }
 
@@ -102,6 +108,20 @@ impl<'a> IndexedColumn<'a> {
         // strings as values, which `get_str_by_slot` does not read.
         if let Some(Value::String(s)) = self.store.get(row, self.key) {
             return Some(s);
+        }
+        if self.falls_back_to_title {
+            // A stored non-string `name` is the row's value; its title is not.
+            if self
+                .store
+                .get(row, self.key)
+                .is_some_and(|stored| !matches!(stored, Value::Null))
+            {
+                return None;
+            }
+            return match self.store.get_title(row) {
+                Some(Value::String(s)) => Some(s),
+                _ => None,
+            };
         }
         if self.is_column {
             return None;

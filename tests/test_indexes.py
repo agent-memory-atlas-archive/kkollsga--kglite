@@ -168,21 +168,24 @@ class TestIndexRebuildAfterReload:
 
 
 class TestStructurallyResolvedIndexHonesty:
-    """`name`, `type`, `node_type` and `label` resolve structurally: a node
-    carrying no such stored property answers with its title or its node type.
-    An index over one of them holds the stored values alone, so the matcher
-    refuses to read it — and every surface that reports the index must say so
-    rather than reporting a working accelerator."""
+    """`type`, `node_type` and `label` resolve structurally: a node carrying no
+    such stored property answers with its node type. An index over one of them
+    holds the stored values alone, so the matcher refuses to read it — and
+    every surface that reports the index must say so rather than reporting a
+    working accelerator. `name` answers the title and the index files such a
+    node under it, so it is served."""
 
     @staticmethod
     def mixed_graph():
         graph = KnowledgeGraph()
-        graph.cypher("CREATE (:T {id:1, title:'Ann', name:'Nan', city:'Oslo'}),(:T {id:2, title:'Bob', city:'Oslo'})")
+        graph.cypher(
+            "CREATE (:T {id:1, title:'Ann', name:'Nan', label:'L1', city:'Oslo'}),(:T {id:2, title:'Bob', city:'Oslo'})"
+        )
         return graph
 
     @pytest.mark.parametrize(
         "property,source",
-        [("name", "title"), ("type", "node type"), ("node_type", "node type"), ("label", "node type")],
+        [("type", "node type"), ("node_type", "node type"), ("label", "node type")],
     )
     def test_create_index_reports_the_index_no_query_reads(self, property, source):
         graph = self.mixed_graph()
@@ -192,6 +195,11 @@ class TestStructurallyResolvedIndexHonesty:
         assert f"'{property}' is resolved structurally on T" in info["not_serving"]
         assert source in info["not_serving"]
 
+    def test_a_name_index_reports_serving(self):
+        info = self.mixed_graph().create_index("T", "name")
+        assert info["serves_lookups"] is True
+        assert info["not_serving"] is None
+
     def test_an_ordinary_property_index_still_reports_serving(self):
         graph = self.mixed_graph()
         info = graph.create_index("T", "city")
@@ -200,20 +208,20 @@ class TestStructurallyResolvedIndexHonesty:
 
     def test_list_indexes_carries_the_same_answer_beside_online(self):
         graph = self.mixed_graph()
-        graph.create_index("T", "name")
+        graph.create_index("T", "label")
         graph.create_index("T", "city")
         listed = {row["property"]: row for row in graph.list_indexes()}
-        assert listed["name"]["state"] == "ONLINE" and listed["name"]["serves_lookups"] is False
+        assert listed["label"]["state"] == "ONLINE" and listed["label"]["serves_lookups"] is False
         assert listed["city"]["state"] == "ONLINE" and listed["city"]["serves_lookups"] is True
 
     def test_describe_stops_naming_it_as_the_accelerator(self):
         graph = self.mixed_graph()
-        graph.create_index("T", "name")
+        graph.create_index("T", "label")
         graph.create_index("T", "city")
         described = graph.describe(types=["T"])
-        name_line = next(line for line in described.splitlines() if 'name="name"' in line)
+        label_line = next(line for line in described.splitlines() if 'name="label"' in line)
         city_line = next(line for line in described.splitlines() if 'name="city"' in line)
-        assert "indexed=" not in name_line
+        assert "indexed=" not in label_line
         assert 'indexed="eq"' in city_line
 
     def test_the_answers_themselves_are_unchanged_by_the_index(self):

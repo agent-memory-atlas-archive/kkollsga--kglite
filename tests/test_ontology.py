@@ -425,21 +425,30 @@ def test_closure_probe_is_alias_aware(mat):
     assert [r["id"] for r in mat.cypher(query).to_list()] == [20]
 
 
-def test_closure_probe_declines_on_a_soft_alias_index(mat):
-    # `name` resolves through the structural fallback (a node with no stored
-    # `name` answers with its title) while `create_index` reads the stored
-    # property alone, so the index is a subset of what a scan matches and
-    # cannot cover a member. Correct answer, by scan.
+def test_closure_probe_engages_on_a_name_index(mat):
+    # `name` answers the title for a node that stores no `name`, and the index
+    # files such a node under its title, so it holds what a scan matches and
+    # covers a member.
     mat.create_index("Student", "name")
     mat.create_index("Teacher", "name")
     query = "MATCH (p:Person {name: 'Ann'}) RETURN p.id AS id"
-    assert not _probes(mat, query)
+    assert _probes(mat, query), "the probe must engage"
     assert [r["id"] for r in mat.cypher(query).to_list()] == [1]
 
 
+def test_closure_probe_declines_on_a_type_string_alias_index(mat):
+    # `label` answers the node type for a node that stores none, which an index
+    # over stored values cannot hold. Correct answer, by scan.
+    mat.create_index("Student", "label")
+    mat.create_index("Teacher", "label")
+    query = "MATCH (p:Person {label: 'Student'}) RETURN p.id AS id ORDER BY id"
+    assert not _probes(mat, query)
+    assert [r["id"] for r in mat.cypher(query).to_list()] == [1, 2]
+
+
 def test_an_index_on_a_soft_alias_name_does_not_change_the_answer(g):
-    # The defect the exclusion above closes, at the surface: node 2's `name`
-    # comes from its title and no index ever held it.
+    # At the surface: node 2's `name` comes from its title, and the index has
+    # to hold it or the lookup would drop the row.
     g.cypher("CREATE (:T {id: 1, name: 'Ann'})")
     g.cypher("CREATE (:T {id: 2, title: 'Ann'})")
     before = [r["id"] for r in g.cypher("MATCH (n:T {name: 'Ann'}) RETURN n.id AS id ORDER BY id").to_list()]

@@ -1151,9 +1151,7 @@ mod held_reference_clone_tests {
                 &ExecuteOptions::eager(&params),
             )
             .expect("seed qty");
-            // `sku`, not `name`: an index on a soft-alias name is not
-            // authoritative for its type (`point_lookup_index_key`) and would
-            // make every assertion below vacuous.
+            // `sku` carries `name`'s values as an ordinary stored property.
             graph.create_index("Item", "sku");
             graph.create_composite_index("Item", &["sku", "qty"]);
         }

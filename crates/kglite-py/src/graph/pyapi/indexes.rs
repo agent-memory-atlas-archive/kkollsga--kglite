@@ -197,8 +197,8 @@ impl KnowledgeGraph {
             let idx_dict = PyDict::new(py);
             // `state` is Neo4j's word for "was it built" — `ONLINE` for every
             // index this listing can see. Whether a query then *reads* it is a
-            // separate question, and one an index on a structurally-resolved
-            // name answers no to; a deferred one answers no because it has not
+            // separate question, and one an index on a type-string name
+            // (`label`, `type`, `node_type`) answers no to; a deferred one answers no because it has not
             // been built yet.
             let serves = self.inner.index_serves_lookups(&node_type, &property);
             idx_dict.set_item("node_type", node_type)?;

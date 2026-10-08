@@ -1398,7 +1398,7 @@ pub(super) fn write_fluent_topic_indexes(xml: &mut String) {
     xml.push_str("  <indexes>\n");
     xml.push_str("    <desc>Create property indexes for faster lookups. Type indices are automatic.</desc>\n");
     xml.push_str("    <methods>\n");
-    xml.push_str("      <m sig=\"create_index(node_type, property)\">Equality index: fast exact-match lookup. Reports serves_lookups=false with a reason for an index no query reads - notably a structurally resolved name (name, type, node_type, label), which holds stored values only. node_type_known=false flags a type with no nodes or declaration (likely a typo). On disk, string columns only: any column that is not a string column raises.</m>\n");
+    xml.push_str("      <m sig=\"create_index(node_type, property)\">Equality index: fast exact-match lookup. Reports serves_lookups=false with a reason for an index no query reads - notably type, node_type or label, which answer the node type for a node that stores none. An index on name is served: a node with no stored name is filed under its title. node_type_known=false flags a type with no nodes or declaration (likely a typo). On disk, string columns only: any column that is not a string column raises.</m>\n");
     xml.push_str("      <m sig=\"create_range_index(node_type, property)\">B-tree index: fast range queries (&gt;, &lt;, &gt;=, &lt;=).</m>\n");
     xml.push_str("      <m sig=\"create_composite_index(node_type, [prop1, prop2, ...])\">Multi-property index.</m>\n");
     xml.push_str("      <m sig=\"drop_index(node_type, property) / drop_range_index / drop_composite_index\">Remove indexes.</m>\n");

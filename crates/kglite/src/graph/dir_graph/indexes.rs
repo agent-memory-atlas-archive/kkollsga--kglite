@@ -146,6 +146,17 @@ pub(crate) struct PropertyReader {
     key: InternedKey,
 }
 
+impl PropertyReader {
+    /// `resolved` is `name`, which a node that stores no `name` answers with
+    /// its title (`NodeView::resolved_field`).
+    fn falls_back_to_title(&self) -> bool {
+        matches!(
+            crate::graph::schema::soft_alias_fallback(&self.resolved),
+            Some(crate::graph::schema::SoftAliasFallback::Title)
+        )
+    }
+}
+
 impl DirGraph {
     pub(crate) fn property_reader(&mut self, node_type: &str, property: &str) -> PropertyReader {
         let resolved = self.resolve_alias(node_type, property).to_string();
@@ -179,6 +190,28 @@ impl DirGraph {
         }
     }
 
+    /// The value an **index** files `idx` under: [`Self::read_indexed`], plus
+    /// the structural fallback `MATCH` applies to `name`. A node that stores no
+    /// `name` is matched by `{name: 'Ann'}` through its title, so an index that
+    /// held stored values alone would be a strict subset of what a scan
+    /// matches and could not be read as the answer. Constraints keep
+    /// `read_indexed`: a `REQUIRE` over `name` has always meant the stored
+    /// property.
+    pub(crate) fn read_index_entry(
+        &self,
+        reader: &PropertyReader,
+        idx: NodeIndex,
+    ) -> Option<Value> {
+        self.read_indexed(reader, idx).or_else(|| {
+            if !reader.falls_back_to_title() {
+                return None;
+            }
+            self.graph
+                .get_node_title(idx)
+                .filter(|title| !matches!(title, Value::Null))
+        })
+    }
+
     /// Create a hash equality index. Returns the number of distinct values.
     ///
     /// An index on an id-alias / title-alias field (e.g. `add_nodes(df, "Star",
@@ -210,7 +243,7 @@ impl DirGraph {
 
         if let Some(node_indices) = self.type_indices.get(node_type) {
             for idx in node_indices.iter() {
-                if let Some(value) = self.read_indexed(&reader, idx) {
+                if let Some(value) = self.read_index_entry(&reader, idx) {
                     index.entry(value).or_default().push(idx);
                 }
             }
@@ -502,17 +535,14 @@ impl DirGraph {
     ///
     /// The in-memory arm asks [`Self::index_answers_point_lookup`], not
     /// [`Self::has_index`], for the same reason: a built index on a
-    /// structurally-resolved name (`name`, `type`, `node_type`, `label`) is
-    /// one [`Self::point_lookup_index_key`] refuses to read, so a surface that
+    /// type-string name (`type`, `node_type`, `label`) is one
+    /// [`Self::point_lookup_index_key`] refuses to read, so a surface that
     /// reported it as the accelerator would be naming a structure no query
     /// consults. It also picks up the case where an id/title *alias* index
     /// answers a lookup spelled with the canonical name, or the reverse.
     ///
-    /// The disk arm carries the same soft-alias exclusion through
-    /// [`Self::persistent_index_answers_point_lookup`]: a persistent bundle on
-    /// a structurally-resolved name is built from stored values just like the
-    /// in-memory map, so the matcher declines it too and it accelerates
-    /// nothing.
+    /// The disk arm carries the same exclusion through
+    /// [`Self::persistent_index_answers_point_lookup`].
     pub fn index_serves_lookups(&self, node_type: &str, property: &str) -> bool {
         if self.index_answers_point_lookup(node_type, property) {
             return true;
@@ -532,12 +562,13 @@ impl DirGraph {
     /// to resolve a spelling against.
     ///
     /// A disk bundle is built from *stored* values (`PropertyIndex`, and the
-    /// `title`/`id` columns for the alias family), exactly like the in-memory
-    /// map. `name` / `type` / `node_type` / `label` resolve **structurally**
-    /// for a node that stores no such property (`NodeView::resolved_field`
-    /// falls back to the title or the type string), so such a bundle is a
-    /// strict subset of what a scan matches and the matcher must not read it —
-    /// reading it turned `WHERE n.label = 'Country'` from one row into zero.
+    /// `title`/`id` columns for the alias family). `type` / `node_type` /
+    /// `label` resolve **structurally** to the type string for a node that
+    /// stores no such property (`NodeView::resolved_field`), so such a bundle
+    /// is a strict subset of what a scan matches and the matcher must not
+    /// read it — reading it turned `WHERE n.label = 'Country'` from one row
+    /// into zero. `name` resolves to the title, which the typed `name` bundle
+    /// files such a row under (`IndexedColumn`), so it is served.
     ///
     /// Both names are tested, because the cross-type arms consult a bundle
     /// named by an *alias family member* rather than by the queried property:
@@ -549,14 +580,34 @@ impl DirGraph {
         property: &str,
         index_name: &str,
     ) -> bool {
-        let structural = |name: &str| {
+        let soft = |name: &str| {
             let resolved = match node_type {
                 Some(node_type) => self.resolve_alias(node_type, name),
                 None => name,
             };
-            crate::graph::schema::soft_alias_fallback(resolved).is_some()
+            crate::graph::schema::soft_alias_fallback(resolved)
         };
-        !structural(property) && !structural(index_name)
+        match soft(property) {
+            None => soft(index_name).is_none(),
+            // The typed bundle on `name` files a row with no stored `name`
+            // under its title, so it holds the scan's value-space. Any other
+            // bundle, and the untyped arm (which has no type to resolve a
+            // spelling against), does not.
+            Some(crate::graph::schema::SoftAliasFallback::Title) => {
+                node_type.is_some() && index_name == property
+            }
+            Some(crate::graph::schema::SoftAliasFallback::TypeString) => false,
+        }
+    }
+
+    /// Whether `property` resolves to the node *type string* on a node that
+    /// stores none (`type`, `node_type`, `label`) — the structural alias no
+    /// index can hold completely.
+    pub(crate) fn resolves_to_type_string(&self, node_type: &str, property: &str) -> bool {
+        matches!(
+            crate::graph::schema::soft_alias_fallback(self.resolve_alias(node_type, property)),
+            Some(crate::graph::schema::SoftAliasFallback::TypeString)
+        )
     }
 
     /// Why a *declared* index on `(node_type, property)` will not answer a
@@ -569,18 +620,13 @@ impl DirGraph {
         {
             return None;
         }
-        let resolved = self.resolve_alias(node_type, property);
-        if let Some(fallback) = crate::graph::schema::soft_alias_fallback(resolved) {
-            let source = match fallback {
-                crate::graph::schema::SoftAliasFallback::Title => "title",
-                crate::graph::schema::SoftAliasFallback::TypeString => "node type",
-            };
+        if self.resolves_to_type_string(node_type, property) {
             return Some(format!(
                 "'{property}' is resolved structurally on {node_type}: a node carrying no stored \
-                 '{property}' answers with its {source}, which this index was built from stored \
+                 '{property}' answers with its node type, which this index was built from stored \
                  values alone and does not hold. Lookups scan rather than read a subset, so this \
                  index accelerates nothing. Index the property the values are actually stored \
-                 under, or match on the {source} directly."
+                 under, or match on the node type directly."
             ));
         }
         Some(format!(
@@ -654,18 +700,20 @@ impl DirGraph {
     ///   spelling name one field and therefore one set of index contents
     ///   ([`Self::index_keys_for_field`]), so an index built under either
     ///   spelling serves a query written with the other. Same for `id`.
-    /// * **Soft aliases are excluded.** `name` / `type` / `node_type` /
-    ///   `label` resolve *structurally* on a node that carries no such stored
-    ///   property (`NodeView::resolved_field` falls back to the title / the
-    ///   type string), while [`Self::create_index`] reads the stored property
-    ///   alone ([`Self::read_indexed`]). The index is then a strict subset of
-    ///   what a scan matches — `CREATE (:T {id: 2, title: 'Ann'})` is matched
-    ///   by `{name: 'Ann'}` and indexed by nothing — so reading it as
-    ///   authoritative *drops rows*, which is what building an index on
-    ///   `name` used to do to that node.
+    /// * **`type` / `node_type` / `label` are excluded.** They resolve
+    ///   *structurally* on a node that stores no such property
+    ///   (`NodeView::resolved_field` answers the type string), and an index
+    ///   over them holds stored values alone — a strict subset of what a scan
+    ///   matches, so reading it as authoritative would drop rows. Keeping the
+    ///   type string in the index would make every write to a stored `label`
+    ///   evict from a bucket holding the whole type.
+    ///
+    ///   `name` is served: the index files a node that stores no `name` under
+    ///   its title ([`Self::read_index_entry`]), and every maintenance path
+    ///   moves it with either field, so the buckets are the scan's value-space.
     fn point_lookup_index_key<'a>(&'a self, node_type: &str, property: &'a str) -> Option<&'a str> {
         let resolved = self.resolve_alias(node_type, property);
-        if crate::graph::schema::soft_alias_fallback(resolved).is_some() {
+        if self.resolves_to_type_string(node_type, property) {
             return None;
         }
         if self.has_index(node_type, property) {
@@ -772,7 +820,7 @@ impl DirGraph {
 
         if let Some(node_indices) = self.type_indices.get(node_type) {
             for idx in node_indices.iter() {
-                if let Some(value) = self.read_indexed(&reader, idx) {
+                if let Some(value) = self.read_index_entry(&reader, idx) {
                     index.entry(value).or_default().push(idx);
                 }
             }
@@ -811,11 +859,9 @@ impl DirGraph {
         lower: std::ops::Bound<&Value>,
         upper: std::ops::Bound<&Value>,
     ) -> Option<Vec<NodeIndex>> {
-        // Stored-property indexes omit structural soft-alias fallback values.
-        // A final predicate filter cannot recover those absent candidates.
-        if crate::graph::schema::soft_alias_fallback(self.resolve_alias(node_type, property))
-            .is_some()
-        {
+        // A type-string alias index holds stored values alone, and a final
+        // predicate filter cannot recover the candidates it omits.
+        if self.resolves_to_type_string(node_type, property) {
             return None;
         }
         let key = (node_type.to_string(), property.to_string());
@@ -879,7 +925,7 @@ impl DirGraph {
             for idx in node_indices.iter() {
                 let values: Vec<Value> = readers
                     .iter()
-                    .map(|reader| self.read_indexed(reader, idx).unwrap_or(Value::Null))
+                    .map(|reader| self.read_index_entry(reader, idx).unwrap_or(Value::Null))
                     .collect();
 
                 if values.iter().any(|v| !matches!(v, Value::Null)) {
@@ -997,10 +1043,9 @@ impl DirGraph {
         values: &[Value],
     ) -> Option<Vec<NodeIndex>> {
         if properties.len() != values.len()
-            || properties.iter().any(|property| {
-                crate::graph::schema::soft_alias_fallback(self.resolve_alias(node_type, property))
-                    .is_some()
-            })
+            || properties
+                .iter()
+                .any(|property| self.resolves_to_type_string(node_type, property))
         {
             return None;
         }
@@ -1618,7 +1663,7 @@ impl DirGraph {
         node_idx: NodeIndex,
     ) -> Option<Value> {
         let reader = self.property_reader(node_type, property);
-        self.read_indexed(&reader, node_idx)
+        self.read_index_entry(&reader, node_idx)
     }
 
     /// The properties carrying a single-value (hash or range) index on
@@ -1803,20 +1848,84 @@ impl DirGraph {
         let field = self.resolve_alias(node_type, property).to_string();
         for indexed_as in self.index_keys_for_field(node_type, &field) {
             let key = (node_type.to_string(), indexed_as);
-            if let Some(old_val) = old_value {
-                self.evict_from_single_value_indexes(&key, old_val, node_idx);
-            }
-            self.note_property_append(&key, &landed, node_idx);
-            if let Some(value_map) = self.property_indices.get_mut(&key) {
-                value_map.entry_or_default(&landed).push(node_idx);
-            }
-            self.note_range_append(&key, &landed, node_idx);
-            if let Some(btree) = self.range_indices.get_mut(&key) {
-                btree.entry_or_default(&landed).push(node_idx);
-            }
+            self.move_in_single_value_indexes(&key, old_value, &landed, node_idx);
         }
 
         self.update_composite_indices_for_property_change(node_type, node_idx, property);
+    }
+
+    /// Vacate `old` and join the `landed` bucket of the hash and range indices
+    /// keyed `key`.
+    fn move_in_single_value_indexes(
+        &mut self,
+        key: &IndexKey,
+        old: Option<&Value>,
+        landed: &Value,
+        node_idx: NodeIndex,
+    ) {
+        if let Some(old_val) = old {
+            self.evict_from_single_value_indexes(key, old_val, node_idx);
+        }
+        self.note_property_append(key, landed, node_idx);
+        if let Some(value_map) = self.property_indices.get_mut(key) {
+            value_map.entry_or_default(landed).push(node_idx);
+        }
+        self.note_range_append(key, landed, node_idx);
+        if let Some(btree) = self.range_indices.get_mut(key) {
+            btree.entry_or_default(landed).push(node_idx);
+        }
+    }
+
+    /// Move `node_idx` within a `name` index after a write to its **title**.
+    ///
+    /// A node that stores no `name` is filed under its title there
+    /// ([`Self::read_index_entry`]), so retitling it changes what `name`
+    /// resolves to even though the statement never named `name`.
+    /// [`Self::update_property_indices_for_set`] resolves the field the
+    /// statement wrote, and `title` is not `name`. A node that stores a `name`
+    /// answers with it and stays put. A composite index over `name` is re-filed
+    /// the same way. A no-op when the type carries no `name` index, or when
+    /// `name` is the type's title spelling (then [`Self::index_keys_for_field`]
+    /// already moves it).
+    ///
+    /// For the Cypher `SET` / `REMOVE` paths only: the bulk fold moves a
+    /// `name` index from its own pre-image, and calling this from there would
+    /// file the node twice.
+    pub(crate) fn update_name_index_for_title_write(
+        &mut self,
+        node_type: &str,
+        node_idx: NodeIndex,
+        old_title: Option<&Value>,
+    ) {
+        let key = (node_type.to_string(), "name".to_string());
+        let single =
+            self.property_indices.contains_key(&key) || self.range_indices.contains_key(&key);
+        let composite = self
+            .composite_indices
+            .keys()
+            .any(|(nt, props)| nt == node_type && props.iter().any(|p| p == "name"));
+        if !(single || composite) || self.resolve_alias(node_type, "name") != "name" {
+            return;
+        }
+        let reader = self.property_reader(node_type, "name");
+        if self.read_indexed(&reader, node_idx).is_some() {
+            return;
+        }
+        note_maintenance_pass();
+        if single {
+            let old = old_title.filter(|old| !matches!(old, Value::Null));
+            match self.read_index_entry(&reader, node_idx) {
+                Some(landed) => self.move_in_single_value_indexes(&key, old, &landed, node_idx),
+                None => {
+                    if let Some(old) = old {
+                        self.evict_from_single_value_indexes(&key, old, node_idx);
+                    }
+                }
+            }
+        }
+        if composite {
+            self.update_composite_indices_for_property_change(node_type, node_idx, "name");
+        }
     }
 
     pub fn update_property_indices_for_remove(
