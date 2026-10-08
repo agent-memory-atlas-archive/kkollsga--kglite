@@ -679,6 +679,13 @@ pub(crate) fn audit_counts(graph: &DirGraph) -> Result<Vec<AuditLine>, String> {
     audit_lines(graph, AuditBreakdown::None)
 }
 
+/// [`audit_counts`] with the property rules fanned out per declared
+/// property, for declaration reports that name the offending field.
+pub(crate) fn audit_counts_by_property(graph: &DirGraph) -> Result<Vec<AuditLine>, String> {
+    let _read_pass = graph.begin_read_pass();
+    audit_lines(graph, AuditBreakdown::Property)
+}
+
 /// The audit's per-check counts. Counts run through the same check
 /// implementations as the no-arg procs, with a synthetic YIELD naming each
 /// proc's own columns.

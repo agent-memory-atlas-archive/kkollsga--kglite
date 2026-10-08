@@ -31,7 +31,7 @@ def test_inherited_contracts_audit_drilldown_and_persistence(storage, tmp_path):
             "Study": {
                 "required_properties": ["design", "tags", "title"],
                 "property_types": {"tags": "list", "title": "string"},
-                "enforcement": {"required_properties": "error"},
+                "enforcement": {"required_properties": "warn"},
             },
             "Trial": {"is_a": "Study", "required_properties": ["registration"]},
             "Empty": {"required_properties": ["unused"]},
@@ -43,7 +43,7 @@ def test_inherited_contracts_audit_drilldown_and_persistence(storage, tmp_path):
     audit = {(r["entity_kind"], r["rule"]): r for r in rows}
     assert len(audit) == 5
     expected = {
-        ("node", "Study.required_properties"): (2, 3, 66.7, "error"),
+        ("node", "Study.required_properties"): (2, 3, 66.7, "warn"),
         ("node", "Study.property_types"): (1, 3, 33.3, "advisory"),
         ("node", "Trial.required_properties"): (1, 1, 100.0, "advisory"),
         ("node", "Empty.required_properties"): (0, 0, 0.0, "advisory"),
@@ -239,25 +239,25 @@ def test_property_contract_description_escapes_xml_attributes():
 def test_closed_labels_audit_render_and_persistence(tmp_path):
     g = kglite.KnowledgeGraph()
     g.cypher("CREATE (:Doc {id: 1}), (:Doc {id: 2}), (:Stray {id: 3})")
-    warnings = g.define_ontology({"classes": {"Doc": {}}, "closed_labels": True, "enforcement": "error"})
+    warnings = g.define_ontology({"classes": {"Doc": {}}, "closed_labels": True, "enforcement": "warn"})
     assert any("closes labels" in w and "Stray" in w for w in warnings)
 
     audit = {(r["entity_kind"], r["rule"]): r for r in _audit(g)}
     line = audit[("node", "closed_labels")]
-    assert (line["violations"], line["total"], line["severity"]) == (1, 3, "error")
+    assert (line["violations"], line["total"], line["severity"]) == (1, 3, "warn")
     by_class = [r for r in _audit(g, "domain_class") if r["rule"] == "closed_labels"]
     assert [(r["domain_class"], r["violations"]) for r in by_class] == [("Stray", 1)]
 
     rows = g.cypher("SHOW ONTOLOGY").to_list()
     assert rows[0]["kind"] == "store"
-    assert rows[0]["enforcement"] == "closed_labels=true; enforcement=error"
-    assert 'store="closed_labels=true; enforcement=error"' in g.describe()
+    assert rows[0]["enforcement"] == "closed_labels=true; enforcement=warn"
+    assert 'store="closed_labels=true; enforcement=warn"' in g.describe()
 
     path = str(tmp_path / "g.kgl")
     g.save(path)
     loaded = kglite.load(path)
     assert loaded.ontology()["closed_labels"] is True
-    assert loaded.ontology()["enforcement"] == "error"
+    assert loaded.ontology()["enforcement"] == "warn"
 
     with pytest.raises(ValueError, match="at least one declared class"):
         g.define_ontology({"closed_labels": True})

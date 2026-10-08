@@ -35,8 +35,11 @@ def g() -> KnowledgeGraph:
 
 def test_define_get_clear_roundtrip(g):
     warnings = g.define_ontology(SCHOOL)
-    # Teacher is concrete with no live nodes -> one warning.
-    assert warnings == [w for w in warnings if "Teacher" in w] and len(warnings) == 1
+    # Teacher is concrete with no live nodes -> one warning; the warn-level
+    # ENROLLED_IN contract is violated by the stored edges -> one more.
+    assert len(warnings) == 2, warnings
+    assert sum("Teacher" in w for w in warnings) == 1
+    assert sum("ENROLLED_IN.required" in w for w in warnings) == 1
     doc = g.ontology()
     assert doc["classes"]["Person"]["abstract"] is True
     assert doc["classes"]["Student"]["is_a"] == "Person"
@@ -583,14 +586,14 @@ def test_required_properties_audit_row(props_graph):
                     "domain": "Student",
                     "range": "Class",
                     "required_properties": ["since"],
-                    "enforcement": "error",
+                    "enforcement": "warn",
                 }
             },
         }
     )
     audit = _audit(props_graph)
     row = audit["ENROLLED_IN.required_properties"]
-    assert (row["violations"], row["total"], row["severity"]) == (1, 2, "error")
+    assert (row["violations"], row["total"], row["severity"]) == (1, 2, "warn")
 
 
 def test_property_types_audit_row(props_graph):
@@ -704,13 +707,13 @@ def test_enforcement_map_sets_per_check_severity(props_graph):
                     "domain": "Student",
                     "range": "Class",
                     "required_properties": ["since"],
-                    "enforcement": {"required_properties": "error", "domain": "warn"},
+                    "enforcement": {"required_properties": "warn", "domain": "warn"},
                 }
             },
         }
     )
     audit = _audit(props_graph)
-    assert audit["ENROLLED_IN.required_properties"]["severity"] == "error"
+    assert audit["ENROLLED_IN.required_properties"]["severity"] == "warn"
     assert audit["ENROLLED_IN.domain"]["severity"] == "warn"
     # Unlisted checks keep the advisory base.
     assert audit["ENROLLED_IN.range"]["severity"] == "advisory"
@@ -728,12 +731,12 @@ def test_describe_renders_per_check_enforcement_overrides(props_graph):
                     "domain": "Student",
                     "range": "Class",
                     "required_properties": ["since"],
-                    "enforcement": {"required_properties": "error", "domain": "warn"},
+                    "enforcement": {"required_properties": "warn", "domain": "warn"},
                 }
             },
         }
     )
-    summary = "advisory; domain=warn, required_properties=error"
+    summary = "advisory; domain=warn, required_properties=warn"
     assert f'enforcement="{summary}"' in props_graph.describe()
     rel = [r for r in props_graph.cypher("SHOW ONTOLOGY").to_list() if r["kind"] == "relationship"]
     assert [r["enforcement"] for r in rel] == [summary]
@@ -760,7 +763,7 @@ def test_new_declaration_fields_persist(props_graph, tmp_path):
                 "inverse_enforced": True,
                 "required_properties": ["since"],
                 "property_types": {"since": "integer"},
-                "enforcement": {"required_properties": "error"},
+                "enforcement": {"required_properties": "warn"},
                 "ancestry": True,
             }
         },
@@ -773,9 +776,9 @@ def test_new_declaration_fields_persist(props_graph, tmp_path):
     assert rel["inverse_enforced"] is True
     assert rel["required_properties"] == ["since"]
     assert rel["property_types"] == {"since": "integer"}
-    assert rel["enforcement_overrides"] == {"required_properties": "error"}
+    assert rel["enforcement_overrides"] == {"required_properties": "warn"}
     assert rel["ancestry"] is True
-    assert _audit(loaded)["ENROLLED_IN.required_properties"]["severity"] == "error"
+    assert _audit(loaded)["ENROLLED_IN.required_properties"]["severity"] == "warn"
 
 
 # ---- per-source-class exemption on required_properties / property_types ----
@@ -801,7 +804,7 @@ def mixed_props_graph() -> KnowledgeGraph:
 
 
 def _since_decl(classes, exempt=None):
-    rel = {"required_properties": ["since"], "enforcement": "error"}
+    rel = {"required_properties": ["since"], "enforcement": "warn"}
     if exempt is not None:
         rel["exempt"] = exempt
     return {"classes": classes, "relationships": {"ENROLLED_IN": rel}}
@@ -823,7 +826,7 @@ def test_exempt_counts_separately_instead_of_against_severity(mixed_props_graph)
     assert (row["violations"], row["exempted"], row["total"]) == (1, 2, 4)
     assert row["violations"] + row["exempted"] == 3
     assert row["pct"] == 25.0
-    assert row["severity"] == "error"
+    assert row["severity"] == "warn"
 
 
 def test_exempt_widens_over_declared_descendants(mixed_props_graph):
@@ -910,7 +913,7 @@ def test_exempt_persists_through_save_load(mixed_props_graph, tmp_path):
             "ENROLLED_IN": {
                 "required_properties": ["since"],
                 "property_types": {"since": "integer"},
-                "enforcement": "error",
+                "enforcement": "warn",
                 "exempt": {"required_properties": ["Auditor"], "property_types": ["Student"]},
             }
         },
@@ -966,7 +969,7 @@ def test_audit_breakdown_fans_a_rule_per_violating_class(mixed_props_graph):
     # The fan-out is a partition of the aggregate count, and the per-rule
     # columns ride along unchanged on every row.
     assert sum(r["violations"] for r in fanned) == aggregate[0]["violations"]
-    assert {(r["severity"], r["total"], r["exempted"]) for r in fanned} == {("error", 4, 0)}
+    assert {(r["severity"], r["total"], r["exempted"]) for r in fanned} == {("warn", 4, 0)}
     assert [r["pct"] for r in sorted(fanned, key=lambda r: r["domain_class"])] == [50.0, 25.0]
 
 
@@ -1032,7 +1035,7 @@ def _property_decl(exempt=None):
     rel = {
         "required_properties": ["since"],
         "property_types": {"since": "string"},
-        "enforcement": "error",
+        "enforcement": "warn",
     }
     if exempt is not None:
         rel["exempt"] = exempt
@@ -1121,7 +1124,7 @@ def multi_props_graph() -> KnowledgeGraph:
 
 
 def _multi_decl(properties=("since", "grade"), extra=None):
-    rel = {"required_properties": list(properties), "enforcement": "error"}
+    rel = {"required_properties": list(properties), "enforcement": "warn"}
     if extra:
         rel.update(extra)
     return {"classes": {"Student": {}, "Class": {}}, "relationships": {"ENROLLED_IN": rel}}
@@ -1203,7 +1206,7 @@ def test_audit_by_property_is_a_census_not_a_partition(multi_props_graph):
     # aggregate rather than partitioning it — the contract the docs state.
     assert sum(r["violations"] for r in fanned) == 3 > aggregate["violations"]
     assert [r["pct"] for r in fanned] == [33.3, 66.7]
-    assert {(r["severity"], r["exempted"]) for r in fanned} == {("error", 0)}
+    assert {(r["severity"], r["exempted"]) for r in fanned} == {("warn", 0)}
 
 
 def test_audit_by_property_reports_a_property_nothing_fails(multi_props_graph):
@@ -1328,6 +1331,64 @@ def test_ancestry_is_refused_where_a_check_name_is_expected(g):
         g.define_ontology(_taxonomy_decl(enforcement={"ancestry": "error"}))
     with pytest.raises(Exception, match="not a check name"):
         g.define_ontology(_taxonomy_decl(exempt={"ancestry": ["Student"]}))
+
+
+# ---- declaring over existing data -----------------------------------------
+
+
+@pytest.fixture
+def docs() -> KnowledgeGraph:
+    graph = KnowledgeGraph()
+    graph.cypher(
+        "CREATE (:Doc {id: 1, title: 'a', owner: 'x'}), (:Doc {id: 2, title: 'b'}), (:Doc {id: 3, title: 'c'})"
+    )
+    return graph
+
+
+def _docs_decl(enforcement, **extra):
+    return {"classes": {"Doc": {"required_properties": ["owner"]}}, "enforcement": enforcement, **extra}
+
+
+def test_declaring_an_error_rule_over_violating_data_is_refused_and_changes_nothing(docs):
+    docs.define_ontology({"classes": {"Doc": {}}})
+    before = docs.ontology()
+    with pytest.raises(kglite.OntologyViolationError) as raised:
+        docs.define_ontology(_docs_decl("error"))
+    message = str(raised.value)
+    assert "Doc.required_properties" in message and "[owner]" in message and "2/3" in message
+    assert isinstance(raised.value, kglite.ConstraintViolationError)
+    assert docs.ontology() == before
+
+
+def test_declaring_a_warn_rule_installs_and_reports(docs):
+    warnings = docs.define_ontology(_docs_decl("warn"))
+    assert any("Doc.required_properties" in w and "2/3" in w for w in warnings), warnings
+    assert docs.ontology()["enforcement"] == "warn"
+
+
+def test_declaring_an_advisory_rule_is_silent(docs):
+    assert docs.define_ontology(_docs_decl("advisory")) == []
+
+
+def test_clean_data_declares_at_error(docs):
+    docs.cypher("MATCH (d:Doc) SET d.owner = 'x'")
+    assert docs.define_ontology(_docs_decl("error")) == []
+
+
+def test_closed_labels_error_is_refused_for_stray_types(docs):
+    docs.cypher("CREATE (:Stray {id: 9})")
+    with pytest.raises(kglite.OntologyViolationError, match="Stray"):
+        docs.define_ontology({"classes": {"Doc": {}}, "closed_labels": True, "enforcement": "error"})
+    assert docs.ontology() is None
+
+
+def test_saved_declaration_loads_without_reverification(docs, tmp_path):
+    # Accepted at warn while the data violated it; the stored declaration is
+    # restored as written on load, never re-judged.
+    docs.define_ontology(_docs_decl("warn"))
+    path = str(tmp_path / "g.kgl")
+    docs.save(path)
+    assert kglite.load(path).ontology() == docs.ontology()
 
 
 RICH = {

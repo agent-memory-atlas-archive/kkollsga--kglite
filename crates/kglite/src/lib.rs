@@ -105,6 +105,7 @@ pub mod api {
         infer_selection_node_type, is_canonical_node_column, schema_property_keys, KnowledgeGraph,
         CANONICAL_NODE_COLUMNS,
     };
+    pub use crate::graph::ontology::violation::DefineOntologyError;
     pub use crate::graph::ontology::{
         ontology_from_json, ontology_from_value, ontology_to_json, CardinalityDecl, ClassDecl,
         Enforcement, ManagedLabelState, OntologyStore, RelationshipDecl, MAX_ONTOLOGY_CLASSES,

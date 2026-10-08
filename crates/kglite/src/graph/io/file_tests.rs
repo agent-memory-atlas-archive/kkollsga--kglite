@@ -94,6 +94,31 @@ mod atomic_save_tests {
         assert_eq!(*loaded.ontology, store);
     }
 
+    /// A saved declaration is restored, not re-judged: a file whose ontology
+    /// the data now violates (written before declaration-time verification
+    /// existed) must still open.
+    #[test]
+    fn load_does_not_reverify_the_stored_declaration() {
+        use crate::graph::ontology::ontology_from_json;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.kgl");
+        let mut g = DirGraph::new();
+        fill_docs(&mut g, 3);
+        let store = ontology_from_json(
+            r#"{"classes": {"Doc": {"required_properties": ["owner"]}},
+                "enforcement": "error"}"#,
+        )
+        .unwrap();
+        // Verified declaration is refused: no Doc has an owner.
+        assert!(g.define_ontology(store.clone()).is_err());
+        g.define_ontology_unverified(store.clone()).unwrap();
+        let g = ready_for_save(g);
+        write_kgl(&g, path.to_str().unwrap()).unwrap();
+        let loaded = load_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(*loaded.ontology, store);
+    }
+
     #[test]
     fn define_ontology_warns_on_undeclared_live_types_when_labels_closed() {
         use crate::graph::ontology::ontology_from_json;
@@ -118,7 +143,7 @@ mod atomic_save_tests {
         fill_docs(&mut g, 2);
         // Abstract class shadowing the live primary type "Doc" — refused.
         let store = ontology_from_json(r#"{"classes": {"Doc": {"abstract": true}}}"#).unwrap();
-        let err = g.define_ontology(store).unwrap_err();
+        let err = g.define_ontology(store).unwrap_err().to_string();
         assert!(err.contains("abstract"), "{err}");
         // Concrete class with no live type — warning, installed anyway.
         let store = ontology_from_json(r#"{"classes": {"Ghost": {}}}"#).unwrap();

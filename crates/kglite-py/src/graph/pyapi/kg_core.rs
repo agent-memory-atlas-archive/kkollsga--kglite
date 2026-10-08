@@ -1355,7 +1355,14 @@ impl KnowledgeGraph {
         self.check_durable_owner()?;
         let warnings = get_graph_mut(&mut self.inner)
             .define_ontology(store)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            .map_err(|e| match e {
+                kglite_core::api::DefineOntologyError::Refused(r) => {
+                    crate::error_py::kg_to_pyerr(kglite_core::api::KgError::from(r))
+                }
+                kglite_core::api::DefineOntologyError::Invalid(m) => {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(m)
+                }
+            })?;
         self.commit_wal()?;
         let out = pyo3::types::PyList::empty(py);
         for w in warnings {

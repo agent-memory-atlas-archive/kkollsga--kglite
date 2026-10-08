@@ -759,7 +759,7 @@ fn apply_ontology_gate(
         DiagnosticGroup::DataShape,
         "ontology_class_without_nodes",
         graph
-            .define_ontology(store)?
+            .define_ontology_unverified(store)?
             .into_iter()
             .map(|w| format!("ontology: {w}")),
     );

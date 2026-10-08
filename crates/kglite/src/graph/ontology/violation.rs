@@ -81,3 +81,36 @@ pub struct OntologyDeclarationRefused {
     pub entries: Vec<OntologyReportEntry>,
     pub message: String,
 }
+
+/// Why `DirGraph::define_ontology` did not install a declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DefineOntologyError {
+    /// The declaration itself is unacceptable (structure, abstract class
+    /// shadowing a live type, an audit that could not run).
+    Invalid(String),
+    /// Stored data already breaks an `error`-level rule.
+    Refused(OntologyDeclarationRefused),
+}
+
+impl std::fmt::Display for DefineOntologyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefineOntologyError::Invalid(m) => f.write_str(m),
+            DefineOntologyError::Refused(r) => f.write_str(&r.message),
+        }
+    }
+}
+
+impl std::error::Error for DefineOntologyError {}
+
+impl From<String> for DefineOntologyError {
+    fn from(m: String) -> Self {
+        DefineOntologyError::Invalid(m)
+    }
+}
+
+impl From<DefineOntologyError> for String {
+    fn from(e: DefineOntologyError) -> Self {
+        e.to_string()
+    }
+}

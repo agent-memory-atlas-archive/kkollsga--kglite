@@ -75,6 +75,7 @@
 //!   always wins. Resolution happens at parse time, so a persisted
 //!   declaration carries its effective severity.
 
+pub(crate) mod declare_check;
 pub mod predicates;
 pub mod violation;
 

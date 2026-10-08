@@ -3790,6 +3790,23 @@ pub fn kglite::api::timeseries::parse_date_query(s: &str) -> core::result::Resul
 pub fn kglite::api::timeseries::validate_channel_length(keys_len: usize, channel_len: usize, channel_name: &str) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::timeseries::validate_keys_sorted(keys: &[chrono::naive::date::NaiveDate]) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::timeseries::validate_resolution(resolution: &str) -> core::result::Result<(), alloc::string::String>
+pub enum kglite::api::DefineOntologyError
+pub kglite::api::DefineOntologyError::Invalid(alloc::string::String)
+pub kglite::api::DefineOntologyError::Refused(kglite::graph::ontology::violation::OntologyDeclarationRefused)
+impl core::clone::Clone for kglite::api::DefineOntologyError
+pub fn kglite::api::DefineOntologyError::clone(&self) -> kglite::api::DefineOntologyError
+impl core::cmp::PartialEq for kglite::api::DefineOntologyError
+pub fn kglite::api::DefineOntologyError::eq(&self, other: &kglite::api::DefineOntologyError) -> bool
+impl core::convert::From<alloc::string::String> for kglite::api::DefineOntologyError
+pub fn kglite::api::DefineOntologyError::from(m: alloc::string::String) -> Self
+impl core::convert::From<kglite::api::DefineOntologyError> for alloc::string::String
+pub fn alloc::string::String::from(e: kglite::api::DefineOntologyError) -> Self
+impl core::error::Error for kglite::api::DefineOntologyError
+impl core::fmt::Debug for kglite::api::DefineOntologyError
+pub fn kglite::api::DefineOntologyError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::DefineOntologyError
+pub fn kglite::api::DefineOntologyError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::DefineOntologyError
 pub enum kglite::api::Enforcement
 pub kglite::api::Enforcement::Advisory
 pub kglite::api::Enforcement::Error
@@ -4383,7 +4400,8 @@ pub fn kglite::api::DirGraph::auto_timestamp_for_connection(&self, conn_type: &s
 pub fn kglite::api::DirGraph::clear_ontology(&mut self)
 pub fn kglite::api::DirGraph::clear_schema(&mut self)
 pub fn kglite::api::DirGraph::constraints_dropped_by_replace(&self, incoming: &kglite::api::SchemaDefinition) -> alloc::vec::Vec<alloc::string::String>
-pub fn kglite::api::DirGraph::define_ontology(&mut self, store: kglite::api::OntologyStore) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
+pub fn kglite::api::DirGraph::define_ontology(&mut self, store: kglite::api::OntologyStore) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::api::DefineOntologyError>
+pub fn kglite::api::DirGraph::define_ontology_unverified(&mut self, store: kglite::api::OntologyStore) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, alloc::string::String>
 pub fn kglite::api::DirGraph::get_instructions(&self, channel: core::option::Option<&str>) -> core::option::Option<&str>
 pub fn kglite::api::DirGraph::get_schema(&self) -> core::option::Option<&kglite::api::SchemaDefinition>
 pub fn kglite::api::DirGraph::layer_for(&self, node_type: &str) -> core::option::Option<&str>
@@ -5430,6 +5448,7 @@ pub fn kglite::api::make_dir_graph_mut(arc: &mut alloc::sync::Arc<kglite::api::D
 pub fn kglite::api::make_dir_graph_mut_preserving_lineage(arc: &mut alloc::sync::Arc<kglite::api::DirGraph>) -> &mut kglite::api::DirGraph
 pub fn kglite::api::ontology_from_json(json: &str) -> core::result::Result<kglite::api::OntologyStore, alloc::string::String>
 pub fn kglite::api::ontology_from_value(doc: &kglite::datatypes::values::Value) -> core::result::Result<kglite::api::OntologyStore, alloc::string::String>
+pub fn kglite::api::ontology_to_json(store: &kglite::api::OntologyStore) -> core::result::Result<serde_json::value::Value, alloc::string::String>
 pub fn kglite::api::parse_property_shape(text: &str) -> core::option::Option<core::result::Result<kglite::api::PropertyShape, alloc::string::String>>
 pub fn kglite::api::parse_spatial_column_types_from_pairs(pairs: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> core::result::Result<(core::option::Option<kglite::api::SpatialConfig>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>), alloc::string::String>
 pub fn kglite::api::parse_temporal_column_types_from_pairs(pairs: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> core::result::Result<(core::option::Option<kglite::api::TemporalConfig>, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>), alloc::string::String>

@@ -338,18 +338,61 @@ impl DirGraph {
         }
     }
 
-    /// Install the declared semantic layer, replacing any existing store.
+    /// Install the declared semantic layer, replacing any existing store,
+    /// after verifying stored data against it.
     ///
-    /// Structural validation (forest, cap, unknown keys) already ran in
-    /// `ontology_from_value`; this adds the graph-aware checks the parser
-    /// cannot do:
+    /// Beyond [`Self::define_ontology_unverified`]'s checks, any rule declared
+    /// at `error` severity that stored data already breaks refuses the whole
+    /// declaration (`DefineOntologyError::Refused`, per-rule counts) and the
+    /// previous ontology stays. `warn`-level findings install and come back
+    /// in the returned warnings; `advisory` costs no scan. Exemptions excuse
+    /// rows exactly as in `ontology_audit()`. `.kgl` load and WAL replay
+    /// restore an accepted declaration and never come through here.
+    pub fn define_ontology(
+        &mut self,
+        store: crate::graph::ontology::OntologyStore,
+    ) -> Result<Vec<String>, crate::graph::ontology::violation::DefineOntologyError> {
+        let mut warnings = self.check_ontology_declaration(&store)?;
+        // The audit judges `self.ontology`, so install the candidate, judge,
+        // and put the previous store back on refusal.
+        let previous = std::mem::replace(&mut self.ontology, std::sync::Arc::new(store));
+        self.rebuild_ontology_closures();
+        match crate::graph::ontology::declare_check::verify_declaration(self) {
+            Ok(findings) => {
+                warnings.extend(findings);
+                let installed = (*self.ontology).clone();
+                self.note_ontology_declaration(&installed);
+                Ok(warnings)
+            }
+            Err(e) => {
+                self.ontology = previous;
+                self.rebuild_ontology_closures();
+                Err(e)
+            }
+        }
+    }
+
+    /// [`Self::define_ontology`] without data verification — for callers that
+    /// run their own gate over the installed store (the blueprint build).
+    pub fn define_ontology_unverified(
+        &mut self,
+        store: crate::graph::ontology::OntologyStore,
+    ) -> Result<Vec<String>, String> {
+        let warnings = self.check_ontology_declaration(&store)?;
+        self.note_ontology_declaration(&store);
+        self.ontology = std::sync::Arc::new(store);
+        self.rebuild_ontology_closures();
+        Ok(warnings)
+    }
+
+    /// Structure and graph-aware checks of a declaration (no data scan):
     /// - an **abstract** class whose name is a live or schema-declared
     ///   primary type is an error (`MATCH (n:X)` must keep one meaning);
     /// - a **concrete** class naming no live primary type is a warning
     ///   (returned, not printed — callers own the channel).
-    pub fn define_ontology(
-        &mut self,
-        store: crate::graph::ontology::OntologyStore,
+    fn check_ontology_declaration(
+        &self,
+        store: &crate::graph::ontology::OntologyStore,
     ) -> Result<Vec<String>, String> {
         store.validate()?;
         let mut warnings = Vec::new();
@@ -388,9 +431,6 @@ impl DirGraph {
                 ));
             }
         }
-        self.note_ontology_declaration(&store);
-        self.ontology = std::sync::Arc::new(store);
-        self.rebuild_ontology_closures();
         Ok(warnings)
     }
 

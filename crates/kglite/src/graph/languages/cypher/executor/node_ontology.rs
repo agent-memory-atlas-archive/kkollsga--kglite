@@ -240,7 +240,9 @@ mod node_ontology_tests {
         let mut g = DirGraph::new();
         add(&mut g, "Doc", 3);
         add(&mut g, "Stray", 2);
-        g.define_ontology(ontology_from_json(ontology).unwrap())
+        // Audit tests need data that already breaks an `error` rule, which a
+        // verified declaration would refuse.
+        g.define_ontology_unverified(ontology_from_json(ontology).unwrap())
             .unwrap();
         g
     }
