@@ -28,8 +28,10 @@ Choose the smallest deployment surface that matches the client:
    which owns authn/authz, and serve reads from a refreshed `freeze()`
    snapshot. This is the
    [traversal-component pattern](../python/guides/derived-index.md#an-embedded-traversal-component-behind-your-api).
-6. Back up the complete `.kgl`/disk directory before upgrades and read the
-   migration notes. Portable CSV exports are intentionally not full backups.
+6. Back up the complete graph before upgrades and read the migration notes.
+   Use `db.backup()` on the Bolt server or `backup()` in Python for a
+   memory or mapped graph, and copy the directory of a disk graph.
+   Portable CSV exports are intentionally not full backups.
 7. Run `--help` for the installed version and a startup/self-test before routing
    production traffic.
 

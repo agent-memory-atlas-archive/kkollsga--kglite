@@ -36,11 +36,11 @@ CALL db.temporal.declare({node: 'Person', from: 'valid_from', to: 'valid_to',
 
 | You want | Use | Read back with |
 | --- | --- | --- |
-| A complete backup, any storage mode, all engine state | `.kgl` (`save`) | `kglite.load` |
+| A complete backup of a memory or mapped graph, all engine state | `.kgl` (`backup`, or `save`) | `kglite.load` |
 | Tables for a spreadsheet, a warehouse or a hand edit, restorable | lossless CSV + blueprint (`export_csv`) | `kglite.from_blueprint` |
 | Triples for another graph store or a linked-data pipeline | RDF 1.2 N-Quads / TriG (`export_rdf`) | `kglite.load_rdf` |
 
-A `.kgl` is the only complete backup. The open formats omit engine-specific state
+A `.kgl` is the only complete backup. A disk-mode graph is a directory, saved with `save(directory)`, and `backup()` refuses it. The open formats omit engine-specific state
 such as indexes, embeddings and schema locks. They move the *data*, with its
 declared meaning, somewhere else.
 

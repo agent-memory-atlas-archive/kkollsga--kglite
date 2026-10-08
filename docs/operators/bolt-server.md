@@ -458,8 +458,7 @@ holding a snapshot are unaffected. Time one `CALL db.checkpoint()` on a
 representative graph before choosing the interval.
 
 Retention is one: each checkpoint atomically replaces the previous file. Use
-filesystem tooling, such as a snapshot, a copy, or a backup job, if you want
-history.
+`db.backup()` or `--backup-interval` (see *Backups*) if you want history.
 
 ### The sidecar file
 
@@ -478,9 +477,10 @@ that keeps creating and deleting new nodes costs up to five times its size. `--c
 Neither makes commits safer, because the log already did that. They keep
 replay time and sidecar size bounded.
 
-Back up the sidecar with the graph, or checkpoint before copying the `.kgl`
-alone. A `.kgl` copied while a sidecar runs ahead of it is missing the commits
-the sidecar holds. The engine refuses the dangerous half of this by itself. A
+Use `CALL db.backup()` (see *Backups*) for a live copy. If you copy files
+yourself, copy the sidecar with the graph, or checkpoint before copying the
+`.kgl` alone. A `.kgl` copied while a sidecar runs ahead of it is missing the
+commits the sidecar holds. The engine refuses the dangerous half of this by itself. A
 non-durable open, and a save, over a path whose sidecar runs ahead are errors
 rather than silent data loss.
 
@@ -519,6 +519,81 @@ uncommitted writes. Commit first and call it in auto-commit.
 `tests/test_bolt_server_durability.py` (`-m bolt`) pins the behavior above. It
 includes the `SIGKILL`-and-restart tests behind each level, the
 checkpoint-truncates-the-log test, and every row of this matrix.
+
+## Backups
+
+`CALL db.backup('<name>')` writes a consistent single-file `.kgl` of the committed graph while the server keeps serving.
+
+```bash
+kglite-bolt-server graph.kgl --backup-dir /var/backups/kglite
+```
+
+```cypher
+CALL db.backup('nightly.kgl')
+```
+
+The verb is off until the server starts with `--backup-dir`. Without it, `db.backup()` is refused.
+
+### Flags
+
+| Flag | Meaning |
+|---|---|
+| `--backup-dir DIR` | Enables `db.backup()`. Clients pass a bare file name and the server writes `DIR/<name>`. `DIR` is created if missing. |
+| `--backup-allow-any-path` | Lets clients name any path the server can write. Refused at startup with `--auth none`. With `--backup-dir` also set, bare names still land in `DIR` and only absolute paths go elsewhere. |
+| `--backup-interval SECS` | Writes a backup into `--backup-dir` every `SECS` seconds. Requires `--backup-dir`. |
+| `--backup-keep N` | Keeps only the newest `N` scheduled backups. Requires `--backup-interval`; `N` is at least 1. |
+
+### Result columns
+
+`db.backup()` yields one row: `success`, `path`, `lsn`, `nodes`, `relationships`, `bytes`, `lock_hold_ms`, `elapsed_ms`. `lsn` is null when the server keeps no write-ahead log. Like the other verbs, it accepts a `YIELD` naming a subset of these columns.
+
+### Path policy
+
+- **Bare names only by default.** A name containing `/`, `\`, `..` or an absolute path is refused.
+- **Credentials.** The server has one credential and no roles. "Authenticated" means the client has the password. Anyone who can log on can write a backup into `--backup-dir`.
+- **Why `--backup-allow-any-path` needs auth.** Under `--auth none` every client that can connect would gain a file-write primitive, so the server refuses to start.
+
+### What is refused
+
+- A call inside an explicit transaction.
+- A disk-mode graph.
+- A name that is the served graph itself.
+- A second call while one runs: "backup already in progress".
+
+`--readonly` servers may back up. The file is written to a temp name, fsynced and renamed, so a killed server leaves no partial destination, and an existing backup of the same name stays intact until the new one is complete.
+
+### Scheduled backups
+
+With `--backup-interval`, the server writes `<graph-stem>-YYYYMMDDTHHMMSSZ.kgl` (UTC) into `--backup-dir`.
+
+- The first backup lands one interval after startup.
+- A tick is skipped when the graph is unchanged since the last scheduled backup, or when a `db.backup()` is still running.
+- A failure is logged and the server keeps serving.
+- With `--backup-keep N`, the oldest files matching this name pattern are deleted after each successful scheduled backup. Files from `db.backup()` and any other file in the directory are never touched.
+
+### Writer cost
+
+`backup()` holds the commit path for under a millisecond regardless of graph size. A writer that only adds or updates nodes is not slowed.
+
+- A writer that creates or deletes relationships sees at most one commit up to about 2x slower than usual during the backup.
+- Measured worst case at 1 million nodes and 3 million relationships: 0.22 s in memory mode and 0.25 s in mapped mode (one 0.46 s outlier), against 0.1 s for such a commit without a backup.
+- Memory use rises by roughly 10-30% of the graph's size while the backup runs.
+
+### Restoring a backup
+
+A backup is an ordinary `.kgl`: serve it, or put it in place of the live graph.
+
+1. Stop the server.
+2. To restore over a live path, move the old `<graph>-wal` sidecar aside first. A log that runs ahead of the restored file is refused on startup, correctly.
+3. Copy the backup to the graph path and start the server.
+
+```bash
+mv graph.kgl-wal graph.kgl-wal.old
+cp /var/backups/kglite/nightly.kgl graph.kgl
+kglite-bolt-server graph.kgl
+```
+
+Cross-architecture portability of a backup file is not yet tested; restore on the architecture that wrote it. For the in-process equivalent, see [Backups and restore](../python/guides/durable-apps.md#backups-and-restore).
 
 ## Driver identity (`--neo4j-compat`)
 
@@ -617,8 +692,9 @@ disconnect, idle reaping of paging clients and the result summary of DISCARD.
   - `--readonly` servers take no lease and start alongside a live writer.
   - Because the lease is exclusive, the graph's write-ahead sidecar has exactly
     one writer too.
-- **Back up the complete graph before upgrades.** Include the `<graph>-wal`
-  sidecar, or back up after a `CALL db.checkpoint()` that folds it in. See
+- **Back up the complete graph before upgrades.** Use `CALL db.backup()` (see
+  *Backups*), or include the `<graph>-wal` sidecar, or copy after a
+  `CALL db.checkpoint()` that folds it in. See
   [Import and Export](../python/guides/import-export.md) and *Durability*.
 - **Use release benchmarks/CI reports for performance claims.** This operator
   page intentionally avoids unversioned hardware-specific numbers.

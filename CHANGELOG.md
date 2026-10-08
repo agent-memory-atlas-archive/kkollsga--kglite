@@ -11,24 +11,50 @@ before upgrading.
 
 ### Added
 
-- **`kglite-bolt-server` backs up the served graph on request.**
-  `CALL db.backup('nightly.kgl')` or `CALL db.backup($name)` writes a
-  consistent single-file `.kgl` of the committed graph, without stalling
-  writers: they are held only to fix the snapshot point, not for the write.
-  Yields `success, path, lsn, nodes, relationships, bytes, lock_hold_ms,
-  elapsed_ms`; `lsn` is null when the server keeps no write-ahead log.
-  - The verb is off until the server is started with `--backup-dir DIR`. It
-    takes a bare file name and writes `DIR/<name>`; names with `/`, `\`,
-    `..` or an absolute path are refused.
-  - `--backup-allow-any-path` lets clients name any path. It is a startup flag
-    only, and the server refuses to start with it under `--auth none`.
+- **Online backup.** `backup(path)` writes a consistent single-file `.kgl` of
+  a graph while it is in use. The file stands alone: no `-wal` or `.lock`
+  beside it, and the source graph keeps its path and log.
+  - **Python:** `KnowledgeGraph.backup(path)` and `Session.backup(path)`
+    return `path`, `bytes`, `nodes`, `relationships`, `graph_version`, `lsn`,
+    `lock_hold_ms` and `elapsed_ms`. Use `Session.backup` while other threads
+    write.
+  - **Bolt:** `CALL db.backup('nightly.kgl')` or `CALL db.backup($name)`
+    yields the same columns without `graph_version`, plus `success`; `lsn` is
+    null when the server keeps no write-ahead log.
+  - **C ABI:** the new symbol `kglite_session_backup` returns the report as a
+    JSON object.
+  - **Safe replace:** an existing destination is replaced through a temp file,
+    fsync and rename, so a crash leaves the previous file or the complete new
+    one.
+  - **Refusals:** disk-mode graphs, the graph's own file, and a destination
+    whose `-wal` sidecar holds commits the file lacks.
+  - **Writer cost:** the commit path is held for under a millisecond. A
+    writer that creates or deletes relationships sees at most one commit up to
+    about 2x slower; measured worst 0.22 s (memory) and 0.25 s (mapped) at 1
+    million nodes and 3 million relationships, against 0.1 s without a backup.
+    Memory use rises by roughly 10-30% of the graph's size during the backup.
+  - Guides: "Backups and restore" in the Durable apps guide, and "Backups" in
+    the Bolt server guide.
+- **`kglite-bolt-server` gains four backup flags.**
+  - `--backup-dir DIR` turns `db.backup()` on. It takes a bare file name and
+    writes `DIR/<name>`; names with `/`, `\`, `..` or an absolute path are
+    refused.
+  - `--backup-allow-any-path` lets clients name any path. The server refuses to
+    start with it under `--auth none`.
+  - `--backup-interval SECS` writes `<graph-stem>-YYYYMMDDTHHMMSSZ.kgl` into
+    `--backup-dir` every `SECS` seconds, skipping a tick when the graph is
+    unchanged.
+  - `--backup-keep N` keeps the newest `N` scheduled backups. It requires
+    `--backup-interval` and never deletes `db.backup()` files.
   - Allowed on `--readonly` servers. Refused inside an explicit transaction,
-    for disk-mode graphs, and for a name that is the served graph itself.
-  - One backup runs at a time; a second concurrent call fails with "backup
-    already in progress".
-  - The file is written to a temp name, fsynced and renamed, so a killed
-    server leaves no partial destination and an existing backup of the same
-    name stays intact until the new one is complete.
+    for disk-mode graphs, and for the served graph itself. One backup runs at
+    a time.
+
+### Fixed
+
+- **Documentation no longer calls a `.kgl` a backup of "any storage mode".**
+  A disk-mode graph is a directory; `backup()` refuses it and `save(directory)`
+  is the route.
 
 ## [0.19.5] - 2026-10-08
 

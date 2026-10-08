@@ -398,6 +398,48 @@ full model.
   state and the index rebuilt once. A periodic `save()` still keeps the WAL short
   and recovery near-instant for write-heavy, rarely-restarted services.
 
+## Backups and restore
+
+`backup(path)` writes a consistent single-file `.kgl` copy of the graph while the application keeps running.
+
+```python
+report = g.backup("backups/nightly.kgl")
+print(report["nodes"], report["bytes"], report["lsn"])
+```
+
+- **Standalone file.** The backup has no `-wal` and no `.lock` beside it. `kglite.load()` or `kglite.open()` opens it as it is.
+- **Your graph is untouched.** It keeps its remembered path, its log and its save target.
+- **Atomic replace.** An existing file at `path` is replaced through a temp file, fsync and rename. A crash leaves the previous file or the complete new one.
+- **Pending commits are included.** They are logged first, so `lsn` covers exactly the data in the file. `lsn` is `None` for a non-durable graph.
+- **Memory and mapped graphs only.** A disk-mode graph raises `ValueError`; use `save(directory)` for it.
+- **Refused before writing.** `path` is the graph's own checkpoint file, or a `<path>-wal` beside it holds commits the existing file lacks.
+
+For a graph that many threads write, call `backup()` on a session (`g.session().backup(path)`). Writers wait only for the instant the snapshot is fixed, reported as `lock_hold_ms`.
+
+### Writer cost
+
+`backup()` holds the commit path for under a millisecond regardless of graph size. A writer that only adds or updates nodes is not slowed.
+
+- A writer that creates or deletes relationships sees at most one commit up to about 2x slower than usual during the backup.
+- Measured worst case at 1 million nodes and 3 million relationships: 0.22 s in memory mode and 0.25 s in mapped mode (one 0.46 s outlier), against 0.1 s for such a commit without a backup.
+- Memory use rises by roughly 10-30% of the graph's size while the backup runs.
+
+### Restoring a backup
+
+A backup is an ordinary `.kgl`, so restoring is opening it.
+
+1. Stop the application that holds the graph.
+2. To restore over a live path, move the old `<path>-wal` sidecar aside first. A log that runs ahead of the file you put in place is refused on open, correctly, because replaying it would mix two histories.
+3. Copy the backup to the live path.
+4. Start the application, or open the backup directly: `kglite.open("backups/nightly.kgl")`.
+
+```bash
+mv app.kgl-wal app.kgl-wal.old
+cp backups/nightly.kgl app.kgl
+```
+
+Test a restore before you need one. Cross-architecture portability of a backup file is not yet tested; restore on the architecture that wrote it. For the Bolt server, see [Backups](../../operators/bolt-server.md#backups).
+
 ## Limitations
 
 ### Not available for `storage="disk"`

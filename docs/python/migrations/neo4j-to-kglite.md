@@ -401,7 +401,7 @@ Every `cypher()` call also attaches lightweight `result.diagnostics` (`elapsed_m
 | Concern | Neo4j | KGLite |
 |---|---|---|
 | Persistence | Live server store directory | A `.kgl` file; explicit `graph.save(path)` / `kglite.load(path)` |
-| Backup | `neo4j-admin dump` / online backup | Copy the `.kgl` file (or `save_subset(path)` for a slice) |
+| Backup | `neo4j-admin dump` / online backup | `graph.backup(path)` for a live single-file copy, or `CALL db.backup(name)` on the Bolt server (`save_subset(path)` for a slice) |
 | Concurrency | Server-managed sessions, ACID | Reads parallelize (GIL released via `py.detach()`); mutations serialize via copy-on-write; OCC on transactions |
 | Cross-process access | Native (server) | Embedded — use the Bolt server as the coordination point for multi-process |
 | Schema DDL | `CREATE INDEX` / `CREATE CONSTRAINT` Cypher | Index DDL is supported — `CREATE [RANGE] INDEX`, `DROP INDEX`, `SHOW INDEXES`. What each statement builds differs from Neo4j (KGLite has separate equality, composite, and range structures) and index names are canonical, not user-assigned: see [CYPHER.md → Cypher index DDL](https://github.com/kkollsga/kglite/blob/main/CYPHER.md#cypher-index-ddl). The equivalent APIs remain — `create_index(type, prop)`, `create_range_index(...)`, `list_indexes()`, `drop_index(...)`. Type indices are automatic. |

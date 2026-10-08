@@ -2972,6 +2972,28 @@ pub fn kglite::api::session::CsvImportPolicy::default() -> kglite::api::session:
 impl core::fmt::Debug for kglite::api::session::CsvImportPolicy
 pub fn kglite::api::session::CsvImportPolicy::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::session::CsvImportPolicy
+pub struct kglite::api::session::BackupOptions
+pub kglite::api::session::BackupOptions::live_path: core::option::Option<std::path::PathBuf>
+impl core::clone::Clone for kglite::api::session::BackupOptions
+pub fn kglite::api::session::BackupOptions::clone(&self) -> kglite::api::session::BackupOptions
+impl core::default::Default for kglite::api::session::BackupOptions
+pub fn kglite::api::session::BackupOptions::default() -> kglite::api::session::BackupOptions
+impl core::fmt::Debug for kglite::api::session::BackupOptions
+pub fn kglite::api::session::BackupOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::session::BackupReport
+pub kglite::api::session::BackupReport::bytes: u64
+pub kglite::api::session::BackupReport::elapsed: core::time::Duration
+pub kglite::api::session::BackupReport::graph_version: u64
+pub kglite::api::session::BackupReport::lock_hold: core::time::Duration
+pub kglite::api::session::BackupReport::lsn: core::option::Option<u64>
+pub kglite::api::session::BackupReport::nodes: usize
+pub kglite::api::session::BackupReport::path: std::path::PathBuf
+pub kglite::api::session::BackupReport::prepared_copy: bool
+pub kglite::api::session::BackupReport::relationships: usize
+impl core::clone::Clone for kglite::api::session::BackupReport
+pub fn kglite::api::session::BackupReport::clone(&self) -> kglite::api::session::BackupReport
+impl core::fmt::Debug for kglite::api::session::BackupReport
+pub fn kglite::api::session::BackupReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::session::ExecuteOptions<'a>
 pub kglite::api::session::ExecuteOptions::cancel: core::option::Option<&'static core::sync::atomic::AtomicBool>
 pub kglite::api::session::ExecuteOptions::csv_import: kglite::api::session::CsvImportPolicy
@@ -3021,6 +3043,8 @@ pub kglite::api::session::ResolvedQueryOptions::row_limit: core::option::Option<
 pub kglite::api::session::ResolvedQueryOptions::timeout_ms: core::option::Option<u64>
 pub struct kglite::api::session::Session
 impl kglite::api::session::Session
+pub fn kglite::api::session::Session::backup(&self, dest: &std::path::Path, opts: &kglite::api::session::BackupOptions) -> core::result::Result<kglite::api::session::BackupReport, kglite::api::io::SaveError>
+impl kglite::api::session::Session
 pub fn kglite::api::session::Session::begin(&self) -> kglite::api::session::Transaction
 pub fn kglite::api::session::Session::begin_read(&self) -> kglite::api::session::Transaction
 pub fn kglite::api::session::Session::commit(&self, tx: kglite::api::session::Transaction, check_occ: bool) -> kglite::api::session::CommitOutcome
@@ -3047,6 +3071,7 @@ pub fn kglite::api::session::Transaction::take_working(self) -> (core::option::O
 pub fn kglite::api::session::Transaction::working_mut(&mut self) -> core::result::Result<&mut kglite::api::DirGraph, kglite::error::KgError>
 pub const kglite::api::session::DEFAULT_TIMEOUT_MS: u64
 pub const kglite::api::session::QUERY_THREAD_STACK_SIZE: usize
+pub fn kglite::api::session::backup_snapshot(snapshot: &alloc::sync::Arc<kglite::api::DirGraph>, lsn: core::option::Option<u64>, dest: &std::path::Path, opts: &kglite::api::session::BackupOptions) -> core::result::Result<kglite::api::session::BackupReport, kglite::api::io::SaveError>
 pub fn kglite::api::session::deadline_from(timeout_ms: core::option::Option<u64>) -> core::option::Option<std::time::Instant>
 pub fn kglite::api::session::deadline_span(timeout_ms: core::option::Option<u64>) -> core::option::Option<(std::time::Instant, std::time::Instant)>
 pub fn kglite::api::session::execute_mut(graph: &mut kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>

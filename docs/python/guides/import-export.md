@@ -30,7 +30,9 @@ Save files (`.kgl`) use an explicitly versioned binary container.
   [0.13 → 0.14 migration guide](../migrations/0.13-to-0.14.md#convert-persisted-data-before-upgrading).
 
 A `.kgl` is the only complete KGLite backup, because portable exports
-intentionally omit some engine-specific state.
+intentionally omit some engine-specific state. Use `backup(path)` to write one
+while the graph is in use; see
+[Backups and restore](durable-apps.md#backups-and-restore).
 
 ### `open()` — load-or-create lifecycle
 
