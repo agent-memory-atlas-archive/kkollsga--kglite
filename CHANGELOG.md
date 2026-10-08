@@ -152,6 +152,12 @@ before upgrading.
   `ResultView.warnings` that it stops at 10 hops. The cap is unchanged. **Do:**
   write `*1..N` to go deeper and to silence the warning.
 
+- A `MERGE` node pattern with no label (`MERGE (n)`, `MERGE (n {k: 1})`) now
+  matches every node, whatever its type. Before, it matched only nodes created
+  without a label, so on a graph of typed nodes it created a new node and
+  later rows reused it. **Do:** name the label (`MERGE (n:Label {k: 1})`) when
+  the statement should create rather than match an existing typed node.
+
 ### Changed
 
 - Concurrent Bolt writers no longer retry. With 4 writers each committing 1000
@@ -195,6 +201,9 @@ before upgrading.
   [Write concurrency](https://kglite.readthedocs.io/en/latest/operators/bolt-server.html#write-concurrency).
 
 ### Fixed
+
+- `r['type']` on a relationship returns its type, as `keys(r)` implies. It was
+  null, so `[k IN keys(r) | r[k]]` carried a null for `type`.
 
 - `EXPLAIN` of a write no longer bumps the graph version. In an explicit
   `kglite-bolt-server` transaction it forked a working copy, so its `COMMIT`
