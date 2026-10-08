@@ -65,7 +65,13 @@ fn match_node_pattern(
         }
     }
 
-    let label = node_pat.label.as_deref().unwrap_or("Node");
+    let Some(label) = node_pat.label.as_deref() else {
+        return match_unlabelled_node(
+            graph,
+            node_pat,
+            &merge_expected_props(executor, node_pat, row, graph)?,
+        );
+    };
 
     // The id/property/composite indexes and `type_indices` are keyed by
     // PRIMARY type. If `label` also occurs as a secondary label on some node,
@@ -106,6 +112,29 @@ fn match_node_pattern(
         .collect();
     if found.is_empty() {
         return refuse_duplicate_id(graph, label, &wanted);
+    }
+    Ok(node_result_rows(node_pat, &found))
+}
+
+/// A label-less node pattern matches every node, whatever its type, as
+/// `MATCH (n {…})` does. No per-type index applies, so this scans; a miss falls
+/// to the CREATE arm, which types the new node `Node`.
+fn match_unlabelled_node(
+    graph: &DirGraph,
+    node_pat: &CreateNodePattern,
+    expected_props: &[(&str, Value)],
+) -> Result<Vec<ResultRow>, String> {
+    let wanted = Candidate {
+        props: expected_props,
+        extra_labels: &node_pat.extra_labels,
+    };
+    let found: Vec<NodeIndex> = graph
+        .graph
+        .node_indices()
+        .filter(|&idx| wanted.matches(graph, idx))
+        .collect();
+    if found.is_empty() {
+        return refuse_duplicate_id(graph, "Node", &wanted);
     }
     Ok(node_result_rows(node_pat, &found))
 }
