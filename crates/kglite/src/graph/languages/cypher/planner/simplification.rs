@@ -1443,12 +1443,14 @@ pub(super) fn desugar_multi_match_return_aggregate(query: &mut CypherQuery) {
             new_return_items.push(ReturnItem {
                 expression: Expression::Variable(alias.clone()),
                 alias: Some(alias),
+                display: None,
             });
         } else {
             let internal = format!("__dgr_grp_{idx}");
             with_items.push(ReturnItem {
                 expression: item.expression.clone(),
                 alias: Some(internal.clone()),
+                display: None,
             });
             new_return_items.push(ReturnItem {
                 expression: Expression::Variable(internal),
@@ -1456,6 +1458,7 @@ pub(super) fn desugar_multi_match_return_aggregate(query: &mut CypherQuery) {
                     // Preserve the column name the unfused path would produce.
                     Some(default_column_name(&item.expression))
                 }),
+                display: None,
             });
         }
     }

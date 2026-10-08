@@ -40,6 +40,7 @@ impl CypherExecutor<'_> {
         // the work of building what they would have discarded.
         let capped = apply_row_limit(&mut result_set.rows, row_limit);
         let mut result = self.finalize_result(result_set)?;
+        apply_column_display(query, &mut result);
         stamp_row_limit(&mut result, capped);
         result.stats = None;
         if query.profile {
@@ -83,6 +84,7 @@ impl CypherExecutor<'_> {
             // The batches run the scope's clauses, so they keep its guard.
             guard: query.guard.clone(),
             suppress_default: query.suppress_default,
+            column_display: Vec::new(),
         };
         let mut suffix_declared = initial_declared.clone();
         suffix_declared.insert(load.variable.clone());
@@ -462,6 +464,7 @@ impl CypherExecutor<'_> {
                     .map(|name| ReturnItem {
                         expression: Expression::Variable(name.clone()),
                         alias: Some(name),
+                        display: None,
                     })
                     .collect();
                 self.execute_return_retaining(&expanded, result_set, &retain)
@@ -492,6 +495,7 @@ impl CypherExecutor<'_> {
                             .unwrap_or(ReturnItem {
                                 expression: Expression::Variable(name.clone()),
                                 alias: Some(name),
+                                display: None,
                             })
                     })
                     .collect();

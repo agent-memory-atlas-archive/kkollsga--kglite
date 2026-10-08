@@ -35,6 +35,12 @@ pub struct CypherQuery {
     /// Set by the session's plain-plan re-prepare: lowering must not add the
     /// default context to this text again.
     pub(crate) suppress_default: bool,
+    /// `(internal column name, source text)` for each unaliased item of the
+    /// top-level `RETURN` whose source text differs from its internal name.
+    /// Applied to the finished result's column names only, so ORDER BY,
+    /// HAVING, grouping and UNION arm matching keep resolving on the internal
+    /// name. Empty for nested scopes and programmatically built queries.
+    pub(crate) column_display: Vec<(String, String)>,
 }
 
 impl CypherQuery {
@@ -49,6 +55,7 @@ impl CypherQuery {
             context: None,
             guard: None,
             suppress_default: false,
+            column_display: Vec::new(),
         }
     }
 }
@@ -849,6 +856,11 @@ pub struct ReturnClause {
 pub struct ReturnItem {
     pub expression: Expression,
     pub alias: Option<String>,
+    /// The item's source text when it differs from the canonical rendering
+    /// that names the item internally (`toInteger('3')` against the canonical
+    /// `tointeger(3)`). Set by the parser for unaliased items only; it names
+    /// the result column of a top-level `RETURN` and nothing else.
+    pub display: Option<String>,
 }
 
 /// WITH clause: same structure as RETURN, acts as intermediate projection

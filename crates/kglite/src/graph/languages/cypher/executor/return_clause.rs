@@ -536,6 +536,7 @@ fn expand_wildcards(items: &[ReturnItem], row: &ResultRow) -> Vec<ReturnItem> {
             out.push(ReturnItem {
                 expression: Expression::Variable(name.clone()),
                 alias: Some(name.clone()),
+                display: None,
             });
         }
     }

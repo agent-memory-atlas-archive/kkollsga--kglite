@@ -11,6 +11,20 @@ before upgrading.
 
 ### Breaking changes and migration
 
+- **An unaliased `RETURN` item is named by the text the query wrote.**
+  `RETURN toInteger('3'), 'a', 1+2` now returns the columns `toInteger('3')`,
+  `'a'` and `1+2`; before, it returned `tointeger(3)`, `a` and `1 + 2`, with
+  function names lowercased, string quotes dropped and operators respaced.
+  The name is the item's source text, trimmed, with its casing, quotes and
+  spacing kept and `//` comments removed. It applies to every interface that
+  reports column names: Python results and DataFrames, Bolt `fields`, the C
+  ABI, the CLI and the MCP server. `ORDER BY`, `HAVING`, grouping and `UNION`
+  arm matching still resolve on the internal form, so a query keeps working
+  and `UNION` arms that respell an expression still match (the result takes
+  the left arm's text). `WITH` items and `CALL { }` bodies are not renamed.
+  **Do:** alias with `AS` for a name that does not depend on spelling, and
+  update code that read the old lowercased or respaced name.
+
 - **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
   that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
   the connection to its ready state, and it could run queries and commit write

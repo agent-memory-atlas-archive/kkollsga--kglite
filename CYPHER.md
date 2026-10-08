@@ -344,6 +344,14 @@ graph.cypher("MATCH (n:Person) RETURN median(n.age), percentile_cont(n.age, 0.9)
 graph.cypher("MATCH (n:Person) RETURN variance(n.age), std(n.age)")
 ```
 
+### Result column names
+
+An item with `AS` is named by its alias. An unaliased item of the final
+`RETURN` is named by its source text as written, trimmed: `RETURN toInteger('3'), 1+2`
+has the columns `toInteger('3')` and `1+2`. Casing, quotes and spacing are kept;
+`//` comments are dropped. `WITH` items are referenced by their alias or
+property form, not by source text.
+
 ### ORDER BY after an aggregate
 
 An aggregating `RETURN` emits one row per group, so a sort key must have a
@@ -2663,6 +2671,8 @@ graph.cypher("""
 
 Set operators dedupe by the projected column values. Column names must match
 between sides (positional fallback when they don't).
+Unaliased items match on their internal form, so `toInteger('3')` and
+`tointeger('3')` are the same column; the result uses the left side's spelling.
 
 ## Variable Binding in MATCH Patterns
 

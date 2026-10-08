@@ -236,6 +236,7 @@ fn lazy_public_materialization_scrubs_nested_relationship_tokens() {
         vec![crate::graph::languages::cypher::ast::ReturnItem {
             expression: Expression::Variable("nested".into()),
             alias: None,
+            display: None,
         }],
         &graph,
     );

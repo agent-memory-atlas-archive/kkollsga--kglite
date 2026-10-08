@@ -52,6 +52,11 @@ pub struct CypherParser {
     /// the re-serialized pattern by a `$` placeholder naming its index; see
     /// `match_pattern::INLINE_EXPR_PARAM_PREFIX`.
     inline_map_exprs: Vec<Expression>,
+    /// Statement text and the char offset at which each token starts, for
+    /// reading an unaliased projection item's text as written. Empty when the
+    /// parser was built over a bare token stream (the pattern re-parser).
+    source: Vec<char>,
+    positions: Vec<usize>,
 }
 
 /// Maximum expression/predicate AST nesting depth accepted by the parser.
@@ -122,7 +127,41 @@ impl CypherParser {
             depth: 0,
             keyword_lexemes: keyword_lexemes.into_iter().collect(),
             inline_map_exprs: Vec::new(),
+            source: Vec::new(),
+            positions: Vec::new(),
         }
+    }
+
+    /// Attach the statement text so projection items can record their
+    /// source spelling.
+    fn with_source(mut self, input: &str, positions: Vec<usize>) -> Self {
+        self.source = input.chars().collect();
+        self.positions = positions;
+        self
+    }
+
+    /// The statement text from token `start` up to (not including) token
+    /// `end`, trimmed. `None` without source text or on an empty span.
+    pub(super) fn source_between(&self, start: usize, end: usize) -> Option<String> {
+        let mut from = *self.positions.get(start)?;
+        // A parameter token is positioned at its name; its `$` (and the `(`
+        // of `$(name)`) belong to the item's text.
+        if matches!(self.tokens.get(start), Some(CypherToken::Parameter(_))) {
+            for sigil in ['(', '$'] {
+                if from > 0 && self.source.get(from - 1) == Some(&sigil) {
+                    from -= 1;
+                }
+            }
+        }
+        let to = self
+            .positions
+            .get(end)
+            .copied()
+            .unwrap_or(self.source.len())
+            .min(self.source.len());
+        let text = strip_line_comments(self.source.get(from..to)?);
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
     }
 
     pub(super) fn keyword_lexeme_at(&self, idx: usize) -> Option<&str> {
@@ -414,6 +453,7 @@ impl CypherParser {
         }
         let mut query = self.parse_query_body(explain, profile)?;
         query.context = context;
+        query.column_display = column_display_names(&query.clauses);
         Ok(query)
     }
 
@@ -736,7 +776,8 @@ pub fn parse_cypher(input: &str) -> Result<CypherQuery, KgError> {
             col: Some(col),
         });
     }
-    let mut parser = CypherParser::with_keyword_lexemes(tokens, keyword_lexemes);
+    let mut parser = CypherParser::with_keyword_lexemes(tokens, keyword_lexemes)
+        .with_source(input, positions.clone());
     match parser.parse_query() {
         Ok(mut q) => {
             if let Some(context) = q.context.as_mut() {
@@ -761,6 +802,63 @@ pub fn parse_cypher(input: &str) -> Result<CypherQuery, KgError> {
             })
         }
     }
+}
+
+/// `text` without its `//` line comments. A comment can sit between an
+/// expression and the next token, inside the span read for the item's name;
+/// quoted strings and backtick names are scanned past so a `//` inside one
+/// survives.
+fn strip_line_comments(text: &[char]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < text.len() {
+        let c = text[i];
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == '\\' && q != '`' && i + 1 < text.len() {
+                    out.push(text[i + 1]);
+                    i += 1;
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '\'' || c == '"' || c == '`' => {
+                quote = Some(c);
+                out.push(c);
+            }
+            None if c == '/' && text.get(i + 1) == Some(&'/') => {
+                while i < text.len() && text[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            None => out.push(c),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `(internal column name, source text)` for the unaliased items of the first
+/// top-level `RETURN` whose written form differs from the internal name. A
+/// UNION query's result takes its names from the left arm, which is the first
+/// `RETURN` in the clause list.
+fn column_display_names(clauses: &[Clause]) -> Vec<(String, String)> {
+    let Some(Clause::Return(ret)) = clauses.iter().find(|c| matches!(c, Clause::Return(_))) else {
+        return Vec::new();
+    };
+    ret.items
+        .iter()
+        .filter_map(|item| {
+            let shown = item.display.as_ref()?;
+            let name = crate::graph::languages::cypher::executor::helpers::return_item_column_name(
+                item,
+            );
+            (name != *shown).then(|| (name, shown.clone()))
+        })
+        .collect()
 }
 
 /// Convert a char offset (index into `input.chars().collect()`)

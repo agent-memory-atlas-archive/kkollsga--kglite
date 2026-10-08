@@ -686,6 +686,7 @@ fn finalize_mutation(
         crate::graph::languages::cypher::result::clear_published_relationship_incarnations(
             &mut result,
         );
+        super::apply_column_display(query, &mut result);
         super::stamp_row_limit(&mut result, capped);
         result.stats = Some(stats);
         result.profile = profile;

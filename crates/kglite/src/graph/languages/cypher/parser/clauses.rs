@@ -53,7 +53,9 @@ impl CypherParser {
     }
 
     pub(super) fn parse_return_item(&mut self) -> Result<ReturnItem, String> {
+        let start = self.pos;
         let expression = self.parse_expression_with_predicates()?;
+        let end = self.pos;
 
         let alias = if self.check(&CypherToken::As) {
             self.advance();
@@ -62,7 +64,16 @@ impl CypherParser {
             None
         };
 
-        Ok(ReturnItem { expression, alias })
+        let display = if alias.is_none() {
+            self.source_between(start, end)
+        } else {
+            None
+        };
+        Ok(ReturnItem {
+            expression,
+            alias,
+            display,
+        })
     }
 
     // ========================================================================

@@ -536,6 +536,7 @@ fn substitute_tail(tail: &[Clause], map: &HashMap<String, Expression>) -> Option
                     items.push(ReturnItem {
                         expression: substitute_expr(&item.expression, map)?,
                         alias: Some(column),
+                        display: None,
                     });
                 }
                 Clause::Return(ReturnClause { items, ..r.clone() })
