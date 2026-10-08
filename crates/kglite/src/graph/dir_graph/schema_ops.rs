@@ -377,7 +377,7 @@ impl DirGraph {
             let mut undeclared: Vec<&str> = self
                 .type_indices
                 .iter()
-                .filter(|(t, nodes)| nodes.len() > 0 && !store.classes.contains_key(*t))
+                .filter(|(t, nodes)| !nodes.is_empty() && !store.classes.contains_key(*t))
                 .map(|(t, _)| t)
                 .collect();
             undeclared.sort_unstable();
