@@ -147,6 +147,16 @@ class ConstraintViolationError(ConstraintError):
     bulk node and relationship writers.
     """
 
+class OntologyViolationError(ConstraintViolationError):
+    """The declared ontology refused a write, or refused a declaration.
+
+    Subclasses :class:`ConstraintViolationError`, so existing ``except`` clauses
+    still catch it; ``.code`` is ``"OntologyViolation"``. The graph is
+    unchanged. The message names the rule (``required_property``,
+    ``property_type``, ``closed_labels``, ``domain`` or ``range``), the label or
+    relationship type, and the property where one applies.
+    """
+
 class ConstraintCreationError(ConstraintError):
     """Declaring a constraint failed because the stored data already violates it.
 

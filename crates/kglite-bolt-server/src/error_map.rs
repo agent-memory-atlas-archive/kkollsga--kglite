@@ -140,6 +140,7 @@ mod tests {
             KgErrorCode::ConstraintCreationFailed,
             KgErrorCode::TransactionConflict,
             KgErrorCode::LoadMemoryLimit,
+            KgErrorCode::OntologyViolation,
         ] {
             let s = code.neo4j_status_code();
             assert!(

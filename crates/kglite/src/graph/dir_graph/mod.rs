@@ -106,6 +106,14 @@ pub(crate) fn id_index_scans() -> usize {
 
 /// Core graph storage: a directed graph (petgraph `StableDiGraph`) with fast
 /// type-based indexing and optional property/composite/range/spatial indexes.
+/// A structured write refusal parked beside its message while the
+/// `Result<_, String>` channel unwinds (see `pending_constraint_violation`).
+#[derive(Clone)]
+pub(crate) enum PendingViolation {
+    Constraint(crate::graph::constraints::ConstraintViolation),
+    Ontology(crate::graph::ontology::violation::OntologyViolation),
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DirGraph {
     pub graph: GraphBackend,
@@ -664,7 +672,7 @@ pub struct DirGraph {
     #[serde(skip, default)]
     pub(crate) active_modified_by: Option<String>,
     /// Transient, **execution-scoped** carrier for the structured constraint
-    /// violation behind the write error currently unwinding.
+    /// or ontology violation behind the write error currently unwinding.
     ///
     /// The Cypher mutation tree (`executor/write.rs`, `executor/schema_ddl.rs`)
     /// and the bulk-loader gate (`mutation/maintain.rs`) both report failures
@@ -684,8 +692,7 @@ pub struct DirGraph {
     /// cleared unconditionally, never serialized, never copied (see
     /// `independent_copy`).
     #[serde(skip, default)]
-    pub(crate) pending_constraint_violation:
-        Option<Box<(String, crate::graph::constraints::ConstraintViolation)>>,
+    pub(crate) pending_constraint_violation: Option<Box<(String, PendingViolation)>>,
     /// Monotonically increasing version counter — incremented on every mutation.
     /// Used for optimistic concurrency control in transactions.
     #[serde(skip, default)]
@@ -898,7 +905,26 @@ impl DirGraph {
         violation: crate::graph::constraints::ConstraintViolation,
     ) -> String {
         let message = violation.to_string();
-        self.pending_constraint_violation = Some(Box::new((message.clone(), violation)));
+        self.pending_constraint_violation = Some(Box::new((
+            message.clone(),
+            PendingViolation::Constraint(violation),
+        )));
+        message
+    }
+
+    /// [`Self::record_constraint_violation`] for an ontology refusal: parks
+    /// the violation under its own message and returns that message for
+    /// `Err(..)`. The write gates call this wherever they would otherwise
+    /// stringify an [`OntologyViolation`](crate::graph::ontology::violation::OntologyViolation).
+    pub fn record_ontology_violation(
+        &mut self,
+        violation: crate::graph::ontology::violation::OntologyViolation,
+    ) -> String {
+        let message = violation.message.clone();
+        self.pending_constraint_violation = Some(Box::new((
+            message.clone(),
+            PendingViolation::Ontology(violation),
+        )));
         message
     }
 
@@ -917,17 +943,27 @@ impl DirGraph {
     /// being reported and is dropped rather than mis-attributed. This is an
     /// equality test against a string this graph itself produced — not a
     /// pattern match on error prose.
+    #[cfg(test)]
     pub(crate) fn take_constraint_violation_for(
         &mut self,
         message: &str,
     ) -> Option<crate::graph::constraints::ConstraintViolation> {
+        match self.take_pending_violation_for(message)? {
+            PendingViolation::Constraint(violation) => Some(violation),
+            PendingViolation::Ontology(_) => None,
+        }
+    }
+
+    /// Take the parked violation of either kind, under the same
+    /// message-identity rule as [`Self::take_constraint_violation_for`].
+    pub(crate) fn take_pending_violation_for(&mut self, message: &str) -> Option<PendingViolation> {
         let parked = self.pending_constraint_violation.take()?;
         let (recorded, violation) = *parked;
         (recorded == message).then_some(violation)
     }
 
     /// Typed [`KgError`] for a write that failed with `message`, when that
-    /// failure was a declared-constraint violation.
+    /// failure was a declared-constraint or ontology violation.
     ///
     /// Returns `None` when the error was something else, so each caller keeps
     /// its own fallback: the Cypher path degrades to
@@ -936,8 +972,11 @@ impl DirGraph {
     /// the engine's `Result<_, String>` channel needs exactly this step, so it
     /// lives here rather than being re-derived per binding.
     pub fn take_constraint_error(&mut self, message: &str) -> Option<crate::error::KgError> {
-        self.take_constraint_violation_for(message)
-            .map(crate::error::KgError::from)
+        self.take_pending_violation_for(message)
+            .map(|parked| match parked {
+                PendingViolation::Constraint(v) => crate::error::KgError::from(v),
+                PendingViolation::Ontology(v) => crate::error::KgError::from(v),
+            })
     }
 
     pub fn new() -> Self {

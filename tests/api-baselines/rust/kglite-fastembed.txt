@@ -3858,6 +3858,13 @@ pub kglite::api::KgError::MissingArgument(alloc::string::String)
 pub kglite::api::KgError::NodeNotFound
 pub kglite::api::KgError::NodeNotFound::id: alloc::string::String
 pub kglite::api::KgError::NodeNotFound::node_type: alloc::string::String
+pub kglite::api::KgError::OntologyViolation
+pub kglite::api::KgError::OntologyViolation::entity: &'static str
+pub kglite::api::KgError::OntologyViolation::entity_type: alloc::string::String
+pub kglite::api::KgError::OntologyViolation::message: alloc::string::String
+pub kglite::api::KgError::OntologyViolation::property: core::option::Option<alloc::string::String>
+pub kglite::api::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::graph::ontology::violation::OntologyReportEntry>
+pub kglite::api::KgError::OntologyViolation::rule: &'static str
 pub kglite::api::KgError::PropertyNotFound
 pub kglite::api::KgError::PropertyNotFound::node_type: alloc::string::String
 pub kglite::api::KgError::PropertyNotFound::property: alloc::string::String
@@ -3905,6 +3912,7 @@ pub kglite::api::KgErrorCode::InvalidArgument
 pub kglite::api::KgErrorCode::LoadMemoryLimit
 pub kglite::api::KgErrorCode::MissingArgument
 pub kglite::api::KgErrorCode::NodeNotFound
+pub kglite::api::KgErrorCode::OntologyViolation
 pub kglite::api::KgErrorCode::PropertyNotFound
 pub kglite::api::KgErrorCode::Schema
 pub kglite::api::KgErrorCode::TransactionConflict
@@ -4336,6 +4344,7 @@ pub fn kglite::api::DirGraph::rebuild_columns_to_heap(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_indices(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_indices_and_schemas(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_schemas(&mut self)
+pub fn kglite::api::DirGraph::record_ontology_violation(&mut self, violation: kglite::graph::ontology::violation::OntologyViolation) -> alloc::string::String
 pub fn kglite::api::DirGraph::register_connection_type(&mut self, connection_type: alloc::string::String)
 pub fn kglite::api::DirGraph::reindex(&mut self)
 pub fn kglite::api::DirGraph::remove_node_property(&mut self, index: petgraph::graph_impl::NodeIndex, key: &str) -> core::option::Option<kglite::datatypes::values::Value>
@@ -5876,6 +5885,13 @@ pub kglite::error::KgError::MissingArgument(alloc::string::String)
 pub kglite::error::KgError::NodeNotFound
 pub kglite::error::KgError::NodeNotFound::id: alloc::string::String
 pub kglite::error::KgError::NodeNotFound::node_type: alloc::string::String
+pub kglite::error::KgError::OntologyViolation
+pub kglite::error::KgError::OntologyViolation::entity: &'static str
+pub kglite::error::KgError::OntologyViolation::entity_type: alloc::string::String
+pub kglite::error::KgError::OntologyViolation::message: alloc::string::String
+pub kglite::error::KgError::OntologyViolation::property: core::option::Option<alloc::string::String>
+pub kglite::error::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::graph::ontology::violation::OntologyReportEntry>
+pub kglite::error::KgError::OntologyViolation::rule: &'static str
 pub kglite::error::KgError::PropertyNotFound
 pub kglite::error::KgError::PropertyNotFound::node_type: alloc::string::String
 pub kglite::error::KgError::PropertyNotFound::property: alloc::string::String
@@ -5923,6 +5939,7 @@ pub kglite::error::KgErrorCode::InvalidArgument
 pub kglite::error::KgErrorCode::LoadMemoryLimit
 pub kglite::error::KgErrorCode::MissingArgument
 pub kglite::error::KgErrorCode::NodeNotFound
+pub kglite::error::KgErrorCode::OntologyViolation
 pub kglite::error::KgErrorCode::PropertyNotFound
 pub kglite::error::KgErrorCode::Schema
 pub kglite::error::KgErrorCode::TransactionConflict

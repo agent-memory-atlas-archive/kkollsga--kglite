@@ -90,6 +90,14 @@ enum KgliteStatusCode
    */
   KGLITE_STATUS_CODE_LOAD_MEMORY_LIMIT = 21,
   /**
+   * A write was refused by the declared ontology (a required property, a
+   * property type, the closed-label rule, or a relationship domain/range),
+   * or a declaration was refused because stored data already violates it.
+   * The graph is unchanged. Appended to keep the existing discriminants
+   * stable across this ABI major version.
+   */
+  KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION = 22,
+  /**
    * A string argument failed UTF-8 validation. The C-side
    * caller passed a `*const c_char` whose bytes didn't decode
    * as UTF-8 — typically a corrupted buffer or a non-UTF-8

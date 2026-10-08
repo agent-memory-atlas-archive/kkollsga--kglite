@@ -29,6 +29,7 @@
 //!     ├── kglite.ExprError
 //!     ├── kglite.ConstraintError            (declared-integrity base)
 //!     │   ├── kglite.ConstraintViolationError
+//!     │   │   └── kglite.OntologyViolationError
 //!     │   └── kglite.ConstraintCreationError
 //!     ├── kglite.TransactionConflictError
 //!     ├── kglite.NodeNotFoundError
@@ -156,6 +157,13 @@ pyo3::create_exception!(
     ConstraintCreationError,
     ConstraintError,
     "Declaring a constraint failed because the stored data already violates it. Deduplicate the node type, then re-declare."
+);
+
+pyo3::create_exception!(
+    kglite,
+    OntologyViolationError,
+    ConstraintViolationError,
+    "A write was refused by the declared ontology, or a declaration was refused because stored data already violates it. Subclass of `ConstraintViolationError`; the graph is unchanged."
 );
 
 // ── Concurrency ──────────────────────────────────────────────────────
@@ -308,6 +316,7 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
         RustKgError::Validation(_) => ValidationError::new_err(message),
         RustKgError::ConstraintViolation { .. } => ConstraintViolationError::new_err(message),
         RustKgError::ConstraintCreationFailed { .. } => ConstraintCreationError::new_err(message),
+        RustKgError::OntologyViolation { .. } => OntologyViolationError::new_err(message),
         RustKgError::TransactionConflict { .. } => TransactionConflictError::new_err(message),
         RustKgError::Expr(_) => ExprError::new_err(message),
         RustKgError::NodeNotFound { .. } => NodeNotFoundError::new_err(message),
@@ -400,6 +409,10 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
         "ConstraintCreationError",
         py.get_type::<ConstraintCreationError>(),
     )?;
+    m.add(
+        "OntologyViolationError",
+        py.get_type::<OntologyViolationError>(),
+    )?;
 
     // Concurrency
     m.add(
@@ -482,6 +495,8 @@ fn register_class_codes(py: Python<'_>) -> PyResult<()> {
         .setattr("code", C::ConstraintViolation.as_str())?;
     py.get_type::<ConstraintCreationError>()
         .setattr("code", C::ConstraintCreationFailed.as_str())?;
+    py.get_type::<OntologyViolationError>()
+        .setattr("code", C::OntologyViolation.as_str())?;
     py.get_type::<TransactionConflictError>()
         .setattr("code", C::TransactionConflict.as_str())?;
     py.get_type::<NodeNotFoundError>()
@@ -526,6 +541,23 @@ mod tests {
             };
             let error = kg_to_pyerr(RustKgError::InternerCollision(collision));
             assert!(error.is_instance_of::<InternerCollisionError>(py));
+        });
+    }
+
+    #[test]
+    fn ontology_violation_maps_to_constraint_violation_subclass() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = kg_to_pyerr(RustKgError::OntologyViolation {
+                rule: "closed_labels",
+                entity: "node",
+                entity_type: "Ghost".into(),
+                property: None,
+                message: "label Ghost is not declared".into(),
+                report: Vec::new(),
+            });
+            assert!(error.is_instance_of::<OntologyViolationError>(py));
+            assert!(error.is_instance_of::<ConstraintViolationError>(py));
         });
     }
 }

@@ -76,6 +76,7 @@
 //!   declaration carries its effective severity.
 
 pub mod predicates;
+pub mod violation;
 
 use std::collections::BTreeMap;
 

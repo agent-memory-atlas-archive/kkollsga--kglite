@@ -20,6 +20,7 @@ Exception
     ├── kglite.ExprError
     ├── kglite.ConstraintError
     │   ├── kglite.ConstraintViolationError
+    │   │   └── kglite.OntologyViolationError
     │   └── kglite.ConstraintCreationError
     ├── kglite.TransactionConflictError
     ├── kglite.NodeNotFoundError
@@ -79,6 +80,12 @@ constraint raises `ConstraintViolationError`, from **every** write path:
 - Declaring a constraint the stored data already violates is a different problem
   with a different fix. It raises the sibling `ConstraintCreationError`.
 - Both subclass `ConstraintError`.
+- `OntologyViolationError` (`.code == "OntologyViolation"`) is raised when the
+  declared ontology refuses a write, or refuses a declaration the stored data
+  already violates. It subclasses `ConstraintViolationError`, so an existing
+  `except kglite.ConstraintViolationError` clause still catches it.
+- Bolt reports it as `Neo.ClientError.Schema.ConstraintValidationFailed`; the C
+  ABI status is `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (22).
 
 ```python
 try:

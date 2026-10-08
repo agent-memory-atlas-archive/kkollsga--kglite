@@ -28,7 +28,8 @@
 //! `CypherError`, which subclasses `KgError`.
 //!
 //! Constraints: `ConstraintViolationError`, `ConstraintCreationError` — both
-//! subclass `ConstraintError`.
+//! subclass `ConstraintError`. `OntologyViolationError` subclasses
+//! `ConstraintViolationError`, so existing `except` clauses still catch it.
 //!
 //! Everything else subclasses `KgError` directly: `SchemaError`,
 //! `ValidationError`, `ExprError`, `TransactionConflictError`,
@@ -78,6 +79,12 @@ pub enum KgErrorCode {
     ConstraintViolation,
     ConstraintCreationFailed,
 
+    // A write (or a declaration over existing data) refused by the declared
+    // ontology. Own code so a client can tell "the ontology said no" from
+    // "a UNIQUE constraint said no"; shares the constraint Neo4j status so
+    // drivers treat both alike.
+    OntologyViolation,
+
     // Optimistic concurrency control. Split from `InvalidArgument` because a
     // conflict is the one error in the taxonomy whose correct handling is
     // "retry the whole transaction" rather than "fix the call" — bindings and
@@ -125,6 +132,7 @@ impl KgErrorCode {
             KgErrorCode::Expr => "Expr",
             KgErrorCode::ConstraintViolation => "ConstraintViolation",
             KgErrorCode::ConstraintCreationFailed => "ConstraintCreationFailed",
+            KgErrorCode::OntologyViolation => "OntologyViolation",
             KgErrorCode::TransactionConflict => "TransactionConflict",
             KgErrorCode::NodeNotFound => "NodeNotFound",
             KgErrorCode::ConnectionNotFound => "ConnectionNotFound",
@@ -151,7 +159,7 @@ impl KgErrorCode {
     /// - `CypherTimeout` → 408 Request Timeout
     /// - `TransactionConflict` → 409 Conflict
     /// - `Schema`, `Validation`, `Expr`, `ConstraintViolation`,
-    ///   `ConstraintCreationFailed`, `CypherExecution` → 422 Unprocessable
+    ///   `ConstraintCreationFailed`, `OntologyViolation`, `CypherExecution` → 422 Unprocessable
     ///   Entity
     /// - `LoadMemoryLimit` → 507 Insufficient Storage
     /// - `Cancelled` → 499 Client Closed Request
@@ -197,7 +205,8 @@ impl KgErrorCode {
             | KgErrorCode::Expr
             | KgErrorCode::CypherExecution
             | KgErrorCode::ConstraintViolation
-            | KgErrorCode::ConstraintCreationFailed => 422,
+            | KgErrorCode::ConstraintCreationFailed
+            | KgErrorCode::OntologyViolation => 422,
 
             KgErrorCode::FileFormat | KgErrorCode::FileIo | KgErrorCode::Internal => 500,
         }
@@ -219,7 +228,9 @@ impl KgErrorCode {
             KgErrorCode::Cancelled => "Neo.ClientError.Transaction.Terminated",
             KgErrorCode::CypherTypeMismatch => "Neo.ClientError.Statement.TypeError",
             KgErrorCode::Schema => "Neo.ClientError.Schema.ConstraintValidationFailed",
-            KgErrorCode::ConstraintViolation => "Neo.ClientError.Schema.ConstraintValidationFailed",
+            KgErrorCode::ConstraintViolation | KgErrorCode::OntologyViolation => {
+                "Neo.ClientError.Schema.ConstraintValidationFailed"
+            }
             KgErrorCode::ConstraintCreationFailed => {
                 "Neo.ClientError.Schema.ConstraintCreationFailed"
             }
@@ -373,6 +384,23 @@ pub enum KgError {
         message: String,
     },
 
+    /// A write was refused by the declared ontology, or a declaration was
+    /// refused because stored data already violates it. The graph is unchanged.
+    ///
+    /// `rule` is `required_property` / `property_type` / `closed_labels` /
+    /// `domain` / `range`; `entity` is `node` / `relationship`; `entity_type`
+    /// the label or relationship type; `property` the offending property when
+    /// the rule is a property rule. `report` is empty for a refused write and
+    /// holds the per-rule breakdown for a refused declaration.
+    OntologyViolation {
+        rule: &'static str,
+        entity: &'static str,
+        entity_type: String,
+        property: Option<String>,
+        message: String,
+        report: Vec<crate::graph::ontology::violation::OntologyReportEntry>,
+    },
+
     /// An optimistic-concurrency commit lost its race: the graph advanced
     /// between `begin()` and `commit()`, so the transaction's working copy is
     /// stale and applying it would silently discard the newer commit.
@@ -506,6 +534,7 @@ impl KgError {
             KgError::Validation(_) => KgErrorCode::Validation,
             KgError::ConstraintViolation { .. } => KgErrorCode::ConstraintViolation,
             KgError::ConstraintCreationFailed { .. } => KgErrorCode::ConstraintCreationFailed,
+            KgError::OntologyViolation { .. } => KgErrorCode::OntologyViolation,
             KgError::TransactionConflict { .. } => KgErrorCode::TransactionConflict,
             KgError::Expr(_) => KgErrorCode::Expr,
             KgError::NodeNotFound { .. } => KgErrorCode::NodeNotFound,
@@ -591,7 +620,8 @@ impl fmt::Display for KgError {
             // `graph::constraints::ConstraintViolation`), so don't re-wrap them
             // in a prefix that would bury the actionable part.
             KgError::ConstraintViolation { message, .. }
-            | KgError::ConstraintCreationFailed { message, .. } => f.write_str(message),
+            | KgError::ConstraintCreationFailed { message, .. }
+            | KgError::OntologyViolation { message, .. } => f.write_str(message),
             KgError::TransactionConflict {
                 base_version,
                 current_version,
@@ -722,6 +752,42 @@ impl From<crate::graph::constraints::ConstraintViolation> for KgError {
                 descriptor,
                 message,
             }
+        }
+    }
+}
+
+fn entity_str(entity: crate::graph::constraints::EntityKind) -> &'static str {
+    match entity {
+        crate::graph::constraints::EntityKind::Node => "node",
+        crate::graph::constraints::EntityKind::Relationship => "relationship",
+    }
+}
+
+impl From<crate::graph::ontology::violation::OntologyViolation> for KgError {
+    fn from(v: crate::graph::ontology::violation::OntologyViolation) -> Self {
+        KgError::OntologyViolation {
+            rule: v.rule.as_str(),
+            entity: entity_str(v.entity),
+            entity_type: v.entity_type,
+            property: v.property,
+            message: v.message,
+            report: Vec::new(),
+        }
+    }
+}
+
+impl From<crate::graph::ontology::violation::OntologyDeclarationRefused> for KgError {
+    /// The headline `rule`/`entity_type`/`property` are the first report
+    /// entry's; the full breakdown rides in `report`.
+    fn from(r: crate::graph::ontology::violation::OntologyDeclarationRefused) -> Self {
+        let head = r.entries.first();
+        KgError::OntologyViolation {
+            rule: head.map_or("declaration", |e| e.rule.as_str()),
+            entity: head.map_or("node", |e| entity_str(e.entity)),
+            entity_type: head.map(|e| e.entity_type.clone()).unwrap_or_default(),
+            property: head.and_then(|e| e.property.clone()),
+            message: r.message,
+            report: r.entries,
         }
     }
 }
@@ -863,6 +929,7 @@ mod tests {
             KgErrorCode::Expr,
             KgErrorCode::ConstraintViolation,
             KgErrorCode::ConstraintCreationFailed,
+            KgErrorCode::OntologyViolation,
             KgErrorCode::TransactionConflict,
             KgErrorCode::NodeNotFound,
             KgErrorCode::ConnectionNotFound,
@@ -881,5 +948,115 @@ mod tests {
                 "code {code:?} mapped to non-4xx-5xx http status: {code_val}"
             );
         }
+    }
+    #[test]
+    fn ontology_violation_surfaces() {
+        use crate::graph::constraints::EntityKind;
+        use crate::graph::ontology::violation::{OntologyRule, OntologyViolation};
+        let v = OntologyViolation::new(
+            OntologyRule::RequiredProperty,
+            EntityKind::Node,
+            "Person",
+            Some("name".into()),
+            "Ontology violation: Person requires property name",
+        );
+        let kg = KgError::from(v);
+        assert_eq!(kg.code(), KgErrorCode::OntologyViolation);
+        assert_eq!(kg.code().as_str(), "OntologyViolation");
+        assert_eq!(kg.code().http_status_code(), 422);
+        assert_eq!(
+            kg.code().neo4j_status_code(),
+            "Neo.ClientError.Schema.ConstraintValidationFailed"
+        );
+        assert_eq!(
+            kg.to_string(),
+            "Ontology violation: Person requires property name"
+        );
+        match kg {
+            KgError::OntologyViolation {
+                rule,
+                entity,
+                entity_type,
+                property,
+                report,
+                ..
+            } => {
+                assert_eq!(rule, "required_property");
+                assert_eq!(entity, "node");
+                assert_eq!(entity_type, "Person");
+                assert_eq!(property.as_deref(), Some("name"));
+                assert!(report.is_empty());
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ontology_declaration_refusal_carries_report() {
+        use crate::graph::constraints::EntityKind;
+        use crate::graph::ontology::violation::{
+            OntologyDeclarationRefused, OntologyReportEntry, OntologyRule,
+        };
+        let kg = KgError::from(OntologyDeclarationRefused {
+            entries: vec![OntologyReportEntry {
+                rule: OntologyRule::Domain,
+                entity: EntityKind::Relationship,
+                entity_type: "WORKS_AT".into(),
+                property: None,
+                count: 3,
+            }],
+            message: "declaration refused".into(),
+        });
+        assert_eq!(kg.code(), KgErrorCode::OntologyViolation);
+        match kg {
+            KgError::OntologyViolation {
+                rule,
+                entity,
+                report,
+                ..
+            } => {
+                assert_eq!((rule, entity), ("domain", "relationship"));
+                assert_eq!(report[0].count, 3);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ontology_violation_rides_the_pending_violation_side_channel() {
+        use crate::graph::constraints::EntityKind;
+        use crate::graph::ontology::violation::{OntologyRule, OntologyViolation};
+        use crate::graph::schema::DirGraph;
+        let mut graph = DirGraph::new();
+        let message = graph.record_ontology_violation(OntologyViolation::new(
+            OntologyRule::ClosedLabels,
+            EntityKind::Node,
+            "Ghost",
+            None,
+            "label Ghost is not declared",
+        ));
+        // A wrapped message no longer matches: the parked value is dropped,
+        // never mis-attributed.
+        assert!(graph
+            .take_constraint_error("wrapped: label Ghost")
+            .is_none());
+        graph.record_ontology_violation(OntologyViolation::new(
+            OntologyRule::ClosedLabels,
+            EntityKind::Node,
+            "Ghost",
+            None,
+            "label Ghost is not declared",
+        ));
+        let err = graph.take_constraint_error(&message).expect("parked");
+        assert_eq!(err.code(), KgErrorCode::OntologyViolation);
+        // The constraint-only drain does not hand back an ontology violation.
+        graph.record_ontology_violation(OntologyViolation::new(
+            OntologyRule::Domain,
+            EntityKind::Relationship,
+            "R",
+            None,
+            "m",
+        ));
+        assert!(graph.take_constraint_violation_for("m").is_none());
     }
 }

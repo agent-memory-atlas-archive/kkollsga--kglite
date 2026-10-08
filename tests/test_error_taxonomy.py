@@ -558,3 +558,13 @@ def test_an_unsupported_numpy_type_is_named_with_its_module():
     with pytest.raises(TypeError) as excinfo:
         kg.cypher("RETURN $v AS v", params={"v": np.complex128(1 + 2j)})
     assert "numpy.complex128" in str(excinfo.value)
+
+
+def test_ontology_violation_error_is_a_constraint_violation_with_its_own_code():
+    # No write path raises it yet; this pins the class, its place in the
+    # hierarchy (existing `except ConstraintViolationError` keeps catching it)
+    # and the class-level `.code`.
+    assert issubclass(kglite.OntologyViolationError, kglite.ConstraintViolationError)
+    assert issubclass(kglite.OntologyViolationError, kglite.ConstraintError)
+    assert kglite.OntologyViolationError.code == "OntologyViolation"
+    assert "OntologyViolationError" in kglite.__all__

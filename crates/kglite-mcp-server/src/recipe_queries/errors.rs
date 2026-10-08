@@ -380,6 +380,7 @@ const fn kg_error_category(code: KgErrorCode) -> &'static str {
         KgErrorCode::Expr => "expr",
         KgErrorCode::ConstraintViolation => "constraint_violation",
         KgErrorCode::ConstraintCreationFailed => "constraint_creation_failed",
+        KgErrorCode::OntologyViolation => "ontology_violation",
         KgErrorCode::TransactionConflict => "transaction_conflict",
         KgErrorCode::NodeNotFound => "node_not_found",
         KgErrorCode::ConnectionNotFound => "connection_not_found",
