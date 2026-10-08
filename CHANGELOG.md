@@ -54,6 +54,21 @@ before upgrading.
 
 ### Added
 
+- `kglite-bolt-server` runs data writes in auto-commit. `session.run("CREATE
+  (:X)")`, `SET`, `DELETE` and `MERGE` were refused with
+  `Neo.ClientError.Request.Invalid`; each now commits as a transaction of its
+  own, so Neo4j Browser and G.V() can write without wrapping. The summary reports type `w` (`rw` when the statement
+  returns rows) and the usual `stats`. Drivers never retry `session.run`, so the
+  server absorbs contention: in `queue` mode the write waits for the writer
+  slot (`--writer-wait-timeout` applies), and in `optimistic` mode a lost
+  commit race is retried up to three times before
+  `Neo.TransientError.Transaction.Outdated` is returned. A run with `mode: "r"`
+  (`default_access_mode=READ`) is refused with
+  `Neo.ClientError.Statement.AccessMode`, and `--readonly` still refuses every
+  write. **Differs from Neo4j:** the commit happens at RUN, before the result is
+  pulled, so a RESET or disconnect between the two does not undo the write; a
+  write that fails sends no rows and applies nothing. No bookmark is returned.
+
 - `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still
   checks the trust gate, the mapping shape, the `load` value and that the
   library can be hosted. A failed lazy build is logged and retried on the
@@ -79,6 +94,10 @@ before upgrading.
 
 ### Fixed
 
+- `EXPLAIN` of a write no longer bumps the graph version. In an explicit
+  `kglite-bolt-server` transaction it forked a working copy, so its `COMMIT`
+  published an unchanged graph as a new version and could conflict a concurrent
+  writer for nothing. `EXPLAIN` now runs as a read in every Bolt path.
 - `MERGE` now returns one row per match. It stopped at the first, so
   `MATCH (a:A), (b:B) MERGE (a)-[r:E]->(b)` over two parallel `:E` relationships
   returned one row, and `MATCH (a) MERGE (b)` over two nodes returned two rows
@@ -264,7 +283,7 @@ before upgrading.
   INDEX …")`, `DROP INDEX`, `CREATE CONSTRAINT` and `DROP CONSTRAINT` were refused
   with "auto-commit mutations not supported", so a script ported from Neo4j
   failed on its first line. Each now publishes as a transaction of its own and
-  reports query type `s`; data mutations are still refused in auto-commit.
+  reports query type `s`.
   Inside an explicit transaction a schema statement still runs and commits with
   the data, where Neo4j refuses the mix.
 - Deleting many nodes in one statement no longer holds about 2 KB per node

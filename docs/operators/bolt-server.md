@@ -112,11 +112,30 @@ every version.
 ## Transactions and errors
 
 The backend uses native KGLite sessions and transactions, not Python or the
-GIL. Reads and schema statements may auto-commit. **All data writes must be
-explicit driver transactions.** An auto-commit data mutation is rejected rather
-than run. That covers `CREATE`/`INSERT`, `SET`/`REMOVE`, a delete form, and
-`MERGE`. Use the driver's `execute_write` equivalent; a plain `session.run`
-remains auto-commit.
+GIL. A plain `session.run` is auto-commit and may read, write data or change
+schema. Each auto-commit write is a transaction of its own and commits before
+the result is returned. Explicit transactions (`execute_write`,
+`begin_transaction`) group several statements.
+
+### Auto-commit writes
+
+- A `CREATE`/`INSERT`, `SET`/`REMOVE`, delete form or `MERGE` in `session.run`
+  commits as one transaction. The summary reports type `w`, or `rw` when the
+  statement returns rows, plus the usual `stats`.
+- The write is applied or not as a whole. A failed statement, a lost conflict
+  or a log failure sends no rows and changes nothing.
+- A session in read mode (`default_access_mode=READ`) is refused with
+  `Neo.ClientError.Statement.AccessMode`. `--readonly` refuses every write.
+- Drivers never retry `session.run`, so the server absorbs contention. In
+  `queue` mode the write waits for the writer slot and obeys the wait timeout.
+  In `optimistic` mode a lost commit race is retried up to three times, then
+  fails with `Neo.TransientError.Transaction.Outdated`.
+- The commit happens at RUN, before the result is pulled. Neo4j commits when
+  the result is consumed, so a RESET or disconnect between RUN and PULL rolls
+  back there. Here the write has already committed.
+- The server returns no bookmarks. It is a single process, and a commit is
+  visible to every later query, so a session reads its own writes.
+- `USING PERIODIC COMMIT` and `CALL { … } IN TRANSACTIONS` are unsupported.
 
 ### Schema statements
 
@@ -144,11 +163,10 @@ Hand-rolled `begin_transaction` code needs its own retry loop.
 
 Error codes:
 
-- The auto-commit refusal is published as `Neo.ClientError.Request.Invalid`.
-  That is a client error with a client-side remedy.
-- A `--readonly` server or a disk-mode graph answers with
-  `Neo.ClientError.Security.Forbidden` instead. No rewrite of the request
-  helps there.
+- A `--readonly` server or a disk-mode graph answers a write with
+  `Neo.ClientError.Security.Forbidden`. No rewrite of the request helps there.
+- A write in a read-mode session or transaction is
+  `Neo.ClientError.Statement.AccessMode`.
 - KGLite typed errors map to Neo4j status codes for syntax, schema, timeout,
   access-mode, conflict, and execution failures.
 
@@ -197,8 +215,8 @@ concurrent writers queue instead of conflicting at commit. Reads never wait.
 - Waiting writers are served in arrival order.
 - Reads (auto-commit and read-mode transactions) run on snapshots and never
   take or wait for the slot. A snapshot never shows an uncommitted write.
-- An auto-commit schema statement (`CREATE`/`DROP INDEX`, `CREATE`/`DROP
-  CONSTRAINT`) takes the slot for its one-shot transaction and obeys the wait
+- An auto-commit write, data or schema (`CREATE`/`DROP INDEX`, `CREATE`/`DROP
+  CONSTRAINT`), takes the slot for its one-shot transaction and obeys the wait
   timeout.
 - Automatic and periodic checkpoints never take the slot. They save only
   committed state, so an open writer's uncommitted work is never written, and

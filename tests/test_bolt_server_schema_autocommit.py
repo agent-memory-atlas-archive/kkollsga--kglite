@@ -7,7 +7,8 @@ on `kglite-bolt-server`:
 
 - schema DDL publishes from `session.run`, reports query type `s`, and a
   refused form publishes nothing;
-- data writes stay refused in auto-commit, with the explicit-transaction remedy;
+- a data write whose variable is spelled like a DDL keyword is still a data
+  write (query type `w`, not `s`);
 - schema DDL also runs inside an explicit write transaction and commits with
   it. This is a deliberate difference from Neo4j, which refuses a transaction
   that mixes schema and data writes;
@@ -66,16 +67,13 @@ def test_constraints_run_in_auto_commit(bolt_server):
             assert "person_title_unique" not in names
 
 
-def test_data_writes_stay_refused_in_auto_commit(bolt_server):
+def test_a_keyword_named_variable_is_a_data_write_not_ddl(bolt_server):
     with neo4j.GraphDatabase.driver(bolt_server, auth=AUTH) as driver:
         with driver.session() as session:
-            with pytest.raises(neo4j.exceptions.ClientError) as excinfo:
-                session.run("CREATE (:Person {id: 9001, title: 'Nope'})").consume()
-            assert "explicit transaction" in str(excinfo.value)
-            # A node variable spelled like a DDL keyword is still a data write.
-            with pytest.raises(neo4j.exceptions.ClientError):
-                session.run("CREATE (index:Person {id: 9002, title: 'Nope'})").consume()
-            assert session.run("MATCH (n:Person) RETURN count(n) AS c").single()["c"] == 4
+            summary = session.run("CREATE (index:Person {id: 9002, title: 'NotDdl'})").consume()
+            assert summary.query_type == "w"
+            assert summary.counters.nodes_created == 1
+            assert session.run("MATCH (n:Person) RETURN count(n) AS c").single()["c"] == 5
 
 
 def test_schema_ddl_also_runs_in_an_explicit_write_transaction(bolt_server):

@@ -279,9 +279,7 @@ def test_outside_mutation_during_open_transaction(bolt_server_optimistic):
     """While session_a has an open tx, session_b commits an auto-commit
     mutation. session_a's tx still sees its own snapshot (pre-B), and
     its commit clobbers B (last-writer-wins). Pins current behavior."""
-    # Auto-commit mutations aren't supported by kglite-bolt-server
-    # (C.5 design — wrap writes in begin_transaction). So this test
-    # uses two transactions: session_a begins, session_b begins+commits,
+    # Two explicit transactions: session_a begins, session_b begins+commits,
     # then session_a commits.
     with neo4j.GraphDatabase.driver(bolt_server_optimistic, auth=("neo4j", "password")) as driver:
         with driver.session() as session_a:
@@ -327,9 +325,9 @@ def test_readonly_rejects_each_mutation_class(bolt_server_readonly, query):
 
 
 def test_auto_commit_reads_are_independently_visible(bolt_server):
-    """Each session.run is its own auto-commit (no wrapping tx). For
-    bolt-server: writes are NOT allowed in auto-commit, but each read
-    sees the current graph state."""
+    """Each session.run is its own auto-commit (no wrapping tx), and each
+    read sees the current graph state. Auto-commit writes are covered in
+    test_bolt_server_autocommit_writes.py."""
     with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
         with driver.session() as session:
             # Two independent reads each return current state.
@@ -343,25 +341,6 @@ def test_auto_commit_reads_are_independently_visible(bolt_server):
             tx.commit()
             c3 = _count_people(session)
             assert c3 == 5
-
-
-def test_auto_commit_mutation_is_refused_as_a_client_error(bolt_server):
-    """The refusal names a client-side remedy — "wrap it in an explicit
-    transaction" — so it must be published in the ClientError class. It used to
-    arrive as `Neo.DatabaseError.General.UnknownError`, which tells a driver the
-    *server* broke and makes the refusal retriable-looking to a routing layer.
-
-    `Neo.ClientError.Security.Forbidden`, which `--readonly` and disk-mode
-    graphs use, would be the wrong client code here: those are permission
-    refusals no client rewrite helps. This is a request-shape limitation."""
-    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
-        with driver.session() as session:
-            with pytest.raises(neo4j.exceptions.ClientError) as excinfo:
-                session.run("CREATE (:Person {id: 1300, title: 'AutoCommit'})").consume()
-    error = excinfo.value
-    assert error.code == "Neo.ClientError.Request.Invalid"
-    assert not isinstance(error, neo4j.exceptions.DatabaseError)
-    assert "explicit transaction" in str(error)
 
 
 def test_a_zoned_datetime_parameter_is_refused_with_its_remedy(bolt_server):

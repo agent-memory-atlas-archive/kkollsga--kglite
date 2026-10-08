@@ -451,6 +451,119 @@ async fn auto_commit_schema_ddl_times_out_like_any_writer_and_optimistic_skips_t
     run_ddl(&o).await.expect("optimistic mode never waits");
 }
 
+const AUTO_WRITE: &str = "CREATE (:Item {id: 2})";
+
+async fn run_auto_write(b: &KgliteBackend) -> Result<(), BoltError> {
+    b.execute(
+        &session(9),
+        AUTO_WRITE,
+        &HashMap::new(),
+        &BoltDict::new(),
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+#[tokio::test]
+async fn auto_commit_data_write_takes_the_writer_slot() {
+    let b = backend(WriteConcurrency::Queue, 0, 0);
+    let sa = session(1);
+    let a = b.begin_transaction(&sa, &BoltDict::new()).await.unwrap();
+    run(&b, &a, "CREATE (:Item {id: 1})").unwrap();
+
+    let b2 = Arc::clone(&b);
+    let write = tokio::spawn(async move { run_auto_write(&b2).await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !write.is_finished(),
+        "an auto-commit write must wait behind the open writer"
+    );
+
+    b.commit(&sa, &a).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), write)
+        .await
+        .expect("the write proceeds once the slot frees")
+        .unwrap()
+        .expect("queued writers never conflict");
+    assert_eq!(scalar(&b, "MATCH (n:Item) RETURN count(n)"), 2);
+    let t = tokio::time::timeout(
+        Duration::from_millis(300),
+        b.begin_transaction(&session(2), &BoltDict::new()),
+    )
+    .await
+    .expect("the auto-commit write released the slot")
+    .unwrap();
+    b.rollback(&session(2), &t).await.unwrap();
+}
+
+#[tokio::test]
+async fn auto_commit_data_write_times_out_like_any_writer_and_optimistic_skips_the_slot() {
+    let q = backend(WriteConcurrency::Queue, 200, 0);
+    let held = q
+        .begin_transaction(&session(1), &BoltDict::new())
+        .await
+        .unwrap();
+    let err = run_auto_write(&q).await.expect_err("slot is held");
+    assert_eq!(
+        code_of(&err),
+        "Neo.TransientError.Transaction.LockAcquisitionTimeout"
+    );
+    assert_eq!(scalar(&q, "MATCH (n:Item) RETURN count(n)"), 0);
+    q.rollback(&session(1), &held).await.unwrap();
+    run_auto_write(&q).await.expect("slot is free");
+
+    let o = backend(WriteConcurrency::Optimistic, 200, 0);
+    let _open = o
+        .begin_transaction(&session(1), &BoltDict::new())
+        .await
+        .unwrap();
+    run_auto_write(&o)
+        .await
+        .expect("optimistic mode never waits");
+}
+
+/// Commit one `CREATE` on its own transaction: the competing writer that
+/// lands between an auto-commit write's execution and its commit.
+fn commit_competitor(b: &KgliteBackend) {
+    let mut tx = b.session.begin();
+    let working = tx.working_mut().expect("working copy");
+    let params = HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::new(&params);
+    kglite::api::session::execute_mut(working, "CREATE (:Rival)", &opts).expect("competitor write");
+    b.session.commit(tx, true);
+}
+
+#[tokio::test]
+async fn optimistic_auto_commit_retries_a_lost_race_and_gives_up_after_three() {
+    let b = backend(WriteConcurrency::Optimistic, 0, 0);
+    let params = HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::new(&params);
+
+    // Two lost races, then the third attempt commits.
+    let mut runs = 0;
+    b.one_shot_write(AUTO_WRITE, &opts, 3, &mut |attempt| {
+        runs = attempt;
+        if attempt <= 2 {
+            commit_competitor(&b);
+        }
+    })
+    .expect("the third attempt wins");
+    assert_eq!(runs, 3);
+    assert_eq!(scalar(&b, "MATCH (n:Item) RETURN count(n)"), 1);
+    assert_eq!(scalar(&b, "MATCH (n:Rival) RETURN count(n)"), 2);
+
+    // A race lost on every attempt surfaces the conflict, applying nothing.
+    let err = b
+        .one_shot_write("CREATE (:Item {id: 3})", &opts, 3, &mut |_| {
+            commit_competitor(&b)
+        })
+        .expect_err("three lost races");
+    assert_eq!(code_of(&err), OUTDATED);
+    assert_eq!(scalar(&b, "MATCH (n:Item) RETURN count(n)"), 1);
+    assert_eq!(scalar(&b, "MATCH (n:Rival) RETURN count(n)"), 5);
+}
+
 #[tokio::test]
 async fn automatic_checkpoint_neither_waits_for_nor_blocks_the_slot_and_never_saves_uncommitted_work(
 ) {

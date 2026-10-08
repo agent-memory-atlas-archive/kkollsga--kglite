@@ -630,7 +630,7 @@ class KgliteBolt(KgliteCypher):
         return found
 
     def g_bulk_update(self, ds):
-        # write → explicit transaction (the server rejects auto-commit writes)
+        # write → explicit transaction, so the batch commits atomically
         tx = self._session.begin_transaction()
         try:
             rec = tx.run(
@@ -659,8 +659,8 @@ class KgliteBolt(KgliteCypher):
         return tuple(r["id"] for r in rows)
 
     def g_mutations(self, ds):
-        # kglite-bolt-server rejects auto-commit writes — mutations must run
-        # inside an explicit transaction.
+        # Mutations run inside an explicit transaction so the batch commits
+        # atomically.
         off = ds.params["mut_new_base"] + self._mut * 100_000
         self._mut += 1
         n = ds.params["mut_new_count"]

@@ -70,7 +70,7 @@ Check names, grouped:
 - `session.scalar_return`, `session.parameters`
 - `types.{integer,float,string,boolean,null,list,map}`
 - `graph.{node,relationship,path}`
-- `tx.{explicit_write_commits,rollback_discards,executeWrite_managed_retry,autocommit_mutation_is_rejected,occ_conflict_code}`
+- `tx.{explicit_write_commits,rollback_discards,executeWrite_managed_retry,autocommit_write_commits,occ_conflict_code}`
 - `errors.{syntax_error_code,codes_are_neo4j_shaped}`
 - `procedures.db_labels`
 - `capability.load_csv_denied_for_remote_clients`

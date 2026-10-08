@@ -189,24 +189,18 @@ async function main() {
     }
   });
 
-  await check("tx.autocommit_mutation_is_rejected", async () => {
-    // Documented kglite limitation: writes need an explicit transaction. The
-    // point of asserting it is that the client gets a *clear* refusal rather
-    // than a silent no-op.
+  await check("tx.autocommit_write_commits", async () => {
+    // A plain session.run write is its own transaction: it commits before the
+    // result is read, reports its counters, and is visible to the next session.
     const session = driver.session();
-    let raised = null;
     try {
-      await session.run("CREATE (:JsProbe {id: 99})");
-    } catch (err) {
-      raised = err;
+      const result = await session.run("CREATE (:JsProbe {id: 99})");
+      assertEqual(result.summary.counters.updates().nodesCreated, 1, "nodes created");
     } finally {
       await session.close();
     }
-    assert(raised !== null, "expected auto-commit CREATE to be rejected");
-    assert(
-      /auto-commit/i.test(raised.message),
-      `expected the message to mention auto-commit, got: ${raised.message}`,
-    );
+    const records = await read(driver, "MATCH (n:JsProbe {id: 99}) RETURN count(n) AS n");
+    assertEqual(records[0].get("n").toNumber(), 1, "auto-commit node count");
   });
 
   await check("tx.writer_wait_code", async () => {

@@ -544,7 +544,7 @@ limitations vs a full Neo4j server. Triaged for Phase F (post-E):
 | # | Limitation | Triage |
 |---|---|---|
 | 1 | No OCC version checking on commit (last-writer-wins under concurrent writes) | **Fix in Phase F** (~1 hr) — expose `DirGraph::version` accessor + wire into commit. Real value: prevents silent data loss. |
-| 2 | No auto-commit mutations (must wrap in BEGIN/COMMIT) | **Keep** — drivers always wrap writes in BEGIN/COMMIT; supporting auto-commit adds surface for no real win. |
+| 2 | No auto-commit mutations (must wrap in BEGIN/COMMIT) | **Keep** — drivers always wrap writes in BEGIN/COMMIT; supporting auto-commit adds surface for no real win. *Reversed in 0.19.5: auto-commit writes now commit as a transaction of their own.* |
 | 3 | Single-graph only (no multi-database) | **Keep** — would require rethinking the backend's data model. |
 | 4 | No causal consistency / bookmarks | **Keep** — Neo4j cluster feature; doesn't apply to single-server. |
 | 5 | No `neo4j://` routing | **Fix in Phase F** (~2 hr) — return a single-server self-pointing routing table; cluster-aware drivers work. |

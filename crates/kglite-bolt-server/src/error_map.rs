@@ -37,7 +37,7 @@
 //! | Refusal                                                        | `BoltError`  | Neo4j status code                       | Driver class |
 //! |----------------------------------------------------------------|--------------|------------------------------------------|--------------|
 //! | Permission: `--readonly`, disk-mode `db.checkpoint()`           | `Forbidden`  | `Neo.ClientError.Security.Forbidden`     | ClientError  |
-//! | Request shape: auto-commit mutation, `tx_timeout`, zoned params | `Session` / `Protocol` | `Neo.ClientError.Request.Invalid` | ClientError  |
+//! | Request shape: `tx_timeout`, zoned params                        | `Session` / `Protocol` | `Neo.ClientError.Request.Invalid` | ClientError  |
 //! | Server fault: a commit the WAL rejected, an unreachable outcome | `Backend`    | `Neo.DatabaseError.General.UnknownError` | DatabaseError |
 
 use boltr::error::BoltError;

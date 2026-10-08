@@ -813,6 +813,32 @@ def test_a_logged_commit_survives_a_sigkill_with_no_checkpoint(tmp_path, level):
         _teardown_bolt_server(restarted)
 
 
+@pytest.mark.parametrize("level", ["full", "normal"])
+def test_an_auto_commit_write_survives_a_sigkill_with_no_checkpoint(tmp_path, level):
+    """`session.run("CREATE ...")` is logged before it is acknowledged, like a
+    `COMMIT`: SIGKILL straight after the run returns and the restart replays it."""
+    _require_binary()
+    fixture = tmp_path / f"wal-auto-{level}.kgl"
+    _build_bolt_fixture_graph(fixture)
+    untouched = _digest(fixture)
+
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                session.run("CREATE (:Person {id: 98, title: 'AutoZed', city: 'Tromso'})").consume()
+        assert _wal_size(fixture) > WAL_HEADER_BYTES, "the auto-commit write must reach the log"
+    finally:
+        _teardown_bolt_server(proc)  # SIGKILL: no shutdown path, no exit save
+
+    assert _digest(fixture) == untouched, "no checkpoint ran, so only the log can carry the write"
+    restarted, restarted_url = _spawn_bolt_server(fixture, extra_args=["--durability", level])
+    try:
+        assert _count_over_bolt(restarted_url, "AutoZed") == 1
+    finally:
+        _teardown_bolt_server(restarted)
+
+
 BULK_NODES = 1500
 
 

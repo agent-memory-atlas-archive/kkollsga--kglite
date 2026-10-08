@@ -117,11 +117,15 @@ impl ServerIdentity {
 const COMPONENTS_EDITION: &str = "community";
 
 mod admission;
+mod auto_commit;
+#[cfg(test)]
+mod auto_commit_tests;
 mod intercepts;
 mod result_stream;
 #[cfg(test)]
 mod writer_queue_tests;
 mod writer_slot;
+use auto_commit::{access_mode_error, is_write_statement};
 use intercepts::{
     checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, server_facts_stream,
     CheckpointCall, ServerFactsCall, ServerFactsVerb,
@@ -160,13 +164,14 @@ pub(crate) use writer_slot::{WriteConcurrency, WriterConfig};
 /// - **`--write-concurrency queue`** (default): a write-mode transaction takes
 ///   the process-wide [`WriterSlot`] at BEGIN and holds it until its `TxState`
 ///   is dropped, so writers run one at a time on the latest graph and COMMIT
-///   cannot conflict. Read-mode transactions and auto-commit reads never take
-///   it. **`optimistic`**: no slot; a stale transaction conflicts at COMMIT.
+///   cannot conflict. An auto-commit write takes the slot for the length of its
+///   one-shot transaction. Read-mode transactions and auto-commit reads never
+///   take it. **`optimistic`**: no slot; a stale transaction conflicts at
+///   COMMIT, and an auto-commit write retries internally (see `auto_commit`).
 ///
-/// **`--readonly`**: rejects `begin_transaction` outright, and the
-/// auto-commit mutation gate in `execute` is unchanged. A read-only
-/// server is genuinely write-rejecting; there's no read-only-tx
-/// surface today.
+/// **`--readonly`**: rejects `begin_transaction` outright and every
+/// auto-commit mutation. A read-only server is genuinely write-rejecting;
+/// there's no read-only-tx surface today.
 pub struct KgliteBackend {
     /// Canonical shared graph + transaction-commit machinery, owned
     /// by `kglite::api::session`.
@@ -594,7 +599,9 @@ impl BoltBackend for KgliteBackend {
         } else {
             // Auto-commit: drivers attach tx metadata to RUN's extra.
             let meta = TxMeta::from_extra(extra)?;
-            self.execute_auto_commit(query, parameters, &meta).await?
+            let read_mode = matches!(extra.get("mode"), Some(BoltValue::String(m)) if m == "r");
+            self.execute_auto_commit(query, parameters, &meta, read_mode)
+                .await?
         };
         Ok(stream)
     }
@@ -1109,98 +1116,6 @@ impl KgliteBackend {
         }
     }
 
-    /// Auto-commit path. Reads run on a snapshot and schema statements run in a
-    /// one-shot transaction ([`is_schema_ddl`]); every other mutation is
-    /// rejected, because drivers wrap data writes in explicit transactions in
-    /// practice.
-    ///
-    /// Schema DDL is the exception because Neo4j *requires* it here:
-    /// `session.run("CREATE INDEX …")` is how a migration script issues it, and
-    /// an explicit write transaction is where Neo4j refuses it once the
-    /// transaction has touched data. Run as a transaction of its own, the
-    /// statement either publishes with its schema change or leaves the graph
-    /// untouched, and shares `COMMIT`'s conflict and durability handling.
-    async fn execute_auto_commit(
-        &self,
-        query: &str,
-        parameters: &HashMap<String, BoltValue>,
-        meta: &TxMeta,
-    ) -> Result<ResultStream, BoltError> {
-        // Pre-parse to reject auto-commit mutations with a Bolt-specific error
-        // before session::execute_read rejects with a generic one. The parse
-        // result is discarded; the executor's parse_cache makes the second
-        // parse free.
-        let (_, is_mutation) = cypher::parse_with_mutation_check(query).map_err(kg_to_bolt)?;
-        if is_mutation {
-            if self.readonly {
-                return Err(BoltError::Forbidden(
-                    "server is read-only — mutations rejected (--readonly flag)".into(),
-                ));
-            }
-            if is_schema_ddl(query) {
-                let kg_params = decode_params(parameters)?;
-                let started = Instant::now();
-                let (result, type_str, explain) = self
-                    .execute_schema_auto_commit(query, &kg_params, meta)
-                    .await?;
-                return finish_stream(result, type_str, explain, started);
-            }
-            // `Session` (`Neo.ClientError.Request.Invalid`), not `Forbidden`:
-            // the remedy below is a client-side rewrite, so this is a
-            // request-shape limitation rather than the permission refusal
-            // `--readonly` and disk-mode graphs publish.
-            return Err(BoltError::Session(
-                "auto-commit data mutations not supported by kglite-bolt-server — \
-                 wrap CREATE/SET/DELETE in an explicit transaction \
-                 (session.begin_transaction or execute_write); schema statements \
-                 (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT) do run in auto-commit"
-                    .into(),
-            ));
-        }
-
-        off_async_worker(|| {
-            let kg_params = decode_params(parameters)?;
-            let started = Instant::now();
-            let snapshot = self.session.snapshot();
-            let opts = self.execute_opts(&kg_params, meta);
-            let outcome =
-                kglite::api::session::execute_read(&snapshot, query, &opts).map_err(kg_to_bolt)?;
-            finish_stream(outcome.result, "r", outcome.explain, started)
-        })
-    }
-
-    /// Run one schema statement as its own transaction and publish it.
-    ///
-    /// In queue mode the statement takes the writer slot for its one-shot
-    /// transaction, like any other write, so it runs on the latest graph and
-    /// cannot conflict with a queued writer's commit.
-    async fn execute_schema_auto_commit(
-        &self,
-        query: &str,
-        kg_params: &HashMap<String, Value>,
-        meta: &TxMeta,
-    ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
-        let opts = self.execute_opts(kg_params, meta);
-        let _slot = if self.writer.config().mode == WriteConcurrency::Queue {
-            let id = self.tx_counter.fetch_add(1, Ordering::Relaxed);
-            let permit = self
-                .acquire_writer_slot(&format!("auto-commit-{id}"))
-                .await?;
-            // A running statement is never idle, whatever the idle timeout.
-            let running = permit.activity().begin_query();
-            Some((permit, running))
-        } else {
-            None
-        };
-        let mut tx = self.session.begin();
-        let working = tx.working_mut().map_err(kg_to_bolt)?;
-        let outcome =
-            kglite::api::session::execute_mut(working, query, &opts).map_err(kg_to_bolt)?;
-        self.publish(tx, "auto-commit", "auto-commit")?;
-        // Neo4j's summary type for a schema write is `s`.
-        Ok((outcome.result, "s", outcome.explain))
-    }
-
     /// Tx path: outer mutex only long enough to clone the per-tx Arc, then the
     /// inner per-tx mutex for the whole pipeline (lock ordering: see
     /// [`KgliteBackend`]). Contention is confined to a single tx, which Bolt
@@ -1243,7 +1158,7 @@ impl KgliteBackend {
 
         // Pre-parse for read/mut routing; the result is discarded and the
         // executor's parse_cache makes the second parse free.
-        let (_, is_mutation) = cypher::parse_with_mutation_check(query).map_err(kg_to_bolt)?;
+        let is_mutation = is_write_statement(query)?;
 
         if is_mutation && self.readonly {
             // Shouldn't happen — we reject begin_transaction under
@@ -1258,12 +1173,7 @@ impl KgliteBackend {
         if is_mutation && read_only && self.writer.config().mode == WriteConcurrency::Queue {
             // A read-mode transaction holds no writer slot; letting it commit
             // would let it overtake slot holders and conflict them.
-            return Err(BoltError::Query {
-                code: "Neo.ClientError.Statement.AccessMode".into(),
-                message: "Writing in read access mode not allowed: this transaction was begun \
-                          with mode \"r\" (session.execute_read). Use a write transaction."
-                    .into(),
-            });
+            return Err(access_mode_error("transaction"));
         }
 
         if is_mutation {
@@ -2162,38 +2072,6 @@ mod tests {
         assert!(!path.exists(), "a refused checkpoint writes nothing");
     }
 
-    /// The auto-commit mutation refusal names a client-side remedy, so it is a
-    /// client error. `Forbidden` — what `--readonly` and disk-mode graphs use —
-    /// is the *permission* class, where no client rewrite helps; this is a
-    /// request-shape limitation, which is what `Session` publishes.
-    #[tokio::test]
-    async fn auto_commit_mutation_is_refused_as_a_client_request_error() {
-        let backend = memory_backend();
-        let session = SessionHandle("auto-commit".into());
-
-        let err = backend
-            .execute(
-                &session,
-                "CREATE (:Person {id: 1})",
-                &HashMap::new(),
-                &BoltDict::new(),
-                None,
-            )
-            .await
-            .expect_err("auto-commit mutations are not supported");
-        assert!(
-            matches!(&err, BoltError::Session(msg) if msg.contains("explicit transaction")),
-            "unexpected error: {err:?}"
-        );
-        assert_eq!(
-            err.to_failure_metadata().get("code"),
-            Some(&BoltValue::String(
-                "Neo.ClientError.Request.Invalid".to_string()
-            )),
-            "a refusal with a client-side remedy must not be a DatabaseError"
-        );
-    }
-
     #[test]
     fn schema_ddl_is_told_from_data_writes_by_its_leading_words() {
         for ddl in [
@@ -2223,8 +2101,7 @@ mod tests {
 
     /// Neo4j runs schema statements in auto-commit, which is where a migration
     /// script sends them: `CREATE INDEX` must publish, show up in `SHOW
-    /// INDEXES`, and `DROP INDEX` must publish its removal. A data write on
-    /// the same path stays refused.
+    /// INDEXES`, and `DROP INDEX` must publish its removal.
     #[tokio::test]
     async fn schema_statements_run_and_publish_in_auto_commit() {
         let backend = memory_backend();
@@ -2274,12 +2151,6 @@ mod tests {
             "the dropped index must be gone: {:?}",
             shown.records
         );
-
-        let err = run("CREATE (:Person {id: 1})")
-            .await
-            .expect_err("a data write is still refused in auto-commit");
-        assert!(matches!(&err, BoltError::Session(msg) if msg.contains("explicit transaction")));
-        assert_eq!(count_nodes(&backend, "Person"), 0);
     }
 
     /// A schema statement that fails publishes nothing: an unsupported index

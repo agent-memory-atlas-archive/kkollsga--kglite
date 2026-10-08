@@ -1,8 +1,8 @@
 """Contended-writer load test for kglite-bolt-server (Track G, G4a).
 
 Answers the only question the write path can actually be asked: all Bolt
-writes are *explicit* transactions (auto-commit mutations are rejected at
-`backend.rs`), so what matters is how committed throughput, conflict rate,
+writes here are *explicit* transactions (the shape driver-managed
+`execute_write` produces), so what matters is how committed throughput, conflict rate,
 and latency move as N driver-managed writers contend for the single graph.
 
 Two sweeps live here: `test_contended_writer_sweep` varies the writer count

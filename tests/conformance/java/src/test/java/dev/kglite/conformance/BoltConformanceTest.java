@@ -229,18 +229,15 @@ class BoltConformanceTest {
   }
 
   @Test
-  @DisplayName("tx.autocommit_mutation_is_rejected — documented, and refused clearly")
-  void txAutocommitMutationIsRejected() {
+  @DisplayName("tx.autocommit_write_commits — a plain session.run write is its own transaction")
+  void txAutocommitWriteCommits() {
     try (Session session = driver.session()) {
-      Neo4jException raised =
-          assertThrows(
-              Neo4jException.class,
-              () -> session.run("CREATE (:JavaProbe {id: 99})").consume(),
-              "expected auto-commit CREATE to be rejected");
-      assertTrue(
-          raised.getMessage().toLowerCase().contains("auto-commit"),
-          "expected the message to mention auto-commit, got: " + raised.getMessage());
+      assertEquals(
+          1,
+          session.run("CREATE (:JavaProbe {id: 99})").consume().counters().nodesCreated(),
+          "nodes created");
     }
+    assertEquals(1L, count("MATCH (n:JavaProbe {id: 99}) RETURN count(n) AS n"));
   }
 
   @Test

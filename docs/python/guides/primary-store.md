@@ -484,7 +484,7 @@ When several processes need to read and write one graph, `kglite-bolt-server` is
 the coordination point. That one process owns the graph while clients connect over
 the Bolt protocol. It does not lift the single-writer model; it centralises it.
 
-- All writes go through explicit transactions. Auto-commit mutations are refused.
+- Auto-commit writes (`session.run`) commit as a transaction of their own; `execute_write` groups several statements.
 - Writes serialize at commit.
 - A commit against a stale snapshot conflicts with a retriable status code, so
   driver-managed transactions retry on their own. That retry is contention-tested,
