@@ -205,6 +205,13 @@ before upgrading.
 - `r['type']` on a relationship returns its type, as `keys(r)` implies. It was
   null, so `[k IN keys(r) | r[k]]` carried a null for `type`.
 
+- `SET` and `REMOVE` on a node or relationship held as a value now show their
+  effect to the rest of the statement. After `UNWIND collect(n) AS x SET x.p = 1`,
+  `x.p`, `properties(x)` and `labels(x)` in a later clause answered the value
+  from before the write, so `RETURN x.p` gave `null` and a second `SET` that read
+  `x.p` saw the old one. The write itself was always stored. Values the clause did
+  not name, and values inside lists or maps, stay as they were captured.
+
 - `EXPLAIN` of a write no longer bumps the graph version. In an explicit
   `kglite-bolt-server` transaction it forked a working copy, so its `COMMIT`
   published an unchanged graph as a new version and could conflict a concurrent
