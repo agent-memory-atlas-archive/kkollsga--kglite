@@ -4409,7 +4409,6 @@ pub fn kglite::api::DirGraph::rebuild_columns_to_heap(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_indices(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_indices_and_schemas(&mut self)
 pub fn kglite::api::DirGraph::rebuild_type_schemas(&mut self)
-pub fn kglite::api::DirGraph::record_ontology_violation(&mut self, violation: kglite::graph::ontology::violation::OntologyViolation) -> alloc::string::String
 pub fn kglite::api::DirGraph::register_connection_type(&mut self, connection_type: alloc::string::String)
 pub fn kglite::api::DirGraph::reindex(&mut self)
 pub fn kglite::api::DirGraph::remove_node_property(&mut self, index: petgraph::graph_impl::NodeIndex, key: &str) -> core::option::Option<kglite::datatypes::values::Value>
@@ -4418,7 +4417,6 @@ pub fn kglite::api::DirGraph::set_node_property(&mut self, index: petgraph::grap
 pub fn kglite::api::DirGraph::set_type_connectivity(&self, triples: alloc::vec::Vec<kglite::api::introspection::ConnectivityTriple>)
 pub fn kglite::api::DirGraph::set_version(&mut self, v: u64)
 pub fn kglite::api::DirGraph::take_column_store(&mut self, node_type: &str) -> core::option::Option<alloc::sync::Arc<kglite::graph::storage::column_store::ColumnStore>>
-pub fn kglite::api::DirGraph::take_constraint_error(&mut self, message: &str) -> core::option::Option<kglite::error::KgError>
 pub fn kglite::api::DirGraph::upsert_connection_type_metadata(&mut self, conn_type: &str, source_type: &str, target_type: &str, prop_types: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>)
 pub fn kglite::api::DirGraph::vacuum(&mut self) -> kglite::api::NodeRemap
 pub fn kglite::api::DirGraph::version(&self) -> u64
@@ -4537,6 +4535,9 @@ pub fn kglite::api::DirGraph::populate_index_keys(&mut self)
 pub fn kglite::api::DirGraph::rebuild_indices_from_keys(&mut self)
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::insert_node_routed(&mut self, id: kglite::datatypes::values::Value, title: kglite::datatypes::values::Value, node_type: &str, properties: std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>) -> petgraph::graph_impl::NodeIndex
+impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::record_ontology_violation(&mut self, violation: kglite::graph::ontology::violation::OntologyViolation) -> alloc::string::String
+pub fn kglite::api::DirGraph::take_constraint_error(&mut self, message: &str) -> core::option::Option<kglite::error::KgError>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::set_valid_time_default(&mut self, default: kglite::api::temporal::ValidTimeDefault, persist: bool)
 impl core::clone::Clone for kglite::api::DirGraph
