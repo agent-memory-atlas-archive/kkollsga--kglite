@@ -524,3 +524,20 @@ fn extend_refuses_before_any_group_lands() {
     assert_loader_violation(&mut target, &message, "required_property", Some("email"));
     assert_eq!(people(&mut target), before, "nothing was merged");
 }
+
+#[test]
+fn a_minted_title_does_not_satisfy_a_required_name() {
+    in_every_mode(|mut graph| {
+        declare(
+            &mut graph,
+            r#"{"classes": {"Person": {"required_properties": ["name"],
+                                       "enforcement": "error"}}}"#,
+        );
+        run(&mut graph, "CREATE (:Person {name: 'Ada', age: 1})").unwrap();
+        let error = run(&mut graph, "CREATE (:Person {age: 3})").unwrap_err();
+        assert_violation(error, "required_property", Some("name"));
+        let error = run(&mut graph, "MATCH (n:Person) REMOVE n.name").unwrap_err();
+        assert_violation(error, "required_property", Some("name"));
+        assert_eq!(people(&mut graph), 1);
+    });
+}

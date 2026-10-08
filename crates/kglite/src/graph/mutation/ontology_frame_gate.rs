@@ -21,6 +21,7 @@ use crate::datatypes::{DataFrame, Value};
 use crate::graph::diagnostics::{Diagnostic, DiagnosticGroup};
 use crate::graph::mutation::batch::ConflictHandling;
 use crate::graph::ontology::node_gate::{Tally, TypeRules};
+use crate::graph::ontology::predicates::stored_property_value;
 use crate::graph::schema::PROVISIONAL_KEY;
 use crate::graph::schema::{soft_alias_fallback, DirGraph, InternedKey, SoftAliasFallback};
 use crate::graph::storage::GraphRead;
@@ -112,9 +113,7 @@ pub(super) fn gate_node_updates<'v>(
                             .find(|(name, _)| graph.resolve_alias(node_type, name) == field);
                         match written {
                             Some((_, value)) => Some((*value).clone()),
-                            None => view
-                                .resolved_field(node_type, field, InternedKey::from_str(field))
-                                .map(|v| v.into_owned()),
+                            None => stored_property_value(graph, &view, node_type, property),
                         }
                     },
                     &mut tally,
@@ -165,6 +164,7 @@ fn judge_rows(
             .and_then(|titles| titles.get(row).cloned())
             .or_else(|| df.get_value_by_index(row, shape.title_idx))
             .unwrap_or(Value::Null);
+        let title_supplied = shape.title_field != shape.id_field;
         rules.judge_values(
             node_type,
             |property| {
@@ -172,7 +172,9 @@ fn judge_rows(
                 let incoming = if field == "id" || property == shape.id_field {
                     Some(id.clone())
                 } else if field == "title" || property == shape.title_field {
-                    Some(title.clone())
+                    // Without a title column the loader mints the title from
+                    // the id, which supplies nothing.
+                    title_supplied.then(|| title.clone())
                 } else {
                     df.get_column_index(property)
                         .and_then(|col| df.get_value_by_index(row, col))
@@ -185,16 +187,13 @@ fn judge_rows(
                     (Some(_), ConflictHandling::Preserve) => stored().or(incoming),
                     (Some(_), _) => incoming.or_else(stored),
                 };
-                // The same structural fallback a stored node's read applies,
-                // so a frame and the node it becomes answer alike.
+                // The structural fallback a stored node's read applies, minus
+                // the title one: a minted title never satisfies a rule.
                 merged.or_else(|| match soft_alias_fallback(field) {
-                    Some(SoftAliasFallback::Title) => {
-                        Some(title.clone()).filter(|v| !matches!(v, Value::Null))
-                    }
                     Some(SoftAliasFallback::TypeString) => {
                         Some(Value::String(node_type.to_string()))
                     }
-                    None => None,
+                    _ => None,
                 })
             },
             tally,
@@ -214,8 +213,5 @@ fn stored_value(
     property: &str,
 ) -> Option<Value> {
     let view = graph.graph.node_view(idx)?;
-    let field = graph.resolve_alias(node_type, property);
-    view.resolved_field(node_type, field, InternedKey::from_str(field))
-        .map(|v| v.into_owned())
-        .filter(|v| !matches!(v, Value::Null))
+    stored_property_value(graph, &view, node_type, property).filter(|v| !matches!(v, Value::Null))
 }

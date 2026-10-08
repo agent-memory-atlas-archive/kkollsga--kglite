@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 use crate::datatypes::values::Value;
 use crate::graph::mutation::validation::value_matches_type;
 use crate::graph::ontology::{ClassDecl, OntologyStore, RelationshipDecl};
-use crate::graph::schema::{DirGraph, InternedKey};
+use crate::graph::schema::{soft_alias_fallback, DirGraph, InternedKey, SoftAliasFallback};
 use crate::graph::storage::NodeView;
 
 /// `class_or_type` plus every declared class whose ancestor chain contains
@@ -84,6 +84,66 @@ pub fn declared_node_properties(decl: &ClassDecl, check: &str) -> Vec<String> {
     }
 }
 
+/// Whether `title` is the value the engine mints for a node whose creator
+/// supplied none: `<Label>_<id>`, or the id itself on a type with no declared
+/// title field (what `add_nodes` without a title column and an untitled
+/// `CREATE` on such a type both write). A stored node carries no marker
+/// beyond the value, so this is the only evidence the audit has; a title a
+/// caller deliberately supplies that is exactly `<Label>_<id>` (or, on an
+/// undeclared type, equal to its id) is indistinguishable from a minted one.
+pub fn title_is_synthesised(
+    graph: &DirGraph,
+    primary_type: &str,
+    id: &Value,
+    title: &Value,
+) -> bool {
+    if let Value::String(t) = title {
+        let minted = match id {
+            Value::UniqueId(n) => format!("{primary_type}_{n}"),
+            Value::Int64(n) => format!("{primary_type}_{n}"),
+            other => format!(
+                "{primary_type}_{}",
+                crate::datatypes::values::raw_string(other)
+            ),
+        };
+        if *t == minted {
+            return true;
+        }
+    }
+    !graph.title_field_aliases.contains_key(primary_type)
+        && crate::graph::core::filtering::values_equal(id, title)
+}
+
+/// The value ontology rules judge for `property` on a stored node: the same
+/// resolution a filter applies, except that a title the engine minted never
+/// counts as a supplied value. `name` falls back to the title only for reads;
+/// a required `name` is satisfied by a stored `name` property or a supplied
+/// title under the type's declared title field, never by a default.
+pub fn stored_property_value(
+    graph: &DirGraph,
+    view: &NodeView<'_>,
+    primary_type: &str,
+    property: &str,
+) -> Option<Value> {
+    let field = graph.resolve_alias(primary_type, property);
+    match field {
+        "id" => Some(view.id().into_owned()),
+        "title" => {
+            let (id, title) = (view.id(), view.title());
+            (!title_is_synthesised(graph, primary_type, &id, &title)).then(|| title.into_owned())
+        }
+        _ => view
+            .get(InternedKey::from_str(field))
+            .map(|v| v.into_owned())
+            .or_else(|| match soft_alias_fallback(field) {
+                Some(SoftAliasFallback::TypeString) => {
+                    Some(Value::String(primary_type.to_string()))
+                }
+                _ => None,
+            }),
+    }
+}
+
 /// The subset of `properties` that `view` fails under `check`
 /// (`required_properties` or `property_types`) against `decl`. Loader
 /// aliases resolve against the node's actual `primary_type`, not the
@@ -99,9 +159,8 @@ pub fn node_property_failures(
     properties
         .iter()
         .filter(|property| {
-            let field = graph.resolve_alias(primary_type, property);
-            let value = view.resolved_field(primary_type, field, InternedKey::from_str(field));
-            property_fails(decl, check, property, value.as_deref())
+            let value = stored_property_value(graph, view, primary_type, property);
+            property_fails(decl, check, property, value.as_ref())
         })
         .cloned()
         .collect()

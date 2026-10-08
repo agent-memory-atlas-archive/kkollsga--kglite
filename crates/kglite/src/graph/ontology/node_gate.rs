@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use petgraph::graph::NodeIndex;
 
-use super::predicates::{declared_node_properties, label_allowed, property_fails};
+use super::predicates::{
+    declared_node_properties, label_allowed, property_fails, stored_property_value,
+};
 use super::violation::{OntologyRule, OntologyViolation};
 use super::{ClassDecl, Enforcement, OntologyStore, NODE_CHECK_NAMES};
 use crate::datatypes::values::Value;
@@ -298,11 +300,7 @@ impl DirGraph {
                 if rules.has_property_rules() && !is_provisional_stub(&view) {
                     rules.judge_values(
                         primary_type,
-                        |property| {
-                            let field = graph.resolve_alias(primary_type, property);
-                            view.resolved_field(primary_type, field, InternedKey::from_str(field))
-                                .map(|v| v.into_owned())
-                        },
+                        |property| stored_property_value(graph, &view, primary_type, property),
                         tally,
                     );
                 }
