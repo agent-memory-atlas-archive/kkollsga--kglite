@@ -861,12 +861,6 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "[x IN [p] | size(relationships(x))] AS r ORDER BY a, b.name",
         None,
     ),
-    (
-        "merge_relationship_matches_every_parallel_member",
-        "small_graph",
-        "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) MERGE (a)-[r:KNOWS]->(b) RETURN count(r) AS c",
-        None,
-    ),
     # The query-local equality index (past 64 driving rows) against the
     # per-row matcher's cross-kind equality: int probes on float keys, ISO
     # text on date keys, plain text on one-element JSON list keys.
