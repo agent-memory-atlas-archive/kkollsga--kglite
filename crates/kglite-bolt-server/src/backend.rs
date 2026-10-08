@@ -397,6 +397,11 @@ impl KgliteBackend {
         Arc::clone(&self.session)
     }
 
+    /// A handle on the backup service, sharing its one-in-flight gate.
+    pub(crate) fn backup_service(&self) -> BackupService {
+        self.backup.clone()
+    }
+
     /// Where a checkpoint of this server's graph is written.
     pub(crate) fn graph_path(&self) -> &std::path::Path {
         &self.graph_path

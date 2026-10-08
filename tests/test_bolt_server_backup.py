@@ -396,3 +396,92 @@ def test_allow_any_path_with_auth_takes_an_absolute_path(tmp_path):
         assert record["path"] == str(target) and target.is_file()
     finally:
         _teardown_bolt_server(proc)
+
+
+# ── Scheduled backups: --backup-interval / --backup-keep ────────────────────
+
+
+def _scheduled(bdir):
+    return sorted(p.name for p in bdir.glob("graph-*.kgl")) if bdir.exists() else []
+
+
+def _wait_for(predicate, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.1)
+    raise AssertionError("condition not reached in time")
+
+
+def _create_person(url, pid):
+    with _driver(url) as driver, driver.session() as session:
+        session.run("CREATE (:Person {id: $i, title: 't', city: 'c'})", i=pid).consume()
+
+
+def test_schedule_flags_without_backup_dir_are_refused_at_startup(tmp_path):
+    served = tmp_path / "graph.kgl"
+    _build_bolt_fixture_graph(served)
+    for flags in (["--backup-interval", "5"], ["--backup-keep", "2"]):
+        result = subprocess.run(
+            [str(_BOLT_BINARY), "--graph", str(served), "--port", "0", *flags],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "--backup-dir" in result.stderr
+
+
+def test_interval_fires_keep_prunes_and_foreign_files_survive(tmp_path):
+    served_dir = tmp_path / "served"
+    served_dir.mkdir()
+    served = served_dir / "graph.kgl"
+    _build_bolt_fixture_graph(served)
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    (bdir / "manual.kgl").write_bytes(b"manual backup")
+    (bdir / "notes.txt").write_text("foreign")
+    (bdir / "other-20240101T000000Z.kgl").write_bytes(b"other stem")
+    proc, url = _spawn_bolt_server(
+        served, extra_args=["--backup-dir", str(bdir), "--backup-interval", "1", "--backup-keep", "2"]
+    )
+    try:
+        # Each pass changes the graph, so no tick is skipped as unchanged.
+        seen = set()
+        pid = 100
+        deadline = time.monotonic() + 40
+        while time.monotonic() < deadline and len(seen) < 4:
+            _create_person(url, pid)
+            pid += 1
+            seen.update(_scheduled(bdir))
+            time.sleep(0.5)
+        assert len(seen) >= 4, f"interval never produced enough backups: {seen}"
+        final = _scheduled(bdir)
+        assert len(final) <= 2, f"--backup-keep 2 left {final}"
+        assert set(final) <= seen
+        assert (bdir / "manual.kgl").read_bytes() == b"manual backup"
+        assert (bdir / "notes.txt").read_text() == "foreign"
+        assert (bdir / "other-20240101T000000Z.kgl").read_bytes() == b"other stem"
+    finally:
+        _teardown_bolt_server(proc)
+    newest = bdir / _scheduled(bdir)[-1]
+    assert _seq_or_people(newest) >= 5
+
+
+def _seq_or_people(path):
+    return kglite.open(str(path)).cypher("MATCH (p:Person) RETURN count(p) AS c").to_list()[0]["c"]
+
+
+def test_unchanged_graph_is_not_backed_up_again(tmp_path):
+    proc, url, _served, bdir = _start(tmp_path, extra=["--backup-interval", "1"])
+    try:
+        _create_person(url, 500)
+        first = _wait_for(lambda: _scheduled(bdir))
+        time.sleep(4)  # several ticks with no write in between
+        assert _scheduled(bdir) == first
+        _create_person(url, 501)
+        _wait_for(lambda: len(_scheduled(bdir)) > len(first))
+    finally:
+        _teardown_bolt_server(proc)

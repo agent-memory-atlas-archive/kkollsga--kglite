@@ -253,6 +253,25 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     backup_allow_any_path: bool,
 
+    /// Write a backup into `--backup-dir` every SECS seconds.
+    ///
+    /// Requires `--backup-dir`. Files are named `<graph-stem>-YYYYMMDDTHHMMSSZ.kgl`
+    /// (UTC). The first backup lands one interval after startup; a tick is
+    /// skipped when the graph is unchanged since the last scheduled backup, or
+    /// when a `db.backup()` is still running. A failure is logged and the
+    /// server keeps serving.
+    #[arg(long, value_name = "SECS", value_parser = backup::parse_backup_interval)]
+    backup_interval: Option<Duration>,
+
+    /// Keep only the newest N scheduled backups [default: keep all].
+    ///
+    /// Requires `--backup-interval`. After each successful scheduled backup the
+    /// oldest files matching the scheduler's own name pattern are deleted;
+    /// files from `db.backup()` and any other file in the directory are never
+    /// touched.
+    #[arg(long, value_name = "N", value_parser = backup::parse_backup_keep)]
+    backup_keep: Option<usize>,
+
     /// Authentication scheme. `none` (default) accepts any LOGON
     /// credentials; `basic` validates against `--auth-user` / `--auth-pass`.
     #[arg(long, value_enum, default_value_t = AuthScheme::None)]
@@ -929,6 +948,9 @@ async fn serve() -> Result<()> {
         matches!(cli.auth, AuthScheme::None),
     )
     .map_err(|e| anyhow::anyhow!(e))?;
+    backup::validate_schedule(cli.backup_interval, cli.backup_keep, backup_policy.dir())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let backup_dir = backup_policy.dir().map(Path::to_path_buf);
     let mut durability = Durability::resolve(&cli)?;
     // The graph is opened *and* wrapped in its session here: at a logging level
     // the two are one step, because recovering the write-ahead sidecar is part
@@ -1023,6 +1045,7 @@ async fn serve() -> Result<()> {
     // already on disk.
     let checkpoint_state = backend.checkpoint_state();
     let checkpoint_state_for_wal = Arc::clone(&checkpoint_state);
+    let backup_service = backend.backup_service();
 
     let addr = SocketAddr::new(cli.bind, cli.port);
 
@@ -1066,6 +1089,28 @@ async fn serve() -> Result<()> {
         )
     });
 
+    let backup_task = match (cli.backup_interval, backup_dir) {
+        (Some(interval), Some(dir)) => {
+            let stem = served_path
+                .file_stem()
+                .map_or_else(|| "graph".to_string(), |s| s.to_string_lossy().into_owned());
+            tracing::info!(
+                interval_secs = interval.as_secs(),
+                keep = cli.backup_keep,
+                dir = %dir.display(),
+                "scheduled backups enabled"
+            );
+            Some(backup::spawn_scheduler(
+                backup_service,
+                dir,
+                stem,
+                interval,
+                cli.backup_keep,
+            ))
+        }
+        _ => None,
+    };
+
     let serve_result = listener
         .serve(addr)
         .await
@@ -1076,7 +1121,7 @@ async fn serve() -> Result<()> {
         &durability,
         &exit_session,
         &served_path,
-        [checkpoint_task, wal_task],
+        [checkpoint_task, wal_task, backup_task],
         serve_result,
     )
     .await
@@ -1143,10 +1188,10 @@ async fn finish_shutdown(
     durability: &Durability,
     exit_session: &kglite::api::session::Session,
     served_path: &Path,
-    checkpoint_tasks: [Option<tokio::task::JoinHandle<()>>; 2],
+    checkpoint_tasks: [Option<tokio::task::JoinHandle<()>>; 3],
     serve_result: Result<()>,
 ) -> Result<()> {
-    let [interval_task, wal_task] = checkpoint_tasks;
+    let [interval_task, wal_task, backup_task] = checkpoint_tasks;
     if let Some(task) = interval_task {
         task.abort();
         let _ = task.await;
@@ -1156,6 +1201,11 @@ async fn finish_shutdown(
         task.abort();
         let _ = task.await;
         tracing::info!("checkpoint-wal: stopped");
+    }
+    if let Some(task) = backup_task {
+        task.abort();
+        let _ = task.await;
+        tracing::info!("backup-interval: stopped");
     }
     // At `off` there is no log to flush and calling `sync` would be an
     // error, so it is skipped rather than reported.
