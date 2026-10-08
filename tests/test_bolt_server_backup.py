@@ -83,11 +83,14 @@ def _seq(path):
     return row["c"], row["lo"], row["hi"]
 
 
-def _start(tmp_path, graph_name="graph.kgl", big=False, extra=(), readonly=False, backup_dir=True):
+def _start(tmp_path, graph_name="graph.kgl", big=False, extra=(), readonly=False, backup_dir=True, nodes=BIG_NODES):
     served_dir = tmp_path / "served"
     served_dir.mkdir(exist_ok=True)
     served = served_dir / graph_name
-    (_big_graph if big else _build_bolt_fixture_graph)(served)
+    if big:
+        _big_graph(served, nodes)
+    else:
+        _build_bolt_fixture_graph(served)
     bdir = tmp_path / "backups"
     args = ["--backup-dir", str(bdir)] if backup_dir else []
     proc, url = _spawn_bolt_server(served, readonly=readonly, extra_args=[*args, *extra])
@@ -140,8 +143,27 @@ class _Writer(threading.Thread):
 # ── AC1, AC2, AC3, AC6 ──────────────────────────────────────────────────────
 
 
+MIN_BACKUP_WINDOW = 0.3
+
+
 def test_writer_keeps_acking_and_backup_is_a_gap_free_prefix(tmp_path):
-    proc, url, _served, bdir = _start(tmp_path, big=True)
+    """The graph is sized to the machine: a backup shorter than the window
+    proves nothing, so the graph grows (bounded) until one is long enough.
+    The writer and prefix assertions then run unchanged on that attempt."""
+    nodes = BIG_NODES
+    for attempt in range(4):
+        elapsed = _backup_race(tmp_path / f"attempt{attempt}", nodes, final=attempt == 3)
+        if elapsed is not None:
+            return
+        nodes *= 2
+    raise AssertionError("unreachable: the final attempt asserts the window")
+
+
+def _backup_race(tmp_path, nodes, final):
+    """One attempt. `None` means the backup finished inside `MIN_BACKUP_WINDOW`
+    and the caller should retry on a larger graph (never on `final`)."""
+    tmp_path.mkdir()
+    proc, url, _served, bdir = _start(tmp_path, big=True, nodes=nodes)
     writer = _Writer(url)
     try:
         writer.start()
@@ -157,7 +179,11 @@ def test_writer_keeps_acking_and_backup_is_a_gap_free_prefix(tmp_path):
         print(f"AC1 backup {t1 - t0:.3f}s, writer max gap {gap * 1000:.0f} ms, {acked_in_window} acks inside")
         # AC1: commits flow during the backup. Gap bounded well under the
         # backup's own duration (a serialize-under-lock backup stalls for all of it).
-        assert (t1 - t0) > 0.3, "graph too small: the backup finished too fast to prove anything"
+        if (t1 - t0) <= MIN_BACKUP_WINDOW and not final:
+            return None
+        assert (t1 - t0) > MIN_BACKUP_WINDOW, (
+            f"graph too small: a {nodes}-node backup finished in {t1 - t0:.3f}s, too fast to prove anything"
+        )
         assert acked_in_window >= 10, f"writer starved: {acked_in_window} acks in {t1 - t0:.2f}s"
         assert gap < 0.5, f"writer stalled {gap * 1000:.0f} ms during a {(t1 - t0) * 1000:.0f} ms backup"
         assert record["success"] is True
@@ -177,9 +203,10 @@ def test_writer_keeps_acking_and_backup_is_a_gap_free_prefix(tmp_path):
         count, lo, hi = (int(x) for x in out.stdout.split())
         assert (count, lo) == (hi, 1), f"not a contiguous prefix: count={count} lo={lo} hi={hi}"
         assert record["lsn"] == hi, f"lsn {record['lsn']} does not match last commit in file {hi}"
-        assert record["nodes"] == BIG_NODES + count
+        assert record["nodes"] == nodes + count
         assert any(i > hi for _, i in writer.acks), "writer did not outlive the snapshot point"
         assert record["path"] == str((bdir.resolve() / "snap.kgl"))
+        return t1 - t0
     finally:
         writer.stop.set()
         _teardown_bolt_server(proc)
