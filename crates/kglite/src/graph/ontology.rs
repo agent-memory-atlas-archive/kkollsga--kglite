@@ -504,6 +504,52 @@ pub fn ontology_from_json(json: &str) -> Result<OntologyStore, String> {
     ontology_from_value(&value)
 }
 
+/// The declaration as the JSON document [`ontology_from_json`] accepts —
+/// the serde form, plus an explicit `enforcement` on each advisory class and
+/// relationship when the store default is not advisory. The serde form drops
+/// an `advisory` severity, which the parser would re-inherit from that
+/// default; stating it keeps `ontology_from_json(ontology_to_json(s)) == s`
+/// without bloating documents that need no help.
+pub fn ontology_to_json(store: &OntologyStore) -> Result<serde_json::Value, String> {
+    let mut doc =
+        serde_json::to_value(store).map_err(|e| format!("ontology serialization: {e}"))?;
+    if store.enforcement == Enforcement::Advisory {
+        return Ok(doc);
+    }
+    for (section, severities) in [
+        (
+            "classes",
+            store
+                .classes
+                .iter()
+                .map(|(k, d)| (k, d.enforcement))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "relationships",
+            store
+                .relationships
+                .iter()
+                .map(|(k, d)| (k, d.enforcement))
+                .collect(),
+        ),
+    ] {
+        for (name, severity) in severities {
+            if let Some(decl) = doc
+                .get_mut(section)
+                .and_then(|m| m.get_mut(name))
+                .and_then(|d| d.as_object_mut())
+            {
+                decl.insert(
+                    "enforcement".to_string(),
+                    serde_json::Value::String(severity.as_str().to_string()),
+                );
+            }
+        }
+    }
+    Ok(doc)
+}
+
 /// The closed accept-list for `property_types` values — every spelling
 /// [`crate::graph::mutation::validation::value_matches_type`] resolves.
 const PROPERTY_TYPE_NAMES: &[&str] = &[
@@ -562,6 +608,7 @@ const CLASS_KEYS: &[&str] = &[
     "required_properties",
     "property_types",
     "enforcement",
+    "enforcement_overrides",
 ];
 const REL_KEYS: &[&str] = &[
     "domain",
@@ -578,6 +625,7 @@ const REL_KEYS: &[&str] = &[
     "enforcement",
     "exempt",
     "description",
+    "enforcement_overrides",
 ];
 
 fn severity_from_str(s: &str, context: &str) -> Result<Enforcement, String> {
@@ -592,6 +640,39 @@ fn severity_from_str(s: &str, context: &str) -> Result<Enforcement, String> {
 }
 
 fn parse_enforcement(
+    map: &crate::datatypes::PropMap,
+    context: &str,
+    checks: &[&str],
+    default: Enforcement,
+) -> Result<(Enforcement, BTreeMap<String, Enforcement>), String> {
+    let severity = |s: &str| severity_from_str(s, context);
+    let (base, mut overrides) = parse_enforcement_key(map, context, checks, default)?;
+    // `enforcement_overrides` is the canonical spelling `ontology()` emits next
+    // to a string `enforcement` base; the map form of `enforcement` is the
+    // authoring shorthand. Both land in the same per-check table.
+    if let Some(extra) = map.get("enforcement_overrides") {
+        let per_check = as_map(extra).ok_or_else(|| {
+            format!("{context}: 'enforcement_overrides' must be a {{check: severity}} map")
+        })?;
+        for (check, sv) in per_check {
+            if !checks.contains(&check) {
+                return Err(format!(
+                    "{context}: enforcement_overrides key '{check}' \
+                     is not a check — use one of {checks:?}"
+                ));
+            }
+            let Value::String(sv) = sv else {
+                return Err(format!(
+                    "{context}: enforcement_overrides['{check}'] must be a severity string"
+                ));
+            };
+            overrides.insert(check.to_string(), severity(sv)?);
+        }
+    }
+    Ok((base, overrides))
+}
+
+fn parse_enforcement_key(
     map: &crate::datatypes::PropMap,
     context: &str,
     checks: &[&str],
@@ -1141,5 +1222,49 @@ mod tests {
         let store = OntologyStore::default();
         assert!(store.is_empty());
         assert_eq!(serde_json::to_string(&store).unwrap(), r#"{"version":0}"#);
+    }
+
+    /// The `ontology()` document must be accepted back by the declaring
+    /// grammar, per-check overrides and a non-advisory store default
+    /// included.
+    #[test]
+    fn rich_ontology_round_trips_through_its_own_document() {
+        let rich = parse(
+            r#"{"classes": {"Thing": {"abstract": true, "description": "root"},
+                            "Doc": {"is_a": "Thing", "by": "kind",
+                                    "required_properties": ["owner"],
+                                    "property_types": {"title": "string"},
+                                    "enforcement": {"required_properties": "error",
+                                                    "property_types": "advisory"}},
+                            "Person": {"enforcement": "advisory"}},
+                "relationships": {"AUTHORED": {"domain": "Person", "range": "Doc",
+                                               "inverse_name": "AUTHORED_BY",
+                                               "inverse_enforced": true,
+                                               "cardinality": {"min": 0, "max": 5},
+                                               "required_properties": ["since"],
+                                               "property_types": {"since": "integer"},
+                                               "enforcement": {"domain": "error", "range": "advisory"},
+                                               "exempt": {"required_properties": ["Person"]},
+                                               "description": "d"}},
+                "closed_labels": true,
+                "enforcement": "warn"}"#,
+        )
+        .unwrap();
+        assert!(
+            !store_overrides_empty(&rich),
+            "fixture must carry overrides"
+        );
+        let doc = ontology_to_json(&rich).unwrap();
+        let back = ontology_from_json(&doc.to_string()).unwrap();
+        assert_eq!(back, rich);
+    }
+
+    fn store_overrides_empty(s: &OntologyStore) -> bool {
+        s.classes
+            .values()
+            .all(|c| c.enforcement_overrides.is_empty())
+            && s.relationships
+                .values()
+                .all(|r| r.enforcement_overrides.is_empty())
     }
 }

@@ -1328,3 +1328,48 @@ def test_ancestry_is_refused_where_a_check_name_is_expected(g):
         g.define_ontology(_taxonomy_decl(enforcement={"ancestry": "error"}))
     with pytest.raises(Exception, match="not a check name"):
         g.define_ontology(_taxonomy_decl(exempt={"ancestry": ["Student"]}))
+
+
+RICH = {
+    "classes": {
+        "Thing": {"abstract": True, "description": "root"},
+        "Doc": {
+            "is_a": "Thing",
+            "by": "kind",
+            "required_properties": ["owner"],
+            "property_types": {"title": "string"},
+            "enforcement": {"required_properties": "warn", "property_types": "advisory"},
+        },
+        "Person": {"enforcement": "advisory"},
+    },
+    "relationships": {
+        "AUTHORED": {
+            "domain": "Person",
+            "range": "Doc",
+            "inverse_name": "AUTHORED_BY",
+            "inverse_enforced": True,
+            "cardinality": {"min": 0, "max": 5},
+            "required_properties": ["since"],
+            "property_types": {"since": "integer"},
+            "enforcement": {"domain": "warn", "range": "advisory"},
+            "exempt": {"required_properties": ["Person"]},
+            "description": "d",
+        }
+    },
+    "closed_labels": True,
+    "enforcement": "warn",
+}
+
+
+def test_ontology_output_is_accepted_back_by_define_ontology():
+    first = KnowledgeGraph()
+    first.define_ontology(RICH)
+    doc = first.ontology()
+    assert doc["classes"]["Doc"]["enforcement_overrides"] == {
+        "required_properties": "warn",
+        "property_types": "advisory",
+    }
+    second = KnowledgeGraph()
+    second.define_ontology(doc)
+    assert second.ontology() == doc
+    assert second.ontology()["classes"]["Person"]["enforcement"] == "advisory"

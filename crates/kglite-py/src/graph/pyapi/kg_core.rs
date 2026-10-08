@@ -1369,11 +1369,8 @@ impl KnowledgeGraph {
         if self.inner.ontology.is_empty() {
             return Ok(py.None());
         }
-        let json = serde_json::to_value(&*self.inner.ontology).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "ontology serialization failed: {e}"
-            ))
-        })?;
+        let json = kglite_core::api::ontology_to_json(&self.inner.ontology)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         let value = kglite_core::api::param::json_value_to_kglite_value(&json);
         py_out::value_to_py(py, &value)
     }
