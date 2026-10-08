@@ -90,6 +90,14 @@ The header exposes:
   → `kglite_session_new` → `kglite_session_execute_mut` → `kglite_session_save`
   → free the session → free the lease;
 - atomic/durable save, byte serialization, and schema JSON;
+- `kglite_session_backup`, an online single-file `.kgl` snapshot of a session's
+  published graph that does not stall writers. It takes no lease and writes no
+  `-wal` sidecar. Pass `live_path` (the file the graph was opened from, or null)
+  so a destination aliasing it is refused; a disk-mode graph is refused too.
+  Both refusals report `KGLITE_STATUS_CODE_FILE_IO` with the reason in the
+  message. The report is a JSON object (`path`, `bytes`, `nodes`,
+  `relationships`, `graph_version`, `lsn` or null, `lock_hold_ms`,
+  `elapsed_ms`) freed with `kglite_free_string`;
 - `kglite_session_save`, the checkpoint for a graph that has been moved into a
   session. `kglite_session_new` takes ownership of the graph handle, so a graph
   mutated through `kglite_session_execute_mut` is persisted from the session

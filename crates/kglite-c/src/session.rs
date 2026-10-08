@@ -15,7 +15,7 @@ use kglite::api::param::{
     json_object_to_query_value_map, json_object_to_value_map, json_text_to_query_value_map,
     json_value_to_kglite_value, validate_json_query_numbers_at, JsonQueryTextError,
 };
-use kglite::api::session::{execute_mut, execute_read, ExecuteOptions, Session};
+use kglite::api::session::{execute_mut, execute_read, BackupOptions, ExecuteOptions, Session};
 use kglite::api::{Embedder, Value};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -766,6 +766,96 @@ pub unsafe extern "C" fn kglite_session_save(
                         unsafe {
                             *out_error_msg = alloc_c_string(&message);
                         }
+                    }
+                    KgliteStatusCode::FileIo
+                }
+            }
+        },
+    )
+}
+
+/// Write a consistent single-file `.kgl` backup of a session's published graph
+/// to `dest` while writers keep committing.
+///
+/// Unlike [`kglite_session_save`](crate::kglite_session_save), a backup is an
+/// independent copy: it takes no writer lease, creates no `-wal` sidecar, and
+/// does not touch the session's checkpoint. Memory and mapped graphs are
+/// supported; a disk-mode graph is refused. An existing `dest` is replaced
+/// atomically.
+///
+/// `live_path` (nullable) is the file the graph was opened from, when the
+/// caller has one. A session cannot know it, so pass it to have a backup over
+/// the live file refused; a durable session also detects its own log sidecar.
+///
+/// On success `out_report_json` is an owned JSON object: `path`, `bytes`,
+/// `nodes`, `relationships`, `graph_version`, `lsn` (null for a session
+/// without a write-ahead log), `lock_hold_ms`, `elapsed_ms`. Free it with
+/// [`kglite_free_string`](crate::kglite_free_string). On failure it is null.
+///
+/// # Errors
+///
+/// - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `dest` or `out_report_json` is null
+/// - `KGLITE_STATUS_CODE_INVALID_UTF8` — `dest` or `live_path` isn't valid UTF-8
+/// - `KGLITE_STATUS_CODE_FILE_IO` — the write failed, or the backup was
+///   refused (destination aliases the live checkpoint, disk-mode graph);
+///   the message says which
+///
+/// # Safety
+///
+/// `session` must be a valid handle from [`kglite_session_new`], not yet
+/// freed; `dest` a null-terminated UTF-8 string; `live_path` null or a
+/// null-terminated UTF-8 string; `out_report_json` a valid writable slot;
+/// `out_error_msg` null or a valid writable slot.
+#[no_mangle]
+pub unsafe extern "C" fn kglite_session_backup(
+    session: *const KgliteSession,
+    dest: *const c_char,
+    live_path: *const c_char,
+    out_report_json: *mut *const c_char,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || crate::ffi::init_out(out_report_json, std::ptr::null()),
+        || {
+            if session.is_null() || dest.is_null() || out_report_json.is_null() {
+                return KgliteStatusCode::NullPointer;
+            }
+            let Ok(dest_str) = unsafe { CStr::from_ptr(dest) }.to_str() else {
+                return KgliteStatusCode::InvalidUtf8;
+            };
+            let live = if live_path.is_null() {
+                None
+            } else {
+                match unsafe { CStr::from_ptr(live_path) }.to_str() {
+                    Ok(s) => Some(std::path::PathBuf::from(s)),
+                    Err(_) => return KgliteStatusCode::InvalidUtf8,
+                }
+            };
+            let session_state = unsafe { SessionState::from_handle(session) };
+            let opts = BackupOptions { live_path: live };
+            match session_state
+                .inner
+                .backup(std::path::Path::new(dest_str), &opts)
+            {
+                Ok(report) => {
+                    let json = serde_json::json!({
+                        "path": report.path.to_string_lossy(),
+                        "bytes": report.bytes,
+                        "nodes": report.nodes,
+                        "relationships": report.relationships,
+                        "graph_version": report.graph_version,
+                        "lsn": report.lsn,
+                        "lock_hold_ms": report.lock_hold.as_secs_f64() * 1000.0,
+                        "elapsed_ms": report.elapsed.as_secs_f64() * 1000.0,
+                    })
+                    .to_string();
+                    unsafe { *out_report_json = alloc_c_string(&json) };
+                    KgliteStatusCode::Ok
+                }
+                Err(error) => {
+                    if !out_error_msg.is_null() {
+                        unsafe { *out_error_msg = alloc_c_string(&error.to_string()) };
                     }
                     KgliteStatusCode::FileIo
                 }

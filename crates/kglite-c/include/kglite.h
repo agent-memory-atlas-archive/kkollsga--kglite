@@ -1688,6 +1688,47 @@ KgliteStatusCode kglite_session_save(struct KgliteSession *session,
                                      const char **out_error_msg);
 
 /**
+ * Write a consistent single-file `.kgl` backup of a session's published graph
+ * to `dest` while writers keep committing.
+ *
+ * Unlike [`kglite_session_save`](crate::kglite_session_save), a backup is an
+ * independent copy: it takes no writer lease, creates no `-wal` sidecar, and
+ * does not touch the session's checkpoint. Memory and mapped graphs are
+ * supported; a disk-mode graph is refused. An existing `dest` is replaced
+ * atomically.
+ *
+ * `live_path` (nullable) is the file the graph was opened from, when the
+ * caller has one. A session cannot know it, so pass it to have a backup over
+ * the live file refused; a durable session also detects its own log sidecar.
+ *
+ * On success `out_report_json` is an owned JSON object: `path`, `bytes`,
+ * `nodes`, `relationships`, `graph_version`, `lsn` (null for a session
+ * without a write-ahead log), `lock_hold_ms`, `elapsed_ms`. Free it with
+ * [`kglite_free_string`](crate::kglite_free_string). On failure it is null.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `dest` or `out_report_json` is null
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `dest` or `live_path` isn't valid UTF-8
+ * - `KGLITE_STATUS_CODE_FILE_IO` — the write failed, or the backup was
+ *   refused (destination aliases the live checkpoint, disk-mode graph);
+ *   the message says which
+ *
+ * # Safety
+ *
+ * `session` must be a valid handle from [`kglite_session_new`], not yet
+ * freed; `dest` a null-terminated UTF-8 string; `live_path` null or a
+ * null-terminated UTF-8 string; `out_report_json` a valid writable slot;
+ * `out_error_msg` null or a valid writable slot.
+ */
+
+KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
+                                       const char *dest,
+                                       const char *live_path,
+                                       const char **out_report_json,
+                                       const char **out_error_msg);
+
+/**
  * Free a session handle. Idempotent on null (no-op).
  *
  * # Safety
