@@ -38,7 +38,7 @@ struct InlineConfig {
 /// parks the structured violation on the graph alongside the message it
 /// produced. Recovering it here is what makes a bulk write raise
 /// `kglite.ConstraintViolationError` rather than the generic `ArgumentError`.
-pub(super) fn bulk_write_err(graph: &mut DirGraph, message: String) -> pyo3::PyErr {
+pub(crate) fn bulk_write_err(graph: &mut DirGraph, message: String) -> pyo3::PyErr {
     let error = graph
         .take_constraint_error(&message)
         .unwrap_or(crate::error::KgError::Argument(message));
@@ -47,9 +47,11 @@ pub(super) fn bulk_write_err(graph: &mut DirGraph, message: String) -> pyo3::PyE
 
 /// Run a bulk write off-GIL and raise its typed error.
 ///
-/// [`detach_mutation`]'s sibling for the paths that can raise a constraint
-/// violation: the graph is threaded through so [`bulk_write_err`] can recover
-/// the parked violation once the detached borrow has ended.
+/// The apply phase of a bulk loader works on already-converted Rust data, so
+/// holding the GIL through it would starve every other Python thread; only
+/// code touching `Bound`/`PyAny` must stay attached. The graph is threaded
+/// through so [`bulk_write_err`] can recover the parked violation once the
+/// detached borrow has ended.
 fn detach_bulk_write<T, F>(py: Python<'_>, graph: &mut DirGraph, f: F) -> PyResult<T>
 where
     F: pyo3::marker::Ungil + Send + FnOnce(&mut DirGraph) -> Result<T, String>,
@@ -57,22 +59,6 @@ where
 {
     let outcome = py.detach(|| f(graph));
     outcome.map_err(|message| bulk_write_err(graph, message))
-}
-
-/// Run a pure-Rust batch-mutation closure with the GIL released, mapping
-/// the engine's `String` error to the typed `kglite.*` exception.
-///
-/// The apply phase of a bulk loader operates purely on already-converted Rust
-/// data (`DataFrame`, `&mut DirGraph`), so holding the GIL through it starves
-/// every other Python thread for the duration of a bulk insert. Detach only
-/// spans like this one — anything touching `Bound`/`PyAny` must stay attached.
-fn detach_mutation<T, F>(py: Python<'_>, f: F) -> PyResult<T>
-where
-    F: pyo3::marker::Ungil + Send + FnOnce() -> Result<T, String>,
-    T: pyo3::marker::Ungil + Send,
-{
-    py.detach(f)
-        .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))
 }
 
 fn validate_interner_names<'a>(
@@ -1834,7 +1820,7 @@ impl KnowledgeGraph {
             let graph = get_graph_mut(&mut self.inner);
 
             // Converted frame is pure Rust — apply off-GIL.
-            let report = detach_mutation(py, || {
+            let report = detach_bulk_write(py, graph, |graph| {
                 graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
                     kglite_core::api::mutation::add_nodes(
                         graph,
@@ -2000,7 +1986,7 @@ impl KnowledgeGraph {
             let graph = get_graph_mut(&mut self.inner);
 
             // Converted frame is pure Rust — apply off-GIL.
-            let report = detach_mutation(py, || {
+            let report = detach_bulk_write(py, graph, |graph| {
                 graph.with_write_provenance(git_sha, modified_by, |graph| {
                     kglite_core::api::mutation::add_connections_with_identical_rows(
                         graph,

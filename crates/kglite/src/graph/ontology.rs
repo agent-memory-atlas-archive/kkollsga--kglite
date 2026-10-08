@@ -3,8 +3,8 @@
 //!
 //! **Annotations, not axioms.** The store never invents facts and never
 //! changes what a query matches: it feeds `describe()`, provides defaults
-//! for the rule-procedure validators, and (via the blueprint gate) turns
-//! declarations into a load-time data-quality contract. In spirit this is
+//! for the rule-procedure validators, and (via the blueprint gate and the
+//! node write gate) turns declarations into a data-quality contract. In spirit this is
 //! SKOS, not OWL — no entailment, no open-world semantics.
 //!
 //! Deliberately independent of `DirGraph::parent_types`: that map is a
@@ -60,8 +60,12 @@
 //!   `*1..`, which is what a parent-pointer taxonomy (`STRAT_PARENT`,
 //!   `wdt:P279`) actually is — declaring *that* `transitive` would report
 //!   100% violations.
-//! - `enforcement` is data for *callers* — the blueprint gate and
-//!   `ontology_audit()` — never an engine write guarantee in this mode.
+//! - `enforcement` at `warn` or `error` is enforced at write time for the
+//!   node rules (class `required_properties` / `property_types` and
+//!   `closed_labels`): a violating Cypher statement or bulk load is refused
+//!   (`error`) or reported (`warn`), judged on the node's primary label
+//!   alone. Relationship rules are data for the blueprint gate and
+//!   `ontology_audit()`, not engine write guarantees.
 //! - `exempt` names, per check, source classes whose violations are counted
 //!   *separately* (`ontology_audit`'s `exempted`) instead of against
 //!   severity, so one legitimately-nonconforming source type cannot pin a
@@ -76,6 +80,9 @@
 //!   declaration carries its effective severity.
 
 pub(crate) mod declare_check;
+pub(crate) mod node_gate;
+#[cfg(test)]
+mod ontology_gate_tests;
 pub mod predicates;
 pub mod violation;
 

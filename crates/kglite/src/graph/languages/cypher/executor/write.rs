@@ -27,6 +27,7 @@ use super::{clause_display_name, delete_clause, merge_pattern, schema_ddl, Cyphe
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::Interrupt;
 use crate::graph::features::temporal::{check_new_node, EmptyIntervals};
+use crate::graph::ontology::node_gate::Tally;
 use crate::graph::schema::{DirGraph, EdgeData, InternedKey};
 use crate::graph::storage::{GraphRead, GraphWrite};
 use petgraph::graph::NodeIndex;
@@ -304,6 +305,12 @@ pub(crate) fn execute_mutable_with_csv(
     let mut stats = MutationStats::default();
     let profiling = query.profile;
     let mut profile_stats: Vec<ClauseStats> = Vec::new();
+    // Enforced node rules are judged on the nodes the statement touched once
+    // its clauses have run, so a SET later in the statement can repair an
+    // earlier CREATE. A stale buffer from a statement that failed midway is
+    // dropped here.
+    graph.ontology_touched.clear();
+    let mut ontology_tally = Tally::default();
 
     // `LOAD CSV` drives the rest of the pipeline over bounded row batches
     // instead of being executed as a clause — the whole point is that peak
@@ -339,6 +346,7 @@ pub(crate) fn execute_mutable_with_csv(
                 let mut batch_profile = Vec::new();
                 let out =
                     run_clause_pipeline(graph, suffix, seed, &ctx, &mut stats, &mut batch_profile)?;
+                graph.judge_touched_nodes(&mut ontology_tally)?;
                 merge_profile(&mut profile_stats, batch_profile);
                 Ok(out)
             },
@@ -356,14 +364,16 @@ pub(crate) fn execute_mutable_with_csv(
             leading: &[],
             empty_intervals: &empty_intervals,
         };
-        run_clause_pipeline(
+        let out = run_clause_pipeline(
             graph,
             &query.clauses,
             ResultSet::new(),
             &ctx,
             &mut stats,
             &mut profile_stats,
-        )?
+        )?;
+        graph.judge_touched_nodes(&mut ontology_tally)?;
+        out
     };
 
     let mut result = finalize_mutation(
@@ -389,6 +399,9 @@ pub(crate) fn execute_mutable_with_csv(
         .into_inner()
         .unwrap_or_else(|e| e.into_inner());
     if let Some(warning) = empty.warning() {
+        super::retrieval_diagnostics::record_warning(&mut target.warnings, warning);
+    }
+    for warning in ontology_tally.warnings() {
         super::retrieval_diagnostics::record_warning(&mut target.warnings, warning);
     }
     Ok(result)
@@ -1291,13 +1304,15 @@ fn create_node(
         )?;
     }
 
-    // Last abort point: a single-node CREATE runs with no rollback checkpoint
-    // (`can_skip_rollback_checkpoint`), so no deadline error may follow the insert.
+    // Last abort point: a single-node CREATE can run with no rollback
+    // checkpoint (`can_skip_rollback_checkpoint`), so no deadline error may
+    // follow the insert.
     super::check_interrupt(ctx.interrupt)?;
 
     // Every backend writes id/title/properties through the per-type
     // ColumnStore — see `DirGraph::insert_node_routed`.
     let node_idx = graph.insert_node_routed(id, title, &label, properties);
+    graph.note_ontology_touch(node_idx);
 
     // Update type_indices. `bucket_was_new` feeds statement rollback: undoing
     // the append is not enough if this CREATE also *introduced* the type —
@@ -2202,6 +2217,7 @@ fn execute_remove(
                         );
                     }
                     graph.apply_property_write_plan(&constraint_plan, node_idx);
+                    graph.note_ontology_touch(node_idx);
                 }
                 RemoveItem::Label {
                     variable, label, ..

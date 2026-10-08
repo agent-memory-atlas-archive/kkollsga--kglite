@@ -796,7 +796,7 @@ impl KnowledgeGraph {
 
             let written =
                 kglite_core::api::mutation::update_node_properties(graph, &nodes, target_property)
-                    .map_err(crate::graph::store_as_refused)?;
+                    .map_err(|m| crate::graph::store_as_refused(graph, m))?;
             slf.store_as_landed(&written.warnings)?;
 
             if !keep_selection.unwrap_or(false) {
@@ -1175,11 +1175,8 @@ impl KnowledgeGraph {
 
         self.check_durable_owner()?;
         let graph = get_graph_mut(&mut self.inner);
-        let result = core_add_properties(graph, &self.cursor.selection, spec_map).map_err(
-            |e: String| -> PyErr {
-                crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-            },
-        )?;
+        let result = core_add_properties(graph, &self.cursor.selection, spec_map)
+            .map_err(|e: String| super::kg_mutation::bulk_write_err(graph, e))?;
         self.commit_wal()?;
         Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
@@ -1286,7 +1283,7 @@ impl KnowledgeGraph {
 
         let result =
             kglite_core::api::mutation::update_node_properties(graph, &nodes, store_as.unwrap())
-                .map_err(crate::graph::store_as_refused)?;
+                .map_err(|m| crate::graph::store_as_refused(graph, m))?;
         self.store_as_landed(&result.warnings)?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
@@ -1383,11 +1380,19 @@ impl KnowledgeGraph {
                     Python::attach(|py| Ok(Py::new(py, new_kg)?.into_any()))
                 }
                 Ok(_) => Err(crate::graph::store_as_refused(
+                    graph,
                     "Unexpected result type when storing calculation result".to_string(),
                 )),
-                Err(e) => Err(crate::graph::store_as_refused(format!(
-                    "Error evaluating expression '{expression}': {e}"
-                ))),
+                // A constraint or ontology refusal parked on the graph keeps
+                // its typed class; the expression prefix would break the
+                // identity that recovers it.
+                Err(e) => Err(match graph.take_constraint_error(&e) {
+                    Some(typed) => crate::error_py::kg_to_pyerr(typed),
+                    None => crate::graph::store_as_refused(
+                        graph,
+                        format!("Error evaluating expression '{expression}': {e}"),
+                    ),
+                }),
             }
         } else {
             // The temporary whole-graph clone + evaluation are pure Rust —
@@ -1520,7 +1525,7 @@ impl KnowledgeGraph {
                 use_grouping,
                 target_property,
             )
-            .map_err(crate::graph::store_as_refused)?;
+            .map_err(|m| crate::graph::store_as_refused(graph, m))?;
             self.store_as_landed(&result.warnings)?;
 
             let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));

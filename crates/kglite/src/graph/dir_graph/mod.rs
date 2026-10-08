@@ -392,6 +392,19 @@ pub struct DirGraph {
     /// the store on define/clear/load, never persisted.
     #[serde(skip)]
     pub(crate) ontology_closures: HashMap<InternedKey, Vec<InternedKey>>,
+    /// Whether any node rule of the declared ontology is enforced (`warn` or
+    /// `error`): the one branch every node write hook takes when no ontology
+    /// is enforced. Derived beside `ontology_closures` by
+    /// `rebuild_ontology_closures`, never persisted; `false` on a graph whose
+    /// store was assigned without that rebuild, so every path that installs a
+    /// store must call it.
+    #[serde(skip)]
+    pub(crate) ontology_node_gate: bool,
+    /// Nodes the running Cypher statement wrote while `ontology_node_gate`
+    /// was set, drained by the statement-end judge
+    /// (`DirGraph::judge_touched_nodes`). Empty between statements.
+    #[serde(skip)]
+    pub(crate) ontology_touched: Vec<petgraph::graph::NodeIndex>,
     /// WAL replay sets this while it rebuilds state: the write-funnel
     /// closure stamp must not run there — the log's whole-set label ops are
     /// authoritative, and re-deriving would un-apply a logged
@@ -930,6 +943,8 @@ impl DirGraph {
             property_shapes: std::collections::BTreeMap::new(),
             managed_labels: std::collections::BTreeMap::new(),
             ontology_closures: HashMap::new(),
+            ontology_node_gate: false,
+            ontology_touched: Vec::new(),
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
             build_info: None,

@@ -390,7 +390,7 @@ fn merge_rows(
         })
         .map(|((conn_type, _, _), group)| (conn_type.clone(), group.source_type.clone()))
         .collect();
-    gate_node_groups(target, &node_groups)?;
+    gate_node_groups(target, &node_groups, conflict_mode)?;
     gate_edge_groups(target, &edge_groups, &owned, conflict_mode)?;
     let empty_labels = gate_label_carriers(target, &node_groups, &label_carriers, conflict_mode)?;
     report.warnings.extend(empty_labels.warning());
@@ -449,9 +449,10 @@ fn gate_label_carriers(
 fn gate_node_groups(
     target: &mut DirGraph,
     node_groups: &BTreeMap<String, NodeGroup>,
+    conflict_mode: ConflictHandling,
 ) -> Result<(), String> {
     for (node_type, group) in node_groups {
-        gate_node_rows(target, node_type, "id", "title", || {
+        gate_node_rows(target, node_type, "id", "title", conflict_mode, || {
             build_node_dataframe(group, "id", "title")
         })?;
     }

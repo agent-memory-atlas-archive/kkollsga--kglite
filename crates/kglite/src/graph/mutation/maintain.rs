@@ -1,6 +1,9 @@
 use crate::datatypes::{DataFrame, Value};
 use crate::graph::constraints::{ConstraintResult, UniqueConstraintKey};
-use crate::graph::features::temporal::{check_edge_load, check_node_load, merge_start_key};
+use crate::graph::diagnostics::Diagnostic;
+use crate::graph::features::temporal::{
+    check_edge_load, check_node_load, merge_start_key, EmptyIntervals,
+};
 use crate::graph::introspection::reporting::{ConnectionOperationReport, NodeOperationReport};
 use crate::graph::mutation::batch::{
     BatchProcessor, BatchStats, ConflictHandling, ConnectionBatchProcessor, NodeAction,
@@ -20,6 +23,7 @@ use crate::graph::mutation::endpoints::{
 use crate::graph::mutation::identical_rows::{
     IdenticalRowTracker, IdenticalRows, RowColumns, RowIdentity,
 };
+use crate::graph::mutation::ontology_frame_gate::{gate_node_frame, FrameShape};
 use crate::graph::mutation::pending_edges::PendingEdges;
 use crate::graph::mutation::rel_constraint_gate::{ConnectionBatchGate, RowFolding};
 use crate::graph::mutation::traversal_paths::{copy_path_properties, node_type_name, LevelPaths};
@@ -182,7 +186,7 @@ impl ConstraintColumns {
 /// Judge the frame `frame` builds as [`add_nodes`] would, writing nothing —
 /// for a caller that merges several node types and must refuse before the
 /// first of them lands (`extend_graph`). The same refusals `add_nodes` makes —
-/// the abstract-class refusal and the constraint gate — on the same pre-call
+/// the abstract-class refusal, the constraint gate and the ontology gate — on the same pre-call
 /// state, so a frame this admits `add_nodes` admits too. The frame is built
 /// only for a type a constraint gates.
 pub(super) fn gate_node_rows(
@@ -190,11 +194,13 @@ pub(super) fn gate_node_rows(
     node_type: &str,
     unique_id_field: &str,
     title_field: &str,
+    mode: ConflictHandling,
     frame: impl FnOnce() -> Result<DataFrame, String>,
 ) -> Result<(), String> {
     graph.reject_abstract_batch_type(node_type)?;
     let pk_enforced = graph.primary_key_for(node_type).is_some();
     let gated = pk_enforced
+        || graph.ontology_node_gate
         || graph.has_unique_constraints()
         || graph.has_required_fields(node_type)
         || graph.type_has_property_type_constraints(node_type)
@@ -224,7 +230,23 @@ pub(super) fn gate_node_rows(
         unique_id_field,
         title_field,
         derived_titles.as_deref(),
+    )?;
+    // Only a refusal matters here: the warnings are reported by the
+    // `add_nodes` call that follows, which judges the same frame again.
+    gate_node_frame(
+        graph,
+        node_type,
+        &df_data,
+        &FrameShape {
+            id_idx,
+            title_idx,
+            id_field: unique_id_field,
+            title_field,
+            derived_titles: derived_titles.as_deref(),
+        },
+        mode,
     )
+    .map(|_| ())
 }
 
 /// Refuse the whole batch before anything is written, by checking every row's
@@ -869,6 +891,40 @@ fn preflight_add_nodes(
         .map_err(|e| format!("disk mutation lease failed: {e}"))
 }
 
+/// Every pre-write refusal of an `add_nodes` call, in order: declared
+/// constraints, the ontology gate, then valid-time bounds. Returns what the
+/// call's report carries: the empty-interval count and the ontology `warn`
+/// findings.
+fn gate_node_load(
+    graph: &mut DirGraph,
+    (node_type, df_data, conflict_mode): (&str, &DataFrame, ConflictHandling),
+    shape: &FrameShape<'_>,
+) -> Result<(EmptyIntervals, Vec<Diagnostic>), String> {
+    let constraint_columns = ConstraintColumns::for_batch(graph, node_type, df_data);
+    let pk_enforced = graph.primary_key_for(node_type).is_some();
+    gate_batch(
+        graph,
+        node_type,
+        df_data,
+        constraint_columns.as_ref(),
+        pk_enforced,
+        shape.id_idx,
+        shape.title_idx,
+        shape.id_field,
+        shape.title_field,
+        shape.derived_titles,
+    )?;
+    let ontology_warnings = gate_node_frame(graph, node_type, df_data, shape, conflict_mode)?;
+    let empty_intervals = check_node_load(
+        graph,
+        node_type,
+        df_data,
+        shape.id_idx,
+        (conflict_mode, &[]),
+    )?;
+    Ok((empty_intervals, ontology_warnings))
+}
+
 pub fn add_nodes(
     graph: &mut DirGraph,
     mut df_data: DataFrame,
@@ -923,22 +979,17 @@ pub fn add_nodes(
 
     // Every refusal happens here, ahead of the first write — see `gate_batch`
     // for why none of the writes below is a safe place for one.
-    let constraint_columns = ConstraintColumns::for_batch(graph, &node_type, &df_data);
-    let pk_enforced = graph.primary_key_for(&node_type).is_some();
-    gate_batch(
+    let (empty_intervals, ontology_warnings) = gate_node_load(
         graph,
-        &node_type,
-        &df_data,
-        constraint_columns.as_ref(),
-        pk_enforced,
-        id_idx,
-        title_idx,
-        &unique_id_field,
-        &title_field,
-        derived_titles.as_deref(),
+        (&node_type, &df_data, conflict_mode),
+        &FrameShape {
+            id_idx,
+            title_idx,
+            id_field: &unique_id_field,
+            title_field: &title_field,
+            derived_titles: derived_titles.as_deref(),
+        },
     )?;
-    let empty_intervals =
-        check_node_load(graph, &node_type, &df_data, id_idx, (conflict_mode, &[]))?;
 
     install_node_type_metadata(
         graph,
@@ -1063,7 +1114,13 @@ pub fn add_nodes(
     .with_errors(errors);
     let shadowed =
         shadowed_identity_columns(graph, &df_data, &node_type, &unique_id_field, &title_field);
-    report.warn_all(empty_intervals.diagnostic().into_iter().chain(shadowed));
+    report.warn_all(
+        empty_intervals
+            .diagnostic()
+            .into_iter()
+            .chain(shadowed)
+            .chain(ontology_warnings),
+    );
     graph.bump_version();
     Ok(report)
 }

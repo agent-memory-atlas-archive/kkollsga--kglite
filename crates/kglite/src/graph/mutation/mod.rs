@@ -16,6 +16,7 @@ mod endpoints;
 pub mod extend;
 pub(crate) mod identical_rows;
 pub mod maintain;
+mod ontology_frame_gate;
 mod pending_edges;
 pub mod property_updates;
 mod rel_constraint_gate;

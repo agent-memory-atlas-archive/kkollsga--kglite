@@ -19,6 +19,7 @@
 
 use crate::datatypes::Value;
 use crate::graph::features::temporal::{check_node_update, EmptyIntervals};
+use crate::graph::mutation::ontology_frame_gate::gate_node_updates;
 // Defined in `maintain` rather than here on purpose: it is the return type of the
 // public `kglite::api::mutation::add_properties`, and the pinned Rust API
 // baseline records that type at its canonical path. Moving the definition would
@@ -234,6 +235,15 @@ where
             check_node_update(graph, *node_idx, &values, &mut empty)?;
         }
     }
+    let ontology_warnings = gate_node_updates(
+        graph,
+        updates.iter().map(|(node_idx, props)| {
+            (
+                *node_idx,
+                props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+            )
+        }),
+    )?;
     let mut nodes_updated = 0;
     let mut properties_set = 0;
     let mut touched_types: HashSet<String> = HashSet::new();
@@ -283,7 +293,11 @@ where
     Ok(AddPropertiesReport {
         nodes_updated,
         properties_set,
-        warnings: empty.warning().into_iter().collect(),
+        warnings: empty
+            .warning()
+            .into_iter()
+            .chain(ontology_warnings)
+            .collect(),
     })
 }
 

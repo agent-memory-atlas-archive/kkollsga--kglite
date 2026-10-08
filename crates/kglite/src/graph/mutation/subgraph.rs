@@ -199,6 +199,9 @@ pub(crate) fn copy_induced_subgraph(
     // The declared ontology travels with the copy (type-level metadata,
     // like the schema install below).
     new_graph.ontology = Arc::clone(&source.ontology);
+    // Derives the write gate with the closures: a copy that dropped it would
+    // accept writes its source refuses.
+    new_graph.rebuild_ontology_closures();
 
     // Copy schema definition if present. The subgraph's nodes are a subset of a
     // graph that already satisfied these constraints, so installing them cannot

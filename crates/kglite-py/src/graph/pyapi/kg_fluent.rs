@@ -522,7 +522,7 @@ impl KnowledgeGraph {
         // writing both bounds is one legal write; a refusal raises.
         let written =
             kglite_core::api::mutation::update_node_property_set(graph, &nodes, &parsed_properties)
-                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
+                .map_err(|e| super::kg_mutation::bulk_write_err(graph, e))?;
         let total_updated = written.nodes_updated;
         let errors = written.errors;
         let warnings = written.warnings;

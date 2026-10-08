@@ -710,7 +710,9 @@ pub fn store_count_results(
         Ok(result) => result,
         Err(e) => {
             errors.push(format!("Failed to update node properties: {}", e));
-            return Err(format!("Failed to update node properties: {}", e));
+            // Unwrapped: a parked constraint or ontology violation is
+            // recovered by the identity of this exact message.
+            return Err(e);
         }
     };
 

@@ -1393,8 +1393,24 @@ fn ingest_phase1(context: Phase1Ingest<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// Open the input, staging the disk build in a mutation workspace unless it
-/// can write where it lies.
+/// Refuse a load that would write entities past an enforced ontology. The
+/// streaming build bypasses every per-row gate, so with an enforced node rule
+/// it would report success and enforce nothing; load first and declare
+/// afterwards, which verifies the stored data.
+fn refuse_under_enforced_ontology(graph: &DirGraph) -> Result<(), String> {
+    if graph.ontology_node_gate {
+        return Err(
+            "load_ntriples cannot run while the declared ontology enforces node rules \
+             (warn or error): it bulk-writes entities without per-row validation. Load the \
+             triples first, then declare the ontology, which verifies the stored data."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Admit the load, open the input, and stage the disk build in a mutation
+/// workspace unless it can write where it lies.
 ///
 /// Fresh disk builders intentionally finalise in place so their directory is
 /// reloadable without save(). A detached copy's base snapshot belongs to its
@@ -1406,6 +1422,7 @@ fn open_reader_for_load(
     path: &Path,
     display_path: &str,
 ) -> Result<Box<dyn Read + Send>, String> {
+    refuse_under_enforced_ontology(graph)?;
     let reader = open_ntriples_reader(path, display_path)?;
     if let crate::graph::schema::GraphBackend::Disk(ref mut disk) = graph.graph {
         disk.prepare_bulk_load_workspace()

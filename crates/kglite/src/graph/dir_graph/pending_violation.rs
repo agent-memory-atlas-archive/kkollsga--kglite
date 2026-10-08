@@ -38,7 +38,7 @@ impl DirGraph {
     /// the violation under its own message and returns that message for
     /// `Err(..)`. The write gates call this wherever they would otherwise
     /// stringify an [`OntologyViolation`](crate::graph::ontology::violation::OntologyViolation).
-    pub fn record_ontology_violation(
+    pub(crate) fn record_ontology_violation(
         &mut self,
         violation: crate::graph::ontology::violation::OntologyViolation,
     ) -> String {

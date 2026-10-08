@@ -195,6 +195,9 @@ pub(super) fn apply_node_property_set<'a>(
     } = write;
 
     crate::graph::session::snapshot_property_values(&graph.graph, std::iter::once(&mut value));
+    // Judged at statement end against the stored state, so a later write in
+    // the same statement can still repair this one.
+    graph.note_ontology_touch(node_idx);
 
     // The row's node type, and with it every statement-constant fact about
     // this write. Arena guard: the type read materializes on the disk backend

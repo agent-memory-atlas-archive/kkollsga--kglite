@@ -1035,9 +1035,10 @@ pub(crate) fn parse_interval_options(
 
 /// A `store_as=` writer's refusal — a row breaking a validity-interval
 /// declaration, or any other argument the write rejects — raised as
-/// `ArgumentError`, the same exception from all four writers.
-pub(crate) fn store_as_refused(message: String) -> PyErr {
-    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
+/// `ArgumentError`, the same exception from all four writers. A refusal by a
+/// declared constraint or ontology rule keeps its typed class.
+pub(crate) fn store_as_refused(graph: &mut DirGraph, message: String) -> PyErr {
+    pyapi::kg_mutation::bulk_write_err(graph, message)
 }
 
 /// Raise each advisory a declaration earns (abutting rows, empty intervals,

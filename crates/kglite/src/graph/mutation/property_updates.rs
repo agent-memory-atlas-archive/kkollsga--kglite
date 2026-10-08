@@ -21,6 +21,7 @@ use crate::graph::features::temporal::{check_node_update, EmptyIntervals};
 use crate::graph::introspection::reporting::NodeOperationReport;
 use crate::graph::mutation::batch::{BatchProcessor, ConflictHandling, NodeAction};
 use crate::graph::mutation::maintain::type_mismatch_message;
+use crate::graph::mutation::ontology_frame_gate::{as_diagnostics, gate_node_updates};
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 
@@ -41,8 +42,15 @@ pub fn update_node_properties(
             check_node_update(graph, *idx, &[(property, value)], &mut empty)?;
         }
     }
+    let ontology_warnings = gate_node_updates(
+        graph,
+        nodes
+            .iter()
+            .filter_map(|(idx, value)| idx.map(|idx| (idx, vec![(property, value)]))),
+    )?;
     let mut report = write_node_property(graph, nodes, property)?;
     report.warn_all(empty.diagnostic());
+    report.warn_all(as_diagnostics(ontology_warnings));
     Ok(report)
 }
 
@@ -69,6 +77,8 @@ pub fn update_node_property_set(
     for &idx in nodes {
         check_node_update(graph, idx, &values, &mut empty)?;
     }
+    let ontology_warnings =
+        gate_node_updates(graph, nodes.iter().map(|&idx| (idx, values.clone())))?;
     let mut report = NodeOperationReport::new("update_node_property_set".to_string(), 0, 0, 0, 0.0);
     for (property, value) in properties {
         let rows: Vec<(Option<NodeIndex>, Value)> = nodes
@@ -84,6 +94,7 @@ pub fn update_node_property_set(
         report.errors.extend(written.errors);
     }
     report.warn_all(empty.diagnostic());
+    report.warn_all(as_diagnostics(ontology_warnings));
     Ok(report)
 }
 

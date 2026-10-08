@@ -101,15 +101,28 @@ pub fn node_property_failures(
         .filter(|property| {
             let field = graph.resolve_alias(primary_type, property);
             let value = view.resolved_field(primary_type, field, InternedKey::from_str(field));
-            let present = value.as_deref().filter(|v| !matches!(v, Value::Null));
-            if check == "required_properties" {
-                present.is_none()
-            } else {
-                present.is_some_and(|v| !value_matches_type(v, &decl.property_types[*property]))
-            }
+            property_fails(decl, check, property, value.as_deref())
         })
         .cloned()
         .collect()
+}
+
+/// Whether one property's `value` (`None` = absent) fails `check` against
+/// `decl`: a required property is absent or null; a type violation needs a
+/// present, non-null value of the wrong type. The leaf both the stored-node
+/// predicate and the pre-write row gates evaluate, so they cannot disagree.
+pub fn property_fails(
+    decl: &ClassDecl,
+    check: &str,
+    property: &str,
+    value: Option<&Value>,
+) -> bool {
+    let present = value.filter(|v| !matches!(v, Value::Null));
+    if check == "required_properties" {
+        present.is_none()
+    } else {
+        present.is_some_and(|v| !value_matches_type(v, &decl.property_types[property]))
+    }
 }
 
 /// The subset of the declaration's properties one relationship fails under
