@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.5] - 2026-10-08
+
 ### Breaking changes and migration
 
 - **An unaliased `RETURN` item is named by the text the query wrote.**
@@ -382,6 +384,10 @@ before upgrading.
 
 ### Rust API
 
+- `kglite::api::cypher::ReturnItem` gains a public field `display:
+  Option<String>`, the item's source text for an unaliased column. Code that
+  builds a `ReturnItem` with a struct literal must set it. **Do:** add
+  `display: None`.
 - `Wal::append_resolved`: new method that resolves a commit's captured ops
   straight into one frame and appends it, with the bytes `Wal::append` writes
   for the same ops. Nothing existing changes.
