@@ -171,8 +171,14 @@ GROUP_CAP_MAX_RATIO = 0.75
 #: plain variable, so the group set is keyed by resolved value rather than by
 #: `NodeIndex` — the only shape where capping the group set is sound (see
 #: `stream::aggregate::apply`).
+#:
+#: The `WITH` only survives planning with `fold_aliasing_with` off: that pass
+#: substitutes the aliases into the `RETURN` and drops the `WITH`, which hands
+#: the query back to the fusion above. Both arms run with it off, so the
+#: ratio still isolates the group cap.
 GROUP_CAP_QUERY = f"MATCH (n:Ev) WITH n.g AS gg, n.w AS w RETURN gg AS g, count(*) AS c LIMIT {GROUP_CAP_LIMIT}"
-GROUP_CAP_NOHINT = ["push_limit_into_aggregate"]
+GROUP_CAP_KEEP_WITH = ["fold_aliasing_with"]
+GROUP_CAP_NOHINT = [*GROUP_CAP_KEEP_WITH, "push_limit_into_aggregate"]
 
 
 def _build_group_cap_graph(nodes: int, distinct: int) -> KnowledgeGraph:
@@ -226,11 +232,12 @@ def _interleaved_mins(first, second, rounds: int, warmup: int) -> tuple[float, f
 @pytest.mark.benchmark
 def test_bench_streaming_group_cap(benchmark, group_cap_graph):
     """The streaming aggregate must stop opening groups once the LIMIT is met."""
-    operations = [row["operation"] for row in group_cap_graph.cypher(f"EXPLAIN {GROUP_CAP_QUERY}").to_list()]
+    explain = group_cap_graph.cypher(f"EXPLAIN {GROUP_CAP_QUERY}", disabled_passes=GROUP_CAP_KEEP_WITH)
+    operations = [row["operation"] for row in explain.to_list()]
     assert not any(operation.startswith("Fused") for operation in operations), operations
 
     def capped():
-        return group_cap_graph.cypher(GROUP_CAP_QUERY).to_list()
+        return group_cap_graph.cypher(GROUP_CAP_QUERY, disabled_passes=GROUP_CAP_KEEP_WITH).to_list()
 
     def uncapped():
         return group_cap_graph.cypher(GROUP_CAP_QUERY, disabled_passes=GROUP_CAP_NOHINT).to_list()
