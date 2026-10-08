@@ -558,9 +558,12 @@ pub(super) fn execute_type_domain_violation(
     let expected = require_string_param(params, "expected_source", "type_domain_violation")?;
     let src_var = require_node_yield(yield_items, "type_domain_violation", "source")?;
     let tgt_var = require_node_yield(yield_items, "type_domain_violation", "target")?;
-    let accepted = [expected];
-    let pairs =
-        super::ontology_procedures::scan_endpoint_mismatch(graph, &edge_type, &accepted, true);
+    let pairs = super::ontology_procedures::scan_endpoint_mismatch(
+        graph,
+        &edge_type,
+        |actual| actual == expected,
+        true,
+    );
     let mut rows = Vec::new();
     for (src, tgt) in pairs {
         let mut row = ResultRow::new();
@@ -586,9 +589,12 @@ pub(super) fn execute_type_range_violation(
     let expected = require_string_param(params, "expected_target", "type_range_violation")?;
     let src_var = require_node_yield(yield_items, "type_range_violation", "source")?;
     let tgt_var = require_node_yield(yield_items, "type_range_violation", "target")?;
-    let accepted = [expected];
-    let pairs =
-        super::ontology_procedures::scan_endpoint_mismatch(graph, &edge_type, &accepted, false);
+    let pairs = super::ontology_procedures::scan_endpoint_mismatch(
+        graph,
+        &edge_type,
+        |actual| actual == expected,
+        false,
+    );
     let mut rows = Vec::new();
     for (src, tgt) in pairs {
         let mut row = ResultRow::new();

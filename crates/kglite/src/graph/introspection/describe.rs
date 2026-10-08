@@ -62,9 +62,15 @@ fn write_ontology(xml: &mut String, graph: &DirGraph, focus: Option<&[String]>) 
         "  <ontology classes=\"{}\" relationships=\"{}\" note=\"declared semantic layer \
          (annotations, not axioms — SKOS in spirit): no-arg rule procedures and CALL \
          ontology_audit() read these declarations; distinct from the parent_types \
-         ownership tiering\">\n",
+         ownership tiering\"{}>\n",
         store.classes.len(),
-        store.relationships.len()
+        store.relationships.len(),
+        store
+            .store_summary()
+            .map_or(String::new(), |summary| format!(
+                " store=\"{}\"",
+                xml_escape(&summary)
+            ))
     ));
     for (name, decl) in &store.classes {
         if !in_focus(name) {

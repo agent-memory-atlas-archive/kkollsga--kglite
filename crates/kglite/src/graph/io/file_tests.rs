@@ -74,6 +74,43 @@ mod atomic_save_tests {
     }
 
     #[test]
+    fn ontology_store_level_keys_roundtrip_through_kgl() {
+        use crate::graph::ontology::{ontology_from_json, Enforcement};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.kgl");
+        let mut g = DirGraph::new();
+        fill_docs(&mut g, 2);
+        let store = ontology_from_json(
+            r#"{"classes": {"Doc": {}}, "closed_labels": true, "enforcement": "error"}"#,
+        )
+        .unwrap();
+        assert!(g.define_ontology(store.clone()).unwrap().is_empty());
+        let g = ready_for_save(g);
+        write_kgl(&g, path.to_str().unwrap()).unwrap();
+        let loaded = load_file(path.to_str().unwrap()).unwrap();
+        assert!(loaded.ontology.closed_labels);
+        assert_eq!(loaded.ontology.enforcement, Enforcement::Error);
+        assert_eq!(*loaded.ontology, store);
+    }
+
+    #[test]
+    fn define_ontology_warns_on_undeclared_live_types_when_labels_closed() {
+        use crate::graph::ontology::ontology_from_json;
+
+        let mut g = DirGraph::new();
+        fill_docs(&mut g, 2);
+        let store = ontology_from_json(
+            r#"{"classes": {"Other": {"abstract": true}}, "closed_labels": true}"#,
+        )
+        .unwrap();
+        let warnings = g.define_ontology(store).unwrap();
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("closes labels") && w.contains("Doc")));
+    }
+
+    #[test]
     fn define_ontology_graph_checks() {
         use crate::graph::ontology::ontology_from_json;
 

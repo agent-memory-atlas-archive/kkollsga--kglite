@@ -26,7 +26,7 @@
 //! listing for the two property checks, which have no rule procedure of
 //! their own.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use petgraph::graph::NodeIndex;
 
@@ -37,35 +37,19 @@ use super::rule_procedures::{
 use crate::datatypes::values::Value;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
-use crate::graph::mutation::validation::value_matches_type;
-use crate::graph::ontology::{OntologyStore, RelationshipDecl};
+use crate::graph::ontology::predicates::{self, accepted_types, unique_required_properties};
+use crate::graph::ontology::RelationshipDecl;
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 
-/// `class_or_type` plus every declared class whose ancestor chain contains
-/// it — the accepted endpoint set a supertype declaration widens to.
-pub(super) fn accepted_types(store: &OntologyStore, class_or_type: &str) -> Vec<String> {
-    let mut out = vec![class_or_type.to_string()];
-    for name in store.classes.keys() {
-        if store
-            .ancestors(name)
-            .iter()
-            .any(|ancestor| ancestor == class_or_type)
-        {
-            out.push(name.clone());
-        }
-    }
-    out
-}
-
 /// Edges of `edge_type` whose source (or target, per `check_source`) node's
-/// primary type is not in `accepted`. The single implementation behind both
+/// primary type `is_accepted` rejects. The single implementation behind both
 /// the explicit `type_domain_violation`/`type_range_violation` calls
-/// (singleton set) and the declaration-driven class-widened form.
+/// (exact name) and the declaration-driven class-widened form.
 pub(super) fn scan_endpoint_mismatch(
     graph: &DirGraph,
     edge_type: &str,
-    accepted: &[String],
+    is_accepted: impl Fn(&str) -> bool,
     check_source: bool,
 ) -> Vec<(NodeIndex, NodeIndex)> {
     let key = InternedKey::from_str(edge_type);
@@ -79,25 +63,14 @@ pub(super) fn scan_endpoint_mismatch(
         } else {
             er.target()
         };
-        let actual = match graph.graph.node_view(subject) {
-            Some(n) => n.node_type_str(&graph.interner).to_string(),
-            None => continue,
+        let Some(n) = graph.graph.node_view(subject) else {
+            continue;
         };
-        if !accepted.contains(&actual) {
+        if !is_accepted(n.node_type_str(&graph.interner)) {
             out.push((er.source(), er.target()));
         }
     }
     out
-}
-
-/// The primary node types an exemption list covers: each named class plus
-/// its declared descendants — the same widening `domain`/`range` acceptance
-/// uses ([`accepted_types`]), applied to the edge's source side.
-fn exempt_source_types(store: &OntologyStore, classes: &[String]) -> BTreeSet<String> {
-    classes
-        .iter()
-        .flat_map(|class| accepted_types(store, class))
-        .collect()
 }
 
 /// One edge flagged by a property check, with the exemption verdict the
@@ -135,40 +108,26 @@ fn edge_property_findings(
         check,
         DeclaredCheck::RequiredProperties | DeclaredCheck::PropertyTypes
     ));
-    let required = check == DeclaredCheck::RequiredProperties;
-    let required_properties = unique_required_properties(&decl.required_properties);
-    let exempted_types = exempt_source_types(&graph.ontology, decl.exempt_classes(check.name()));
     let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
     for er in graph.graph.edge_references() {
         if er.connection_type() != key {
             continue;
         }
-        let failed: Vec<String> = if required {
-            required_properties
-                .iter()
-                .filter(|p| matches!(er.weight().get_property(p), None | Some(Value::Null)))
-                .cloned()
-                .collect()
-        } else {
-            decl.property_types
-                .iter()
-                .filter(|(p, ty)| {
-                    er.weight()
-                        .get_property(p)
-                        .is_some_and(|v| !matches!(v, Value::Null) && !value_matches_type(v, ty))
-                })
-                .map(|(p, _)| p.clone())
-                .collect()
-        };
+        let failed =
+            predicates::edge_property_failures(decl, check.name(), |p| er.weight().get_property(p));
         if failed.is_empty() {
             continue;
         }
-        let exempt = !exempted_types.is_empty()
-            && graph
-                .graph
-                .node_view(er.source())
-                .is_some_and(|n| exempted_types.contains(n.node_type_str(&graph.interner)));
+        let exempt = !decl.exempt_classes(check.name()).is_empty()
+            && graph.graph.node_view(er.source()).is_some_and(|n| {
+                predicates::edge_exempt(
+                    &graph.ontology,
+                    decl,
+                    check.name(),
+                    n.node_type_str(&graph.interner),
+                )
+            });
         out.push(PropertyFinding {
             source: er.source(),
             target: er.target(),
@@ -344,13 +303,6 @@ fn check_rows(
     match check {
         DeclaredCheck::Domain | DeclaredCheck::Range => {
             let check_source = check == DeclaredCheck::Domain;
-            let endpoint = if check_source {
-                decl.domain.as_deref()
-            } else {
-                decl.range.as_deref()
-            }
-            .expect("declared_checks gated on presence");
-            let accepted = accepted_types(store, endpoint);
             let proc = if check_source {
                 "type_domain_violation"
             } else {
@@ -358,7 +310,18 @@ fn check_rows(
             };
             let src_var = require_node_yield(yield_items, proc, "source")?;
             let tgt_var = require_node_yield(yield_items, proc, "target")?;
-            let pairs = scan_endpoint_mismatch(graph, rel, &accepted, check_source);
+            let pairs = scan_endpoint_mismatch(
+                graph,
+                rel,
+                |actual| {
+                    if check_source {
+                        !predicates::domain_violated(store, decl, actual)
+                    } else {
+                        !predicates::range_violated(store, decl, actual)
+                    }
+                },
+                check_source,
+            );
             Ok(CheckOutcome::plain(endpoint_rows(
                 pairs, &src_var, &tgt_var,
             )))
@@ -821,17 +784,6 @@ fn violations_by_domain_class(
         *counts.entry(class).or_default() += 1;
     }
     counts
-}
-
-/// A repeated declaration still names one property. Apply at read time too,
-/// because persisted or directly constructed declarations can contain repeats.
-pub(super) fn unique_required_properties(properties: &[String]) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    properties
-        .iter()
-        .filter(|p| seen.insert(*p))
-        .cloned()
-        .collect()
 }
 
 /// The properties a check declares, in the order it declares them:

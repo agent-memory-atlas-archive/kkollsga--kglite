@@ -373,6 +373,21 @@ impl DirGraph {
                 ));
             }
         }
+        if store.closed_labels {
+            let mut undeclared: Vec<&str> = self
+                .type_indices
+                .iter()
+                .filter(|(t, nodes)| nodes.len() > 0 && !store.classes.contains_key(*t))
+                .map(|(t, _)| t)
+                .collect();
+            undeclared.sort_unstable();
+            if !undeclared.is_empty() {
+                warnings.push(format!(
+                    "ontology closes labels but live node types {undeclared:?} are not declared \
+                     classes; ontology_audit() reports them under 'closed_labels'"
+                ));
+            }
+        }
         self.note_ontology_declaration(&store);
         self.ontology = std::sync::Arc::new(store);
         self.rebuild_ontology_closures();

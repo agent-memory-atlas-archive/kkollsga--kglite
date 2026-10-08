@@ -5,7 +5,8 @@ use super::super::result::{ResultRow, ResultSet};
 use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
 
-/// `SHOW ONTOLOGY` — one row per declared class and relationship. A graph
+/// `SHOW ONTOLOGY` — one row per declared class and relationship, plus a
+/// leading `store` row when store-level settings are set. A graph
 /// with no ontology returns zero rows (not an error), matching the other
 /// SHOW forms' empty-inventory behaviour.
 pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
@@ -34,6 +35,24 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
         }
         out.rows.push(row);
     };
+    // Store-level settings (closed_labels, default severity) ride on a
+    // leading `store` row, present only when one is set so ontologies that
+    // use neither keep their row set.
+    if let Some(summary) = graph.ontology.store_summary() {
+        push([
+            ("kind", Value::String("store".to_string())),
+            ("name", Value::Null),
+            ("is_a", Value::Null),
+            ("abstract", Value::Null),
+            ("domain", Value::Null),
+            ("range", Value::Null),
+            ("enforcement", Value::String(summary)),
+            ("exempt", Value::Null),
+            ("required_properties", Value::List(Vec::new())),
+            ("property_types", Value::Map(Default::default())),
+            ("description", Value::Null),
+        ]);
+    }
     for (name, decl) in &graph.ontology.classes {
         push([
             ("kind", Value::String("class".to_string())),

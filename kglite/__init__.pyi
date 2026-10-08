@@ -5740,6 +5740,18 @@ class KnowledgeGraph:
         id/title and loader aliases. Classes accept only the two property
         checks in an enforcement map and do not accept edge exemptions.
 
+        Two optional top-level keys add store-level settings.
+        ``closed_labels: True`` adds the allowed-labels rule: a node's
+        primary label must be a declared class (secondary and materialised
+        labels are never judged), and it needs at least one declared class.
+        ``enforcement`` (``advisory``/``warn``/``error``) is the severity of
+        that rule and the default for every class and relationship that
+        states no ``enforcement`` of its own; an explicit value, including
+        ``advisory``, always wins. The audit reports the label rule as
+        ``entity_kind='node'``, ``rule='closed_labels'``, and declaring it
+        over live undeclared node types returns a warning naming them.
+        ``SHOW ONTOLOGY`` and ``describe()`` render these settings.
+
         ``CALL ontology_audit()`` adds ``entity_kind`` (``node``/``edge``);
         use it with ``rule`` to distinguish a class and relationship with the
         same name. Node totals count covered live nodes and exemptions are

@@ -4,54 +4,22 @@ use std::collections::{BTreeMap, HashMap};
 
 use petgraph::graph::NodeIndex;
 
-use super::ontology_procedures::{
-    accepted_types, unique_required_properties, yield_alias, AuditBreakdown, AuditLine,
-};
+use super::ontology_procedures::{yield_alias, AuditBreakdown, AuditLine};
 use crate::datatypes::values::Value;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
-use crate::graph::mutation::validation::value_matches_type;
+use crate::graph::ontology::predicates::{
+    accepted_types, declared_node_properties as declared_properties, label_allowed,
+    node_property_failures,
+};
 use crate::graph::ontology::{ClassDecl, NODE_CHECK_NAMES};
-use crate::graph::schema::{DirGraph, InternedKey};
-use crate::graph::storage::{GraphRead, NodeView};
+use crate::graph::schema::DirGraph;
+use crate::graph::storage::GraphRead;
 
 struct Finding {
     node: NodeIndex,
     primary_type: String,
     properties: Vec<String>,
-}
-
-fn declared_properties(decl: &ClassDecl, check: &str) -> Vec<String> {
-    if check == "required_properties" {
-        unique_required_properties(&decl.required_properties)
-    } else {
-        decl.property_types.keys().cloned().collect()
-    }
-}
-
-fn failed_properties(
-    graph: &DirGraph,
-    view: &NodeView<'_>,
-    primary_type: &str,
-    decl: &ClassDecl,
-    check: &str,
-    properties: &[String],
-) -> Vec<String> {
-    properties
-        .iter()
-        .filter(|property| {
-            // Loader aliases belong to the actual type, not its abstract parent.
-            let field = graph.resolve_alias(primary_type, property);
-            let value = view.resolved_field(primary_type, field, InternedKey::from_str(field));
-            let present = value.as_deref().filter(|v| !matches!(v, Value::Null));
-            if check == "required_properties" {
-                present.is_none()
-            } else {
-                present.is_some_and(|v| !value_matches_type(v, &decl.property_types[*property]))
-            }
-        })
-        .cloned()
-        .collect()
 }
 
 /// Primary membership plus declared descendants; arbitrary secondary labels
@@ -74,7 +42,8 @@ fn findings(
                 continue;
             };
             total += 1;
-            let failed = failed_properties(graph, &view, &primary_type, decl, check, properties);
+            let failed =
+                node_property_failures(graph, &view, &primary_type, decl, check, properties);
             if !failed.is_empty() {
                 out.push(Finding {
                     node,
@@ -147,7 +116,51 @@ pub(super) fn audit_lines(graph: &DirGraph, breakdown: AuditBreakdown) -> Vec<Au
             }
         }
     }
+    if graph.ontology.closed_labels {
+        out.extend(label_lines(graph, breakdown));
+    }
     out
+}
+
+/// The allowed-labels rule as scorecard lines: `total` is every node, a
+/// violation is a node whose primary type [`label_allowed`] refuses.
+/// Judged per primary type (the predicate's input), so it is O(types).
+/// `DomainClass` fans out over the offending types; `Property` has nothing
+/// to fan over and keeps the aggregate line.
+fn label_lines(graph: &DirGraph, breakdown: AuditBreakdown) -> Vec<AuditLine> {
+    let store = &graph.ontology;
+    let mut total = 0usize;
+    let mut offending = BTreeMap::<String, usize>::new();
+    for (primary_type, nodes) in graph.type_indices.iter() {
+        let count = nodes.len();
+        total += count;
+        if count > 0 && !label_allowed(store, primary_type) {
+            offending.insert(primary_type.to_string(), count);
+        }
+    }
+    let violations: usize = offending.values().sum();
+    let line = |domain_class, violations| AuditLine {
+        entity_kind: "node",
+        rule: "closed_labels".to_string(),
+        domain_class,
+        property: None,
+        severity: store.enforcement,
+        violations,
+        exempted: 0,
+        total,
+        pct: if total == 0 {
+            0.0
+        } else {
+            ((violations as f64 / total as f64 * 100.0) * 10.0).round() / 10.0
+        },
+    };
+    if breakdown == AuditBreakdown::DomainClass && !offending.is_empty() {
+        return offending
+            .into_iter()
+            .map(|(name, n)| line(Some(name), n))
+            .collect();
+    }
+    vec![line(None, violations)]
 }
 
 pub(super) fn execute_node_property_violation(
@@ -198,4 +211,109 @@ pub(super) fn execute_node_property_violation(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod node_ontology_tests {
+    use super::*;
+    use crate::datatypes::DataFrame;
+    use crate::graph::ontology::ontology_from_json;
+
+    fn add(g: &mut DirGraph, node_type: &str, n: i64) {
+        let rows = (1..=n)
+            .map(|i| vec![Value::Int64(i), Value::String(format!("t{i}"))])
+            .collect();
+        let df =
+            DataFrame::from_cypher_rows(vec!["id".to_string(), "title".to_string()], rows).unwrap();
+        crate::graph::mutation::maintain::add_nodes(
+            g,
+            df,
+            node_type.to_string(),
+            "id".to_string(),
+            Some("title".to_string()),
+            None,
+        )
+        .unwrap();
+    }
+
+    fn graph_with(ontology: &str) -> DirGraph {
+        let mut g = DirGraph::new();
+        add(&mut g, "Doc", 3);
+        add(&mut g, "Stray", 2);
+        g.define_ontology(ontology_from_json(ontology).unwrap())
+            .unwrap();
+        g
+    }
+
+    fn label_line(g: &DirGraph, breakdown: AuditBreakdown) -> Vec<AuditLine> {
+        audit_lines(g, breakdown)
+            .into_iter()
+            .filter(|l| l.rule == "closed_labels")
+            .collect()
+    }
+
+    #[test]
+    fn closed_labels_counts_undeclared_primary_types() {
+        let g = graph_with(
+            r#"{"classes": {"Doc": {}}, "closed_labels": true, "enforcement": "error"}"#,
+        );
+        let lines = label_line(&g, AuditBreakdown::None);
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert_eq!((line.violations, line.total), (2, 5));
+        assert_eq!(line.entity_kind, "node");
+        assert_eq!(line.severity, crate::graph::ontology::Enforcement::Error);
+        assert_eq!(line.pct, 40.0);
+
+        let by_class = label_line(&g, AuditBreakdown::DomainClass);
+        assert_eq!(by_class.len(), 1);
+        assert_eq!(by_class[0].domain_class.as_deref(), Some("Stray"));
+        assert_eq!(by_class[0].violations, 2);
+    }
+
+    #[test]
+    fn open_labels_add_no_audit_line() {
+        let g = graph_with(r#"{"classes": {"Doc": {}}}"#);
+        assert!(label_line(&g, AuditBreakdown::None).is_empty());
+    }
+
+    #[test]
+    fn declaring_every_live_type_clears_the_label_rule() {
+        let g = graph_with(r#"{"classes": {"Doc": {}, "Stray": {}}, "closed_labels": true}"#);
+        let lines = label_line(&g, AuditBreakdown::DomainClass);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            (lines[0].violations, lines[0].domain_class.clone()),
+            (0, None)
+        );
+    }
+
+    #[test]
+    fn node_property_failures_judge_one_node() {
+        let g = graph_with(
+            r#"{"classes": {"Doc": {"required_properties": ["owner"],
+                                    "property_types": {"title": "integer"}}}}"#,
+        );
+        let decl = &g.ontology.classes["Doc"];
+        let idx = g.type_indices.get("Doc").unwrap().iter().next().unwrap();
+        let view = g.graph.node_view(idx).unwrap();
+        let required = node_property_failures(
+            &g,
+            &view,
+            "Doc",
+            decl,
+            "required_properties",
+            &declared_properties(decl, "required_properties"),
+        );
+        assert_eq!(required, vec!["owner".to_string()]);
+        let typed = node_property_failures(
+            &g,
+            &view,
+            "Doc",
+            decl,
+            "property_types",
+            &declared_properties(decl, "property_types"),
+        );
+        assert_eq!(typed, vec!["title".to_string()]);
+    }
 }

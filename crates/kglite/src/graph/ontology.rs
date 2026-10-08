@@ -67,6 +67,15 @@
 //!   severity, so one legitimately-nonconforming source type cannot pin a
 //!   whole rule at `advisory`. Accepted for [`EXEMPTABLE_CHECKS`] only.
 //! - `by` names a discriminator property and is documentation only.
+//! - `closed_labels: true` adds the allowed-labels rule: a node's primary
+//!   label must be a declared class (needs at least one class).
+//! - A top-level `enforcement` severity string governs that label rule and
+//!   is the default for any class/relationship that states no `enforcement`
+//!   of its own; an explicit per-declaration value (including `advisory`)
+//!   always wins. Resolution happens at parse time, so a persisted
+//!   declaration carries its effective severity.
+
+pub mod predicates;
 
 use std::collections::BTreeMap;
 
@@ -83,6 +92,17 @@ pub const MAX_ONTOLOGY_CLASSES: usize = 512;
 pub struct OntologyStore {
     #[serde(default = "default_version")]
     pub version: u32,
+    /// Allowed-labels rule: when set, a node's **primary** label must be a
+    /// declared class. Secondary labels (including engine-written
+    /// materialised ones) are never judged. Absent in files written before
+    /// the key existed, which read as `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed_labels: bool,
+    /// Store-level severity: governs the label rule, and is the severity
+    /// every class/relationship declaration inherits at parse time when it
+    /// states none of its own.
+    #[serde(default, skip_serializing_if = "Enforcement::is_default")]
+    pub enforcement: Enforcement,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub classes: BTreeMap<String, ClassDecl>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -299,6 +319,20 @@ impl OntologyStore {
         self.classes.is_empty() && self.relationships.is_empty()
     }
 
+    /// Store-level settings as `closed_labels=true; enforcement=error`, or
+    /// `None` when both are at their defaults — the reader-surface summary
+    /// (`SHOW ONTOLOGY`, `describe()`).
+    pub(crate) fn store_summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.closed_labels {
+            parts.push("closed_labels=true".to_string());
+        }
+        if self.enforcement != Enforcement::Advisory {
+            parts.push(format!("enforcement={}", self.enforcement.as_str()));
+        }
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
+
     /// Ancestor chain of `class`, nearest first. Empty for roots and for
     /// names the store does not declare. Bounded by the forest invariant
     /// (`validate` rejects cycles), with a defensive cap for stores built
@@ -321,6 +355,13 @@ impl OntologyStore {
     /// primary types) live in `DirGraph::define_ontology`, which has the
     /// graph.
     pub fn validate(&self) -> Result<(), String> {
+        if self.closed_labels && self.classes.is_empty() {
+            return Err(
+                "ontology 'closed_labels' needs at least one declared class: with none, \
+                 every node label would be refused"
+                    .to_string(),
+            );
+        }
         if self.classes.len() > MAX_ONTOLOGY_CLASSES {
             return Err(format!(
                 "ontology declares {} classes; the layer is for schema-level vocabularies \
@@ -402,7 +443,17 @@ impl OntologyStore {
 /// declaration key the parser cannot place is never a harmless extra.
 pub fn ontology_from_value(doc: &Value) -> Result<OntologyStore, String> {
     let map = as_map(doc).ok_or("ontology document must be a map")?;
-    reject_unknown(map, &["version", "classes", "relationships"], "ontology")?;
+    reject_unknown(
+        map,
+        &[
+            "version",
+            "classes",
+            "relationships",
+            "closed_labels",
+            "enforcement",
+        ],
+        "ontology",
+    )?;
 
     let mut store = OntologyStore {
         version: 1,
@@ -414,20 +465,28 @@ pub fn ontology_from_value(doc: &Value) -> Result<OntologyStore, String> {
             _ => return Err("ontology 'version' must be a positive integer".to_string()),
         };
     }
+    store.closed_labels = opt_bool(map, "closed_labels", "ontology")?;
+    store.enforcement = match map.get("enforcement") {
+        None => Enforcement::Advisory,
+        Some(Value::String(s)) => severity_from_str(s, "ontology")?,
+        Some(_) => return Err("ontology: 'enforcement' must be a severity string".to_string()),
+    };
+    let default = store.enforcement;
     if let Some(classes) = map.get("classes") {
         let classes = as_map(classes).ok_or("ontology 'classes' must be a map")?;
         for (name, decl) in classes {
             store
                 .classes
-                .insert(name.to_string(), class_from_value(name, decl)?);
+                .insert(name.to_string(), class_from_value(name, decl, default)?);
         }
     }
     if let Some(rels) = map.get("relationships") {
         let rels = as_map(rels).ok_or("ontology 'relationships' must be a map")?;
         for (name, decl) in rels {
-            store
-                .relationships
-                .insert(name.to_string(), relationship_from_value(name, decl)?);
+            store.relationships.insert(
+                name.to_string(),
+                relationship_from_value(name, decl, default)?,
+            );
         }
     }
     store.validate()?;
@@ -520,27 +579,29 @@ const REL_KEYS: &[&str] = &[
     "description",
 ];
 
+fn severity_from_str(s: &str, context: &str) -> Result<Enforcement, String> {
+    match s {
+        "advisory" => Ok(Enforcement::Advisory),
+        "warn" => Ok(Enforcement::Warn),
+        "error" => Ok(Enforcement::Error),
+        other => Err(format!(
+            "{context}: enforcement '{other}' is not one of 'advisory', 'warn', 'error'"
+        )),
+    }
+}
+
 fn parse_enforcement(
     map: &crate::datatypes::PropMap,
     context: &str,
     checks: &[&str],
+    default: Enforcement,
 ) -> Result<(Enforcement, BTreeMap<String, Enforcement>), String> {
-    let severity = |s: &str| -> Result<Enforcement, String> {
-        match s {
-            "advisory" => Ok(Enforcement::Advisory),
-            "warn" => Ok(Enforcement::Warn),
-            "error" => Ok(Enforcement::Error),
-            other => Err(format!(
-                "{context}: enforcement '{other}' is not one of \
-                 'advisory', 'warn', 'error'"
-            )),
-        }
-    };
+    let severity = |s: &str| severity_from_str(s, context);
     let parsed = match map.get("enforcement") {
-        None => (Enforcement::Advisory, BTreeMap::new()),
+        None => (default, BTreeMap::new()),
         Some(Value::String(s)) => (severity(s)?, BTreeMap::new()),
         // Map form: per-check severities; unlisted checks keep the
-        // advisory base.
+        // store-level default base (advisory when the store sets none).
         Some(other) => match as_map(other) {
             Some(per_check) => {
                 let mut overrides = BTreeMap::new();
@@ -559,7 +620,7 @@ fn parse_enforcement(
                     };
                     overrides.insert(check.to_string(), severity(sv)?);
                 }
-                (Enforcement::Advisory, overrides)
+                (default, overrides)
             }
             None => {
                 return Err(format!(
@@ -623,12 +684,13 @@ fn parse_property_contract(
     Ok((required_properties, property_types))
 }
 
-fn class_from_value(name: &str, value: &Value) -> Result<ClassDecl, String> {
+fn class_from_value(name: &str, value: &Value, default: Enforcement) -> Result<ClassDecl, String> {
     let map = as_map(value).ok_or_else(|| format!("class '{name}' must be a map"))?;
     let context = format!("class '{name}'");
     reject_unknown(map, CLASS_KEYS, &context)?;
     let (required_properties, property_types) = parse_property_contract(map, &context)?;
-    let (enforcement, enforcement_overrides) = parse_enforcement(map, &context, NODE_CHECK_NAMES)?;
+    let (enforcement, enforcement_overrides) =
+        parse_enforcement(map, &context, NODE_CHECK_NAMES, default)?;
     Ok(ClassDecl {
         required_properties,
         property_types,
@@ -641,11 +703,16 @@ fn class_from_value(name: &str, value: &Value) -> Result<ClassDecl, String> {
     })
 }
 
-fn relationship_from_value(name: &str, value: &Value) -> Result<RelationshipDecl, String> {
+fn relationship_from_value(
+    name: &str,
+    value: &Value,
+    default: Enforcement,
+) -> Result<RelationshipDecl, String> {
     let map = as_map(value).ok_or_else(|| format!("relationship '{name}' must be a map"))?;
     reject_unknown(map, REL_KEYS, &format!("relationship '{name}'"))?;
     let context = format!("relationship '{name}'");
-    let (enforcement, enforcement_overrides) = parse_enforcement(map, &context, CHECK_NAMES)?;
+    let (enforcement, enforcement_overrides) =
+        parse_enforcement(map, &context, CHECK_NAMES, default)?;
     let cardinality = match map.get("cardinality") {
         None => None,
         Some(v) => {
@@ -885,6 +952,71 @@ mod tests {
         let json = serde_json::to_string(&store).unwrap();
         let back: OntologyStore = serde_json::from_str(&json).unwrap();
         assert_eq!(back, store);
+    }
+
+    #[test]
+    fn closed_labels_and_store_enforcement_parse_and_inherit() {
+        let store = parse(
+            r#"{"closed_labels": true, "enforcement": "error",
+                "classes": {"A": {}, "B": {"enforcement": "advisory"},
+                            "C": {"enforcement": {"required_properties": "warn"}}},
+                "relationships": {"R": {"domain": "A"}}}"#,
+        )
+        .unwrap();
+        assert!(store.closed_labels);
+        assert_eq!(store.enforcement, Enforcement::Error);
+        assert_eq!(store.classes["A"].enforcement, Enforcement::Error);
+        // An explicit value, even `advisory`, wins over the store default.
+        assert_eq!(store.classes["B"].enforcement, Enforcement::Advisory);
+        // Map form: unlisted checks fall to the store default.
+        assert_eq!(
+            store.classes["C"].enforcement_for("property_types"),
+            Enforcement::Error
+        );
+        assert_eq!(
+            store.classes["C"].enforcement_for("required_properties"),
+            Enforcement::Warn
+        );
+        assert_eq!(store.relationships["R"].enforcement, Enforcement::Error);
+        assert_eq!(
+            store.store_summary().as_deref(),
+            Some("closed_labels=true; enforcement=error")
+        );
+    }
+
+    #[test]
+    fn closed_labels_validation_and_type_errors() {
+        let err = parse(r#"{"closed_labels": true}"#).unwrap_err();
+        assert!(err.contains("at least one declared class"), "{err}");
+        let err = parse(r#"{"classes": {"A": {}}, "closed_labels": "yes"}"#).unwrap_err();
+        assert!(
+            err.contains("closed_labels") && err.contains("boolean"),
+            "{err}"
+        );
+        let err = parse(r#"{"classes": {"A": {}}, "enforcement": "fatal"}"#).unwrap_err();
+        assert!(err.contains("fatal"), "{err}");
+        let err = parse(r#"{"classes": {"A": {}}, "enforcement": {"x": "warn"}}"#).unwrap_err();
+        assert!(err.contains("severity string"), "{err}");
+    }
+
+    #[test]
+    fn store_keys_persist_and_old_documents_read_as_defaults() {
+        let store =
+            parse(r#"{"classes": {"A": {}}, "closed_labels": true, "enforcement": "warn"}"#)
+                .unwrap();
+        let json = serde_json::to_string(&store).unwrap();
+        assert_eq!(serde_json::from_str::<OntologyStore>(&json).unwrap(), store);
+        // A document written before the keys existed: absent = old behaviour.
+        let old: OntologyStore =
+            serde_json::from_str(r#"{"version":1,"classes":{"A":{}}}"#).unwrap();
+        assert!(!old.closed_labels);
+        assert_eq!(old.enforcement, Enforcement::Advisory);
+        // Defaults are not written, so ontologies using neither key serialize
+        // byte-identically to before.
+        let plain = parse(r#"{"classes": {"A": {}}}"#).unwrap();
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("closed_labels") && !text.contains("\"enforcement\":\"advisory"));
+        assert!(store.store_summary().is_some() && plain.store_summary().is_none());
     }
 
     #[test]
