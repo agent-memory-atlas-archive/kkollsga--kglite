@@ -47,6 +47,7 @@ BOUND	KgliteStatusCode kglite_session_execute_read_batch(const struct KgliteSess
 BOUND	KgliteStatusCode kglite_session_execute_mut_batch(struct KgliteSession *session, const char *queries_json, const char **out_results_json, const char **out_error_msg)
 -	KgliteStatusCode kglite_create_edges_batch(struct KgliteSession *session, const char *edges_json, const char **out_report_json, const char **out_error_msg)
 BOUND	KgliteStatusCode kglite_session_save(struct KgliteSession *session, const char *path, uint8_t fsync, const char **out_error_msg)
+-	KgliteStatusCode kglite_session_backup(const struct KgliteSession *session, const char *dest, const char *live_path, const char **out_report_json, const char **out_error_msg)
 BOUND	void kglite_session_free(struct KgliteSession *session)
 -	const char *kglite_status_code_name(KgliteStatusCode code)
 BOUND	const char *kglite_status_code_name_static(KgliteStatusCode code)

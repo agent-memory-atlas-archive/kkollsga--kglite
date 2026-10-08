@@ -442,7 +442,7 @@ def test_interval_fires_keep_prunes_and_foreign_files_survive(tmp_path):
     bdir = tmp_path / "backups"
     bdir.mkdir()
     (bdir / "manual.kgl").write_bytes(b"manual backup")
-    (bdir / "notes.txt").write_text("foreign")
+    (bdir / "notes.txt").write_text("foreign", encoding="utf-8")
     (bdir / "other-20240101T000000Z.kgl").write_bytes(b"other stem")
     proc, url = _spawn_bolt_server(
         served, extra_args=["--backup-dir", str(bdir), "--backup-interval", "1", "--backup-keep", "2"]
@@ -462,7 +462,7 @@ def test_interval_fires_keep_prunes_and_foreign_files_survive(tmp_path):
         assert len(final) <= 2, f"--backup-keep 2 left {final}"
         assert set(final) <= seen
         assert (bdir / "manual.kgl").read_bytes() == b"manual backup"
-        assert (bdir / "notes.txt").read_text() == "foreign"
+        assert (bdir / "notes.txt").read_text(encoding="utf-8") == "foreign"
         assert (bdir / "other-20240101T000000Z.kgl").read_bytes() == b"other stem"
     finally:
         _teardown_bolt_server(proc)
