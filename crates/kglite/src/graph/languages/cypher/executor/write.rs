@@ -2222,15 +2222,7 @@ fn execute_merge(
                 }
 
                 if let Some(ref set_items) = merge.on_match {
-                    let set_clause = SetClause {
-                        items: set_items.clone(),
-                    };
-                    let temp_rs = ResultSet {
-                        rows: vec![matched_row.clone()],
-                        columns: Vec::new(),
-                        lazy_return_items: None,
-                    };
-                    execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+                    matched_row = apply_merge_set(graph, set_items, matched_row, stats, ctx)?;
                 }
                 new_rows.push(matched_row);
             }
@@ -2257,15 +2249,7 @@ fn execute_merge(
         }
 
         if let Some(ref set_items) = merge.on_create {
-            let set_clause = SetClause {
-                items: set_items.clone(),
-            };
-            let temp_rs = ResultSet {
-                rows: vec![new_row.clone()],
-                columns: Vec::new(),
-                lazy_return_items: None,
-            };
-            execute_folded_set(graph, &set_clause, &temp_rs, stats, ctx)?;
+            new_row = apply_merge_set(graph, set_items, new_row, stats, ctx)?;
         }
 
         new_rows.push(new_row);
@@ -2276,6 +2260,31 @@ fn execute_merge(
         columns: existing.columns,
         lazy_return_items: None,
     })
+}
+
+/// A MERGE's `ON MATCH` / `ON CREATE` SET over one row. The row comes back
+/// with the node and relationship values the SET names re-read from the
+/// store, as after a plain SET clause: a projected node (`UNWIND collect(n) AS
+/// x`) is a snapshot, and `RETURN x.p` must show the written value.
+fn apply_merge_set(
+    graph: &mut DirGraph,
+    set_items: &[SetItem],
+    row: ResultRow,
+    stats: &mut MutationStats,
+    ctx: &WriteClauseCtx<'_>,
+) -> Result<ResultRow, String> {
+    let set_clause = SetClause {
+        items: set_items.to_vec(),
+    };
+    let mut rows = ResultSet {
+        rows: vec![row],
+        columns: Vec::new(),
+        lazy_return_items: None,
+    };
+    execute_folded_set(graph, &set_clause, &rows, stats, ctx)?;
+    GraphWrite::flush_pending_writes(&mut graph.graph);
+    refresh_written_projections(graph, &mut rows, &set_clause_variables(&set_clause));
+    Ok(rows.rows.pop().expect("one row in, one row out"))
 }
 
 /// The clause's pattern, cloned once, whose row-dependent property slots

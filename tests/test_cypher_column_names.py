@@ -16,7 +16,8 @@ from kglite import KnowledgeGraph
 def people():
     g = KnowledgeGraph()
     g.cypher(
-        "CREATE (:P {id: 1, name: 'ann', age: 30}), (:P {id: 2, name: 'bob', age: 20}), (:P {id: 3, name: 'cy', age: 30})"
+        "CREATE (:P {id: 1, name: 'ann', age: 30}), (:P {id: 2, name: 'bob', age: 20}), "
+        "(:P {id: 3, name: 'cy', age: 30})"
     )
     return g
 
@@ -68,7 +69,9 @@ def test_order_by_resolves_on_the_expression_not_the_column_name(people):
         {"toUpper(n.name)": "ANN", "n.age+1": 31},
     ]
     # Another spelling of the same expression resolves to the same column.
-    assert [r["toUpper(n.name)"] for r in people.cypher(q.replace("toUpper(n.name) DESC", "TOUPPER(n.name)")).to_list()] == [
+    assert [
+        r["toUpper(n.name)"] for r in people.cypher(q.replace("toUpper(n.name) DESC", "TOUPPER(n.name)")).to_list()
+    ] == [
         "ANN",
         "BOB",
         "CY",
@@ -86,7 +89,10 @@ def test_distinct_and_dataframe_columns(people):
     result = people.cypher("MATCH (n:P) RETURN DISTINCT n.age*2")
     assert list(result.columns) == ["n.age*2"]
     assert sorted(r["n.age*2"] for r in result.to_list()) == [40, 60]
-    assert list(people.cypher("MATCH (n:P) RETURN n.age*2, toLower('X')").to_df().columns) == ["n.age*2", "toLower('X')"]
+    assert list(people.cypher("MATCH (n:P) RETURN n.age*2, toLower('X')").to_df().columns) == [
+        "n.age*2",
+        "toLower('X')",
+    ]
 
 
 def test_with_items_keep_their_names_for_later_clauses(people):

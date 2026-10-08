@@ -853,9 +853,8 @@ fn column_display_names(clauses: &[Clause]) -> Vec<(String, String)> {
         .iter()
         .filter_map(|item| {
             let shown = item.display.as_ref()?;
-            let name = crate::graph::languages::cypher::executor::helpers::return_item_column_name(
-                item,
-            );
+            let name =
+                crate::graph::languages::cypher::executor::helpers::return_item_column_name(item);
             (name != *shown).then(|| (name, shown.clone()))
         })
         .collect()

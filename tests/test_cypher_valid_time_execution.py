@@ -283,9 +283,9 @@ def test_an_id_seek_after_a_reload_follows_the_reloaded_node_order(storage, tmp_
         "MATCH (w:Well {id: $k}) RETURN w.id ORDER BY w.id LIMIT 1",
         "MATCH (w:Well {id: $k})-[:IN]->(f) RETURN f.id",
         "MATCH (f:Project) OPTIONAL MATCH (w:Well {id: $k})-[:IN]->(f) RETURN w.id",
-        "MATCH (f:Project) RETURN COUNT { (w:Well {id: $k})-[:IN]->(f) }",
+        "MATCH (f:Project) RETURN COUNT { (w:Well {id: $k})-[:IN]->(f) } AS c",
         "MATCH (f:Project) WHERE EXISTS { (:Well {id: $k})-[:IN]->(f) } RETURN f.id",
-        "MATCH (f:Project) RETURN [(w:Well {id: $k})-[:IN]->(f) | w.id]",
+        "MATCH (f:Project) RETURN [(w:Well {id: $k})-[:IN]->(f) | w.id] AS ids",
         "MATCH (w:Well {id: $k})-[:IN*1..2]-(x:Project) RETURN x.id",
         "MATCH p = shortestPath((w:Well {id: $k})-[*]-(c:Company)) RETURN length(p)",
         "MATCH (a:Project) MATCH (w:Well {id: $k}) RETURN w.id",
@@ -294,7 +294,9 @@ def test_an_id_seek_after_a_reload_follows_the_reloaded_node_order(storage, tmp_
 def test_an_inline_map_expression_answers_as_its_value_under_a_context(ledger, body):
     """A statement under a context keeps its inline-map expressions (they are
     not folded at plan time without the filter): each shape answers as the
-    same statement with the value written as a literal."""
+    same statement with the value written as a literal. Items carry an alias:
+    an unaliased column is named by its source text, which differs between
+    the two spellings."""
     for date in ("2003-01-01", "2011-01-01"):
         for k in (1, 2):
             want = ledger.cypher(at(date, body.replace("$k", str(k)))).to_list()

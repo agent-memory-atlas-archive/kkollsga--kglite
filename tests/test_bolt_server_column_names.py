@@ -21,6 +21,8 @@ def test_unaliased_items_are_named_by_their_source_text(bolt_server):
 def test_aliases_and_ordering_are_unaffected(bolt_server):
     with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
         with driver.session() as session:
-            result = session.run("MATCH (n:Person) RETURN toUpper(n.title), n.title AS t ORDER BY toUpper(n.title) DESC")
+            result = session.run(
+                "MATCH (n:Person) RETURN toUpper(n.title), n.title AS t ORDER BY toUpper(n.title) DESC"
+            )
             assert result.keys() == ["toUpper(n.title)", "t"]
             assert [r["t"] for r in result] == ["Dave", "Carol", "Bob", "Alice"]
