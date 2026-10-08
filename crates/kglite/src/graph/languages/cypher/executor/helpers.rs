@@ -1564,6 +1564,24 @@ pub(super) fn parse_json_float_list(s: &str) -> Result<Vec<f32>, String> {
         })
         .collect()
 }
+/// Name the result's columns the way the top-level `RETURN` wrote them.
+///
+/// An unaliased item is resolved internally by its canonical rendering
+/// (`tointeger(3)`), which ORDER BY, HAVING, grouping and UNION arm matching
+/// all read; the written spelling (`toInteger('3')`) only replaces the name
+/// the caller sees, after the pipeline has finished. A name that would collide
+/// with another column keeps its internal form.
+pub(crate) fn apply_column_display(query: &CypherQuery, result: &mut CypherResult) {
+    for (name, shown) in &query.column_display {
+        if result.columns.contains(shown) {
+            continue;
+        }
+        if let Some(column) = result.columns.iter_mut().find(|c| *c == name) {
+            *column = shown.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 pub(super) fn arithmetic_add(a: &Value, b: &Value) -> Value {
     crate::graph::core::value_operations::arithmetic_add(a, b)

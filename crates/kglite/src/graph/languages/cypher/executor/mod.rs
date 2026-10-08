@@ -120,24 +120,6 @@ pub(super) fn apply_row_limit(
 /// The warning rides the ordinary query-warning channel rather than a new one,
 /// so it reaches stderr, `QueryDiagnostics::warnings`, and every binding's
 /// existing warning surface without per-binding wiring.
-/// Name the result's columns the way the top-level `RETURN` wrote them.
-///
-/// An unaliased item is resolved internally by its canonical rendering
-/// (`tointeger(3)`), which ORDER BY, HAVING, grouping and UNION arm matching
-/// all read; the written spelling (`toInteger('3')`) only replaces the name
-/// the caller sees, after the pipeline has finished. A name that would collide
-/// with another column keeps its internal form.
-pub(super) fn apply_column_display(query: &CypherQuery, result: &mut CypherResult) {
-    for (name, shown) in &query.column_display {
-        if result.columns.contains(shown) {
-            continue;
-        }
-        if let Some(column) = result.columns.iter_mut().find(|c| *c == name) {
-            *column = shown.clone();
-        }
-    }
-}
-
 pub(super) fn stamp_row_limit(result: &mut CypherResult, outcome: Option<RowLimitOutcome>) {
     let Some(outcome) = outcome else {
         return;

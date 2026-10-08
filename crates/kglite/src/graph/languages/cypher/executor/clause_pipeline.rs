@@ -40,7 +40,7 @@ impl CypherExecutor<'_> {
         // the work of building what they would have discarded.
         let capped = apply_row_limit(&mut result_set.rows, row_limit);
         let mut result = self.finalize_result(result_set)?;
-        apply_column_display(query, &mut result);
+        helpers::apply_column_display(query, &mut result);
         stamp_row_limit(&mut result, capped);
         result.stats = None;
         if query.profile {
