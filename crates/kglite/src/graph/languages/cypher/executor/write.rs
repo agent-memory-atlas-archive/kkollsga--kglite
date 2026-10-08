@@ -16,7 +16,8 @@ use super::identity_fields::{
 };
 use super::projected_targets::{
     is_null_write_target, projected_node_target, promote_projected_relationships,
-    remove_clause_variables, resolve_node_write_target, set_clause_variables,
+    refresh_written_projections, remove_clause_variables, resolve_node_write_target,
+    set_clause_variables,
 };
 use super::set_row::{apply_node_property_set, NodePropertySet, SetMemos};
 use super::write_scope::{enforce_edge_write_scope, enforce_node_write_scope, enforce_write_scope};
@@ -493,7 +494,7 @@ fn run_clause_pipeline(
                 result_set = execute_create(graph, create, result_set, stats, &write_ctx)?;
             }
             Clause::Set(set) => {
-                apply_set_clause(graph, set, &result_set, stats, &write_ctx)?;
+                apply_set_clause(graph, set, &mut result_set, stats, &write_ctx)?;
             }
             Clause::Delete(del) => {
                 delete_clause::execute_delete(
@@ -506,7 +507,7 @@ fn run_clause_pipeline(
                 )?;
             }
             Clause::Remove(rem) => {
-                apply_remove_clause(graph, rem, &result_set, stats, &write_ctx)?;
+                apply_remove_clause(graph, rem, &mut result_set, stats, &write_ctx)?;
             }
             Clause::Merge(merge) => {
                 result_set = execute_merge(graph, merge, result_set, stats, &write_ctx)?;
@@ -794,7 +795,7 @@ impl WriteClauseCtx<'_> {
 fn apply_foreach_body_clause(
     graph: &mut DirGraph,
     clause: &Clause,
-    result_set: ResultSet,
+    mut result_set: ResultSet,
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
 ) -> Result<ResultSet, String> {
@@ -809,7 +810,7 @@ fn apply_foreach_body_clause(
     match clause {
         Clause::Create(create) => execute_create(graph, create, result_set, stats, ctx),
         Clause::Set(set) => {
-            apply_set_clause(graph, set, &result_set, stats, ctx)?;
+            apply_set_clause(graph, set, &mut result_set, stats, ctx)?;
             Ok(result_set)
         }
         Clause::Delete(del) => {
@@ -825,7 +826,7 @@ fn apply_foreach_body_clause(
             Ok(result_set)
         }
         Clause::Remove(rem) => {
-            apply_remove_clause(graph, rem, &result_set, stats, ctx)?;
+            apply_remove_clause(graph, rem, &mut result_set, stats, ctx)?;
             Ok(result_set)
         }
         Clause::Merge(merge) => {
@@ -1642,7 +1643,7 @@ pub(super) fn flush_disk_item_writes(graph: &mut DirGraph) {
 fn apply_set_clause(
     graph: &mut DirGraph,
     set: &SetClause,
-    result_set: &ResultSet,
+    result_set: &mut ResultSet,
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
@@ -1650,9 +1651,10 @@ fn apply_set_clause(
         let identities = ctx.relationship_identities.lock().expect("identity lock");
         promote_projected_relationships(graph, result_set, &set_clause_variables(set), &identities)?
     };
-    let rows = promoted.as_ref().unwrap_or(result_set);
+    let rows = promoted.as_ref().unwrap_or(&*result_set);
     execute_set(graph, set, rows, stats, ctx)?;
     GraphWrite::flush_pending_writes(&mut graph.graph);
+    refresh_written_projections(graph, result_set, &set_clause_variables(set));
     Ok(())
 }
 
@@ -1660,7 +1662,7 @@ fn apply_set_clause(
 fn apply_remove_clause(
     graph: &mut DirGraph,
     remove: &RemoveClause,
-    result_set: &ResultSet,
+    result_set: &mut ResultSet,
     stats: &mut MutationStats,
     ctx: &WriteClauseCtx<'_>,
 ) -> Result<(), String> {
@@ -1669,9 +1671,10 @@ fn apply_remove_clause(
         let variables = remove_clause_variables(remove);
         promote_projected_relationships(graph, result_set, &variables, &identities)?
     };
-    let rows = promoted.as_ref().unwrap_or(result_set);
+    let rows = promoted.as_ref().unwrap_or(&*result_set);
     execute_remove(graph, remove, rows, stats, ctx.interrupt)?;
     GraphWrite::flush_pending_writes(&mut graph.graph);
+    refresh_written_projections(graph, result_set, &remove_clause_variables(remove));
     Ok(())
 }
 

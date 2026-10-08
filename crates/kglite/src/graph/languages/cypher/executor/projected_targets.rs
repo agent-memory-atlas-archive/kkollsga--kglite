@@ -209,6 +209,43 @@ pub(super) fn set_clause_variables(set: &SetClause) -> Vec<&str> {
         .collect()
 }
 
+/// Re-materialise the node and relationship VALUES a SET / REMOVE clause just
+/// wrote through, so the rows it hands downstream read the written state. A
+/// projected `Value::Node` / `Value::Relationship` is a snapshot taken when
+/// it was projected (`UNWIND collect(n) AS x`); the write reaches the stored
+/// element, and without this refresh `x.name` and `properties(x)` after the
+/// clause answer the pre-write value. Values held inside lists or maps are
+/// left alone — they are snapshots by construction. A slot that no longer
+/// holds the element keeps its old value.
+pub(super) fn refresh_written_projections(
+    graph: &DirGraph,
+    result_set: &mut ResultSet,
+    variables: &[&str],
+) {
+    for row in &mut result_set.rows {
+        for &variable in variables {
+            let refreshed = match row.projected.get(variable) {
+                Some(Value::Node(node)) => {
+                    super::helpers::materialize_node_value(NodeIndex::new(node.id as usize), graph)
+                        .map(|fresh| Value::Node(Box::new(fresh)))
+                }
+                Some(Value::Relationship(rel)) => {
+                    super::helpers::materialize_rel_value_with_incarnation(
+                        EdgeIndex::new(rel.id as usize),
+                        graph,
+                        rel.incarnation,
+                    )
+                    .map(|fresh| Value::Relationship(Box::new(fresh)))
+                }
+                _ => None,
+            };
+            if let Some(fresh) = refreshed {
+                row.projected.insert(variable.to_string(), fresh);
+            }
+        }
+    }
+}
+
 pub(super) fn remove_clause_variables(remove: &RemoveClause) -> Vec<&str> {
     remove
         .items
