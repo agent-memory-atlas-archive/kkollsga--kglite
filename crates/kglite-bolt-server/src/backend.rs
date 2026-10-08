@@ -25,6 +25,7 @@ use boltr::types::{BoltDict, BoltValue};
 use kglite::api::session::CsvImportPolicy;
 use kglite::api::{cypher, Value};
 
+use crate::backup::{BackupError, BackupPolicy, BackupService};
 use crate::error_map::kg_to_bolt;
 
 /// The Neo4j server version reported by [`ServerIdentity::Neo4jCompatible`].
@@ -120,6 +121,8 @@ mod admission;
 mod auto_commit;
 #[cfg(test)]
 mod auto_commit_tests;
+#[cfg(test)]
+mod backup_tests;
 mod intercepts;
 mod result_stream;
 #[cfg(test)]
@@ -127,8 +130,9 @@ mod writer_queue_tests;
 mod writer_slot;
 use auto_commit::{access_mode_error, is_write_statement};
 use intercepts::{
-    checkpoint_stream, parse_checkpoint_call, parse_server_facts_call, server_facts_stream,
-    CheckpointCall, ServerFactsCall, ServerFactsVerb,
+    backup_stream, checkpoint_stream, parse_backup_call, parse_checkpoint_call,
+    parse_server_facts_call, server_facts_stream, BackupArg, BackupCall, CheckpointCall,
+    ServerFactsCall, ServerFactsVerb,
 };
 use result_stream::{decode_params, finish_stream, off_async_worker};
 use writer_slot::{ReapedHandles, WriterPermit, WriterSlot};
@@ -215,6 +219,8 @@ pub struct KgliteBackend {
     writer: Arc<WriterSlot>,
     /// Transactions an idle reclaim discarded; see [`ReapedHandles`].
     reaped: ReapedHandles,
+    /// `db.backup()`: path policy and the one-in-flight gate.
+    backup: BackupService,
 }
 
 /// Per-Bolt-transaction state: the canonical snapshot/working CoW
@@ -347,8 +353,14 @@ impl KgliteBackend {
         identity: ServerIdentity,
         auth_user: Option<String>,
     ) -> Self {
+        let session = Arc::new(session);
+        let backup = BackupService::new(
+            Arc::clone(&session),
+            graph_path.clone(),
+            BackupPolicy::Disabled,
+        );
         Self {
-            session: Arc::new(session),
+            session,
             graph_path,
             readonly,
             last_checkpoint_version: Arc::new(Mutex::new(None)),
@@ -361,7 +373,14 @@ impl KgliteBackend {
             auth_user,
             writer: WriterSlot::new(WriterConfig::default()),
             reaped: ReapedHandles::default(),
+            backup,
         }
+    }
+
+    /// Set the `db.backup()` path policy (default: disabled).
+    pub fn with_backup_policy(mut self, policy: BackupPolicy) -> Self {
+        self.backup = self.backup.with_policy(policy);
+        self
     }
 
     /// Replace the default writer admission settings (queue, 20 s wait,
@@ -577,6 +596,16 @@ impl BoltBackend for KgliteBackend {
         // before parameter decoding because the verb takes none.
         if let Some(call) = parse_checkpoint_call(trimmed) {
             return self.run_checkpoint(&call, transaction.is_some());
+        }
+
+        // `CALL db.backup(<name>)`: a bolt-layer verb for the same reasons as
+        // db.checkpoint — it needs the session and the server's path policy.
+        // Unlike a checkpoint it is allowed on `--readonly`: it writes a copy,
+        // never the served graph.
+        if let Some(call) = parse_backup_call(trimmed) {
+            return self
+                .run_backup(&call, parameters, transaction.is_some())
+                .await;
         }
 
         // Server-facts verbs (dbms.components / dbms.showCurrentUser /
@@ -1114,6 +1143,73 @@ impl KgliteBackend {
                 ))
             }
         }
+    }
+
+    /// Run the `db.backup()` verb: resolve the name under the path policy,
+    /// then write the backup on a blocking thread so the IO loop and the
+    /// writers keep moving.
+    ///
+    /// Refusals: inside an explicit transaction (`Protocol`: the backup holds
+    /// the committed graph, not the transaction's writes), policy or name
+    /// (`Forbidden`), a destination the engine declines (`Forbidden`), a second
+    /// concurrent backup (`ResourceExhausted`, retriable), a failed write
+    /// (`Backend`).
+    async fn run_backup(
+        &self,
+        call: &BackupCall,
+        parameters: &HashMap<String, BoltValue>,
+        in_transaction: bool,
+    ) -> Result<ResultStream, BoltError> {
+        let started = Instant::now();
+        if in_transaction {
+            return Err(BoltError::Protocol(
+                "db.backup() cannot run inside an explicit transaction — it backs up \
+                 the committed graph, which does not include this transaction's \
+                 uncommitted writes; COMMIT first, then call it in auto-commit"
+                    .into(),
+            ));
+        }
+        let name = match &call.arg {
+            BackupArg::Literal(name) => name.clone(),
+            BackupArg::Param(param) => match parameters.get(param) {
+                Some(BoltValue::String(name)) => name.clone(),
+                Some(_) => {
+                    return Err(BoltError::Protocol(format!(
+                        "db.backup(${param}): the parameter must be a string"
+                    )))
+                }
+                None => {
+                    return Err(BoltError::Protocol(format!(
+                        "db.backup(${param}): parameter ${param} was not supplied"
+                    )))
+                }
+            },
+        };
+        let dest = self.backup.resolve(&name).map_err(BoltError::Forbidden)?;
+        let service = self.backup.clone();
+        let report = tokio::task::spawn_blocking(move || service.run_blocking(&dest))
+            .await
+            .map_err(|e| BoltError::Backend(format!("db.backup() task failed: {e}")))?
+            .map_err(|e| match e {
+                BackupError::Busy => BoltError::ResourceExhausted(
+                    "backup already in progress: only one db.backup() runs at a time; \
+                     retry when it finishes"
+                        .into(),
+                ),
+                BackupError::Refused(m) => {
+                    BoltError::Forbidden(format!("db.backup() refused: {m}"))
+                }
+                BackupError::Failed(m) => BoltError::Backend(format!("db.backup() failed: {m}")),
+            })?;
+        tracing::info!(
+            path = %report.path.display(),
+            bytes = report.bytes,
+            graph_version = report.graph_version,
+            lsn = ?report.lsn,
+            lock_hold_ms = report.lock_hold.as_millis() as u64,
+            "db.backup(): backup written"
+        );
+        Ok(backup_stream(call, &report, started))
     }
 
     /// Tx path: outer mutex only long enough to clone the per-tx Arc, then the

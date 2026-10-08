@@ -164,6 +164,12 @@ pub(super) fn parse_procedure_call(
     let rest = strip_keyword_ci(rest, proc)?;
     let rest = rest.strip_prefix('(')?.trim_start();
     let rest = rest.strip_prefix(')')?.trim_start();
+    parse_yield_tail(rest, declared)
+}
+
+/// Parse what follows a procedure's closing parenthesis: nothing (all
+/// `declared` columns) or `YIELD` naming a duplicate-free subset of them.
+fn parse_yield_tail(rest: &str, declared: &'static [&'static str]) -> Option<Vec<&'static str>> {
     if rest.is_empty() {
         return Some(declared.to_vec());
     }
@@ -178,6 +184,112 @@ pub(super) fn parse_procedure_call(
         columns.push(*canonical);
     }
     Some(columns)
+}
+
+/// Output columns of `db.backup(...)`, in declaration order.
+pub(super) const BACKUP_COLUMNS: [&str; 8] = [
+    "success",
+    "path",
+    "lsn",
+    "nodes",
+    "relationships",
+    "bytes",
+    "lock_hold_ms",
+    "elapsed_ms",
+];
+
+/// The single argument of `db.backup(...)`.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BackupArg {
+    /// A quoted string literal, quotes removed.
+    Literal(String),
+    /// A `$name` parameter reference (name without the `$`).
+    Param(String),
+}
+
+/// A recognized `CALL db.backup(<name>)` invocation and the columns it asked for.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct BackupCall {
+    pub(super) arg: BackupArg,
+    pub(super) columns: Vec<&'static str>,
+}
+
+/// Recognize `CALL db.backup('<name>')` or `CALL db.backup($param)` with an
+/// optional `YIELD` of a subset of [`BACKUP_COLUMNS`]; `None` for anything else.
+///
+/// Exactly one argument: a string literal or a parameter. A second argument,
+/// an expression, a backslash or the other quote character inside a literal
+/// all fall through to the engine's "Unknown procedure" — path text is
+/// policy-checked later, so the parser keeps no escape rules to get wrong.
+pub(super) fn parse_backup_call(query: &str) -> Option<BackupCall> {
+    let mut body = query.trim();
+    if let Some(stripped) = body.strip_suffix(';') {
+        body = stripped.trim_end();
+    }
+    let rest = strip_keyword_ci(body, "call")?;
+    let rest = strip_keyword_ci(rest, "db.backup")?;
+    let rest = rest.strip_prefix('(')?.trim_start();
+    let (arg, rest) = if let Some(after) = rest.strip_prefix('$') {
+        let end = after
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        if end == 0 {
+            return None;
+        }
+        (BackupArg::Param(after[..end].to_string()), &after[end..])
+    } else {
+        let quote = rest.chars().next().filter(|c| *c == '\'' || *c == '"')?;
+        let after = &rest[1..];
+        let end = after.find(quote)?;
+        let literal = &after[..end];
+        if literal.contains('\\') {
+            return None;
+        }
+        (BackupArg::Literal(literal.to_string()), &after[end + 1..])
+    };
+    let rest = rest.trim_start().strip_prefix(')')?.trim_start();
+    let columns = parse_yield_tail(rest, &BACKUP_COLUMNS)?;
+    Some(BackupCall { arg, columns })
+}
+
+/// Project a finished backup onto the yielded columns as a one-record stream.
+/// `success` is always `true`: every failure is a Bolt FAILURE instead.
+pub(super) fn backup_stream(
+    call: &BackupCall,
+    report: &kglite::api::session::BackupReport,
+    started: Instant,
+) -> ResultStream {
+    let values: Vec<BoltValue> = call
+        .columns
+        .iter()
+        .map(|column| match *column {
+            "success" => BoltValue::Boolean(true),
+            "path" => BoltValue::String(report.path.display().to_string()),
+            "lsn" => report
+                .lsn
+                .map_or(BoltValue::Null, |lsn| BoltValue::Integer(lsn as i64)),
+            "nodes" => BoltValue::Integer(report.nodes as i64),
+            "relationships" => BoltValue::Integer(report.relationships as i64),
+            "bytes" => BoltValue::Integer(report.bytes as i64),
+            "lock_hold_ms" => BoltValue::Integer(report.lock_hold.as_millis() as i64),
+            "elapsed_ms" => BoltValue::Integer(report.elapsed.as_millis() as i64),
+            other => unreachable!("parse_backup_call yielded an unknown column: {other}"),
+        })
+        .collect();
+    ResultStream {
+        metadata: ResultMetadata {
+            columns: call.columns.iter().map(|c| (*c).to_string()).collect(),
+            extra: BoltDict::new(),
+        },
+        records: vec![BoltRecord { values }],
+        summary: BoltDict::from([
+            ("type".to_string(), BoltValue::String("r".to_string())),
+            (
+                "t_last".to_string(),
+                BoltValue::Integer(started.elapsed().as_millis() as i64),
+            ),
+        ]),
+    }
 }
 
 /// Recognize the server-facts verbs. `SHOW DATABASES` is matched in its

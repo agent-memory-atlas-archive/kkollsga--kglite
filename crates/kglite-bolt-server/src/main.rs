@@ -27,6 +27,7 @@ use crate::startup::{start_graph, DurabilityRequest};
 mod accept;
 mod auth;
 mod backend;
+mod backup;
 mod coalesce;
 mod discard;
 mod error_map;
@@ -230,6 +231,27 @@ struct Cli {
     /// gate CSV import the same way: an allowed directory, off by default.
     #[arg(long, value_name = "DIR")]
     allow_csv_import: Option<PathBuf>,
+
+    /// Let clients run `CALL db.backup('<name>')`, writing into this directory.
+    ///
+    /// Off by default: without the flag `db.backup()` is refused. The client
+    /// passes a bare file name (no `/`, `\`, `..` or absolute path) and the
+    /// server writes `DIR/<name>` as a single self-contained `.kgl` file —
+    /// temp file, fsync, atomic rename, so an interrupted backup leaves the
+    /// previous file intact. DIR is created if missing and canonicalised at
+    /// startup. A backup of a disk-mode graph is refused; `--readonly` servers
+    /// may back up.
+    #[arg(long, value_name = "DIR")]
+    backup_dir: Option<PathBuf>,
+
+    /// Let `db.backup()` clients name any path the server can write.
+    ///
+    /// Startup flag only, never a client argument. Refused at startup with
+    /// `--auth none`, because there every client that can connect would gain a
+    /// file-write primitive. With `--backup-dir` also set, bare names still
+    /// land in DIR and only absolute paths go elsewhere.
+    #[arg(long, default_value_t = false)]
+    backup_allow_any_path: bool,
 
     /// Authentication scheme. `none` (default) accepts any LOGON
     /// credentials; `basic` validates against `--auth-user` / `--auth-pass`.
@@ -901,6 +923,12 @@ async fn serve() -> Result<()> {
         .map(StorageMode::parse)
         .transpose()
         .map_err(|e| anyhow::anyhow!(e))?;
+    let backup_policy = backup::BackupPolicy::from_flags(
+        cli.backup_dir.as_deref(),
+        cli.backup_allow_any_path,
+        matches!(cli.auth, AuthScheme::None),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
     let mut durability = Durability::resolve(&cli)?;
     // The graph is opened *and* wrapped in its session here: at a logging level
     // the two are one step, because recovering the write-ahead sidecar is part
@@ -975,6 +1003,7 @@ async fn serve() -> Result<()> {
         identity,
         cli.auth_user.clone(),
     )
+    .with_backup_policy(backup_policy)
     .with_writer_config(WriterConfig {
         mode: match cli.write_concurrency {
             WriteConcurrencyArg::Queue => WriteConcurrency::Queue,

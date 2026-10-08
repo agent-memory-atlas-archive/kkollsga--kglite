@@ -9,6 +9,27 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **`kglite-bolt-server` backs up the served graph on request.**
+  `CALL db.backup('nightly.kgl')` or `CALL db.backup($name)` writes a
+  consistent single-file `.kgl` of the committed graph, without stalling
+  writers: they are held only to fix the snapshot point, not for the write.
+  Yields `success, path, lsn, nodes, relationships, bytes, lock_hold_ms,
+  elapsed_ms`; `lsn` is null when the server keeps no write-ahead log.
+  - The verb is off until the server is started with `--backup-dir DIR`. It
+    takes a bare file name and writes `DIR/<name>`; names with `/`, `\`,
+    `..` or an absolute path are refused.
+  - `--backup-allow-any-path` lets clients name any path. It is a startup flag
+    only, and the server refuses to start with it under `--auth none`.
+  - Allowed on `--readonly` servers. Refused inside an explicit transaction,
+    for disk-mode graphs, and for a name that is the served graph itself.
+  - One backup runs at a time; a second concurrent call fails with "backup
+    already in progress".
+  - The file is written to a temp name, fsynced and renamed, so a killed
+    server leaves no partial destination and an existing backup of the same
+    name stays intact until the new one is complete.
+
 ## [0.19.5] - 2026-10-08
 
 ### Breaking changes and migration
