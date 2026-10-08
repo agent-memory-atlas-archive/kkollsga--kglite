@@ -1178,6 +1178,7 @@ impl serde_core::ser::Serialize for kglite::api::cypher::RetrievalDiagnostics
 pub fn kglite::api::cypher::RetrievalDiagnostics::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub struct kglite::api::cypher::ReturnItem
 pub kglite::api::cypher::ReturnItem::alias: core::option::Option<alloc::string::String>
+pub kglite::api::cypher::ReturnItem::display: core::option::Option<alloc::string::String>
 pub kglite::api::cypher::ReturnItem::expression: kglite::api::cypher::Expression
 impl core::clone::Clone for kglite::api::cypher::ReturnItem
 pub fn kglite::api::cypher::ReturnItem::clone(&self) -> kglite::api::cypher::ReturnItem

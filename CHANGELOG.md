@@ -23,7 +23,8 @@ before upgrading.
   and `UNION` arms that respell an expression still match (the result takes
   the left arm's text). `WITH` items and `CALL { }` bodies are not renamed.
   **Do:** alias with `AS` for a name that does not depend on spelling, and
-  update code that read the old lowercased or respaced name.
+  update code that read the old lowercased or respaced name. Rust callers that
+  build a `kglite::api::cypher::ReturnItem` literal add `display: None`.
 
 - **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
   that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
