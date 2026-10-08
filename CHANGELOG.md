@@ -142,6 +142,11 @@ before upgrading.
   (a)-[r:E]->(b)` over two parallel `:E` relationships returned one row, and
   `MATCH (a) MERGE (b)` over two nodes returned two rows instead of four.
   **Do:** add `LIMIT 1` or `RETURN DISTINCT` where a query relied on one row.
+  For upserts, index the `MERGE` key or declare it unique: an unindexed `MERGE`
+  scans every node of the label, as a `MATCH` does. A `MERGE` whose pattern
+  names every property of a declared `UNIQUE` or `NODE KEY` constraint stops at
+  the one node holding that tuple, and creates without a scan when a text or
+  boolean tuple is unoccupied.
 
 - A path variable that another part of the query already uses is an error
   again, and it is now an error in every position. `MATCH p = (a)-->(b), p =

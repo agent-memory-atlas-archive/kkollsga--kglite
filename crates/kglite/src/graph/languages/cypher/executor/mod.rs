@@ -1099,6 +1099,9 @@ pub mod match_clause;
 pub mod match_execution;
 mod match_stream;
 mod merge_pattern;
+#[cfg(test)]
+#[path = "merge_unique_probe_tests.rs"]
+mod merge_unique_probe_tests;
 mod mutating_call;
 mod mutation_support;
 mod node_embedding_procedures;

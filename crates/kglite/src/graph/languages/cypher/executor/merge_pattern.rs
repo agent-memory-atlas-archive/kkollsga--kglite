@@ -10,7 +10,7 @@ use crate::graph::languages::cypher::ast::{
     CreateEdgeDirection, CreateEdgePattern, CreateElement, CreateNodePattern, CreatePattern,
 };
 use crate::graph::languages::cypher::result::{EdgeBinding, ResultRow};
-use crate::graph::schema::{canonical_id, DirGraph, EdgeData, InternedKey};
+use crate::graph::schema::{canonical_id, CompositeValue, DirGraph, EdgeData, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
 
@@ -228,6 +228,21 @@ impl Candidate<'_> {
         }
     }
 
+    /// The pattern's values for `names`, in that order; `None` when the
+    /// pattern leaves one of them unnamed or names it null.
+    fn tuple_for(&self, names: &[String]) -> Option<Vec<Value>> {
+        names
+            .iter()
+            .map(|name| {
+                self.props
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+                    .filter(|value| !matches!(value, Value::Null))
+            })
+            .collect()
+    }
+
     fn carries_labels(&self, graph: &DirGraph, idx: NodeIndex) -> bool {
         self.extra_labels
             .iter()
@@ -248,6 +263,11 @@ fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
             }
         }
         return IndexProbe::NoMatch;
+    }
+
+    // 1b. A declared unique tuple the pattern names in full has one holder.
+    if let Some(probe) = probe_unique_index(graph, label, wanted) {
+        return probe;
     }
 
     // 2. Single non-id property: try property index.
@@ -284,6 +304,38 @@ fn probe_node_indexes(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
     }
 
     IndexProbe::Unindexed
+}
+
+/// The verdict of a unique constraint on `label` whose every property the
+/// pattern names, or `None` when no such constraint answers. The index keys
+/// tuples by exact `Value`, so a hit is one node (kept only if the whole
+/// pattern matches it); a miss is authoritative only for text and boolean
+/// values, where exact equality is Cypher equality. An integer or float
+/// pattern value may equal a stored value of the other numeric type, which the
+/// index files apart, so a numeric miss is left to the scan.
+fn probe_unique_index(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> Option<IndexProbe> {
+    if !graph.has_unique_constraints() {
+        return None;
+    }
+    for ((node_type, names), occupants) in &graph.unique_indices {
+        if node_type != label {
+            continue;
+        }
+        let Some(tuple) = wanted.tuple_for(names) else {
+            continue;
+        };
+        if let Some(&idx) = occupants.get(&CompositeValue(tuple.clone())) {
+            if wanted.matches(graph, idx) {
+                return Some(IndexProbe::Matched(vec![idx]));
+            }
+        } else if tuple
+            .iter()
+            .all(|v| matches!(v, Value::String(_) | Value::Boolean(_)))
+        {
+            return Some(IndexProbe::NoMatch);
+        }
+    }
+    None
 }
 
 fn node_matches_all(graph: &DirGraph, idx: NodeIndex, props: &[(&str, Value)]) -> bool {
