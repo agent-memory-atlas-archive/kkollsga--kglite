@@ -4760,6 +4760,8 @@ pub fn kglite::api::NodeView<'a>::clone(&self) -> kglite::api::NodeView<'a>
 impl<'a> core::marker::Copy for kglite::api::NodeView<'a>
 pub struct kglite::api::OntologyStore
 pub kglite::api::OntologyStore::classes: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::ClassDecl>
+pub kglite::api::OntologyStore::closed_labels: bool
+pub kglite::api::OntologyStore::enforcement: kglite::api::Enforcement
 pub kglite::api::OntologyStore::relationships: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::RelationshipDecl>
 pub kglite::api::OntologyStore::version: u32
 impl kglite::api::OntologyStore
