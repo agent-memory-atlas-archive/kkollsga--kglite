@@ -1202,7 +1202,15 @@ pub(super) fn map_subscript(container: &Value, key: &str) -> Value {
     match container {
         Value::Map(map) => map.get(key).cloned().unwrap_or(Value::Null),
         Value::Node(node) => node.properties.get(key).cloned().unwrap_or(Value::Null),
-        Value::Relationship(rel) => rel.properties.get(key).cloned().unwrap_or(Value::Null),
+        Value::Relationship(rel) => rel.properties.get(key).cloned().unwrap_or_else(|| {
+            // `keys(r)` reports the synthetic `type` entry, so `r['type']`
+            // reads it; a stored property of that name wins.
+            if key == "type" && !rel.rel_type.is_empty() {
+                Value::String(rel.rel_type.clone())
+            } else {
+                Value::Null
+            }
+        }),
         _ => Value::Null,
     }
 }
