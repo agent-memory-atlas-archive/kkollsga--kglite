@@ -112,6 +112,15 @@ before upgrading.
   `cooldown` also moves an accelerator-resident model back to the CPU before
   dropping it, because a plain drop left the GPU memory allocated.
 
+- A path variable that another part of the query already uses is an error
+  again, and it is now an error in every position. `MATCH p = (a)-->(b), p =
+  (c)-->(d)`, `MATCH p = (p)-->(b)`, `MATCH p = (a)-[p]->(b)` and a path
+  variable that an earlier `MATCH`, `WITH` or `UNWIND` bound all fail with
+  "Variable `p` is already bound"; a name bound as a path cannot return as a
+  node or relationship variable. Re-using a node or relationship variable is
+  unchanged. Since the previous release, a path variable on a later comma part
+  (`MATCH (x), p = ...`) parses, which stopped these shapes failing by accident.
+
 - A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
   `error` now names the key in its error. It said only "unknown variant".
 
