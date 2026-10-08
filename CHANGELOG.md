@@ -11,11 +11,49 @@ before upgrading.
 
 ### Breaking changes and migration
 
+- **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
+  that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
+  the connection to its ready state, and it could run queries and commit write
+  transactions without credentials (a defect in `boltr` 0.2.0, the Bolt library
+  the server uses). Servers started with `--auth basic` were affected, in every
+  release since the server shipped; `--auth none` servers accept every client
+  by design. The server now refuses every query, transaction and routing
+  request from a connection that has not completed a successful LOGON with
+  `Neo.ClientError.Security.Unauthorized`, and closes the connection on the
+  first rejected LOGON, so a client that sends requests before LOGON, or keeps a
+  connection after a failed one, now fails. **Do:** upgrade, send a successful
+  LOGON first, and treat data on an `--auth basic` server reachable by
+  untrusted clients as exposed.
+
+- `kglite-bolt-server` now bounds what an unauthenticated client can make it
+  allocate. A message larger than 64 KiB before a successful LOGON gets a
+  FAILURE and its connection is closed, although `--max-message-size` (16 MiB by
+  default) still bounds later messages. A message nested deeper than 128
+  levels gets a FAILURE and closes its connection at any point; before, it
+  overflowed the decoder's stack and killed the server for every client.
+  **Do:** keep the LOGON message under 64 KiB, and keep parameters shallower
+  than 128 levels.
+
 - `extensions.embedder` now loads its model on the first call that needs it,
   not at boot. The first `text_score()` pays the load time (seconds for
   `sentence-transformers` with `BAAI/bge-m3`). A model that cannot load now
   fails that call, not the boot. **Do:** set `extensions.embedder.load: eager`
   to build the model at boot as before.
+
+- `extensions.embedder.cooldown` defaults to `600` seconds, so an idle server
+  now drops its embedder model and the next `text_score()` rebuilds it (a load
+  delay on the first call after the pause). **Do:** set
+  `extensions.embedder.cooldown: 0` to keep the model loaded.
+
+- The `sentence-transformers` embedder wrapper now runs on `cpu` on Apple
+  silicon instead of the library's `mps` choice; other machines keep the
+  library's choice. `mps` held about 3 GB for `BAAI/bge-m3` and grew the CPU
+  heap by about 7 MB per distinct query length (measured: 3.8 GB at load, 5 GB
+  after 150 varied queries and climbing). On `cpu` the same model takes 0.74 GB,
+  flat, and a query takes ~65 ms against ~30 ms. **Do:** set
+  `extensions.embedder.device: mps` (or `cuda`, `cpu`) to choose the device.
+  The idle `cooldown` also moves an accelerator-resident model back to the CPU
+  before dropping it, because a plain drop left the GPU memory allocated.
 
 - `kglite-bolt-server` now queues write transactions for a single writer slot
   at BEGIN instead of letting them conflict at COMMIT. Concurrent writers wait
@@ -35,6 +73,69 @@ before upgrading.
   keep the earlier behaviour, start the server with
   `--write-concurrency optimistic`.
 
+- `kglite-bolt-server` now accepts schema statements (`CREATE INDEX`,
+  `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`) in auto-commit. They
+  were refused with "auto-commit mutations not supported". Each now publishes
+  as a transaction of its own, takes the writer slot and reports query type
+  `s`; data mutations are still refused in auto-commit. Inside an explicit
+  transaction a schema statement still runs and commits with the data, where
+  Neo4j refuses the mix. **Do:** nothing, unless a client relied on the refusal.
+
+- `kglite-bolt-server` now serves a DISCARD (sent by `result.consume()`) as a
+  PULL and withholds the records, so the summary, `has_more` and `n` behave as
+  for PULL. `consume().counters` read zero after a write, and a partly read
+  result lost its bookmark and timings, because `boltr` 0.2.0 answered DISCARD
+  with an empty SUCCESS. **Do:** nothing; read the summary from `consume()`.
+
+- `kglite-bolt-server` now checkpoints on its own once the write-ahead log
+  passes 16 MiB and is at least as large as the `.kgl`, which rewrites the file
+  passed to `--graph`. A server at the default `normal` durability with no
+  `--checkpoint-interval` never folded its log, so the log grew without bound
+  and every restart replayed all of it. **Do:** pass `--checkpoint-wal-mib 0`
+  (or `KGLITE_BOLT_CHECKPOINT_WAL_MIB=0`) to keep the old behaviour, or another
+  size to move the bound. It does not apply at `--durability off`, with
+  `--readonly`, or for disk-mode graphs.
+
+- Opening a damaged write-ahead log can now leave extra files next to it.
+  Instead of refusing to start, a durable open copies the whole log to
+  `<graph file>-wal.quarantine-<UTC time>` and continues on the frames before
+  the damage. A torn tail holding any non-zero byte is first saved to
+  `<graph file>-wal.torn-<UTC time>-at-<offset>`. Neither copy is ever
+  deleted. The open logs an error naming the copy, and `graph_info()` lists a
+  `wal_quarantined` or `wal_tail_saved` advisory. If the copy cannot be
+  written the open is refused. An undamaged log opens unchanged. **Do:** inspect
+  the copy, then delete it when you no longer need it.
+
+- `MERGE` now returns one row per matching pattern, where it always returned
+  one, and `ON MATCH SET` runs on every matched row. `MATCH (a:A), (b:B) MERGE
+  (a)-[r:E]->(b)` over two parallel `:E` relationships returned one row, and
+  `MATCH (a) MERGE (b)` over two nodes returned two rows instead of four.
+  **Do:** add `LIMIT 1` or `RETURN DISTINCT` where a query relied on one row.
+
+- A path variable that another part of the query already uses is an error
+  again, and it is now an error in every position. `MATCH p = (a)-->(b), p =
+  (c)-->(d)`, `MATCH p = (p)-->(b)`, `MATCH p = (a)-[p]->(b)` and a path
+  variable that an earlier `MATCH`, `WITH` or `UNWIND` bound all fail with
+  "Variable `p` is already bound"; a name bound as a path cannot return as a
+  node or relationship variable. Some of these shapes ran in 0.19.4.
+  Re-using a node or relationship variable is unchanged. **Do:** give each path
+  its own variable name.
+
+- `STARTS WITH`, `ENDS WITH` and `CONTAINS` with a non-string operand now answer
+  `null`, not `false`, so `NOT (n.x CONTAINS 'a')` over a non-string `n.x` is
+  `null` and its row is filtered out. **Do:** test the operand's type first
+  (`toString(n.x) CONTAINS …`) where you relied on `false`.
+
+- `r:TYPE` on a relationship now tests its type; it was false for every row.
+  A label test on a null variable (`m:Q` after an unmatched `OPTIONAL MATCH`) is
+  now `null`, not `false`. `type(r)` after `DELETE r` in the same statement now
+  returns the deleted relationship's type, not `null`. **Do:** use
+  `coalesce(m:Q, false)` where you relied on `false`.
+
+- An open-ended variable-length pattern (`*`, `*N..`) now carries a warning in
+  `ResultView.warnings` that it stops at 10 hops. The cap is unchanged. **Do:**
+  write `*1..N` to go deeper and to silence the warning.
+
 ### Changed
 
 - Concurrent Bolt writers no longer retry. With 4 writers each committing 1000
@@ -52,6 +153,11 @@ before upgrading.
   (release build, macOS loopback, load 5, two agreeing runs). Streaming time
   and peak server memory (6.4-6.5 GB for 1M map rows) did not change.
 
+- Examples, fixtures and docs now use neutral vocabulary (`Project`,
+  `Contract`, `Site`, `Proposal`, `Initiative`, `Portfolio` nodes with
+  `HAS_HOLDER`, `MANAGED_BY` and `IN_CONTRACT` relationships). The query
+  behaviour is unchanged; copy-pasted examples use the new names.
+
 ### Added
 
 - `extensions.embedder.load: lazy | eager` (default `lazy`). The boot still
@@ -59,67 +165,26 @@ before upgrading.
   library can be hosted. A failed lazy build is logged and retried on the
   next call. See the
   [MCP guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html).
+
 - `extensions.embedder.cooldown: <seconds>` (default `600`; `0` disables). The
   server drops the model after that many idle seconds and the next
   `text_score()` rebuilds it, so an idle session no longer holds the model in
   memory (about 4 GB for `sentence-transformers` with `BAAI/bge-m3`). It
   applies to every library and to both `load` modes. A call in flight keeps
   its model, and a negative or non-integer value fails the boot.
-- `kglite-bolt-server` now checkpoints on its own once the write-ahead log
-  passes 16 MiB and is as large as the `.kgl`, which rewrites the file passed
-  to `--graph`. A server at the default `normal` durability with no
-  `--checkpoint-interval` never folded its log, so the log grew without bound
-  and every restart replayed all of it. **Do:** pass `--checkpoint-wal-mib 0`
-  (or `KGLITE_BOLT_CHECKPOINT_WAL_MIB=0`) to keep the old behaviour, or another
-  size to move the bound. It does not apply at `--durability off`, with
-  `--readonly`, or for disk-mode graphs.
+- `extensions.embedder.device` (`cpu`, `cuda`, `mps`) picks the
+  `sentence-transformers` device.
 - `--write-concurrency queue|optimistic`, `--writer-wait-timeout SECS` and
   `--writer-idle-timeout SECS` on `kglite-bolt-server`. See
   [Write concurrency](https://kglite.readthedocs.io/en/latest/operators/bolt-server.html#write-concurrency).
 
 ### Fixed
 
-- `MERGE` now returns one row per match. It stopped at the first, so
-  `MATCH (a:A), (b:B) MERGE (a)-[r:E]->(b)` over two parallel `:E` relationships
-  returned one row, and `MATCH (a) MERGE (b)` over two nodes returned two rows
-  instead of four. `ON MATCH SET` now runs for every matched row, not only the
-  first.
+- `properties(map)` returns the map, not `null`.
 
 - `nodes(p)`, `relationships(p)` and `length(p)` now work on a path held as a
   value, such as a list-comprehension variable (`[x IN [p] | nodes(x)]`). It
   returned `null`.
-
-- `r:TYPE` on a relationship now tests its type. It was false for every row.
-  A label test on a null variable (`m:Q` after an unmatched `OPTIONAL MATCH`) is
-  now `null`, not `false`.
-
-- `STARTS WITH`, `ENDS WITH` and `CONTAINS` with a non-string operand now answer
-  `null`, not `false`.
-
-- `properties(map)` returns the map, not `null`. `type(r)` and `r:TYPE` after
-  `DELETE r` in the same statement still report the relationship's type.
-
-- An open-ended variable-length pattern (`*`, `*N..`) now carries the warning
-  that it stops at 10 hops. The cap is unchanged; write `*1..N` to go deeper.
-
-- A `sentence-transformers` embedder on Apple silicon no longer takes 4 to 10 GB
-  per server process. The library picked the `mps` GPU, which held about 3 GB for
-  `BAAI/bge-m3` (in the process footprint, not RSS) and grew the CPU heap by
-  about 7 MB per distinct query length (measured: 3.8 GB at load, 5 GB after 150
-  varied queries and climbing). The wrapper now runs on `cpu` there (0.74 GB,
-  flat; ~65 ms against ~30 ms per query). `extensions.embedder.device` (`cpu`,
-  `cuda`, `mps`) overrides it; other machines keep the library's choice. The idle
-  `cooldown` also moves an accelerator-resident model back to the CPU before
-  dropping it, because a plain drop left the GPU memory allocated.
-
-- A path variable that another part of the query already uses is an error
-  again, and it is now an error in every position. `MATCH p = (a)-->(b), p =
-  (c)-->(d)`, `MATCH p = (p)-->(b)`, `MATCH p = (a)-[p]->(b)` and a path
-  variable that an earlier `MATCH`, `WITH` or `UNWIND` bound all fail with
-  "Variable `p` is already bound"; a name bound as a path cannot return as a
-  node or relationship variable. Re-using a node or relationship variable is
-  unchanged. Since the previous release, a path variable on a later comma part
-  (`MATCH (x), p = ...`) parses, which stopped these shapes failing by accident.
 
 - A blueprint `on_missing_endpoint` value that is not `auto`, `vivify`, `drop` or
   `error` now names the key in its error. It said only "unknown variant".
@@ -133,36 +198,6 @@ before upgrading.
   relationship form 23.2 ms to 0.21 ms, the path form 48.8 ms to 0.21 ms.
   `WITH` clauses that aggregate, use `DISTINCT` or `ORDER BY`, or carry a
   parameter `LIMIT` or `SKIP` are unchanged.
-
-- **`kglite-bolt-server`: consuming a result kept no summary.** `boltr` 0.2.0
-  answers DISCARD, which drivers send on `result.consume()`, with an empty
-  SUCCESS: it ignored `n` and dropped the summary, so `consume().counters`
-  read zero after a write and a partly read result lost its bookmark and
-  timings. The server now serves a DISCARD as a PULL and withholds the
-  records, so the summary, `has_more` and `n` behave as for PULL.
-
-- **Security: `kglite-bolt-server --auth basic` could be bypassed.** A client
-  that sent a wrong password in LOGON got a FAILURE, but a RESET then returned
-  the connection to its ready state, and it could run queries and commit write
-  transactions without credentials (a defect in `boltr` 0.2.0, the Bolt library
-  the server uses). Servers started with `--auth basic` were affected, in every
-  release since the server shipped; `--auth none` servers accept every client
-  by design. The server now refuses every query, transaction and routing
-  request from a connection that has not completed a successful LOGON with
-  `Neo.ClientError.Security.Unauthorized`, and closes the connection on the
-  first rejected LOGON. **Do:** upgrade, and treat data on an `--auth basic`
-  server reachable by untrusted clients as exposed.
-
-- `kglite-bolt-server` no longer aborts the whole process on a deeply nested
-  PackStream value. One message of nested one-element lists overflowed the
-  decoder's stack and killed the server for every client. A message nested
-  deeper than 128 levels now gets a FAILURE and its connection is closed.
-
-- `kglite-bolt-server` now bounds what an unauthenticated client can make it
-  allocate. A decoded value costs far more memory than its wire size, and
-  `--max-message-size` (16 MiB by default) applied before LOGON. A message
-  larger than 64 KiB before a successful LOGON now gets a FAILURE and its
-  connection is closed.
 
 - `kglite-bolt-server` now closes a connection's session however the
   connection ends. When a client vanished while a result was streaming, the
@@ -201,25 +236,12 @@ before upgrading.
   (release build, macOS loopback, raw reader, min of 3 runs, two agreeing
   rounds). Small exchanges stay at ~21 us.
 
-- A write-ahead log with damage before further bytes is now quarantined
-  instead of refusing to start. At `--durability normal` a power cut can
-  persist later log pages and lose an earlier one, and a frame spanning the gap
-  failed its checksum ("refusing to append or truncate non-tail damage"). A
-  durable open now copies the whole log to `<graph>.kgl-wal.quarantine-<UTC
-  time>`, makes the copy durable, and continues on the frames before the
-  damage. The copy is never deleted. The open logs an error naming the copy,
-  the byte offset and how much was set aside; `kglite-bolt-server` repeats it
-  at startup, and `graph_info()` lists a `wal_quarantined` advisory. If the
-  copy cannot be written the open is refused. A torn tail is still cut
-  off, but any non-zero byte in it is first saved unchanged to
-  `<graph>.kgl-wal.torn-<UTC time>-at-<offset>`, with the same log line and a
-  `wal_tail_saved` advisory; an open refuses if that copy cannot be written.
-  A tail of zeros is cut without a copy. An undamaged log opens unchanged.
 - A commit whose log write failed (full disk, failing barrier) no longer
   costs the commits after it. The failed bytes stayed in the log, the next
   commit appended behind them, and recovery stopped at the dead bytes and
   dropped every later acknowledged commit. The log is now cut back to its last
   whole frame, and refuses further commits if it cannot be.
+
 - A checkpoint whose directory sync fails now reports the error and keeps the
   log. The failure was ignored, so the log was truncated while the rename of
   the new `.kgl` might not have reached disk: a power cut then left the old
@@ -236,16 +258,19 @@ before upgrading.
   in `OPTIONAL MATCH`, `EXISTS`, `COUNT { }` and pattern comprehensions. The
   common-ancestor query `MATCH px=(x)-[*0..20]->(c) MATCH py=(y)-[*0..20]->(c)`
   answered `[]`.
+
 - A path variable on a comma-separated pattern now holds that pattern's own
   path. `MATCH px=(a)-[*1..20]->(c), (b)-[*1..20]->(d)` bound `px` to the
   second pattern's path, so `length(px)` was wrong (seen as far back as
   0.18.0). A path through two variable-length segments,
   `p=(a)-[*]->(b)-[*]->(c)`, returned null.
+
 - A path variable is now accepted on any comma-separated pattern of a `MATCH`.
   `MATCH (x), (y), px=(x)-[*]->(c), py=(y)-[*]->(c)` was a syntax error
   ("Unexpected token in MATCH pattern: ="); only the first pattern could be
   named. `shortestPath()` still applies to a clause's first pattern only, and
   now says so on a later one.
+
 - A create/delete steady state no longer grows memory without bound on
   memory-mode graphs served through a `Session` (Bolt server, MCP server, C
   ABI). A delete kept the deleted node's column row, so `MATCH (n) DETACH
@@ -253,6 +278,7 @@ before upgrading.
   1,500 cycles of 1,000 nodes. Each commit now rebuilds the column stores once
   dead rows pass the `auto_vacuum_threshold` ratio (default 0.3, floor 100
   rows). No node index changes, so indexes and labels stay valid.
+
 - `UNWIND $rows AS r MERGE (s:Label {key: r.key})` no longer costs O(index) per
   new key inside a transaction. After the statement's first `CREATE`, every
   later row's index lookup merged every level of the transaction's index to
@@ -260,13 +286,7 @@ before upgrading.
   against 0.4 ms for one `MERGE`. A lookup now reads the index only when the
   probe is a date. This covers single-property and composite indexes, and
   every `MATCH {key: …}` that uses them.
-- `kglite-bolt-server` runs schema statements in auto-commit. `session.run("CREATE
-  INDEX …")`, `DROP INDEX`, `CREATE CONSTRAINT` and `DROP CONSTRAINT` were refused
-  with "auto-commit mutations not supported", so a script ported from Neo4j
-  failed on its first line. Each now publishes as a transaction of its own and
-  reports query type `s`; data mutations are still refused in auto-commit.
-  Inside an explicit transaction a schema statement still runs and commits with
-  the data, where Neo4j refuses the mix.
+
 - Deleting many nodes in one statement no longer holds about 2 KB per node
   while the graph is durable. A terminal `DELETE` or `DETACH DELETE` on a graph
   with a write-ahead log (the default `normal` and `full` durability) kept a
@@ -278,6 +298,7 @@ before upgrading.
   same delete peaks at 188 MiB at `normal` and `full`. A delete behind a write
   in the same statement keeps its journal. The log bytes and recovered state
   are unchanged.
+
 - Restarting a durable graph no longer holds the whole write-ahead log in
   memory. Recovery decoded every frame into a list, about ten times its
   on-disk size, before folding it: a 6 MB log restarted at 90 MiB resident,
@@ -291,6 +312,7 @@ before upgrading.
 - `Wal::append_resolved`: new method that resolves a commit's captured ops
   straight into one frame and appends it, with the bytes `Wal::append` writes
   for the same ops. Nothing existing changes.
+
 
 ## [0.19.4] - 2026-10-06
 
