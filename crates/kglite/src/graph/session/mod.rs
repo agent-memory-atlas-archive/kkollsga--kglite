@@ -50,6 +50,7 @@
 //!   they publish, and [`Session::save`] is the four-step checkpoint.
 //!   See [`durable`] for the orderings that are correctness.
 
+pub use self::backup::{BackupOptions, BackupReport};
 pub use self::execute::{execute_mut, execute_read, ExecuteOptions, ExecuteOutcome};
 pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,
@@ -62,6 +63,9 @@ pub use self::transaction::{CommitOutcome, Session, Transaction};
 
 #[cfg(test)]
 mod append_capacity_tests;
+pub(crate) mod backup;
+#[cfg(test)]
+mod backup_tests;
 #[cfg(test)]
 mod checkpoint_order_tests;
 #[cfg(test)]

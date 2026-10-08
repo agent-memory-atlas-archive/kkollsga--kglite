@@ -1,0 +1,195 @@
+//! Online backup: a consistent single-file `.kgl` of the published graph.
+//!
+//! [`Session::backup`] fixes its point in time under both session locks for the
+//! length of an `Arc` clone, then serializes that snapshot with no lock held,
+//! so committers are never stalled for the serialize.
+//!
+//! **The point.** A commit holds the graph mutex across its log append and the
+//! `Arc` swap, and the durability mutex is only taken while the graph mutex is
+//! held (see [`super::durable`]). Holding both therefore yields a published
+//! graph together with the exact LSN of the last frame inside it.
+//!
+//! **No mutation of the snapshot.** The ordinary save prepares the graph it
+//! writes in place (`prepare_kgl_write`), which on a shared `Arc` forks the
+//! whole graph. The backup instead asks the read-only halves of those steps
+//! whether anything would change, and only then prepares a private copy; the
+//! published `Arc` is never written through. The metadata stamp is skipped
+//! because it does not reach the bytes (`oldest_writer_for_save` is idempotent).
+//!
+//! **No sidecars.** The destination is a plain file published by temp + fsync +
+//! rename + directory fsync. No `-wal` and no `.lock` is created, and no writer
+//! lease is taken, so the result is one self-contained file.
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use super::transaction::Session;
+use crate::graph::dir_graph::DirGraph;
+use crate::graph::io::file::SaveError;
+use crate::graph::storage::GraphRead;
+use crate::graph::wal::{wal_path, DurabilityLevel};
+
+/// Inputs to [`Session::backup`] beyond the destination.
+#[derive(Debug, Clone, Default)]
+pub struct BackupOptions {
+    /// The checkpoint path the live graph is saved to, when the caller has one.
+    /// A durable session knows it already (its log sits beside it) and derives
+    /// it when this is `None`; a non-durable session cannot, so a caller that
+    /// loaded the graph from a file passes that path here to have a backup over
+    /// it refused.
+    pub live_path: Option<PathBuf>,
+}
+
+/// What a backup wrote. `graph_version` and `lsn` are different counters:
+/// the version is the session's in-memory commit count, the LSN is a position
+/// in the write-ahead log.
+#[derive(Debug, Clone)]
+pub struct BackupReport {
+    pub path: PathBuf,
+    /// Size of the published file.
+    pub bytes: u64,
+    /// Node count of the snapshot written.
+    pub nodes: usize,
+    /// Relationship count of the snapshot written.
+    pub relationships: usize,
+    /// Version of the snapshot written.
+    pub graph_version: u64,
+    /// The `checkpoint_lsn` stamped into the file: the newest log frame the
+    /// snapshot contains (0 when nothing was logged). `None` for a session
+    /// without a write-ahead log.
+    pub lsn: Option<u64>,
+    /// How long both session locks were held to fix the point in time.
+    pub lock_hold: Duration,
+    /// Whole call, guards through the final directory fsync.
+    pub elapsed: Duration,
+    /// Whether the snapshot needed a private prepared copy first (column stores
+    /// out of order after deletes, or stale index declarations). Costs a fork.
+    pub prepared_copy: bool,
+}
+
+const DISK_REFUSAL: &str = "online backup writes a single .kgl file, which a disk-mode graph \
+     cannot be: its storage is a directory of generations. Save it with save(<directory>) \
+     instead, or open a memory or mapped copy to back up.";
+
+impl Session {
+    /// Write a consistent single-file backup of the published graph to `dest`.
+    ///
+    /// Concurrent commits keep flowing: both locks are held only to fix the
+    /// point in time. Memory and mapped graphs are supported; a disk graph is
+    /// refused. `dest` must not alias the live checkpoint (see
+    /// [`BackupOptions::live_path`]) and a stray `dest-wal` holding commits the
+    /// previous `dest` lacks is refused; an existing `dest` is replaced
+    /// atomically.
+    pub fn backup(&self, dest: &Path, opts: &BackupOptions) -> Result<BackupReport, SaveError> {
+        let started = Instant::now();
+        let dest_str = dest.to_str().ok_or_else(|| {
+            SaveError::Refused(format!(
+                "backup destination '{}' is not valid UTF-8",
+                dest.display()
+            ))
+        })?;
+        self.refuse_live_alias(dest, opts)?;
+        crate::graph::durability::prepare_save_as_target(dest, DurabilityLevel::Off)?;
+
+        let (snapshot, lsn, lock_hold) = self.consistent_point();
+        #[cfg(test)]
+        window_hook::run();
+        if snapshot.graph.is_disk() {
+            return Err(SaveError::Refused(DISK_REFUSAL.to_string()));
+        }
+
+        let (prepared, prepared_copy) = prepared_for_write(&snapshot);
+        let written: &DirGraph = prepared.as_ref().unwrap_or(&snapshot);
+        let bytes = crate::graph::io::file::write_kgl_with_stamp(written, dest_str, true, lsn)
+            .map_err(|error| SaveError::Io(error.to_string()))?;
+        Ok(BackupReport {
+            path: dest.to_path_buf(),
+            bytes,
+            nodes: written.graph.node_count(),
+            relationships: written.graph.edge_count(),
+            graph_version: written.version(),
+            lsn,
+            lock_hold,
+            elapsed: started.elapsed(),
+            prepared_copy,
+        })
+    }
+
+    /// Refuse a destination that is the live checkpoint, by path, by the log
+    /// sidecar the durable state appends to, or by the caller-supplied path.
+    fn refuse_live_alias(&self, dest: &Path, opts: &BackupOptions) -> Result<(), SaveError> {
+        let wal = self
+            .durable
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|state| state.wal_file().to_path_buf());
+        let mut aliased = false;
+        if let Some(live) = &opts.live_path {
+            aliased |= crate::graph::durability::same_checkpoint_path(live, dest)
+                .map_err(|e| SaveError::Io(e.to_string()))?;
+        }
+        if let Some(wal) = &wal {
+            aliased |= crate::graph::io::open::same_existing_file(wal, &wal_path(dest))
+                .map_err(|e| SaveError::Io(e.to_string()))?;
+        }
+        if aliased {
+            return Err(SaveError::Refused(format!(
+                "backup destination '{}' is the live graph's checkpoint; a backup is an \
+                 independent copy, so choose another path",
+                dest.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The published graph and the LSN of the last frame it contains, fixed
+    /// together under both locks (graph first, then durability — the commit
+    /// order). The second value is `None` for a non-durable session.
+    fn consistent_point(&self) -> (Arc<DirGraph>, Option<u64>, Duration) {
+        let graph = self.graph.lock().unwrap_or_else(|p| p.into_inner());
+        let durable = self.durable.lock().unwrap_or_else(|p| p.into_inner());
+        let held = Instant::now();
+        let snapshot = Arc::clone(&graph);
+        let lsn = durable.as_ref().map(|state| state.last_lsn());
+        drop(durable);
+        drop(graph);
+        (snapshot, lsn, held.elapsed())
+    }
+}
+
+/// A private prepared copy of `snapshot` when writing it as it stands would
+/// differ from what a normal save writes; `None` when it would not. The shared
+/// `Arc` is never written through: the copy is a fork of it.
+fn prepared_for_write(snapshot: &Arc<DirGraph>) -> (Option<Arc<DirGraph>>, bool) {
+    if !snapshot.columnar_rebuild_needed() && !snapshot.index_keys_stale() {
+        return (None, false);
+    }
+    let mut copy = Arc::clone(snapshot);
+    crate::graph::io::file::prepare_kgl_write(&mut copy);
+    (Some(copy), true)
+}
+
+/// Test seam for the window between fixing the point in time and serializing:
+/// the only place a test can act while a backup is "in flight" without relying
+/// on timing.
+#[cfg(test)]
+pub(super) mod window_hook {
+    use std::cell::RefCell;
+
+    type Hook = Box<dyn FnOnce()>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    pub(in crate::graph::session) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+}

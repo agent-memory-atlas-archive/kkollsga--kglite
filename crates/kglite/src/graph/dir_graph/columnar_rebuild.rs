@@ -77,6 +77,25 @@ impl DirGraph {
     /// `column_ownership_tests::a_second_save_of_an_unmodified_graph_skips_the_rebuild`,
     /// which counts rebuilds rather than trusting the reasoning above.
     pub(crate) fn enable_columnar(&mut self) {
+        if self.columnar_rebuild_needed() {
+            self.rebuild_column_stores();
+        } else {
+            // The stores are already the shape a save wants, but the
+            // *memory limit* still has to be honoured: this is the call
+            // that spills, and taking the fast path used to skip the
+            // spill with it. Harmless while a fresh graph always rebuilt
+            // here; a silent contract break once construction is columnar
+            // and the fast path is the normal case
+            // (`test_spill_when_over_limit`).
+            self.maybe_spill_columns();
+        }
+    }
+
+    /// Whether [`Self::enable_columnar`] would rebuild the stores: the read-only
+    /// half of its decision, so a writer that must not touch a shared graph
+    /// (an online backup of a published snapshot) can ask first and rebuild a
+    /// private copy only when the answer is yes.
+    pub(crate) fn columnar_rebuild_needed(&self) -> bool {
         if self.column_store_count() > 0 {
             // Arena guard: node_weight materializes on the disk backend
             // (protocol in disk/graph.rs); the whole drift check is
@@ -153,19 +172,9 @@ impl DirGraph {
                 .map(|(_, s)| s.row_count() as u64)
                 .sum();
             let orphaned_rows = total_store_rows != self.graph.node_count() as u64;
-            if !any_drift && !orphaned_rows {
-                // The stores are already the shape a save wants, but the
-                // *memory limit* still has to be honoured: this is the call
-                // that spills, and taking the fast path used to skip the
-                // spill with it. Harmless while a fresh graph always rebuilt
-                // here; a silent contract break once construction is columnar
-                // and the fast path is the normal case
-                // (`test_spill_when_over_limit`).
-                self.maybe_spill_columns();
-                return;
-            }
+            return any_drift || orphaned_rows;
         }
-        self.rebuild_column_stores();
+        true
     }
 
     /// The O(N) half of [`DirGraph::enable_columnar`]: rebuild every type's

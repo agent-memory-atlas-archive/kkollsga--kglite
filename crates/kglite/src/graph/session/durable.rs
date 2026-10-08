@@ -96,6 +96,19 @@ pub(super) struct DurableState {
     fail_append: bool,
 }
 
+impl DurableState {
+    /// LSN of the newest frame the log holds (0 when nothing was logged): the
+    /// `checkpoint_lsn` a checkpoint of the graph published beside it carries.
+    pub(super) fn last_lsn(&self) -> u64 {
+        self.next_lsn.saturating_sub(1)
+    }
+
+    /// Path of the sidecar log this state appends to.
+    pub(super) fn wal_file(&self) -> &Path {
+        self.wal.path()
+    }
+}
+
 /// Message shared by every operation that a direct write has invalidated.
 const DIVERGED_MSG: &str = "this durable session was mutated through Session::write / \
      Session::transact, which the write-ahead log cannot describe: those mutations are \

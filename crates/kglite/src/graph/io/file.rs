@@ -917,6 +917,19 @@ fn validate_column_keys_registered(graph: &DirGraph) -> io::Result<()> {
 /// OS/power crash. `fsync = false` keeps the atomic rename (still no torn
 /// file) but skips the durability barrier for speed.
 pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<()> {
+    write_kgl_with_stamp(graph, path, fsync, None).map(|_| ())
+}
+
+/// [`write_kgl_with`] recording `checkpoint_lsn` in the file's metadata instead
+/// of the graph's own stamp (`None` keeps the graph's). The graph is only read,
+/// so a published snapshot another thread holds can be written as it stands.
+/// Returns the byte length of the file it published.
+pub fn write_kgl_with_stamp(
+    graph: &DirGraph,
+    path: &str,
+    fsync: bool,
+    checkpoint_lsn: Option<u64>,
+) -> io::Result<u64> {
     let dest = Path::new(path);
     let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
 
@@ -930,10 +943,10 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
     };
 
     // Scope the writer so the File is closed before the rename.
-    let write_result = (|| -> io::Result<()> {
+    let write_result = (|| -> io::Result<u64> {
         let file = File::create(&tmp)?;
         let mut writer = BufWriter::new(file);
-        write_kgl_to(graph, &mut writer)?;
+        write_kgl_to_stamped(graph, &mut writer, checkpoint_lsn)?;
         writer.flush()?;
         let file = writer
             .into_inner()
@@ -942,14 +955,17 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
             crate::graph::durable_io::trace::record(|| "kgl temp sync_all".to_string());
             file.sync_all()?;
         }
-        Ok(())
+        Ok(file.metadata()?.len())
     })();
 
     // On any write error, remove the temp so a failed save leaves no litter.
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
+    let bytes = match write_result {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
 
     crate::graph::durable_io::trace::record(|| "kgl rename".to_string());
     if let Err(e) = std::fs::rename(&tmp, dest) {
@@ -965,7 +981,7 @@ pub fn write_kgl_with(graph: &DirGraph, path: &str, fsync: bool) -> io::Result<(
         crate::graph::durable_io::trace::record(|| "kgl sync_dir".to_string());
         crate::graph::durable_io::sync_dir(dir.unwrap_or_else(|| Path::new(".")))?;
     }
-    Ok(())
+    Ok(bytes)
 }
 
 /// Serialize, compress, and write the graph to a `.kgl` file, atomically
@@ -1013,6 +1029,16 @@ fn build_section_digests(
 /// save, an in-memory `to_bytes()`, and a caller-supplied writer — none of
 /// them duplicate the section layout.
 pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()> {
+    write_kgl_to_stamped(graph, writer, None)
+}
+
+/// [`write_kgl_to`] with the metadata's `checkpoint_lsn` overridden (`None`
+/// keeps the graph's own stamp). Reads the graph only.
+pub fn write_kgl_to_stamped<W: Write>(
+    graph: &DirGraph,
+    writer: &mut W,
+    checkpoint_lsn: Option<u64>,
+) -> io::Result<()> {
     validate_column_keys_registered(graph)?;
     let codec = serde_codec::CodecVersion::PostcardV1;
 
@@ -1143,6 +1169,9 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
         ],
     );
     let mut metadata = FileMetadata::from_graph_version(graph, core_version);
+    if let Some(lsn) = checkpoint_lsn {
+        metadata.checkpoint_lsn = lsn;
+    }
     metadata.section_digests = section_digests;
     metadata.topology_compressed_size = topology_compressed.len() as u64;
     metadata.column_sections = column_sections_meta;

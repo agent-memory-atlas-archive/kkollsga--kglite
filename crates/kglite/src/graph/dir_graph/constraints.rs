@@ -1284,6 +1284,13 @@ impl DirGraph {
             .min()
     }
 
+    /// Whether [`Self::prune_constraint_names`] would drop a name: its read-only test.
+    pub(crate) fn has_undeclared_constraint_names(&self) -> bool {
+        self.constraint_names
+            .values()
+            .any(|declared| !self.constraint_is_declared(declared))
+    }
+
     /// Drop every registered name whose constraint is no longer declared.
     ///
     /// The registry is a lookup aid, not the source of truth, and several paths

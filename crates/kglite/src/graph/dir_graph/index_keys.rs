@@ -56,6 +56,18 @@ impl DirGraph {
         self.prune_constraint_names();
     }
 
+    /// Whether [`Self::populate_index_keys`] would change anything: its
+    /// read-only test, so a writer holding a shared snapshot can skip the copy
+    /// a mutation would force.
+    pub(crate) fn index_keys_stale(&self) -> bool {
+        !self.indexes_deferred
+            && (self.property_index_keys != sorted_keys(&self.property_indices)
+                || self.composite_index_keys != sorted_keys(&self.composite_indices)
+                || self.range_index_keys != sorted_keys(&self.range_indices)
+                || self.unique_constraint_keys != sorted_keys(&self.unique_indices)
+                || self.has_undeclared_constraint_names())
+    }
+
     /// Rebuild property, composite and range indexes from the persisted key
     /// lists. Called automatically after load.
     ///

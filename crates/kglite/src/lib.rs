@@ -972,5 +972,7 @@ pub mod api {
             execute_mut, execute_read, resolve_noderef_value, resolve_noderefs, CommitOutcome,
             ExecuteOptions, ExecuteOutcome, Session, Transaction, QUERY_THREAD_STACK_SIZE,
         };
+        /// `Session::backup`'s options and result.
+        pub use crate::graph::session::{BackupOptions, BackupReport};
     }
 }
