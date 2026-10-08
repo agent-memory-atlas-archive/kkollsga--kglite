@@ -23,7 +23,11 @@ def rows(g):
 
 
 def sidecars(path):
-    return [p for p in os.listdir(os.path.dirname(path)) if p.startswith(os.path.basename(path)) and p != os.path.basename(path)]
+    return [
+        p
+        for p in os.listdir(os.path.dirname(path))
+        if p.startswith(os.path.basename(path)) and p != os.path.basename(path)
+    ]
 
 
 @pytest.mark.parametrize("storage", [None, "mapped"])
@@ -36,7 +40,14 @@ def test_round_trip(tmp_path, storage):
     assert report["lsn"] is None
     assert report["bytes"] == os.path.getsize(dest) > 0
     assert set(report) == {
-        "path", "bytes", "nodes", "relationships", "graph_version", "lsn", "lock_hold_ms", "elapsed_ms",
+        "path",
+        "bytes",
+        "nodes",
+        "relationships",
+        "graph_version",
+        "lsn",
+        "lock_hold_ms",
+        "elapsed_ms",
     }
     restored = kglite.load(dest)
     assert rows(restored) == rows(g)
