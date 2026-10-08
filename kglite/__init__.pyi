@@ -5210,6 +5210,61 @@ class KnowledgeGraph:
         """
         ...
 
+    def backup(self, path: str | Path) -> dict[str, Any]:
+        """Write a consistent single-file backup of the graph to ``path``.
+
+        The backup is an independent ``.kgl`` copy: it is not this graph's save
+        target, takes no writer lease and creates no ``-wal`` or ``.lock``
+        sidecar, so :func:`kglite.load` or :func:`kglite.open` opens it with
+        nothing else beside it. This graph keeps its remembered path and, for a
+        durable graph, its log. ``save()`` and ``save(path)`` are unchanged.
+
+        The graph is captured at the call (pending commits are logged first, so
+        the returned ``lsn`` covers exactly the data in the file). The borrow on
+        this handle is released before the file is serialised, so another
+        thread may use the graph meanwhile without raising "Already borrowed".
+        A plain :class:`KnowledgeGraph` is still single-owner by design: for a
+        graph that many threads write while a backup runs, use
+        :meth:`session` and call :meth:`Session.backup`, which also keeps
+        writers from waiting on anything but the instant the snapshot is fixed.
+
+        ``path`` may be any location the process can write; there is no path
+        policy for in-process callers. An existing file at ``path`` is replaced
+        atomically (temp file, fsync, rename, directory fsync): a crash leaves
+        either the previous file or the complete new one.
+
+        Memory and mapped graphs are supported. Disk-mode graphs are refused
+        (their storage is a directory; use ``save(directory)``).
+
+        Args:
+            path: Destination file, typically ``*.kgl``.
+
+        Returns:
+            A dict with ``path`` (str), ``bytes`` (published file size),
+            ``nodes``, ``relationships`` (counts in the file), ``graph_version``
+            (the in-memory commit count, not a log position), ``lsn`` (the
+            write-ahead-log position the file contains, ``0`` if nothing was
+            logged; ``None`` for a non-durable graph), ``lock_hold_ms`` (time
+            both session locks were held; ``0.0`` here, as no lock is held) and
+            ``elapsed_ms`` (the whole call).
+
+        Raises:
+            ValueError: Refused before anything was written: ``path`` is this
+                graph's own checkpoint file, a ``<path>-wal`` sidecar beside
+                it holds commits the existing file lacks, the graph is
+                disk-mode, the write-ahead log has diverged, or this handle is
+                derived from a durable graph.
+            kglite.FileIoError: The write itself failed (full disk, read-only
+                directory). Carries ``.code == "FileIo"``.
+
+        Example::
+
+            g = kglite.open("app.kgl", durable="full")
+            report = g.backup("backups/app-2026-10-09.kgl")
+            restored = kglite.load("backups/app-2026-10-09.kgl")
+        """
+        ...
+
     def sync(self) -> None:
         """Flush every commit made so far to stable storage.
 
@@ -10950,6 +11005,46 @@ class Session:
         but cannot publish independent writes
         into the source stream. Use ``cursor.copy()`` for an independent graph and
         change stream, or mutate the original owning graph.
+        """
+        ...
+
+    def backup(self, path: str | Path) -> dict[str, Any]:
+        """Write a consistent single-file backup of the current graph to ``path``
+        while other threads keep committing.
+
+        This is the writer-concurrent backup surface. The graph lock is held
+        only long enough to fix the point in time (an ``Arc`` clone, reported
+        as ``lock_hold_ms``); the file is serialised with no lock held, so
+        concurrent :meth:`execute` writers are not stalled for the serialise.
+        A first write that changes edges after the snapshot may pay a one-off
+        copy of the graph; node-only writes do not.
+
+        The result is an independent ``.kgl``: no ``-wal``, no ``.lock``, and
+        this Session's graph is untouched. If the Session was seeded from a
+        graph loaded from a file, backing up onto that file is refused.
+        ``path`` may be any location the process can write; an existing file is
+        replaced atomically. Disk-mode graphs are refused. A Session does not
+        carry a write-ahead log, so ``lsn`` is ``None``.
+
+        Args:
+            path: Destination file, typically ``*.kgl``.
+
+        Returns:
+            A dict with ``path``, ``bytes``, ``nodes``, ``relationships``,
+            ``graph_version``, ``lsn`` (``None``), ``lock_hold_ms`` and
+            ``elapsed_ms``; see :meth:`KnowledgeGraph.backup`.
+
+        Raises:
+            ValueError: ``path`` is the seeding graph's own file, a stray
+                ``<path>-wal`` holds commits the existing file lacks, or the
+                graph is disk-mode.
+            kglite.FileIoError: The write itself failed.
+
+        Example::
+
+            s = g.session()
+            report = s.backup("backups/nightly.kgl")
+            print(report["nodes"], report["lock_hold_ms"])
         """
         ...
 

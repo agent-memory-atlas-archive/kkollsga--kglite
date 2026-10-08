@@ -508,6 +508,10 @@
           "kind": "method",
           "signature": "(self, /, source_type, source_id, target_type, target_id, connection_types=None, via_types=None, direction=None, timeout_ms=None)"
         },
+        "backup": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
         "begin": {
           "kind": "method",
           "signature": "(self, /, timeout_ms=None)"
@@ -1644,6 +1648,10 @@
       "constructor": "()",
       "kind": "class",
       "members": {
+        "backup": {
+          "kind": "method",
+          "signature": "(self, /, path)"
+        },
         "cursor": {
           "kind": "method",
           "signature": "(self, /)"

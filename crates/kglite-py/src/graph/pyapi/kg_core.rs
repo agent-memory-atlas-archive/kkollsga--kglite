@@ -99,6 +99,15 @@ impl ProgressSink for PyProgressSink {
     }
 }
 
+/// Map a core save/backup refusal to its Python exception: a refusal is a
+/// `ValueError`, an I/O failure the file-I/O class `save` raises.
+pub(crate) fn save_error_to_pyerr(error: io::SaveError) -> PyErr {
+    match error {
+        io::SaveError::Refused(message) => PyErr::new::<pyo3::exceptions::PyValueError, _>(message),
+        io::SaveError::Io(message) => file_io_err(std::io::Error::other(message)),
+    }
+}
+
 /// Clear, actionable error for a cross-thread borrow conflict on a shared
 /// `KnowledgeGraph`. PyO3's `#[pyclass]` is `RefCell`-guarded: while one
 /// thread mutates the graph (`add_nodes` / `embed_texts` / a `CREATE`
@@ -773,6 +782,42 @@ impl KnowledgeGraph {
         Ok(())
     }
 
+    /// Write a consistent single-file backup of the graph to `path` without moving this graph's save target.
+    fn backup(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        path: std::path::PathBuf,
+    ) -> PyResult<Py<PyAny>> {
+        // The borrow covers only fixing the point in time. The serialize runs
+        // with it released, so a second thread using this graph meanwhile gets
+        // a working graph instead of "Already borrowed".
+        let (snapshot, lsn, live_path) = {
+            let mut this = slf
+                .try_borrow_mut()
+                .map_err(|_| concurrent_access_pyerr())?;
+            this.check_wal_not_diverged()?;
+            this.check_durable_owner()?;
+            // Apply-then-log: drain anything still buffered so the LSN read
+            // below is never ahead of, or behind, the graph captured with it.
+            this.commit_wal()?;
+            let lsn = this
+                .lifecycle
+                .durable
+                .as_ref()
+                .map(|state| state.next_lsn.saturating_sub(1));
+            (
+                Arc::clone(&this.inner),
+                lsn,
+                this.lifecycle.source_path.clone(),
+            )
+        };
+        let opts = kglite_core::api::session::BackupOptions { live_path };
+        let report = py
+            .detach(|| kglite_core::api::session::backup_snapshot(&snapshot, lsn, &path, &opts))
+            .map_err(save_error_to_pyerr)?;
+        crate::graph::pyapi::session::backup_report_to_dict(py, &report)
+    }
+
     /// Flush every commit made so far to stable storage — the barrier that
     /// `durable="full"` performs on *every* commit, taken on demand.
     ///
@@ -920,6 +965,7 @@ impl KnowledgeGraph {
             self.query_defaults(),
             self.lifecycle.durable_authority(),
         )
+        .with_live_path(self.lifecycle.source_path.clone())
     }
 
     /// Save to the remembered path and end persistence ownership, retaining detached usable data.

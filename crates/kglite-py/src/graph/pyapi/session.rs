@@ -72,6 +72,8 @@ pub struct Session {
     defaults: QueryDefaults,
     source_authority: Option<super::lifecycle::SourceAuthority>,
     pub(crate) inner: CoreSession,
+    /// The file the seeding graph was loaded from, so a backup over it is refused.
+    live_path: Option<std::path::PathBuf>,
     pub(crate) embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>,
     /// Serialises writers. Held across the whole `begin → mutate → commit` so
     /// concurrent `execute()` calls compose (each sees prior commits) instead
@@ -200,6 +202,12 @@ impl Session {
         Self::with_defaults(inner, embedder, QueryDefaults::default(), None)
     }
 
+    /// Record the file the seeding graph is saved to (alias guard for `backup`).
+    pub(crate) fn with_live_path(mut self, live_path: Option<std::path::PathBuf>) -> Self {
+        self.live_path = live_path;
+        self
+    }
+
     pub(crate) fn with_defaults(
         inner: Arc<DirGraph>,
         embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>,
@@ -210,6 +218,7 @@ impl Session {
             defaults,
             source_authority,
             inner: CoreSession::from_arc(inner),
+            live_path: None,
             embedder,
             write_lock: Mutex::new(()),
         }
@@ -605,6 +614,17 @@ impl Session {
         kg
     }
 
+    /// Write a consistent single-file backup of the current graph to `path` while writers keep committing.
+    fn backup(&self, py: Python<'_>, path: std::path::PathBuf) -> PyResult<Py<PyAny>> {
+        let opts = kglite_core::api::session::BackupOptions {
+            live_path: self.live_path.clone(),
+        };
+        let report = py
+            .detach(|| self.inner.backup(&path, &opts))
+            .map_err(super::kg_core::save_error_to_pyerr)?;
+        backup_report_to_dict(py, &report)
+    }
+
     /// Monotonic version of the current graph. Bumped by each committed
     /// write. Useful for cheap "did anything change?" checks.
     fn version(&self, py: Python<'_>) -> u64 {
@@ -631,4 +651,21 @@ impl Session {
             snap.version(),
         )
     }
+}
+
+/// Marshal a backup report into the dict both `backup` methods return.
+pub(crate) fn backup_report_to_dict(
+    py: Python<'_>,
+    report: &kglite_core::api::session::BackupReport,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("path", report.path.to_string_lossy().into_owned())?;
+    dict.set_item("bytes", report.bytes)?;
+    dict.set_item("nodes", report.nodes)?;
+    dict.set_item("relationships", report.relationships)?;
+    dict.set_item("graph_version", report.graph_version)?;
+    dict.set_item("lsn", report.lsn)?;
+    dict.set_item("lock_hold_ms", report.lock_hold.as_secs_f64() * 1000.0)?;
+    dict.set_item("elapsed_ms", report.elapsed.as_secs_f64() * 1000.0)?;
+    Ok(dict.into_any().unbind())
 }

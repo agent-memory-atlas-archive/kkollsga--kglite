@@ -82,37 +82,14 @@ impl Session {
     /// atomically.
     pub fn backup(&self, dest: &Path, opts: &BackupOptions) -> Result<BackupReport, SaveError> {
         let started = Instant::now();
-        let dest_str = dest.to_str().ok_or_else(|| {
-            SaveError::Refused(format!(
-                "backup destination '{}' is not valid UTF-8",
-                dest.display()
-            ))
-        })?;
+        let dest_str = destination_str(dest)?;
         self.refuse_live_alias(dest, opts)?;
         crate::graph::durability::prepare_save_as_target(dest, DurabilityLevel::Off)?;
 
         let (snapshot, lsn, lock_hold) = self.consistent_point();
         #[cfg(test)]
         window_hook::run();
-        if snapshot.graph.is_disk() {
-            return Err(SaveError::Refused(DISK_REFUSAL.to_string()));
-        }
-
-        let (prepared, prepared_copy) = prepared_for_write(&snapshot);
-        let written: &DirGraph = prepared.as_ref().unwrap_or(&snapshot);
-        let bytes = crate::graph::io::file::write_kgl_with_stamp(written, dest_str, true, lsn)
-            .map_err(|error| SaveError::Io(error.to_string()))?;
-        Ok(BackupReport {
-            path: dest.to_path_buf(),
-            bytes,
-            nodes: written.graph.node_count(),
-            relationships: written.graph.edge_count(),
-            graph_version: written.version(),
-            lsn,
-            lock_hold,
-            elapsed: started.elapsed(),
-            prepared_copy,
-        })
+        write_backup(started, &snapshot, lsn, lock_hold, dest, dest_str)
     }
 
     /// Refuse a destination that is the live checkpoint, by path, by the log
@@ -134,11 +111,7 @@ impl Session {
                 .map_err(|e| SaveError::Io(e.to_string()))?;
         }
         if aliased {
-            return Err(SaveError::Refused(format!(
-                "backup destination '{}' is the live graph's checkpoint; a backup is an \
-                 independent copy, so choose another path",
-                dest.display()
-            )));
+            return Err(alias_refusal(dest));
         }
         Ok(())
     }
@@ -156,6 +129,77 @@ impl Session {
         drop(graph);
         (snapshot, lsn, held.elapsed())
     }
+}
+
+/// Write a backup of a snapshot the caller already fixed, for a holder that is
+/// not a [`Session`] (the Python wheel's single-owner graph). `lsn` is the
+/// `checkpoint_lsn` the snapshot contains (`None` without a write-ahead log);
+/// `opts.live_path` is the only alias source, since there is no session log to
+/// consult. Same guards, same writer, same atomic publish as
+/// [`Session::backup`]; `lock_hold` is zero because the caller held no lock.
+pub fn backup_snapshot(
+    snapshot: &Arc<DirGraph>,
+    lsn: Option<u64>,
+    dest: &Path,
+    opts: &BackupOptions,
+) -> Result<BackupReport, SaveError> {
+    let started = Instant::now();
+    let dest_str = destination_str(dest)?;
+    if let Some(live) = &opts.live_path {
+        if crate::graph::durability::same_checkpoint_path(live, dest)
+            .map_err(|e| SaveError::Io(e.to_string()))?
+        {
+            return Err(alias_refusal(dest));
+        }
+    }
+    crate::graph::durability::prepare_save_as_target(dest, DurabilityLevel::Off)?;
+    write_backup(started, snapshot, lsn, Duration::ZERO, dest, dest_str)
+}
+
+fn destination_str(dest: &Path) -> Result<&str, SaveError> {
+    dest.to_str().ok_or_else(|| {
+        SaveError::Refused(format!(
+            "backup destination '{}' is not valid UTF-8",
+            dest.display()
+        ))
+    })
+}
+
+fn alias_refusal(dest: &Path) -> SaveError {
+    SaveError::Refused(format!(
+        "backup destination '{}' is the live graph's checkpoint; a backup is an \
+         independent copy, so choose another path",
+        dest.display()
+    ))
+}
+
+/// Disk refusal, preparation fork if needed, serialize, publish.
+fn write_backup(
+    started: Instant,
+    snapshot: &Arc<DirGraph>,
+    lsn: Option<u64>,
+    lock_hold: Duration,
+    dest: &Path,
+    dest_str: &str,
+) -> Result<BackupReport, SaveError> {
+    if snapshot.graph.is_disk() {
+        return Err(SaveError::Refused(DISK_REFUSAL.to_string()));
+    }
+    let (prepared, prepared_copy) = prepared_for_write(snapshot);
+    let written: &DirGraph = prepared.as_ref().unwrap_or(snapshot);
+    let bytes = crate::graph::io::file::write_kgl_with_stamp(written, dest_str, true, lsn)
+        .map_err(|error| SaveError::Io(error.to_string()))?;
+    Ok(BackupReport {
+        path: dest.to_path_buf(),
+        bytes,
+        nodes: written.graph.node_count(),
+        relationships: written.graph.edge_count(),
+        graph_version: written.version(),
+        lsn,
+        lock_hold,
+        elapsed: started.elapsed(),
+        prepared_copy,
+    })
 }
 
 /// A private prepared copy of `snapshot` when writing it as it stands would

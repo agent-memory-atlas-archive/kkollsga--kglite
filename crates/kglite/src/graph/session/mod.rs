@@ -50,7 +50,7 @@
 //!   they publish, and [`Session::save`] is the four-step checkpoint.
 //!   See [`durable`] for the orderings that are correctness.
 
-pub use self::backup::{BackupOptions, BackupReport};
+pub use self::backup::{backup_snapshot, BackupOptions, BackupReport};
 pub use self::execute::{execute_mut, execute_read, ExecuteOptions, ExecuteOutcome};
 pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,

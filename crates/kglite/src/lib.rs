@@ -961,6 +961,9 @@ pub mod api {
         /// `LOAD CSV` filesystem capability. Every binding decides what its
         /// callers get; see `ExecuteOptions::csv_import`.
         pub use crate::graph::languages::cypher::executor::load_csv::CsvImportPolicy;
+        /// `Session::backup`'s options and result, and `backup_snapshot` for a holder
+        /// that fixed its own snapshot.
+        pub use crate::graph::session::{backup_snapshot, BackupOptions, BackupReport};
         /// Captured per-surface query policy and the shared deadline default.
         /// Two bindings would otherwise re-type `180_000`, which is exactly
         /// how two surfaces come to disagree about what "the default" is;
@@ -972,7 +975,5 @@ pub mod api {
             execute_mut, execute_read, resolve_noderef_value, resolve_noderefs, CommitOutcome,
             ExecuteOptions, ExecuteOutcome, Session, Transaction, QUERY_THREAD_STACK_SIZE,
         };
-        /// `Session::backup`'s options and result.
-        pub use crate::graph::session::{BackupOptions, BackupReport};
     }
 }
