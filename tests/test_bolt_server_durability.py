@@ -1121,18 +1121,14 @@ def test_the_log_size_trigger_trims_the_log_online_and_a_kill_loses_nothing(tmp_
     _require_binary()
     fixture = tmp_path / "wal-online.kgl"
     _build_bolt_fixture_graph(fixture)
-    proc, url = _spawn_bolt_server(
-        fixture, extra_args=["--durability", "normal", "--checkpoint-wal-mib", "1"]
-    )
+    proc, url = _spawn_bolt_server(fixture, extra_args=["--durability", "normal", "--checkpoint-wal-mib", "1"])
     pad = "x" * (64 * 1024)
     before = fixture.stat().st_mtime_ns
     try:
         with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
             with driver.session() as session:
                 for i in range(40):
-                    session.run(
-                        "CREATE (:Blob {id: $i, pad: $pad})", i=i, pad=pad
-                    ).consume()
+                    session.run("CREATE (:Blob {id: $i, pad: $pad})", i=i, pad=pad).consume()
             assert _wal_size(fixture) > 2 * 1024 * 1024, "2.5 MiB of log before the poller runs"
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline and fixture.stat().st_mtime_ns == before:

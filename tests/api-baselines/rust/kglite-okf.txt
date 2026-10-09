@@ -1447,6 +1447,7 @@ pub struct kglite::api::durable::Wal
 impl kglite::api::durable::Wal
 pub fn kglite::api::durable::Wal::append(&mut self, frame: &kglite::api::durable::WalFrame) -> core::io::error::Result<()>
 pub fn kglite::api::durable::Wal::append_resolved(&mut self, lsn: u64, raw: &[kglite::api::durable::RawOp], dir: &kglite::api::DirGraph) -> core::io::error::Result<()>
+pub fn kglite::api::durable::Wal::frame_bytes(&self) -> u64
 pub fn kglite::api::durable::Wal::open(path: std::path::PathBuf, sync: kglite::api::durable::SyncMode) -> core::io::error::Result<Self>
 pub fn kglite::api::durable::Wal::path(&self) -> &std::path::Path
 pub fn kglite::api::durable::Wal::reset(&mut self) -> core::io::error::Result<()>
@@ -3078,6 +3079,20 @@ pub kglite::api::session::ExecuteOutcome::explain: bool
 pub kglite::api::session::ExecuteOutcome::is_mutation: bool
 pub kglite::api::session::ExecuteOutcome::output_format: kglite::api::cypher::OutputFormat
 pub kglite::api::session::ExecuteOutcome::result: kglite::api::cypher::CypherResult
+pub struct kglite::api::session::OnlineCheckpointReport
+pub kglite::api::session::OnlineCheckpointReport::bytes: u64
+pub kglite::api::session::OnlineCheckpointReport::elapsed: core::time::Duration
+pub kglite::api::session::OnlineCheckpointReport::graph_version: u64
+pub kglite::api::session::OnlineCheckpointReport::lsn: u64
+pub kglite::api::session::OnlineCheckpointReport::path: std::path::PathBuf
+pub kglite::api::session::OnlineCheckpointReport::snapshot_hold: core::time::Duration
+pub kglite::api::session::OnlineCheckpointReport::trim_hold: core::time::Duration
+pub kglite::api::session::OnlineCheckpointReport::wal_bytes_after: u64
+pub kglite::api::session::OnlineCheckpointReport::wal_bytes_before: u64
+impl core::clone::Clone for kglite::api::session::OnlineCheckpointReport
+pub fn kglite::api::session::OnlineCheckpointReport::clone(&self) -> kglite::api::session::OnlineCheckpointReport
+impl core::fmt::Debug for kglite::api::session::OnlineCheckpointReport
+pub fn kglite::api::session::OnlineCheckpointReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::session::OpenSpec
 pub kglite::api::session::OpenSpec::durability: kglite::api::durable::DurabilityLevel
 pub kglite::api::session::OpenSpec::durability_explicit: bool
@@ -3143,6 +3158,11 @@ impl kglite::api::session::Session
 pub fn kglite::api::session::Session::checkpoint_if_changed(&self, path: &std::path::Path, last_version: &mut core::option::Option<u64>) -> core::result::Result<kglite::api::session::CheckpointOutcome, alloc::string::String>
 pub fn kglite::api::session::Session::execute_auto_commit(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>, attempts: u32) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::Session::execute_auto_commit_observed(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>, attempts: u32, between: &mut dyn core::ops::function::FnMut(u32)) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
+impl kglite::api::session::Session
+pub fn kglite::api::session::Session::checkpoint_online(&self) -> core::result::Result<kglite::api::session::OnlineCheckpointReport, alloc::string::String>
+pub fn kglite::api::session::Session::maybe_checkpoint_online(&self) -> core::result::Result<core::option::Option<kglite::api::session::OnlineCheckpointReport>, alloc::string::String>
+pub fn kglite::api::session::Session::needs_checkpoint(&self) -> bool
+pub fn kglite::api::session::Session::set_auto_checkpoint_wal_bytes(&self, bytes: core::option::Option<u64>)
 pub struct kglite::api::session::Transaction
 impl kglite::api::session::Transaction
 pub fn kglite::api::session::Transaction::base_version(&self) -> u64
@@ -3151,6 +3171,7 @@ pub fn kglite::api::session::Transaction::has_writes(&self) -> bool
 pub fn kglite::api::session::Transaction::is_read_only(&self) -> bool
 pub fn kglite::api::session::Transaction::take_working(self) -> (core::option::Option<kglite::api::DirGraph>, u64)
 pub fn kglite::api::session::Transaction::working_mut(&mut self) -> core::result::Result<&mut kglite::api::DirGraph, kglite::error::KgError>
+pub const kglite::api::session::DEFAULT_AUTO_CHECKPOINT_WAL_BYTES: u64
 pub const kglite::api::session::DEFAULT_TIMEOUT_MS: u64
 pub const kglite::api::session::QUERY_THREAD_STACK_SIZE: usize
 pub fn kglite::api::session::backup_snapshot(snapshot: &alloc::sync::Arc<kglite::api::DirGraph>, lsn: core::option::Option<u64>, dest: &std::path::Path, opts: &kglite::api::session::BackupOptions) -> core::result::Result<kglite::api::session::BackupReport, kglite::api::io::SaveError>
@@ -4034,6 +4055,8 @@ pub kglite::api::KgError::MissingArgument(alloc::string::String)
 pub kglite::api::KgError::NodeNotFound
 pub kglite::api::KgError::NodeNotFound::id: alloc::string::String
 pub kglite::api::KgError::NodeNotFound::node_type: alloc::string::String
+pub kglite::api::KgError::NotDurable
+pub kglite::api::KgError::NotDurable::message: alloc::string::String
 pub kglite::api::KgError::OntologyViolation
 pub kglite::api::KgError::OntologyViolation::entity: &'static str
 pub kglite::api::KgError::OntologyViolation::entity_type: alloc::string::String
@@ -4060,6 +4083,7 @@ impl kglite::error::KgError
 pub fn kglite::error::KgError::code(&self) -> kglite::error::KgErrorCode
 pub fn kglite::error::KgError::position(&self) -> core::option::Option<(usize, usize)>
 impl kglite::error::KgError
+pub fn kglite::error::KgError::not_durable(message: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn kglite::error::KgError::read_only(message: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
@@ -4100,6 +4124,7 @@ pub kglite::api::KgErrorCode::InvalidArgument
 pub kglite::api::KgErrorCode::LoadMemoryLimit
 pub kglite::api::KgErrorCode::MissingArgument
 pub kglite::api::KgErrorCode::NodeNotFound
+pub kglite::api::KgErrorCode::NotDurable
 pub kglite::api::KgErrorCode::OntologyViolation
 pub kglite::api::KgErrorCode::PropertyNotFound
 pub kglite::api::KgErrorCode::ReadOnly
@@ -6111,6 +6136,8 @@ pub kglite::error::KgError::MissingArgument(alloc::string::String)
 pub kglite::error::KgError::NodeNotFound
 pub kglite::error::KgError::NodeNotFound::id: alloc::string::String
 pub kglite::error::KgError::NodeNotFound::node_type: alloc::string::String
+pub kglite::error::KgError::NotDurable
+pub kglite::error::KgError::NotDurable::message: alloc::string::String
 pub kglite::error::KgError::OntologyViolation
 pub kglite::error::KgError::OntologyViolation::entity: &'static str
 pub kglite::error::KgError::OntologyViolation::entity_type: alloc::string::String
@@ -6137,6 +6164,7 @@ impl kglite::error::KgError
 pub fn kglite::error::KgError::code(&self) -> kglite::error::KgErrorCode
 pub fn kglite::error::KgError::position(&self) -> core::option::Option<(usize, usize)>
 impl kglite::error::KgError
+pub fn kglite::error::KgError::not_durable(message: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn kglite::error::KgError::read_only(message: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
@@ -6177,6 +6205,7 @@ pub kglite::error::KgErrorCode::InvalidArgument
 pub kglite::error::KgErrorCode::LoadMemoryLimit
 pub kglite::error::KgErrorCode::MissingArgument
 pub kglite::error::KgErrorCode::NodeNotFound
+pub kglite::error::KgErrorCode::NotDurable
 pub kglite::error::KgErrorCode::OntologyViolation
 pub kglite::error::KgErrorCode::PropertyNotFound
 pub kglite::error::KgErrorCode::ReadOnly
