@@ -204,7 +204,11 @@ impl DirGraph {
         // backend (protocol in disk/graph.rs); no-op on memory/mapped.
         let _arena_guard = self.graph.begin_query();
         let field_key = InternedKey::from_str(field);
-        let mut seen: std::collections::HashSet<Value> = std::collections::HashSet::new();
+        // Presized and Fx-hashed: this scan reruns after every committed write
+        // (the cache is keyed by graph version), so growth rehashes and SipHash
+        // dominate the plan time of a point lookup on a 100k-node type.
+        let mut seen: rustc_hash::FxHashSet<Value> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(nodes.len(), Default::default());
         for idx in nodes.iter() {
             if let Some(node) = self.node_view(idx) {
                 if let Some(val) = node.resolved_field(node_type, field, field_key) {

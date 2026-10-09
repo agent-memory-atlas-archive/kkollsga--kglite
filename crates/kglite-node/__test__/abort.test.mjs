@@ -74,7 +74,7 @@ test('abort while queued rejects at once and the call never runs', async () => {
   const running = blockers.map((b) => graph.executeRead(LONG, null, { signal: b.signal }));
   await sleep(200);
   const ac = new AbortController();
-  const queued = graph.executeWrite('CREATE (:Queued)', null, { signal: ac.signal });
+  const queued = graph.executeRead('RETURN 1 AS one', null, { signal: ac.signal });
   await sleep(50);
   const t0 = Date.now();
   ac.abort();
@@ -84,6 +84,24 @@ test('abort while queued rejects at once and the call never runs', async () => {
   assert.ok(e.cause instanceof Error, 'cause defaults to the signal reason (an AbortError)');
   blockers.forEach((b) => b.abort());
   await Promise.all(running.map(rejection));
+});
+
+// Writes run on their own thread, so a queued write waits behind another write,
+// not behind the read workers.
+test('abort while a write is queued behind a write never runs it', async () => {
+  const blocker = new AbortController();
+  const running = graph.executeWrite(LONG_WRITE, null, { signal: blocker.signal });
+  await sleep(200);
+  const ac = new AbortController();
+  const queued = graph.executeWrite('CREATE (:Queued)', null, { signal: ac.signal });
+  await sleep(50);
+  const t0 = Date.now();
+  ac.abort();
+  const e = await rejection(queued);
+  assert.equal(e.code, 'Cancelled');
+  assert.ok(Date.now() - t0 < 1000, 'queued abort settles without waiting for the writer');
+  blocker.abort();
+  await rejection(running);
   assert.equal(await count('Queued'), 0);
 });
 

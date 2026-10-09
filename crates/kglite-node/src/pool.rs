@@ -5,6 +5,15 @@
 //! a libuv worker's stack depends on the platform and `RLIMIT_STACK`. Owning the
 //! threads makes that a guarantee instead of an assumption.
 //!
+//! Two lanes. Reads run on a small pool (`min(4, cores)` threads). Everything
+//! that takes the graph's write lock (auto-commit writes, commits, checkpoints,
+//! `close`) runs on one dedicated writer thread. The lock already serialises
+//! those jobs, so a single thread costs no parallelism, and it keeps each
+//! commit's copy-on-write fork and the drop of the superseded graph on one
+//! thread's allocator heap. Rotating them across four workers made every
+//! commit free memory another thread's heap owned, which measured 25-30 %
+//! slower on a 1M-node delete and 20-30 % on a 100k-node relationship write.
+//!
 //! A job returns a [`Settle`] closure; the worker hands it to a napi `JsDeferred`,
 //! which runs it back on the JS thread (building JS values needs the `Env`) and
 //! resolves the promise with its result.
@@ -36,8 +45,17 @@ pub type Settle = Box<dyn FnOnce(Env) -> JsRes<sys::napi_value> + Send>;
 
 type Deferred = JsDeferred<RawJs, Box<dyn FnOnce(Env) -> napi::Result<RawJs> + Send>>;
 
-/// Queue ceiling. A burst past it is refused rather than buffered without bound.
+/// Per-lane queue ceiling. A burst past it is refused rather than buffered without bound.
 const QUEUE_CAPACITY: usize = 4096;
+
+/// Which thread set a job runs on.
+#[derive(Clone, Copy)]
+enum Lane {
+    /// Queries that only read, spread over the worker pool.
+    Read,
+    /// Jobs that take the write lock, on the single writer thread.
+    Write,
+}
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -46,23 +64,29 @@ struct Queue {
     ready: Condvar,
 }
 
-fn pool() -> &'static Arc<Queue> {
-    static POOL: OnceLock<Arc<Queue>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let queue = Arc::new(Queue {
-            jobs: Mutex::new(VecDeque::new()),
-            ready: Condvar::new(),
-        });
-        for n in 0..worker_count() {
-            let q = Arc::clone(&queue);
-            thread::Builder::new()
-                .name(format!("kglite-node-{n}"))
-                .stack_size(worker_stack_size())
-                .spawn(move || worker(&q))
-                .expect("spawn kglite-node worker");
-        }
-        queue
-    })
+fn start_lane(threads: usize, name: &str) -> Arc<Queue> {
+    let queue = Arc::new(Queue {
+        jobs: Mutex::new(VecDeque::new()),
+        ready: Condvar::new(),
+    });
+    for n in 0..threads {
+        let q = Arc::clone(&queue);
+        thread::Builder::new()
+            .name(format!("{name}-{n}"))
+            .stack_size(worker_stack_size())
+            .spawn(move || worker(&q))
+            .expect("spawn kglite-node worker");
+    }
+    queue
+}
+
+fn lane_queue(lane: Lane) -> &'static Arc<Queue> {
+    static READ: OnceLock<Arc<Queue>> = OnceLock::new();
+    static WRITE: OnceLock<Arc<Queue>> = OnceLock::new();
+    match lane {
+        Lane::Read => READ.get_or_init(|| start_lane(worker_count(), "kglite-node")),
+        Lane::Write => WRITE.get_or_init(|| start_lane(1, "kglite-node-writer")),
+    }
 }
 
 /// Stack for every worker: the engine's `QUERY_THREAD_STACK_SIZE`, in every profile.
@@ -106,8 +130,8 @@ fn worker_loop(queue: &Queue) {
     }
 }
 
-fn enqueue(job: Job) -> Result<(), Job> {
-    let queue = pool();
+fn enqueue(lane: Lane, job: Job) -> Result<(), Job> {
+    let queue = lane_queue(lane);
     let mut jobs = queue.jobs.lock().unwrap_or_else(PoisonError::into_inner);
     if jobs.len() >= QUEUE_CAPACITY {
         return Err(job);
@@ -140,10 +164,36 @@ fn settle_now(deferred: Deferred, settle: Settle) {
     deferred.resolve(guarded(settle));
 }
 
-/// Run `work` on a pool thread and return the promise it settles.
+/// Run `work` on a read-pool thread and return the promise it settles.
 ///
 /// `work` runs inside `catch_unwind`; a panic rejects with `Internal`.
 pub fn spawn<'e>(
+    env: &'e Env,
+    work: impl FnOnce() -> Settle + Send + 'static,
+) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
+    spawn_on(Lane::Read, env, work)
+}
+
+/// [`spawn`] on the writer thread, for jobs that take the graph's write lock
+/// or mutate through a transaction.
+pub fn spawn_write<'e>(
+    env: &'e Env,
+    work: impl FnOnce() -> Settle + Send + 'static,
+) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
+    spawn_on(Lane::Write, env, work)
+}
+
+/// [`spawn_write`] when `write`, else [`spawn`].
+pub fn spawn_for<'e>(
+    write: bool,
+    env: &'e Env,
+    work: impl FnOnce() -> Settle + Send + 'static,
+) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
+    spawn_on(if write { Lane::Write } else { Lane::Read }, env, work)
+}
+
+fn spawn_on<'e>(
+    lane: Lane,
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,
 ) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
@@ -169,7 +219,7 @@ pub fn spawn<'e>(
             settle_now(d, settle);
         }
     });
-    if enqueue(job).is_err() {
+    if enqueue(lane, job).is_err() {
         if let Some(d) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
             let e = JsErr::new(CODE_QUEUE_FULL, "the query queue is full; retry later");
             settle_now(d, Box::new(move |_| Err(e)));
