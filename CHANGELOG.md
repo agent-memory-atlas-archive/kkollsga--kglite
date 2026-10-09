@@ -71,6 +71,16 @@ before upgrading.
   objects. Conversion to JavaScript objects yields to the event loop every
   `batchSize` rows (default 1000), so a 300,000-row result no longer stalls the
   loop for one long conversion. The engine still builds the whole result first.
+- **Node.js binding: `AbortSignal` cancellation.** `executeRead`, `executeWrite`,
+  `tx.run` and `stream()` accept `{ signal }`.
+  - An already-aborted signal rejects `Cancelled` without queuing the call.
+  - Abort while queued rejects at once and the call never runs.
+  - Abort while running cancels the query on its worker; the promise rejects
+    `Cancelled` with `cause` set to `signal.reason`.
+  - A cancelled `executeWrite` publishes nothing. A cancelled write in a
+    transaction aborts the transaction.
+  - Abort during `stream()` stops further batches and rejects the pending `next()`.
+  - The listener is removed when the call settles.
 - **Node.js binding: `validTimeDefault` open option and JavaScript embedders.**
   `open(path, { validTimeDefault: 'today' | 'all' | 'YYYY-MM-DD' })` sets the
   instant an unprefixed statement reads on a graph with declared validity

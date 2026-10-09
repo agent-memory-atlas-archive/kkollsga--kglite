@@ -310,6 +310,8 @@ export interface QueryOptions {
   rowLimit?: number
   /** Work budget (not a row cap); exceeding it fails the query. */
   maxWorkUnits?: number
+  /** Cancels the call when aborted: rejects `Cancelled` with `cause` set to `signal.reason`. */
+  signal?: AbortSignal
 }
 
 export interface QueryResult {
@@ -336,6 +338,8 @@ export interface StreamOptions {
    * batches the loop runs timers and I/O.
    */
   batchSize?: number
+  /** Cancels the query and fails the pending `next()` when aborted: rejects `Cancelled` with `cause` set to `signal.reason`. */
+  signal?: AbortSignal
 }
 
 export interface Truncated {

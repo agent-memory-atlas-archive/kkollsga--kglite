@@ -42,6 +42,7 @@ use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
 
+use crate::abort::{cancelled_error, wire_query, AbortHandle, Signal};
 use crate::contain;
 use crate::embedder::JsEmbedder;
 use crate::errors::{to_sync_error, JsErr, JsRes, CODE_CLOSED, CODE_NOT_DURABLE, CODE_READ_ONLY};
@@ -274,15 +275,20 @@ pub(crate) struct QueryArgs {
     pub(crate) timeout_ms: Option<u64>,
     pub(crate) row_limit: Option<usize>,
     pub(crate) max_work_units: Option<usize>,
+    /// Set when the call carries a `signal`; the pool job checks it before running.
+    pub(crate) cancel: Option<Arc<AbortHandle>>,
 }
+
+/// Query arguments, the caller's own options as `(name, value)`, and the `signal`.
+pub(crate) type ParsedQuery = (QueryArgs, Vec<(String, sys::napi_value)>, Option<Signal>);
 
 pub(crate) fn parse_query_args(
     f: &mut FromJs,
     cypher: sys::napi_value,
     params: Option<sys::napi_value>,
     options: Option<sys::napi_value>,
-) -> JsRes<QueryArgs> {
-    parse_query_args_with(f, cypher, params, options, &[]).map(|(args, _)| args)
+) -> JsRes<(QueryArgs, Option<Signal>)> {
+    parse_query_args_with(f, cypher, params, options, &[]).map(|(args, _, signal)| (args, signal))
 }
 
 /// [`parse_query_args`] for a call that accepts options of its own on top of the
@@ -294,7 +300,7 @@ pub(crate) fn parse_query_args_with(
     params: Option<sys::napi_value>,
     options: Option<sys::napi_value>,
     extra: &[&str],
-) -> JsRes<(QueryArgs, Vec<(String, sys::napi_value)>)> {
+) -> JsRes<ParsedQuery> {
     let cypher = expect_string(f, cypher, "cypher")?;
     let params = f.params(params)?;
     let mut args = QueryArgs {
@@ -303,13 +309,20 @@ pub(crate) fn parse_query_args_with(
         timeout_ms: None,
         row_limit: None,
         max_work_units: None,
+        cancel: None,
     };
-    let mut known = vec!["timeoutMs", "rowLimit", "maxWorkUnits"];
+    let mut signal = None;
+    let mut known = vec!["timeoutMs", "rowLimit", "maxWorkUnits", "signal"];
     known.extend_from_slice(extra);
     let mut own = Vec::new();
     for (key, val) in option_entries(f, options, &known, "query option")? {
         if extra.contains(&key.as_str()) {
             own.push((key, val));
+            continue;
+        }
+        if key == "signal" {
+            signal = Some(crate::abort::read_signal(f, val)?);
+            args.cancel = Some(Arc::new(AbortHandle::new()));
             continue;
         }
         let n = expect_number(f, val, &key)?;
@@ -319,7 +332,7 @@ pub(crate) fn parse_query_args_with(
             _ => args.max_work_units = Some(n as usize),
         }
     }
-    Ok((args, own))
+    Ok((args, own, signal))
 }
 
 // ------------------------------------------------------------------ results
@@ -427,6 +440,7 @@ impl Inner {
         opts.deadline_origin = resolved.deadline_origin;
         opts.max_work_units = resolved.max_work_units;
         opts.row_limit = resolved.row_limit;
+        opts.cancel = args.cancel.as_ref().map(|c| c.token());
         opts.embedder = self
             .embedder
             .lock()
@@ -479,15 +493,22 @@ impl Graph {
             params.as_ref().map(|p| p.raw()),
             options.as_ref().map(|o| o.raw()),
         );
-        let args = match parsed {
+        let (args, signal) = match parsed {
             Ok(a) => a,
             Err(e) => return err_promise(env, e),
         };
         if write && self.inner.read_only {
             return err_promise(env, read_only_error("executeWrite"));
         }
+        if signal.as_ref().is_some_and(|s| s.aborted) {
+            return err_promise(env, cancelled_error());
+        }
+        let handle = args.cancel.clone();
         let inner = Arc::clone(&self.inner);
         let promise = pool::spawn(env, move || {
+            if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
+                return failed(cancelled_error());
+            }
             let opts = inner.execute_options(&args);
             let outcome = if write {
                 let _serial = inner
@@ -513,7 +534,8 @@ impl Graph {
                 Err(e) => failed(JsErr::from_kg(&e)),
             }
         });
-        promise.map_err(|e| to_sync_error(JsErr::from(e)))
+        let promise = promise.map_err(|e| to_sync_error(JsErr::from(e)))?;
+        wire_signal(env, signal.as_ref(), handle.as_ref(), promise)
     }
 
     /// Ship `work` to the pool, rejecting at once when the graph is already closed.
@@ -870,4 +892,19 @@ pub fn open<'e>(
         })
         .map_err(|e| to_sync_error(JsErr::from(e)))
     })
+}
+
+/// Attaches `signal` to a query's promise; without one the promise is returned as is.
+pub(crate) fn wire_signal<'e>(
+    env: &'e Env,
+    signal: Option<&Signal>,
+    handle: Option<&Arc<AbortHandle>>,
+    promise: Object<'e>,
+) -> napi::Result<Object<'e>, &'static str> {
+    let (Some(signal), Some(handle)) = (signal, handle) else {
+        return Ok(promise);
+    };
+    wire_query(env, signal, handle, promise.raw())
+        .map(|raw| Object::from_raw(env.raw(), raw))
+        .map_err(to_sync_error)
 }

@@ -237,6 +237,9 @@ pub struct QueryOptions {
     pub row_limit: Option<f64>,
     /// Work budget (not a row cap); exceeding it fails the query.
     pub max_work_units: Option<f64>,
+    /// Cancels the call when aborted: rejects `Cancelled` with `cause` set to `signal.reason`.
+    #[napi(ts_type = "AbortSignal")]
+    pub signal: Option<KgMap>,
 }
 
 #[napi(object)]
@@ -250,6 +253,9 @@ pub struct StreamOptions {
     /// Rows delivered per event-loop turn (default 1000, minimum 1). Between
     /// batches the loop runs timers and I/O.
     pub batch_size: Option<f64>,
+    /// Cancels the query and fails the pending `next()` when aborted: rejects `Cancelled` with `cause` set to `signal.reason`.
+    #[napi(ts_type = "AbortSignal")]
+    pub signal: Option<KgMap>,
 }
 
 #[napi(object)]

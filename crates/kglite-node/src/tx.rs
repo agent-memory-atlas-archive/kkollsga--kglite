@@ -26,11 +26,12 @@ use napi::bindgen_prelude::{FnArgs, Object, This, ToNapiValue};
 use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
 
+use crate::abort::cancelled_error;
 use crate::contain;
 use crate::errors::{to_sync_error, JsErr, JsRes, CODE_TX_CLOSED};
 use crate::graph::{
     build_result, closed_error, done, err_promise, failed, option_entries, parse_query_args,
-    read_only_error, Graph, Inner,
+    read_only_error, wire_signal, Graph, Inner,
 };
 use crate::pool;
 use crate::values::FromJs;
@@ -227,7 +228,7 @@ impl Transaction {
     ) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             let mut f = FromJs::new(env.raw());
-            let args = match parse_query_args(
+            let (args, signal) = match parse_query_args(
                 &mut f,
                 cypher.raw(),
                 params.as_ref().map(|p| p.raw()),
@@ -236,15 +237,25 @@ impl Transaction {
                 Ok(a) => a,
                 Err(e) => return err_promise(env, e),
             };
+            if signal.as_ref().is_some_and(|s| s.aborted) {
+                return err_promise(env, cancelled_error());
+            }
+            let handle = args.cancel.clone();
             let shared = Arc::clone(&self.shared);
-            pool::spawn(env, move || match run_in_tx(&shared, &args) {
-                Ok(outcome) => {
-                    let ints = shared.graph.ints;
-                    Box::new(move |env: Env| build_result(env.raw(), &outcome, ints))
+            let promise = pool::spawn(env, move || {
+                if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
+                    return failed(cancelled_error());
                 }
-                Err(e) => failed(e),
+                match run_in_tx(&shared, &args) {
+                    Ok(outcome) => {
+                        let ints = shared.graph.ints;
+                        Box::new(move |env: Env| build_result(env.raw(), &outcome, ints))
+                    }
+                    Err(e) => failed(e),
+                }
             })
-            .map_err(|e| to_sync_error(JsErr::from(e)))
+            .map_err(|e| to_sync_error(JsErr::from(e)))?;
+            wire_signal(env, signal.as_ref(), handle.as_ref(), promise)
         })
     }
 

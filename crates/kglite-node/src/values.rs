@@ -707,6 +707,9 @@ impl KindOf {
     pub fn is_function(&self) -> bool {
         self.0 == Kind::Function
     }
+    pub fn is_object(&self) -> bool {
+        self.0 == Kind::Object
+    }
 }
 
 #[cfg(test)]

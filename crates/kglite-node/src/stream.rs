@@ -21,6 +21,7 @@ use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env};
 use napi_derive::napi;
 
+use crate::abort::{cancelled_error, wire_stream, AbortHandle};
 use crate::contain;
 use crate::errors::{rejected_promise, to_sync_error, JsErr, JsRes};
 use crate::graph::{expect_number, parse_query_args_with, Inner, QueryArgs};
@@ -29,8 +30,8 @@ use crate::values::{FromJs, ToJs};
 
 const DEFAULT_BATCH: usize = 1000;
 
-/// Options `stream` accepts beyond the query options. A new per-call option
-/// (an abort signal) is added here and read in `open_stream`.
+/// Options `stream` accepts beyond the query options (`signal` is a query option,
+/// handled by the shared parser).
 const STREAM_OPTIONS: &[&str] = &["batchSize"];
 
 enum Slot {
@@ -46,6 +47,8 @@ struct Shared {
     batch: usize,
     claimed: AtomicUsize,
     stopped: AtomicBool,
+    /// Present when the stream was opened with a `signal`.
+    cancel: Option<Arc<AbortHandle>>,
     /// Serialises the one query run when several `next()` calls race the first.
     start: Mutex<()>,
     slot: Mutex<Slot>,
@@ -79,6 +82,9 @@ impl Shared {
     }
 
     fn run_query(&self, args: &QueryArgs) -> JsRes<ExecuteOutcome> {
+        if self.cancel.as_ref().is_some_and(|c| !c.begin()) {
+            return Err(cancelled_error());
+        }
         let session = self.inner.session()?;
         let opts = self.inner.execute_options(args);
         let snapshot = session.snapshot();
@@ -89,6 +95,16 @@ impl Shared {
     /// The iterator result for the `idx`-th row, built on the JS thread.
     fn step(&self, env: sys::napi_env, idx: usize) -> JsRes<sys::napi_value> {
         let js = ToJs::new(env, self.inner.ints);
+        if !self.stopped.load(Ordering::Acquire)
+            && self.cancel.as_ref().is_some_and(|c| c.is_cancelled())
+        {
+            let mut slot = self.slot();
+            // A `Failed` slot carries the error the cancelled query returned.
+            if matches!(&*slot, Slot::Ready(_) | Slot::Unstarted(_)) {
+                *slot = Slot::Finished;
+                return Err(cancelled_error());
+            }
+        }
         let ready = {
             let mut slot = self.slot();
             match &mut *slot {
@@ -276,21 +292,33 @@ pub(crate) fn open_stream<'e>(
 ) -> JsRes<Object<'e>> {
     let mut f = FromJs::new(env.raw());
     let parsed = parse_query_args_with(&mut f, cypher, params, options, STREAM_OPTIONS)
-        .and_then(|(args, own)| parse_batch(&f, &own).map(|b| (args, b)));
-    let (slot, batch) = match parsed {
-        Ok((args, batch)) => (Slot::Unstarted(Some(args)), batch),
-        Err(e) => (Slot::Failed(Some(e)), DEFAULT_BATCH),
+        .and_then(|(args, own, signal)| parse_batch(&f, &own).map(|b| (args, b, signal)));
+    let (slot, batch, cancel, signal) = match parsed {
+        Ok((args, batch, signal)) => {
+            let cancel = args.cancel.clone();
+            if signal.as_ref().is_some_and(|s| s.aborted) {
+                (Slot::Failed(Some(cancelled_error())), batch, cancel, signal)
+            } else {
+                (Slot::Unstarted(Some(args)), batch, cancel, signal)
+            }
+        }
+        Err(e) => (Slot::Failed(Some(e)), DEFAULT_BATCH, None, None),
     };
     let shared = Arc::new(Shared {
         inner: Arc::clone(inner),
         batch,
         claimed: AtomicUsize::new(0),
         stopped: AtomicBool::new(false),
+        cancel: cancel.clone(),
         start: Mutex::new(()),
         slot: Mutex::new(slot),
     });
     let raw = unsafe { RowStream::to_napi_value(env.raw(), RowStream { shared }) }
         .map_err(JsErr::from)?;
     make_async_iterable(env.raw(), raw)?;
+    let raw = match (&signal, &cancel) {
+        (Some(signal), Some(cancel)) => wire_stream(env, signal, cancel, raw)?,
+        _ => raw,
+    };
     Ok(Object::from_raw(env.raw(), raw))
 }

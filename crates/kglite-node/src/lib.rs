@@ -14,6 +14,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use napi_derive::napi;
 
+mod abort;
 mod admin;
 mod classes;
 mod embedder;

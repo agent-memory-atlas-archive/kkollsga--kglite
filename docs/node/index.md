@@ -151,6 +151,24 @@ for await (const row of graph.stream('MATCH (p:Person) RETURN p.name AS name')) 
 - **Errors:** a bad argument or a failing query rejects the first `next()` with the same typed error `executeRead` would reject with. The stream is finished after that.
 - **Scope:** `stream()` runs on the graph, not inside a transaction. A mutating statement rejects `InvalidArgument`.
 
+## Cancelling a call
+
+`executeRead`, `executeWrite`, `tx.run` and `stream()` accept `signal`, a standard `AbortSignal`, in their options.
+
+```js
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 2000);
+await graph.executeRead(slowQuery, null, { signal: ac.signal }); // rejects Cancelled
+```
+
+- **Already aborted:** the call rejects `Cancelled` without queuing.
+- **Queued:** abort rejects at once and the call never runs.
+- **Running:** abort stops the query on its worker. The promise rejects `Cancelled`, and `err.cause` is `signal.reason`.
+- **Writes:** a cancelled `executeWrite` publishes nothing. A cancelled write in a transaction fails the statement and aborts the transaction; a cancelled read leaves it open.
+- **Streams:** abort stops further batches and rejects the pending `next()`; later `next()` calls resolve `done`.
+- **Listeners:** the abort listener is removed when the call settles, a stream ends, or `return()` runs.
+- **Scope:** `transaction(fn)` takes no signal; pass one to the `tx.run` calls inside the callback.
+
 ## Transactions
 
 `graph.begin(options?)` starts a transaction on a snapshot of the graph and resolves to a `Transaction`. Settle every transaction with `commit()` or `rollback()`.
