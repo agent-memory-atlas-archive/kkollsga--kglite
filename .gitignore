@@ -63,6 +63,7 @@ __pycache__/
 # Compiled extension modules (built by maturin develop)
 *.so
 *.pyd
+*.pdb
 
 # IDE and editor settings
 .vscode/
