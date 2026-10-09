@@ -93,7 +93,7 @@ KGLite checks the rules below when it installs a declaration.
 
 ### Reading and removing the store
 
-`g.ontology()` returns the store as a dict. `g.clear_ontology()` removes it, withdrawing any materialized labels first. From Cypher, `CALL db.ontology.declare({ontology: $doc})` and `CALL db.ontology.clear()` do the same, so a Bolt client can declare without the Python API. The store persists in the `.kgl` and travels with `save_subset` / `to_subgraph`.
+`g.ontology()` returns the store as a dict. `g.clear_ontology()` removes it, withdrawing any materialized labels first. From Cypher, `CALL db.ontology.declare({ontology: $doc})` and `CALL db.ontology.clear()` do the same, so a Bolt client can declare without the Python API. `CALL db.ontology.show() YIELD ontology, locked, enforcement` reads the declared document back as a map that `db.ontology.declare` accepts unchanged (Null when nothing is declared); `locked` is the operator's `--ontology` lock. The store persists in the `.kgl` and travels with `save_subset` / `to_subgraph`.
 
 ## Node property contracts
 

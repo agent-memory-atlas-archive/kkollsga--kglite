@@ -307,6 +307,12 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &["declared", "warnings"],
     },
     ProcedureSpec {
+        name: "db.ontology.show",
+        aliases: &[],
+        description: "The declared ontology as the canonical document (a map that db.ontology.declare({ontology: ...}) accepts back unchanged; Null when nothing is declared), locked (the operator's --ontology lock) and the store's default enforcement",
+        columns: &["ontology", "locked", "enforcement"],
+    },
+    ProcedureSpec {
         name: "db.ontology.clear",
         aliases: &[],
         description: "Remove the declared ontology entirely (managed labels are withdrawn). Refused on a server whose operator locked the ontology (--ontology)",
@@ -906,6 +912,7 @@ const CONTEXT_FREE_PROCEDURES: &[&str] = &[
     "apoc.meta.nodeTypeProperties",
     "apoc.meta.relTypeProperties",
     "db.temporal.declarations",
+    "db.ontology.show",
     "db.node_embeddings.list",
     "db.embeddings.list",
     "db.relationship_embeddings.list",
@@ -1093,6 +1100,7 @@ mod tests {
             "db.node_text_index.list",
             "db.text_index.list",
             "db.temporal.declarations",
+            "db.ontology.show",
         ] {
             assert!(!is_mutating_procedure(name));
             assert_eq!(procedure_mode(name), "READ");

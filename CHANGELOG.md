@@ -35,6 +35,20 @@ before upgrading.
 
 ### Added
 
+- **`CALL db.ontology.show()` returns the declared ontology.** It yields
+  `ontology` (the canonical document as a map, which
+  `db.ontology.declare({ontology: ...})` accepts back unchanged; Null when none
+  is declared), `locked` (the operator's `--ontology` lock) and `enforcement`
+  (the store default). It is a read, so every binding gets it through Cypher.
+- **Bolt server query limits.** `--query-timeout MS`, `--max-work-units N` and
+  `--max-rows N` bound every statement. A timeout is
+  `Neo.ClientError.Transaction.TransactionTimedOut`; a work-unit overrun fails
+  the statement; a row overrun truncates and reports `kglite.row_limit`
+  (`limit`, `total_rows`) in the summary. A client `tx_timeout` is now honoured
+  per statement, capped by `--query-timeout`, instead of being rejected.
+- **Backup reports `graph_version` and `prepared_copy` everywhere.** Bolt
+  `db.backup()` adds both columns; the C `kglite_session_backup` JSON and the
+  Python `backup()` dict add `prepared_copy`.
 - **Node.js binding: `kglite-node`.** `npm install kglite-node` embeds the engine
   in a Node 20+ process. It is a napi-rs addon over `kglite::api` with
   prebuilt binaries and no toolchain.

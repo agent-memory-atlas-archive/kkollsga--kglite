@@ -601,6 +601,11 @@ impl<'a> CypherExecutor<'a> {
                     &params,
                     &clause.yield_items,
                 )?,
+                "db.ontology.show" => super::ontology_declare_procedures::show(
+                    self.graph,
+                    &params,
+                    &clause.yield_items,
+                )?,
                 "db.temporal.declarations" => super::temporal_procedures::declarations(
                     self.graph,
                     &params,

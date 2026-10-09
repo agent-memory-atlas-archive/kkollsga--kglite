@@ -94,6 +94,11 @@ def test_ontology_is_enforced_and_locked_against_runtime_changes(tmp_path):
         clear = _run_error(url, "CALL db.ontology.clear()")
         assert "--ontology" in clear.message, clear.message
 
+        with _driver(url) as driver, driver.session() as session:
+            shown = session.run("CALL db.ontology.show() YIELD ontology, locked RETURN ontology, locked").single()
+            assert shown["locked"] is True
+            assert "Person" in shown["ontology"]["classes"]
+
         # Still enforced after the refused attempts.
         err = _run_error(url, "CREATE (:Person {id: 51, title: 'StillNoCity'})")
         assert err.code == "Neo.ClientError.Schema.ConstraintValidationFailed", err.code
@@ -111,6 +116,9 @@ def test_without_the_flag_a_client_may_declare_and_clear(tmp_path):
                 doc=CITY_REQUIRED,
             ).single()
             assert row["declared"] is True
+            shown = session.run("CALL db.ontology.show() YIELD ontology, locked RETURN ontology, locked").single()
+            assert shown["locked"] is False
+            assert "Person" in shown["ontology"]["classes"]
             session.run("CALL db.ontology.clear()").consume()
             session.run("CREATE (:Person {id: 60, title: 'Free'})").consume()
     finally:

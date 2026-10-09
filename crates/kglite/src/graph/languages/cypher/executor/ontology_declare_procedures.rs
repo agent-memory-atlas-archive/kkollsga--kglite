@@ -5,6 +5,7 @@
 //! CALL db.ontology.declare({ontology: $ontology})   // map or JSON string
 //! CALL db.ontology.declare({classes: {...}, relationships: {...}, enforcement: 'error'})
 //! CALL db.ontology.clear()
+//! CALL db.ontology.show() YIELD ontology, locked, enforcement   // read-only
 //! ```
 //!
 //! A locked graph (`DirGraph::lock_ontology`, the Bolt server's `--ontology`)
@@ -79,6 +80,41 @@ pub(super) fn execute(
         other => unreachable!("non-ontology procedure routed here: {other}"),
     };
     Ok(vec![yield_row(values, yields)])
+}
+
+/// `db.ontology.show`: the declared ontology as the canonical document
+/// (`ontology_to_json`, which `db.ontology.declare` accepts back unchanged),
+/// whether the operator locked it, and the store's default enforcement.
+/// `ontology` is Null when nothing is declared.
+pub(super) fn show(
+    graph: &DirGraph,
+    params: &HashMap<String, Value>,
+    yields: &[YieldItem],
+) -> Result<Vec<ResultRow>, String> {
+    reject_unknown_keys(
+        "CALL db.ontology.show",
+        params.keys().map(String::as_str),
+        &[],
+    )?;
+    let store = &*graph.ontology;
+    let document = if store.is_empty() {
+        Value::Null
+    } else {
+        let json = crate::graph::ontology::ontology_to_json(store)
+            .map_err(|e| format!("CALL db.ontology.show: {e}"))?;
+        crate::param::json_value_to_kglite_value(&json)
+    };
+    Ok(vec![yield_row(
+        HashMap::from([
+            ("ontology", document),
+            ("locked", Value::Boolean(graph.ontology_locked())),
+            (
+                "enforcement",
+                Value::String(store.enforcement.as_str().to_string()),
+            ),
+        ]),
+        yields,
+    )])
 }
 
 /// The declaration document: the `ontology` parameter (a map, or a JSON

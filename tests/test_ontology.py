@@ -1402,6 +1402,19 @@ def test_ontology_procedures_declare_and_clear(docs):
     assert docs.ontology() is None
 
 
+def test_ontology_show_round_trips_through_declare(docs):
+    docs.cypher("MATCH (d:Doc) SET d.owner = 'x'")
+    empty = list(docs.cypher("CALL db.ontology.show() YIELD ontology, locked, enforcement"))[0]
+    assert empty["ontology"] is None and empty["locked"] is False
+    docs.define_ontology(_docs_decl("error"))
+    row = list(docs.cypher("CALL db.ontology.show() YIELD ontology, locked, enforcement"))[0]
+    assert row["locked"] is False
+    assert row["ontology"] == docs.ontology()
+    docs.clear_ontology()
+    docs.cypher("CALL db.ontology.declare({ontology: $doc})", params={"doc": row["ontology"]})
+    assert docs.ontology() == row["ontology"]
+
+
 def test_ontology_procedure_refuses_over_violating_data(docs):
     with pytest.raises(Exception, match=r"Doc\.required_properties"):
         docs.cypher("CALL db.ontology.declare({ontology: $doc})", params={"doc": _docs_decl("error")})

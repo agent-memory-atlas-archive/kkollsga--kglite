@@ -117,3 +117,69 @@ fn the_lock_survives_a_transaction_fork() {
     assert!(fork.ontology_locked());
     assert!(fork.clear_ontology().is_err());
 }
+
+const RICH: &str = r#"{"enforcement": "warn", "closed_labels": true,
+    "classes": {
+      "Licensable": {"abstract": true},
+      "Contract": {"is_a": "Licensable", "enforcement": "advisory",
+                   "required_properties": ["id"]}
+    },
+    "relationships": {
+      "MANAGED_BY": {"domain": "Licensable", "range": "Company",
+        "cardinality": {"min": 0, "max": 1}, "property_types": {"validFrom": "date"},
+        "enforcement": "error"}
+    }}"#;
+
+fn show_row(graph: &mut DirGraph) -> Vec<Value> {
+    run_outcome(
+        graph,
+        "CALL db.ontology.show() YIELD ontology, locked, enforcement \
+         RETURN ontology, locked, enforcement",
+    )
+    .unwrap()
+    .result
+    .rows
+    .remove(0)
+}
+
+#[test]
+fn show_returns_the_document_declare_accepts_back_unchanged() {
+    let mut graph = DirGraph::new();
+    declare_json(&mut graph, RICH).unwrap();
+    let row = show_row(&mut graph);
+    assert!(matches!(row[0], Value::Map(_)), "{:?}", row[0]);
+    assert_eq!(row[1], Value::Boolean(false));
+    assert_eq!(row[2], Value::String("warn".into()));
+
+    let mut other = DirGraph::new();
+    let mut params = HashMap::new();
+    params.insert("doc".to_string(), row[0].clone());
+    execute_mut(
+        &mut other,
+        "CALL db.ontology.declare({ontology: $doc})",
+        &ExecuteOptions::eager(&params),
+    )
+    .unwrap();
+    assert_eq!(*other.ontology, *graph.ontology);
+    assert_eq!(show_row(&mut other)[0], row[0]);
+}
+
+#[test]
+fn show_without_an_ontology_is_null_and_unlocked() {
+    let mut graph = DirGraph::new();
+    let row = show_row(&mut graph);
+    assert_eq!(row[0], Value::Null);
+    assert_eq!(row[1], Value::Boolean(false));
+}
+
+#[test]
+fn show_reports_the_operator_lock_and_is_not_a_write() {
+    let mut graph = DirGraph::new();
+    declare_json(&mut graph, PERSON).unwrap();
+    graph.lock_ontology();
+    let row = show_row(&mut graph);
+    assert_eq!(row[1], Value::Boolean(true));
+    assert!(matches!(row[0], Value::Map(_)));
+    let err = run(&mut graph, "CALL db.ontology.show({x: 1})").unwrap_err();
+    assert!(err.to_string().contains("show"), "{err}");
+}
