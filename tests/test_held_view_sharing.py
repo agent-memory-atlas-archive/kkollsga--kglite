@@ -45,8 +45,7 @@ WIDE_QUERY = "MATCH (n:Item) RETURN n.name, n.qty LIMIT 100"
 FIXTURE_NODES = 200
 
 
-@pytest.fixture
-def graph() -> kglite.KnowledgeGraph:
+def _fixture() -> kglite.KnowledgeGraph:
     g = kglite.KnowledgeGraph()
     g.cypher(
         "UNWIND range(0, %d) AS i "
@@ -54,6 +53,11 @@ def graph() -> kglite.KnowledgeGraph:
     )
     g.cypher("MATCH (n:Item {id: 0}) RETURN n.id")  # warm the id index
     return g
+
+
+@pytest.fixture
+def graph() -> kglite.KnowledgeGraph:
+    return _fixture()
 
 
 def _rows(view) -> list[dict]:
@@ -199,6 +203,56 @@ def test_a_held_view_survives_indexed_and_deleting_writes(graph: kglite.Knowledg
     assert not graph.cypher("MATCH (n:Item {id: 8}) RETURN n.id AS id").to_list()
 
     del view
+
+
+def test_a_held_view_survives_relationship_writes_and_traversals_agree(
+    graph: kglite.KnowledgeGraph,
+) -> None:
+    """Relationship creates, deletes, weight writes and ``DETACH DELETE`` fork too.
+
+    These used to copy the whole graph (an overlay could not express an
+    adjacency edit). They now land in the overlay's edge layer, so the backend
+    stays forked and every traversal must read the writer's edges — in the order
+    a graph that never forked would return them — while the held view keeps the
+    pre-write rows. ``ORDER BY`` is deliberately absent from the traversal
+    queries: edge order is the thing under test.
+    """
+    expected = _fixture()  # built apart and never held, so it never forks
+    for g in (graph, expected):
+        g.cypher("MATCH (a:Item {id: 1}), (b:Item {id: 2}) CREATE (a)-[:NEXT {w: 1}]->(b)")
+        g.cypher("MATCH (a:Item {id: 2}), (b:Item {id: 3}) CREATE (a)-[:NEXT {w: 2}]->(b)")
+    view = graph.cypher(WIDE_QUERY)
+    before = _rows(view)
+
+    writes = [
+        "MATCH (a:Item {id: 1}), (b:Item {id: 3}) CREATE (a)-[:NEXT {w: 3}]->(b)",
+        "MATCH (a:Item {id: 1}), (b:Item {id: 4}) CREATE (a)-[:NEXT {w: 4}]->(b)",
+        "MATCH (:Item {id: 1})-[r:NEXT {w: 3}]->(:Item {id: 3}) SET r.w = 33",
+        "MATCH (:Item {id: 2})-[r:NEXT]->(:Item {id: 3}) DELETE r",
+        "MATCH (n:Item {id: 4}) DETACH DELETE n",
+        "MATCH (a:Item {id: 3}), (b:Item {id: 5}) CREATE (a)-[:NEXT {w: 5}]->(b)",
+    ]
+    for write in writes:
+        graph.cypher(write)
+        expected.cypher(write)
+        assert kglite._backend_is_forked(graph) is True, f"{write}: an adjacency write flattened the overlay"
+        assert kglite._backend_is_forked(expected) is False, "the oracle graph must never fork"
+
+    traversals = [
+        "MATCH (a:Item)-[r:NEXT]->(b:Item) RETURN a.id AS a, b.id AS b, r.w AS w",
+        "MATCH (a:Item {id: 1})-[r:NEXT]->(b) RETURN b.id AS b, r.w AS w",
+        "MATCH (a:Item)<-[r:NEXT]-(b:Item) RETURN a.id AS a, b.id AS b",
+        "MATCH (a:Item {id: 3})-[:NEXT]-(b:Item) RETURN b.id AS b",
+        "MATCH (a:Item {id: 1})-[:NEXT*1..3]->(b:Item) RETURN b.id AS b",
+        "MATCH (a:Item)-[r:NEXT]->(b:Item) WHERE r.w > 2 RETURN a.id AS a, r.w AS w",
+    ]
+    for query in traversals:
+        assert graph.cypher(query).to_list() == expected.cypher(query).to_list(), query
+    assert graph.cypher("MATCH ()-[r:NEXT]->() RETURN count(r) AS n").to_list() == [{"n": 3}]
+
+    assert _rows(view) == before, "the held view must not see any of the writer's relationships"
+    del view
+    assert graph.cypher("MATCH (n:Item {id: 4}) RETURN n.id AS id").to_list() == []
 
 
 def test_a_failed_statement_rolls_back_while_a_view_is_held(

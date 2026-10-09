@@ -515,10 +515,11 @@ impl GraphBackend {
     /// deep-copying the base if a reader still holds it.
     ///
     /// No write needs it: node and adjacency edits alike land in the overlay.
-    /// It serves the whole-graph operations that need one concrete
-    /// `StableDiGraph` (vacuum, a disk conversion, an N-Triples load, the
-    /// column rebuild). Cost is the whole-graph deep copy the overlay normally
-    /// avoids, paid by the caller that asked.
+    /// Two kinds of caller collapse it: the whole-graph operations that need
+    /// one concrete `StableDiGraph` (vacuum, a disk conversion, an N-Triples
+    /// load, the column rebuild), and an adjacency write whose delta has passed
+    /// [`ForkedGraph::delta_exceeds_write_cap`]. Cost is the whole-graph deep
+    /// copy the overlay normally avoids, paid by the caller that asked.
     ///
     pub(crate) fn flatten_fork(&mut self) {
         if let GraphBackend::Recording(rg) = self {

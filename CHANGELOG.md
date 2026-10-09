@@ -347,6 +347,22 @@ before upgrading.
   the statement's duration (4 ms for a 1M-node `DETACH DELETE`) and then sees
   all of it. Readers already holding a snapshot are unaffected and never see the
   write. The copy path never blocked readers.
+- **Performance: relationship writes and node deletes no longer copy the graph
+  while a reader or an open transaction holds it.** `add_edge`, `remove_edge`,
+  `remove_node` and edge-property writes land in the fork overlay instead of
+  deep-copying the base, so the cost follows the change, not the graph. On 1M
+  nodes / 3M edges, release build, median of an explicit-transaction commit:
+  relationship `CREATE`/`DELETE` 59.7 / 60.9 ms -> 0.015 / 0.017 ms, with a
+  reader held 32.4 / 32.8 ms -> 0.026 / 0.023 ms, `DETACH DELETE` 81 ms ->
+  19.8 ms (44 -> 11.4 ms held), and the +389 MB peak per relationship commit is
+  gone. At 100k nodes: 6.1 ms -> 0.013 ms. Reads on a graph nobody holds are
+  unchanged.
+  - **Bulk statements cost what they did.** A statement that rewrites more than
+    a sixty-fourth of the graph collapses the overlay and finishes in place.
+  - **Mapped graphs still copy** on the first adjacency write; disk graphs have
+    their own overlay and are unaffected.
+  - **`DETACH DELETE` keeps a cost that is not adjacency**: it copies the merged
+    user index on the node's `id` (11 ms at 1M entries).
 
 ### Fixed
 

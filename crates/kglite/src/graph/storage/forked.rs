@@ -679,10 +679,10 @@ impl ForkedGraph {
         Some(std::mem::replace(target, MemoryGraph::new()))
     }
 
-    /// Deep-copy the base and fold into the copy, for the whole-graph
-    /// operations that need one concrete `StableDiGraph` while a reader still
-    /// holds the base. The only deep copy left on a write path is a caller
-    /// choosing this one.
+    /// Deep-copy the base and fold into the copy: the collapse behind
+    /// `GraphBackend::flatten_fork`, for the whole-graph operations that need
+    /// one concrete `StableDiGraph` and for a delta past its cap
+    /// ([`Self::delta_exceeds_write_cap`]).
     ///
     /// `Err` when the fold would not reproduce the overlay's indices; the
     /// overlay is then untouched and the copy is dropped.

@@ -31,6 +31,25 @@ The first two rows are a snapshot of a distinction that no longer exists.
 
 See [The rollback pre-image, since](#the-rollback-pre-image-since).
 
+**Relationship and node deletes are O(changes) too.** `add_edge`, `remove_edge`, `remove_node` and
+an edge-weight write land in the overlay's edge layer. Median of 100-200 explicit-transaction
+commits, one edge or node per commit, graph with 3 edges per node, indexed `id`, release build:
+
+| commit | 100k nodes before | after | 1M nodes before | after |
+|---|---:|---:|---:|---:|
+| relationship `CREATE` | 6.06 ms | **0.013 ms** | 59.7 ms | **0.015 ms** |
+| relationship `DELETE` | 6.29 ms | **0.013 ms** | 60.9 ms | **0.017 ms** |
+| node `DETACH DELETE` | 8.17 ms | 1.86 ms | 81.1 ms | 19.8 ms |
+| relationship `CREATE`, reader held | 3.31 ms | **0.019 ms** | 32.4 ms | **0.026 ms** |
+| relationship `DELETE`, reader held | 3.33 ms | **0.017 ms** | 32.8 ms | **0.023 ms** |
+| node `DETACH DELETE`, reader held | 4.49 ms | 1.03 ms | 44.3 ms | 11.4 ms |
+| peak resident set per commit, 1M | +389 MB | **+0 MB** | | |
+
+The `DETACH DELETE` rows keep a cost that is not adjacency: deleting a node copies the whole
+merged user index on the node's `id` (`LayeredIndex::retain_members`), 11 ms at 1M entries, and
+the publish frees it. The first relationship write after a load also builds the lazy id index
+(~26 ms, ~130 MB at 1M nodes) once.
+
 ---
 
 ## Why writer-side, and not the obvious alternative
@@ -62,7 +81,7 @@ Four fields carry the graph-sized state, and each is layered:
 
 | field | layer | shape |
 |---|---|---|
-| `graph` (the backend) | `GraphBackend::Forked` — `storage/forked.rs` | base `Arc<MemoryGraph>` + per-node/edge copy-on-write maps and tombstones |
+| `graph` (the backend) | `GraphBackend::Forked` — `storage/forked.rs`, `forked_edges.rs` | base `Arc<MemoryGraph>` + node weights, an edge layer (added edges, tombstones, copied weights) and an operation log |
 | `id_indices` | `storage/disk/id_index_layer.rs` | per type: `Owned` or `Layered { base: Arc<TypeEntry>, delta }`, recursive chain, deletions as `NodeIndex::end()` tombstones |
 | `type_indices` | `storage/disk/type_index_layer.rs` | per type: `Vec<Arc<Vec<NodeIndex>>>`, **append-only**, last level writable |
 | `property_indices`, `composite_indices` | `dir_graph/index_layer.rs` | per index: `Vec<Arc<HashMap<K, Option<Vec<NodeIndex>>>>>`, `None` = tombstone, bucket-granular copy-on-write |
@@ -108,8 +127,8 @@ by tests that assert on pointer identity rather than on content.
 **Slot identity.** Statement rollback guarantees a node or edge returns on the
 exact `NodeIndex`/`EdgeIndex` it vacated. Those indices are the keys of every
 index structure. `StableGraph` reuses free-list slots and offers no
-index-controlled insertion, so the overlay must *predict* what `add_node` will
-return and reproduce it at fold-back.
+index-controlled insertion, so the overlay must *predict* what `add_node` and
+`add_edge` will return and reproduce it at fold-back.
 
 `storage/slot_mirror.rs` mirrors petgraph's two free lists as LIFO stacks. It
 refuses to predict, rather than guessing, for a graph whose free-list order is
@@ -117,10 +136,24 @@ not observable. That means a graph adopted by `from_graph`, unless it provably
 has no holes. Unsynced means *slower*, never wrong. A
 `debug_assert` validates the prediction on every insert the test suites perform.
 
-Two sources do know the order. Petgraph's deserializer links both free lists in
-one ascending scan, so a `.kgl` load rebuilds the mirror from the vacant slots.
-A storage-mode conversion moves the same `StableDiGraph`, so it keeps the
-mirror it had.
+Removals feed the same free lists, so the fold cannot replay "the appended
+nodes". The overlay logs every `add_node`, `add_edge`, `remove_edge` and
+`remove_node` in the order issued (`Op` in `forked.rs`) and the fold replays
+that log against the base's own petgraph. Each add must come back on the slot
+the overlay handed out. The same operations on the same state reproduce both
+free lists and the adjacency order, which a petgraph-level test pins.
+
+- Before anything changes, the fold simulates the log against a copy of the target's mirror and refuses on a mismatch.
+- While the replay has only added things, a slot mismatch is undone newest-first and the overlay keeps serving.
+- After a removal ran, a mismatch can only panic: re-adding an edge links it at the head of its lists, not where it was.
+
+`forked_model_tests.rs` runs 12,000 seeded operation sequences against a graph
+that never forks and compares every add's slot, the full read surface, and the
+folded graph with its slot mirror. Two sources know the free-list order of a
+loaded base. Petgraph's deserializer links both free lists in one ascending
+scan, so a `.kgl` load rebuilds the mirror from the vacant slots. A
+storage-mode conversion moves the same `StableDiGraph`, so it keeps the mirror
+it had.
 
 **The journal reverses into the delta, never the base.** Every `UndoEntry` is
 keyed on an index and replayed through the write path. On a forked graph that
@@ -185,14 +218,24 @@ steady state that costs one `Arc::get_mut` probe.
 
 These are real and deliberate; none of them is a defect.
 
-**Adjacency edits flatten the overlay.** `add_edge`, `remove_node` and
-`remove_edge` rewrite existing nodes' petgraph adjacency, which the overlay
-cannot express without chaining base⊕overlay behind all six iterator types.
-They flatten instead — one whole-graph copy, the pre-D2 cost, paid **once per
-fork rather than once per statement**. Accepting that boundary is what let the
-overlay skip adjacency chaining entirely. A statement *rollback* that removes a
-node it created flattens for the same reason. Extending the overlay to adjacency
-is a well-defined follow-up.
+**A delta that outgrows the base collapses.** Two thresholds, both a fraction of
+the base's node and edge count with a 4,096-operation floor.
+
+- **A fork of a fork copies the delta**, and a reader held continuously across
+  commits keeps the base shared, so the delta only grows. Past a sixteenth of
+  the base the next fork collapses it once (`delta_exceeds_clone_cap`).
+- **An adjacency statement runs every edit twice** when the overlay carries it,
+  into the delta and again at the fold. Past a sixty-fourth of the base the
+  overlay collapses mid-statement and the rest runs in place
+  (`delta_exceeds_write_cap`). That bounds a bulk write at the one whole-graph
+  copy it paid before the overlay held adjacency. Measured at 1M nodes, 3M
+  edges, statement plus commit: a `DETACH DELETE` of 100k nodes takes 573 ms
+  against 560 ms before the overlay held adjacency, 500k nodes 2.47 s against
+  2.39 s, and creating 100k relationships in one statement 283 ms against 267 ms.
+
+Nothing else flattens. `vacuum`, a disk conversion, an N-Triples load and the
+commit-time column reclaim collapse the overlay themselves because each needs
+one concrete `StableDiGraph`.
 
 **A continuously held reader pays an amortised flatten.** In a loop that
 re-takes a view before every write, compaction never fires and the depth cap
@@ -214,7 +257,7 @@ either.** `unique_indices` holds one entry per node of every constrained type;
 d=384, and more once an HNSW index exists, whose `links` allocate per node per
 layer. A graph carrying those still pays them on every fork.
 
-**`Mapped` stays on the deep-clone path**, explicitly.
+**`Mapped` stays on the deep-clone path**, explicitly. **`Disk` never forks this way**: it forks through remapped immutable bases and its own mutation overlay, and none of this applies.
 
 **The rollback pre-image clone is a different cost and is unchanged by this
 work.** It is not the fork: it fires once per write *statement* on a columnar
