@@ -32,12 +32,13 @@ use std::time::Duration as StdDuration;
 use kglite::api::durable::DurabilityLevel;
 use kglite::api::io::{load_file, GraphWriterLease};
 use kglite::api::session::{
-    open_path, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec, QueryDefaults, Session,
+    open_path, CheckpointOutcome, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec,
+    QueryDefaults, Session,
 };
-use kglite::api::storage::StorageMode;
+use kglite::api::storage::{live_storage_mode, StorageMode};
 use kglite::api::temporal::ValidTimeDefault;
 use kglite::api::Embedder;
-use kglite::api::{KgError, Value};
+use kglite::api::{DataAdvisory, KgError, Value};
 use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
@@ -48,6 +49,7 @@ use crate::embedder::JsEmbedder;
 use crate::errors::{to_sync_error, JsErr, JsRes, CODE_CLOSED, CODE_NOT_DURABLE, CODE_READ_ONLY};
 use crate::pool::{self, Settle};
 use crate::tx::TxShared;
+use crate::typings::{OpenAdvisory, OpenInfo};
 use crate::values::{FromJs, IntegerMode, ToJs};
 
 /// Attempts an auto-commit write makes while it keeps losing an optimistic race.
@@ -70,7 +72,8 @@ pub(crate) struct Inner {
     /// Version of the last checkpoint this handle wrote.
     pub(crate) last_checkpoint: Mutex<Option<u64>>,
     pub(crate) closed: AtomicBool,
-    pub(crate) warnings: Vec<String>,
+    /// What the open reported; `openInfo` returns a copy.
+    pub(crate) info: OpenInfo,
     pub(crate) defaults: QueryDefaults,
     pub(crate) ints: IntegerMode,
     /// Serialises auto-commit writes, checkpoints and `close` so none races another.
@@ -424,6 +427,36 @@ pub(crate) fn done() -> Settle {
     Box::new(|env: Env| undefined(env.raw()))
 }
 
+fn advisories(list: &[DataAdvisory]) -> Vec<OpenAdvisory> {
+    list.iter()
+        .map(|a| OpenAdvisory {
+            code: a.code.clone(),
+            message: a.message.clone(),
+            affected: a.affected.clone(),
+        })
+        .collect()
+}
+
+fn checkpoint_object(
+    env: sys::napi_env,
+    outcome: CheckpointOutcome,
+    ints: IntegerMode,
+) -> JsRes<sys::napi_value> {
+    let (written, version) = match outcome {
+        CheckpointOutcome::Written(v) => (true, v),
+        CheckpointOutcome::Skipped(v) => (false, v),
+    };
+    let js = ToJs::new(env, ints);
+    let out = js.object()?;
+    js.set(out, "written", js.boolean(written)?)?;
+    js.set(
+        out,
+        "version",
+        js.int(i64::try_from(version).unwrap_or(i64::MAX))?,
+    )?;
+    Ok(out)
+}
+
 pub(crate) fn save_error(message: String) -> JsErr {
     JsErr::new("FileIo", message)
 }
@@ -452,14 +485,13 @@ impl Inner {
 
     /// Write a checkpoint unless nothing changed since this handle's last one.
     /// The caller holds `write_lock`.
-    fn checkpoint_locked(&self, session: &Session) -> JsRes<()> {
+    fn checkpoint_locked(&self, session: &Session) -> JsRes<CheckpointOutcome> {
         let mut last = self
             .last_checkpoint
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         session
             .checkpoint_if_changed(Path::new(&self.path), &mut last)
-            .map(|_| ())
             .map_err(save_error)
     }
 
@@ -606,7 +638,7 @@ impl Graph {
     }
 
     /// Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one.
-    #[napi(ts_return_type = "Promise<void>")]
+    #[napi(ts_return_type = "Promise<Checkpoint>")]
     pub fn checkpoint<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             if self.inner.read_only {
@@ -621,8 +653,11 @@ impl Graph {
                     Ok(s) => s,
                     Err(e) => return failed(e),
                 };
+                let ints = inner.ints;
                 match inner.checkpoint_locked(&session) {
-                    Ok(()) => done(),
+                    Ok(outcome) => {
+                        Box::new(move |env: Env| checkpoint_object(env.raw(), outcome, ints))
+                    }
                     Err(e) => failed(e),
                 }
             })
@@ -734,10 +769,10 @@ impl Graph {
         contain(|| Ok(self.inner.closed.load(Ordering::Acquire)))
     }
 
-    /// Notices from opening the graph (a quarantined or repaired write-ahead log, a degraded durability level, a storage conversion).
+    /// What the open reported: the storage mode and durability in force, any degradation or conversion, and the advisories (a quarantined or saved write-ahead log) an operator should read.
     #[napi(getter)]
-    pub fn open_warnings(&self) -> napi::Result<Vec<String>, &'static str> {
-        contain(|| Ok(self.inner.warnings.clone()))
+    pub fn open_info(&self) -> napi::Result<OpenInfo, &'static str> {
+        contain(|| Ok(self.inner.info.clone()))
     }
 }
 
@@ -778,24 +813,16 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
     }
     spec.lease_timeout = Some(spec.lease_timeout.unwrap_or(StdDuration::ZERO));
     let opened = open_path(p, &spec).map_err(|e| open_error(&e))?;
-    let mut warnings: Vec<String> = opened
-        .advisories
-        .iter()
-        .map(|a| format!("{}: {}", a.code, a.message))
-        .collect();
-    if let Some(requested) = opened.degraded_from {
-        warnings.push(format!(
-            "durability '{}' is not available for storage 'disk'; running at 'off' (use checkpoint() to persist)",
-            requested.name()
-        ));
-    }
-    if let Some(from) = opened.converted_from {
-        warnings.push(format!(
-            "storage converted from '{}' to '{}'",
-            from.as_str(),
-            opened.live_mode.as_str()
-        ));
-    }
+    let info = OpenInfo {
+        path: path.to_string(),
+        read_only: false,
+        created: !existed,
+        storage: opened.live_mode.as_str().to_string(),
+        durability: opened.durability.name().to_string(),
+        degraded_from: opened.degraded_from.map(|d| d.name().to_string()),
+        converted_from: opened.converted_from.map(|m| m.as_str().to_string()),
+        advisories: advisories(&opened.advisories),
+    };
     let session = opened.session;
     Ok(Inner {
         open_version: session.version(),
@@ -807,7 +834,7 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         created: !existed,
         last_checkpoint: Mutex::new(None),
         closed: AtomicBool::new(false),
-        warnings,
+        info,
         defaults: config.defaults,
         ints: config.ints,
         write_lock: Mutex::new(()),
@@ -826,11 +853,16 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
     {
         kglite::api::make_dir_graph_mut_preserving_lineage(&mut graph).valid_time_default = default;
     }
-    let warnings = graph
-        .advisories
-        .iter()
-        .map(|a| format!("{}: {}", a.code, a.message))
-        .collect();
+    let info = OpenInfo {
+        path: path.to_string(),
+        read_only: true,
+        created: false,
+        storage: live_storage_mode(&graph).as_str().to_string(),
+        durability: DurabilityLevel::Off.name().to_string(),
+        degraded_from: None,
+        converted_from: None,
+        advisories: advisories(&graph.advisories),
+    };
     let session = Session::from_arc(graph);
     Ok(Inner {
         open_version: session.version(),
@@ -842,7 +874,7 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         created: false,
         last_checkpoint: Mutex::new(None),
         closed: AtomicBool::new(false),
-        warnings,
+        info,
         defaults: config.defaults,
         ints: config.ints,
         write_lock: Mutex::new(()),

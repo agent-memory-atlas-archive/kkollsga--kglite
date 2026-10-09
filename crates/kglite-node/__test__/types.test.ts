@@ -12,6 +12,9 @@ import {
   type KgNode,
   type KgValue,
   type BackupReport,
+  type Checkpoint,
+  type OpenAdvisory,
+  type OpenInfo,
   type OntologyDeclared,
   type QueryResult,
 } from '../index.js';
@@ -49,8 +52,13 @@ export async function flow(): Promise<void> {
 
   // Graph getters.
   assertType<Equal<typeof graph.durability, 'full' | 'normal' | 'off'>>();
-  const warnings: string[] = graph.openWarnings;
-  void warnings;
+  const info: OpenInfo = graph.openInfo;
+  const advisory: OpenAdvisory | undefined = info.advisories[0];
+  assertType<Equal<typeof info.storage, 'memory' | 'mapped' | 'disk'>>();
+  const checkpoint: Checkpoint = await graph.checkpoint();
+  const written: boolean = checkpoint.written;
+  const version: number | bigint = checkpoint.version;
+  void [advisory, written, version];
 
   // Errors carry a string code and an optional lease holder.
   try {

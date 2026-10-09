@@ -147,6 +147,52 @@ pub struct OntologyDeclared {
     pub warnings: Vec<String>,
 }
 
+/// What `checkpoint` did.
+#[napi(object)]
+pub struct Checkpoint {
+    /// `false` when nothing changed since this handle's last checkpoint, so no file was written.
+    pub written: bool,
+    /// The graph version the checkpoint covers. `number` when exact, `bigint` beyond 2^53 - 1
+    /// (always `bigint` with `integers: 'bigint'`).
+    #[napi(ts_type = "number | bigint")]
+    pub version: f64,
+}
+
+/// One notice from opening a graph, such as a quarantined write-ahead log or a saved torn tail.
+#[napi(object)]
+#[derive(Clone)]
+pub struct OpenAdvisory {
+    /// Stable machine-readable kind, such as `wal_quarantined`.
+    pub code: String,
+    pub message: String,
+    /// The node or relationship types, or files, the notice concerns; empty when none.
+    pub affected: Vec<String>,
+}
+
+/// What `open` reports about the graph it returned.
+#[napi(object)]
+#[derive(Clone)]
+pub struct OpenInfo {
+    pub path: String,
+    pub read_only: bool,
+    /// The open created the graph.
+    pub created: bool,
+    /// The storage mode now running.
+    #[napi(ts_type = "'memory' | 'mapped' | 'disk'")]
+    pub storage: String,
+    /// The durability level in force.
+    #[napi(ts_type = "'full' | 'normal' | 'off'")]
+    pub durability: String,
+    /// The level that was requested but degraded to `off` (a disk graph has no log). Absent otherwise.
+    #[napi(ts_type = "'full' | 'normal'")]
+    pub degraded_from: Option<String>,
+    /// The mode the graph was in before an explicit `storage` converted it. Absent otherwise.
+    #[napi(ts_type = "'memory' | 'mapped' | 'disk'")]
+    pub converted_from: Option<String>,
+    /// Notices an operator should read; empty when the open was clean.
+    pub advisories: Vec<OpenAdvisory>,
+}
+
 /// What `backup` captured.
 #[napi(object)]
 pub struct BackupReport {

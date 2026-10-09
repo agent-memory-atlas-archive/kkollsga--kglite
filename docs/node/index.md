@@ -52,9 +52,17 @@ For the query language itself, see the [Cypher reference](../reference/cypher-re
 | `integers` | `'safe'` | `'bigint'` returns every integer as a `bigint`. |
 | `validTimeDefault` | `'today'` | Instant an unprefixed statement reads on a graph with declared validity intervals: `'today'`, `'all'` (no valid-time filtering) or a `'YYYY-MM-DD'` day. Runtime only; not saved. Any other value rejects `InvalidArgument`. |
 
-Opening quarantines or repairs a damaged write-ahead log and can degrade the durability level. Each case adds a notice to `graph.openWarnings`.
+Opening quarantines or repairs a damaged write-ahead log and can degrade the durability level. Each case adds an entry to `graph.openInfo.advisories`.
 
-`graph.path`, `graph.durability`, `graph.readOnly` and `graph.closed` report the handle's state.
+`graph.path`, `graph.durability`, `graph.readOnly` and `graph.closed` report the handle's state. `graph.openInfo` reports what the open did:
+
+| Field | Value |
+|---|---|
+| `path`, `readOnly`, `created` | The opened path, whether writes are refused, and whether the open created the graph. |
+| `storage`, `durability` | The storage mode and durability level now in force. |
+| `degradedFrom` | The requested level that degraded to `'off'`. Absent when nothing degraded. |
+| `convertedFrom` | The mode an explicit `storage` converted the graph from. Absent when nothing converted. |
+| `advisories` | `{ code, message, affected }` entries, such as `wal_quarantined` or `wal_tail_saved`. Empty when the open was clean. |
 
 ### Durability levels
 
@@ -64,11 +72,11 @@ Opening quarantines or repairs a damaged write-ahead log and can degrade the dur
 | `'normal'` | Commits reach the log but are fsynced in batches. Call `graph.sync()` for a power-safe point. |
 | `'off'` | No write-ahead log. Changes persist only at a checkpoint. `sync()` rejects with `NotDurable`. |
 
-A `readOnly` graph reports `'off'`. A disk graph degrades an inherited level to `'off'` and notes it in `openWarnings`.
+A `readOnly` graph reports `'off'`. A disk graph degrades an inherited level to `'off'` and reports it as `openInfo.degradedFrom`.
 
 ### Checkpoint and close
 
-- `graph.checkpoint()` folds the write-ahead log into the `.kgl` file. It does nothing when nothing changed since this handle's last checkpoint.
+- `graph.checkpoint()` folds the write-ahead log into the `.kgl` file. It resolves `{ written, version }`: `written` is `false`, and no file is written, when nothing changed since this handle's last checkpoint. `version` is a `number`, or a `bigint` beyond 2^53 - 1.
 - `graph.close()` checkpoints a writable graph that has unsaved changes, releases the writer lease and closes the handle. It is idempotent.
 - `close()` rolls back any transaction still open on the graph.
 - After `close()`, every method rejects with `Closed`.

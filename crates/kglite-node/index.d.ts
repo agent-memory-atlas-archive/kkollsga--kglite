@@ -43,7 +43,7 @@ export declare class Graph {
   /** Stream a read-only query as an async iterator of row objects, converted a batch per event-loop turn. */
   stream(cypher: string, params?: Params | null, options?: StreamOptions): AsyncIterableIterator<KgMap>
   /** Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one. */
-  checkpoint(): Promise<void>
+  checkpoint(): Promise<Checkpoint>
   /** Flush the write-ahead log to stable storage (the power-safe point at durability `normal`). */
   sync(): Promise<void>
   /** Checkpoint if there are unsaved changes (writable graphs), release the writer lease and close the graph. Idempotent. */
@@ -56,8 +56,8 @@ export declare class Graph {
   get readOnly(): boolean
   /** Whether `close()` has completed. */
   get closed(): boolean
-  /** Notices from opening the graph (a quarantined or repaired write-ahead log, a degraded durability level, a storage conversion). */
-  get openWarnings(): Array<string>
+  /** What the open reported: the storage mode and durability in force, any degradation or conversion, and the advisories (a quarantined or saved write-ahead log) an operator should read. */
+  get openInfo(): OpenInfo
   /** Start a transaction on a snapshot of the graph. Always settle it with `commit()` or `rollback()`; `transaction(fn)` does so for you. */
   begin(options?: { readOnly?: boolean }): Promise<Transaction>
   /** Run `callback` in a transaction: commit when its promise resolves, roll back when it throws. With `retries`, a lost optimistic race re-runs the callback on a fresh transaction. */
@@ -153,6 +153,17 @@ export interface BackupReport {
   elapsedMs: number
   /** The snapshot needed a private copy first (costs a fork of the graph). */
   preparedCopy: boolean
+}
+
+/** What `checkpoint` did. */
+export interface Checkpoint {
+  /** `false` when nothing changed since this handle's last checkpoint, so no file was written. */
+  written: boolean
+  /**
+   * The graph version the checkpoint covers. `number` when exact, `bigint` beyond 2^53 - 1
+   * (always `bigint` with `integers: 'bigint'`).
+   */
+  version: number | bigint
 }
 
 export interface EmbedderOptions {
@@ -269,6 +280,33 @@ export interface OntologyReportEntry {
 
 /** Open (or create) the graph at `path`. */
 export declare function open(path: string, options?: OpenOptions): Promise<Graph>
+
+/** One notice from opening a graph, such as a quarantined write-ahead log or a saved torn tail. */
+export interface OpenAdvisory {
+  /** Stable machine-readable kind, such as `wal_quarantined`. */
+  code: string
+  message: string
+  /** The node or relationship types, or files, the notice concerns; empty when none. */
+  affected: Array<string>
+}
+
+/** What `open` reports about the graph it returned. */
+export interface OpenInfo {
+  path: string
+  readOnly: boolean
+  /** The open created the graph. */
+  created: boolean
+  /** The storage mode now running. */
+  storage: 'memory' | 'mapped' | 'disk'
+  /** The durability level in force. */
+  durability: 'full' | 'normal' | 'off'
+  /** The level that was requested but degraded to `off` (a disk graph has no log). Absent otherwise. */
+  degradedFrom?: 'full' | 'normal'
+  /** The mode the graph was in before an explicit `storage` converted it. Absent otherwise. */
+  convertedFrom?: 'memory' | 'mapped' | 'disk'
+  /** Notices an operator should read; empty when the open was clean. */
+  advisories: Array<OpenAdvisory>
+}
 
 export interface OpenOptions {
   /** Default `'full'`. Refused for `storage: 'disk'` when set explicitly. */

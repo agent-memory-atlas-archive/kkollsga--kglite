@@ -56,14 +56,19 @@ test('checkpoint() writes once and is a no-op until something changes', async (t
   const path = join(scratch(t), 'g.kgl');
   const g = await kglite.open(path, { durability: 'off' });
   await g.executeWrite('CREATE (:N)');
-  await g.checkpoint();
+  const one = await g.checkpoint();
+  assert.equal(one.written, true);
+  assert.equal(typeof one.version, 'number');
   const first = statSync(path).mtimeMs;
   await sleep(30);
-  await g.checkpoint();
+  const two = await g.checkpoint();
+  assert.deepEqual(two, { written: false, version: one.version });
   assert.equal(statSync(path).mtimeMs, first, 'an unchanged graph is not rewritten');
   await g.executeWrite('CREATE (:N)');
   await sleep(30);
-  await g.checkpoint();
+  const three = await g.checkpoint();
+  assert.equal(three.written, true);
+  assert.ok(three.version > one.version, 'the version moves with the write');
   assert.ok(statSync(path).mtimeMs > first, 'a changed graph is rewritten');
   await g.close();
 });
@@ -93,11 +98,21 @@ test('sync() flushes under normal/full and rejects NotDurable under off', async 
   await off.close();
 });
 
-test('the default durability is full and openWarnings is an array', async (t) => {
-  const g = await kglite.open(join(scratch(t), 'g.kgl'));
+test('the default durability is full and openInfo describes a clean create', async (t) => {
+  const path = join(scratch(t), 'g.kgl');
+  const g = await kglite.open(path);
   assert.equal(g.durability, 'full');
   assert.equal(g.readOnly, false);
-  assert.deepEqual(g.openWarnings, []);
+  assert.equal(g.openWarnings, undefined, 'openWarnings was replaced by openInfo');
+  const info = g.openInfo;
+  assert.equal(info.path, path);
+  assert.equal(info.readOnly, false);
+  assert.equal(info.created, true);
+  assert.equal(info.storage, 'memory');
+  assert.equal(info.durability, 'full');
+  assert.equal(info.degradedFrom ?? null, null);
+  assert.equal(info.convertedFrom ?? null, null);
+  assert.deepEqual(info.advisories, []);
   await g.close();
 });
 
@@ -105,7 +120,9 @@ test('disk storage: an inherited durability degrades to off with a warning; an e
   const dir = scratch(t);
   const g = await kglite.open(join(dir, 'disk'), { storage: 'disk' });
   assert.equal(g.durability, 'off');
-  assert.ok(g.openWarnings.some((w) => /disk/.test(w) && /'full'/.test(w)), g.openWarnings.join('|'));
+  assert.equal(g.openInfo.storage, 'disk');
+  assert.equal(g.openInfo.durability, 'off');
+  assert.equal(g.openInfo.degradedFrom, 'full');
   await g.executeWrite('CREATE (:D {k: 1})');
   await g.close();
   const back = await kglite.open(join(dir, 'disk'));

@@ -145,7 +145,10 @@ before upgrading.
     newer, and musl), Windows x64.
   - **API:** `open(path, options)` returns a promise-based `Graph` with
     `executeRead`, `executeWrite`, `begin`, `transaction(fn)`, `checkpoint`,
-    `sync` and `close`. TypeScript types ship with the package.
+    `sync` and `close`. `checkpoint()` resolves `{ written, version }` and
+    `graph.openInfo` reports the storage mode, durability, any degradation or
+    conversion and the open advisories, as the C ABI and Java do. TypeScript
+    types ship with the package.
   - **Values:** integers are `number`, or `bigint` beyond 2^53 - 1 (or always,
     with `integers: 'bigint'`). Dates, datetimes, durations and points are the
     `LocalDate`, `LocalDateTime`, `Duration` and `Point` classes. `KgFloat`
