@@ -302,6 +302,24 @@ def test_backup_over_the_served_graph_is_refused(tmp_path):
         _teardown_bolt_server(proc)
 
 
+def test_backup_through_a_symlink_to_the_served_graph_is_refused(tmp_path):
+    served_dir = tmp_path / "bk"
+    served_dir.mkdir()
+    served = served_dir / "graph.kgl"
+    _build_bolt_fixture_graph(served)
+    (served_dir / "alias.kgl").symlink_to(served)
+    proc, url = _spawn_bolt_server(served, extra_args=["--backup-dir", str(served_dir)])
+    try:
+        before = served.read_bytes()
+        err = _backup_error(url, "alias.kgl")
+        assert err.code == "Neo.ClientError.Security.Forbidden"
+        assert "symlink" in err.message
+        assert served.read_bytes() == before
+        assert (served_dir / "alias.kgl").is_symlink()
+    finally:
+        _teardown_bolt_server(proc)
+
+
 def test_backup_is_disabled_without_backup_dir(tmp_path):
     proc, url, _served, bdir = _start(tmp_path, backup_dir=False)
     try:

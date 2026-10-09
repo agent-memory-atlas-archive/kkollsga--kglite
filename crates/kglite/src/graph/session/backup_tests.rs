@@ -427,3 +427,78 @@ fn a_disk_graph_is_refused_with_the_reason() {
     assert!(message.contains("single .kgl"), "{message}");
     assert!(!backup.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_or_hardlink_to_the_live_graph_is_refused_but_other_links_are_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("g.kgl");
+    let session = in_mode(StorageMode::Memory);
+    populate(&session);
+    session.save(live.to_str().unwrap(), true).unwrap();
+    let opts = BackupOptions {
+        live_path: Some(live.clone()),
+    };
+    let before = std::fs::read(&live).unwrap();
+
+    let sym = dir.path().join("sym.kgl");
+    std::os::unix::fs::symlink(&live, &sym).unwrap();
+    let message = refused(session.backup(&sym, &opts));
+    assert!(message.contains("symlink"), "{message}");
+
+    let hard = dir.path().join("hard.kgl");
+    std::fs::hard_link(&live, &hard).unwrap();
+    let message = refused(session.backup(&hard, &opts));
+    assert!(message.contains("hardlink"), "{message}");
+    assert_eq!(std::fs::read(&live).unwrap(), before);
+
+    // A symlink to an unrelated file is still replaced by the atomic publish.
+    let other = dir.path().join("other.kgl");
+    std::fs::write(&other, b"unrelated").unwrap();
+    let ok = dir.path().join("ok.kgl");
+    std::os::unix::fs::symlink(&other, &ok).unwrap();
+    session.backup(&ok, &opts).unwrap();
+    assert!(!std::fs::symlink_metadata(&ok)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(&other).unwrap(), b"unrelated");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_durable_session_refuses_a_symlink_to_its_checkpoint_without_a_live_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("g.kgl");
+    let session = durable(&live);
+    populate(&session);
+    session.save(live.to_str().unwrap(), true).unwrap();
+    let sym = dir.path().join("sym.kgl");
+    std::os::unix::fs::symlink(&live, &sym).unwrap();
+    let message = refused(session.backup(&sym, &BackupOptions::default()));
+    assert!(message.contains("symlink"), "{message}");
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_destination_temps_are_reaped_and_live_ones_kept() {
+    let session = in_mode(StorageMode::Memory);
+    populate(&session);
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("backup.kgl");
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = child.id();
+    child.wait().unwrap();
+    let stale = dir.path().join(format!("backup.kgl.tmp.{dead_pid}.7"));
+    let mine = dir
+        .path()
+        .join(format!("backup.kgl.tmp.{}.8", std::process::id()));
+    let foreign = dir.path().join("backup.kgl.tmp.notes");
+    for p in [&stale, &mine, &foreign] {
+        std::fs::write(p, b"partial").unwrap();
+    }
+    session.backup(&backup, &BackupOptions::default()).unwrap();
+    assert!(!stale.exists(), "dead writer's temp is reaped");
+    assert!(mine.exists(), "a live process's temp is kept");
+    assert!(foreign.exists(), "a non-temp name is never touched");
+}

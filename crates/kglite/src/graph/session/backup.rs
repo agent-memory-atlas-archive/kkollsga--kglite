@@ -102,9 +102,16 @@ impl Session {
             .as_ref()
             .map(|state| state.wal_file().to_path_buf());
         let mut aliased = false;
-        if let Some(live) = &opts.live_path {
+        // The log is `<live>-wal`, so the session knows its checkpoint even
+        // when the caller supplied no `live_path`.
+        let derived_live = wal.as_ref().and_then(|w| {
+            let name = w.file_name()?.to_str()?.strip_suffix("-wal")?.to_owned();
+            Some(w.with_file_name(name))
+        });
+        for live in opts.live_path.iter().chain(derived_live.iter()) {
             aliased |= crate::graph::durability::same_checkpoint_path(live, dest)
                 .map_err(|e| SaveError::Io(e.to_string()))?;
+            refuse_link_alias(live, dest)?;
         }
         if let Some(wal) = &wal {
             aliased |= crate::graph::io::open::same_existing_file(wal, &wal_path(dest))
@@ -151,6 +158,7 @@ pub fn backup_snapshot(
         {
             return Err(alias_refusal(dest));
         }
+        refuse_link_alias(live, dest)?;
     }
     crate::graph::durability::prepare_save_as_target(dest, DurabilityLevel::Off)?;
     write_backup(started, snapshot, lsn, Duration::ZERO, dest, dest_str)
@@ -173,6 +181,43 @@ fn alias_refusal(dest: &Path) -> SaveError {
     ))
 }
 
+/// Refuse a `dest` that is a symlink or hardlink to the live checkpoint.
+///
+/// The atomic publish would only replace the link, leaving the live file
+/// intact, but a backup aimed at an alias of the live graph is a mistake the
+/// caller should hear about. A symlink to some *other* file is fine.
+/// (A symlinked parent directory is caught by `same_checkpoint_path`.)
+fn refuse_link_alias(live: &Path, dest: &Path) -> Result<(), SaveError> {
+    let io_err = |e: std::io::Error| SaveError::Io(e.to_string());
+    let is_symlink = std::fs::symlink_metadata(dest)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if is_symlink {
+        if let (Ok(resolved), Ok(live_real)) = (dest.canonicalize(), live.canonicalize()) {
+            if resolved == live_real {
+                return Err(alias_link_refusal(dest, "a symlink to"));
+            }
+        }
+    }
+    if crate::graph::io::open::same_existing_file(live, dest).map_err(io_err)? {
+        let kind = if is_symlink {
+            "a symlink to"
+        } else {
+            "a hardlink to"
+        };
+        return Err(alias_link_refusal(dest, kind));
+    }
+    Ok(())
+}
+
+fn alias_link_refusal(dest: &Path, kind: &str) -> SaveError {
+    SaveError::Refused(format!(
+        "backup destination '{}' is {kind} the live graph's checkpoint; a backup is an \
+         independent copy, so choose another path",
+        dest.display()
+    ))
+}
+
 /// Disk refusal, preparation fork if needed, serialize, publish.
 fn write_backup(
     started: Instant,
@@ -185,6 +230,8 @@ fn write_backup(
     if snapshot.graph.is_disk() {
         return Err(SaveError::Refused(DISK_REFUSAL.to_string()));
     }
+    // A backup killed mid-write leaves a full-size `<dest>.tmp.<pid>.<n>`.
+    crate::graph::io::file::reap_stale_save_temps(dest);
     let (prepared, prepared_copy) = prepared_for_write(snapshot);
     let written: &DirGraph = prepared.as_ref().unwrap_or(snapshot);
     let bytes = crate::graph::io::file::write_kgl_with_stamp(written, dest_str, true, lsn)

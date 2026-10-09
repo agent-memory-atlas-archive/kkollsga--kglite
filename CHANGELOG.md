@@ -256,6 +256,13 @@ before upgrading.
 
 ### Fixed
 
+- **`backup()` reaps the stale temps of a killed backup and refuses link aliases of the live graph.**
+  A backup killed mid-write left `<dest>.tmp.<pid>.<n>` behind; the next backup
+  to that destination now removes temps whose writer is gone (never a live
+  process's). A destination that is a symlink or hardlink to the live
+  checkpoint is refused with a `Refused` error naming the link kind. A symlink
+  to any other file is still replaced by the atomic publish.
+
 - **`sync()` on a handle with no write-ahead log reports one error identity.**
   It was a bare `ValueError` in Python, `InvalidArgument` in the C ABI and Java,
   and a Node-only `NotDurable`. Core now has `KgErrorCode::NotDurable`, and every

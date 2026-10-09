@@ -91,6 +91,30 @@ def test_alias_refused_for_loaded_graph(tmp_path):
         g.session().backup(src)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_symlink_and_hardlink_aliases_refused_other_symlink_replaced(tmp_path):
+    src = str(tmp_path / "live.kgl")
+    build(5).save(src)
+    g = kglite.load(src)
+    before = open(src, "rb").read()
+    sym = tmp_path / "sym.kgl"
+    sym.symlink_to(src)
+    with pytest.raises(ValueError, match="symlink to the live graph"):
+        g.backup(str(sym))
+    hard = tmp_path / "hard.kgl"
+    os.link(src, hard)
+    with pytest.raises(ValueError, match="hardlink to the live graph"):
+        g.backup(str(hard))
+    assert open(src, "rb").read() == before
+    other = tmp_path / "other.kgl"
+    other.write_bytes(b"unrelated")
+    ok = tmp_path / "ok.kgl"
+    ok.symlink_to(other)
+    g.backup(str(ok))
+    assert not ok.is_symlink()
+    assert other.read_bytes() == b"unrelated"
+
+
 @pytest.mark.parametrize("level", ["full", "normal"])
 def test_durable_lsn_and_no_sidecars(tmp_path, level):
     live = str(tmp_path / "live.kgl")
