@@ -229,7 +229,7 @@ try {
 | Engine codes such as `CypherSyntax`, `CypherTimeout`, `ConstraintViolation`, `OntologyViolation` | The engine rejects the statement. They match the other bindings. |
 | `InvalidArgument` | An argument or parameter is invalid, or `executeRead` got a write. |
 | `WriterLeaseHeld` | Another writer owns the path. `e.holder` carries `pid`, `since`, `label` and `self`. |
-| `QueueFull` | The worker queue is at capacity. Retry later. |
+| `QueueFull` | A job queue is at capacity (4096 jobs). See [Job queues and bursts](#job-queues-and-bursts). |
 | `Closed` | The graph handle is closed. |
 | `ReadOnly` | A write on a `readOnly` graph. |
 | `NotDurable` | `sync()` on a graph without a write-ahead log. |
@@ -241,9 +241,27 @@ try {
 
 ## Event loop and threads
 
-Queries run on a worker pool, never on the JavaScript thread. The pool has `min(4, cores)` threads. Set `KGLITE_NODE_THREADS` to change it.
+Queries run off the JavaScript thread. Reads run on a pool of `min(4, cores)` threads; set `KGLITE_NODE_THREADS` to change it. Writes (`executeWrite`, commits, `checkpoint()`, `sync()`, `close()` and read-write transactions) run on one dedicated writer thread. Writes were already serialised, so the thread costs no parallelism, and it keeps each commit's allocations on one thread, which measured 25-30 % faster than rotating them over the pool.
 
 Converting a result to JavaScript objects runs on the JavaScript thread at about 0.5 µs per row. A query that returns millions of rows stalls the event loop for that conversion. Bound results with `LIMIT` or `rowLimit`, or read them with [`stream()`](#streaming-rows).
+
+### Job queues and bursts
+
+Reads and writes each have a bounded queue of 4096 jobs. A call that finds its queue full rejects at once with `QueueFull`; nothing is buffered without bound and nothing waits. A loop that starts more than 4096 un-awaited calls (for example `Promise.all` over 10,000 `executeWrite` calls) loses the overflow.
+
+Cap the number of calls in flight. A counting semaphore does it in a few lines, or use a package such as `p-limit`:
+
+```js
+const limit = 256; let active = 0; const waiting = [];
+async function capped(fn) {
+  if (active >= limit) await new Promise((resume) => waiting.push(resume));
+  else active++;
+  try { return await fn(); } finally { const next = waiting.shift(); if (next) next(); else active--; }
+}
+await Promise.all(rows.map((r) => capped(() => graph.executeWrite(q, r))));
+```
+
+Prefer one `UNWIND $rows` statement over many single-row calls: it is a single job and a single commit.
 
 ## Several processes
 
