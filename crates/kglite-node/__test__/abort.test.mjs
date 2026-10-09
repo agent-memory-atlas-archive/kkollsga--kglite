@@ -190,17 +190,40 @@ test('a finished stream and a settled call remove their listeners', async () => 
   assert.equal(removes, 3);
 });
 
-test('many calls on one signal raise no MaxListeners warning', async () => {
+test('many in-flight calls on one signal share one listener and raise no MaxListeners warning', async () => {
   const warnings = [];
   const onWarning = (w) => warnings.push(w);
   process.on('warning', onWarning);
   const ac = new AbortController();
-  await Promise.all(Array.from({ length: 200 }, () => graph.executeRead('RETURN 1', null, { signal: ac.signal })));
-  for (let i = 0; i < 200; i++) await graph.executeRead('RETURN 1', null, { signal: ac.signal });
+  let live = 0;
+  const add = ac.signal.addEventListener.bind(ac.signal);
+  const remove = ac.signal.removeEventListener.bind(ac.signal);
+  ac.signal.addEventListener = (type, ...a) => (type === 'abort' && live++, add(type, ...a));
+  ac.signal.removeEventListener = (type, ...a) => (type === 'abort' && live--, remove(type, ...a));
+  // The pool has 2 workers, so 2 of these run and 12 queue: 14 genuinely in flight at once.
+  const inflight = Array.from({ length: 14 }, () => graph.executeRead(LONG, null, { signal: ac.signal }));
+  await sleep(100);
+  assert.equal(live, 1, 'one abort listener however many calls are in flight');
+  ac.abort();
+  const errors = await Promise.all(inflight.map(rejection));
+  assert.ok(errors.every((e) => e.code === 'Cancelled'));
+  await sleep(20);
+  assert.equal(live, 0);
+  // Settled calls also leave nothing behind, one after another and all at once.
+  const ac2 = new AbortController();
+  await Promise.all(Array.from({ length: 200 }, () => graph.executeRead('RETURN 1', null, { signal: ac2.signal })));
+  for (let i = 0; i < 20; i++) await graph.executeRead('RETURN 1', null, { signal: ac2.signal });
   await sleep(20);
   process.off('warning', onWarning);
   assert.deepEqual(warnings, []);
+});
+
+test('a call that settles normally while others on its signal run does not cancel them', async () => {
+  const ac = new AbortController();
+  const long = graph.executeRead(LONG, null, { signal: ac.signal });
+  await graph.executeRead('RETURN 1', null, { signal: ac.signal });
   ac.abort();
+  assert.equal((await rejection(long)).code, 'Cancelled');
 });
 
 test('aborting one query leaves a concurrent one untouched', async () => {

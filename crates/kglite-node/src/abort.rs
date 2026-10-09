@@ -3,8 +3,8 @@
 //! The signal is validated and wired on the JS thread; the token travels with
 //! the query arguments into the pool job, so the clone inside `ExecuteOptions`
 //! keeps the token's flag slot alive for as long as the query runs. A small
-//! JavaScript wrapper owns the listener lifecycle (added at call time, removed
-//! when the call settles) and attaches `signal.reason` as the rejection's `cause`.
+//! JavaScript wrapper owns the listener lifecycle (one listener per signal,
+//! shared by every in-flight call on it, removed when the last call settles) and attaches `signal.reason` as the rejection's `cause`.
 
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,9 +87,47 @@ pub fn read_signal(f: &FromJs, v: sys::napi_value) -> JsRes<Signal> {
     })
 }
 
-const QUERY_WRAPPER: &str = r#"(function (signal, cancel, promise, code) {
+// Shared by both wrappers. One `abort` listener per signal, however many calls
+// are in flight on it: Node warns at 11 listeners on one EventTarget, and the
+// user's signal must not have its max-listeners mutated. `globalThis` holds the
+// registry because each wrapper is compiled per call; the symbol is non-enumerable.
+const REGISTRY: &str = r#"const reg = (() => {
+  const key = Symbol.for('kglite-node.abort-registry.v1');
+  if (globalThis[key]) return globalThis[key];
+  const live = new WeakMap();
+  const fire = (signal) => {
+    const rec = live.get(signal);
+    if (!rec) return;
+    live.delete(signal);
+    signal.removeEventListener('abort', rec.listener);
+    for (const fn of [...rec.fns]) fn();
+  };
+  const r = {
+    add(signal, fn) {
+      let rec = live.get(signal);
+      if (!rec) {
+        rec = { fns: new Set(), listener: () => fire(signal) };
+        live.set(signal, rec);
+        signal.addEventListener('abort', rec.listener, { once: true });
+      }
+      rec.fns.add(fn);
+      return () => {
+        const cur = live.get(signal);
+        if (cur !== rec) return;
+        rec.fns.delete(fn);
+        if (rec.fns.size === 0) {
+          live.delete(signal);
+          signal.removeEventListener('abort', rec.listener);
+        }
+      };
+    },
+  };
+  Object.defineProperty(globalThis, key, { value: r, enumerable: false });
+  return r;
+})();"#;
+
+const QUERY_BODY: &str = r#"(function (signal, cancel, promise, code) {
   return new Promise((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener('abort', onAbort);
     const onAbort = () => {
       if (!cancel()) return;
       cleanup();
@@ -99,7 +137,7 @@ const QUERY_WRAPPER: &str = r#"(function (signal, cancel, promise, code) {
       e.cause = signal.reason;
       reject(e);
     };
-    signal.addEventListener('abort', onAbort, { once: true });
+    const cleanup = reg.add(signal, onAbort);
     promise.then(
       (v) => { cleanup(); resolve(v); },
       (e) => {
@@ -111,10 +149,8 @@ const QUERY_WRAPPER: &str = r#"(function (signal, cancel, promise, code) {
   });
 })"#;
 
-const STREAM_WRAPPER: &str = r#"(function (signal, cancel, stream, code) {
-  const cleanup = () => signal.removeEventListener('abort', onAbort);
-  const onAbort = () => { cancel(); };
-  signal.addEventListener('abort', onAbort, { once: true });
+const STREAM_BODY: &str = r#"(function (signal, cancel, stream, code) {
+  const cleanup = reg.add(signal, () => { cancel(); });
   const next = stream.next;
   const ret = stream.return;
   stream.next = function () {
@@ -133,7 +169,7 @@ const STREAM_WRAPPER: &str = r#"(function (signal, cancel, stream, code) {
 
 fn wire(
     env: &Env,
-    script: &str,
+    body: &str,
     signal: &Signal,
     handle: &Arc<AbortHandle>,
     subject: sys::napi_value,
@@ -142,7 +178,8 @@ fn wire(
     let cancel = env
         .create_function_from_closure::<(), bool, _>("cancel", move |_| Ok(h.cancel()))
         .map_err(JsErr::from)?;
-    let wrapper: Unknown = env.run_script(script).map_err(JsErr::from)?;
+    let script = format!("(function () {{ {REGISTRY} return {body}; }})()");
+    let wrapper: Unknown = env.run_script(script.as_str()).map_err(JsErr::from)?;
     let code = env.create_string(CODE_CANCELLED).map_err(JsErr::from)?;
     let argv = [signal.value, cancel.raw(), subject, code.raw()];
     let raw = env.raw();
@@ -172,7 +209,7 @@ pub fn wire_query(
     handle: &Arc<AbortHandle>,
     promise: sys::napi_value,
 ) -> JsRes<sys::napi_value> {
-    wire(env, QUERY_WRAPPER, signal, handle, promise)
+    wire(env, QUERY_BODY, signal, handle, promise)
 }
 
 /// Wires `signal` to a stream: abort cancels its query and fails the next `next()`.
@@ -182,5 +219,5 @@ pub fn wire_stream(
     handle: &Arc<AbortHandle>,
     stream: sys::napi_value,
 ) -> JsRes<sys::napi_value> {
-    wire(env, STREAM_WRAPPER, signal, handle, stream)
+    wire(env, STREAM_BODY, signal, handle, stream)
 }

@@ -366,6 +366,9 @@ before upgrading.
 
 ### Fixed
 
+- **Node: more than 10 concurrent calls on one `AbortSignal` printed
+  `MaxListenersExceededWarning`.** The signal now carries one `abort` listener
+  however many calls are in flight, and it is removed when the last settles.
 - **`ontology_audit()` counted 0 `cardinality` violations when the relationship
   type had no edges.** A declared minimum now counts every domain node as
   holding 0 edges, as the write gate does; a maximum is still met.

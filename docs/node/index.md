@@ -176,7 +176,7 @@ await graph.executeRead(slowQuery, null, { signal: ac.signal }); // rejects Canc
 - **Running:** abort stops the query on its worker. The promise rejects `Cancelled`, and `err.cause` is `signal.reason`.
 - **Writes:** a cancelled `executeWrite` publishes nothing. A cancelled write in a transaction fails the statement and aborts the transaction; a cancelled read leaves it open.
 - **Streams:** abort stops further batches and rejects the pending `next()`; later `next()` calls resolve `done`.
-- **Listeners:** the abort listener is removed when the call settles, a stream ends, or `return()` runs.
+- **Listeners:** one `abort` listener per signal serves every call in flight on it (no `MaxListenersExceededWarning`); it is removed when the last call settles, a stream ends, or `return()` runs.
 - **Scope:** `transaction(fn)` takes no signal; pass one to the `tx.run` calls inside the callback.
 
 ## Transactions
