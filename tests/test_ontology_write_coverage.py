@@ -280,7 +280,7 @@ def _attach_rows(g, tmp):
 
 def _load_ntriples(g, tmp):
     path = tmp / "t.nt"
-    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n")
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n", encoding="utf-8")
     with pytest.raises(Exception, match="load_ntriples cannot run"):
         g.load_ntriples(str(path))
 
@@ -604,7 +604,7 @@ def _extend_rel(g, tmp):
 
 def _load_ntriples_rel(g, tmp):
     path = tmp / "t.nt"
-    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n")
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n", encoding="utf-8")
     with pytest.raises(Exception, match="load_ntriples cannot run"):
         g.load_ntriples(str(path))
 
@@ -734,7 +734,7 @@ def test_load_ntriples_at_warn_loads_and_says_it_skipped_judgement(tmp_path):
     }
     g = make_rel_graph("memory", tmp_path, warn)
     path = tmp_path / "t.nt"
-    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n")
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n", encoding="utf-8")
     with pytest.warns(UserWarning, match="not judged"):
         stats = g.load_ntriples(str(path))
     assert any("without per-row validation" in w for w in stats["warnings"])
