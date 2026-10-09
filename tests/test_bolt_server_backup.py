@@ -512,3 +512,15 @@ def test_unchanged_graph_is_not_backed_up_again(tmp_path):
         _wait_for(lambda: len(_scheduled(bdir)) > len(first))
     finally:
         _teardown_bolt_server(proc)
+
+
+def test_backup_reports_graph_version_and_prepared_copy(tmp_path):
+    proc, url, _served, _bdir = _start(tmp_path)
+    try:
+        record = _backup(url, "cols.kgl")
+        assert isinstance(record["graph_version"], int) and record["graph_version"] >= 0
+        assert record["prepared_copy"] is False
+        subset = _backup(url, "cols2.kgl", "CALL db.backup($n) YIELD graph_version, prepared_copy")
+        assert subset.keys() == ["graph_version", "prepared_copy"]
+    finally:
+        _teardown_bolt_server(proc)

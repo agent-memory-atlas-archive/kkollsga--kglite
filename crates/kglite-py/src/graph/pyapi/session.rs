@@ -666,5 +666,6 @@ pub(crate) fn backup_report_to_dict(
     dict.set_item("lsn", report.lsn)?;
     dict.set_item("lock_hold_ms", report.lock_hold.as_secs_f64() * 1000.0)?;
     dict.set_item("elapsed_ms", report.elapsed.as_secs_f64() * 1000.0)?;
+    dict.set_item("prepared_copy", report.prepared_copy)?;
     Ok(dict.into_any().unbind())
 }

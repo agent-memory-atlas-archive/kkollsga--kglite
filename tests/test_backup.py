@@ -48,7 +48,9 @@ def test_round_trip(tmp_path, storage):
         "lsn",
         "lock_hold_ms",
         "elapsed_ms",
+        "prepared_copy",
     }
+    assert report["prepared_copy"] is False
     restored = kglite.load(dest)
     assert rows(restored) == rows(g)
     rel = restored.cypher("MATCH ()-[r:LINKS]->() RETURN r.w AS w")

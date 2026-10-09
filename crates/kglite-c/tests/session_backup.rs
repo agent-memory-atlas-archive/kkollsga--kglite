@@ -119,9 +119,11 @@ fn backup_round_trips_with_report_shape() {
         "lsn",
         "lock_hold_ms",
         "elapsed_ms",
+        "prepared_copy",
     ] {
         assert!(json.get(key).is_some(), "missing key {key}: {json}");
     }
+    assert!(json["prepared_copy"].is_boolean(), "{json}");
     assert_eq!(json["nodes"], 2);
     assert_eq!(json["relationships"], 1);
     assert!(json["lsn"].is_null(), "no write-ahead log, so no lsn");

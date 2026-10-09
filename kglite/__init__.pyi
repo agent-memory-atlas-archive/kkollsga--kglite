@@ -5309,8 +5309,10 @@ class KnowledgeGraph:
             (the in-memory commit count, not a log position), ``lsn`` (the
             write-ahead-log position the file contains, ``0`` if nothing was
             logged; ``None`` for a non-durable graph), ``lock_hold_ms`` (time
-            both session locks were held; ``0.0`` here, as no lock is held) and
-            ``elapsed_ms`` (the whole call).
+            both session locks were held; ``0.0`` here, as no lock is held),
+            ``elapsed_ms`` (the whole call) and ``prepared_copy`` (``True``
+            when the snapshot needed a private prepared copy first, which
+            costs a fork).
 
         Raises:
             ValueError: Refused before anything was written: ``path`` is this
@@ -11133,8 +11135,8 @@ class Session:
 
         Returns:
             A dict with ``path``, ``bytes``, ``nodes``, ``relationships``,
-            ``graph_version``, ``lsn`` (``None``), ``lock_hold_ms`` and
-            ``elapsed_ms``; see :meth:`KnowledgeGraph.backup`.
+            ``graph_version``, ``lsn`` (``None``), ``lock_hold_ms``,
+            ``elapsed_ms`` and ``prepared_copy``; see :meth:`KnowledgeGraph.backup`.
 
         Raises:
             ValueError: ``path`` is the seeding graph's own file, a stray

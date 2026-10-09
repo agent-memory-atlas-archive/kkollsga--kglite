@@ -806,7 +806,9 @@ pub unsafe extern "C" fn kglite_session_save(
 ///
 /// On success `out_report_json` is an owned JSON object: `path`, `bytes`,
 /// `nodes`, `relationships`, `graph_version`, `lsn` (null for a session
-/// without a write-ahead log), `lock_hold_ms`, `elapsed_ms`. Free it with
+/// without a write-ahead log), `lock_hold_ms`, `elapsed_ms`,
+/// `prepared_copy` (true when the snapshot needed a private prepared copy
+/// first). Free it with
 /// [`kglite_free_string`](crate::kglite_free_string). On failure it is null.
 ///
 /// # Errors
@@ -865,6 +867,7 @@ pub unsafe extern "C" fn kglite_session_backup(
                         "lsn": report.lsn,
                         "lock_hold_ms": report.lock_hold.as_secs_f64() * 1000.0,
                         "elapsed_ms": report.elapsed.as_secs_f64() * 1000.0,
+                        "prepared_copy": report.prepared_copy,
                     })
                     .to_string();
                     unsafe { *out_report_json = alloc_c_string(&json) };

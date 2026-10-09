@@ -1814,7 +1814,9 @@ KgliteStatusCode kglite_session_save(struct KgliteSession *session,
  *
  * On success `out_report_json` is an owned JSON object: `path`, `bytes`,
  * `nodes`, `relationships`, `graph_version`, `lsn` (null for a session
- * without a write-ahead log), `lock_hold_ms`, `elapsed_ms`. Free it with
+ * without a write-ahead log), `lock_hold_ms`, `elapsed_ms`,
+ * `prepared_copy` (true when the snapshot needed a private prepared copy
+ * first). Free it with
  * [`kglite_free_string`](crate::kglite_free_string). On failure it is null.
  *
  * # Errors

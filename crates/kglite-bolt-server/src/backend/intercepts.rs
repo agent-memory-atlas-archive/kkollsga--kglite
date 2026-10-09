@@ -187,7 +187,7 @@ fn parse_yield_tail(rest: &str, declared: &'static [&'static str]) -> Option<Vec
 }
 
 /// Output columns of `db.backup(...)`, in declaration order.
-pub(super) const BACKUP_COLUMNS: [&str; 8] = [
+pub(super) const BACKUP_COLUMNS: [&str; 10] = [
     "success",
     "path",
     "lsn",
@@ -196,6 +196,8 @@ pub(super) const BACKUP_COLUMNS: [&str; 8] = [
     "bytes",
     "lock_hold_ms",
     "elapsed_ms",
+    "graph_version",
+    "prepared_copy",
 ];
 
 /// The single argument of `db.backup(...)`.
@@ -273,6 +275,8 @@ pub(super) fn backup_stream(
             "bytes" => BoltValue::Integer(report.bytes as i64),
             "lock_hold_ms" => BoltValue::Integer(report.lock_hold.as_millis() as i64),
             "elapsed_ms" => BoltValue::Integer(report.elapsed.as_millis() as i64),
+            "graph_version" => BoltValue::Integer(report.graph_version as i64),
+            "prepared_copy" => BoltValue::Boolean(report.prepared_copy),
             other => unreachable!("parse_backup_call yielded an unknown column: {other}"),
         })
         .collect();
