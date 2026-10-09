@@ -1113,6 +1113,7 @@ pub(crate) mod ordering;
 mod path_binding;
 mod procedure_params;
 mod procedure_registry;
+pub(crate) mod row_cursor;
 #[cfg(test)]
 mod test_clock;
 pub(crate) use procedure_registry::{

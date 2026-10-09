@@ -299,7 +299,7 @@ fn timeout_err(opts: &ExecuteOptions<'_>, started: Instant, message: String) -> 
 /// deadline passed but before the next poll would have aborted the run
 /// anyway — a query already over budget, reported as over budget.
 #[inline]
-fn exec_err(opts: &ExecuteOptions<'_>, started: Instant, message: String) -> KgError {
+pub(super) fn exec_err(opts: &ExecuteOptions<'_>, started: Instant, message: String) -> KgError {
     if is_cancelled(opts) {
         KgError::Cancelled
     } else if deadline_expired(opts) {
@@ -383,7 +383,7 @@ pub fn execute_read(
 
 // KgError deliberately carries structured context; boxing it would change the public result type.
 #[allow(clippy::result_large_err)]
-fn read_statement(
+pub(super) fn read_statement(
     graph: &DirGraph,
     query: &str,
     opts: &ExecuteOptions<'_>,
@@ -834,13 +834,13 @@ fn collect_clause_names<'a>(clauses: &'a [Clause], out: &mut Vec<&'a str>) {
 /// embedding-augmented) param map, the column-indexed value-codec encode plan
 /// (empty when no codecs apply), and the non-fatal schema warnings this
 /// statement earned.
-struct PreparedQuery {
-    plan: Arc<CypherQuery>,
-    params: HashMap<String, Value>,
-    encode_plan: Vec<Option<ValueCodec>>,
+pub(super) struct PreparedQuery {
+    pub(super) plan: Arc<CypherQuery>,
+    pub(super) params: HashMap<String, Value>,
+    pub(super) encode_plan: Vec<Option<ValueCodec>>,
     /// Unknown-label / unknown-relationship-type / absent-property warnings.
     /// Behind an `Arc` because the plan cache stores them alongside the plan.
-    warnings: Arc<[String]>,
+    pub(super) warnings: Arc<[String]>,
 }
 
 fn plan_scope(
@@ -907,7 +907,7 @@ fn cached_plan(
 /// context would filter nothing. It is part of the plan cache key.
 // KgError carries query context; boxing it would only burden an error path.
 #[allow(clippy::result_large_err)]
-fn prepare(
+pub(super) fn prepare(
     graph: &DirGraph,
     query: &str,
     opts: &ExecuteOptions<'_>,
@@ -1155,7 +1155,7 @@ fn prepare_uncached(
 /// guarded plan. Also returns the statement's valid-time echo, taken from the
 /// plan with the context, and `None` without one.
 #[allow(clippy::result_large_err)] // KgError carries query context, as `prepare`'s does.
-fn timeless_route(
+pub(super) fn timeless_route(
     graph: &DirGraph,
     query: &str,
     prepared: PreparedQuery,

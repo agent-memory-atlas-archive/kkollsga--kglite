@@ -23,10 +23,10 @@ use crate::graph::core::pattern_matching::PatternMatch;
 
 /// Builds each match's row exactly as `first_pattern_rows` does for a
 /// `MATCH` with no limit hint and no distinct hint, one match at a time.
-struct MatchRows<'q> {
+pub(super) struct MatchRows<'q> {
     executor: &'q CypherExecutor<'q>,
     clause: &'q MatchClause,
-    pattern: &'q Pattern,
+    pattern: Pattern,
     inline_where: Option<&'q Predicate>,
     matcher: PatternExecutor<'q>,
     chunker: PatternChunker,
@@ -64,7 +64,7 @@ impl MatchRows<'_> {
                 }
                 continue;
             }
-            match self.matcher.next_chunk(self.pattern, &mut self.chunker)? {
+            match self.matcher.next_chunk(&self.pattern, &mut self.chunker)? {
                 Some(next) => {
                     #[cfg(test)]
                     match_stream_probe::note_chunk(next.len());
@@ -111,7 +111,7 @@ impl CypherExecutor<'_> {
     /// - comma patterns, which join across patterns;
     /// - `shortestPath`, which has its own route;
     /// - the disk backend, whose query arenas live as long as the matcher.
-    fn first_match_streams(&self, clause: &MatchClause) -> bool {
+    pub(super) fn first_match_streams(&self, clause: &MatchClause) -> bool {
         clause.patterns.len() == 1
             && clause.limit_hint.is_none()
             && clause.distinct_node_hint.is_none()
@@ -126,8 +126,8 @@ impl CypherExecutor<'_> {
 /// run then.
 pub(super) fn try_stream_first_match<'q>(
     executor: &'q CypherExecutor<'q>,
-    clause: &MatchClause,
-    inline_where: Option<&Predicate>,
+    clause: &'q MatchClause,
+    inline_where: Option<&'q Predicate>,
     clauses: &[Clause],
 ) -> Result<Option<StreamingRun>, String> {
     if !executor.first_match_streams(clause) {
@@ -141,29 +141,63 @@ pub(super) fn try_stream_first_match<'q>(
 
 fn stream_first_match<'q>(
     executor: &'q CypherExecutor<'q>,
-    clause: &MatchClause,
-    inline_where: Option<&Predicate>,
+    clause: &'q MatchClause,
+    inline_where: Option<&'q Predicate>,
     plan: StreamingPlan,
 ) -> Result<Option<StreamingRun>, String> {
+    let anchors = first_match_anchors(clause);
+    let Some(rows) = open_first_match_rows(executor, clause, inline_where, anchors.as_ref())?
+    else {
+        return Ok(None);
+    };
+    let upstream = RowStream::new(rows, Vec::new());
+    pipeline::run_streaming_plan(executor, plan, upstream).map(Some)
+}
+
+/// The node anchors the opening `clause` seeds its matcher with. Owned by the
+/// caller because the matcher borrows them for as long as the row source lives.
+pub(super) fn first_match_anchors(
+    clause: &MatchClause,
+) -> Option<Bindings<petgraph::graph::NodeIndex>> {
+    let unbound: Bindings<petgraph::graph::NodeIndex> = Bindings::new();
+    match_clause::seed_clause_node_anchors(clause, &unbound)
+}
+
+/// The leading `clause` as a row-at-a-time source, or `None` when its matcher
+/// cannot be driven in slices (nothing has run then). Shared by the streaming
+/// aggregate and the row cursor. The caller checks
+/// [`CypherExecutor::first_match_streams`] first.
+pub(super) fn open_first_match_rows<'q>(
+    executor: &'q CypherExecutor<'q>,
+    clause: &'q MatchClause,
+    inline_where: Option<&'q Predicate>,
+    anchors: Option<&'q Bindings<petgraph::graph::NodeIndex>>,
+) -> Result<Option<MatchRows<'q>>, String> {
     let pattern = &clause.patterns[0];
     // The opening MATCH has no row: an inline-map expression can only read
     // constants and parameters, so it resolves against the empty row.
-    let resolved;
     let pattern = if CypherExecutor::pattern_has_vars(pattern) {
-        resolved = executor.resolve_pattern_vars(pattern, &ResultRow::new())?;
-        &resolved
+        executor.resolve_pattern_vars(pattern, &ResultRow::new())?
     } else {
-        pattern
+        pattern.clone()
     };
-    let unbound: Bindings<petgraph::graph::NodeIndex> = Bindings::new();
-    let anchors = match_clause::seed_clause_node_anchors(clause, &unbound);
+    open_with_pattern(executor, clause, inline_where, anchors, pattern)
+}
+
+fn open_with_pattern<'q>(
+    executor: &'q CypherExecutor<'q>,
+    clause: &'q MatchClause,
+    inline_where: Option<&'q Predicate>,
+    anchors: Option<&'q Bindings<petgraph::graph::NodeIndex>>,
+    pattern: Pattern,
+) -> Result<Option<MatchRows<'q>>, String> {
     let matcher = executor
-        .pattern_executor(None, anchors.as_ref())
+        .pattern_executor(None, anchors)
         .set_match_ceiling(executor.budget.match_ceiling("MATCH expansion"));
-    let Some(chunker) = matcher.begin_chunks(pattern)? else {
+    let Some(chunker) = matcher.begin_chunks(&pattern)? else {
         return Ok(None);
     };
-    let rows = MatchRows {
+    Ok(Some(MatchRows {
         executor,
         clause,
         pattern,
@@ -178,9 +212,7 @@ fn stream_first_match<'q>(
             .any(|pa| !pa.is_shortest_path),
         work: 0,
         done: false,
-    };
-    let upstream = RowStream::new(rows, Vec::new());
-    pipeline::run_streaming_plan(executor, plan, upstream).map(Some)
+    }))
 }
 
 /// The widest chunk a streamed first MATCH held, recorded per thread in tests

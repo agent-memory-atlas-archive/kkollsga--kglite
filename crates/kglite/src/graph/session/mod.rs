@@ -53,6 +53,7 @@
 pub use self::auto_commit::CheckpointOutcome;
 pub use self::backup::{backup_snapshot, BackupOptions, BackupReport};
 pub use self::cancel::CancelToken;
+pub use self::cursor::{execute_read_cursor, Cursor};
 pub use self::execute::{execute_mut, execute_read, ExecuteOptions, ExecuteOutcome};
 pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,
@@ -82,6 +83,9 @@ mod checkpoint_order_tests;
 mod column_reclaim_tests;
 #[cfg(test)]
 mod compaction_tests;
+mod cursor;
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod default_context_tests;
 pub(crate) mod durable;

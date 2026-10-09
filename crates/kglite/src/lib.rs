@@ -980,8 +980,9 @@ pub mod api {
             deadline_from, deadline_span, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
         };
         pub use crate::graph::session::{
-            execute_mut, execute_read, resolve_noderef_value, resolve_noderefs, CommitOutcome,
-            ExecuteOptions, ExecuteOutcome, Session, Transaction, QUERY_THREAD_STACK_SIZE,
+            execute_mut, execute_read, execute_read_cursor, resolve_noderef_value,
+            resolve_noderefs, CommitOutcome, Cursor, ExecuteOptions, ExecuteOutcome, Session,
+            Transaction, QUERY_THREAD_STACK_SIZE,
         };
         /// `open_path`: writer lease + open/create in a storage mode + durable
         /// session in one ordered call, with the recovery advisories returned as

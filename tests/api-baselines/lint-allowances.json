@@ -565,6 +565,18 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/session/cursor.rs::fn:execute_read_cursor:pub fn execute_read_cursor( &self, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<Cursor, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/cursor.rs::fn:execute_read_cursor:pub fn execute_read_cursor( graph: Arc<DirGraph>, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<Cursor, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/cursor.rs::fn:next_batch:pub fn next_batch(&mut self, n: usize) -> Result<Vec<Vec<Value>>, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:embed_into_params:fn embed_into_params( opts: &ExecuteOptions<'_>, rewrite: &cypher::planner::simplification::TextScoreRewrite, ) -> Result<HashMap<String, Value>, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
@@ -581,7 +593,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare:fn prepare( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, suppress_default: bool, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare:pub(super) fn prepare( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, suppress_default: bool, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
@@ -589,11 +601,11 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:read_statement:fn read_statement( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:read_statement:pub(super) fn read_statement( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<(PreparedQuery, Option<TemporalDiagnostics>), KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:pub(super) fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<(PreparedQuery, Option<TemporalDiagnostics>), KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
