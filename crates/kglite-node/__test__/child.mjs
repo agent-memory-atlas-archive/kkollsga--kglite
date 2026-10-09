@@ -1,6 +1,8 @@
 // Child process driven by crash.test.mjs and lease.test.mjs.
 //
 //   node child.mjs stream <path> <durability>    acknowledged writes, one `ack <i>` line each
+//   node child.mjs tx     <path> <durability>    one committed transaction (rows 0-2) and one left open
+//                                                (rows 100-101), then `ready`; waits on stdin
 //   node child.mjs hold   <path> <durability>    5 rows, checkpoint, 3 more rows, `ready`;
 //                                                `close` on stdin closes the graph first, any
 //                                                other input ends the process without closing
@@ -12,7 +14,15 @@ const kglite = require('../index.js');
 const [mode, path, durability] = process.argv.slice(2);
 
 const graph = await kglite.open(path, { durability });
-if (mode === 'stream') {
+if (mode === 'tx') {
+  const committed = await graph.begin();
+  for (let i = 0; i < 3; i++) await committed.run('CREATE (:Item {i: $i})', { i });
+  await committed.commit();
+  const open = await graph.begin();
+  for (let i = 100; i < 102; i++) await open.run('CREATE (:Item {i: $i})', { i });
+  process.stdout.write('ready\n');
+  process.stdin.resume();
+} else if (mode === 'stream') {
   for (let i = 0; ; i++) {
     await graph.executeWrite('CREATE (:Item {i: $i})', { i });
     process.stdout.write(`ack ${i}\n`);

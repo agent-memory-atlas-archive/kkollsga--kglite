@@ -85,7 +85,7 @@ pub struct LeaseHolderInfo {
 pub struct KgliteErrorShape {
     /// Engine error code (`CypherSyntax`, `CypherTimeout`, `ConstraintViolation`,
     /// `TransactionConflict`, ...) or a binding code: `Internal`, `QueueFull`,
-    /// `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`.
+    /// `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`, `TransactionClosed`.
     pub code: String,
     /// Always `"KgliteError"`.
     pub name: String,

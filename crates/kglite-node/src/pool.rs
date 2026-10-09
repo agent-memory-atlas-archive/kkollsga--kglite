@@ -65,20 +65,12 @@ fn pool() -> &'static Arc<Queue> {
     })
 }
 
-/// Stack for every worker: the engine's `QUERY_THREAD_STACK_SIZE`, doubled in
-/// debug builds.
+/// Stack for every worker: the engine's `QUERY_THREAD_STACK_SIZE`, in every profile.
 ///
-/// A debug build's frames are large enough that `execute_read` at the parser's
-/// nesting ceiling (`RETURN [[...[1]...]]`, 511 levels) overflows 8 MiB and aborts
-/// the process; it needs between 9 and 10 MiB. The engine's own stack test drives
-/// a narrower path (`run_full_pipeline`) and does not see it. Release builds are
-/// held to the engine constant.
+/// The parser's deepest accepted nesting (511 levels) fits it in a debug build
+/// because planning runs under the engine's stack guard.
 pub const fn worker_stack_size() -> usize {
-    if cfg!(debug_assertions) {
-        QUERY_THREAD_STACK_SIZE * 2
-    } else {
-        QUERY_THREAD_STACK_SIZE
-    }
+    QUERY_THREAD_STACK_SIZE
 }
 
 /// `KGLITE_NODE_THREADS`, else `min(4, available cores)`.

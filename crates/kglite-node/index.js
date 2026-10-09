@@ -784,5 +784,6 @@ module.exports.KgFloat = nativeBinding.KgFloat
 module.exports.LocalDate = nativeBinding.LocalDate
 module.exports.LocalDateTime = nativeBinding.LocalDateTime
 module.exports.Point = nativeBinding.Point
+module.exports.Transaction = nativeBinding.Transaction
 module.exports.open = nativeBinding.open
 module.exports.version = nativeBinding.version

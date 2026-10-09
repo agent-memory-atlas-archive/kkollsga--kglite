@@ -18,6 +18,7 @@ mod classes;
 mod errors;
 mod graph;
 mod pool;
+mod tx;
 // `pub` so the type-only declarations are not dead code: nothing constructs them.
 pub mod typings;
 mod values;

@@ -695,6 +695,9 @@ impl KindOf {
     pub fn is_boolean(&self) -> bool {
         self.0 == Kind::Boolean
     }
+    pub fn is_function(&self) -> bool {
+        self.0 == Kind::Function
+    }
 }
 
 #[cfg(test)]

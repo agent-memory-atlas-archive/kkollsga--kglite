@@ -26,7 +26,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration as StdDuration;
 
 use kglite::api::durable::DurabilityLevel;
@@ -46,37 +46,40 @@ use crate::errors::{
     CODE_READ_ONLY,
 };
 use crate::pool::{self, Settle};
+use crate::tx::TxShared;
 use crate::values::{FromJs, IntegerMode, ToJs};
 
 /// Attempts an auto-commit write makes while it keeps losing an optimistic race.
 /// Writes on one `Graph` are serialised, so only an outside committer causes a retry.
 const WRITE_ATTEMPTS: u32 = 5;
 
-struct Inner {
+pub(crate) struct Inner {
     /// `None` once [`Graph::close`] has run; taking it out is what finally closes
     /// the write-ahead log, so a successor writer never meets a live handle on it.
-    session: Mutex<Option<Arc<Session>>>,
+    pub(crate) session: Mutex<Option<Arc<Session>>>,
     /// Held for as long as the graph is writable; `None` for a `readOnly` graph.
-    lease: Mutex<Option<GraphWriterLease>>,
-    path: String,
-    durability: DurabilityLevel,
-    read_only: bool,
+    pub(crate) lease: Mutex<Option<GraphWriterLease>>,
+    pub(crate) path: String,
+    pub(crate) durability: DurabilityLevel,
+    pub(crate) read_only: bool,
     /// The path did not hold a graph when it was opened.
-    created: bool,
+    pub(crate) created: bool,
     /// Version right after open (and recovery), the baseline for "unchanged".
-    open_version: u64,
+    pub(crate) open_version: u64,
     /// Version of the last checkpoint this handle wrote.
-    last_checkpoint: Mutex<Option<u64>>,
-    closed: AtomicBool,
-    warnings: Vec<String>,
-    defaults: QueryDefaults,
-    ints: IntegerMode,
+    pub(crate) last_checkpoint: Mutex<Option<u64>>,
+    pub(crate) closed: AtomicBool,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) defaults: QueryDefaults,
+    pub(crate) ints: IntegerMode,
     /// Serialises auto-commit writes, checkpoints and `close` so none races another.
-    write_lock: Mutex<()>,
+    pub(crate) write_lock: Mutex<()>,
+    /// Open transactions, so `close` can roll them back.
+    pub(crate) txs: Mutex<Vec<Weak<TxShared>>>,
 }
 
 impl Inner {
-    fn session(&self) -> JsRes<Arc<Session>> {
+    pub(crate) fn session(&self) -> JsRes<Arc<Session>> {
         self.session
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -85,11 +88,11 @@ impl Inner {
     }
 }
 
-fn closed_error() -> JsErr {
+pub(crate) fn closed_error() -> JsErr {
     JsErr::new(CODE_CLOSED, "this graph is closed")
 }
 
-fn read_only_error(what: &str) -> JsErr {
+pub(crate) fn read_only_error(what: &str) -> JsErr {
     JsErr::new(
         CODE_READ_ONLY,
         format!("{what} is not available: this graph was opened with readOnly: true"),
@@ -99,7 +102,7 @@ fn read_only_error(what: &str) -> JsErr {
 /// A graph opened by [`open`].
 #[napi]
 pub struct Graph {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
 // ------------------------------------------------------------------ options
@@ -136,7 +139,7 @@ fn expect_string(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<String> {
 
 /// The defined own entries of an options object; unknown keys are an error so a
 /// misspelt option never silently does nothing.
-fn option_entries(
+pub(crate) fn option_entries(
     f: &mut FromJs,
     v: Option<sys::napi_value>,
     known: &[&str],
@@ -254,15 +257,15 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
     })
 }
 
-struct QueryArgs {
-    cypher: String,
-    params: std::collections::HashMap<String, Value>,
-    timeout_ms: Option<u64>,
-    row_limit: Option<usize>,
-    max_work_units: Option<usize>,
+pub(crate) struct QueryArgs {
+    pub(crate) cypher: String,
+    pub(crate) params: std::collections::HashMap<String, Value>,
+    pub(crate) timeout_ms: Option<u64>,
+    pub(crate) row_limit: Option<usize>,
+    pub(crate) max_work_units: Option<usize>,
 }
 
-fn parse_query_args(
+pub(crate) fn parse_query_args(
     f: &mut FromJs,
     cypher: sys::napi_value,
     params: Option<sys::napi_value>,
@@ -291,7 +294,7 @@ fn parse_query_args(
 
 // ------------------------------------------------------------------ results
 
-fn build_result(
+pub(crate) fn build_result(
     env: sys::napi_env,
     outcome: &ExecuteOutcome,
     ints: IntegerMode,
@@ -358,11 +361,11 @@ fn build_result(
 
 // ------------------------------------------------------------------ dispatch
 
-fn failed(e: JsErr) -> Settle {
+pub(crate) fn failed(e: JsErr) -> Settle {
     Box::new(move |_| Err(e))
 }
 
-fn err_promise<'e>(env: &'e Env, e: JsErr) -> napi::Result<Object<'e>, &'static str> {
+pub(crate) fn err_promise<'e>(env: &'e Env, e: JsErr) -> napi::Result<Object<'e>, &'static str> {
     pool::settled(env, failed(e)).map_err(|e| to_sync_error(JsErr::from(e)))
 }
 
@@ -374,7 +377,7 @@ fn undefined(env: sys::napi_env) -> JsRes<sys::napi_value> {
     Ok(out)
 }
 
-fn done() -> Settle {
+pub(crate) fn done() -> Settle {
     Box::new(|env: Env| undefined(env.raw()))
 }
 
@@ -383,6 +386,20 @@ fn save_error(message: String) -> JsErr {
 }
 
 impl Inner {
+    /// One call's execution options: the arguments laid over the open-time defaults.
+    pub(crate) fn execute_options<'a>(&self, args: &'a QueryArgs) -> ExecuteOptions<'a> {
+        let resolved = self
+            .defaults
+            .resolve(args.timeout_ms, args.max_work_units, args.row_limit);
+        let mut opts = ExecuteOptions::eager(&args.params);
+        opts.streaming = true;
+        opts.deadline = resolved.deadline;
+        opts.deadline_origin = resolved.deadline_origin;
+        opts.max_work_units = resolved.max_work_units;
+        opts.row_limit = resolved.row_limit;
+        opts
+    }
+
     /// Write a checkpoint unless nothing changed since this handle's last one.
     /// The caller holds `write_lock`.
     fn checkpoint_locked(&self, session: &Session) -> JsRes<()> {
@@ -434,16 +451,8 @@ impl Graph {
             return err_promise(env, read_only_error("executeWrite"));
         }
         let inner = Arc::clone(&self.inner);
-        let resolved = inner
-            .defaults
-            .resolve(args.timeout_ms, args.max_work_units, args.row_limit);
         let promise = pool::spawn(env, move || {
-            let mut opts = ExecuteOptions::eager(&args.params);
-            opts.streaming = true;
-            opts.deadline = resolved.deadline;
-            opts.deadline_origin = resolved.deadline_origin;
-            opts.max_work_units = resolved.max_work_units;
-            opts.row_limit = resolved.row_limit;
+            let opts = inner.execute_options(&args);
             let outcome = if write {
                 let _serial = inner
                     .write_lock
@@ -591,6 +600,7 @@ impl Graph {
                     }
                 }
                 inner.closed.store(true, Ordering::Release);
+                inner.abandon_transactions();
                 // Session first (closes the log), lease second (admits a successor).
                 drop(
                     inner
@@ -725,6 +735,7 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         defaults: config.defaults,
         ints: config.ints,
         write_lock: Mutex::new(()),
+        txs: Mutex::new(Vec::new()),
     })
 }
 
@@ -752,6 +763,7 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         defaults: config.defaults,
         ints: config.ints,
         write_lock: Mutex::new(()),
+        txs: Mutex::new(Vec::new()),
     })
 }
 

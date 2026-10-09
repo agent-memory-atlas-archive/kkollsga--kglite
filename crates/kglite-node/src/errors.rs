@@ -5,7 +5,8 @@
 //! binding. Codes the binding itself raises are `Internal` (a contained panic),
 //! `WriterLeaseHeld` (another writer owns the path; carries a `holder`), `QueueFull`,
 //! `Closed` (the handle was closed), `ReadOnly` (a write on a `readOnly` handle)
-//! and `NotDurable` (`sync()` on a handle with no write-ahead log).
+//! `NotDurable` (`sync()` on a handle with no write-ahead log) and `TransactionClosed`
+//! (a transaction that is already committed, rolled back or aborted).
 
 use std::ffi::c_char;
 use std::ptr;
@@ -19,6 +20,7 @@ pub const CODE_QUEUE_FULL: &str = "QueueFull";
 pub const CODE_CLOSED: &str = "Closed";
 pub const CODE_READ_ONLY: &str = "ReadOnly";
 pub const CODE_NOT_DURABLE: &str = "NotDurable";
+pub const CODE_TX_CLOSED: &str = "TransactionClosed";
 const CODE_ARGUMENT: &str = "InvalidArgument";
 
 /// Who holds a writer lease, as published by the holder (best effort: a

@@ -42,6 +42,10 @@ export declare class Graph {
   get closed(): boolean
   /** Notices from opening the graph (a quarantined or repaired write-ahead log, a degraded durability level, a storage conversion). */
   get openWarnings(): Array<string>
+  /** Start a transaction on a snapshot of the graph. Always settle it with `commit()` or `rollback()`; `transaction(fn)` does so for you. */
+  begin(options?: { readOnly?: boolean }): Promise<Transaction>
+  /** Run `callback` in a transaction: commit when its promise resolves, roll back when it throws. With `retries`, a lost optimistic race re-runs the callback on a fresh transaction. */
+  transaction<T>(callback: (tx: Transaction) => Promise<T> | T, options?: { retries?: number, readOnly?: boolean }): Promise<T>
 }
 
 /**
@@ -92,12 +96,26 @@ export declare class Point {
   toJSON(): { latitude: number; longitude: number }
 }
 
+/** An open transaction, from `graph.begin()` or passed to the `graph.transaction()` callback. */
+export declare class Transaction {
+  /** Run a Cypher statement inside the transaction. */
+  run(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
+  /** Publish the transaction's writes. Rejects `TransactionConflict` (retriable) when another writer committed first. */
+  commit(): Promise<void>
+  /** Discard the transaction. Idempotent, and a no-op once it is committed or its graph is closed. */
+  rollback(): Promise<void>
+  /** Whether the transaction was opened with `readOnly: true`. */
+  get readOnly(): boolean
+  /** Whether the transaction is over: committed, rolled back, or abandoned by `close()`. */
+  get finished(): boolean
+}
+
 /** The `Error` every rejection carries. */
 export interface KgliteError {
   /**
    * Engine error code (`CypherSyntax`, `CypherTimeout`, `ConstraintViolation`,
    * `TransactionConflict`, ...) or a binding code: `Internal`, `QueueFull`,
-   * `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`.
+   * `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`, `TransactionClosed`.
    */
   code: string
   /** Always `"KgliteError"`. */
