@@ -126,6 +126,10 @@ mod write_publish_tests;
 /// cannot merely fail a query — a Rust stack overflow aborts the **process**,
 /// so one client's deep query would take down every other session sharing it.
 ///
+/// A debug build's walkers in `prepare` outgrow 8 MiB at the nesting ceiling, so
+/// that step grows its own stack for deep statements (`with_query_stack`); the
+/// remaining stages fit within this size.
+///
 /// 8 MiB matches the main-thread default that the CLI and the Python wheel
 /// already get for free, so every frontend has the same headroom.
 pub const QUERY_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;

@@ -83,7 +83,10 @@ pub struct CypherParser {
 /// ([`crate::graph::session::QUERY_THREAD_STACK_SIZE`], and the main-thread
 /// default for the CLI and the Python wheel). So the stages downstream of the
 /// parser do not need their own `stacker` guard — the budget alone keeps them
-/// inside the stack they are given, and
+/// inside the stack they are given. The exception is `session::prepare`'s
+/// pre-execution walkers (dynamic-label binding alone costs ~18.7 KiB/level in
+/// debug, 9.5 MiB at the ceiling), which `with_query_stack` runs on a grown
+/// stack when the statement could nest deeply. For the planner and executor,
 /// `stack_probe::budget_ceiling_query_fits_the_query_thread_stack` holds that
 /// true on every platform CI runs.
 ///
@@ -103,7 +106,7 @@ pub struct CypherParser {
 /// inside a [`CypherParser::chain`] scope; recursive nesting is charged by
 /// [`CypherParser::descend`]. Charging both is what makes the budget an
 /// actual bound on what the downstream walkers recurse through.
-pub(super) const MAX_EXPRESSION_DEPTH: usize = 512;
+pub(crate) const MAX_EXPRESSION_DEPTH: usize = 512;
 
 /// Remaining-stack threshold below which [`CypherParser::descend`] allocates
 /// a fresh segment, and the size of that segment. The red zone must cover the

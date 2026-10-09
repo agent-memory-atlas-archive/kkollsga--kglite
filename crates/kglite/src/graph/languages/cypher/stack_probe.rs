@@ -39,7 +39,8 @@
 //!     --exact graph::languages::cypher::stack_probe::stack_probe --nocapture
 //! ```
 //!
-//! Stages: `parse`, `plan`, `exec`, `drop`, `full`, plus `calibrate` (a
+//! Stages: `parse`, `plan`, `exec`, `drop`, `full`, `read` (the public
+//! `execute_read`, including `prepare`), plus `calibrate` (a
 //! recursion of known frame size, to prove the method) and `bench` (a
 //! release-profile timing of the per-row expression path, for costing any
 //! proposed guard). `KGL_PROBE_STACK_KIB` sizes the measured thread.
@@ -80,6 +81,18 @@ fn query(shape: &str, depth: usize) -> String {
         "lists" => format!("RETURN {}1{} AS x", "[".repeat(depth), "]".repeat(depth)),
         "not" => format!("RETURN {}false AS x", "NOT ".repeat(depth)),
         "neg" => format!("RETURN {}5 AS x", "-".repeat(depth)),
+        "maps" => format!("RETURN {}1{} AS x", "{a:".repeat(depth), "}".repeat(depth)),
+        "case" => format!(
+            "RETURN {}1{} AS x",
+            "CASE WHEN true THEN ".repeat(depth),
+            " END".repeat(depth)
+        ),
+        "fncalls" => format!("RETURN {}1{} AS x", "abs(".repeat(depth), ")".repeat(depth)),
+        "listcomp" => format!(
+            "RETURN {}1{} AS x",
+            "[v IN [1] | ".repeat(depth),
+            "]".repeat(depth)
+        ),
         // Iteratively parsed left-associative chains (one AST level each).
         "or" => format!("RETURN {} AS x", vec!["false"; depth + 1].join(" OR ")),
         "and" => format!("RETURN {} AS x", vec!["true"; depth + 1].join(" AND ")),
@@ -131,6 +144,10 @@ const ALL_SHAPES: &[&str] = &[
     "not",
     "neg",
     "lists",
+    "maps",
+    "case",
+    "fncalls",
+    "listcomp",
     "add",
     "concat",
     "subscript",
@@ -139,6 +156,18 @@ const ALL_SHAPES: &[&str] = &[
     "where_or_mixed",
     "where_in",
 ];
+
+/// The deepest `depth` for `shape` that the parser still accepts. Shapes that
+/// charge more than one budget level per nesting (list comprehensions, `CASE`,
+/// maps) are refused at `MAX_EXPRESSION_DEPTH - 1`, so each is walked down to
+/// its own ceiling: the test must run the deepest *accepted* query, not the
+/// deepest requested one.
+fn ceiling_depth(shape: &str) -> usize {
+    (1..MAX_EXPRESSION_DEPTH)
+        .rev()
+        .find(|&d| parse_cypher(&query(shape, d)).is_ok())
+        .unwrap_or_else(|| panic!("shape {shape} parses at no depth"))
+}
 
 /// A one-node `:T` graph, so `MATCH (n:T) WHERE …` actually produces a row
 /// and the executor really walks the predicate tree. On an empty graph the
@@ -181,13 +210,12 @@ fn run_full_pipeline(graph: &DirGraph, text: &str) {
 /// executor path): 3.7 MiB of 8 MiB in debug, 0.54 MiB in release.
 #[test]
 fn budget_ceiling_query_fits_the_query_thread_stack() {
-    let depth = MAX_EXPRESSION_DEPTH - 1;
     std::thread::Builder::new()
         .stack_size(QUERY_THREAD_STACK_SIZE)
         .spawn(move || {
             let graph = seeded_graph();
             for shape in ALL_SHAPES {
-                run_full_pipeline(&graph, &query(shape, depth));
+                run_full_pipeline(&graph, &query(shape, ceiling_depth(shape)));
             }
         })
         .expect("spawn query-sized thread")
@@ -210,7 +238,6 @@ fn budget_ceiling_query_fits_the_query_thread_stack() {
 /// clean assertion — that is the intended signal.
 #[test]
 fn budget_ceiling_query_fits_the_query_pool_worker_stack() {
-    let depth = MAX_EXPRESSION_DEPTH - 1;
     let graph = seeded_graph();
     crate::graph::parallel::install(|| {
         assert!(
@@ -221,9 +248,43 @@ fn budget_ceiling_query_fits_the_query_pool_worker_stack() {
              test would measure the caller's stack instead"
         );
         for shape in ALL_SHAPES {
-            run_full_pipeline(&graph, &query(shape, depth));
+            run_full_pipeline(&graph, &query(shape, ceiling_depth(shape)));
         }
     });
+}
+
+/// The public `execute_read` entry point — query-plan cache, result
+/// conversion and result drop included — at the budget ceiling, on a thread of
+/// exactly [`QUERY_THREAD_STACK_SIZE`]. `run_full_pipeline` above stops at
+/// `CypherExecutor::execute`; the servers and bindings call this instead, and
+/// its `prepare` step runs walkers (dynamic-label binding, schema validation,
+/// `text_score` rewrite) that cost more per level than the executor — in a
+/// debug build the ceiling `neg` chain overflowed 8 MiB (the dynamic-label walk
+/// alone measured 9.5 MiB) before `prepare` grew its own stack for deep
+/// statements.
+#[test]
+fn budget_ceiling_query_fits_through_execute_read() {
+    use crate::graph::session::{execute_read, ExecuteOptions};
+    std::thread::Builder::new()
+        .stack_size(QUERY_THREAD_STACK_SIZE)
+        .spawn(move || {
+            let graph = seeded_graph();
+            let params: HashMap<String, Value> = HashMap::new();
+            for shape in ALL_SHAPES {
+                for (streaming, lazy) in [(false, false), (true, false), (true, true)] {
+                    let mut opts = ExecuteOptions::eager(&params);
+                    opts.streaming = streaming;
+                    opts.lazy_eligible = lazy;
+                    execute_read(&graph, &query(shape, ceiling_depth(shape)), &opts)
+                        .unwrap_or_else(|e| {
+                            panic!("{shape} streaming={streaming} lazy={lazy}: {e}")
+                        });
+                }
+            }
+        })
+        .expect("spawn query-sized thread")
+        .join()
+        .expect("execute_read at the budget ceiling overflowed the query-thread stack");
 }
 
 /// A query past the budget is refused by the parser, so no downstream walker
@@ -465,6 +526,17 @@ fn stack_probe() {
         "full" => on_probe_thread(move || {
             let graph = seeded_graph();
             measure(|| run_full_pipeline(&graph, &text))
+        }),
+        // The public `execute_read` entry point, end to end.
+        "read" => on_probe_thread(move || {
+            let graph = seeded_graph();
+            let params: HashMap<String, Value> = HashMap::new();
+            let opts = crate::graph::session::ExecuteOptions::eager(&params);
+            measure(|| {
+                let out = crate::graph::session::execute_read(&graph, &text, &opts)
+                    .expect("execute_read");
+                drop(out);
+            })
         }),
         other => panic!("unknown stage {other}"),
     };

@@ -937,6 +937,48 @@ fn prepare(
         }
     }
 
+    with_query_stack(query, || {
+        prepare_uncached(graph, query, opts, suppress_default, cacheable)
+    })
+}
+
+/// Stack one nesting level of the parsed statement can cost the post-parse
+/// walkers in `prepare` (dynamic-label binding, schema validation, warning
+/// collection, `text_score` rewrite, planner). Measured per level at the
+/// parser's ceiling: ~18.7 KiB for the dynamic-label walk in a debug build,
+/// which is the largest; release walkers are well under a quarter of that.
+const PREPARE_STACK_PER_LEVEL: usize = if cfg!(debug_assertions) {
+    24 * 1024
+} else {
+    8 * 1024
+};
+
+/// Run `f` on a stack that can hold the deepest AST `query` could parse into.
+///
+/// Only the parser grows its own stack; the walkers `prepare` runs afterwards
+/// recurse on the caller's. At the parser's nesting ceiling those walkers need
+/// more than [`QUERY_THREAD_STACK_SIZE`] in a debug build, and a stack
+/// overflow aborts the process. A query of N bytes cannot nest deeper than N
+/// levels, so the bytes bound the need without a second walk of the text:
+/// short statements — nearly all of them — see no extra stack, and the segment
+/// is allocated only when the thread's remaining stack falls under the bound.
+fn with_query_stack<R>(query: &str, f: impl FnOnce() -> R) -> R {
+    let levels = query.len().min(cypher::parser::MAX_EXPRESSION_DEPTH);
+    let need = levels * PREPARE_STACK_PER_LEVEL;
+    let headroom = 512 * 1024;
+    stacker::maybe_grow(need + headroom, need + 4 * headroom, f)
+}
+
+/// The cache-miss half of [`prepare`]: parse, validate, plan, and cache.
+// KgError carries query context; boxing it would only burden an error path.
+#[allow(clippy::result_large_err)]
+fn prepare_uncached(
+    graph: &DirGraph,
+    query: &str,
+    opts: &ExecuteOptions<'_>,
+    suppress_default: bool,
+    cacheable: bool,
+) -> Result<PreparedQuery, KgError> {
     let mut parsed = cypher::parse_cypher(query)?;
     parsed.suppress_default = suppress_default;
 
