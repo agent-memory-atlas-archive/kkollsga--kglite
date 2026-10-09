@@ -2615,4 +2615,12 @@ def test_node_publish_is_dispatched_by_the_release_train_on_the_tag() -> None:
     )
     assert tag_release["permissions"].get("actions") == "write"
     triggers = NODE.get("on", NODE.get(True))
-    assert set(triggers) == {"workflow_dispatch"}, "a tag trigger would double-publish next to the dispatch"
+    assert set(triggers) == {"workflow_dispatch", "pull_request"}, (
+        "a tag trigger would double-publish next to the dispatch"
+    )
+    # The PR trigger only exercises the build and verify legs; it must stay
+    # scoped to the Node package and never be a push trigger.
+    assert set(triggers["pull_request"]["paths"]) == {
+        "crates/kglite-node/**",
+        ".github/workflows/publish_node.yml",
+    }, triggers["pull_request"]

@@ -16,6 +16,11 @@ name: Publish Node
 # Release-time verification (the `release` skill): until the repository
 # variable NPM_PUBLISH_ENABLED is 'true', a release that publishes no npm
 # package is the expected outcome and not a failure.
+#
+# A pull request that touches the Node package (or this file) runs every job
+# except publish — the seven native builds and the no-toolchain install check —
+# so a broken platform leg surfaces on the PR, not at release time. Publishing
+# still requires a v* tag ref (see the publish job's `if:`).
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +28,15 @@ on:
         description: 'Publish to npm even if NPM_PUBLISH_ENABLED is unset (first publication). Only takes effect when the workflow runs on a v* tag.'
         type: boolean
         default: false
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/kglite-node/**"
+      - ".github/workflows/publish_node.yml"
+
+concurrency:
+  group: publish-node-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
