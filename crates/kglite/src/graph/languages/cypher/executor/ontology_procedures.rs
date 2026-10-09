@@ -360,7 +360,7 @@ fn check_rows(
             let card = decl.cardinality.expect("gated on presence");
             let mut rows = Vec::new();
             for node_type in accepted_types(store, domain) {
-                if !live(graph, &node_type) || !edge_type_exists(graph, rel) {
+                if !live(graph, &node_type) {
                     continue;
                 }
                 let mut params = string_params(&[("type", &node_type), ("edge", rel)]);

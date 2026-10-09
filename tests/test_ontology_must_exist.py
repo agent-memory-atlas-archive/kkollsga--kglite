@@ -149,3 +149,29 @@ def test_warn_reports_at_the_commit(storage, tmp_path):
     with pytest.warns(UserWarning, match=r"ontology warning \(required_relationship\): 2 nodes"):
         tx.commit()
     assert count(g) == 2
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_the_audit_counts_min_cardinality_when_the_relationship_type_is_absent(storage, tmp_path):
+    g = make_graph(storage, tmp_path, works_at(required=True, cardinality={"min": 1}, enforcement="warn"))
+    g.cypher("CREATE (:Person {id: 1}), (:Person {id: 2}), (:Company {id: 7})")
+    rows = {
+        r["rule"]: r["violations"]
+        for r in g.cypher("CALL ontology_audit() YIELD rule, violations RETURN rule, violations").to_list()
+    }
+    assert rows["WORKS_AT.required"] == 2
+    assert rows["WORKS_AT.cardinality"] == 2
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_declaring_min_cardinality_at_error_over_absent_type_is_refused_and_the_gate_agrees(storage, tmp_path):
+    opts = {} if storage == "memory" else {"storage": storage}
+    if storage == "disk":
+        opts["path"] = str(tmp_path / "disk")
+    g = kglite.KnowledgeGraph(**opts)
+    g.cypher("CREATE (:Person {id: 1}), (:Person {id: 2}), (:Company {id: 7})")
+    with pytest.raises(Exception):
+        g.define_ontology({"classes": {"Person": {}, "Company": {}}, "relationships": works_at(cardinality={"min": 1})})
+    h = make_graph(storage, tmp_path / "h", works_at(cardinality={"min": 1}))
+    with pytest.raises(Exception):
+        h.cypher("CREATE (:Person {id: 1})")

@@ -330,6 +330,9 @@ before upgrading.
 
 ### Fixed
 
+- **`ontology_audit()` counted 0 `cardinality` violations when the relationship
+  type had no edges.** A declared minimum now counts every domain node as
+  holding 0 edges, as the write gate does; a maximum is still met.
 - **The `cardinality` warning counted sources as relationships.** A `warn`-level
   maximum reported "N relationships" where N is the number of source nodes over
   the maximum; the line now reads "N source nodes above the declared maximum of

@@ -606,3 +606,47 @@ fn declaring_an_error_rule_over_violating_data_is_refused() {
     )
     .unwrap();
 }
+
+fn audit_violations(graph: &mut DirGraph, rule: &str) -> i64 {
+    count(
+        graph,
+        &format!(
+            "CALL ontology_audit() YIELD rule, violations WHERE rule = '{rule}' \
+             RETURN violations"
+        ),
+    )
+}
+
+#[test]
+fn the_audit_counts_must_exist_violations_when_the_relationship_type_is_absent() {
+    let mut graph = DirGraph::new();
+    run(
+        &mut graph,
+        "CREATE (:Person {id: 1}), (:Person {id: 2}), (:Company {id: 7})",
+    )
+    .unwrap();
+    declare(
+        &mut graph,
+        &works_at(r#""required": true, "cardinality": {"min": 1},"#, "warn"),
+    );
+    assert_eq!(edges(&mut graph, "WORKS_AT"), 0);
+    assert_eq!(audit_violations(&mut graph, "WORKS_AT.required"), 2);
+    assert_eq!(audit_violations(&mut graph, "WORKS_AT.cardinality"), 2);
+
+    // A maximum is trivially met by zero edges.
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:Person {id: 1})").unwrap();
+    declare(
+        &mut graph,
+        &works_at(r#""cardinality": {"max": 1},"#, "warn"),
+    );
+    assert_eq!(audit_violations(&mut graph, "WORKS_AT.cardinality"), 0);
+
+    // The gate agrees: with no edge ever written, a Person is refused.
+    let mut graph = DirGraph::new();
+    declare(&mut graph, &required("error"));
+    assert_eq!(
+        rule_of(*run(&mut graph, "CREATE (:Person {id: 1})").unwrap_err()),
+        "required_relationship"
+    );
+}
