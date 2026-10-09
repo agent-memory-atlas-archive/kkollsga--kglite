@@ -2121,7 +2121,9 @@ dependencies = [
 name = "kglite-node"
 version = "0.19.5"
 dependencies = [
+ "chrono",
  "kglite",
+ "mimalloc",
  "napi",
  "napi-build",
  "napi-derive",

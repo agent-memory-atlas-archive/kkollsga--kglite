@@ -9,5 +9,192 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
+/** A Cypher duration: calendar months and days are kept apart from clock seconds. */
+export declare class Duration {
+  readonly months: number
+  readonly days: number
+  readonly seconds: number
+  constructor(months?: number | undefined | null, days?: number | undefined | null, seconds?: number | undefined | null)
+  /** ISO-8601 (`P1Y2M3DT4S`); zero parts are omitted and a zero duration is `PT0S`. */
+  toString(): string
+  toJSON(): { months: number; days: number; seconds: number }
+}
+
+/** A graph opened by [`open`]. */
+export declare class Graph {
+  /** Run a read-only Cypher statement. A mutating statement rejects with `InvalidArgument`. */
+  executeRead(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
+  /** Run a Cypher statement that may write, as one auto-committed transaction. */
+  executeWrite(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
+  /** The path this graph was opened at. */
+  get path(): string
+  /** The durability level in force (an inherited level degrades to `off` on a disk graph). */
+  get durability(): 'full' | 'normal' | 'off'
+}
+
+/**
+ * Forces a parameter to the engine's float type. A plain JS `1` is an integer
+ * because JavaScript cannot tell `1` from `1.0`.
+ */
+export declare class KgFloat {
+  readonly value: number
+  constructor(value: number)
+  toJSON(): number
+}
+
+/** A calendar date without a time or zone. */
+export declare class LocalDate {
+  readonly year: number
+  readonly month: number
+  readonly day: number
+  constructor(year: number, month: number, day: number)
+  /** ISO-8601 `YYYY-MM-DD`. */
+  toString(): string
+  toJSON(): string
+}
+
+/** A calendar date with a wall-clock time (nanosecond precision), no zone. */
+export declare class LocalDateTime {
+  readonly year: number
+  readonly month: number
+  readonly day: number
+  readonly hour: number
+  readonly minute: number
+  readonly second: number
+  readonly nanosecond: number
+  constructor(year: number, month: number, day: number, hour?: number | undefined | null, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null)
+  /** ISO-8601 with the shortest of 0, 3, 6 or 9 fractional digits. */
+  toString(): string
+  /** A JS `Date` reading this wall clock as UTC; sub-millisecond digits are dropped. */
+  toDate(): Date
+  toJSON(): string
+}
+
+/** A WGS-84 point. */
+export declare class Point {
+  readonly latitude: number
+  readonly longitude: number
+  constructor(latitude: number, longitude: number)
+  /** WKT, `POINT(longitude latitude)`. */
+  toString(): string
+  toJSON(): { latitude: number; longitude: number }
+}
+
+/** The `Error` every rejection carries. */
+export interface KgliteError {
+  /**
+   * Engine error code (`CypherSyntax`, `CypherTimeout`, `ConstraintViolation`,
+   * `TransactionConflict`, ...), or `INTERNAL` / `WRITER_LEASE_HELD` / `QUEUE_FULL`.
+   */
+  code: string
+  /** Always `"KgliteError"`. */
+  name: string
+  message: string
+}
+
+/** A node as returned in a row. */
+export interface KgNode {
+  id: number
+  labels: Array<string>
+  properties: Record<string, KgValue>
+}
+
+/** A path as returned in a row. */
+export interface KgPath {
+  nodes: Array<KgNode>
+  relationships: Array<KgRelationship>
+}
+
+/** A relationship as returned in a row. */
+export interface KgRelationship {
+  id: number
+  type: string
+  startId: number
+  endId: number
+  properties: Record<string, KgValue>
+}
+
+/**
+ * Any value a query can return.
+ *
+ * `Int64` is `number` when exact and `bigint` beyond 2^53 - 1 (`integers: 'bigint'`
+ * makes every integer a `bigint`). Dates, datetimes, durations and points are the
+ * exported classes; nodes, relationships and paths are plain objects.
+ *
+ * `JSON.stringify` throws on a `bigint` (a JavaScript rule, not a kglite one): pass a
+ * replacer, or define `BigInt.prototype.toJSON`, when a result may hold one.
+ */
+export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | Record<string, KgValue>
+
+export interface MutationStats {
+  nodesCreated: number
+  relationshipsCreated: number
+  propertiesSet: number
+  nodesDeleted: number
+  relationshipsDeleted: number
+  propertiesRemoved: number
+  indexesAdded: number
+  indexesRemoved: number
+  constraintsAdded: number
+  constraintsRemoved: number
+}
+
+/** Open (or create) the graph at `path`. */
+export declare function open(path: string, options?: OpenOptions): Promise<Graph>
+
+export interface OpenOptions {
+  /** Default `'full'`. Refused for `storage: 'disk'` when set explicitly. */
+  durability?: 'full' | 'normal' | 'off'
+  storage?: 'memory' | 'mapped' | 'disk'
+  /** Not supported yet; `true` rejects. */
+  readOnly?: boolean
+  /** How long to wait for another writer to release the path. Default 0 (fail fast). */
+  lockTimeoutMs?: number
+  /** Per-query default; `0` disables the deadline. Default 180000. */
+  timeoutMs?: number
+  /** Per-query default cap on returned rows. */
+  rowLimit?: number
+  /** `'safe'` (default): `number` when exact, `bigint` otherwise. `'bigint'`: always `bigint`. */
+  integers?: 'safe' | 'bigint'
+}
+
+/** Named parameters, referenced in Cypher as `$name`. */
+export type Params = Record<string, ParamValue>
+
+/**
+ * A value accepted as a query parameter.
+ *
+ * A `number` that is a safe integer is sent as an integer, any other as a float
+ * (use `KgFloat` to force a float); a `bigint` outside the signed 64-bit range
+ * rejects. `Date` is sent as a UTC datetime. `undefined` map entries are omitted.
+ */
+export type ParamValue = KgValue | KgFloat | Date
+
+export interface QueryOptions {
+  /** Deadline in milliseconds; `0` disables it. */
+  timeoutMs?: number
+  /** Cap on rows returned; the rest are dropped and `truncated` says how many. */
+  rowLimit?: number
+  /** Work budget (not a row cap); exceeding it fails the query. */
+  maxWorkUnits?: number
+}
+
+export interface QueryResult {
+  columns: Array<string>
+  /** One object per row, keyed by column name. */
+  rows: Array<Record<string, KgValue>>
+  /** Present for statements that write. */
+  stats?: MutationStats
+  /** Advisory warnings for this query; never printed. */
+  warnings: Array<string>
+  /** Present only when `rowLimit` dropped rows. */
+  truncated?: Truncated
+}
+
+export interface Truncated {
+  rowLimit: number
+  totalRows: number
+}
+
 /** Engine version, equal to the workspace package version. */
 export declare function version(): string
