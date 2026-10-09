@@ -77,6 +77,7 @@ Important options (run `--help` on the installed version for the authority):
 | `--checkpoint-wal-mib MIB` | checkpoint when the log passes this size, default `16` while a log is kept, `0` disables |
 | `--auth none\|basic`, `--auth-user`, `--auth-pass` | Bolt LOGON policy |
 | `--idle-timeout`, `--max-sessions`, `--max-message-size` | resource bounds |
+| `--query-timeout MS`, `--max-work-units N`, `--max-rows N` | per-statement limits (see *Query limits and transaction timeouts*) |
 | `--advertise-addr HOST:PORT` | address returned to `neo4j://` routing clients |
 | `--tls-cert`, `--tls-key` | PEM TLS pair for `bolt+s://` / `neo4j+s://` |
 
@@ -170,19 +171,22 @@ Error codes:
 - KGLite typed errors map to Neo4j status codes for syntax, schema, timeout,
   access-mode, conflict, and execution failures.
 
-### Transaction timeouts
+### Query limits and transaction timeouts
 
-KGLite does not yet implement Bolt transaction timeouts. This server applies
-**no query deadline of its own**. That is a declared divergence from the Python
-API and the MCP server, which both apply the shared 180,000 ms default.
-"Absent `tx_timeout` means no timeout" is the Neo4j wire contract, and a driver
-that wants a bound sends one.
+By default the server applies **no query deadline and no limits**. That is a declared divergence from the Python API and the MCP server, which both apply the shared 180,000 ms default. Three flags set server-wide limits for every statement, auto-commit and inside an explicit transaction.
 
-- A top-level `tx_timeout` of zero, NULL, or absent means no timeout.
-- Any nonzero value is rejected before RUN or BEGIN changes state
-  (`Neo.ClientError.Request.Invalid`).
-- A `tx_timeout` key nested inside `tx_metadata` remains ordinary user
-  metadata.
+| Flag | Effect on overrun |
+|---|---|
+| `--query-timeout MS` | The statement fails with `Neo.ClientError.Transaction.TransactionTimedOut`. `0` or absent means none. |
+| `--max-work-units N` | The statement fails with an execution error naming the `max_work_units` budget. It never truncates a result. |
+| `--max-rows N` | The result is truncated to the first `N` rows. The summary carries `kglite.row_limit` as `{limit, total_rows}`. Writes still happen in full. |
+
+A client `tx_timeout` is honoured:
+
+- A top-level `tx_timeout` in RUN or BEGIN extra is a per-statement timeout in milliseconds. It applies to every statement of that transaction, not to the transaction as a whole.
+- With `--query-timeout` set, the smaller of the two wins: a client can tighten the server limit and never loosen it.
+- Zero, NULL, or absent means no client timeout. A negative or non-integer value is `Neo.ClientError.Request.Invalid`.
+- A `tx_timeout` key nested inside `tx_metadata` remains ordinary user metadata.
 
 ## Timezone-aware datetime parameters
 
@@ -591,7 +595,7 @@ The verb is off until the server starts with `--backup-dir`. Without it, `db.bac
 
 ### Result columns
 
-`db.backup()` yields one row: `success`, `path`, `lsn`, `nodes`, `relationships`, `bytes`, `lock_hold_ms`, `elapsed_ms`. `lsn` is null when the server keeps no write-ahead log. Like the other verbs, it accepts a `YIELD` naming a subset of these columns.
+`db.backup()` yields one row: `success`, `path`, `lsn`, `nodes`, `relationships`, `bytes`, `lock_hold_ms`, `elapsed_ms`, `graph_version`, `prepared_copy`. `graph_version` is the version of the snapshot written; `prepared_copy` is true when the snapshot needed a private prepared copy first. `lsn` is null when the server keeps no write-ahead log. Like the other verbs, it accepts a `YIELD` naming a subset of these columns.
 
 ### Path policy
 

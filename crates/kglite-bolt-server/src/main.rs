@@ -19,8 +19,8 @@ use kglite::api::session::CsvImportPolicy;
 use kglite::api::storage::StorageMode;
 
 use crate::backend::{
-    checkpoint_if_changed, CheckpointOutcome, CheckpointState, KgliteBackend, ServerIdentity,
-    WriteConcurrency, WriterConfig,
+    checkpoint_if_changed, CheckpointOutcome, CheckpointState, KgliteBackend, QueryLimits,
+    ServerIdentity, WriteConcurrency, WriterConfig,
 };
 use crate::startup::{start_graph, DurabilityRequest};
 
@@ -304,6 +304,26 @@ struct Cli {
     /// Password required when `--auth basic`. Ignored for `--auth none`.
     #[arg(long, requires = "auth_user")]
     auth_pass: Option<String>,
+
+    /// Milliseconds one statement may run before it fails with
+    /// `Neo.ClientError.Transaction.TransactionTimedOut`. Applies to every
+    /// statement, auto-commit and in an explicit transaction. A client's Bolt
+    /// `tx_timeout` is honoured per statement but capped by this value (the
+    /// smaller wins). Default: none (0 also means none).
+    #[arg(long, value_name = "MS")]
+    query_timeout: Option<u64>,
+
+    /// Work budget per statement (intermediate rows, retained items, scan
+    /// work). Exceeding it fails the statement; it never truncates a result.
+    /// Default: the engine's built-in backstop.
+    #[arg(long, value_name = "N")]
+    max_work_units: Option<usize>,
+
+    /// Cap on the rows returned per statement. Overflow truncates the result
+    /// and reports `{limit, total_rows}` in the summary under
+    /// `kglite.row_limit`; writes still happen in full. Default: unlimited.
+    #[arg(long, value_name = "N")]
+    max_rows: Option<usize>,
 
     /// How write transactions are admitted.
     ///
@@ -1047,6 +1067,11 @@ async fn serve() -> Result<()> {
         cli.auth_user.clone(),
     )
     .with_backup_policy(backup_policy)
+    .with_query_limits(QueryLimits {
+        timeout_ms: cli.query_timeout.filter(|ms| *ms > 0),
+        max_work_units: cli.max_work_units,
+        max_rows: cli.max_rows,
+    })
     .with_writer_config(WriterConfig {
         mode: match cli.write_concurrency {
             WriteConcurrencyArg::Queue => WriteConcurrency::Queue,

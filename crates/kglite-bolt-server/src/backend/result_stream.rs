@@ -81,6 +81,15 @@ pub(super) fn finish_stream(
         if let Some(temporal) = &d.temporal {
             summary.insert("kglite.temporal".into(), temporal_metadata(temporal));
         }
+        if let (Some(limit), Some(total)) = (d.row_limit, d.total_rows) {
+            summary.insert(
+                "kglite.row_limit".into(),
+                BoltValue::Dict(BoltDict::from([
+                    ("limit".to_string(), BoltValue::Integer(limit as i64)),
+                    ("total_rows".to_string(), BoltValue::Integer(total as i64)),
+                ])),
+            );
+        }
         if let Some(ontology) = ontology_metadata(&d.warnings) {
             summary.insert("kglite.ontology".into(), ontology);
         }

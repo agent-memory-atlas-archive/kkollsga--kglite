@@ -221,6 +221,8 @@ pub struct KgliteBackend {
     reaped: ReapedHandles,
     /// `db.backup()`: path policy and the one-in-flight gate.
     backup: BackupService,
+    /// Server-wide query limits applied to every statement.
+    limits: QueryLimits,
 }
 
 /// Per-Bolt-transaction state: the canonical snapshot/working CoW
@@ -265,6 +267,9 @@ struct TxMeta {
     write_scope: Option<HashSet<String>>,
     git_sha: Option<String>,
     modified_by: Option<String>,
+    /// The client's `tx_timeout` (ms), applied to each statement of the
+    /// transaction and capped by `--query-timeout`.
+    tx_timeout_ms: Option<u64>,
 }
 
 impl TxMeta {
@@ -314,17 +319,43 @@ impl TxMeta {
             write_scope,
             git_sha: string_field("git_sha")?,
             modified_by: string_field("modified_by")?,
+            tx_timeout_ms: parse_tx_timeout(extra)?,
         })
     }
 }
 
-/// Reject Bolt's execution-time transaction timeout until the backend can
-/// enforce it. This is a protocol extra, not user `tx_metadata`.
-fn reject_unsupported_tx_timeout(extra: &BoltDict) -> Result<(), BoltError> {
+/// Server-side per-query limits (`--query-timeout`, `--max-work-units`,
+/// `--max-rows`). `None` leaves the engine default for that limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueryLimits {
+    /// Per-statement wall-clock budget in milliseconds.
+    pub timeout_ms: Option<u64>,
+    /// `ExecuteOptions::max_work_units`: exceeding it fails the query.
+    pub max_work_units: Option<usize>,
+    /// `ExecuteOptions::row_limit`: exceeding it truncates, with a signal.
+    pub max_rows: Option<usize>,
+}
+
+impl QueryLimits {
+    /// The timeout one statement runs under: the client's `tx_timeout`
+    /// capped by the server's `--query-timeout` (the smaller wins; either
+    /// alone applies as given).
+    fn effective_timeout_ms(&self, tx_timeout_ms: Option<u64>) -> Option<u64> {
+        match (self.timeout_ms, tx_timeout_ms) {
+            (Some(server), Some(client)) => Some(server.min(client)),
+            (server, client) => server.or(client),
+        }
+    }
+}
+
+/// Parse Bolt's `tx_timeout` protocol extra (integer milliseconds). Null,
+/// absent and 0 mean "no client timeout"; it is not user `tx_metadata`.
+fn parse_tx_timeout(extra: &BoltDict) -> Result<Option<u64>, BoltError> {
     match extra.get("tx_timeout") {
-        None | Some(BoltValue::Null) | Some(BoltValue::Integer(0)) => Ok(()),
+        None | Some(BoltValue::Null) | Some(BoltValue::Integer(0)) => Ok(None),
+        Some(BoltValue::Integer(value)) if *value > 0 => Ok(Some(*value as u64)),
         Some(BoltValue::Integer(value)) => Err(BoltError::Protocol(format!(
-            "tx_timeout={value} is not supported; omit it or send 0 for no timeout"
+            "tx_timeout={value} must not be negative"
         ))),
         Some(other) => Err(BoltError::Protocol(format!(
             "tx_timeout must be integer milliseconds, null, or absent, got {other:?}"
@@ -374,7 +405,14 @@ impl KgliteBackend {
             writer: WriterSlot::new(WriterConfig::default()),
             reaped: ReapedHandles::default(),
             backup,
+            limits: QueryLimits::default(),
         }
+    }
+
+    /// Set the server-wide query limits (default: none).
+    pub fn with_query_limits(mut self, limits: QueryLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Set the `db.backup()` path policy (default: disabled).
@@ -590,7 +628,7 @@ impl BoltBackend for KgliteBackend {
                     .into(),
             ));
         }
-        reject_unsupported_tx_timeout(extra)?;
+        parse_tx_timeout(extra)?;
 
         // `CALL db.checkpoint()` is a *bolt-layer verb*, not an engine
         // procedure: the Cypher executor has no session, no `&mut` graph and
@@ -647,7 +685,7 @@ impl BoltBackend for KgliteBackend {
         session: &SessionHandle,
         extra: &BoltDict,
     ) -> Result<TransactionHandle, BoltError> {
-        reject_unsupported_tx_timeout(extra)?;
+        parse_tx_timeout(extra)?;
         if self.readonly {
             return Err(read_only_refusal(
                 "server is read-only — explicit transactions rejected (--readonly flag)",
@@ -1033,6 +1071,9 @@ impl KgliteBackend {
         // remote-caller policy applies unconditionally. `execute_opts` is the
         // single chokepoint for both the auto-commit and in-transaction paths.
         opts.csv_import = self.csv_import.clone();
+        opts.set_timeout_ms(self.limits.effective_timeout_ms(meta.tx_timeout_ms));
+        opts.max_work_units = self.limits.max_work_units;
+        opts.row_limit = self.limits.max_rows;
         opts
     }
 
@@ -1639,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn transaction_timeout_admission_is_explicit_and_top_level_only() {
+    fn tx_timeout_parses_top_level_only_and_rejects_bad_shapes() {
         for extra in [
             BoltDict::new(),
             BoltDict::from([("tx_timeout".into(), BoltValue::Null)]),
@@ -1652,67 +1693,51 @@ mod tests {
                 )])),
             )]),
         ] {
-            reject_unsupported_tx_timeout(&extra).expect("unlimited or user metadata");
+            assert_eq!(parse_tx_timeout(&extra).unwrap(), None);
         }
-        for value in [BoltValue::Integer(1), BoltValue::Integer(-1)] {
-            let error =
-                reject_unsupported_tx_timeout(&BoltDict::from([("tx_timeout".into(), value)]))
-                    .expect_err("a nonzero unsupported timeout must be refused");
-            assert!(error.to_string().contains("not supported"), "{error}");
+        let ms = BoltDict::from([("tx_timeout".into(), BoltValue::Integer(250))]);
+        assert_eq!(parse_tx_timeout(&ms).unwrap(), Some(250));
+        for bad in [BoltValue::Integer(-1), BoltValue::String("10".into())] {
+            parse_tx_timeout(&BoltDict::from([("tx_timeout".into(), bad)]))
+                .expect_err("a negative or mistyped timeout must be refused");
         }
-        let error = reject_unsupported_tx_timeout(&BoltDict::from([(
-            "tx_timeout".into(),
-            BoltValue::String("10".into()),
-        )]))
-        .expect_err("a mistyped timeout must be refused");
-        assert!(
-            error.to_string().contains("integer milliseconds"),
-            "{error}"
-        );
     }
 
-    #[tokio::test]
-    async fn unsupported_timeout_is_refused_before_begin_intercepts_and_tx_run() {
-        let backend = memory_backend();
-        let session = SessionHandle("timeout".into());
-        let unsupported = BoltDict::from([("tx_timeout".into(), BoltValue::Integer(1))]);
+    #[test]
+    fn client_timeout_is_capped_by_the_server_limit() {
+        let none = QueryLimits::default();
+        assert_eq!(none.effective_timeout_ms(None), None);
+        assert_eq!(none.effective_timeout_ms(Some(40)), Some(40));
+        let capped = QueryLimits {
+            timeout_ms: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(capped.effective_timeout_ms(None), Some(100));
+        assert_eq!(capped.effective_timeout_ms(Some(40)), Some(40));
+        assert_eq!(capped.effective_timeout_ms(Some(5000)), Some(100));
+    }
 
-        let checkpoint = backend
-            .execute(
-                &session,
-                "CALL db.checkpoint()",
-                &HashMap::new(),
-                &unsupported,
-                None,
-            )
-            .await
-            .expect_err("the checkpoint intercept must not bypass timeout admission");
-        assert!(
-            checkpoint.to_string().contains("tx_timeout"),
-            "{checkpoint}"
-        );
-
-        backend
-            .begin_transaction(&session, &unsupported)
-            .await
-            .expect_err("BEGIN must refuse before creating state");
-        assert!(backend.transactions.lock().unwrap().is_empty());
-
-        let tx = backend
-            .begin_transaction(&session, &BoltDict::new())
-            .await
-            .expect("ordinary BEGIN");
-        backend
-            .execute(
-                &session,
-                "RETURN 1",
-                &HashMap::new(),
-                &unsupported,
-                Some(&tx),
-            )
-            .await
-            .expect_err("RUN inside a transaction must use the shared admission check");
-        backend.rollback(&session, &tx).await.expect("rollback");
+    #[test]
+    fn execute_opts_carry_the_configured_limits() {
+        let backend = memory_backend().with_query_limits(QueryLimits {
+            timeout_ms: Some(100),
+            max_work_units: Some(7),
+            max_rows: Some(3),
+        });
+        let params = HashMap::new();
+        let meta = TxMeta {
+            tx_timeout_ms: Some(30),
+            ..Default::default()
+        };
+        let opts = backend.execute_opts(&params, &meta);
+        assert!(opts.deadline.is_some());
+        assert_eq!(opts.max_work_units, Some(7));
+        assert_eq!(opts.row_limit, Some(3));
+        let bare = memory_backend();
+        let default_meta = TxMeta::default();
+        let opts = bare.execute_opts(&params, &default_meta);
+        assert!(opts.deadline.is_none());
+        assert_eq!((opts.max_work_units, opts.row_limit), (None, None));
     }
 
     // ---- Handshake identity -------------------------------------------------
