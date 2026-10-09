@@ -59,11 +59,13 @@ impl DirGraph {
     }
 
     /// Recompute the per-type ancestor cache from the declaration store.
-    /// Also refreshes the cached `ontology_node_gate`. Called by
+    /// Also refreshes the cached `ontology_node_gate` and `ontology_rel_gate`. Called by
     /// `define_ontology`, `clear_ontology`, WAL replay and metadata load.
     pub(crate) fn rebuild_ontology_closures(&mut self) {
         self.ontology_node_gate =
             crate::graph::ontology::node_gate::node_gate_enabled(&self.ontology);
+        self.ontology_rel_gate =
+            crate::graph::ontology::edge_gate::rel_gate_enabled(&self.ontology);
         self.ontology_closures.clear();
         if self.ontology.is_empty() {
             return;

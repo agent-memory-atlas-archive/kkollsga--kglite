@@ -1393,23 +1393,34 @@ fn ingest_phase1(context: Phase1Ingest<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// Refuse a load that would write entities past an enforced ontology. The
-/// streaming build bypasses every per-row gate, so with an enforced node rule
-/// it would report success and enforce nothing; load first and declare
-/// afterwards, which verifies the stored data.
-fn refuse_under_enforced_ontology(graph: &DirGraph) -> Result<(), String> {
-    if graph.ontology_node_gate {
+/// Decide how a load meets the declared ontology. The streaming build
+/// bypasses every per-row gate, so under an `error`-level node or relationship
+/// rule it would report success and enforce nothing: refuse, and let the
+/// caller load first and declare afterwards, which verifies the stored data.
+/// Under `warn`-level rules alone the load proceeds and the returned warning
+/// says per-row judgement was skipped.
+fn admit_under_enforced_ontology(graph: &DirGraph) -> Result<Option<String>, String> {
+    use crate::graph::ontology::{edge_gate, node_gate};
+    if node_gate::node_rule_refuses(&graph.ontology) || edge_gate::rel_rule_refuses(&graph.ontology)
+    {
         return Err(
-            "load_ntriples cannot run while the declared ontology enforces node rules \
-             (warn or error): it bulk-writes entities without per-row validation. Load the \
+            "load_ntriples cannot run while the declared ontology enforces rules at error: \
+             it bulk-writes entities and relationships without per-row validation. Load the \
              triples first, then declare the ontology, which verifies the stored data."
                 .to_string(),
         );
     }
-    Ok(())
+    Ok(
+        (graph.ontology_node_gate || graph.ontology_rel_gate).then(|| {
+            "ontology warning: load_ntriples bulk-writes without per-row validation, so the \
+         declared warn-level ontology rules were not judged on the loaded entities; declare \
+         the ontology again to verify the stored data."
+                .to_string()
+        }),
+    )
 }
 
-/// Admit the load, open the input, and stage the disk build in a mutation
+/// Admit the load (with any ontology warning it carries), open the input, and stage the disk build in a mutation
 /// workspace unless it can write where it lies.
 ///
 /// Fresh disk builders intentionally finalise in place so their directory is
@@ -1421,14 +1432,14 @@ fn open_reader_for_load(
     graph: &mut DirGraph,
     path: &Path,
     display_path: &str,
-) -> Result<Box<dyn Read + Send>, String> {
-    refuse_under_enforced_ontology(graph)?;
+) -> Result<(Box<dyn Read + Send>, Option<String>), String> {
+    let ontology_warning = admit_under_enforced_ontology(graph)?;
     let reader = open_ntriples_reader(path, display_path)?;
     if let crate::graph::schema::GraphBackend::Disk(ref mut disk) = graph.graph {
         disk.prepare_bulk_load_workspace()
             .map_err(|error| format!("Failed to prepare the disk build workspace: {error}"))?;
     }
-    Ok(reader)
+    Ok((reader, ontology_warning))
 }
 
 pub fn load_ntriples(
@@ -1439,7 +1450,7 @@ pub fn load_ntriples(
     let start = Instant::now();
     let path_obj = Path::new(path);
 
-    let reader = open_reader_for_load(graph, path_obj, path)?;
+    let (reader, ontology_warning) = open_reader_for_load(graph, path_obj, path)?;
     // Reader thread: decompresses + reads lines via channel (hides I/O latency).
     //
     // Each batch packs lines into a single `LineBuffer` (contiguous bytes +
@@ -1454,6 +1465,7 @@ pub fn load_ntriples(
         edges_created: 0,
         edges_skipped: 0,
         seconds: 0.0,
+        warnings: ontology_warning.into_iter().collect(),
     };
 
     // Phase 1: Parse and ingest. Disk and mapped modes stream properties into

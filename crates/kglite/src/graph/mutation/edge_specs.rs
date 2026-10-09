@@ -8,7 +8,8 @@ use crate::graph::mutation::batch::{ConflictHandling, ConnectionBatchProcessor};
 use crate::graph::mutation::maintain::{
     preflight_interner_names, source_owns_its_edges, update_schema_node,
 };
-use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding};
+use crate::graph::mutation::ontology_frame_gate::as_diagnostics;
+use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding, RowRegime};
 use crate::graph::schema::{DirGraph, InternedKey, RESERVED_PROVENANCE_KEYS};
 use crate::graph::storage::lookups::EndpointResolver;
 use petgraph::graph::NodeIndex;
@@ -171,9 +172,16 @@ pub fn add_edges_from_specs(
     }
 
     let mut empty_intervals = EmptyIntervals::default();
+    let mut ontology_warnings = Vec::new();
     for group in &prepared {
-        empty_intervals.absorb(group.gate(graph)?);
+        let (empty, warnings) = group.gate(graph)?;
+        empty_intervals.absorb(empty);
+        ontology_warnings.extend(warnings);
     }
+    report
+        .diagnostics
+        .extend(as_diagnostics(ontology_warnings.clone()));
+    report.warnings.extend(ontology_warnings);
 
     for group in prepared {
         let mut batch = ConnectionBatchProcessor::new(group.endpoints.len());
@@ -223,15 +231,18 @@ struct PreparedSpecGroup {
 impl PreparedSpecGroup {
     /// Judge the group against the declared relationship constraints with the
     /// gate `add_connections` uses, under the regime its batch will run in.
-    fn gate(&self, graph: &mut DirGraph) -> Result<EmptyIntervals, String> {
+    fn gate(&self, graph: &mut DirGraph) -> Result<(EmptyIntervals, Vec<String>), String> {
         gate_property_rows(
             graph,
             &self.edge_type,
             &self.endpoints,
             &self.properties,
             ConflictHandling::Update,
-            RowFolding::for_load(self.is_initial_load),
-            self.start_key.as_ref(),
+            RowRegime {
+                folding: RowFolding::for_load(self.is_initial_load),
+                start_key: self.start_key.as_ref(),
+                endpoint_types: Some((&self.source_type, &self.target_type)),
+            },
         )
     }
 }

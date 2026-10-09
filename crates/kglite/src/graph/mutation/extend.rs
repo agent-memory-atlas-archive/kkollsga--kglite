@@ -471,11 +471,11 @@ fn gate_edge_groups(
     owned: &HashSet<(String, String)>,
     conflict_mode: ConflictHandling,
 ) -> Result<(), String> {
-    if !target.has_rel_constraints() {
+    if !target.has_rel_constraints() && !target.ontology_rel_gate {
         return Ok(());
     }
     for ((conn_type, source_type, target_type), group) in edge_groups {
-        if !target.type_has_rel_constraints(conn_type) {
+        if !target.type_has_rel_constraints(conn_type) && !target.ontology_rel_gate {
             continue;
         }
         let df = build_edge_dataframe(group)?;
@@ -501,6 +501,7 @@ fn gate_edge_groups(
             conflict_mode,
             folding: RowFolding::for_load(is_owned),
             start_key: start_key.as_ref(),
+            endpoint_types: Some((source_type, target_type)),
         }
         .run(target)?;
     }

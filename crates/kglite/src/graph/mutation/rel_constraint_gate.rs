@@ -58,8 +58,11 @@ use crate::datatypes::values::Value;
 use crate::datatypes::DataFrame;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::{EmptyIntervals, StartKey};
+use crate::graph::ontology::edge_gate::RelRules;
+use crate::graph::ontology::node_gate::Tally;
 use crate::graph::storage::interner::InternedKey;
 use crate::graph::storage::GraphRead;
+use petgraph::graph::NodeIndex;
 
 use super::batch::{sum_values, ConflictHandling};
 use super::maintain::source_owns_its_edges;
@@ -108,9 +111,13 @@ pub(crate) fn gate_property_rows(
     )],
     properties: &[Vec<(InternedKey, Value)>],
     conflict_mode: ConflictHandling,
-    folding: RowFolding,
-    start_key: Option<&StartKey>,
-) -> Result<EmptyIntervals, String> {
+    regime: RowRegime<'_>,
+) -> Result<(EmptyIntervals, Vec<String>), String> {
+    let RowRegime {
+        folding,
+        start_key,
+        endpoint_types,
+    } = regime;
     // A declared validity interval gates these rows as it gates a load.
     let empty = crate::graph::features::temporal::check_edge_rows(
         graph,
@@ -119,8 +126,10 @@ pub(crate) fn gate_property_rows(
         properties,
     )?;
     // The gate's own fast-out, taken before the column list is built.
-    if !graph.has_rel_constraints() || !graph.type_has_rel_constraints(connection_type) {
-        return Ok(empty);
+    let constrained =
+        graph.has_rel_constraints() && graph.type_has_rel_constraints(connection_type);
+    if !constrained && !graph.ontology_rel_gate {
+        return Ok((empty, Vec::new()));
     }
     let mut keys: Vec<InternedKey> = Vec::new();
     for (key, _) in properties.iter().flatten() {
@@ -150,9 +159,18 @@ pub(crate) fn gate_property_rows(
         conflict_mode,
         folding,
         start_key,
+        endpoint_types,
     }
-    .run(graph)?;
-    Ok(empty)
+    .run(graph)
+    .map(|warnings| (empty, warnings))
+}
+
+/// How a frame of resolved rows becomes relationships, and the endpoint types
+/// it was declared with ([`ConnectionBatchGate::endpoint_types`]).
+pub(crate) struct RowRegime<'a> {
+    pub folding: RowFolding,
+    pub start_key: Option<&'a StartKey>,
+    pub endpoint_types: Option<(&'a str, &'a str)>,
 }
 
 /// One bulk frame, as its gate sees it.
@@ -179,6 +197,21 @@ pub(crate) struct ConnectionBatchGate<'a> {
     /// a declared temporal type, whose rows never merge: each is judged as
     /// [`RowFolding::Independent`] whatever `folding` says.
     pub start_key: Option<&'a StartKey>,
+    /// The call's declared `(source type, target type)`, which is the type of
+    /// every endpoint of the frame — a vivified stub included. `None` when
+    /// the rows arrive as resolved node indices of possibly mixed types: the
+    /// stored endpoint types are read instead.
+    pub endpoint_types: Option<(&'a str, &'a str)>,
+}
+
+/// What one frame is judged against: the declared relationship constraints
+/// and the enforced ontology relationship rules.
+struct FramePlan {
+    /// Every property either set reads, sorted.
+    names: Vec<String>,
+    constrained: bool,
+    rules: Option<RelRules>,
+    tally: Tally,
 }
 
 /// How a frame's rows become relationships — the distinction the gate's
@@ -232,16 +265,91 @@ type PairState = Vec<Option<Value>>;
 
 impl ConnectionBatchGate<'_> {
     /// Refuse the frame if any row would leave a relationship violating a
-    /// declared constraint. The violation is parked before it is returned, so
-    /// the caller's `Err(String)` still becomes a typed error at the binding.
-    pub(crate) fn run(self, graph: &mut DirGraph) -> Result<(), String> {
-        // Fast-out. A graph that declares nothing pays one `is_empty` pair; a
-        // graph that constrains some *other* connection type pays two more
-        // probes. Nothing below this line runs for an unconstrained write.
-        if !graph.has_rel_constraints() || !graph.type_has_rel_constraints(self.connection_type) {
-            return Ok(());
+    /// declared constraint or an enforced ontology rule. The violation is
+    /// parked before it is returned, so the caller's `Err(String)` still
+    /// becomes a typed error at the binding. `Ok` carries the `warn`-level
+    /// ontology lines.
+    pub(crate) fn run(self, graph: &mut DirGraph) -> Result<Vec<String>, String> {
+        // Fast-out. A graph that declares nothing pays one `is_empty` pair and
+        // one flag read; a graph that constrains some *other* connection type
+        // pays two more probes. Nothing below this line runs for an
+        // unconstrained write.
+        let constrained =
+            graph.has_rel_constraints() && graph.type_has_rel_constraints(self.connection_type);
+        let rules = if graph.ontology_rel_gate {
+            RelRules::build(&graph.ontology, self.connection_type)
+        } else {
+            None
+        };
+        if !constrained && rules.is_none() {
+            return Ok(Vec::new());
         }
-        let names = graph.rel_constrained_properties(self.connection_type);
+        let mut names = if constrained {
+            graph.rel_constrained_properties(self.connection_type)
+        } else {
+            Vec::new()
+        };
+        if let Some(rules) = &rules {
+            names.extend(rules.property_names());
+            names.sort();
+            names.dedup();
+        }
+        let mut plan = FramePlan {
+            names,
+            constrained,
+            rules,
+            tally: Tally::default(),
+        };
+        self.judge_endpoints(graph, &mut plan);
+        self.run_rows(graph, &mut plan)?;
+        graph.settle_ontology_tally(plan.tally)
+    }
+
+    /// Domain and range, which depend on the endpoints' types alone: judged
+    /// once per type pair, with the count of rows that share it.
+    fn judge_endpoints(&self, graph: &DirGraph, plan: &mut FramePlan) {
+        let Some(rules) = plan.rules.as_ref().filter(|r| r.has_endpoint_rules()) else {
+            return;
+        };
+        let store = &graph.ontology;
+        if let Some((source_type, target_type)) = self.endpoint_types {
+            let rows = self.matched.len() + self.deferred.len();
+            if rows > 0 {
+                rules.judge_endpoints(
+                    store,
+                    self.connection_type,
+                    (source_type, target_type),
+                    rows,
+                    &mut plan.tally,
+                );
+            }
+            return;
+        }
+        let mut pairs: HashMap<(InternedKey, InternedKey), usize> = HashMap::new();
+        for (_, source, target) in self.matched {
+            if let (Some(s), Some(t)) = (
+                graph.graph.node_type_of(*source),
+                graph.graph.node_type_of(*target),
+            ) {
+                *pairs.entry((s, t)).or_default() += 1;
+            }
+        }
+        for ((source, target), count) in pairs {
+            rules.judge_endpoints(
+                store,
+                self.connection_type,
+                (
+                    graph.interner.resolve(source),
+                    graph.interner.resolve(target),
+                ),
+                count,
+                &mut plan.tally,
+            );
+        }
+    }
+
+    fn run_rows(&self, graph: &mut DirGraph, plan: &mut FramePlan) -> Result<(), String> {
+        let names = &plan.names;
         // Where each constrained property lives in this frame, if at all.
         let columns: Vec<Option<usize>> = names
             .iter()
@@ -252,17 +360,18 @@ impl ConnectionBatchGate<'_> {
                     .map(|(_, _, index)| *index)
             })
             .collect();
+        let names = names.clone();
 
         // Independent rows share no state, so there is nothing to key and
         // nothing to seed: each row is judged as the relationship it creates.
         if self.folding == RowFolding::Independent || self.start_key.is_some() {
-            for (row_idx, ..) in self.matched {
+            for (row_idx, source, _) in self.matched {
                 let row = self.row_values(*row_idx, &columns);
-                self.verdict(graph, &names, &row)?;
+                self.verdict(graph, plan, &row, Some(*source))?;
             }
             for (row_idx, ..) in self.deferred {
                 let row = self.row_values(*row_idx, &columns);
-                self.verdict(graph, &names, &row)?;
+                self.verdict(graph, plan, &row, None)?;
             }
             return Ok(());
         }
@@ -280,7 +389,7 @@ impl ConnectionBatchGate<'_> {
             };
             let already_there = existing.is_some() || matched_state.contains_key(&key);
             let merged = self.merge_row(*row_idx, &columns, state, already_there);
-            self.verdict(graph, &names, &merged)?;
+            self.verdict(graph, plan, &merged, Some(*source))?;
             matched_state.insert(key, merged);
         }
 
@@ -292,7 +401,7 @@ impl ConnectionBatchGate<'_> {
                 .unwrap_or_else(|| vec![None; names.len()]);
             let already_there = deferred_state.contains_key(&key);
             let merged = self.merge_row(*row_idx, &columns, state, already_there);
-            self.verdict(graph, &names, &merged)?;
+            self.verdict(graph, plan, &merged, None)?;
             deferred_state.insert(key, merged);
         }
         Ok(())
@@ -412,19 +521,54 @@ impl ConnectionBatchGate<'_> {
             .collect()
     }
 
-    /// Judge one pair's post-merge state against the declared constraints.
+    /// Judge one pair's post-merge state against the declared constraints and
+    /// the enforced ontology property rules. `source` is the pair's stored
+    /// source node; `None` for a row whose endpoints are still to be
+    /// vivified, which carries the call's declared source type.
     fn verdict(
         &self,
         graph: &mut DirGraph,
-        names: &[String],
+        plan: &mut FramePlan,
         state: &PairState,
+        source: Option<NodeIndex>,
     ) -> Result<(), String> {
-        graph.check_rel_row(self.connection_type, |property| {
-            names
+        let read = |property: &str| {
+            plan.names
                 .iter()
                 .position(|name| name == property)
                 .and_then(|index| state[index].clone())
-        })
+        };
+        if plan.constrained {
+            graph.check_rel_row(self.connection_type, read)?;
+        }
+        let Some(rules) = plan.rules.as_ref() else {
+            return Ok(());
+        };
+        let source_type = match (self.endpoint_types, source) {
+            (Some((source_type, _)), _) => source_type.to_string(),
+            (None, Some(idx)) => graph
+                .graph
+                .node_type_of(idx)
+                .map(|key| graph.interner.resolve(key).to_string())
+                .unwrap_or_default(),
+            (None, None) => String::new(),
+        };
+        rules.judge_properties(
+            &graph.ontology,
+            self.connection_type,
+            &source_type,
+            |property| {
+                plan.names
+                    .iter()
+                    .position(|name| name == property)
+                    .and_then(|index| state[index].as_ref())
+            },
+            &mut plan.tally,
+        );
+        match plan.tally.take_refusal() {
+            Some(violation) => Err(graph.record_ontology_violation(violation)),
+            None => Ok(()),
+        }
     }
 }
 

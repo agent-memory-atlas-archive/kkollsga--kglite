@@ -83,6 +83,9 @@ pub struct NTriplesStats {
     pub edges_created: u64,
     pub edges_skipped: u64, // target entity not in graph
     pub seconds: f64,
+    /// Advisories about the load, such as `warn`-level ontology rules the
+    /// bulk build could not judge row by row.
+    pub warnings: Vec<String>,
 }
 
 /// Configuration for the loader.

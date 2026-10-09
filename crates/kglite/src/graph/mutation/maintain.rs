@@ -23,7 +23,7 @@ use crate::graph::mutation::endpoints::{
 use crate::graph::mutation::identical_rows::{
     IdenticalRowTracker, IdenticalRows, RowColumns, RowIdentity,
 };
-use crate::graph::mutation::ontology_frame_gate::{gate_node_frame, FrameShape};
+use crate::graph::mutation::ontology_frame_gate::{as_diagnostics, gate_node_frame, FrameShape};
 use crate::graph::mutation::pending_edges::PendingEdges;
 use crate::graph::mutation::rel_constraint_gate::{ConnectionBatchGate, RowFolding};
 use crate::graph::mutation::traversal_paths::{copy_path_properties, node_type_name, LevelPaths};
@@ -1407,11 +1407,9 @@ pub(crate) fn add_connections_tracked(
     );
     matched.retain(|&(row, source, target)| identity.admit(row, source, target));
 
-    // Extract a row's edge properties — shared by the happy path and
-    // the deferred-row replay (Pass C). Skip nulls: property access
-    // returns Null for missing keys anyway, and an all-null column must
-    // register nothing at all (not on the edge, not in the connection type's
-    // property list, not in the interner).
+    // A row's edge properties, shared by Pass A and the deferred replay
+    // (Pass C). Nulls are skipped: an all-null column must register nothing
+    // (not on the edge, not in the type's property list, not in the interner).
     let extract_props = |row_idx: usize| -> Vec<(InternedKey, Value)> {
         let mut properties = Vec::with_capacity(property_columns.len());
         for (_, interned_key, col_idx) in &property_columns {
@@ -1424,7 +1422,7 @@ pub(crate) fn add_connections_tracked(
         properties
     };
 
-    ConnectionBatchGate {
+    let ontology_rel_warnings = ConnectionBatchGate {
         connection_type: &connection_type,
         rows: &df_data,
         property_columns: &property_columns,
@@ -1433,6 +1431,7 @@ pub(crate) fn add_connections_tracked(
         conflict_mode,
         folding: RowFolding::for_load(is_initial_load),
         start_key: start_key.as_ref(),
+        endpoint_types: Some((&source_type, &target_type)),
     }
     .run(graph)?;
 
@@ -1531,6 +1530,7 @@ pub(crate) fn add_connections_tracked(
     report.stubs_vivified = stubs_vivified;
     report.warn_all(stub_advisories);
     report.warn_all(empty_intervals.diagnostic());
+    report.warn_all(as_diagnostics(ontology_rel_warnings));
 
     if !errors.is_empty() {
         report = report.with_errors(errors);
@@ -2056,6 +2056,7 @@ pub fn replace_connections(
         // Why this regime and not the loader's: `RowFolding::for_replace`.
         folding: RowFolding::for_replace(graph, &connection_type, &source_type),
         start_key: merge_start_key(graph, &connection_type, Some(&source_type)).as_ref(),
+        endpoint_types: Some((&source_type, &target_type)),
     }
     .run(graph)?;
 
@@ -2344,6 +2345,7 @@ pub fn create_connections(
         report = report.with_errors(written.errors);
     }
     report.warn_all(written.empty_intervals.diagnostic());
+    report.warn_all(as_diagnostics(written.ontology_warnings));
 
     graph.bump_version();
     Ok(report)

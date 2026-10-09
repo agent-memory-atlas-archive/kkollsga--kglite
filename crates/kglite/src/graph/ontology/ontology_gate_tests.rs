@@ -17,7 +17,7 @@ use crate::graph::storage::mode::{new_dir_graph_in_mode, StorageMode};
 const MODES: [StorageMode; 3] = [StorageMode::Memory, StorageMode::Mapped, StorageMode::Disk];
 
 /// Run `check` on a fresh graph of every storage mode.
-fn in_every_mode(check: impl Fn(DirGraph)) {
+pub(super) fn in_every_mode(check: impl Fn(DirGraph)) {
     for mode in MODES {
         let dir = tempfile::tempdir().expect("tempdir");
         let graph = new_dir_graph_in_mode(mode, Some(dir.path())).expect("graph");
@@ -25,7 +25,7 @@ fn in_every_mode(check: impl Fn(DirGraph)) {
     }
 }
 
-fn run_outcome(
+pub(super) fn run_outcome(
     graph: &mut DirGraph,
     query: &str,
 ) -> Result<crate::graph::session::execute::ExecuteOutcome, Box<KgError>> {
@@ -33,11 +33,11 @@ fn run_outcome(
     execute_mut(graph, query, &ExecuteOptions::eager(&params)).map_err(Box::new)
 }
 
-fn run(graph: &mut DirGraph, query: &str) -> Result<(), Box<KgError>> {
+pub(super) fn run(graph: &mut DirGraph, query: &str) -> Result<(), Box<KgError>> {
     run_outcome(graph, query).map(|_| ())
 }
 
-fn count(graph: &mut DirGraph, query: &str) -> i64 {
+pub(super) fn count(graph: &mut DirGraph, query: &str) -> i64 {
     let outcome = run_outcome(graph, query).unwrap();
     match outcome.result.rows[0][0] {
         Value::Int64(n) => n,
@@ -49,7 +49,7 @@ fn people(graph: &mut DirGraph) -> i64 {
     count(graph, "MATCH (n:Person) RETURN count(n)")
 }
 
-fn declare(graph: &mut DirGraph, json: &str) {
+pub(super) fn declare(graph: &mut DirGraph, json: &str) {
     let store = ontology_from_json(json).unwrap();
     graph.define_ontology(store).expect("declaration accepted");
 }
@@ -289,7 +289,7 @@ fn off_state_records_no_touched_nodes() {
     assert!(!graph.ontology_node_gate);
 }
 
-fn frame(columns: &[&str], rows: Vec<Vec<Value>>) -> DataFrame {
+pub(super) fn frame(columns: &[&str], rows: Vec<Vec<Value>>) -> DataFrame {
     let columns = columns.iter().map(|c| c.to_string()).collect();
     DataFrame::from_cypher_rows(columns, rows).unwrap()
 }

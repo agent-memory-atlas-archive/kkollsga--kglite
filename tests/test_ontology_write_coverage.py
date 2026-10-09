@@ -1,4 +1,4 @@
-"""Write-surface coverage contract for the node ontology gate.
+"""Write-surface coverage contract for the node and relationship ontology gates.
 
 An ontology rule declared at ``error`` must refuse a violating write through
 **every** entry point that can write a node. A writer the gate missed would
@@ -19,6 +19,13 @@ Adding a method to ``KnowledgeGraph`` without classifying it fails
 ``test_every_public_method_is_classified``; classify it by adding an entry to
 ``ENFORCED`` (preferred for anything that writes node data) or a reasoned
 entry to ``NO_NODE_RULE``.
+
+The relationship rules (domain, range, required properties, property types)
+have the same contract over the same writers: every writer is in
+``REL_ENFORCED`` (an entry that attempts an invalid edge write and must be
+refused) or ``NO_REL_RULE`` (it cannot write an edge), and
+``test_every_writer_is_classified_for_relationship_rules`` fails on one that
+is neither.
 """
 
 import pandas as pd
@@ -93,7 +100,8 @@ NO_NODE_RULE = {
         enable_disk_mode unspill freeze close sync save backup""".split(),
         "declaration, configuration or persistence",
     ),
-    # Edges between existing nodes: the node never changes.
+    # Edges between existing nodes: the node never changes. Their relationship
+    # contract is REL_ENFORCED below.
     **dict.fromkeys(["create_connections", "create_relationships"], "edges between existing nodes"),
     # Removals cannot violate a presence or type rule.
     **dict.fromkeys(["purge_provisional", "clear"], "removes nodes"),
@@ -265,7 +273,7 @@ def _set_table_property(g, tmp):
 def _attach_rows(g, tmp):
     table = pd.DataFrame({"k": ["a"], "age": [1]})
     expect_refused(
-        lambda: kglite.attach_rows(g, "Person", 0, table, row_type="Person", edge_type="HAS_ROW", key="k"),
+        lambda: kglite.attach_rows(g, "Person", 0, table, row_type="Row", edge_type="HAS_ROW", key="k"),
         "required_property",
     )
 
@@ -443,3 +451,291 @@ def test_warn_level_writes_land_with_a_warning(storage, tmp_path):
     with pytest.warns(UserWarning, match="ontology warning"):
         g.add_nodes(people({"id": [10], "age": [3]}), "Person", "id")
     assert g.cypher("MATCH (p:Person) RETURN count(p) AS c").to_list() == [{"c": 4}]
+
+
+# ── Relationship rules ───────────────────────────────────────────────────────
+
+REL_ONTOLOGY = {
+    "classes": {"Person": {}, "Company": {}, "Org": {}},
+    "relationships": {
+        "WORKS_AT": {
+            "domain": "Person",
+            "range": "Company",
+            "required_properties": ["since"],
+            "property_types": {"since": "integer"},
+            "enforcement": "error",
+        },
+        "HAS_ROW": {"domain": "Company", "range": "Person", "enforcement": "error"},
+    },
+}
+
+# Writers that put no edge in the graph.
+NO_REL_RULE = {
+    **dict.fromkeys(
+        """add_nodes add_nodes_bulk add_properties update calculate count unique_values
+        collect_children set_table_property""".split(),
+        "writes node properties only",
+    ),
+    **{name: "writes no edge" for name in NO_NODE_RULE if name not in {"create_connections", "create_relationships"}},
+}
+
+
+def make_rel_graph(storage, tmp_path, ontology=REL_ONTOLOGY):
+    opts = {} if storage == "memory" else {"storage": storage}
+    if storage == "disk":
+        opts["path"] = str(tmp_path / "disk")
+    g = kglite.KnowledgeGraph(**opts)
+    g.cypher("CREATE (:Person {id: 0}), (:Person {id: 1}), (:Company {id: 10})")
+    g.cypher("MATCH (c:Company {id: 10}), (p:Person {id: 0}) CREATE (c)-[:OWNS]->(p)")
+    g.cypher("MATCH (c:Company {id: 10}), (p:Person {id: 0}) CREATE (p)-[:WORKS_AT {since: 1}]->(c)")
+    g.define_ontology(ontology)
+    return g
+
+
+def rel_snapshot(g):
+    return (
+        g.cypher("MATCH (n) RETURN count(n) AS c").to_list(),
+        g.cypher("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS c ORDER BY t").to_list(),
+    )
+
+
+def _reversed_edge(g):
+    return "MATCH (c:Company {id: 10}), (p:Person {id: 1}) "
+
+
+def _cypher_domain(g, tmp):
+    expect_refused(
+        lambda: g.cypher(_reversed_edge(g) + "CREATE (c)-[:WORKS_AT {since: 1}]->(p)"),
+        "domain",
+    )
+
+
+def _cypher_range(g, tmp):
+    expect_refused(
+        lambda: g.cypher("MATCH (a:Person {id: 0}), (b:Person {id: 1}) CREATE (a)-[:WORKS_AT {since: 1}]->(b)"),
+        "range",
+    )
+
+
+def _cypher_required(g, tmp):
+    expect_refused(
+        lambda: g.cypher("MATCH (p:Person {id: 0}), (c:Company {id: 10}) CREATE (p)-[:WORKS_AT]->(c)"),
+        "required_property",
+    )
+
+
+def _cypher_merge_rel(g, tmp):
+    expect_refused(
+        lambda: g.cypher(_reversed_edge(g) + "MERGE (c)-[:WORKS_AT {since: 1}]->(p)"),
+        "domain",
+    )
+
+
+def _cypher_unwind_rel(g, tmp):
+    expect_refused(
+        lambda: g.cypher(
+            "UNWIND [1, 2] AS i MATCH (p:Person {id: 0}), (c:Company {id: 10}) "
+            "CREATE (p)-[:WORKS_AT {since: CASE WHEN i = 2 THEN null ELSE 1 END}]->(c)"
+        ),
+        "required_property",
+    )
+
+
+def _cypher_set_rel(g, tmp):
+    expect_refused(lambda: g.cypher("MATCH ()-[r:WORKS_AT]->() SET r.since = 'old'"), "property_type")
+    expect_refused(lambda: g.cypher("MATCH ()-[r:WORKS_AT]->() SET r += {since: 'old'}"), "property_type")
+    expect_refused(lambda: g.cypher("MATCH ()-[r:WORKS_AT]->() REMOVE r.since"), "required_property")
+    expect_refused(lambda: g.cypher("MATCH ()-[r:WORKS_AT]->() SET r = {}"), "required_property")
+
+
+def _transaction_rel(g, tmp):
+    with g.begin() as tx:
+        expect_refused(lambda: tx.cypher(_reversed_edge(g) + "CREATE (c)-[:WORKS_AT {since: 1}]->(p)"), "domain")
+
+
+def _session_rel(g, tmp):
+    session = g.session()
+    expect_refused(lambda: session.execute(_reversed_edge(g) + "CREATE (c)-[:WORKS_AT {since: 1}]->(p)"), "domain")
+
+
+def _frame_call(method, names=("Company", "Person")):
+    def call(g):
+        data = pd.DataFrame({"s": [10], "t": [1], "since": [1]})
+        getattr(g, method)(data, "WORKS_AT", names[0], "s", names[1], "t")
+
+    return call
+
+
+def _bulk_rel(method):
+    def call(g):
+        getattr(g, method)(
+            [
+                {
+                    "source_type": "Company",
+                    "target_type": "Person",
+                    "connection_name": "WORKS_AT",
+                    "data": pd.DataFrame({"source_id": [10], "target_id": [1], "since": [1]}),
+                }
+            ]
+        )
+
+    return call
+
+
+def _entry(call, rule):
+    def run(g, tmp):
+        expect_refused(lambda: call(g), rule)
+
+    return run
+
+
+def _create_connections(method):
+    def call(g):
+        getattr(g.select("Company").traverse("OWNS"), method)("WORKS_AT", properties={"Company": ["id"]})
+
+    return call
+
+
+def _extend_rel(g, tmp):
+    other = kglite.KnowledgeGraph()
+    other.cypher("CREATE (:Company {id: 20})-[:WORKS_AT {since: 1}]->(:Person {id: 21})")
+    expect_refused(lambda: g.extend(other), "domain")
+
+
+def _load_ntriples_rel(g, tmp):
+    path = tmp / "t.nt"
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n")
+    with pytest.raises(Exception, match="load_ntriples cannot run"):
+        g.load_ntriples(str(path))
+
+
+def _attach_rows_rel(g, tmp):
+    table = pd.DataFrame({"k": ["a"], "age": [1]})
+    expect_refused(
+        lambda: kglite.attach_rows(g, "Person", 0, table, row_type="Row", edge_type="HAS_ROW", key="k"),
+        "domain",
+    )
+
+
+REL_ENFORCED = {
+    "cypher": [
+        _cypher_domain,
+        _cypher_range,
+        _cypher_required,
+        _cypher_merge_rel,
+        _cypher_unwind_rel,
+        _cypher_set_rel,
+        _transaction_rel,
+        _session_rel,
+    ],
+    "extend": [_extend_rel],
+    "load_ntriples": [_load_ntriples_rel],
+    **{
+        name: [_entry(_frame_call(name), "domain")]
+        for name in [
+            "add_connections",
+            "add_relationships",
+            "replace_connections",
+            "replace_relationships",
+        ]
+    },
+    **{
+        name: [_entry(_bulk_rel(name), "domain")]
+        for name in [
+            "add_connections_bulk",
+            "add_relationships_bulk",
+            "add_connections_from_source",
+            "add_relationships_from_source",
+        ]
+    },
+    **{name: [_entry(_create_connections(name), "domain")] for name in ["create_connections", "create_relationships"]},
+}
+# Helper functions (not KnowledgeGraph methods) that write edges.
+FUNCTION_ENTRIES = [_attach_rows_rel]
+
+REL_ENTRIES = [
+    pytest.param(name, entry, id=f"{name}:{entry.__name__.lstrip('_')}")
+    for name, entries in REL_ENFORCED.items()
+    for entry in entries
+]
+
+
+def test_every_writer_is_classified_for_relationship_rules():
+    """Fails when a node-classified writer has no relationship classification."""
+    writers = set(ENFORCED) | set(NO_NODE_RULE)
+    unclassified = writers - set(REL_ENFORCED) - set(NO_REL_RULE)
+    assert not unclassified, (
+        "classify these writers for relationship rules in tests/test_ontology_write_coverage.py "
+        f"(REL_ENFORCED if they can write an edge, else NO_REL_RULE): {sorted(unclassified)}"
+    )
+    assert not set(REL_ENFORCED) & set(NO_REL_RULE), sorted(set(REL_ENFORCED) & set(NO_REL_RULE))
+    stale = (set(REL_ENFORCED) | set(NO_REL_RULE)) - writers
+    assert not stale, f"classified but not a node-classified writer: {sorted(stale)}"
+
+
+@pytest.mark.filterwarnings("ignore:.*chained graph view")
+@pytest.mark.parametrize("storage", STORAGES)
+@pytest.mark.parametrize("name,entry", REL_ENTRIES)
+def test_every_edge_writer_refuses_an_invalid_write(storage, name, entry, tmp_path):
+    if name in {"extend", "load_ntriples"} and storage != "memory":
+        pytest.skip(f"{name} is in-memory only")
+    g = make_rel_graph(storage, tmp_path)
+    before = rel_snapshot(g)
+    entry(g, tmp_path)
+    assert rel_snapshot(g) == before, "a refused write left the graph changed"
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_attach_rows_refuses_an_invalid_edge(storage, tmp_path):
+    """The helper is two calls (row nodes, then edges), so a refused edge step
+    leaves the row nodes it had already added; no edge lands."""
+    g = make_rel_graph(storage, tmp_path)
+    before = rel_snapshot(g)[1]
+    _attach_rows_rel(g, tmp_path)
+    assert rel_snapshot(g)[1] == before
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_the_issue_acceptance_case_ac5(storage, tmp_path):
+    """A reversed WORKS_AT fails and persists nothing; the right way round works."""
+    g = make_rel_graph(storage, tmp_path)
+    before = rel_snapshot(g)
+    with pytest.raises(kglite.OntologyViolationError) as raised:
+        g.cypher("CREATE (c:Company {id: 11})-[:WORKS_AT {since: 1}]->(p:Person {id: 5})")
+    assert "domain" in str(raised.value)
+    assert rel_snapshot(g) == before
+    g.cypher("MATCH (p:Person {id: 1}), (c:Company {id: 10}) CREATE (p)-[:WORKS_AT {since: 1}]->(c)")
+    assert g.cypher("MATCH ()-[r:WORKS_AT]->() RETURN count(r) AS c").to_list() == [{"c": 2}]
+    with pytest.raises(kglite.OntologyViolationError):
+        _frame_call("add_connections")(g)
+    good = pd.DataFrame({"s": [1], "t": [10], "since": [2]})
+    g.add_connections(good, "WORKS_AT", "Person", "s", "Company", "t", conflict_handling="update")
+    assert g.cypher("MATCH ()-[r:WORKS_AT]->() RETURN count(r) AS c").to_list() == [{"c": 2}]
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_warn_level_edges_land_with_a_warning(storage, tmp_path):
+    warn = {
+        "classes": REL_ONTOLOGY["classes"],
+        "relationships": {"WORKS_AT": {**REL_ONTOLOGY["relationships"]["WORKS_AT"], "enforcement": "warn"}},
+    }
+    g = make_rel_graph(storage, tmp_path, warn)
+    result = g.cypher(_reversed_edge(g) + "CREATE (c)-[:WORKS_AT {since: 1}]->(p)")
+    assert any("ontology warning (domain)" in w for w in result.diagnostics["warnings"])
+    with pytest.warns(UserWarning, match="ontology warning"):
+        _frame_call("add_connections")(g)
+    # The loader's row meets the pair the Cypher edge made and merges into it.
+    assert g.cypher("MATCH ()-[r:WORKS_AT]->() RETURN count(r) AS c").to_list() == [{"c": 2}]
+
+
+def test_load_ntriples_at_warn_loads_and_says_it_skipped_judgement(tmp_path):
+    warn = {
+        "classes": REL_ONTOLOGY["classes"],
+        "relationships": {"WORKS_AT": {**REL_ONTOLOGY["relationships"]["WORKS_AT"], "enforcement": "warn"}},
+    }
+    g = make_rel_graph("memory", tmp_path, warn)
+    path = tmp_path / "t.nt"
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n")
+    with pytest.warns(UserWarning, match="not judged"):
+        stats = g.load_ntriples(str(path))
+    assert any("without per-row validation" in w for w in stats["warnings"])

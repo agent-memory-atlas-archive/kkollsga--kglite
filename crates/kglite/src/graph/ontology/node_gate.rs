@@ -34,10 +34,19 @@ fn enforced(severity: Enforcement) -> bool {
 /// value of the cached `DirGraph::ontology_node_gate`. A class that declares
 /// no properties for a check enrols no rule for it, whatever its severity.
 pub(crate) fn node_gate_enabled(store: &OntologyStore) -> bool {
-    (store.closed_labels && enforced(store.enforcement))
+    node_rule_where(store, enforced)
+}
+
+/// Whether any node rule of `store` is declared at `error`.
+pub(crate) fn node_rule_refuses(store: &OntologyStore) -> bool {
+    node_rule_where(store, |severity| severity == Enforcement::Error)
+}
+
+fn node_rule_where(store: &OntologyStore, severity_matches: impl Fn(Enforcement) -> bool) -> bool {
+    (store.closed_labels && severity_matches(store.enforcement))
         || store.classes.values().any(|decl| {
             NODE_CHECK_NAMES.iter().any(|&check| {
-                enforced(decl.enforcement_for(check))
+                severity_matches(decl.enforcement_for(check))
                     && !declared_node_properties(decl, check).is_empty()
             })
         })
@@ -180,11 +189,22 @@ impl PropertyRule {
 #[derive(Default)]
 pub(crate) struct Tally {
     refusal: Option<OntologyViolation>,
-    warned: BTreeMap<(&'static str, String, Option<String>), usize>,
+    /// Keyed `(is_relationship, rule, type, property)`.
+    warned: BTreeMap<(bool, &'static str, String, Option<String>), usize>,
 }
 
 impl Tally {
     pub(crate) fn flag(&mut self, severity: Enforcement, violation: OntologyViolation) {
+        self.flag_many(severity, violation, 1);
+    }
+
+    /// `flag` for `count` entities that broke the same rule the same way.
+    pub(crate) fn flag_many(
+        &mut self,
+        severity: Enforcement,
+        violation: OntologyViolation,
+        count: usize,
+    ) {
         match severity {
             Enforcement::Error => {
                 self.refusal.get_or_insert(violation);
@@ -193,11 +213,12 @@ impl Tally {
                 *self
                     .warned
                     .entry((
+                        violation.entity == EntityKind::Relationship,
                         violation.rule.as_str(),
                         violation.entity_type,
                         violation.property,
                     ))
-                    .or_default() += 1;
+                    .or_default() += count;
             }
             Enforcement::Advisory => {}
         }
@@ -215,7 +236,7 @@ impl Tally {
     pub(crate) fn warnings(&self) -> Vec<String> {
         self.warned
             .iter()
-            .map(|((rule, entity_type, property), count)| {
+            .map(|((is_relationship, rule, entity_type, property), count)| {
                 let target = match property {
                     Some(p) => format!("'{entity_type}' property '{p}'"),
                     None => format!("'{entity_type}'"),
@@ -223,7 +244,12 @@ impl Tally {
                 format!(
                     "ontology warning ({rule}): {count} {} on {target} break(s) the \
                      declaration (enforcement: warn)",
-                    if *count == 1 { "node" } else { "nodes" }
+                    match (*is_relationship, *count == 1) {
+                        (false, true) => "node",
+                        (false, false) => "nodes",
+                        (true, true) => "relationship",
+                        (true, false) => "relationships",
+                    }
                 )
             })
             .collect()

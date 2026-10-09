@@ -80,9 +80,12 @@
 //!   declaration carries its effective severity.
 
 pub(crate) mod declare_check;
+pub(crate) mod edge_gate;
 pub(crate) mod node_gate;
 #[cfg(test)]
 mod ontology_gate_tests;
+#[cfg(test)]
+mod ontology_rel_gate_tests;
 pub mod predicates;
 pub mod violation;
 

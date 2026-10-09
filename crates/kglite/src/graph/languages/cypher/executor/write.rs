@@ -305,11 +305,12 @@ pub(crate) fn execute_mutable_with_csv(
     let mut stats = MutationStats::default();
     let profiling = query.profile;
     let mut profile_stats: Vec<ClauseStats> = Vec::new();
-    // Enforced node rules are judged on the nodes the statement touched once
+    // Enforced node and relationship rules are judged on what the statement touched once
     // its clauses have run, so a SET later in the statement can repair an
     // earlier CREATE. A stale buffer from a statement that failed midway is
     // dropped here.
     graph.ontology_touched.clear();
+    graph.ontology_touched_edges.clear();
     let mut ontology_tally = Tally::default();
 
     // `LOAD CSV` drives the rest of the pipeline over bounded row batches
@@ -346,7 +347,7 @@ pub(crate) fn execute_mutable_with_csv(
                 let mut batch_profile = Vec::new();
                 let out =
                     run_clause_pipeline(graph, suffix, seed, &ctx, &mut stats, &mut batch_profile)?;
-                graph.judge_touched_nodes(&mut ontology_tally)?;
+                graph.judge_touched_writes(&mut ontology_tally)?;
                 merge_profile(&mut profile_stats, batch_profile);
                 Ok(out)
             },
@@ -372,7 +373,7 @@ pub(crate) fn execute_mutable_with_csv(
             &mut stats,
             &mut profile_stats,
         )?;
-        graph.judge_touched_nodes(&mut ontology_tally)?;
+        graph.judge_touched_writes(&mut ontology_tally)?;
         out
     };
 
@@ -1120,6 +1121,7 @@ fn create_pattern_edges(
             let edge_index =
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
+            graph.note_ontology_edge_touch(edge_index);
 
             if let Some(ref var) = edge_pat.variable {
                 new_row.edge_bindings.insert(

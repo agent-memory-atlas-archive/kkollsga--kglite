@@ -94,6 +94,7 @@ pub(super) fn set_edge_property(
         edge_index,
         Some(property),
     );
+    graph.note_ontology_edge_touch(edge_index);
 
     // Arena guard: edge_weight materializes on the disk backend (protocol
     // in disk/graph.rs); scoped so the borrow ends before the next item's
@@ -167,6 +168,7 @@ pub(super) fn remove_edge_property(
         edge_index,
         Some(property),
     );
+    graph.note_ontology_edge_touch(edge_index);
     Ok(true)
 }
 

@@ -405,6 +405,16 @@ pub struct DirGraph {
     /// (`DirGraph::judge_touched_nodes`). Empty between statements.
     #[serde(skip)]
     pub(crate) ontology_touched: Vec<petgraph::graph::NodeIndex>,
+    /// Whether any relationship rule of the declared ontology (domain, range,
+    /// required properties, property types) is enforced — the node gate's
+    /// twin, derived and reset the same way.
+    #[serde(skip)]
+    pub(crate) ontology_rel_gate: bool,
+    /// Relationships the running Cypher statement wrote while
+    /// `ontology_rel_gate` was set, drained by the statement-end judge
+    /// (`DirGraph::judge_touched_edges`). Empty between statements.
+    #[serde(skip)]
+    pub(crate) ontology_touched_edges: Vec<petgraph::graph::EdgeIndex>,
     /// WAL replay sets this while it rebuilds state: the write-funnel
     /// closure stamp must not run there — the log's whole-set label ops are
     /// authoritative, and re-deriving would un-apply a logged
@@ -945,6 +955,8 @@ impl DirGraph {
             ontology_closures: HashMap::new(),
             ontology_node_gate: false,
             ontology_touched: Vec::new(),
+            ontology_rel_gate: false,
+            ontology_touched_edges: Vec::new(),
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
             build_info: None,

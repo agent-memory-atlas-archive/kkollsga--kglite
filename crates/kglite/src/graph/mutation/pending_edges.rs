@@ -8,7 +8,7 @@ use crate::graph::mutation::batch::{
     BatchMetrics, ConflictHandling, ConnectionBatchProcessor, ConnectionBatchStats,
 };
 use crate::graph::mutation::maintain::update_schema_node;
-use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding};
+use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding, RowRegime};
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -29,6 +29,8 @@ pub(super) struct Written {
     pub errors: Vec<String>,
     /// The rows written with an empty validity interval.
     pub empty_intervals: EmptyIntervals,
+    /// `warn`-level ontology findings on the relationships written.
+    pub ontology_warnings: Vec<String>,
 }
 
 /// One merge key's share of the pending edges.
@@ -57,16 +59,22 @@ impl PendingEdges {
     ) -> Result<Written, String> {
         let groups = self.split_by_start_key(graph, connection_type, source_type);
         let mut empty_intervals = EmptyIntervals::default();
+        let mut ontology_warnings = Vec::new();
         for group in &groups {
-            empty_intervals.absorb(gate_property_rows(
+            let (empty, warnings) = gate_property_rows(
                 graph,
                 connection_type,
                 &group.edges.endpoints,
                 &group.edges.properties,
                 conflict_mode,
-                RowFolding::for_load(false),
-                group.start_key.as_ref(),
-            )?);
+                RowRegime {
+                    folding: RowFolding::for_load(false),
+                    start_key: group.start_key.as_ref(),
+                    endpoint_types: None,
+                },
+            )?;
+            empty_intervals.absorb(empty);
+            ontology_warnings.extend(warnings);
         }
         let mut written = Written {
             stats: ConnectionBatchStats::default(),
@@ -74,6 +82,7 @@ impl PendingEdges {
             failed: 0,
             errors: Vec::new(),
             empty_intervals,
+            ontology_warnings,
         };
         for KeyedEdges { start_key, edges } in groups {
             let mut batch = ConnectionBatchProcessor::new(edges.endpoints.len());

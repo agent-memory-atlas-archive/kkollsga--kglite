@@ -638,7 +638,17 @@ impl KnowledgeGraph {
             })?;
 
         Python::attach(|py| {
+            for message in &stats.warnings {
+                let cmsg = std::ffi::CString::new(message.as_str()).unwrap_or_default();
+                PyErr::warn(
+                    py,
+                    py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+                    cmsg.as_c_str(),
+                    1,
+                )?;
+            }
             let dict = PyDict::new(py);
+            dict.set_item("warnings", &stats.warnings)?;
             dict.set_item("entities", stats.entities_created)?;
             dict.set_item("edges", stats.edges_created)?;
             dict.set_item("edges_skipped", stats.edges_skipped)?;
