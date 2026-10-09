@@ -9,7 +9,53 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- **A declared ontology at `warn` or `error` now binds writes.** `enforcement`
+  used to feed only the audit and the blueprint gate. It now judges every write
+  on every interface. Before upgrading, run `CALL ontology_audit()` on a graph
+  whose ontology carries `warn` or `error` rules.
+  - **`error`** refuses the write and rolls it back. A transaction that hits it
+    in a later statement rolls back the earlier statements too.
+  - **`warn`** accepts the write and reports each violation.
+  - **`advisory`** is unchanged.
+  - To keep the old behaviour for a rule, declare it `advisory`. Declare it
+    `warn` to observe violations without refusing writes.
+- **Declaring an `error`-level ontology over data that already breaks it is
+  refused.** `define_ontology()` raises `OntologyViolationError` with a per-rule
+  report, and the previous ontology stays. Declare the rule at `warn` first,
+  fix the data, then promote it. An MCP manifest ontology in that state fails
+  the server's open.
+- **`load_ntriples` is refused while a node or relationship rule is declared at
+  `error`.** It cannot judge per row. Under `warn` it loads and reports that
+  judgement was skipped.
+- **`attach_rows`, `store_as`, `update`, `add_properties` and the bulk loaders
+  raise `OntologyViolationError` or `ConstraintViolationError`.** They raised an
+  untyped argument error for a refused write.
+
 ### Added
+
+- **Enforceable ontology (#222).** Declare an ontology once and every client
+  gets the same guarantee.
+  - **Rules:** class `required_properties` and `property_types`, the new
+    top-level `closed_labels: True` (a node's primary label must be a declared
+    class), and relationship `domain`, `range`, `required_properties` and
+    `property_types`. `exempt` excuses a write as it excuses the audit.
+  - **Error code:** `OntologyViolation`. Python raises `OntologyViolationError`,
+    a subclass of `ConstraintViolationError`, with `rule`, `entity`,
+    `entity_type`, `property` and `report`. Bolt reports
+    `Neo.ClientError.Schema.ConstraintValidationFailed`, the C ABI status 22
+    and HTTP 422. The MCP error code is `ontology_violation`.
+  - **Cypher:** `CALL db.ontology.declare({ontology: $doc})` and
+    `CALL db.ontology.clear()`.
+  - **C ABI:** the new symbols `kglite_session_define_ontology` and
+    `kglite_session_clear_ontology`.
+  - **Bolt server:** `--ontology FILE` declares at startup and locks the
+    ontology against runtime changes. A stored ontology that differs from the
+    file stops the start unless `--ontology-replace` is given. `warn` findings
+    arrive as the `kglite.ontology` summary key and a log line.
+  - Guides: "Write-time enforcement" in the ontology guide and "Enforced
+    ontology" in the Bolt server guide.
 
 - **Online backup.** `backup(path)` writes a consistent single-file `.kgl` of
   a graph while it is in use. The file stands alone: no `-wal` or `.lock`
@@ -50,8 +96,22 @@ before upgrading.
     for disk-mode graphs, and for the served graph itself. One backup runs at
     a time.
 
+### Changed
+
+- **Performance: enforced writes cost work; everything else is unchanged.** With no ontology
+  or only `advisory` rules, write paths measure within noise of 0.19.5. With an
+  `error` ontology and all-valid data, release-build cost is about 14-17% for
+  node `CREATE`, 30-32% for `SET`, 12-18% for `add_nodes`, 40-45% for
+  `add_connections`, 5-9% for edge `CREATE`, and none measured for `MERGE`.
+  Cost scales with the write, not the graph.
+
 ### Fixed
 
+- `ontology()` emits a document `define_ontology()` accepts: per-check severities
+  round-trip as `enforcement_overrides`, and an advisory severity under a
+  non-advisory store default is kept.
+- A synthesised title (`<Label>_<id>`) no longer satisfies a required `name`.
+  A title you supply that equals `<Label>_<id>` is read as synthesised.
 - `attach_rows` leaves no row nodes behind when its edge step is refused by a relationship constraint or an ontology rule.
 - **Documentation no longer calls a `.kgl` a backup of "any storage mode".**
   A disk-mode graph is a directory; `backup()` refuses it and `save(directory)`

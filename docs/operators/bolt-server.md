@@ -520,6 +520,52 @@ uncommitted writes. Commit first and call it in auto-commit.
 includes the `SIGKILL`-and-restart tests behind each level, the
 checkpoint-truncates-the-log test, and every row of this matrix.
 
+## Enforced ontology
+
+`--ontology FILE` declares an ontology when the server starts and enforces it on every write, whichever client sends the write.
+
+```bash
+kglite-bolt-server graph.kgl --ontology ontology.json
+```
+
+`FILE` is the JSON document `define_ontology()` takes (see the [ontology guide](../python/guides/ontology.md#write-time-enforcement)):
+
+```json
+{
+  "classes": {
+    "Person": {"required_properties": ["name"], "property_types": {"name": "string"},
+               "enforcement": "error"},
+    "Company": {}
+  },
+  "relationships": {
+    "WORKS_AT": {"domain": "Person", "range": "Company", "enforcement": "error"}
+  }
+}
+```
+
+### What a client sees
+
+- **`error`.** A write that breaks a rule fails with `Neo.ClientError.Schema.ConstraintValidationFailed`. The message names the rule, the label or relationship type and the property. In an explicit transaction the failing statement rolls back the whole transaction, including the statements before it.
+- **`warn`.** The write succeeds. The result summary carries `kglite.ontology = {warnings: [...]}` and the server logs one line per violation.
+- **`SHOW ONTOLOGY`** returns the declaration to any client.
+
+### The lock
+
+An ontology given with `--ontology` is **locked**. `CALL db.ontology.declare()` and `CALL db.ontology.clear()` are refused for every client, with an error naming `--ontology`. Changing the ontology takes an operator action: restart with a new file.
+
+The server has one credential and no roles. "Authenticated" means the client has the password, so without `--ontology` any authenticated client may declare or clear an ontology. Use the flag whenever the shape of the data must not depend on a client.
+
+### Restart
+
+- The declaration persists with the graph at the next checkpoint (`CALL db.checkpoint()`, `--checkpoint-interval` or `--save-on-exit`), and in the write-ahead log at `--durability normal` and above. The lock does not persist: it applies for the life of the process.
+- A stored ontology equal to the file starts normally.
+- A stored ontology that **differs** from the file stops the start. The message shows a short diff and names `--ontology-replace`.
+- `--ontology-replace` replaces the stored ontology with the file's. It requires `--ontology`.
+- A file whose `error` rules the stored data already breaks stops the start with the per-rule report: the same refusal as declaring over existing data. Fix the data or lower the rule to `warn`.
+- A missing or malformed file stops the start.
+
+A backup taken with `CALL db.backup()` carries the ontology. A server restored from it enforces the same rules once started with the same `--ontology` file.
+
 ## Backups
 
 `CALL db.backup('<name>')` writes a consistent single-file `.kgl` of the committed graph while the server keeps serving.

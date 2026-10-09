@@ -20,8 +20,8 @@ use std::sync::Mutex;
 use crate::datatypes::values::Value;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::{QueryDiagnostics, ResultRow};
-use crate::graph::ontology::violation::DefineOntologyError;
 use crate::graph::ontology::ontology_from_value;
+use crate::graph::ontology::violation::DefineOntologyError;
 use crate::graph::schema::DirGraph;
 
 use super::edge_embedding_procedures::yield_row;

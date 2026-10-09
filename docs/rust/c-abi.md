@@ -37,7 +37,7 @@ if (status != KGLITE_STATUS_CODE_OK) {
 ```
 
 Engine codes are `KGLITE_STATUS_CODE_CYPHER_SYNTAX` through
-`KGLITE_STATUS_CODE_CANCELLED` (1–17). Boundary-only failures use 100+ such as
+`KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (1–22). Boundary-only failures use 100+ such as
 `INVALID_UTF8` and `NULL_POINTER`. Output handles/messages are reset before
 validation, and any returned error string is Rust-owned until freed with
 `kglite_free_string`.
@@ -98,6 +98,17 @@ The header exposes:
   message. The report is a JSON object (`path`, `bytes`, `nodes`,
   `relationships`, `graph_version`, `lsn` or null, `lock_hold_ms`,
   `elapsed_ms`) freed with `kglite_free_string`;
+- `kglite_session_define_ontology` and `kglite_session_clear_ontology`, which
+  declare and remove the session graph's ontology. The document is the JSON
+  `define_ontology()` takes. A declaration at `warn` or `error` then binds every
+  write through the session: a refused write returns
+  `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (22) with the rule, type and property
+  in the message, and `kglite_session_execute_mut_batch` rolls back the whole
+  batch. Declaring over stored data that breaks an `error` rule also returns 22;
+  `out_warnings_json` then holds the per-rule report (`rule`, `entity`,
+  `entity_type`, `property`, `count`). On success it holds the `warn`-level
+  findings. The declaration is durable once `kglite_session_save` runs, or
+  through the write-ahead log of a durable session;
 - `kglite_session_save`, the checkpoint for a graph that has been moved into a
   session. `kglite_session_new` takes ownership of the graph handle, so a graph
   mutated through `kglite_session_execute_mut` is persisted from the session

@@ -132,13 +132,14 @@ see only what was valid then. `cypher(valid_at=…)`, the MCP tools and Java's
 `FOR VALID_TIME ALL` reads every version.
 **→ [Valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html).**
 
-**A declared ontology that gates the build.** `define_ontology()` records what
+**A declared ontology that gates the build and every write.** `define_ontology()` records what
 must hold: domain and range over an `is_a` class forest, required edge
 properties, property types, cardinality. Each check carries its own enforcement
 level. A document referenced from a blueprint fails the build on an
 `error`-level breach, with every violated rule counted and no output graph
-written. `CALL ontology_audit()` scores the same declarations against a
-live graph. *Observe → fix → enforce* is configuration, not code review.
+written. At `warn` or `error` the same declarations judge every write from
+Python, the C ABI and the Bolt server (`--ontology FILE`). `CALL ontology_audit()`
+scores them against a live graph. *Observe → fix → enforce* is configuration, not code review.
 **→ [Ontology guide](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html).**
 
 ## Serve it to an agent

@@ -156,19 +156,16 @@ class OntologyViolationError(ConstraintViolationError):
     ``property_type``, ``closed_labels``, ``domain`` or ``range``), the label or
     relationship type, and the property where one applies.
 
-    Attributes:
-        rule: The rule that fired (``"required_property"``, ``"property_type"``,
-            ``"closed_labels"``, ``"domain"`` or ``"range"``). For a refused
-            declaration, the first report entry's rule.
-        entity: ``"node"`` or ``"relationship"``.
-        entity_type: The node primary label or relationship type judged.
-        property: The offending property for the property rules, else ``None``.
-        report: Empty for a refused write. For a refused declaration
-            (:meth:`KnowledgeGraph.define_ontology` over data that already
-            breaks an ``error``-level rule) a list of
-            ``{"rule", "entity", "entity_type", "property", "count"}`` dicts,
-            one per broken rule, where ``count`` is the number of stored
-            entities breaking it.
+    ``rule`` is the rule that fired (``"required_property"``,
+    ``"property_type"``, ``"closed_labels"``, ``"domain"`` or ``"range"``; for a
+    refused declaration, the first report entry's rule). ``entity`` is ``"node"``
+    or ``"relationship"``, ``entity_type`` the node primary label or relationship
+    type judged, and ``property`` the offending property for the property rules,
+    else ``None``. ``report`` is empty for a refused write. For a refused
+    declaration (:meth:`KnowledgeGraph.define_ontology` over data that already
+    breaks an ``error``-level rule) it is a list of
+    ``{"rule", "entity", "entity_type", "property", "count"}`` dicts, one per
+    broken rule, where ``count`` is the number of stored entities breaking it.
     """
 
     rule: str
@@ -5708,8 +5705,9 @@ class KnowledgeGraph:
         Annotations, not axioms — SKOS in spirit, never OWL: the ontology
         never changes what a query matches. It feeds ``describe()``, provides
         defaults for the rule-procedure validators (a no-argument
-        ``CALL type_domain_violation()`` checks every declaration), and acts
-        as a data-quality contract for blueprint builds.
+        ``CALL type_domain_violation()`` checks every declaration), acts as a
+        data-quality contract for blueprint builds, and, at ``warn`` or
+        ``error`` severity, is enforced on every write (see below).
 
         Document shape (all keys optional)::
 
@@ -5741,7 +5739,8 @@ class KnowledgeGraph:
         into the physical-pairing check; ``enforcement`` is a severity
         (``advisory``/``warn``/``error``) or a per-check map
         (``{"required_properties": "error"}``, unlisted checks stay
-        advisory) consumed by the blueprint gate and ``ontology_audit()``;
+        advisory) consumed by the blueprint gate, ``ontology_audit()`` and
+        the write gate;
         ``exempt`` is a per-check map of source classes whose violations are
         counted in ``ontology_audit()``'s ``exempted`` column instead of
         against severity (a class matches when it is the edge source's
@@ -5793,9 +5792,31 @@ class KnowledgeGraph:
         name. It takes no parameters. ``SHOW ONTOLOGY`` exposes
         ``required_properties``, ``property_types`` and class enforcement.
 
+        Write-time enforcement: a rule declared at ``warn`` or ``error``
+        judges every write that could break it (Cypher, the bulk loaders,
+        ``store_as``, ``update``, ``add_properties``, ``attach_rows``).
+        ``error`` refuses the write, rolls it back and raises
+        ``OntologyViolationError``; ``warn`` accepts it and reports each
+        violation (``result.diagnostics["warnings"]`` for Cypher, a
+        ``UserWarning`` from the loaders). Nodes are judged on their primary
+        label only; types are as permissive as the audit's (``float`` admits
+        integers, an unknown type name passes); ``exempt`` also excuses the
+        write. A synthesised title (``<Label>_<id>``) does not satisfy a
+        required ``name``. ``load_ntriples`` cannot be judged per row and is
+        refused while any rule is at ``error``.
+
+        Declaring over existing data: a rule at ``error`` that stored data
+        already breaks refuses the whole declaration with
+        ``OntologyViolationError`` (its ``report`` lists rule, entity,
+        entity_type, property and count per breaking rule) and the previous
+        ontology stays. Rules at ``warn`` install and come back in the
+        returned warnings; ``advisory`` costs no scan.
+
         Replaces any previously declared ontology. Persisted by ``save()``,
         and recorded in the write-ahead log of a graph opened with
         ``durable=``, so a crash before that save does not lose it.
+        ``CALL db.ontology.declare({ontology: $doc})`` and
+        ``CALL db.ontology.clear()`` do the same from Cypher.
 
         Args:
             ontology_dict: The declaration document.
@@ -5810,6 +5831,8 @@ class KnowledgeGraph:
                 and ``ancestry`` on one relationship, an ``exempt`` entry on
                 an unexemptable check or naming an undeclared class), or an
                 abstract class shadowing a live node type.
+            OntologyViolationError: An ``error``-level rule that stored data
+                already breaks.
         """
         ...
 

@@ -15,7 +15,7 @@ The ontology has three jobs:
 
 - State the concept model machines can read.
 - Provide defaults for validators you already have.
-- Act, opt-in, as a data-quality contract at build time.
+- Act, opt-in, as a data-quality contract at build time and at write time.
 
 It is also deliberately **not** `set_parent_type`. That map is presentation *ownership*: which types are supporting detail in `describe()` tiering. The ontology is semantic *kind-of*. `ProjectCore → Project` is ownership; `Contract is_a Agreement` is an ontology fact. Neither is derived from the other.
 
@@ -85,14 +85,15 @@ KGLite checks the rules below when it installs a declaration.
 
 ### Enforcement and exemptions
 
-- `enforcement` is `advisory` (the default), `warn` or `error`. It is data for the consumers below, never an engine write-guarantee.
+- `enforcement` is `advisory` (the default), `warn` or `error`. `warn` and `error` bind every write; see [Write-time enforcement](#write-time-enforcement). `advisory` only feeds the audit and the rule procedures.
+- A top-level `closed_labels: True` adds the allowed-labels rule. A top-level `enforcement` sets its severity, and is the default for declarations that state none.
 - `enforcement` also accepts a per-check map, such as `{"required_properties": "error", "domain": "warn"}`. Unlisted checks keep the advisory base.
 - The map keys are the check names the audit's `rule` column uses: `domain`, `range`, `required`, `required_properties`, `property_types`, `cardinality`, `inverse`, `symmetric`, `transitive`.
 - `exempt` names, per check, source classes whose violations are counted separately instead of against severity. See [Exempting an upstream source](#exempting-an-upstream-source).
 
 ### Reading and removing the store
 
-`g.ontology()` returns the store as a dict. `g.clear_ontology()` removes it, withdrawing any materialized labels first. The store persists in the `.kgl` and travels with `save_subset` / `to_subgraph`.
+`g.ontology()` returns the store as a dict. `g.clear_ontology()` removes it, withdrawing any materialized labels first. From Cypher, `CALL db.ontology.declare({ontology: $doc})` and `CALL db.ontology.clear()` do the same, so a Bolt client can declare without the Python API. The store persists in the `.kgl` and travels with `save_subset` / `to_subgraph`.
 
 ## Node property contracts
 
@@ -250,6 +251,111 @@ A declared property nothing fails still gets a row, at zero; "this field is
 complete" is the answer a census is asked for. One axis applies at a time:
 the column you did not ask for is `None`.
 ```
+
+## Write-time enforcement
+
+A declaration at `warn` or `error` binds every write. The audit and the write gate read the same predicates, so a rule that `ontology_audit()` counts is a rule a write is judged on.
+
+```python
+g.define_ontology({
+    "classes": {
+        "Person": {"required_properties": ["name"],
+                   "property_types": {"name": "string"},
+                   "enforcement": "error"},
+        "Company": {},
+    },
+    "relationships": {
+        "WORKS_AT": {"domain": "Person", "range": "Company", "enforcement": "error"},
+    },
+})
+g.cypher("CREATE (:Person {id: 1, name: 'A'})")     # accepted
+g.cypher("CREATE (:Person {id: 2})")                # OntologyViolationError
+```
+
+### What `error` and `warn` do
+
+- `error` refuses the write and rolls it back. Nothing the write did is kept, and the raised `OntologyViolationError` carries `rule`, `entity`, `entity_type` and `property`.
+- `warn` accepts the write and reports each violation. A Cypher statement reports through `result.diagnostics["warnings"]`; a bulk loader raises a Python `UserWarning`. Over Bolt it is the `kglite.ontology` key of the result summary plus a server log line.
+- `advisory` judges nothing at write time.
+- A transaction that hits `error` in its third statement rolls back the first two as well when it is used as a context manager (`with g.begin() as tx:`) or when the driver closes it. Catching the error and committing keeps the earlier statements.
+
+### Rules that are enforced
+
+| Rule | Declared as | Refuses |
+|---|---|---|
+| `required_property` | class or relationship `required_properties` | An absent or null value. |
+| `property_type` | class or relationship `property_types` | A present, non-null value of another type. |
+| `closed_labels` | top-level `closed_labels: True` | A node whose primary label is not a declared class. |
+| `domain` | relationship `domain` | An edge whose source primary type is not the domain. |
+| `range` | relationship `range` | An edge whose target primary type is not the range. |
+
+- A node is judged on its **primary** label only. It answers to its own class and to every declared ancestor, each at that class's severity. Secondary labels never enroll a node and `closed_labels` never reads them. Materialized (managed) labels are engine-written and are not judged.
+- `domain` and `range` naming an abstract class widen to its declared descendants.
+- Types are permissive, exactly as the audit counts them: `float` admits integers, an unknown type name passes, and `list` checks the outer container only. For strict typing use `CREATE CONSTRAINT ... IS ::`.
+- `exempt` excuses the write as well as the audit count, under the same predicate.
+- A Cypher statement is judged once its clauses have run, so a later `SET` repairs an earlier `CREATE` in the same statement.
+- Bulk loaders (`add_nodes`, `add_connections`, `update`, `store_as`, `add_properties`, `extend`, `attach_rows` and the relationship-named twins) judge the whole frame before writing anything. A refused frame leaves the graph unchanged.
+- `attach_rows` is atomic. A refused edge step leaves none of its row nodes behind.
+
+### A synthesised title does not satisfy a required `name`
+
+KGLite mints a title for a node loaded without one (`<Label>_<id>`, or the id on an untitled type), and `name` reads as a soft alias of the title. The rules discard a minted title, so `required_properties: ["name"]` is not satisfied by it.
+
+**Blind spot:** a title you supply that equals `<Label>_<id>` exactly, such as `Person_7` on a `Person` with id 7, is read as synthesised and does not satisfy the rule. Give such a node a distinct name or set `name` explicitly.
+
+### `load_ntriples`
+
+N-Triples are loaded without per-row judgement. The loader is refused while any node or relationship rule is declared at `error`. Under `warn` it loads and reports that per-row judgement was skipped (`NTriplesStats.warnings`). Load into a graph without the ontology, or declare it afterwards: the declaration then checks what was loaded.
+
+### Declaring over existing data
+
+Declaring checks stored data first, at each rule's severity:
+
+- A rule at `error` that stored data already breaks **refuses the whole declaration**. The previous ontology stays and nothing is changed.
+- A rule at `warn` installs, and the findings come back as warnings.
+- A rule at `advisory` costs no scan.
+- `.kgl` load and write-ahead-log replay restore an accepted declaration without re-checking it.
+
+The refusal is an `OntologyViolationError` whose `report` lists one entry per rule, type and property with the count of stored entities breaking it:
+
+```python
+g.cypher("CREATE (:Person {id: 1})")
+try:
+    g.define_ontology({"classes": {"Person": {"required_properties": ["name"],
+                                              "enforcement": "error"}}})
+except kglite.OntologyViolationError as e:
+    print(e.report)
+    # [{'rule': 'required_property', 'entity': 'node',
+    #   'entity_type': 'Person', 'property': 'name', 'count': 1}]
+```
+
+Fix the data, or declare the rule at `warn` first and promote it once the report is clean. The refusal arrives the same way from `define_ontology()`, `CALL db.ontology.declare()`, the C ABI (status 22) and Bolt.
+
+### Surfaces
+
+| Surface | Declare | Refusal |
+|---|---|---|
+| Python | `g.define_ontology(doc)`, `g.clear_ontology()` | `OntologyViolationError`, a subclass of `ConstraintViolationError`. |
+| Cypher | `CALL db.ontology.declare({ontology: $doc})`, `CALL db.ontology.clear()` | The same typed error. |
+| C ABI | `kglite_session_define_ontology`, `kglite_session_clear_ontology` | Status `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (22). |
+| Bolt server | `--ontology FILE` at startup (see the [Bolt server guide](../../operators/bolt-server.md#enforced-ontology)) | `Neo.ClientError.Schema.ConstraintValidationFailed`. |
+
+`SHOW ONTOLOGY` reads the declaration back on every surface. A backup carries the ontology: a graph backed up at `error` refuses the same writes when opened.
+
+### Cost
+
+Enforcement adds work only to writes it judges. With no ontology, or only `advisory` rules, the write path is unchanged (measured within noise of 0.19.5). With an `error` ontology and all-valid data, the measured cost on a release build was:
+
+| Write | Added cost |
+|---|---|
+| `CREATE` of nodes | about 14-17% |
+| `SET` | about 30-32% |
+| `add_nodes` | about 12-18% |
+| `add_connections` | about 40-45% |
+| `CREATE` of edges | about 5-9% |
+| `MERGE` | none measured |
+
+The cost scales with the size of the write, not the size of the graph.
 
 ## The blueprint gate (observe → fix → enforce)
 
