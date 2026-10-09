@@ -32,6 +32,18 @@ before upgrading.
 - **`attach_rows`, `store_as`, `update`, `add_properties` and the bulk loaders
   raise `OntologyViolationError` or `ConstraintViolationError`.** They raised an
   untyped argument error for a refused write.
+- **Java: date, datetime, duration and point cells are typed.** They arrive as
+  `LocalDate`, `LocalDateTime`, `KgliteDuration` and `Point`, and non-finite
+  floats as `Double`. They arrived as a string or a map. Code that parsed those
+  strings reads the typed value instead.
+- **Two errors carry their own code on every interface.**
+  - A write on a read-only handle raises `ReadOnlyError` with code `ReadOnly`
+    in Python (`InvalidArgument` before). The class subclasses `ArgumentError`,
+    so `except ArgumentError` still catches it.
+  - A held writer lease raises `WriterLeaseHeldError` with code
+    `WriterLeaseHeld` and a `.holder` (`FileIo` before). The class subclasses
+    `FileIoError`.
+  - Code that compares `.code` strings needs the new values.
 
 ### Added
 
