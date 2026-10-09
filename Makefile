@@ -45,7 +45,7 @@ check-free-space:
 		echo "free space: WARNING — $${free_gb} GB on the build volume (< $(FREE_WARN_GB) GB). Run 'make prune-target' soon."; \
 	fi
 
-.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts check-vocabulary neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest
+.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts check-vocabulary neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest node-build test-node
 
 ## Build and install the package into the local .venv
 dev: | check-free-space
@@ -424,6 +424,7 @@ prune-dev: prune-target
 	rm -f .bench-current.json .bench-grouped-diagnostic.json
 	rm -rf docs/_build .mypy_cache .ruff_cache .pytest_cache .uv-cache
 	find kglite -maxdepth 1 -name "kglite.*.so" ! -name "kglite.abi3.so" -delete
+	rm -rf crates/kglite-node/node_modules crates/kglite-node/npm crates/kglite-node/*.node
 	rm -rf tests/conformance/js/node_modules tests/conformance/java/target tests/conformance/java/.m2
 	rm -rf kglite-java/build kglite-java/.gradle
 	# Per-platform natives staged into the Java JAR — up to four multi-megabyte
@@ -436,6 +437,17 @@ prune-dev: prune-target
 	# engine into its own target/ (2.7 GB seen 2026-10-02); nothing reads it.
 	rm -rf tests/fixtures/rust-embed-consumer/target
 	find . \( -path ./target -o -path ./.venv \) -prune -o -name ".DS_Store" -type f -print0 | xargs -0 rm -f
+
+# Node binding: debug addon into the shared cargo target dir; `napi build`
+# writes the `.node` next to crates/kglite-node/index.js. `test-hooks` exposes
+# `__panic()` for the containment test and is never part of a published build.
+NODE_FEATURES ?=
+node-build: check-free-space
+	cd crates/kglite-node && { [ -d node_modules ] || npm install --no-audit --no-fund; } && npx napi build --platform $(if $(NODE_FEATURES),--features $(NODE_FEATURES))
+
+test-node:
+	$(MAKE) node-build NODE_FEATURES=test-hooks
+	node --test 'crates/kglite-node/__test__/*.test.mjs'
 
 PRUNE_TARGET_GB := 40
 prune-target:

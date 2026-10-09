@@ -13,6 +13,7 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
   - `kglite-c` — `crates/kglite-c/Cargo.toml`
   - `kglite-cli` — `crates/kglite-cli/Cargo.toml`
   - `kglite-mcp-server` — `crates/kglite-mcp-server/Cargo.toml`
+  - `kglite-node` — `crates/kglite-node/Cargo.toml`
   - `kglite-py` — `crates/kglite-py/Cargo.toml`
 
 ## Python distribution

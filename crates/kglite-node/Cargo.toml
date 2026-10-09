@@ -1,0 +1,30 @@
+[package]
+name = "kglite-node"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+authors = ["Kristian dF Kollsgård <kkollsg@gmail.com>"]
+license = "MIT"
+description = "Node.js binding for kglite (napi-rs over kglite::api). Distributed on npm, not crates.io."
+repository = "https://github.com/kkollsga/kglite"
+# Shipped via npm (`publish_node.yml`); `cargo publish` must never see it, which
+# is also why the `kglite` path dependency below carries no version pin.
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[features]
+default = []
+# Exposes `__panic()` so the smoke test can prove panic containment. Must never
+# be enabled in a published build: the npm packaging job builds without it.
+test-hooks = []
+
+[dependencies]
+kglite = { path = "../kglite", default-features = false }
+napi = { version = "3.14.2", default-features = false, features = ["napi4"] }
+napi-derive = "3.6.12"
+
+[build-dependencies]
+napi-build = "2.6.0"

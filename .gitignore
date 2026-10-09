@@ -130,3 +130,10 @@ kglite-java/.gradle/
 # rebuilt from source in one command — never committed. Bounded by
 # `make prune-dev`.
 kglite-java/natives/
+
+# Node binding (crates/kglite-node): npm deps, built addons, generated
+# platform packages. Bounded by `make prune-dev`.
+crates/kglite-node/node_modules/
+crates/kglite-node/package-lock.json
+crates/kglite-node/*.node
+crates/kglite-node/npm/

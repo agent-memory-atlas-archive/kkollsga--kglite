@@ -1,0 +1,30 @@
+{
+  "name": "kglite-node",
+  "version": "0.0.0-dev",
+  "description": "Node.js binding for kglite. The version here is a placeholder: the publish workflow stamps it from [workspace.package] in the root Cargo.toml.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "repository": "https://github.com/kkollsga/kglite",
+  "engines": { "node": ">= 20" },
+  "files": ["index.js", "index.d.ts"],
+  "napi": {
+    "binaryName": "kglite-node",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform",
+    "test": "node --test \"__test__/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.8"
+  }
+}
