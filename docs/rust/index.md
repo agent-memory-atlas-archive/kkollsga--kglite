@@ -114,7 +114,7 @@ Both examples are pyo3-free; `cargo tree -p kglite | rg pyo3` returns empty.
 
 - **[Embedding kglite](embedding.md)** — full embedder guide.
   It covers workspace layout, the `kglite::api::*` surface tour and the
-  `.kgl` portability story. It also sketches cgo / napi / JNI
+  `.kgl` portability story. It also sketches cgo / JNI
   wrappers if you're building a binding in another language.
 - **[Session abstraction](session.md)** — binding-implementer
   reference for the canonical Cypher pipeline + CoW transaction
@@ -127,7 +127,7 @@ Both examples are pyo3-free; `cargo tree -p kglite | rg pyo3` returns empty.
   deep-dive companion to `embedding.md` for anyone publishing a
   new-language binding: bridge-layer choice, full `KgErrorCode`
   mapping table, Embedder trait walkthrough, dataset-wrapping
-  patterns, binding-side cookbook. Includes cgo / napi / JNI
+  patterns, binding-side cookbook. Includes cgo / JNI
   worked examples calling the shipped C ABI.
 - **[C ABI (`kglite-c`)](c-abi.md)** — the design conventions for
   the C ABI crate that non-Rust bindings (Go, JS, JVM, .NET, …)

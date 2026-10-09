@@ -291,8 +291,9 @@ the doorway that matches your stack.
 | **Python**: the primary binding, with DataFrames in/out, fluent API, embeddings | `pip install kglite` | [Getting started](https://kglite.readthedocs.io/en/latest/python/getting-started.html) · [Python track](https://kglite.readthedocs.io/en/latest/python/index.html) |
 | **Rust**: embed the engine directly; sessions, CoW transactions | `cargo add kglite` | [Rust track](https://kglite.readthedocs.io/en/latest/rust/index.html) · [docs.rs](https://docs.rs/kglite) |
 | **Java**: Panama/FFM binding, natives for 4 platforms bundled | Maven Central `io.github.kkollsga:kglite` | [kglite-java README](https://github.com/kkollsga/kglite/tree/main/kglite-java) |
-| **C ABI**: stable `kglite.h` for any other language (Go, JS, .NET, …) | [`crates/kglite-c`](https://github.com/kkollsga/kglite/tree/main/crates/kglite-c) | [C ABI design](https://kglite.readthedocs.io/en/latest/rust/c-abi.html) · [implementing a binding](https://kglite.readthedocs.io/en/latest/rust/implementing-a-binding.html) |
+| **C ABI**: stable `kglite.h` for any other language (Go, .NET, …) | [`crates/kglite-c`](https://github.com/kkollsga/kglite/tree/main/crates/kglite-c) | [C ABI design](https://kglite.readthedocs.io/en/latest/rust/c-abi.html) · [implementing a binding](https://kglite.readthedocs.io/en/latest/rust/implementing-a-binding.html) |
 | **CLI**: shell/scripts/JSONL agent loops over a `.kgl` | bundled in the wheel, or `pip install kglite-cli` / `cargo install kglite-cli` | [CLI guide](https://kglite.readthedocs.io/en/latest/operators/cli.html) |
+| **Node.js**: napi-rs addon, prebuilt for 7 platforms | `npm install kglite-node` | [Node.js guide](https://kglite.readthedocs.io/en/latest/node/index.html) |
 | **Bolt server**: Bolt v5 front-end tested with Neo4j's Python, JavaScript, and Java drivers | `cargo install kglite-bolt-server` | [Bolt server](https://kglite.readthedocs.io/en/latest/operators/bolt-server.html) |
 | **MCP server**: serve a graph to AI agents as tools + skills | bundled with the wheel: `kglite-mcp-server --graph <graph>.kgl` | [MCP config guide](https://kglite.readthedocs.io/en/latest/python/guides/mcp-servers.html) · [operators page](https://kglite.readthedocs.io/en/latest/operators/mcp-server.html) |
 
@@ -549,14 +550,14 @@ The Bolt server (`crates/kglite-bolt-server`) and the Rust MCP server
 For **Java**, an official binding is on Maven Central:
 `io.github.kkollsga:kglite` (Panama/FFM over the C ABI, natives bundled; see
 [`kglite-java/README.md`](https://github.com/kkollsga/kglite/tree/main/kglite-java)).
-For **other non-Rust bindings** (Go via cgo, JavaScript via napi, .NET via
+For **other non-Rust bindings** (Go via cgo, .NET via
 P/Invoke),
 [`crates/kglite-c`](https://github.com/kkollsga/kglite/tree/main/crates/kglite-c)
 exposes the engine through a stable C ABI covering lifecycle, sessions, Cypher,
 results, persistence, and embedders. It includes a cbindgen-generated `kglite.h`.
 **→ [C ABI design](https://kglite.readthedocs.io/en/latest/rust/c-abi.html) ·
 [implementing a binding](https://kglite.readthedocs.io/en/latest/rust/implementing-a-binding.html)
-(cgo / napi / JNI worked examples).**
+(cgo / JNI worked examples).**
 
 ## Examples
 

@@ -4,8 +4,10 @@ Choose the boundary by implementation language:
 
 - A Rust-side wrapper (PyO3, Bolt, MCP, a Rust service) calls
   `kglite::api::*` directly.
-- A non-Rust wrapper (cgo, napi, JNI, P/Invoke, Swift FFI) calls the supported
+- A non-Rust wrapper (cgo, JNI, P/Invoke, Swift FFI) calls the supported
   [`kglite-c` ABI](c-abi.md).
+- The Node.js binding (`kglite-node`, napi-rs) is a Rust-side wrapper, not a
+  C ABI consumer.
 
 Precompiled C ABI libraries are not currently attached to releases; non-Rust
 bindings must build and package the matching `kglite-c` library for each target.

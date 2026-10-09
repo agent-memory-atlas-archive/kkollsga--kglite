@@ -35,6 +35,37 @@ before upgrading.
 
 ### Added
 
+- **Node.js binding: `kglite-node`.** `npm install kglite-node` embeds the engine
+  in a Node 20+ process. It is a napi-rs addon over `kglite::api` with
+  prebuilt binaries and no toolchain.
+  - **Platforms:** macOS arm64 and x64, Linux x64 and arm64 (glibc 2.35 or
+    newer, and musl), Windows x64.
+  - **API:** `open(path, options)` returns a promise-based `Graph` with
+    `executeRead`, `executeWrite`, `begin`, `transaction(fn)`, `checkpoint`,
+    `sync` and `close`. TypeScript types ship with the package.
+  - **Values:** integers are `number`, or `bigint` beyond 2^53 - 1 (or always,
+    with `integers: 'bigint'`). Dates, datetimes, durations and points are the
+    `LocalDate`, `LocalDateTime`, `Duration` and `Point` classes. `KgFloat`
+    forces a float parameter.
+  - **Durability:** `full`, `normal` and `off`, with a single-writer lease and
+    `readOnly` readers that see the last checkpoint. `close()` checkpoints
+    unsaved changes.
+  - **Transactions:** `begin()` or `transaction(fn, { retries })`. A lost
+    optimistic race rejects with the retriable `TransactionConflict`.
+  - **Crash safety:** a panic in the engine rejects with `Internal` and
+    leaves the process running.
+  - **One file format:** the same `.kgl` opens in Python, Rust and Bolt.
+  - **Backup and ontology (#222):** `graph.backup(dest)`, `graph.declareOntology()`
+    and `graph.clearOntology()`. An `OntologyViolation` error carries `rule`,
+    `entity`, `entityType`, `property` and `report`.
+  - Guide: [Node.js guide](https://kglite.readthedocs.io/en/latest/node/index.html).
+- **Rust API: lifecycle helpers the Node binding needed.** `open_path` opens
+  a path with durability, storage and lease options and returns the session.
+  `Session::execute_auto_commit` runs one statement as a committed
+  transaction. `Session::checkpoint_if_changed` skips the checkpoint when
+  nothing changed.
+- **Rust API: `OpenError` carries a structured lease holder** (`pid`, `since`,
+  `label`) instead of a message string.
 - **C ABI: `KGLITE_STATUS_CODE_DURABILITY_FAILED` (23).** A commit the
   write-ahead log rejected is not published. `kglite_session_define_ontology`
   and `kglite_session_clear_ontology` returned `FILE_IO` for it; they now

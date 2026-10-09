@@ -38,7 +38,8 @@ postures for each**:
 ## Wrapper → core (the LIFT direction): active-design posture, cypher-first, use-case-checked
 
 We are actively designing the api surface for future bindings (Go
-via cgo, JS via napi, JVM via JNI, …). Default-generous about
+via cgo, JVM via JNI, …; the Node.js binding already reaches
+`kglite::api` through napi-rs). Default-generous about
 lifting generic-and-useful capabilities — don't wait for a second
 binding to discover the gap, file a request, and wait for us to
 ship it. The cost of speculative-but-useful lifts is small; the
@@ -176,8 +177,8 @@ Different binding types reach kglite through different layers:
 
 | Binding type | Standardization layer | Examples |
 |---|---|---|
-| **Rust-side wrappers** | `kglite::api::*` — Rust types, traits, functions | `kglite-py` (PyO3), `kglite-bolt-server`, `kglite-mcp-server`; future `kglite-grpc-server`, `kglite-rest-server` |
-| **Non-Rust wrappers** | C ABI — `extern "C" fn` over `kglite::api::*` (the `kglite-c` crate) | Future Go (cgo), JavaScript (napi), JVM (JNI), .NET (P/Invoke) |
+| **Rust-side wrappers** | `kglite::api::*` — Rust types, traits, functions | `kglite-py` (PyO3), `kglite-node` (napi-rs), `kglite-bolt-server`, `kglite-mcp-server`; future `kglite-grpc-server`, `kglite-rest-server` |
+| **Non-Rust wrappers** | C ABI — `extern "C" fn` over `kglite::api::*` (the `kglite-c` crate) | Future Go (cgo), JVM (JNI), .NET (P/Invoke) |
 
 **A "framework helper" in `kglite::api::*` is reachable only by
 Rust-side wrappers.** Non-Rust wrappers won't see a `ParamUnmarshaller`
@@ -215,7 +216,8 @@ model on top:
 - Bolt server: drives the sync pipeline from a `tokio::task::spawn_blocking`
 - MCP server: same; runs on tokio but `execute_read` itself is sync
 - Future Go binding: goroutines wrapping the sync C ABI
-- Future JS binding: napi async with `.spawn_blocking` equivalent
+- Node binding (`kglite-node`): napi-rs promises over a worker-thread pool
+  that drives the sync pipeline
 - Future JVM binding: thread pool + sync JNI calls
 
 Never force tokio on a binding. If we make the canonical Cypher

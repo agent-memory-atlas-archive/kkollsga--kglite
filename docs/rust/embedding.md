@@ -254,8 +254,8 @@ idioms, logging, error presentation, and teardown.
 ### Non-Rust bindings via the C ABI
 
 The `kglite-c` crate (`crates/kglite-c/`) is the canonical entry
-point for non-Rust language bindings — Go via cgo, JavaScript via
-napi, JVM via JNI, .NET via P/Invoke. It exposes the supported lifecycle,
+point for non-Rust language bindings — Go via cgo, JVM via
+JNI, .NET via P/Invoke. It exposes the supported lifecycle,
 session, query, result, persistence, and embedder surface through a
 cbindgen-generated `kglite.h` header. The generated header, not a prose
 function count, is the signature authority.
@@ -290,7 +290,7 @@ func LoadFile(path string) (*Graph, error) {
 }
 ```
 
-For the full cgo / napi / JNI worked examples, the C ABI design
+For the full cgo / JNI worked examples, the C ABI design
 conventions, and the binding-author cookbook, see
 [implementing-a-binding.md](implementing-a-binding.md) and
 [c-abi.md](c-abi.md). The bridge is mechanical; no new core

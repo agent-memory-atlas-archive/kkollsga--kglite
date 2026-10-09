@@ -1391,6 +1391,10 @@ jobs:
       - name: Run the Node binding suite
         run: node --test 'crates/kglite-node/__test__/*.test.mjs'
 
+      - name: Type-check the published declarations
+        working-directory: crates/kglite-node
+        run: npx tsc --noEmit -p .
+
       - name: Build the Python extension and bolt server for the cross-binding parity leg
         # Lean feature set (the parity test uses only the core engine) and the
         # debug profile, the same choices as the kglite-java leg above.

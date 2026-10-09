@@ -12,32 +12,52 @@ use napi_derive::napi;
 
 use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, Point};
 
-/// Cycle breaker for the recursive `KgValue` alias below; named so the emitted
-/// TypeScript refers to the alias itself.
-pub struct KgValue;
+/// Declares a type-only marker whose `type_name` is the TypeScript it should emit.
+macro_rules! ts_marker {
+    ($(#[$doc:meta])* $name:ident, $ts:literal) => {
+        $(#[$doc])*
+        pub struct $name;
 
-impl TypeName for KgValue {
-    fn type_name() -> &'static str {
-        "KgValue"
-    }
-    fn value_type() -> napi::ValueType {
-        napi::ValueType::Unknown
-    }
+        impl TypeName for $name {
+            fn type_name() -> &'static str {
+                $ts
+            }
+            fn value_type() -> napi::ValueType {
+                napi::ValueType::Unknown
+            }
+        }
+
+        impl ValidateNapiValue for $name {}
+
+        impl ToNapiValue for $name {
+            unsafe fn to_napi_value(_env: sys::napi_env, _val: Self) -> napi::Result<sys::napi_value> {
+                Err(napi::Error::from_reason(concat!(stringify!($name), " is a type-only marker")))
+            }
+        }
+
+        impl FromNapiValue for $name {
+            unsafe fn from_napi_value(_env: sys::napi_env, _val: sys::napi_value) -> napi::Result<Self> {
+                Err(napi::Error::from_reason(concat!(stringify!($name), " is a type-only marker")))
+            }
+        }
+    };
 }
 
-impl ValidateNapiValue for KgValue {}
+ts_marker!(
+    /// The map member of `KgValue`, declared as an interface by `dtsHeader` in
+    /// `package.json`: `Record<string, KgValue>` inside the alias is circular to
+    /// TypeScript (error TS2456) and degrades `KgValue` to `any`; an interface is not.
+    /// The emitted TypeScript uses this struct's identifier, not its `type_name`.
+    KgMap,
+    "KgMap"
+);
 
-impl ToNapiValue for KgValue {
-    unsafe fn to_napi_value(_env: sys::napi_env, _val: Self) -> napi::Result<sys::napi_value> {
-        Err(napi::Error::from_reason("KgValue is a type-only marker"))
-    }
-}
-
-impl FromNapiValue for KgValue {
-    unsafe fn from_napi_value(_env: sys::napi_env, _val: sys::napi_value) -> napi::Result<Self> {
-        Err(napi::Error::from_reason("KgValue is a type-only marker"))
-    }
-}
+ts_marker!(
+    /// Cycle breaker for the recursive `KgValue` alias below; named so the emitted
+    /// TypeScript refers to the alias itself.
+    KgValue,
+    "KgValue"
+);
 
 /// Any value a query can return.
 ///
@@ -53,7 +73,7 @@ pub type KgValueType = Either5<
     Either4<LocalDate, LocalDateTime, Duration, Point>,
     Either3<KgNode, KgRelationship, KgPath>,
     Vec<KgValue>,
-    HashMap<String, KgValue>,
+    KgMap,
 >;
 
 /// A value accepted as a query parameter.

@@ -1,7 +1,7 @@
 # kglite-c — C ABI for KGLite
 
 `kglite-c` is the supported C boundary for non-Rust bindings such as cgo,
-napi, JNI, P/Invoke, and Swift FFI. The pure-Rust engine owns Cypher, storage,
+JNI, P/Invoke, and Swift FFI. The pure-Rust engine owns Cypher, storage,
 sessions, and persistence; this crate exposes a curated synchronous ABI through
 the generated [`include/kglite.h`](include/kglite.h).
 

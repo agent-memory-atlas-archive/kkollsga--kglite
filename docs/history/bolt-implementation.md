@@ -578,7 +578,7 @@ in this session**:
    causing the lazy-RETURN bug (T4 of the robustness pass surfaced
    it)
 
-Adding future bindings (Go via cgo, TypeScript via napi, etc.)
+Adding future bindings (Go via cgo, a Node binding via napi-rs, etc.)
 without fixing this would multiply the drift.
 
 **What changes.** Extract `kglite::api::session::{Session,
@@ -632,7 +632,7 @@ become thin wrappers:
 - **Single source of truth** for the snapshot/working CoW; OCC
   fix lands in one place
 - **Testable in pure Rust** without async or PyO3
-- **Future Go / TypeScript bindings** become thin cgo / napi wrappers
+- **Future Go / Node bindings** become thin cgo / napi wrappers
   around `Session::execute_*` — the hard part is solved once
 
 **Tests.**

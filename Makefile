@@ -448,6 +448,7 @@ node-build: check-free-space
 test-node:
 	$(MAKE) node-build NODE_FEATURES=test-hooks
 	node --test 'crates/kglite-node/__test__/*.test.mjs'
+	cd crates/kglite-node && npx tsc --noEmit -p .
 
 PRUNE_TARGET_GB := 40
 prune-target:

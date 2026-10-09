@@ -71,6 +71,9 @@ kglite is the engine. Four companion projects surround it. Three build graphs it
 - **[Rust guide](rust/index.md)** — embed the engine in a Rust
   binary (`cargo add kglite`). For graph-as-a-library use cases
   without the Python wheel.
+- **[Node.js guide](node/index.md)** — `npm install kglite-node`, then
+  `require('kglite-node')`. An embedded graph for Node 20+ with prebuilt
+  binaries.
 - **[Operators](operators/index.md)** — choose and run the CLI, MCP, or Bolt
   binary; storage, auth/TLS, and deployment guidance.
 - **[Reference](reference/index.md)** — Python, Cypher, fluent, Rust, C ABI,
@@ -92,6 +95,14 @@ python/index
 :hidden:
 
 rust/index
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Node.js guide
+:hidden:
+
+node/index
 ```
 
 ```{toctree}

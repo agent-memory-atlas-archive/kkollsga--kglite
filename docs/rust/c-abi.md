@@ -1,6 +1,6 @@
 # C ABI
 
-`kglite-c` is the supported boundary for non-Rust bindings (cgo, napi, JNI,
+`kglite-c` is the supported boundary for non-Rust bindings (cgo, JNI,
 P/Invoke, Swift, and similar FFIs). Rust embedders should call
 `kglite::api::*` directly. The generated
 [`kglite.h`](https://github.com/kkollsga/kglite/blob/main/crates/kglite-c/include/kglite.h)
