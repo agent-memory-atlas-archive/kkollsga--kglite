@@ -72,7 +72,13 @@ The header exposes:
   (`kglite_load_rdf` plus `language_maps`);
 - `kglite_open_or_create_graph_in_mode`, which opens or creates a path in an
   explicit mode (null mode = honour what the checkpoint recorded) and reports
-  any conversion through `out_converted_from`;
+  any conversion through `out_converted_from`. It can write: a mode with a
+  missing path creates the graph, and a differing mode converts it;
+- `kglite_load_file`, the read-only open: it never creates the path, never
+  converts, takes no lease and writes nothing (a missing path is
+  `FILE_NOT_FOUND`). A binding's read-only open uses this symbol and checks
+  the mode from `kglite_graph_storage_mode` itself; no separate read-only
+  symbol exists;
 - `kglite_graph_storage_mode`, which reports the mode a graph handle is running
   in *right now* as an owned `"memory"` / `"mapped"` / `"disk"` string. It
   borrows the handle, so call it before `kglite_session_new` consumes it.

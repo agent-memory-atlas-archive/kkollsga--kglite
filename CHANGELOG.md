@@ -144,6 +144,8 @@ before upgrading.
 
 ### Fixed
 
+- Java `openReadOnly(path, mode)` never creates a missing graph or converts a
+  stored storage mode; it loads the graph as stored and fails when `mode` differs.
 - `ontology()` emits a document `define_ontology()` accepts: per-check severities
   round-trip as `enforcement_overrides`, and an advisory severity under a
   non-advisory store default is kept.

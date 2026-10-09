@@ -109,4 +109,73 @@ class ReadOnlyGraphTest {
             assertTrue(caught, "a mutation on a read-only handle threw");
         }
     }
+
+    /** SHA-256 over every file's relative path and bytes under {@code root} (or the file itself). */
+    private static String fingerprint(Path root) throws java.io.IOException {
+        try (java.util.stream.Stream<Path> walk = java.nio.file.Files.walk(root)) {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            for (Path p : walk.sorted().toList()) {
+                md.update(root.relativize(p).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                if (java.nio.file.Files.isRegularFile(p)) {
+                    md.update(java.nio.file.Files.readAllBytes(p));
+                }
+            }
+            return java.util.HexFormat.of().formatHex(md.digest());
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
+    @DisplayName("openReadOnly with a mode never creates a missing path")
+    void readOnlyNeverCreates(@TempDir Path dir) {
+        for (StorageMode mode : StorageMode.values()) {
+            Path missing = dir.resolve("typo-" + mode + ".kgl");
+            assertThrows(KgliteException.class, () -> KnowledgeGraph.openReadOnly(missing, mode));
+            assertTrue(!java.nio.file.Files.exists(missing), mode + " read-only open created a path");
+        }
+        Path missing = dir.resolve("typo-null.kgl");
+        assertThrows(KgliteException.class, () -> KnowledgeGraph.openReadOnly(missing));
+        assertTrue(!java.nio.file.Files.exists(missing));
+    }
+
+    @Test
+    @DisplayName("openReadOnly never converts a graph's storage mode and leaves its bytes alone")
+    void readOnlyNeverConverts(@TempDir Path dir) throws Exception {
+        Path path = seed(dir);
+        String before = fingerprint(path);
+        for (StorageMode mode : new StorageMode[] {StorageMode.MAPPED, StorageMode.DISK}) {
+            assertThrows(KgliteException.class, () -> KnowledgeGraph.openReadOnly(path, mode));
+        }
+        // The matching mode, and no mode, open as-is.
+        try (KnowledgeGraph graph = KnowledgeGraph.openReadOnly(path, StorageMode.MEMORY)) {
+            assertTrue(graph.convertedFrom().isEmpty());
+            assertEquals(1, graph.query("MATCH (p:Person) RETURN p.id").size());
+        }
+        try (KnowledgeGraph graph = KnowledgeGraph.openReadOnly(path)) {
+            assertEquals(1, graph.query("MATCH (p:Person) RETURN p.id").size());
+        }
+        assertEquals(before, fingerprint(path));
+    }
+
+    @Test
+    @DisplayName("openReadOnly on a disk graph writes nothing")
+    void readOnlyDiskWritesNothing(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("disk-graph");
+        try (WriterLease lease = WriterLease.acquire(path);
+                KnowledgeGraph graph = KnowledgeGraph.open(path, StorageMode.DISK)) {
+            assertEquals(path.toAbsolutePath(), lease.path());
+            graph.cypher("CREATE (:Person {id: 1, title: 'Ada'})");
+            graph.save(path);
+        }
+        String before = fingerprint(path);
+        try (KnowledgeGraph graph = KnowledgeGraph.openReadOnly(path, StorageMode.DISK)) {
+            assertEquals(1, graph.query("MATCH (p:Person) RETURN p.id").size());
+        }
+        try (KnowledgeGraph graph = KnowledgeGraph.openReadOnly(path)) {
+            assertEquals(1, graph.query("MATCH (p:Person) RETURN p.id").size());
+        }
+        assertThrows(KgliteException.class, () -> KnowledgeGraph.openReadOnly(path, StorageMode.MEMORY));
+        assertEquals(before, fingerprint(path));
+    }
 }

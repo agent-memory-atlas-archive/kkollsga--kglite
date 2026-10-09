@@ -17,7 +17,7 @@ BOUND	KgliteStatusCode kglite_session_list_embeddings(const struct KgliteSession
 -	struct KgliteGraph *kglite_graph_new(void)
 BOUND	KgliteStatusCode kglite_graph_new_in_mode(const char *mode, const char *path, struct KgliteGraph **out_graph, const char **out_error_msg)
 BOUND	KgliteStatusCode kglite_graph_storage_mode(struct KgliteGraph *graph, const char **out_mode, const char **out_error_msg)
--	KgliteStatusCode kglite_load_file(const char *path, struct KgliteGraph **out_graph, const char **out_error_msg)
+BOUND	KgliteStatusCode kglite_load_file(const char *path, struct KgliteGraph **out_graph, const char **out_error_msg)
 -	KgliteStatusCode kglite_load_rdf(const char *path, const char *languages_json, const char *label_predicates_json, uint8_t keep_full_iris, const char *default_type, int64_t max_triples, struct KgliteGraph **out_graph, const char **out_stats_json, const char **out_error_msg)
 -	KgliteStatusCode kglite_load_rdf_with_options(const char *path, const char *languages_json, const char *label_predicates_json, uint8_t keep_full_iris, const char *default_type, int64_t max_triples, uint8_t language_maps, struct KgliteGraph **out_graph, const char **out_stats_json, const char **out_error_msg)
 -	KgliteStatusCode kglite_save_graph(struct KgliteGraph *graph, const char *path, const char **out_error_msg)

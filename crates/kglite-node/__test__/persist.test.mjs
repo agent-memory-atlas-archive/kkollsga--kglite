@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -153,4 +154,31 @@ test('readOnly cannot be combined with writer options', async (t) => {
   for (const extra of [{ durability: 'full' }, { storage: 'memory' }, { lockTimeoutMs: 10 }]) {
     await assert.rejects(kglite.open(path, { readOnly: true, ...extra }), (e) => e.code === 'InvalidArgument');
   }
+});
+
+function fingerprint(root) {
+  const h = createHash('sha256');
+  const walk = (p) => {
+    h.update(p.slice(root.length));
+    if (statSync(p).isDirectory()) readdirSync(p).sort().forEach((n) => walk(join(p, n)));
+    else h.update(readFileSync(p));
+  };
+  walk(root);
+  return h.digest('hex');
+}
+
+test('a readOnly open writes nothing: no created path, no changed bytes', async (t) => {
+  const dir = scratch(t);
+  const missing = join(dir, 'typo.kgl');
+  await assert.rejects(kglite.open(missing, { readOnly: true }), (e) => e.code === 'FileNotFound');
+  assert.equal(existsSync(missing), false);
+  const path = join(dir, 'g.kgl');
+  const w = await kglite.open(path, { durability: 'off' });
+  await w.executeWrite('CREATE (:N {k: 1})');
+  await w.close();
+  const before = fingerprint(dir);
+  const r = await kglite.open(path, { readOnly: true });
+  await r.executeRead('MATCH (n:N) RETURN count(n) AS c');
+  await r.close();
+  assert.equal(fingerprint(dir), before);
 });

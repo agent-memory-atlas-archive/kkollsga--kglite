@@ -259,28 +259,23 @@ public final class KnowledgeGraph implements AutoCloseable {
         if (path == null) {
             throw new KgliteException("KnowledgeGraph.open requires a path");
         }
-        return openInternal(path, mode, false);
+        return openInternal(path, mode);
     }
 
     /**
      * Open the graph at {@code path} and mark this handle <strong>read-only</strong>.
      *
-     * <p>The read path is unchanged — {@link #query(String)} works exactly as it
-     * does on a normally-opened graph — but every mutation through this handle
-     * ({@link #cypher(String)}, {@link #beginTransaction()}) is refused with a
-     * {@link ReadOnlyGraphException} raised <em>before</em> the call reaches
-     * native code. As with {@link #open(Path)}, a missing path is an error, not
-     * a silent creation.
+     * <p>The open itself writes nothing: it never creates the path, never
+     * converts the stored storage mode, takes no {@link WriterLease}, and
+     * leaves every file untouched. A missing path is an error. Every mutation
+     * through this handle ({@link #cypher(String)}, {@link #beginTransaction()})
+     * is refused with a {@link ReadOnlyGraphException} raised <em>before</em>
+     * the call reaches native code.
      *
-     * <p><strong>This is a convention-level guard on this wrapper instance, not
-     * storage-level immutability.</strong> The engine has no read-only open
-     * mode, so the file itself is not locked and a different handle over the
-     * same path — a second {@link KnowledgeGraph}, the CLI, any C-ABI process —
-     * can still write it. What this buys is a local guarantee: a stray write
-     * through <em>this</em> object is a thrown exception rather than a silent
-     * change. A read-only session takes no {@link WriterLease}, and
-     * {@link #save(Path)} is deliberately still allowed — copying a read-only
-     * view elsewhere does not mutate the graph.
+     * <p><strong>The handle guard is convention-level, not storage-level
+     * immutability.</strong> A different handle over the same path can still
+     * write it. {@link #save(Path)} is deliberately still allowed on this
+     * handle — copying a read-only view elsewhere does not mutate the graph.
      *
      * @param path the graph path (a {@code .kgl} file or a disk-graph directory)
      * @return the opened graph, marked read-only
@@ -292,31 +287,45 @@ public final class KnowledgeGraph implements AutoCloseable {
     }
 
     /**
-     * Open the graph at {@code path} in an explicit mode and mark this handle
-     * <strong>read-only</strong>.
+     * Open the graph at {@code path} read-only, asserting its storage mode.
      *
-     * <p>As {@link #openReadOnly(Path)}, additionally naming the storage mode
-     * the same way {@link #open(Path, StorageMode)} does — so a missing path is
-     * created (and, for a mode that differs, an existing graph is converted).
-     * The read-only guard applies to the resulting handle regardless; it never
-     * blocks the mode conversion that opening performs, only later writes
-     * through Cypher and transactions.
+     * <p>As {@link #openReadOnly(Path)}. {@code mode} is an <em>assertion</em>,
+     * not a request: the graph opens as stored, and when its stored mode
+     * differs the call fails rather than converting it. A missing path is never
+     * created, whatever the mode.
      *
      * @param path the graph path
-     * @param mode the mode to create or convert into, or {@code null} to leave
-     *     the decision to the recorded checkpoint (in which case a missing path
-     *     is an error)
+     * @param mode the storage mode the graph is expected to be stored in, or
+     *     {@code null} to accept whatever it was saved as
      * @return the opened graph, marked read-only
-     * @throws KgliteException if the path is absent with a {@code null} mode,
-     *     the mode is unknown, the conversion cannot happen in place, or the
-     *     file is unreadable or malformed
+     * @throws KgliteException if the path is absent, the stored mode differs
+     *     from {@code mode}, or the file is unreadable or malformed
      * @see #openReadOnly(Path)
      */
     public static KnowledgeGraph openReadOnly(Path path, StorageMode mode) {
-        return openInternal(path, mode, true);
+        if (path == null) {
+            throw new KgliteException("KnowledgeGraph.openReadOnly requires a path");
+        }
+        MemorySegment graph = Abi.loadFile(path.toAbsolutePath().toString());
+        if (mode != null) {
+            String stored;
+            try {
+                stored = Abi.graphStorageMode(graph);
+            } catch (RuntimeException e) {
+                Abi.graphFree(graph);
+                throw e;
+            }
+            if (!mode.wire().equals(stored)) {
+                Abi.graphFree(graph);
+                throw new KgliteException("read-only open of '" + path + "' asked for storage mode '"
+                        + mode.wire() + "' but the graph is stored as '" + stored
+                        + "'; a read-only open never converts a graph");
+            }
+        }
+        return sessionOver(graph, null, true);
     }
 
-    private static KnowledgeGraph openInternal(Path path, StorageMode mode, boolean readOnly) {
+    private static KnowledgeGraph openInternal(Path path, StorageMode mode) {
         if (path == null) {
             throw new KgliteException("KnowledgeGraph.open requires a path");
         }
@@ -324,7 +333,7 @@ public final class KnowledgeGraph implements AutoCloseable {
         MemorySegment graph = Abi.openOrCreateInMode(
                 path.toAbsolutePath().toString(), mode == null ? null : mode.wire(), converted);
         return sessionOver(
-                graph, converted[0] == null ? null : StorageMode.fromWire(converted[0]), readOnly);
+                graph, converted[0] == null ? null : StorageMode.fromWire(converted[0]), false);
     }
 
     private static KnowledgeGraph sessionOver(

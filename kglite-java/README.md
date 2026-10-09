@@ -635,6 +635,10 @@ Four shapes worth knowing:
   `property_type`, `closed_labels`, `domain` or `range`), `entity()` (`node` or
   `relationship`), `entityType()`, `property()` (or `null`) and `report()` (the
   per-rule breakdown of a refused declaration; empty for a refused write).
+- **`openReadOnly(path[, mode])` writes nothing**: it loads the graph as stored
+  through `kglite_load_file`, never creates a missing path (that is an error),
+  never converts the storage mode, and takes no lease. `mode` is an assertion:
+  a stored mode that differs fails the open instead of converting.
 - **`ReadOnlyGraphException`** (status 24, `ReadOnly`) is a write on a handle
   opened with `openReadOnly`, the same identity the other bindings report.
 - **A missing native library** surfaces as `ExceptionInInitializerError`, not

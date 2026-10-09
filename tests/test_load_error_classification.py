@@ -201,3 +201,19 @@ def test_single_bit_corruption_never_loads_silently_wrong(tmp_path):
     assert raised >= len(offsets) // 2, (
         f"only {raised} of {len(offsets)} corruptions were refused — the sweep is not exercising the integrity checks"
     )
+
+
+def test_load_and_open_session_write_nothing(tmp_path):
+    """A read-only load never creates a path or changes a saved graph's bytes."""
+    missing = tmp_path / "typo.kgl"
+    with pytest.raises(kglite.FileError):
+        kglite.load(str(missing))
+    assert not missing.exists()
+
+    p = tmp_path / "g.kgl"
+    g = kglite.KnowledgeGraph()
+    g.add_nodes(pd.DataFrame({"id": [1], "title": ["a"]}), "Doc", "id", "title")
+    g.save(str(p))
+    before = sorted((f.name, f.read_bytes()) for f in tmp_path.iterdir())
+    kglite.load(str(p)).cypher("MATCH (n:Doc) RETURN n.id")
+    assert sorted((f.name, f.read_bytes()) for f in tmp_path.iterdir()) == before

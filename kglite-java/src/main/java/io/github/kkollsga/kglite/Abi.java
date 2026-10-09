@@ -92,6 +92,8 @@ final class Abi {
     private static final MethodHandle OPEN_OR_CREATE_IN_MODE = bind(
             "kglite_open_or_create_graph_in_mode",
             FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
+    private static final MethodHandle LOAD_FILE =
+            bind("kglite_load_file", FunctionDescriptor.of(I32, PTR, PTR, PTR));
     private static final MethodHandle GRAPH_STORAGE_MODE =
             bind("kglite_graph_storage_mode", FunctionDescriptor.of(I32, PTR, PTR, PTR));
     private static final MethodHandle GRAPH_FREE =
@@ -267,6 +269,23 @@ final class Abi {
                     cstr(arena, path), cstr(arena, mode), outGraph, outConverted, outError);
             check(rc, outError);
             convertedFrom[0] = takeString(outConverted.get(PTR, 0));
+            return outGraph.get(PTR, 0);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /**
+     * {@code kglite_load_file} — load the graph at {@code path} exactly as it
+     * is stored. Never creates, converts, or takes a lease; an absent path is
+     * a {@code FileNotFound} failure.
+     */
+    static MemorySegment loadFile(String path) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outGraph = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) LOAD_FILE.invokeExact(cstr(arena, path), outGraph, outError);
+            check(rc, outError);
             return outGraph.get(PTR, 0);
         } catch (Throwable t) {
             throw rethrow(t);
