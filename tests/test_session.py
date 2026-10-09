@@ -68,11 +68,11 @@ def test_session_cypher_rejects_mutations():
         "MATCH (n:Doc) DELETE n",
         "MERGE (n:Doc {id: 1})",
     ]:
-        with pytest.raises(kglite.ArgumentError) as excinfo:
+        with pytest.raises(kglite.ReadOnlyError) as excinfo:
             s.cypher(q)
         # One class and one code for "this handle does not take writes", shared
         # with FrozenGraph, a read-only Transaction and a read-only graph.
-        assert excinfo.value.code == "InvalidArgument"
+        assert excinfo.value.code == "ReadOnly"
         assert "read-only" in str(excinfo.value) or "execute()" in str(excinfo.value)
 
 

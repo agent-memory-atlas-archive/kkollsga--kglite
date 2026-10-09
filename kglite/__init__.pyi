@@ -6271,7 +6271,7 @@ class KnowledgeGraph:
             stored under that name.
 
         Raises:
-            ArgumentError: The graph is in read-only mode.
+            ReadOnlyError: The graph is in read-only mode.
 
         Example:
             ```python
@@ -6302,7 +6302,7 @@ class KnowledgeGraph:
             FileFormatError: A file's frontmatter is unparseable or fails
                 validation; the name of the offending file is in the message.
             FileIoError: A file could not be read.
-            ArgumentError: The graph is in read-only mode.
+            ReadOnlyError: The graph is in read-only mode.
 
         Example:
             ```python
@@ -6505,7 +6505,7 @@ class KnowledgeGraph:
             stored under that pair.
 
         Raises:
-            ArgumentError: The graph is in read-only mode.
+            ReadOnlyError: The graph is in read-only mode.
 
         Example:
             ```python
@@ -11279,7 +11279,7 @@ class Transaction:
 
     Read-only transactions (``begin_read()``):
         - O(1) creation cost (Arc reference, no deep clone).
-        - Mutations are rejected with :class:`ArgumentError` (code ``InvalidArgument``).
+        - Mutations are rejected with :class:`ReadOnlyError` (code ``ReadOnly``).
         - ``commit()`` is a no-op; ``rollback()`` releases the snapshot.
     """
 

@@ -46,7 +46,7 @@ def test_readonly_transaction_raises_the_exception_its_stub_names():
     try:
         with pytest.raises(promised) as raised:
             tx.cypher("CREATE (:Person {id: 1})")
-        assert raised.value.code == "InvalidArgument"
+        assert raised.value.code == "ReadOnly"
         assert graph.cypher("MATCH(n) RETURN count(*) AS n").scalar() == 0
     finally:
         tx.rollback()
