@@ -22,6 +22,12 @@ export declare class Duration {
 
 /** A graph opened by [`open`]. */
 export declare class Graph {
+  /** Write a consistent single-file copy of the graph to `dest` while writers keep committing. */
+  backup(dest: string): Promise<BackupReport>
+  /** Declare (or replace) the graph's ontology and enforce it on every later write. */
+  declareOntology(ontology: object | string): Promise<OntologyDeclared>
+  /** Remove the graph's declared ontology. */
+  clearOntology(): Promise<void>
   /** Run a read-only Cypher statement. A mutating statement rejects with `InvalidArgument`. */
   executeRead(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
   /** Run a Cypher statement that may write, as one auto-committed transaction. */
@@ -110,6 +116,29 @@ export declare class Transaction {
   get finished(): boolean
 }
 
+/** What `backup` captured. */
+export interface BackupReport {
+  /** The destination file. */
+  path: string
+  /** Size of the published file. */
+  bytes: number
+  nodes: number
+  relationships: number
+  /** The graph's in-memory commit count at the snapshot. */
+  graphVersion: number
+  /**
+   * Newest write-ahead-log position the file contains (`null` without a log). `number`
+   * when exact, `bigint` beyond 2^53 - 1 (always `bigint` with `integers: 'bigint'`).
+   */
+  lsn: number | bigint | null
+  /** How long writers were held off to fix the point in time. */
+  lockHoldMs: number
+  /** The whole call. */
+  elapsedMs: number
+  /** The snapshot needed a private copy first (costs a fork of the graph). */
+  preparedCopy: boolean
+}
+
 /** The `Error` every rejection carries. */
 export interface KgliteError {
   /**
@@ -123,6 +152,20 @@ export interface KgliteError {
   message: string
   /** Present on `WriterLeaseHeld`. */
   holder?: LeaseHolderInfo
+  /**
+   * Present on `OntologyViolation`: the rule that fired (`required_property`,
+   * `property_type`, `closed_labels`, `domain`, `range`). For a refused
+   * declaration, the first report entry's.
+   */
+  rule?: string
+  /** Present on `OntologyViolation`. */
+  entity?: 'node' | 'relationship'
+  /** Present on `OntologyViolation`: the label or relationship type. */
+  entityType?: string
+  /** Present on `OntologyViolation`: the offending property, `null` for a rule that has none. */
+  property?: string | null
+  /** Present on `OntologyViolation`: the per-rule breakdown of a refused declaration; empty for a refused write. */
+  report?: Array<OntologyReportEntry>
 }
 
 /** A node as returned in a row. */
@@ -182,6 +225,21 @@ export interface MutationStats {
   indexesRemoved: number
   constraintsAdded: number
   constraintsRemoved: number
+}
+
+/** What `declareOntology` returns. */
+export interface OntologyDeclared {
+  /** `warn`-level findings of the declaration over the stored data; empty when there are none. */
+  warnings: Array<string>
+}
+
+/** One line of a refused declaration's report: `count` stored entities already break `rule`. */
+export interface OntologyReportEntry {
+  rule: string
+  entity: 'node' | 'relationship'
+  entityType: string
+  property?: string | null
+  count: number
 }
 
 /** Open (or create) the graph at `path`. */

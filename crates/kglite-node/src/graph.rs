@@ -130,7 +130,7 @@ fn expect_number(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
     count(f, v, what)
 }
 
-fn expect_string(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<String> {
+pub(crate) fn expect_string(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<String> {
     if !f.kind(v)?.is_string() {
         return Err(JsErr::arg(format!("{what} must be a string")));
     }
@@ -381,7 +381,7 @@ pub(crate) fn done() -> Settle {
     Box::new(|env: Env| undefined(env.raw()))
 }
 
-fn save_error(message: String) -> JsErr {
+pub(crate) fn save_error(message: String) -> JsErr {
     JsErr::new("FileIo", message)
 }
 

@@ -193,7 +193,7 @@ impl ToJs {
         r
     }
 
-    fn int(&self, v: i64) -> JsRes<sys::napi_value> {
+    pub fn int(&self, v: i64) -> JsRes<sys::napi_value> {
         let mut out = ptr::null_mut();
         if self.ints == IntegerMode::Safe && (-MAX_SAFE..=MAX_SAFE).contains(&v) {
             ck(

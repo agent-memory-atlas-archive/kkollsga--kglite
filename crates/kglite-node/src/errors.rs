@@ -11,7 +11,7 @@
 use std::ffi::c_char;
 use std::ptr;
 
-use kglite::api::KgError;
+use kglite::api::{EntityKind, KgError, OntologyReportEntry};
 use napi::sys;
 
 pub const CODE_INTERNAL: &str = "Internal";
@@ -34,6 +34,17 @@ pub struct Holder {
     pub is_self: bool,
 }
 
+/// The structured part of an `OntologyViolation`: which rule refused what.
+#[derive(Debug)]
+pub struct OntologyDetail {
+    pub rule: &'static str,
+    pub entity: &'static str,
+    pub entity_type: String,
+    pub property: Option<String>,
+    /// Per-rule breakdown of a refused declaration; empty for a refused write.
+    pub report: Vec<OntologyReportEntry>,
+}
+
 /// A failure on its way to becoming a JS `Error` with a `code` property.
 #[derive(Debug)]
 pub struct JsErr {
@@ -41,6 +52,8 @@ pub struct JsErr {
     pub message: String,
     /// Set on `WriterLeaseHeld`; becomes the error's `holder` property.
     pub holder: Option<Holder>,
+    /// Set on `OntologyViolation`.
+    pub ontology: Option<Box<OntologyDetail>>,
 }
 
 pub type JsRes<T> = std::result::Result<T, JsErr>;
@@ -51,6 +64,7 @@ impl JsErr {
             code,
             message: message.into(),
             holder: None,
+            ontology: None,
         }
     }
 
@@ -63,7 +77,25 @@ impl JsErr {
     }
 
     pub fn from_kg(err: &KgError) -> Self {
-        Self::new(err.code().as_str(), err.to_string())
+        let mut out = Self::new(err.code().as_str(), err.to_string());
+        if let KgError::OntologyViolation {
+            rule,
+            entity,
+            entity_type,
+            property,
+            report,
+            ..
+        } = err
+        {
+            out.ontology = Some(Box::new(OntologyDetail {
+                rule,
+                entity,
+                entity_type: entity_type.clone(),
+                property: property.clone(),
+                report: report.clone(),
+            }));
+        }
+        out
     }
 
     pub fn from_panic(payload: &(dyn std::any::Any + Send)) -> Self {
@@ -154,6 +186,86 @@ fn holder_object(env: sys::napi_env, h: &Holder) -> JsRes<sys::napi_value> {
     Ok(obj)
 }
 
+fn entity_name(e: EntityKind) -> &'static str {
+    match e {
+        EntityKind::Node => "node",
+        EntityKind::Relationship => "relationship",
+    }
+}
+
+fn array_of(env: sys::napi_env, items: Vec<sys::napi_value>) -> JsRes<sys::napi_value> {
+    let mut arr = ptr::null_mut();
+    check(
+        unsafe { sys::napi_create_array_with_length(env, items.len(), &mut arr) },
+        "create array",
+    )?;
+    for (i, item) in items.into_iter().enumerate() {
+        check(
+            unsafe { sys::napi_set_element(env, arr, i as u32, item) },
+            "set element",
+        )?;
+    }
+    Ok(arr)
+}
+
+fn null_or_string(env: sys::napi_env, s: Option<&str>) -> JsRes<sys::napi_value> {
+    match s {
+        Some(s) => utf8(env, s),
+        None => {
+            let mut n = ptr::null_mut();
+            check(unsafe { sys::napi_get_null(env, &mut n) }, "get null")?;
+            Ok(n)
+        }
+    }
+}
+
+fn new_object(env: sys::napi_env) -> JsRes<sys::napi_value> {
+    let mut obj = ptr::null_mut();
+    check(
+        unsafe { sys::napi_create_object(env, &mut obj) },
+        "create object",
+    )?;
+    Ok(obj)
+}
+
+fn report_entry(env: sys::napi_env, e: &OntologyReportEntry) -> JsRes<sys::napi_value> {
+    let obj = new_object(env)?;
+    set_prop(env, obj, c"rule", utf8(env, e.rule.as_str())?)?;
+    set_prop(env, obj, c"entity", utf8(env, entity_name(e.entity))?)?;
+    set_prop(env, obj, c"entityType", utf8(env, &e.entity_type)?)?;
+    set_prop(
+        env,
+        obj,
+        c"property",
+        null_or_string(env, e.property.as_deref())?,
+    )?;
+    let mut count = ptr::null_mut();
+    check(
+        unsafe { sys::napi_create_double(env, e.count as f64, &mut count) },
+        "create number",
+    )?;
+    set_prop(env, obj, c"count", count)?;
+    Ok(obj)
+}
+
+fn attach_ontology(env: sys::napi_env, err: sys::napi_value, d: &OntologyDetail) -> JsRes<()> {
+    set_prop(env, err, c"rule", utf8(env, d.rule)?)?;
+    set_prop(env, err, c"entity", utf8(env, d.entity)?)?;
+    set_prop(env, err, c"entityType", utf8(env, &d.entity_type)?)?;
+    set_prop(
+        env,
+        err,
+        c"property",
+        null_or_string(env, d.property.as_deref())?,
+    )?;
+    let entries = d
+        .report
+        .iter()
+        .map(|e| report_entry(env, e))
+        .collect::<JsRes<Vec<_>>>()?;
+    set_prop(env, err, c"report", array_of(env, entries)?)
+}
+
 /// A JS `Error` with `.code` set and `.name === "KgliteError"`.
 pub fn make_error(env: sys::napi_env, e: &JsErr) -> JsRes<sys::napi_value> {
     let code = utf8(env, e.code)?;
@@ -170,6 +282,9 @@ pub fn make_error(env: sys::napi_env, e: &JsErr) -> JsRes<sys::napi_value> {
     )?;
     if let Some(h) = &e.holder {
         set_prop(env, err, c"holder", holder_object(env, h)?)?;
+    }
+    if let Some(d) = &e.ontology {
+        attach_ontology(env, err, d)?;
     }
     Ok(err)
 }
@@ -211,6 +326,24 @@ mod tests {
         });
         assert_eq!(e.code, KgErrorCode::CypherSyntax.as_str());
         assert!(e.message.contains("bad"));
+    }
+
+    #[test]
+    fn ontology_violation_keeps_its_structured_fields() {
+        let e = JsErr::from_kg(&KgError::OntologyViolation {
+            rule: "domain",
+            entity: "relationship",
+            entity_type: "WORKS_AT".into(),
+            property: None,
+            message: "m".into(),
+            report: Vec::new(),
+        });
+        assert_eq!(e.code, "OntologyViolation");
+        let d = e.ontology.expect("detail");
+        assert_eq!(
+            (d.rule, d.entity, d.entity_type.as_str()),
+            ("domain", "relationship", "WORKS_AT")
+        );
     }
 
     #[test]

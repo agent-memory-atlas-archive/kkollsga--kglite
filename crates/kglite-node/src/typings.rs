@@ -92,6 +92,62 @@ pub struct KgliteErrorShape {
     pub message: String,
     /// Present on `WriterLeaseHeld`.
     pub holder: Option<LeaseHolderInfo>,
+    /// Present on `OntologyViolation`: the rule that fired (`required_property`,
+    /// `property_type`, `closed_labels`, `domain`, `range`). For a refused
+    /// declaration, the first report entry's.
+    pub rule: Option<String>,
+    /// Present on `OntologyViolation`.
+    #[napi(ts_type = "'node' | 'relationship'")]
+    pub entity: Option<String>,
+    /// Present on `OntologyViolation`: the label or relationship type.
+    pub entity_type: Option<String>,
+    /// Present on `OntologyViolation`: the offending property, `null` for a rule that has none.
+    #[napi(ts_type = "string | null")]
+    pub property: Option<String>,
+    /// Present on `OntologyViolation`: the per-rule breakdown of a refused declaration; empty for a refused write.
+    pub report: Option<Vec<OntologyReportEntry>>,
+}
+
+/// One line of a refused declaration's report: `count` stored entities already break `rule`.
+#[napi(object)]
+pub struct OntologyReportEntry {
+    pub rule: String,
+    #[napi(ts_type = "'node' | 'relationship'")]
+    pub entity: String,
+    pub entity_type: String,
+    #[napi(ts_type = "string | null")]
+    pub property: Option<String>,
+    pub count: f64,
+}
+
+/// What `declareOntology` returns.
+#[napi(object)]
+pub struct OntologyDeclared {
+    /// `warn`-level findings of the declaration over the stored data; empty when there are none.
+    pub warnings: Vec<String>,
+}
+
+/// What `backup` captured.
+#[napi(object)]
+pub struct BackupReport {
+    /// The destination file.
+    pub path: String,
+    /// Size of the published file.
+    pub bytes: f64,
+    pub nodes: f64,
+    pub relationships: f64,
+    /// The graph's in-memory commit count at the snapshot.
+    pub graph_version: f64,
+    /// Newest write-ahead-log position the file contains (`null` without a log). `number`
+    /// when exact, `bigint` beyond 2^53 - 1 (always `bigint` with `integers: 'bigint'`).
+    #[napi(ts_type = "number | bigint | null")]
+    pub lsn: f64,
+    /// How long writers were held off to fix the point in time.
+    pub lock_hold_ms: f64,
+    /// The whole call.
+    pub elapsed_ms: f64,
+    /// The snapshot needed a private copy first (costs a fork of the graph).
+    pub prepared_copy: bool,
 }
 
 /// A node as returned in a row.
