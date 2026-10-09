@@ -110,6 +110,19 @@ Contract points a binding has to honour:
   the original log and transfers subsequent logging after the new checkpoint
   succeeds. Hold the destination writer lease before save-as and keep it for
   the session's remaining lifetime; sessions leave lease ownership to callers.
+- **`checkpoint_online` is the checkpoint that does not stall writers.** It
+  fixes a snapshot, its LSN and the log offset under both locks for an `Arc`
+  clone, writes the stamped file onto the live path with no lock held, then
+  trims the log through that offset and keeps the frames committed meanwhile.
+  A crash after the rename and before the trim leaves the whole log beside a
+  file stamped with the snapshot LSN; replay skips the frames at or below it.
+  It shares a gate with `save`, so the two never overlap.
+- **The automatic policy is `needs_checkpoint` plus `maybe_checkpoint_online`.**
+  The bound is `set_auto_checkpoint_wal_bytes` (default
+  `DEFAULT_AUTO_CHECKPOINT_WAL_BYTES`, 16 MiB; `None` disables). It holds when
+  the log passes the bound and is at least as large as the checkpoint file. The
+  check reads a counter, so call it after every commit. The binding picks the
+  thread; core never starts one.
 - **`write()` / `transact` are not logged paths** and are unsupported on a
   durable session. Taking one anyway latches the session: every later
   durability operation fails loudly until a checkpoint folds the direct write

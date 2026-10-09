@@ -422,21 +422,14 @@ const CHECKPOINT_INTERVAL_ENV: &str = "KGLITE_BOLT_CHECKPOINT_INTERVAL";
 
 const CHECKPOINT_WAL_MIB_ENV: &str = "KGLITE_BOLT_CHECKPOINT_WAL_MIB";
 
-/// The log size, in MiB, past which a server that keeps a log checkpoints on its
-/// own when `--checkpoint-wal-mib` says nothing.
-///
-/// Measured on macOS with the edge workload (40-row upserts, about 2 KB of log
-/// per commit): restart replay costs 7-9 MiB above an idle server for a 6 MB or
-/// a 56 MB log that updates a bounded set of nodes, and up to 5x the log when the
-/// commits keep creating and deleting new nodes, because the replay plan keeps
-/// one entry per distinct node the log names. 16 MiB therefore caps a restart
-/// near 80 MiB in the worst case, at a checkpoint roughly every 8,000 commits. A
-/// graph large enough to make a save expensive makes the log's own size floor
-/// (the `.kgl` size) the binding one. Not measured on a Pi.
-const DEFAULT_CHECKPOINT_WAL_MIB: u64 = 16;
+/// The log size past which a server that keeps a log checkpoints on its own when
+/// `--checkpoint-wal-mib` says nothing: the engine's session default, shared with
+/// every embedded surface.
+const DEFAULT_CHECKPOINT_WAL_BYTES: u64 = kglite::api::session::DEFAULT_AUTO_CHECKPOINT_WAL_BYTES;
 
-/// How often the log's size is looked at: one `stat`, so cheap enough to be
-/// frequent, and short enough that a burst cannot outgrow the bound by much.
+/// How often the log's size is looked at: one lock and a counter read
+/// (`Session::needs_checkpoint`), so cheap enough to be frequent, and short
+/// enough that a burst cannot outgrow the bound by much.
 const WAL_SIZE_POLL: Duration = Duration::from_secs(10);
 
 const DURABILITY_ENV: &str = "KGLITE_BOLT_DURABILITY";
@@ -715,7 +708,7 @@ impl Durability {
             None => resolved
                 .level
                 .logs()
-                .then_some(DEFAULT_CHECKPOINT_WAL_MIB << 20),
+                .then_some(DEFAULT_CHECKPOINT_WAL_BYTES),
         };
         if resolved.wal_checkpoint_requested && !resolved.level.logs() {
             tracing::info!(
@@ -831,19 +824,16 @@ fn spawn_checkpoint_task(
     })
 }
 
-/// Whether the log has outgrown its bound: at least `threshold` bytes and at
-/// least as large as the checkpoint it extends (a missing checkpoint counts as
-/// empty, so the threshold alone decides).
-fn wal_needs_checkpoint(wal_len: u64, checkpoint_len: u64, threshold: u64) -> bool {
-    wal_len >= threshold && wal_len >= checkpoint_len
-}
-
-/// Spawn the log-size checkpoint task: look at the sidecar every `poll`
-/// ([`WAL_SIZE_POLL`] in the server) and checkpoint when [`wal_needs_checkpoint`] says so.
+/// Spawn the log-size checkpoint task: ask the session every `poll`
+/// ([`WAL_SIZE_POLL`] in the server) whether its log has outgrown `threshold`
+/// (`Session::needs_checkpoint`: past the bound and at least as large as the
+/// checkpoint it extends) and fold it with the online checkpoint.
 ///
-/// Same save, same skip rule, same lock discipline as the interval task — both
-/// go through [`checkpoint_if_changed`] — and the same failure stance: a failed
-/// checkpoint is logged at error and retried on the next poll, never fatal.
+/// The online checkpoint holds the session locks only to fix the snapshot and to
+/// trim the log, so writers keep committing through the file write; the
+/// interval task and `db.checkpoint()` still use the blocking `save`. A failed
+/// checkpoint is logged at error and the session backs the policy off by one
+/// threshold of log growth; it is never fatal.
 fn spawn_wal_size_checkpoint_task(
     session: Arc<kglite::api::session::Session>,
     path: PathBuf,
@@ -851,35 +841,43 @@ fn spawn_wal_size_checkpoint_task(
     threshold: u64,
     poll: Duration,
 ) -> tokio::task::JoinHandle<()> {
+    session.set_auto_checkpoint_wal_bytes(Some(threshold));
     tokio::spawn(async move {
-        let wal = kglite::api::durable::wal_path(&path);
         let mut ticker = tokio::time::interval(poll);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
-            let (wal_len, checkpoint_len) = (len(&wal), len(&path));
-            if !wal_needs_checkpoint(wal_len, checkpoint_len, threshold) {
+            if !session.needs_checkpoint() {
                 continue;
             }
-            match checkpoint_if_changed(&session, &path, &state) {
-                Ok(CheckpointOutcome::Written(version)) => tracing::info!(
+            let (worker, recorded) = (Arc::clone(&session), Arc::clone(&state));
+            let outcome = tokio::task::spawn_blocking(move || {
+                let report = worker.maybe_checkpoint_online()?;
+                if let Some(report) = &report {
+                    *recorded.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(report.graph_version);
+                }
+                Ok::<_, String>(report)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("checkpoint task panicked: {e}")));
+            match outcome {
+                Ok(Some(report)) => tracing::info!(
                     path = %path.display(),
-                    graph_version = version,
-                    wal_bytes = wal_len,
-                    "checkpoint-wal: graph written, log truncated"
+                    graph_version = report.graph_version,
+                    wal_bytes_before = report.wal_bytes_before,
+                    wal_bytes_after = report.wal_bytes_after,
+                    snapshot_hold_us = report.snapshot_hold.as_micros() as u64,
+                    trim_hold_us = report.trim_hold.as_micros() as u64,
+                    "checkpoint-wal: online checkpoint written, log trimmed"
                 ),
-                Ok(CheckpointOutcome::Skipped(version)) => tracing::debug!(
-                    graph_version = version,
-                    "checkpoint-wal: skipped (graph unchanged since the last checkpoint)"
-                ),
+                Ok(None) => tracing::debug!("checkpoint-wal: another checkpoint was running"),
                 Err(e) => tracing::error!(
                     path = %path.display(),
                     error = %e,
-                    wal_bytes = wal_len,
-                    "checkpoint-wal: save FAILED — the log keeps growing and the next \
-                     poll retries"
+                    "checkpoint-wal: online checkpoint FAILED — the log keeps growing and \
+                     the next attempt waits for one more threshold of growth"
                 ),
             }
         }
@@ -1409,32 +1407,10 @@ mod tests {
         );
     }
 
-    /// Zero and junk are startup errors, not a warn-and-ignore: a server that
-    /// silently never checkpoints is the failure the flag exists to prevent.
-    /// The size trigger fires on the log's size alone for a small graph and on
-    /// the graph file's size for a large one, and a missing file is empty.
-    #[test]
-    fn wal_checkpoint_waits_for_the_threshold_and_the_graph_file_size() {
-        const MIB: u64 = 1 << 20;
-        let threshold = DEFAULT_CHECKPOINT_WAL_MIB * MIB;
-        assert!(!wal_needs_checkpoint(threshold - 1, 0, threshold));
-        assert!(wal_needs_checkpoint(threshold, 0, threshold));
-        assert!(wal_needs_checkpoint(threshold, threshold, threshold));
-        assert!(
-            !wal_needs_checkpoint(threshold, 10 * threshold, threshold),
-            "a log smaller than the file it extends is cheaper to replay than to rewrite"
-        );
-        assert!(wal_needs_checkpoint(
-            10 * threshold,
-            10 * threshold,
-            threshold
-        ));
-    }
-
     /// The task folds an oversized log on its own: past the threshold the graph
     /// reaches `--graph` and the sidecar is cut back to its header, while a log
     /// under the threshold is left alone. Mutation-checked: dropping the
-    /// `wal_needs_checkpoint` guard checkpoints the small log too.
+    /// `needs_checkpoint` guard checkpoints the small log too.
     #[tokio::test]
     async fn the_wal_size_task_checkpoints_an_oversized_log_and_only_that() {
         use kglite::api::session::{execute_mut, CommitOutcome, ExecuteOptions};
@@ -1511,6 +1487,108 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// Writers keep acknowledging commits while the size task checkpoints: the
+    /// task uses the online checkpoint, so every acknowledged commit survives its
+    /// trims, the log stays bounded, and the shared skip-state records the
+    /// version it wrote.
+    #[tokio::test]
+    async fn the_wal_size_task_checkpoints_online_while_writers_keep_committing() {
+        use kglite::api::session::{execute_mut, CommitOutcome, ExecuteOptions};
+        use std::collections::HashMap;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let scratch = scratch_dir("walonline");
+        let path = scratch.join("graph.kgl");
+        let started = start_graph(
+            &path,
+            Some(StorageMode::Memory),
+            false,
+            DurabilityRequest {
+                level: DurabilityLevel::Normal,
+                explicit: true,
+            },
+            None,
+            &mut |_| {},
+        )
+        .expect("a durable memory graph");
+        let session = Arc::new(started.session);
+        let lease = started.writer_lease;
+        let state: CheckpointState = Arc::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (session, stop) = (Arc::clone(&session), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut acked = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let params = HashMap::new();
+                    let mut tx = session.begin();
+                    execute_mut(
+                        tx.working_mut().expect("working copy"),
+                        &format!("CREATE (:N {{id: {acked}, pad: '{}'}})", "x".repeat(200)),
+                        &ExecuteOptions::eager(&params),
+                    )
+                    .expect("mutation");
+                    match session.commit(tx, true) {
+                        CommitOutcome::Committed { .. } => acked += 1,
+                        other => panic!("commit must not fail: {other:?}"),
+                    }
+                }
+                acked
+            })
+        };
+        let poll = Duration::from_millis(10);
+        let task = spawn_wal_size_checkpoint_task(
+            Arc::clone(&session),
+            path.clone(),
+            Arc::clone(&state),
+            8 * 1024,
+            poll,
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while state.lock().unwrap().is_none() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(poll).await;
+        }
+        tokio::time::sleep(poll * 20).await;
+        stop.store(true, Ordering::Relaxed);
+        let acked = writer.join().expect("writer thread");
+        task.abort();
+        let _ = task.await;
+        assert!(
+            state.lock().unwrap().is_some(),
+            "an online checkpoint must have run"
+        );
+        let wal = kglite::api::durable::wal_path(&path);
+        let wal_len = std::fs::metadata(&wal).map_or(0, |m| m.len());
+        assert!(
+            wal_len < acked * 40,
+            "the log must have been trimmed along the way: {wal_len} bytes for {acked} commits"
+        );
+        drop(session);
+        drop(lease);
+        let reopened = start_graph(
+            &path,
+            Some(StorageMode::Memory),
+            false,
+            DurabilityRequest {
+                level: DurabilityLevel::Normal,
+                explicit: true,
+            },
+            None,
+            &mut |_| {},
+        )
+        .expect("reopen");
+        let rows = kglite::api::session::execute_read(
+            &reopened.session.snapshot(),
+            "MATCH (n:N) RETURN count(n) AS c",
+            &ExecuteOptions::eager(&HashMap::new()),
+        )
+        .expect("count")
+        .result
+        .rows;
+        assert_eq!(format!("{:?}", rows[0][0]), format!("Int64({acked})"));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[test]
     fn checkpoint_wal_mib_accepts_whole_numbers_and_zero() {
         assert_eq!(parse_checkpoint_wal_mib(" 64 "), Ok(64));
@@ -1519,6 +1597,8 @@ mod tests {
         assert!(parse_checkpoint_wal_mib("-1").is_err());
     }
 
+    /// Zero and junk are startup errors, not a warn-and-ignore: a server that
+    /// silently never checkpoints is the failure the flag exists to prevent.
     #[test]
     fn checkpoint_interval_rejects_zero_and_junk() {
         let zero = parse_checkpoint_interval("0").expect_err("0 would checkpoint continuously");

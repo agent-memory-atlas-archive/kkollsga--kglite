@@ -1758,7 +1758,7 @@ impl Wal {
     }
 
     /// Frame bytes in the log, header excluded.
-    pub(crate) fn frame_bytes(&self) -> u64 {
+    pub fn frame_bytes(&self) -> u64 {
         self.end.saturating_sub(WAL_HEADER_LEN)
     }
 

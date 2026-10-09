@@ -1113,6 +1113,46 @@ def test_a_checkpoint_truncates_the_log_and_later_commits_start_a_fresh_one(tmp_
         _teardown_bolt_server(restarted)
 
 
+def test_the_log_size_trigger_trims_the_log_online_and_a_kill_loses_nothing(tmp_path):
+    """`--checkpoint-wal-mib` now runs the online checkpoint: the size poller
+    (every 10 s) folds an oversized log into the `.kgl` and trims it, commits keep
+    being acknowledged, and a SIGKILL right afterwards still recovers every
+    acknowledged write from the checkpoint plus whatever log tail is left."""
+    _require_binary()
+    fixture = tmp_path / "wal-online.kgl"
+    _build_bolt_fixture_graph(fixture)
+    proc, url = _spawn_bolt_server(
+        fixture, extra_args=["--durability", "normal", "--checkpoint-wal-mib", "1"]
+    )
+    pad = "x" * (64 * 1024)
+    before = fixture.stat().st_mtime_ns
+    try:
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                for i in range(40):
+                    session.run(
+                        "CREATE (:Blob {id: $i, pad: $pad})", i=i, pad=pad
+                    ).consume()
+            assert _wal_size(fixture) > 2 * 1024 * 1024, "2.5 MiB of log before the poller runs"
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and fixture.stat().st_mtime_ns == before:
+                time.sleep(0.25)
+            assert fixture.stat().st_mtime_ns != before, "the poller checkpointed the oversized log"
+            with driver.session() as session:
+                # Writers keep being acknowledged after the checkpoint.
+                session.run("CREATE (:Blob {id: 1000, pad: 'tail'})").consume()
+        assert _wal_size(fixture) < 2 * 1024 * 1024, "the log was trimmed"
+    finally:
+        _teardown_bolt_server(proc)  # SIGKILL
+    restarted, restarted_url = _spawn_bolt_server(fixture, extra_args=["--durability", "normal"])
+    try:
+        with neo4j.GraphDatabase.driver(restarted_url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                assert session.run("MATCH (b:Blob) RETURN count(b) AS c").single()["c"] == 41
+    finally:
+        _teardown_bolt_server(restarted)
+
+
 def test_save_on_exit_flushes_and_truncates_the_log(tmp_path):
     """A graceful stop under a log: the exit path flushes the log, the exit
     save folds it into the `.kgl`, and the log is left truncated — so the next

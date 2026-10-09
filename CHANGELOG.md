@@ -47,6 +47,31 @@ before upgrading.
 
 ### Added
 
+- **Durable sessions checkpoint on their own.** A log that grows past
+  `autoCheckpointWalMib` / `auto_checkpoint_wal_mib` (default 16 MiB; `0`
+  disables) is folded into the checkpoint without stopping other writers. The
+  log is no longer left to grow until `close()` on the embedded surfaces, so a
+  restart no longer replays an ever-longer log.
+  - Core: `Session::checkpoint_online()` snapshots the graph and the log
+    position under the session locks for an `Arc` clone, writes the stamped
+    checkpoint with no lock held, then trims the log and keeps the commits that
+    landed meanwhile. `Session::needs_checkpoint()` and
+    `maybe_checkpoint_online()` are the policy; each binding chooses the
+    thread. In a 1M-node release run, the longest commit during a checkpoint
+    fell from 296 ms (`save`) to 9.5 ms.
+  - Node: `OpenOptions.autoCheckpointWalMib`. The checkpoint runs on a
+    background thread after the commit resolves, never on the JavaScript
+    thread.
+  - Python: `kglite.open(..., auto_checkpoint_wal_mib=)`. It runs inline in the
+    commit that crosses the bound, with the GIL released, so that call takes
+    about as long as `save()`.
+  - C and Java: `"auto_checkpoint_wal_mib"` in `kglite_open_session` options,
+    `OpenOptions.autoCheckpointWalMib(long)`. It runs inline in the commit that
+    crosses the bound.
+  - Bolt server: `--checkpoint-wal-mib` now uses the online checkpoint, so
+    writers keep committing during it. `--checkpoint-interval` and
+    `db.checkpoint()` still use the blocking save.
+
 - **Java: durable open, interactive transactions, cancellation, backup and
   ontology.** All reach the C ABI symbols that already shipped.
   - `KnowledgeGraph.open(path, OpenOptions)` takes the writer lease, replays

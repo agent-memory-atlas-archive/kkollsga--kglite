@@ -327,6 +327,8 @@ export interface OpenOptions {
   integers?: 'safe' | 'bigint'
   /** Which instant an unprefixed statement reads on a graph with declared validity intervals: `'today'` (default), `'all'` (no valid-time filtering) or a fixed `'YYYY-MM-DD'` day. Runtime only; not saved with the graph. */
   validTimeDefault?: string
+  /** Write-ahead log size in MiB past which a commit starts a background checkpoint (online: writers keep committing; it never runs on the JS thread or delays the commit's promise). Default 16; `0` disables it. Not combinable with `readOnly`. */
+  autoCheckpointWalMib?: number
 }
 
 /** Named parameters, referenced in Cypher as `$name`. */

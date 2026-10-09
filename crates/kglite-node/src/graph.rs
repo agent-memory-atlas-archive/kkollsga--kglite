@@ -26,7 +26,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::time::Duration as StdDuration;
 
 use kglite::api::durable::DurabilityLevel;
@@ -82,9 +82,99 @@ pub(crate) struct Inner {
     pub(crate) txs: Mutex<Vec<Weak<TxShared>>>,
     /// The JavaScript embedder from `setEmbedder`, handed to every query.
     pub(crate) embedder: Mutex<Option<Arc<JsEmbedder>>>,
+    /// Background online checkpoints in flight, so `close` can wait them out.
+    pub(crate) background: Mutex<usize>,
+    pub(crate) background_idle: Condvar,
 }
 
 impl Inner {
+    /// After a commit: when the log has outgrown `autoCheckpointWalMib`, fold it
+    /// into the checkpoint on a thread of its own.
+    ///
+    /// Never on the caller's thread or its promise: the commit's result is
+    /// already on its way, and the online checkpoint holds the session locks
+    /// only to fix its snapshot and to trim the log, so writers keep committing
+    /// through the file write. A dedicated thread rather than the query pool
+    /// because `close` waits for it, and a pool worker waiting on a job queued
+    /// behind other waiting workers would never return. A failure is not the
+    /// commit's failure; the session backs its policy off by one bound of log
+    /// growth and `checkpoint()` / `close()` still report their own errors.
+    pub(crate) fn kick_checkpoint(self: &Arc<Self>) {
+        if self.read_only {
+            return;
+        }
+        let Some(session) = self
+            .session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return;
+        };
+        if !session.needs_checkpoint() {
+            return;
+        }
+        {
+            let mut running = self
+                .background
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            // Registered under the lock with the closed check, so `close` either
+            // waits for this checkpoint or this call sees the close.
+            if self.closed.load(Ordering::Acquire) {
+                return;
+            }
+            *running += 1;
+        }
+        let inner = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("kglite-node-checkpoint".to_string())
+            .stack_size(pool::worker_stack_size())
+            .spawn({
+                let session = Arc::clone(&session);
+                let inner = Arc::clone(&inner);
+                move || {
+                    if let Ok(Some(report)) = session.maybe_checkpoint_online() {
+                        *inner
+                            .last_checkpoint
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(report.graph_version);
+                    }
+                    drop(session);
+                    inner.finish_background();
+                }
+            });
+        if spawned.is_err() {
+            inner.finish_background();
+        }
+    }
+
+    fn finish_background(&self) {
+        let mut running = self
+            .background
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *running -= 1;
+        if *running == 0 {
+            self.background_idle.notify_all();
+        }
+    }
+
+    /// Block until no background checkpoint is running. Called by `close` after
+    /// `closed` is set, so none can start.
+    fn wait_background_idle(&self) {
+        let mut running = self
+            .background
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        while *running > 0 {
+            running = self
+                .background_idle
+                .wait(running)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     pub(crate) fn session(&self) -> JsRes<Arc<Session>> {
         self.session
             .lock()
@@ -119,6 +209,8 @@ struct OpenConfig {
     defaults: QueryDefaults,
     ints: IntegerMode,
     valid_time_default: Option<ValidTimeDefault>,
+    /// Log size in MiB that triggers a background checkpoint; `0` disables it.
+    auto_checkpoint_wal_mib: Option<u64>,
 }
 
 fn count(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
@@ -185,6 +277,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
     let mut read_only = false;
     let mut lock_explicit = false;
     let mut valid_time_default = None;
+    let mut auto_checkpoint_wal_mib = None;
     let known = [
         "durability",
         "storage",
@@ -194,6 +287,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
         "rowLimit",
         "integers",
         "validTimeDefault",
+        "autoCheckpointWalMib",
     ];
     for (key, val) in option_entries(f, v, &known, "open option")? {
         match key.as_str() {
@@ -253,17 +347,26 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
                 let text = expect_string(f, val, "validTimeDefault")?;
                 valid_time_default = Some(ValidTimeDefault::parse(&text).map_err(JsErr::arg)?);
             }
+            "autoCheckpointWalMib" => {
+                auto_checkpoint_wal_mib = Some(expect_number(f, val, "autoCheckpointWalMib")?);
+            }
             _ => unreachable!("filtered by option_entries"),
         }
     }
     spec.valid_time_default = valid_time_default;
-    if read_only && (spec.durability_explicit || spec.storage.is_some() || lock_explicit) {
+    if read_only
+        && (spec.durability_explicit
+            || spec.storage.is_some()
+            || lock_explicit
+            || auto_checkpoint_wal_mib.is_some())
+    {
         return Err(JsErr::arg(
-            "readOnly cannot be combined with durability, storage or lockTimeoutMs: \
-             a read-only graph loads the last checkpoint and takes no lease",
+            "readOnly cannot be combined with durability, storage, lockTimeoutMs or \
+             autoCheckpointWalMib: a read-only graph loads the last checkpoint and takes no lease",
         ));
     }
     Ok(OpenConfig {
+        auto_checkpoint_wal_mib,
         spec,
         read_only,
         defaults,
@@ -537,7 +640,7 @@ impl Graph {
         }
         let handle = args.cancel.clone();
         let inner = Arc::clone(&self.inner);
-        let promise = pool::spawn(env, move || {
+        let promise = pool::spawn_for(write, env, move || {
             if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
                 return failed(cancelled_error());
             }
@@ -561,6 +664,9 @@ impl Graph {
                 }
             };
             let ints = inner.ints;
+            if write && outcome.is_ok() {
+                inner.kick_checkpoint();
+            }
             match outcome {
                 Ok(outcome) => Box::new(move |env: Env| build_result(env.raw(), &outcome, ints)),
                 Err(e) => failed(JsErr::from_kg(&e)),
@@ -570,14 +676,14 @@ impl Graph {
         wire_signal(env, signal.as_ref(), handle.as_ref(), promise)
     }
 
-    /// Ship `work` to the pool, rejecting at once when the graph is already closed.
+    /// Ship `work` to the writer thread, rejecting at once when the graph is already closed.
     fn lifecycle<'e>(
         &self,
         env: &'e Env,
         work: impl FnOnce(&Inner) -> Settle + Send + 'static,
     ) -> napi::Result<Object<'e>, &'static str> {
         let inner = Arc::clone(&self.inner);
-        pool::spawn(env, move || work(&inner)).map_err(|e| to_sync_error(JsErr::from(e)))
+        pool::spawn_write(env, move || work(&inner)).map_err(|e| to_sync_error(JsErr::from(e)))
     }
 }
 
@@ -717,6 +823,7 @@ impl Graph {
                     }
                 }
                 inner.closed.store(true, Ordering::Release);
+                inner.wait_background_idle();
                 inner.abandon_transactions();
                 // Session first (closes the log), lease second (admits a successor).
                 drop(
@@ -824,6 +931,9 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         advisories: advisories(&opened.advisories),
     };
     let session = opened.session;
+    if let Some(mib) = config.auto_checkpoint_wal_mib {
+        session.set_auto_checkpoint_wal_bytes((mib > 0).then_some(mib.saturating_mul(1 << 20)));
+    }
     Ok(Inner {
         open_version: session.version(),
         session: Mutex::new(Some(Arc::new(session))),
@@ -840,6 +950,8 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         write_lock: Mutex::new(()),
         txs: Mutex::new(Vec::new()),
         embedder: Mutex::new(None),
+        background: Mutex::new(0),
+        background_idle: Condvar::new(),
     })
 }
 
@@ -880,6 +992,8 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         write_lock: Mutex::new(()),
         txs: Mutex::new(Vec::new()),
         embedder: Mutex::new(None),
+        background: Mutex::new(0),
+        background_idle: Condvar::new(),
     })
 }
 

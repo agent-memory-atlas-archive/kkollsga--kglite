@@ -109,6 +109,16 @@ impl SessionState {
     }
 }
 
+/// Fold the write-ahead log into the checkpoint when it has outgrown the
+/// session's bound (`"auto_checkpoint_wal_mib"`). Runs inline on the calling
+/// thread, after the commit has resolved: other threads' commits are not
+/// blocked by it, this caller's return is delayed by it. A failure is not the
+/// commit's failure (the commit is already durable in the log), so it is
+/// dropped here and the session backs its policy off.
+pub(crate) fn auto_checkpoint(session: &Session) {
+    let _ = session.maybe_checkpoint_online();
+}
+
 /// Run `operation` against a fork of a durable session and commit it through
 /// the write-ahead log, as one transaction. An error from the operation drops
 /// the fork, so nothing it wrote is published.
@@ -121,7 +131,10 @@ pub(crate) fn durable_transaction<T, E>(
     let working = tx.working_mut().map_err(&commit_error)?;
     let value = operation(working)?;
     match session.commit(tx, true) {
-        CommitOutcome::Committed { .. } | CommitOutcome::NoWritesNoOp => Ok(value),
+        CommitOutcome::Committed { .. } | CommitOutcome::NoWritesNoOp => {
+            auto_checkpoint(session);
+            Ok(value)
+        }
         CommitOutcome::ConflictDetected {
             current_version,
             base_version,
@@ -146,6 +159,9 @@ struct OpenOptions {
     lock_timeout_ms: Option<i64>,
     valid_time_default: Option<ValidTimeDefault>,
     create_if_missing: bool,
+    /// Log size in MiB that triggers an inline checkpoint after a commit;
+    /// `0` disables it. `None` keeps the engine default.
+    auto_checkpoint_wal_mib: Option<u64>,
 }
 
 fn parse_open_options(json: Option<&str>) -> Result<OpenOptions, String> {
@@ -186,6 +202,14 @@ fn parse_open_options(json: Option<&str>) -> Result<OpenOptions, String> {
                 out.create_if_missing = value
                     .as_bool()
                     .ok_or("create_if_missing must be a boolean")?;
+            }
+            "auto_checkpoint_wal_mib" => {
+                out.auto_checkpoint_wal_mib = Some(
+                    value
+                        .as_u64()
+                        .filter(|mib| *mib <= 1 << 40)
+                        .ok_or("auto_checkpoint_wal_mib must be a non-negative integer")?,
+                );
             }
             other => return Err(format!("unknown open option '{other}'")),
         }
@@ -329,6 +353,11 @@ fn open_writer(
             return Err((KgliteStatusCode::FileIo, message));
         }
     };
+    if let Some(mib) = opts.auto_checkpoint_wal_mib {
+        opened
+            .session
+            .set_auto_checkpoint_wal_bytes((mib > 0).then_some(mib.saturating_mul(1 << 20)));
+    }
     let advisories = opened
         .advisories
         .iter()
@@ -392,6 +421,13 @@ fn open_writer(
 /// - `"valid_time_default"`: `"today"` (default), `"all"` or a `YYYY-MM-DD`
 ///   date; the instant unprefixed statements read on a graph that declares
 ///   validity intervals.
+/// - `"auto_checkpoint_wal_mib"`: non-negative integer, default `16`; `0`
+///   disables it. A durable session whose log outgrows this many MiB (and is at
+///   least as large as its checkpoint) folds it into the checkpoint with an
+///   online checkpoint, run **inline** on the thread of the commit that crossed
+///   the bound, once that commit is published: other threads keep committing
+///   during the file write, but that one call takes the checkpoint's time.
+///   Without it the log grows until `kglite_session_checkpoint` or close.
 /// - `"create_if_missing"`: boolean, default `false`. A missing path is
 ///   `KGLITE_STATUS_CODE_FILE_NOT_FOUND` unless this is true, so a typo'd path
 ///   never becomes an empty database.

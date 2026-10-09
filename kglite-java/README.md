@@ -439,6 +439,10 @@ try (KnowledgeGraph graph = KnowledgeGraph.open(path, options)) {
   a checkpoint — and every write, `begin()`, `sync()` and `checkpoint()` is
   refused with `ReadOnlyGraphException`. It cannot be combined with `storage`,
   `createIfMissing`, `lockTimeout` or an explicit durability.
+- **`autoCheckpointWalMib(long)`** (default 16, `0` disables) folds an
+  oversized write-ahead log into the checkpoint. It runs inline on the thread
+  of the commit that crossed the bound; other threads keep committing during
+  the file write.
 - `graph.openInfo()` reports the mode and durability actually in force
   (a disk-mode graph has no log and runs at `OFF`, reported as `degradedFrom`),
   any storage conversion, and `graph.openWarnings()` the advisories (a

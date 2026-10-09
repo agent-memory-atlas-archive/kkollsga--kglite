@@ -663,9 +663,15 @@ unsafe fn run_mut(
                 // A durable session's mutations must reach its write-ahead
                 // log, which only `begin`/`commit` writes; the direct write
                 // guard below would latch the log as diverged.
-                session_state
-                    .inner
-                    .execute_auto_commit(query_str, &opts, DURABLE_WRITE_ATTEMPTS)
+                let outcome = session_state.inner.execute_auto_commit(
+                    query_str,
+                    &opts,
+                    DURABLE_WRITE_ATTEMPTS,
+                );
+                if outcome.is_ok() {
+                    crate::lifecycle::auto_checkpoint(&session_state.inner);
+                }
+                outcome
             } else {
                 // Hold the core Session write guard across execution. This
                 // serializes the complete mutation (preventing last-writer-loses

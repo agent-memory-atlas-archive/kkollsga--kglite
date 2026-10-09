@@ -26,6 +26,8 @@ import java.util.Objects;
  *   <li>{@link #createIfMissing(boolean)} a missing path is an error unless
  *       this is {@code true}, so a typo'd path never becomes an empty
  *       database.</li>
+ *   <li>{@link #autoCheckpointWalMib(long)} the log size past which a commit
+ *       folds the log into the checkpoint; default 16 MiB, {@code 0} disables.</li>
  *   <li>{@link #readOnly(boolean)} takes no lease and loads the last
  *       checkpoint with nothing created, converted, logged or written. It
  *       cannot be combined with storage, createIfMissing, a lock timeout or an
@@ -35,7 +37,7 @@ import java.util.Objects;
 public final class OpenOptions {
 
     private static final OpenOptions DEFAULTS =
-            new OpenOptions(null, null, null, null, false, false);
+            new OpenOptions(null, null, null, null, false, false, null);
 
     private final StorageMode storage;
     private final Durability durability;
@@ -43,16 +45,19 @@ public final class OpenOptions {
     private final String validTimeDefault;
     private final boolean createIfMissing;
     private final boolean readOnly;
+    private final Long autoCheckpointWalMib;
 
     private OpenOptions(
             StorageMode storage, Durability durability, Duration lockTimeout,
-            String validTimeDefault, boolean createIfMissing, boolean readOnly) {
+            String validTimeDefault, boolean createIfMissing, boolean readOnly,
+            Long autoCheckpointWalMib) {
         this.storage = storage;
         this.durability = durability;
         this.lockTimeout = lockTimeout;
         this.validTimeDefault = validTimeDefault;
         this.createIfMissing = createIfMissing;
         this.readOnly = readOnly;
+        this.autoCheckpointWalMib = autoCheckpointWalMib;
     }
 
     /**
@@ -72,7 +77,7 @@ public final class OpenOptions {
      */
     public OpenOptions storage(StorageMode storage) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
     }
 
     /**
@@ -83,7 +88,7 @@ public final class OpenOptions {
      */
     public OpenOptions durability(Durability durability) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
     }
 
     /**
@@ -94,7 +99,7 @@ public final class OpenOptions {
      */
     public OpenOptions lockTimeout(Duration lockTimeout) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
     }
 
     /**
@@ -106,7 +111,7 @@ public final class OpenOptions {
      */
     public OpenOptions validTimeDefault(String validTimeDefault) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
     }
 
     /**
@@ -127,7 +132,7 @@ public final class OpenOptions {
      */
     public OpenOptions createIfMissing(boolean createIfMissing) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
     }
 
     /**
@@ -138,7 +143,24 @@ public final class OpenOptions {
      */
     public OpenOptions readOnly(boolean readOnly) {
         return new OpenOptions(
-                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly);
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, autoCheckpointWalMib);
+    }
+
+    /**
+     * The write-ahead log size, in MiB, past which a durable session folds its
+     * log into the checkpoint with an online checkpoint. The checkpoint runs
+     * inline on the thread of the commit that crossed the bound, so that one
+     * call takes the checkpoint's time while other threads keep committing.
+     *
+     * @param mib the bound in MiB; {@code 0} disables it (default 16)
+     * @return a changed copy
+     */
+    public OpenOptions autoCheckpointWalMib(long mib) {
+        if (mib < 0) {
+            throw new IllegalArgumentException("autoCheckpointWalMib must not be negative");
+        }
+        return new OpenOptions(
+                storage, durability, lockTimeout, validTimeDefault, createIfMissing, readOnly, mib);
     }
 
     /** The {@code options_json} object the C ABI takes. */
@@ -163,6 +185,9 @@ public final class OpenOptions {
         }
         if (createIfMissing) {
             wire.put("create_if_missing", true);
+        }
+        if (autoCheckpointWalMib != null) {
+            wire.put("auto_checkpoint_wal_mib", autoCheckpointWalMib);
         }
         return Json.writeObject(wire);
     }

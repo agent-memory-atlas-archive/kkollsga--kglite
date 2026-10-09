@@ -565,13 +565,14 @@ fn durable_level_from_arg(
 /// if it needs `open()`'s save-back binding, `kglite.open(path, durable="off",
 /// lock=False)`.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, durable=None, lock=true))]
+#[pyo3(signature = (path, *, storage=None, durable=None, lock=true, auto_checkpoint_wal_mib=None))]
 fn open(
     py: Python<'_>,
     path: String,
     storage: Option<&str>,
     durable: Option<Bound<'_, PyAny>>,
     lock: bool,
+    auto_checkpoint_wal_mib: Option<u64>,
 ) -> PyResult<KnowledgeGraph> {
     use kglite_core::api::durable::DurabilityLevel;
     use kglite_core::api::GraphRead;
@@ -686,7 +687,7 @@ fn open(
     };
     // Called at every level, `off` included — recovery on open is a decision
     // about the path's *data*. See `setup_durable`.
-    setup_durable(&mut kg, &path, level)?;
+    setup_durable(&mut kg, &path, level, auto_checkpoint_wal_mib)?;
     Ok(kg)
 }
 
@@ -746,6 +747,7 @@ fn setup_durable(
     kg: &mut KnowledgeGraph,
     path: &str,
     level: kglite_core::api::durable::DurabilityLevel,
+    auto_checkpoint_wal_mib: Option<u64>,
 ) -> PyResult<()> {
     use kglite_core::api::durable as wal;
     use kglite_core::api::GraphRead;
@@ -789,6 +791,13 @@ fn setup_durable(
             level,
             diverged: false,
             fail_append: false,
+            auto_checkpoint_wal_bytes: match auto_checkpoint_wal_mib {
+                Some(0) => None,
+                Some(mib) => Some(mib.saturating_mul(1 << 20)),
+                None => Some(kglite_core::api::session::DEFAULT_AUTO_CHECKPOINT_WAL_BYTES),
+            },
+            checkpoint_floor: None,
+            retry_after_wal_bytes: 0,
         });
     }
     Ok(())

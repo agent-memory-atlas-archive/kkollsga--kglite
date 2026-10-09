@@ -327,6 +327,16 @@ pub(crate) struct DurableState {
     /// fail on exactly the build where it matters most. The cost is one `bool`
     /// per durable graph and one branch per logged commit.
     pub(crate) fail_append: bool,
+    /// Log bytes past which a commit folds the log into the checkpoint inline
+    /// (`kglite.open(auto_checkpoint_wal_mib=)`); `None` disables it.
+    pub(crate) auto_checkpoint_wal_bytes: Option<u64>,
+    /// Size of the checkpoint file, read once when the log first crosses the
+    /// bound and again after each checkpoint: a log smaller than the file it
+    /// extends does not justify rewriting that file, and the commit path must
+    /// not stat on every commit.
+    pub(crate) checkpoint_floor: Option<u64>,
+    /// Log size below which a failed automatic checkpoint is not retried.
+    pub(crate) retry_after_wal_bytes: u64,
 }
 
 /// Message every operation a failed append invalidated answers with.
@@ -498,7 +508,89 @@ impl KnowledgeGraph {
         // or append a source WAL for an independently mutated derived handle.
         self.check_durable_owner()?;
         self.flush_wal()
-            .map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))
+            .map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))?;
+        self.auto_checkpoint_if_needed();
+        Ok(())
+    }
+
+    /// Fold the log into the checkpoint when it has outgrown
+    /// `auto_checkpoint_wal_mib` (and is at least as large as the file it
+    /// extends). Runs inline on the committing thread with the GIL released for
+    /// the write, so the commit that crosses the bound takes the checkpoint's
+    /// time; this handle is a single owner, so there is no concurrent writer to
+    /// leave unblocked. The commit is already in the log, so a failed checkpoint
+    /// is a `UserWarning`, not an error, and the policy backs off by one bound
+    /// of log growth.
+    fn auto_checkpoint_if_needed(&mut self) {
+        let Some(ds) = self.lifecycle.durable.as_mut() else {
+            return;
+        };
+        let Some(limit) = ds.auto_checkpoint_wal_bytes else {
+            return;
+        };
+        let size = ds.wal.frame_bytes();
+        if ds.diverged || size < limit || size < ds.retry_after_wal_bytes {
+            return;
+        }
+        let Some(source) = self.lifecycle.source_path.clone() else {
+            return;
+        };
+        let floor = *ds
+            .checkpoint_floor
+            .get_or_insert_with(|| std::fs::metadata(&source).map_or(0, |m| m.len()));
+        if size < floor {
+            return;
+        }
+        let outcome = Python::attach(|py| py.detach(|| self.checkpoint_in_place(&source)));
+        let Some(ds) = self.lifecycle.durable.as_mut() else {
+            return;
+        };
+        ds.checkpoint_floor = None;
+        match outcome {
+            Ok(()) => ds.retry_after_wal_bytes = 0,
+            Err(message) => {
+                ds.retry_after_wal_bytes = size.saturating_add(limit);
+                let text = format!(
+                    "automatic checkpoint of the write-ahead log failed ({message}); the \
+                     commit is in the log, which keeps growing, and the next attempt waits \
+                     for one more auto_checkpoint_wal_mib of growth"
+                );
+                Python::attach(|py| {
+                    let cmsg = std::ffi::CString::new(text).unwrap_or_default();
+                    let _ = PyErr::warn(
+                        py,
+                        py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
+                        cmsg.as_c_str(),
+                        1,
+                    );
+                });
+            }
+        }
+    }
+
+    /// The same-target checkpoint `save()` runs on a durable graph: flush and
+    /// stamp, write the `.kgl`, then reset the log.
+    fn checkpoint_in_place(&mut self, target: &std::path::Path) -> Result<(), String> {
+        use kglite_core::api::durable;
+        let Some(state) = self.lifecycle.durable.as_mut() else {
+            return Ok(());
+        };
+        let previous_stamp = self.inner.checkpoint_lsn;
+        durable::checkpoint_prologue(
+            &mut state.wal,
+            state.next_lsn,
+            get_graph_mut(&mut self.inner),
+        )
+        .map_err(|e| e.to_string())?;
+        if let Err(error) =
+            kglite_core::api::io::save_graph_with(&mut self.inner, &target.to_string_lossy(), true)
+        {
+            Arc::make_mut(&mut self.inner).checkpoint_lsn = previous_stamp;
+            return Err(error.to_string());
+        }
+        let state = self.lifecycle.durable.as_mut().expect("checked above");
+        durable::checkpoint_epilogue(&mut state.wal, Arc::make_mut(&mut self.inner))
+            .map_err(|e| e.to_string())
     }
 
     /// The tail every `store_as=` writer (`calculate`, `count`,

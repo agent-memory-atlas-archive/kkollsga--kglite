@@ -184,7 +184,10 @@ fn commit_tx(shared: &TxShared) -> JsRes<()> {
         State::Open(tx) => {
             let session = shared.graph.session()?;
             match session.commit(*tx, true) {
-                CommitOutcome::NoWritesNoOp | CommitOutcome::Committed { .. } => Ok(()),
+                CommitOutcome::NoWritesNoOp | CommitOutcome::Committed { .. } => {
+                    shared.graph.kick_checkpoint();
+                    Ok(())
+                }
                 CommitOutcome::ConflictDetected {
                     current_version,
                     base_version,
@@ -242,7 +245,7 @@ impl Transaction {
             }
             let handle = args.cancel.clone();
             let shared = Arc::clone(&self.shared);
-            let promise = pool::spawn(env, move || {
+            let promise = pool::spawn_for(!shared.read_only, env, move || {
                 if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
                     return failed(cancelled_error());
                 }
@@ -264,7 +267,7 @@ impl Transaction {
     pub fn commit<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             let shared = Arc::clone(&self.shared);
-            pool::spawn(env, move || match commit_tx(&shared) {
+            pool::spawn_for(!shared.read_only, env, move || match commit_tx(&shared) {
                 Ok(()) => done(),
                 Err(e) => failed(e),
             })
@@ -277,7 +280,7 @@ impl Transaction {
     pub fn rollback<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             let shared = Arc::clone(&self.shared);
-            pool::spawn(env, move || {
+            pool::spawn_for(!shared.read_only, env, move || {
                 let mut state = shared.state();
                 if matches!(*state, State::Open(_) | State::Aborted) {
                     *state = State::Finished(Finish::RolledBack);
@@ -345,7 +348,7 @@ impl Graph {
                 Err(e) => return err_promise(env, e),
             };
             let inner = Arc::clone(&self.inner);
-            pool::spawn(env, move || match begin_tx(&inner, read_only) {
+            pool::spawn_for(!read_only, env, move || match begin_tx(&inner, read_only) {
                 Ok(tx) => Box::new(move |env: Env| {
                     unsafe { Transaction::to_napi_value(env.raw(), tx) }.map_err(JsErr::from)
                 }),

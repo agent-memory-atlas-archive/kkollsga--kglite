@@ -265,6 +265,7 @@ pub unsafe extern "C" fn kglite_tx_commit(
             }
             match session.inner.commit(inner, true) {
                 CommitOutcome::NoWritesNoOp | CommitOutcome::Committed { .. } => {
+                    crate::lifecycle::auto_checkpoint(&session.inner);
                     KgliteStatusCode::Ok
                 }
                 CommitOutcome::ConflictDetected {

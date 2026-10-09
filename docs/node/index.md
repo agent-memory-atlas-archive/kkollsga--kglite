@@ -45,8 +45,9 @@ For the query language itself, see the [Cypher reference](../reference/cypher-re
 |---|---|---|
 | `durability` | `'full'` | Crash-safety level (below). Refused with `storage: 'disk'` when set explicitly. |
 | `storage` | engine default | `'memory'`, `'mapped'` or `'disk'`. |
-| `readOnly` | `false` | Load the last checkpoint and take no lease. Writes reject with `ReadOnly`. Not combinable with `durability`, `storage` or `lockTimeoutMs`. |
+| `readOnly` | `false` | Load the last checkpoint and take no lease. Writes reject with `ReadOnly`. Not combinable with `durability`, `storage`, `lockTimeoutMs` or `autoCheckpointWalMib`. |
 | `lockTimeoutMs` | `0` | How long to wait for another writer to release the path. `0` fails fast. |
+| `autoCheckpointWalMib` | `16` | Write-ahead log size past which a commit starts a background online checkpoint. Writers keep committing; it never runs on the JavaScript thread. `0` disables it. Not combinable with `readOnly`. |
 | `timeoutMs` | `180000` | Per-query deadline. `0` disables it. |
 | `rowLimit` | none | Per-query cap on returned rows. |
 | `integers` | `'safe'` | `'bigint'` returns every integer as a `bigint`. |

@@ -441,9 +441,11 @@ flush the log, stamp the checkpoint position, write the file, truncate the log.
   that silently never checkpoints.
 - **`--checkpoint-wal-mib MIB`** (`KGLITE_BOLT_CHECKPOINT_WAL_MIB`) — on log
   size, and **on by default** at `full` and `normal`. Every 10 seconds the
-  server compares the sidecar with the threshold (default 16 MiB) and with the
-  `.kgl`. It checkpoints when the log is at least as large as both, because a
-  log bigger than the file it extends costs more to replay than to rewrite.
+  server asks the session whether the log has passed the threshold (default
+  16 MiB) and is at least as large as the `.kgl`, because a log bigger than the
+  file it extends costs more to replay than to rewrite. It then runs an online
+  checkpoint: the session locks are held only to fix the snapshot and to trim
+  the log, so writers keep committing during the file write.
   `0` disables it. An explicit value is refused with `--readonly` and for
   disk-mode graphs. The default does not apply there, or at `off`, where
   there is no log. It shares the recorded version with the verb and the

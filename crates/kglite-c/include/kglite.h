@@ -1289,6 +1289,13 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
  * - `"valid_time_default"`: `"today"` (default), `"all"` or a `YYYY-MM-DD`
  *   date; the instant unprefixed statements read on a graph that declares
  *   validity intervals.
+ * - `"auto_checkpoint_wal_mib"`: non-negative integer, default `16`; `0`
+ *   disables it. A durable session whose log outgrows this many MiB (and is at
+ *   least as large as its checkpoint) folds it into the checkpoint with an
+ *   online checkpoint, run **inline** on the thread of the commit that crossed
+ *   the bound, once that commit is published: other threads keep committing
+ *   during the file write, but that one call takes the checkpoint's time.
+ *   Without it the log grows until `kglite_session_checkpoint` or close.
  * - `"create_if_missing"`: boolean, default `false`. A missing path is
  *   `KGLITE_STATUS_CODE_FILE_NOT_FOUND` unless this is true, so a typo'd path
  *   never becomes an empty database.

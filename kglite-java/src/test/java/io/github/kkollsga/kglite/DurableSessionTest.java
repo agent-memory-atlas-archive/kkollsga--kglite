@@ -64,6 +64,33 @@ class DurableSessionTest {
     }
 
     @Test
+    @DisplayName("autoCheckpointWalMib bounds the log; 0 leaves it growing")
+    void autoCheckpointBoundsTheLog(@TempDir Path dir) throws Exception {
+        String pad = "x".repeat(64 * 1024);
+        for (long mib : new long[] {1, 0}) {
+            Path path = dir.resolve("g" + mib + ".kgl");
+            Path wal = dir.resolve("g" + mib + ".kgl-wal");
+            try (KnowledgeGraph graph = KnowledgeGraph.open(
+                    path, create().durability(Durability.NORMAL).autoCheckpointWalMib(mib))) {
+                for (int i = 0; i < 40; i++) {
+                    graph.cypher("CREATE (:Person {id: " + i + ", pad: '" + pad + "'})");
+                }
+                long log = Files.size(wal);
+                if (mib > 0) {
+                    assertTrue(Files.exists(path), "checkpoint written inline");
+                    assertTrue(log < 2L << 20, "log trimmed along the way, is " + log);
+                } else {
+                    assertFalse(Files.exists(path), "no checkpoint when disabled");
+                    assertTrue(log > 2L << 20, "log grows unchecked, is " + log);
+                }
+            }
+            try (KnowledgeGraph again = KnowledgeGraph.open(path, OpenOptions.defaults())) {
+                assertEquals(40, count(again));
+            }
+        }
+    }
+
+    @Test
     @DisplayName("a missing path is an error unless createIfMissing")
     void missingPathNeedsCreate(@TempDir Path dir) {
         KgliteException refused = assertThrows(KgliteException.class,

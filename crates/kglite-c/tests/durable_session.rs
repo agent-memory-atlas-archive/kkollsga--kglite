@@ -362,6 +362,8 @@ fn bad_options_are_rejected() {
         serde_json::json!({"storage": "tape"}),
         serde_json::json!({"lock_timeout_ms": -2}),
         serde_json::json!({"valid_time_default": "tomorrowish"}),
+        serde_json::json!({"auto_checkpoint_wal_mib": -1}),
+        serde_json::json!({"auto_checkpoint_wal_mib": "16"}),
         serde_json::json!([1]),
     ] {
         let opened = open(&path, bad.clone());
@@ -683,4 +685,47 @@ fn mut_ex_on_a_durable_session_is_logged_and_refused_when_read_only() {
     let (status, _, _) = execute_ex(reader.session, "CREATE (:T {id: 9})", None, true);
     assert_eq!(status, KgliteStatusCode::ReadOnly);
     free(reader.session);
+}
+
+fn wal_len(path: &Path) -> u64 {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    std::fs::metadata(wal).map_or(0, |m| m.len())
+}
+
+/// Past `auto_checkpoint_wal_mib` the commit that crosses it folds the log
+/// into the checkpoint inline; with `0` the log only grows. The bound is whole
+/// MiB, so the writes carry a 64 KiB payload to cross 1 MiB in a few dozen
+/// commits.
+#[test]
+fn auto_checkpoint_bounds_the_log_and_zero_disables_it() {
+    let pad = "x".repeat(64 * 1024);
+    for (mib, bounded) in [(1u64, true), (0, false)] {
+        let dir = TestDir::new(&format!("autockpt-{mib}"));
+        let path = dir.graph();
+        let first = open_ok(
+            &path,
+            serde_json::json!({
+                "durability": "normal", "create_if_missing": true,
+                "auto_checkpoint_wal_mib": mib,
+            }),
+        );
+        for id in 0..40 {
+            let query = format!("CREATE (:T {{id: {id}, pad: '{pad}'}})");
+            assert_eq!(write(first.session, &query), KgliteStatusCode::Ok);
+        }
+        let log = wal_len(&path);
+        if bounded {
+            assert!(path.exists(), "the checkpoint was written inline");
+            assert!(log < 2 << 20, "log trimmed along the way, is {log} bytes");
+        } else {
+            assert!(!path.exists(), "no checkpoint when disabled");
+            assert!(log > 2 << 20, "log grows unchecked, is {log} bytes");
+        }
+        // Freed without close: the checkpoint plus the log hold all 40.
+        free(first.session);
+        let second = open_ok(&path, serde_json::json!({"durability": "normal"}));
+        assert_eq!(count(second.session), 40, "mib={mib}");
+        free(second.session);
+    }
 }

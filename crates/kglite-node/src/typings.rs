@@ -263,6 +263,8 @@ pub struct OpenOptions {
     pub integers: Option<String>,
     /// Which instant an unprefixed statement reads on a graph with declared validity intervals: `'today'` (default), `'all'` (no valid-time filtering) or a fixed `'YYYY-MM-DD'` day. Runtime only; not saved with the graph.
     pub valid_time_default: Option<String>,
+    /// Write-ahead log size in MiB past which a commit starts a background checkpoint (online: writers keep committing; it never runs on the JS thread or delays the commit's promise). Default 16; `0` disables it. Not combinable with `readOnly`.
+    pub auto_checkpoint_wal_mib: Option<f64>,
 }
 
 #[napi(object)]

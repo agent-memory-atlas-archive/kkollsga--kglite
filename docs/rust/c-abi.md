@@ -99,8 +99,12 @@ The header exposes:
   opens or creates the graph, and replays the write-ahead log. It returns a
   session whose commits are logged at the chosen level.
   - Options are a JSON object: `storage`, `durability` (`full` | `normal` |
-    `off`), `lock_timeout_ms`, `valid_time_default`, `create_if_missing`. An
-    unknown key is `INVALID_ARGUMENT`.
+    `off`), `lock_timeout_ms`, `valid_time_default`, `create_if_missing`,
+    `auto_checkpoint_wal_mib`. An unknown key is `INVALID_ARGUMENT`.
+  - `auto_checkpoint_wal_mib` (default 16, `0` disables) folds an oversized log
+    into the checkpoint with an online checkpoint, run inline on the thread of
+    the commit that crossed the bound. Other threads keep committing; that
+    call takes the checkpoint's time.
   - `lock_timeout_ms = -1` takes no lease and opens read-only. Nothing is
     created, converted, logged or written, and every write is `READ_ONLY` (24).
   - A contended lease is `WRITER_LEASE_HELD` (102). The holder is in

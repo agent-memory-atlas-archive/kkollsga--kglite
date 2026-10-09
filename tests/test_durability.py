@@ -3062,3 +3062,55 @@ def test_relationship_vectors_survive_a_crash_from_a_checkpoint(
 
     recovered = edge_state(_open(path, storage))
     assert recovered == live, "recovery must reproduce exactly the state the writer held"
+
+
+# ── automatic checkpoints ────────────────────────────────────────────────────
+
+_PAD = "x" * (64 * 1024)
+
+
+def _wal_bytes(path):
+    wal = str(path) + "-wal"
+    return os.path.getsize(wal) if os.path.exists(wal) else 0
+
+
+def _count(g):
+    return g.cypher("MATCH (n:T) RETURN count(n) AS c")[0]["c"]
+
+
+@pytest.mark.parametrize("level", LOGGING_LEVELS)
+def test_auto_checkpoint_bounds_the_log_and_reopen_loses_nothing(tmp_path, level):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable=level, auto_checkpoint_wal_mib=1)
+    for i in range(40):
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+    assert path.exists(), "the log crossed 1 MiB, so a checkpoint was written on its own"
+    assert _wal_bytes(path) < 2 * 1024 * 1024
+    del g  # never saved: the checkpoint plus the log hold everything
+    again = kglite.open(str(path), durable=level)
+    assert _count(again) == 40
+
+
+def test_auto_checkpoint_zero_leaves_the_log_growing(tmp_path):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=0)
+    for i in range(40):
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+    assert not path.exists()
+    assert _wal_bytes(path) > 2 * 1024 * 1024
+    del g
+    assert _count(kglite.open(str(path), durable="normal")) == 40
+
+
+def test_auto_checkpoint_default_is_sixteen_mib(tmp_path):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal")
+    for i in range(40):
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+    assert not path.exists(), "2.5 MiB of log is far under the 16 MiB default"
+    assert _wal_bytes(path) > 2 * 1024 * 1024
+
+
+def test_auto_checkpoint_rejects_a_negative_bound(tmp_path):
+    with pytest.raises((OverflowError, ValueError, TypeError)):
+        kglite.open(str(tmp_path / "app.kgl"), auto_checkpoint_wal_mib=-1)

@@ -1123,6 +1123,7 @@ def open(
     storage: str | None = None,
     durable: bool | Literal["full", "normal", "off"] | None = None,
     lock: bool = True,
+    auto_checkpoint_wal_mib: int | None = None,
 ) -> KnowledgeGraph:
     """Open a graph at ``path`` — load it if it exists, create a fresh one if
     it doesn't (load-or-create). The embedded-database lifecycle entry point.
@@ -1226,6 +1227,16 @@ def open(
             already guarantees a single writer — an external supervisor, or a
             process you have confined to reads. ``lock=False`` opts out of
             *taking* the lease, not out of the consequences of ignoring one.
+        auto_checkpoint_wal_mib: Log size, in MiB, past which a durable graph
+            folds its write-ahead log into the checkpoint on its own. Default
+            ``16`` (``None``); ``0`` disables it. The commit that crosses the
+            bound runs the checkpoint inline, with the GIL released for the
+            file write, so that one call takes about as long as ``save()``;
+            every other commit is unaffected. The checkpoint is skipped while
+            the log is smaller than the checkpoint file it would rewrite. A
+            failed automatic checkpoint emits a ``UserWarning`` (the commit is
+            already in the log) and is retried after another bound of log
+            growth. No effect at ``durable="off"``.
 
     Returns:
         A KnowledgeGraph bound to ``path``.
