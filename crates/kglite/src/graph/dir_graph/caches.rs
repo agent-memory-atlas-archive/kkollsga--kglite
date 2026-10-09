@@ -45,8 +45,9 @@ use std::sync::RwLock;
 /// - **`wkt_cache`** is a pure function of its key (WKT text → parsed geometry),
 ///   so an entry another graph wrote is by definition the entry this graph would
 ///   have computed. Sharing it across a fork is not a hazard, it is a win.
-/// - **`property_ndv_cache`** is version-tagged: an entry stamped with a
-///   different graph `version` is recomputed rather than trusted. It is also a
+/// - **`property_ndv_cache`** is version-tagged: an entry whose graph
+///   `version` or row count falls outside the [`NdvEntry::is_fresh`] window is
+///   recomputed rather than trusted. It is also a
 ///   planner *estimate*, so the worst a stale entry does is change a plan, never
 ///   a result.
 ///
@@ -164,7 +165,8 @@ impl DirGraph {
     }
 
     /// Distinct-value count (NDV) for `(node_type, property)`, lazily computed
-    /// and cached per graph `version`. The planner uses it to estimate
+    /// (only when a plan asks) and cached with a bounded-staleness rule, see
+    /// [`NdvEntry::is_fresh`]. The planner uses it to estimate
     /// non-indexed equality selectivity as `type_count / ndv` instead of a
     /// flat heuristic (so a boolean ≈ `count/2`, an enum ≈ `count/k`, a
     /// high-cardinality field ≈ `count/N`). Returns `None` when the type is
@@ -188,14 +190,14 @@ impl DirGraph {
         // field (`term_name` and `title`) are one statistic, not two scans.
         let field = self.resolve_alias(node_type, property);
         let key = (node_type.to_string(), field.to_string());
-        // Fast path: cache hit at the current graph version. A cached `0` is
-        // the "no information" verdict below, memoised so a fruitless scan is
-        // paid once rather than on every plan.
+        // Fast path: a cached entry still within the staleness rule. A cached
+        // `0` is the "no information" verdict below, memoised so a fruitless
+        // scan is paid once rather than on every plan.
         {
             let read = self.property_ndv_cache.read().unwrap();
-            if read.0 == self.version {
-                if let Some(&ndv) = read.1.get(&key) {
-                    return (ndv > 0).then_some(ndv);
+            if let Some(e) = read.get(&key) {
+                if e.is_fresh(self.version, nodes.len()) {
+                    return (e.ndv > 0).then_some(e.ndv);
                 }
             }
         }
@@ -204,9 +206,7 @@ impl DirGraph {
         // backend (protocol in disk/graph.rs); no-op on memory/mapped.
         let _arena_guard = self.graph.begin_query();
         let field_key = InternedKey::from_str(field);
-        // Presized and Fx-hashed: this scan reruns after every committed write
-        // (the cache is keyed by graph version), so growth rehashes and SipHash
-        // dominate the plan time of a point lookup on a 100k-node type.
+        // Presized and Fx-hashed: growth rehashes and SipHash dominate the scan.
         let mut seen: rustc_hash::FxHashSet<Value> =
             rustc_hash::FxHashSet::with_capacity_and_hasher(nodes.len(), Default::default());
         for idx in nodes.iter() {
@@ -217,13 +217,14 @@ impl DirGraph {
             }
         }
         let ndv = seen.len();
-        let mut write = self.property_ndv_cache.write().unwrap();
-        // Drop a stale-version map before inserting (auto-invalidation).
-        if write.0 != self.version {
-            write.1.clear();
-            write.0 = self.version;
-        }
-        write.1.insert(key, ndv);
+        self.property_ndv_cache.write().unwrap().insert(
+            key,
+            NdvEntry {
+                ndv,
+                rows: nodes.len(),
+                version: self.version,
+            },
+        );
         // An empty scan means this route found no values at all — the property
         // is absent from every node, or some future resolution gap hides it.
         // That is *no information*, and it must not be handed to the estimator
@@ -240,6 +241,38 @@ impl DirGraph {
     /// Check if type connectivity cache is populated.
     pub fn has_type_connectivity_cache(&self) -> bool {
         self.type_connectivity_cache.read().unwrap().is_some()
+    }
+}
+
+/// One memoised NDV with the state it was computed at.
+#[derive(Debug, Clone, Copy)]
+pub struct NdvEntry {
+    pub(crate) ndv: usize,
+    pub(crate) rows: usize,
+    pub(crate) version: u64,
+}
+
+impl NdvEntry {
+    /// Types up to this many rows are rescanned on every version change: the
+    /// scan is cheap and exact NDV keeps small-graph plans deterministic.
+    const EXACT_ROWS: usize = 2048;
+    /// Larger types reuse an entry across commits while the row count stays
+    /// within `rows / DRIFT_DIVISOR` (10%) of the scanned count and fewer than
+    /// `MAX_VERSION_LAG` versions passed. The row bound tracks inserts and
+    /// deletes; the version bound caps drift from in-place value updates that
+    /// leave the count unchanged. NDV is a planner estimate, so a stale entry
+    /// can only shift a plan's cost, never a result.
+    const DRIFT_DIVISOR: usize = 10;
+    const MAX_VERSION_LAG: u64 = 256;
+
+    pub(crate) fn is_fresh(&self, version: u64, rows: usize) -> bool {
+        if self.version == version {
+            return true;
+        }
+        rows > Self::EXACT_ROWS
+            && self.rows > Self::EXACT_ROWS
+            && rows.abs_diff(self.rows) <= self.rows / Self::DRIFT_DIVISOR
+            && version.abs_diff(self.version) < Self::MAX_VERSION_LAG
     }
 }
 
@@ -350,9 +383,9 @@ mod fork_aliasing_tests {
     ///   by construction the entry this graph would have computed, so sharing it
     ///   cannot produce a wrong answer — it can only save the parse.
     /// * **`property_ndv_cache` is version-tagged.** Entries carry the graph
-    ///   `version` they were computed at and a mismatch forces a recompute, so a
-    ///   fork that bumps its version cannot read the parent's numbers as its
-    ///   own. It is also a *planner estimate* feeding selectivity, so the worst
+    ///   `version` and row count they were computed at; outside the
+    ///   [`NdvEntry::is_fresh`] window (always, for types of 2048 rows or fewer)
+    ///   a mismatch forces a recompute. It is also a *planner estimate* feeding selectivity, so the worst
     ///   a stale entry can do is pick a different plan — never a different
     ///   result. That is a materially weaker failure mode than the edge caches',
     ///   which are returned to callers verbatim.
@@ -402,5 +435,39 @@ mod fork_aliasing_tests {
             version_before,
             "the reader's snapshot keeps its own version"
         );
+    }
+}
+
+#[cfg(test)]
+mod ndv_staleness_tests {
+    use super::NdvEntry;
+
+    #[test]
+    fn small_types_are_exact_per_version() {
+        let e = NdvEntry {
+            ndv: 5,
+            rows: 100,
+            version: 1,
+        };
+        assert!(e.is_fresh(1, 100));
+        assert!(
+            !e.is_fresh(2, 100),
+            "small type must rescan on a new version"
+        );
+    }
+
+    #[test]
+    fn large_types_tolerate_bounded_drift_only() {
+        let e = NdvEntry {
+            ndv: 5,
+            rows: 100_000,
+            version: 10,
+        };
+        assert!(e.is_fresh(11, 100_001), "one commit, one row: reuse");
+        assert!(e.is_fresh(11, 110_000), "10% row drift is the boundary");
+        assert!(!e.is_fresh(11, 110_001), "past 10% rescans");
+        assert!(!e.is_fresh(11, 89_999));
+        assert!(e.is_fresh(265, 100_000));
+        assert!(!e.is_fresh(266, 100_000), "version lag caps in-place drift");
     }
 }

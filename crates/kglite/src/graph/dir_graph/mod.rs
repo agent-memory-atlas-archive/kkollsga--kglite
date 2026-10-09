@@ -90,9 +90,10 @@ pub(crate) use duplicate_ids::{
 };
 pub use node_remap::NodeRemap;
 
-/// Version-keyed cache of per-`(type, property)` distinct-value counts (NDV)
-/// — see the [`DirGraph::property_ndv_cache`] field.
-type PropertyNdvCache = Arc<RwLock<(u64, HashMap<(String, String), usize>)>>;
+/// Cache of per-`(type, property)` distinct-value counts (NDV); each entry
+/// carries the graph version and type row count it was computed at — see
+/// [`caches::NdvEntry::is_fresh`] for the staleness rule.
+type PropertyNdvCache = Arc<RwLock<HashMap<(String, String), caches::NdvEntry>>>;
 
 // Id indexes built by scanning a type, on this thread: a lookup that finds its
 // index in the file or the overlay never moves it.
@@ -984,7 +985,7 @@ impl DirGraph {
             edge_type_counts_cache: Default::default(),
             alias_hash_cache: Default::default(),
             type_connectivity_cache: Default::default(),
-            property_ndv_cache: Arc::new(RwLock::new((0, HashMap::new()))),
+            property_ndv_cache: Arc::new(RwLock::new(HashMap::new())),
             embeddings: HashMap::new(),
             edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
