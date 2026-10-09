@@ -29,8 +29,10 @@ Exception
     ├── kglite.FileError
     ├── kglite.FileFormatError
     ├── kglite.FileIoError
+    │   └── kglite.WriterLeaseHeldError
     ├── kglite.LoadMemoryLimitError
     ├── kglite.ArgumentError
+    │   └── kglite.ReadOnlyError
     ├── kglite.MissingArgumentError
     ├── kglite.InternerCollisionError
     └── kglite.InternalError
@@ -114,7 +116,10 @@ except kglite.TransactionConflictError:
 ## A write on a read handle
 
 Four handles refuse writes, and all four refuse with the same class and the same
-code: `ArgumentError` / `InvalidArgument`.
+code: `ReadOnlyError` / `ReadOnly`. `ReadOnlyError` subclasses `ArgumentError`, so an
+existing `except kglite.ArgumentError` still catches it. The code is core's
+`ReadOnly`, the identity the Node binding (`ReadOnly`), the C ABI (status 24) and
+the Bolt server (`Neo.ClientError.General.ReadOnly`) report for the same refusal.
 
 | Handle | Refuses |
 |---|---|
@@ -129,15 +134,16 @@ matching four things:
 ```python
 try:
     session.cypher(statement)
-except kglite.ArgumentError as exc:
-    assert exc.code == "InvalidArgument"
+except kglite.ReadOnlyError as exc:
+    assert exc.code == "ReadOnly"
 ```
 
 The refusal is deliberately *not* `CypherExecutionError`. The query did not fail to
 execute. It was aimed at a handle that does not take it, and a caller routes on
-the class. Both are client errors on the wire: `CypherExecution` and
-`InvalidArgument` map to `Neo.ClientError.Statement.ArgumentError` over Bolt
-(HTTP 422 and 400).
+the class. It is a client error on the wire: `ReadOnly` maps to
+`Neo.ClientError.General.ReadOnly` over Bolt (HTTP 403), while `CypherExecution`
+and `InvalidArgument` map to `Neo.ClientError.Statement.ArgumentError` (HTTP 422
+and 400).
 
 A `CypherExecutionError` is a statement that failed on what it was given:
 
@@ -291,6 +297,39 @@ measurement, and it errs high on purpose. A ceiling set close to a graph's real
 cost can therefore refuse a load that would have fitted. Set it where a failure is
 what you want (a serving process that must not be killed by a file it did not
 choose), not as a tight budget.
+
+### Writer lease held
+
+`kglite.open(path)` (and a `save()` onto a path another writer holds) raises
+`WriterLeaseHeldError` when another process, or an earlier un-closed handle in
+this one, holds the writer lease. It subclasses `FileIoError`, so an existing
+`except kglite.FileIoError` still catches it, and its `.code` is
+`"WriterLeaseHeld"`, the same code the C ABI (status 102), the Java wrapper, the
+Node binding and the Bolt server's startup refusal report. It is retriable as it
+stands, which is why it is not a plain I/O error.
+
+`.holder` is a dict: `pid`, `since` (RFC-3339), `label` (each `None` when the
+holder's record could not be read) and `self` (`True` when the holder is this
+process).
+
+```python
+try:
+    graph = kglite.open("app.kgl")
+except kglite.WriterLeaseHeldError as exc:
+    if exc.holder["self"]:
+        ...  # an earlier open() in this process was never closed
+    else:
+        time.sleep(1)  # another process writes; retry, or kglite.load() to read
+```
+
+### Write-ahead-log failures
+
+A commit the write-ahead log refuses (a full disk under `durable="full"` or
+`"normal"`) raises `FileIoError` with `.code == "DurabilityFailed"`. `cypher()`,
+the fluent writers, a transaction's `commit()` and `Session.run_write` all
+answer with that one class and code. After the first refusal the handle is
+latched: later logged writes, `save()` and `sync()` raise the same code until you
+reopen the path.
 
 ### Save failures
 

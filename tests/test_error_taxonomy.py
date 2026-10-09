@@ -401,12 +401,16 @@ def test_a_write_on_a_read_handle_is_one_class_on_every_handle(people, handle):
     """Four handles, one policy — "this handle does not take writes" — so one
     class and one code. Before this test they answered `ValueError` (twice,
     with no `.code` at all), `ArgumentError` and `CypherExecutionError`, and no
-    caller could route on the refusal without matching four things."""
-    with pytest.raises(kglite.ArgumentError) as excinfo:
+    caller could route on the refusal without matching four things. The class
+    is `ReadOnlyError`, a subclass of `ArgumentError` (so `except ArgumentError`
+    still catches it) carrying core's `ReadOnly` code, the identity the Node and
+    Bolt surfaces report for the same refusal."""
+    with pytest.raises(kglite.ReadOnlyError) as excinfo:
         handle(people)
 
     exc = excinfo.value
-    assert exc.code == "InvalidArgument"
+    assert isinstance(exc, kglite.ArgumentError)
+    assert exc.code == "ReadOnly"
     assert isinstance(exc, kglite.KgError)
     # A refusal of the handle, not a statement that failed while executing.
     assert not isinstance(exc, kglite.CypherExecutionError)

@@ -105,7 +105,31 @@ class FileFormatError(KgError):
     """A file's contents are malformed (bad ``.kgl`` header, truncated blueprint, etc.)."""
 
 class FileIoError(KgError):
-    """Generic I/O failure (permission denied, mid-read EOF, mmap failure)."""
+    """Generic I/O failure (permission denied, mid-read EOF, mmap failure).
+
+    A write-ahead-log append that was refused also raises this class, with
+    ``.code == "DurabilityFailed"`` instead of ``"FileIo"``: the same class and
+    code from :meth:`KnowledgeGraph.cypher`, the fluent writers and
+    :meth:`Session.run_write`.
+    """
+
+class WriterLeaseHeldError(FileIoError):
+    """Another process (or an un-closed handle in this one) holds the writer
+    lease for the path.
+
+    Raised by :func:`open` and by :meth:`KnowledgeGraph.save` to a path another
+    writer holds. Subclasses :class:`FileIoError`, so an existing
+    ``except FileIoError`` still catches it; ``.code`` is ``"WriterLeaseHeld"``.
+    Retriable as it stands: wait and try again, or read the graph with
+    :func:`load` / :func:`open_session`, which take no lease.
+
+    ``holder`` is a dict with ``pid`` (int or ``None``), ``since`` (RFC-3339
+    string or ``None``), ``label`` (string or ``None``) and ``self`` (``True``
+    when the holder is this very process, i.e. an earlier handle was never
+    closed). Fields are ``None`` when the holder's record could not be read.
+    """
+
+    holder: dict[str, Any]
 
 class LoadMemoryLimitError(KgError):
     """A ``.kgl`` load exceeded the estimated-memory ceiling set by
@@ -121,6 +145,16 @@ class LoadMemoryLimitError(KgError):
 
 class ArgumentError(KgError):
     """A user-supplied argument violated a precondition."""
+
+class ReadOnlyError(ArgumentError):
+    """A write was refused because the handle is read-only.
+
+    Raised for a mutation on a graph put into read-only mode with
+    :meth:`KnowledgeGraph.read_only`, and for a write through a read-only
+    transaction. Subclasses :class:`ArgumentError`, so an existing
+    ``except ArgumentError`` still catches it; ``.code`` is ``"ReadOnly"``,
+    the same code the Node and Bolt surfaces report. The graph is unchanged.
+    """
 
 class MissingArgumentError(KgError):
     """A required argument wasn't passed."""
@@ -1186,9 +1220,12 @@ def open(
         A KnowledgeGraph bound to ``path``.
 
     Raises:
-        KgError: If another process already holds the write lease for
-            ``path``. The message names the holding pid and when it acquired,
-            e.g. ``app.kgl is open for writing by pid 4711 (since ...)``.
+        WriterLeaseHeldError: If another process already holds the write lease
+            for ``path``. A :class:`FileIoError` subclass with
+            ``.code == "WriterLeaseHeld"`` and a ``.holder`` dict (``pid``,
+            ``since``, ``label``, ``self``). The message names the holding pid
+            and when it acquired, e.g. ``app.kgl is open for writing by pid
+            4711 (since ...)``.
 
     Note:
         **One process writes at a time.** ``save()`` republishes the whole
@@ -3646,8 +3683,8 @@ class KnowledgeGraph:
         """Set or query read-only mode for the Cypher layer.
 
         When enabled, all Cypher mutation queries are rejected with
-        :class:`ArgumentError` (``code``
-        ``'InvalidArgument'``), and ``describe()`` announces the restriction in
+        :class:`ReadOnlyError` (a subclass of :class:`ArgumentError`; ``code``
+        ``'ReadOnly'``), and ``describe()`` announces the restriction in
         a ``<read-only>`` element (the Cypher reference it renders is
         unchanged). Read-only queries (MATCH, RETURN, CALL, etc.) are
         unaffected.
