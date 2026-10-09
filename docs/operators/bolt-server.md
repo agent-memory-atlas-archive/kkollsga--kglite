@@ -133,7 +133,8 @@ the result is returned. Explicit transactions (`execute_write`,
   fails with `Neo.TransientError.Transaction.Outdated`.
 - The commit happens at RUN, before the result is pulled. Neo4j commits when
   the result is consumed, so a RESET or disconnect between RUN and PULL rolls
-  back there. Here the write has already committed.
+  back there. Here the write has already committed. A RESET or disconnect
+  *during* the statement cancels it first (see *Cancelling a running query*).
 - The server returns no bookmarks. It is a single process, and a commit is
   visible to every later query, so a session reads its own writes.
 - `USING PERIODIC COMMIT` and `CALL { … } IN TRANSACTIONS` are unsupported.
@@ -187,6 +188,18 @@ A client `tx_timeout` is honoured:
 - With `--query-timeout` set, the smaller of the two wins: a client can tighten the server limit and never loosen it.
 - Zero, NULL, or absent means no client timeout. A negative or non-integer value is `Neo.ClientError.Request.Invalid`.
 - A `tx_timeout` key nested inside `tx_metadata` remains ordinary user metadata.
+
+### Cancelling a running query
+
+A RESET or a dropped connection stops the query the session is running.
+
+- **RESET** interrupts the running statement. The RUN fails with `Neo.ClientError.Transaction.Terminated`, then the RESET succeeds and the session is usable again.
+- **A dropped connection** (end of input or a socket error without a preceding GOODBYE) stops the statement and releases its writer slot. A client that pipelines `RUN`, `GOODBYE` and half-closes still gets its statement run to completion.
+- **Auto-commit writes** are cancelled before anything is published. A cancelled statement changes nothing.
+- **Explicit transactions**: the cancelled statement fails and the transaction is rolled back by the RESET, or by the connection closing.
+- **Limits**: the stop is cooperative, so it takes effect at the engine's next cancellation check, not instantly. A write waiting for the writer slot is cancelled once it is admitted. A RESET that arrives before its RUN starts, or after it finished, cancels nothing.
+
+`boltr` reads one message at a time and does not read the socket while a RUN executes. The server therefore reads each connection's input itself and forwards it to `boltr` unchanged. It watches the message framing for RESET and for the end of input. A RESET sent behind a running RUN is seen at once, and `boltr` still answers the RUN and then the RESET in order. At most 256 KiB of input is buffered ahead of `boltr`. A client that floods more than that during one query delays the signals behind it until `boltr` catches up.
 
 ## Timezone-aware datetime parameters
 

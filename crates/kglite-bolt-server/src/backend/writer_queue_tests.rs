@@ -59,7 +59,7 @@ fn read_mode() -> BoltDict {
 }
 
 fn run(b: &KgliteBackend, tx: &TransactionHandle, q: &str) -> Result<(), BoltError> {
-    b.execute_in_tx(&tx.0, q, HashMap::new()).map(|_| ())
+    b.execute_in_tx(&tx.0, q, HashMap::new(), None).map(|_| ())
 }
 
 fn scalar(b: &KgliteBackend, q: &str) -> i64 {

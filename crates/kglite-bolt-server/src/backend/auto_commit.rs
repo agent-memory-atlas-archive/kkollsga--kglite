@@ -7,7 +7,8 @@
 //! materialises a statement's rows before the commit anyway, so the commit
 //! happens here, at RUN. A write that fails, conflicts or cannot be logged
 //! sends no rows and applies nothing. The one observable difference: a RESET
-//! or disconnect between RUN and PULL does not undo the write.
+//! or disconnect between RUN and PULL does not undo the write. A RESET or
+//! disconnect *during* the statement cancels it before anything is published.
 
 use super::*;
 
@@ -43,6 +44,7 @@ impl KgliteBackend {
         parameters: &HashMap<String, BoltValue>,
         meta: &TxMeta,
         read_mode: bool,
+        cancel: &kglite::api::session::CancelToken,
     ) -> Result<ResultStream, BoltError> {
         // The executor's parse cache makes the engine's own parse free.
         if !is_write_statement(query)? {
@@ -50,7 +52,8 @@ impl KgliteBackend {
                 let kg_params = decode_params(parameters)?;
                 let started = Instant::now();
                 let snapshot = self.session.snapshot();
-                let opts = self.execute_opts(&kg_params, meta);
+                let mut opts = self.execute_opts(&kg_params, meta);
+                opts.cancel = Some(cancel.clone());
                 let outcome = kglite::api::session::execute_read(&snapshot, query, &opts)
                     .map_err(kg_to_bolt)?;
                 finish_stream(outcome.result, "r", outcome.explain, started)
@@ -74,7 +77,8 @@ impl KgliteBackend {
         } else {
             (None, OPTIMISTIC_ATTEMPTS)
         };
-        let opts = self.execute_opts(&kg_params, meta);
+        let mut opts = self.execute_opts(&kg_params, meta);
+        opts.cancel = Some(cancel.clone());
         let result = off_async_worker(|| {
             self.session
                 .execute_auto_commit(query, &opts, attempts)

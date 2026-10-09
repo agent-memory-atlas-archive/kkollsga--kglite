@@ -32,7 +32,9 @@ mod coalesce;
 mod discard;
 mod error_map;
 mod guard;
+mod inflight;
 mod ontology;
+mod pump;
 mod startup;
 mod value_adapter;
 

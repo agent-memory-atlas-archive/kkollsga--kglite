@@ -223,6 +223,8 @@ pub struct KgliteBackend {
     backup: BackupService,
     /// Server-wide query limits applied to every statement.
     limits: QueryLimits,
+    /// The query each session is running, for RESET and disconnect cancellation.
+    inflight: crate::inflight::InflightQueries,
 }
 
 /// Per-Bolt-transaction state: the canonical snapshot/working CoW
@@ -406,6 +408,7 @@ impl KgliteBackend {
             reaped: ReapedHandles::default(),
             backup,
             limits: QueryLimits::default(),
+            inflight: Default::default(),
         }
     }
 
@@ -480,6 +483,12 @@ impl KgliteBackend {
              KGLITE_BOLT_NEO4J_COMPAT=1 in the environment. The identity is deliberately \
              NOT switched automatically — honest identification is the default."
         );
+    }
+}
+
+impl crate::inflight::InflightCancel for KgliteBackend {
+    fn cancel_inflight(&self, session_id: &str) {
+        self.inflight.cancel(session_id);
     }
 }
 
@@ -599,7 +608,7 @@ impl BoltBackend for KgliteBackend {
 
     async fn execute(
         &self,
-        _session: &SessionHandle,
+        session: &SessionHandle,
         query: &str,
         parameters: &HashMap<String, BoltValue>,
         extra: &BoltDict,
@@ -659,20 +668,25 @@ impl BoltBackend for KgliteBackend {
             return Ok(self.run_server_facts(&call));
         }
 
+        // Held to the end of this function: the token's flag slot is recycled
+        // when its last clone drops (see `inflight.rs`).
+        let running = self.inflight.begin(&session.0);
+        let cancel = running.token();
         let stream = if let Some(handle) = transaction.map(|t| t.0.clone()) {
             // Explicit tx: metadata was parsed at BEGIN and lives on the
             // TxState (Neo4j drivers send tx metadata on BEGIN only).
             off_async_worker(|| {
                 let kg_params = decode_params(parameters)?;
                 let started = Instant::now();
-                let (result, type_str, explain) = self.execute_in_tx(&handle, query, kg_params)?;
+                let (result, type_str, explain) =
+                    self.execute_in_tx(&handle, query, kg_params, Some(cancel))?;
                 finish_stream(result, type_str, explain, started)
             })?
         } else {
             // Auto-commit: drivers attach tx metadata to RUN's extra.
             let meta = TxMeta::from_extra(extra)?;
             let read_mode = matches!(extra.get("mode"), Some(BoltValue::String(m)) if m == "r");
-            self.execute_auto_commit(query, parameters, &meta, read_mode)
+            self.execute_auto_commit(query, parameters, &meta, read_mode, cancel)
                 .await?
         };
         Ok(stream)
@@ -1242,6 +1256,7 @@ impl KgliteBackend {
         handle: &str,
         query: &str,
         kg_params: HashMap<String, Value>,
+        cancel: Option<&kglite::api::session::CancelToken>,
     ) -> Result<(cypher::CypherResult, &'static str, bool), BoltError> {
         // Step 1: Brief outer-mutex hold to look up the per-tx Arc.
         let state_arc: Arc<Mutex<TxState>> = {
@@ -1281,7 +1296,8 @@ impl KgliteBackend {
             ));
         }
 
-        let opts = self.execute_opts(&kg_params, &meta);
+        let mut opts = self.execute_opts(&kg_params, &meta);
+        opts.cancel = cancel.cloned();
 
         if is_mutation && read_only && self.writer.config().mode == WriteConcurrency::Queue {
             // A read-mode transaction holds no writer slot; letting it commit
@@ -1361,7 +1377,7 @@ mod tests {
             .await
             .expect("begin disk transaction");
         backend
-            .execute_in_tx(&tx.0, query, HashMap::new())
+            .execute_in_tx(&tx.0, query, HashMap::new(), None)
             .expect("execute disk transaction mutation");
         if commit {
             backend
@@ -1517,7 +1533,7 @@ mod tests {
             .await
             .expect("begin");
         backend
-            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new())
+            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new(), None)
             .expect("tx mutation");
 
         // Simulate a pipelined RUN still executing on this tx: hold a
@@ -1561,7 +1577,7 @@ mod tests {
             .await
             .expect("begin");
         backend
-            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new())
+            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new(), None)
             .expect("tx mutation");
 
         let in_flight = {
@@ -1611,7 +1627,7 @@ mod tests {
             .expect("begin with tx_metadata");
 
         let err = backend
-            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new())
+            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new(), None)
             .expect_err("out-of-scope CREATE must be rejected");
         assert!(
             format!("{err:?}").contains("write scope"),
@@ -1619,7 +1635,7 @@ mod tests {
         );
 
         backend
-            .execute_in_tx(&tx.0, "CREATE (:Plan {id: 1})", HashMap::new())
+            .execute_in_tx(&tx.0, "CREATE (:Plan {id: 1})", HashMap::new(), None)
             .expect("in-scope CREATE");
         backend.commit(&session, &tx).await.expect("commit");
         assert_eq!(count_nodes(&backend, "Plan"), 1);
@@ -2130,7 +2146,7 @@ mod tests {
             .await
             .expect("begin");
         backend
-            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new())
+            .execute_in_tx(&tx.0, "CREATE (:Person {id: 1})", HashMap::new(), None)
             .expect("tx mutation");
 
         let err = backend

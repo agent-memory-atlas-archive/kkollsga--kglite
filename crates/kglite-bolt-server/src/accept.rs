@@ -22,6 +22,7 @@ use std::time::Duration;
 use crate::coalesce::CoalescingWriter;
 use crate::discard::DiscardTracker;
 use crate::guard::{serve_connection, ConnectionContext};
+use crate::inflight::InflightCancel;
 use boltr::error::BoltError;
 use boltr::server::handshake::server_handshake;
 use boltr::server::{AuthValidator, BoltBackend, SessionHandle, SessionManager};
@@ -70,7 +71,7 @@ fn tune_stream(stream: &TcpStream, peer_addr: SocketAddr) {
     }
 }
 
-impl<B: BoltBackend> BoltListener<B> {
+impl<B: BoltBackend + InflightCancel + 'static> BoltListener<B> {
     /// Bind `addr` and serve until the shutdown future resolves.
     ///
     /// Like `boltr`'s loop, in-flight connection tasks are detached and are
@@ -130,7 +131,7 @@ impl<B: BoltBackend> BoltListener<B> {
     }
 }
 
-async fn run_connection<B: BoltBackend>(
+async fn run_connection<B: BoltBackend + InflightCancel + 'static>(
     stream: TcpStream,
     peer_addr: SocketAddr,
     ctx: Arc<ConnectionContext<B>>,
@@ -148,7 +149,7 @@ async fn run_connection<B: BoltBackend>(
 async fn handshake_and_run<S, B>(mut stream: S, peer_addr: SocketAddr, ctx: &ConnectionContext<B>)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-    B: BoltBackend,
+    B: BoltBackend + InflightCancel + 'static,
 {
     match server_handshake(&mut stream).await {
         Ok(version) => {

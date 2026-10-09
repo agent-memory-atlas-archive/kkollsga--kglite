@@ -39,6 +39,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use crate::discard::{DiscardTracker, SIG_DISCARD, SIG_PULL};
+use crate::inflight::InflightCancel;
+use crate::pump::PumpedReader;
 use boltr::chunk::ChunkWriter;
 use boltr::error::BoltError;
 use boltr::message::encode::encode_server_message;
@@ -636,9 +638,9 @@ pub async fn serve_connection<R, W, B>(
     ctx: &ConnectionContext<B>,
     peer_addr: std::net::SocketAddr,
 ) where
-    R: AsyncRead + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
-    B: BoltBackend,
+    B: BoltBackend + InflightCancel + 'static,
 {
     let ConnectionContext {
         backend,
@@ -652,6 +654,24 @@ pub async fn serve_connection<R, W, B>(
     let guarded_auth = auth.clone().map(|inner| {
         Arc::new(GuardedValidator::new(inner, guard.clone())) as Arc<dyn AuthValidator>
     });
+    // The pump sees RESET and a dropped peer while a query runs, which
+    // `boltr` cannot (see `pump.rs`); both cancel the session's running query.
+    let interrupt = {
+        let guard = guard.clone();
+        let backend = backend.clone();
+        move || {
+            let session = guard
+                .sessions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .last()
+                .cloned();
+            if let Some(session) = session {
+                backend.cancel_inflight(&session.0);
+            }
+        }
+    };
+    let reader = PumpedReader::spawn(reader, interrupt);
     let mut reader = GuardedReader::new(reader, guard.clone(), discards);
 
     {
