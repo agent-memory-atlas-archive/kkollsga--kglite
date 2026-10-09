@@ -88,6 +88,18 @@ pub(super) struct DurableState {
     /// describe ([`Session::write`] / [`Session::transact`]). See
     /// [`Session::write`] for why this is a latch rather than a refusal.
     diverged: bool,
+    /// Log bytes past which [`Session::needs_checkpoint`] says yes; `None`
+    /// disables the policy (an explicit checkpoint still works).
+    auto_checkpoint_wal_bytes: Option<u64>,
+    /// Size of the checkpoint file as last written or opened. A log smaller
+    /// than the checkpoint it extends does not justify rewriting that file.
+    checkpoint_floor: u64,
+    /// Log size below which the policy stays quiet after a failed checkpoint,
+    /// so a full disk costs one attempt per threshold of growth, not one per
+    /// commit.
+    retry_after_wal_bytes: u64,
+    /// An online checkpoint is between its snapshot and its trim.
+    checkpoint_running: bool,
     /// Test-only append fault injection. The guarantee under test — a failed
     /// append blocks the publish — is about *ordering*, and ordering cannot be
     /// exercised without a reachable append failure; no portable filesystem
@@ -107,6 +119,104 @@ impl DurableState {
     pub(super) fn wal_file(&self) -> &Path {
         self.wal.path()
     }
+
+    pub(super) fn set_auto_checkpoint(&mut self, bytes: Option<u64>) {
+        self.auto_checkpoint_wal_bytes = bytes;
+        self.retry_after_wal_bytes = 0;
+    }
+
+    /// The checkpoint the log sits beside (`<checkpoint>-wal` minus the suffix).
+    pub(super) fn checkpoint_file(&self) -> Option<std::path::PathBuf> {
+        let wal = self.wal.path();
+        let name = wal.file_name()?.to_str()?.strip_suffix("-wal")?.to_owned();
+        Some(wal.with_file_name(name))
+    }
+
+    /// The automatic-checkpoint policy: the log has grown past the configured
+    /// bound and at least as large as the checkpoint it extends, no checkpoint
+    /// is already running, and the last failure's backoff has been outgrown.
+    pub(super) fn needs_checkpoint(&self) -> bool {
+        let Some(limit) = self.auto_checkpoint_wal_bytes else {
+            return false;
+        };
+        let size = self.wal.frame_bytes();
+        !self.diverged
+            && !self.checkpoint_running
+            && size >= limit
+            && size >= self.checkpoint_floor
+            && size >= self.retry_after_wal_bytes
+    }
+
+    /// Fix the point an online checkpoint snapshots: the newest logged LSN, the
+    /// log offset just past that frame, and the log's epoch. Called with the
+    /// graph lock held, together with the snapshot `Arc` clone, so the three
+    /// agree (commits append under both locks).
+    pub(super) fn begin_online(&mut self) -> Result<OnlinePoint, String> {
+        if self.diverged {
+            return Err(DIVERGED_MSG.to_string());
+        }
+        let checkpoint = self.checkpoint_file().ok_or_else(|| {
+            format!(
+                "write-ahead log '{}' does not name a checkpoint",
+                self.wal.path().display()
+            )
+        })?;
+        // Under `normal` the frames up to the snapshot may still be in the page
+        // cache; the checkpoint must not outrun them (see
+        // `durability::checkpoint_prologue`). The barrier runs on a duplicate
+        // handle after the locks are released.
+        let barrier = if self.level == DurabilityLevel::Full {
+            None
+        } else {
+            Some(self.wal.sync_handle().map_err(|e| e.to_string())?)
+        };
+        self.checkpoint_running = true;
+        Ok(OnlinePoint {
+            lsn: self.last_lsn(),
+            offset: self.wal.end_offset(),
+            epoch: self.wal.epoch(),
+            wal_bytes: self.wal.frame_bytes(),
+            checkpoint,
+            barrier,
+        })
+    }
+
+    /// Close an online checkpoint: on success trim the log through the
+    /// snapshot's offset; on failure leave it whole and back off.
+    pub(super) fn finish_online(
+        &mut self,
+        point: &OnlinePoint,
+        written: Result<u64, ()>,
+    ) -> Result<u64, String> {
+        self.checkpoint_running = false;
+        match written {
+            Err(()) => {
+                self.retry_after_wal_bytes = self
+                    .wal
+                    .frame_bytes()
+                    .saturating_add(self.auto_checkpoint_wal_bytes.unwrap_or(0));
+                Ok(0)
+            }
+            Ok(bytes) => {
+                self.checkpoint_floor = bytes;
+                self.retry_after_wal_bytes = 0;
+                self.wal
+                    .trim_through(point.offset, point.epoch)
+                    .map_err(|e| e.to_string())?;
+                Ok(self.wal.frame_bytes())
+            }
+        }
+    }
+}
+
+/// What [`DurableState::begin_online`] fixed under the locks.
+pub(super) struct OnlinePoint {
+    pub(super) lsn: u64,
+    pub(super) offset: u64,
+    pub(super) epoch: u64,
+    pub(super) wal_bytes: u64,
+    pub(super) checkpoint: std::path::PathBuf,
+    pub(super) barrier: Option<std::fs::File>,
 }
 
 /// Message shared by every operation that a direct write has invalidated.
@@ -204,6 +314,10 @@ impl Session {
                 next_lsn,
                 level,
                 diverged: false,
+                auto_checkpoint_wal_bytes: Some(super::DEFAULT_AUTO_CHECKPOINT_WAL_BYTES),
+                checkpoint_floor: std::fs::metadata(checkpoint_path).map_or(0, |m| m.len()),
+                retry_after_wal_bytes: 0,
+                checkpoint_running: false,
                 #[cfg(test)]
                 fail_append: false,
             },
@@ -356,6 +470,8 @@ impl Session {
                 .map_err(|error| error.to_string())?;
         }
         state.diverged = false;
+        state.retry_after_wal_bytes = 0;
+        state.checkpoint_floor = std::fs::metadata(path).map_or(0, |m| m.len());
         Ok(())
     }
 
@@ -425,6 +541,7 @@ impl Session {
         Session {
             graph: Mutex::new(graph),
             durable: Mutex::new(Some(state)),
+            checkpoint_gate: Mutex::new(()),
         }
     }
 }

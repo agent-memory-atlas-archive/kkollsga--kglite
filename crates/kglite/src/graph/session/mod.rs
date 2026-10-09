@@ -58,6 +58,7 @@ pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,
 };
 pub use self::noderefs::{resolve_noderef_value, resolve_noderefs};
+pub use self::online_checkpoint::{OnlineCheckpointReport, DEFAULT_AUTO_CHECKPOINT_WAL_BYTES};
 pub use self::open_path::{
     open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
 };
@@ -90,6 +91,9 @@ pub(crate) mod execute;
 #[cfg(test)]
 mod merge_unwind_index_tests;
 pub(crate) mod noderefs;
+mod online_checkpoint;
+#[cfg(test)]
+mod online_checkpoint_tests;
 pub(crate) mod open_path;
 #[cfg(test)]
 mod open_path_tests;

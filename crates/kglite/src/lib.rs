@@ -990,5 +990,10 @@ pub mod api {
         pub use crate::graph::session::{
             open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
         };
+        /// `Session::checkpoint_online`'s result and the automatic-checkpoint
+        /// default every surface shares.
+        pub use crate::graph::session::{
+            OnlineCheckpointReport, DEFAULT_AUTO_CHECKPOINT_WAL_BYTES,
+        };
     }
 }

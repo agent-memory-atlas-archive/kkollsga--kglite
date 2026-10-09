@@ -109,6 +109,9 @@ pub struct Session {
     /// then publish the Arc" indivisible for concurrent committers. See
     /// [`super::durable`].
     pub(super) durable: Mutex<Option<super::durable::DurableState>>,
+    /// Serializes checkpoints (`save` and the online checkpoint). Taken before
+    /// the graph lock, so it sits first in the lock order.
+    pub(super) checkpoint_gate: Mutex<()>,
 }
 
 /// Serialized mutable access to a Session graph. The guard holds the Session
@@ -165,6 +168,7 @@ impl Session {
         Self {
             graph: Mutex::new(graph),
             durable: Mutex::new(None),
+            checkpoint_gate: Mutex::new(()),
         }
     }
 
@@ -324,6 +328,10 @@ impl Session {
     /// warns as well as overriding; the engine has no warning channel, so the
     /// contract is stated here.)
     pub fn save(&self, path: &str, fsync: bool) -> Result<(), String> {
+        let _gate = self
+            .checkpoint_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let mut guard = self.graph.lock().unwrap_or_else(|p| p.into_inner());
         self.save_checkpoint(&mut guard, path, fsync)
     }

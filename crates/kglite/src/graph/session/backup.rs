@@ -249,6 +249,20 @@ fn write_backup(
     })
 }
 
+/// Publish `snapshot` at `dest` stamped with `lsn`, preparing a private copy
+/// first when writing it as it stands would differ from a normal save. The
+/// published `Arc` is never written through. Returns the file's size.
+pub(super) fn write_stamped(
+    snapshot: &Arc<DirGraph>,
+    dest: &str,
+    lsn: u64,
+) -> Result<u64, SaveError> {
+    let (prepared, _) = prepared_for_write(snapshot);
+    let written: &DirGraph = prepared.as_ref().unwrap_or(snapshot);
+    crate::graph::io::file::write_kgl_with_stamp(written, dest, true, Some(lsn))
+        .map_err(|error| SaveError::Io(error.to_string()))
+}
+
 /// A private prepared copy of `snapshot` when writing it as it stands would
 /// differ from what a normal save writes; `None` when it would not. The shared
 /// `Arc` is never written through: the copy is a fork of it.

@@ -94,6 +94,9 @@ pub use edge_embeddings::{
 /// File magic for a kglite WAL sidecar: `KWAL`.
 pub const WAL_MAGIC: [u8; 4] = *b"KWAL";
 
+/// Magic plus the one version byte: where the first frame starts.
+const WAL_HEADER_LEN: u64 = (WAL_MAGIC.len() + 1) as u64;
+
 /// On-disk WAL format version *written* by this build. Bumped when the
 /// frame payload gains anything an older build could not parse; the WAL is
 /// a within-version recovery artefact (truncated at every checkpoint), not
@@ -1513,6 +1516,10 @@ pub struct Wal {
     /// Set when a failed append could not be cut back: the log's tail is then
     /// unknown, so every later append and sync refuses.
     poisoned: Option<String>,
+    /// Bumped whenever the file's frames are rewritten out from under any
+    /// recorded byte offset (`reset`, `trim_through`). A trim whose offset was
+    /// recorded under another epoch refuses instead of cutting at a stale spot.
+    epoch: u64,
     /// Set when this open quarantined a damaged log.
     quarantine: Option<WalQuarantine>,
     /// Set when this open cut a non-zero tail and saved it.
@@ -1596,6 +1603,7 @@ impl Wal {
             sync,
             end,
             poisoned: None,
+            epoch: 0,
             quarantine,
             saved_tail,
             #[cfg(test)]
@@ -1740,7 +1748,96 @@ impl Wal {
         truncate_to_header(&mut file)?;
         self.end = (WAL_MAGIC.len() + 1) as u64;
         self.poisoned = None;
+        self.epoch += 1;
         Ok(())
+    }
+
+    /// Byte length of the log up to its last complete frame.
+    pub(crate) fn end_offset(&self) -> u64 {
+        self.end
+    }
+
+    /// Frame bytes in the log, header excluded.
+    pub(crate) fn frame_bytes(&self) -> u64 {
+        self.end.saturating_sub(WAL_HEADER_LEN)
+    }
+
+    /// See [`Self::trim_through`]: the epoch an offset read now belongs to.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// A second handle on the same open log, for flushing frames to stable
+    /// storage without holding the session locks that serialize appends.
+    pub(crate) fn sync_handle(&self) -> io::Result<File> {
+        self.file.try_clone()
+    }
+
+    /// Drop every frame before byte `offset` (a frame boundary read from
+    /// [`Self::end_offset`] at `epoch`), keeping the frames appended since.
+    ///
+    /// With nothing appended since this is [`Self::reset`]. Otherwise the kept
+    /// tail goes into `<log>.trim` with a fresh header, is fsync'd, and renamed
+    /// over the log, so a crash leaves either the old log (a superset: the
+    /// replay gate skips the frames the checkpoint already holds) or the new
+    /// one, never a log cut mid-frame. The append handle is reopened onto the
+    /// new file; if that fails the log is poisoned, because appends through the
+    /// old handle would land in an unlinked inode.
+    pub(crate) fn trim_through(&mut self, offset: u64, epoch: u64) -> io::Result<()> {
+        use std::io::{Seek, SeekFrom};
+        if let Some(reason) = &self.poisoned {
+            return Err(io::Error::other(reason.clone()));
+        }
+        if epoch != self.epoch || offset < WAL_HEADER_LEN || offset > self.end {
+            return Err(io::Error::other(
+                "the write-ahead log was rewritten while a checkpoint was in flight; \
+                 not trimming at a stale offset",
+            ));
+        }
+        if offset == self.end {
+            return self.reset();
+        }
+        let mut src = File::open(&self.path)?;
+        let mut kept = vec![0u8; WAL_HEADER_LEN as usize];
+        src.read_exact(&mut kept)?;
+        src.seek(SeekFrom::Start(offset))?;
+        let tail_len = (self.end - offset) as usize;
+        let head = kept.len();
+        kept.resize(head + tail_len, 0);
+        src.read_exact(&mut kept[head..])?;
+
+        let mut tmp_name = self.path.as_os_str().to_owned();
+        tmp_name.push(".trim");
+        let tmp = PathBuf::from(tmp_name);
+        let staged = (|| {
+            let mut out = File::create(&tmp)?;
+            out.write_all(&kept)?;
+            crate::graph::durable_io::trace::record(|| "wal trim temp sync_all".to_string());
+            out.sync_all()
+        })();
+        if let Err(e) = staged {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        crate::graph::durable_io::trace::record(|| "wal trim rename".to_string());
+        if let Err(e) = std::fs::rename(&tmp, &self.path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        match OpenOptions::new().read(true).append(true).open(&self.path) {
+            Ok(file) => self.file = file,
+            Err(e) => {
+                self.poisoned = Some(format!(
+                    "WAL trimmed but the new log could not be reopened ({e}); refusing \
+                     further appends until restart"
+                ));
+                return Err(e);
+            }
+        }
+        self.end = kept.len() as u64;
+        self.epoch += 1;
+        crate::graph::durable_io::trace::record(|| "wal trim sync_dir".to_string());
+        crate::graph::durable_io::sync_dir(self.path.parent().unwrap_or_else(|| Path::new(".")))
     }
 
     pub fn path(&self) -> &Path {
