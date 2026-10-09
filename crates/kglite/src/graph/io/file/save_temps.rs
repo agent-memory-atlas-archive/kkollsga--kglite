@@ -26,7 +26,7 @@ pub(crate) fn save_temp_prefix(dest: &Path) -> String {
 /// How long a temp whose owner cannot be identified is kept before it is
 /// treated as abandoned.
 ///
-/// Only reached where process liveness is unavailable (non-Unix, or a `kill`
+/// Only reached where process liveness is unavailable (neither Unix nor Windows, or a probe
 /// that answers neither "alive" nor "gone"). Long enough that no plausible
 /// save is still running, short enough that the litter does not accumulate
 /// across a machine's lifetime.
@@ -127,9 +127,48 @@ fn process_is_alive(pid: u32) -> Option<bool> {
     }
 }
 
-/// Non-Unix platforms have no cheap equivalent, so the age fallback owns the
-/// decision there.
-#[cfg(not(unix))]
+/// Windows liveness via `OpenProcess` + `GetExitCodeProcess`, declared
+/// directly against kernel32 (always linked) so no crate is added for two calls.
+///
+/// A pid that no longer names a process fails `OpenProcess` with
+/// `ERROR_INVALID_PARAMETER`: gone. `ERROR_ACCESS_DENIED` means it exists but
+/// is protected: alive. An open handle to a process that exited (another
+/// holder still has it) reports its exit code, so only `STILL_ACTIVE` counts
+/// as alive. A process that itself exited with code 259 reads as alive, which
+/// only makes the reaper keep a temp it could have deleted. Any other error
+/// answers `None` and leaves the decision to the age fallback.
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> Option<bool> {
+    use std::ffi::c_void;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_INVALID_PARAMETER: i32 = 87;
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+    // SAFETY: plain Win32 calls; the handle is checked for null before use and
+    // closed exactly once, and `code` is a valid out-pointer for the call.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                Some(ERROR_INVALID_PARAMETER) => Some(false),
+                Some(ERROR_ACCESS_DENIED) => Some(true),
+                _ => None,
+            };
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        (ok != 0).then_some(code == STILL_ACTIVE)
+    }
+}
+
+/// Platforms with neither probe: the age fallback owns the decision.
+#[cfg(not(any(unix, windows)))]
 fn process_is_alive(_pid: u32) -> Option<bool> {
     None
 }
