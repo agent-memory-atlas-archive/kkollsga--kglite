@@ -28,12 +28,12 @@ fn in_every_mode(check: impl Fn(DirGraph)) {
 fn run_outcome(
     graph: &mut DirGraph,
     query: &str,
-) -> Result<crate::graph::session::execute::ExecuteOutcome, KgError> {
+) -> Result<crate::graph::session::execute::ExecuteOutcome, Box<KgError>> {
     let params: HashMap<String, Value> = HashMap::new();
-    execute_mut(graph, query, &ExecuteOptions::eager(&params))
+    execute_mut(graph, query, &ExecuteOptions::eager(&params)).map_err(Box::new)
 }
 
-fn run(graph: &mut DirGraph, query: &str) -> Result<(), KgError> {
+fn run(graph: &mut DirGraph, query: &str) -> Result<(), Box<KgError>> {
     run_outcome(graph, query).map(|_| ())
 }
 
@@ -132,7 +132,7 @@ fn create_without_a_required_property_is_refused_and_leaves_nothing() {
         // The single-node CREATE shape that used to skip the rollback
         // checkpoint: the refusal comes after the insert, so it needs one.
         let error = run(&mut graph, "CREATE (:Person {id: 1})").unwrap_err();
-        let message = assert_violation(error, "required_property", Some("email"));
+        let message = assert_violation(*error, "required_property", Some("email"));
         assert!(message.contains("'email'"), "{message}");
         assert_eq!(people(&mut graph), 1, "only the seed remains");
     });
@@ -150,7 +150,7 @@ fn a_later_set_in_the_same_statement_repairs_an_earlier_create() {
         .unwrap();
         assert_eq!(people(&mut graph), 3);
         let message = run(&mut graph, "MERGE (p:Person {id: 3})").unwrap_err();
-        assert_violation(message, "required_property", Some("email"));
+        assert_violation(*message, "required_property", Some("email"));
         assert_eq!(people(&mut graph), 3);
     });
 }
@@ -164,7 +164,7 @@ fn a_late_violation_rolls_back_the_whole_statement() {
             "UNWIND [1, 2, 3] AS i CREATE (:Person {id: i, email: CASE WHEN i = 3 THEN null ELSE 'ok' END})",
         )
         .unwrap_err();
-        assert_violation(message, "required_property", Some("email"));
+        assert_violation(*message, "required_property", Some("email"));
         assert_eq!(people(&mut graph), 1, "rows 1 and 2 were rolled back too");
         // And the graph is still usable.
         run(&mut graph, "CREATE (:Person {id: 9, email: 'fine'})").unwrap();
@@ -177,7 +177,7 @@ fn set_to_a_wrong_type_is_refused_and_the_value_is_restored() {
     in_every_mode(|mut graph| {
         enforced(&mut graph, "error");
         let message = run(&mut graph, "MATCH (p:Person {id: 0}) SET p.age = 'old'").unwrap_err();
-        assert_violation(message, "property_type", Some("age"));
+        assert_violation(*message, "property_type", Some("age"));
         assert_eq!(
             count(&mut graph, "MATCH (p:Person {id: 0}) RETURN p.age"),
             1,
@@ -192,7 +192,7 @@ fn remove_of_a_required_property_is_refused() {
     in_every_mode(|mut graph| {
         enforced(&mut graph, "error");
         let message = run(&mut graph, "MATCH (p:Person {id: 0}) REMOVE p.email").unwrap_err();
-        assert_violation(message, "required_property", Some("email"));
+        assert_violation(*message, "required_property", Some("email"));
         assert_eq!(
             count(
                 &mut graph,
@@ -201,7 +201,7 @@ fn remove_of_a_required_property_is_refused() {
             1
         );
         let message = run(&mut graph, "MATCH (p:Person {id: 0}) SET p.email = null").unwrap_err();
-        assert_violation(message, "required_property", Some("email"));
+        assert_violation(*message, "required_property", Some("email"));
     });
 }
 
@@ -210,7 +210,7 @@ fn a_declared_ancestor_binds_its_descendants() {
     in_every_mode(|mut graph| {
         enforced(&mut graph, "error");
         let message = run(&mut graph, "CREATE (:Student {id: 5})").unwrap_err();
-        assert_violation(message, "required_property", Some("email"));
+        assert_violation(*message, "required_property", Some("email"));
         run(&mut graph, "CREATE (:Student {id: 5, email: 'S'})").unwrap();
     });
 }
@@ -224,7 +224,7 @@ fn closed_labels_refuse_an_undeclared_primary_label_only() {
                 "classes": {"Person": {}}}"#,
         );
         let message = run(&mut graph, "CREATE (:Ghost {id: 1})").unwrap_err();
-        assert_violation(message, "closed_labels", None);
+        assert_violation(*message, "closed_labels", None);
         // Secondary labels are never judged (D3).
         run(&mut graph, "CREATE (p:Person:Ghost {id: 1})").unwrap();
         run(&mut graph, "MATCH (p:Person) SET p:Other").unwrap();
@@ -535,9 +535,9 @@ fn a_minted_title_does_not_satisfy_a_required_name() {
         );
         run(&mut graph, "CREATE (:Person {name: 'Ada', age: 1})").unwrap();
         let error = run(&mut graph, "CREATE (:Person {age: 3})").unwrap_err();
-        assert_violation(error, "required_property", Some("name"));
+        assert_violation(*error, "required_property", Some("name"));
         let error = run(&mut graph, "MATCH (n:Person) REMOVE n.name").unwrap_err();
-        assert_violation(error, "required_property", Some("name"));
+        assert_violation(*error, "required_property", Some("name"));
         assert_eq!(people(&mut graph), 1);
     });
 }
