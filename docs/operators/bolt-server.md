@@ -175,7 +175,7 @@ Error codes:
 
 ### Query limits and transaction timeouts
 
-By default the server applies **no query deadline and no limits**. That is a declared divergence from the Python API and the MCP server, which both apply the shared 180,000 ms default. Three flags set server-wide limits for every statement, auto-commit and inside an explicit transaction.
+By default the server has **no query deadline of its own and applies no limits**. That is a declared divergence from the Python API and the MCP server, which both apply the shared 180,000 ms default. Three flags set server-wide limits for every statement, auto-commit and inside an explicit transaction.
 
 | Flag | Effect on overrun |
 |---|---|
