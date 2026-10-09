@@ -973,15 +973,58 @@ async fn serve() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
+    let (backup_policy, backup_dir) = resolve_backup_policy(&cli)?;
+    let (started, durability) = open_served_graph(&cli)?;
+    log_graph_ready(&started, &durability);
+    // `_writer_lease` rather than `_`: a bare `_` drops it here, releasing
+    // write ownership before the first client connects. This binding holds it
+    // until after the accept loop returns at shutdown.
+    let _writer_lease = started.writer_lease;
+    // The storage-mode half of the refusals: only now is the *live* mode known
+    // (`--storage` may have converted, and a graph opened without the flag
+    // reports whatever it was saved in). The durability level's own disk
+    // refusal has already fired inside `start_graph`, where the engine owns it.
+    durability.ensure_supported(cli.readonly, Some(started.live_mode))?;
 
-    // Mirrors the wheel's `kglite.open(path, storage=...)` exactly, down to a
-    // missing path being an error unless `--storage` opts in to creating one.
-    let requested_mode = cli
-        .storage
-        .as_deref()
-        .map(StorageMode::parse)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let backend = build_backend(&cli, started.session, backup_policy);
+    // Keep the served graph reachable after the backend moves into the server:
+    // the exit hook below runs once the accept loop is done, while
+    // `_writer_lease` is still held, so the save cannot race another process
+    // taking write ownership.
+    let exit_session = backend.session_handle();
+    let served_path = backend.graph_path().to_path_buf();
+    let tasks = spawn_background_tasks(&cli, &durability, &backend, &exit_session, backup_dir);
+
+    let addr = SocketAddr::new(cli.bind, cli.port);
+    let listener = configure_listener(&cli, backend)?;
+    tracing::info!(
+        %addr,
+        readonly = cli.readonly,
+        durability = durability.level.name(),
+        save_on_exit = durability.save_on_exit,
+        checkpoint_interval_secs = durability.checkpoint_interval.map(|d| d.as_secs()),
+        checkpoint_wal_bytes = durability.checkpoint_wal_bytes,
+        "Bolt server starting"
+    );
+
+    let serve_result = listener
+        .serve(addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("Bolt accept loop failed: {}", e));
+
+    tracing::info!("Bolt server stopped");
+    finish_shutdown(
+        &durability,
+        &exit_session,
+        &served_path,
+        tasks,
+        serve_result,
+    )
+    .await
+}
+
+/// Backup policy from the flags, plus its directory for the scheduler.
+fn resolve_backup_policy(cli: &Cli) -> Result<(backup::BackupPolicy, Option<PathBuf>)> {
     let backup_policy = backup::BackupPolicy::from_flags(
         cli.backup_dir.as_deref(),
         cli.backup_allow_any_path,
@@ -991,7 +1034,20 @@ async fn serve() -> Result<()> {
     backup::validate_schedule(cli.backup_interval, cli.backup_keep, backup_policy.dir())
         .map_err(|e| anyhow::anyhow!(e))?;
     let backup_dir = backup_policy.dir().map(Path::to_path_buf);
-    let mut durability = Durability::resolve(&cli)?;
+    Ok((backup_policy, backup_dir))
+}
+
+/// Open the graph in its session, apply `--ontology`, and settle durability.
+fn open_served_graph(cli: &Cli) -> Result<(startup::StartedGraph, Durability)> {
+    // Mirrors the wheel's `kglite.open(path, storage=...)` exactly, down to a
+    // missing path being an error unless `--storage` opts in to creating one.
+    let requested_mode = cli
+        .storage
+        .as_deref()
+        .map(StorageMode::parse)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let mut durability = Durability::resolve(cli)?;
     // The graph is opened *and* wrapped in its session here: at a logging level
     // the two are one step, because recovering the write-ahead sidecar is part
     // of opening the path (see `startup::start_graph`).
@@ -1010,15 +1066,15 @@ async fn serve() -> Result<()> {
     // *default* level to `off` there, and the shutdown flush below must not
     // then call `sync()` on a session that has no log.
     durability.level = started.level;
-    ontology::apply_cli(&started.session, &cli)?;
+    ontology::apply_cli(&started.session, cli)?;
     if !durability.level.logs() {
         // No log, nothing to bound: covers a default degraded to `off`.
         durability.checkpoint_wal_bytes = None;
     }
-    // `_writer_lease` rather than `_`: a bare `_` drops it here, releasing
-    // write ownership before the first client connects. This binding holds it
-    // until after the accept loop returns at shutdown.
-    let _writer_lease = started.writer_lease;
+    Ok((started, durability))
+}
+
+fn log_graph_ready(started: &startup::StartedGraph, durability: &Durability) {
     tracing::info!(
         disposition = match started.disposition {
             OpenDisposition::Opened => "opened",
@@ -1032,20 +1088,9 @@ async fn serve() -> Result<()> {
         durability = durability.level.name(),
         "graph ready; constructing Bolt server"
     );
-    // The storage-mode half of the refusals: only now is the *live* mode known
-    // (`--storage` may have converted, and a graph opened without the flag
-    // reports whatever it was saved in). The durability level's own disk
-    // refusal has already fired inside `start_graph`, where the engine owns it.
-    durability.ensure_supported(cli.readonly, Some(started.live_mode))?;
+}
 
-    let advertised_addr = cli
-        .advertise_addr
-        .clone()
-        .unwrap_or_else(|| format!("{}:{}", cli.bind, cli.port));
-    let csv_import = match cli.allow_csv_import.clone() {
-        Some(dir) => CsvImportPolicy::Directory(dir),
-        None => CsvImportPolicy::Denied,
-    };
+fn server_identity(cli: &Cli) -> ServerIdentity {
     let neo4j_compat = cli.neo4j_compat || env_flag(NEO4J_COMPAT_ENV).unwrap_or(false);
     let identity = if neo4j_compat {
         ServerIdentity::Neo4jCompatible
@@ -1057,13 +1102,29 @@ async fn serve() -> Result<()> {
         neo4j_compat,
         "bolt handshake identity"
     );
-    let backend = KgliteBackend::new(
-        started.session,
+    identity
+}
+
+fn build_backend(
+    cli: &Cli,
+    session: kglite::api::session::Session,
+    backup_policy: backup::BackupPolicy,
+) -> KgliteBackend {
+    let advertised_addr = cli
+        .advertise_addr
+        .clone()
+        .unwrap_or_else(|| format!("{}:{}", cli.bind, cli.port));
+    let csv_import = match cli.allow_csv_import.clone() {
+        Some(dir) => CsvImportPolicy::Directory(dir),
+        None => CsvImportPolicy::Denied,
+    };
+    KgliteBackend::new(
+        session,
         cli.graph.clone(),
         cli.readonly,
         advertised_addr,
         csv_import,
-        identity,
+        server_identity(cli),
         cli.auth_user.clone(),
     )
     .with_backup_policy(backup_policy)
@@ -1079,33 +1140,21 @@ async fn serve() -> Result<()> {
         },
         wait_timeout: timeout_from_secs(cli.writer_wait_timeout),
         idle_timeout: timeout_from_secs(cli.writer_idle_timeout),
-    });
-    // Keep the served graph reachable after the backend moves into the server:
-    // the exit hook below runs once the accept loop is done, while
-    // `_writer_lease` is still held, so the save cannot race another process
-    // taking write ownership.
-    let exit_session = backend.session_handle();
+    })
+}
+
+/// Interval, log-size and backup-schedule tasks, in `finish_shutdown` order.
+fn spawn_background_tasks(
+    cli: &Cli,
+    durability: &Durability,
+    backend: &KgliteBackend,
+    exit_session: &Arc<kglite::api::session::Session>,
+    backup_dir: Option<PathBuf>,
+) -> [Option<tokio::task::JoinHandle<()>>; 3] {
     let served_path = backend.graph_path().to_path_buf();
-    // Cloned out for the same reason, and it must be the backend's own
-    // skip-state so `CALL db.checkpoint()` and the task agree on what is
-    // already on disk.
+    // Cloned out of the backend: it must be the backend's own skip-state so
+    // `CALL db.checkpoint()` and the tasks agree on what is already on disk.
     let checkpoint_state = backend.checkpoint_state();
-    let checkpoint_state_for_wal = Arc::clone(&checkpoint_state);
-    let backup_service = backend.backup_service();
-
-    let addr = SocketAddr::new(cli.bind, cli.port);
-
-    let listener = configure_listener(&cli, backend)?;
-
-    tracing::info!(
-        %addr,
-        readonly = cli.readonly,
-        durability = durability.level.name(),
-        save_on_exit = durability.save_on_exit,
-        checkpoint_interval_secs = durability.checkpoint_interval.map(|d| d.as_secs()),
-        checkpoint_wal_bytes = durability.checkpoint_wal_bytes,
-        "Bolt server starting"
-    );
     let checkpoint_task = durability.checkpoint_interval.map(|interval| {
         tracing::info!(
             interval_secs = interval.as_secs(),
@@ -1113,13 +1162,12 @@ async fn serve() -> Result<()> {
             "periodic checkpointing enabled"
         );
         spawn_checkpoint_task(
-            Arc::clone(&exit_session),
+            Arc::clone(exit_session),
             served_path.clone(),
-            checkpoint_state,
+            Arc::clone(&checkpoint_state),
             interval,
         )
     });
-
     let wal_task = durability.checkpoint_wal_bytes.map(|threshold| {
         tracing::info!(
             threshold_bytes = threshold,
@@ -1127,50 +1175,40 @@ async fn serve() -> Result<()> {
             "log-size checkpointing enabled"
         );
         spawn_wal_size_checkpoint_task(
-            Arc::clone(&exit_session),
+            Arc::clone(exit_session),
             served_path.clone(),
-            checkpoint_state_for_wal,
+            checkpoint_state,
             threshold,
             WAL_SIZE_POLL,
         )
     });
+    let backup_task = spawn_backup_task(cli, backend, &served_path, backup_dir);
+    [checkpoint_task, wal_task, backup_task]
+}
 
-    let backup_task = match (cli.backup_interval, backup_dir) {
-        (Some(interval), Some(dir)) => {
-            let stem = served_path
-                .file_stem()
-                .map_or_else(|| "graph".to_string(), |s| s.to_string_lossy().into_owned());
-            tracing::info!(
-                interval_secs = interval.as_secs(),
-                keep = cli.backup_keep,
-                dir = %dir.display(),
-                "scheduled backups enabled"
-            );
-            Some(backup::spawn_scheduler(
-                backup_service,
-                dir,
-                stem,
-                interval,
-                cli.backup_keep,
-            ))
-        }
-        _ => None,
-    };
-
-    let serve_result = listener
-        .serve(addr)
-        .await
-        .map_err(|e| anyhow::anyhow!("Bolt accept loop failed: {}", e));
-
-    tracing::info!("Bolt server stopped");
-    finish_shutdown(
-        &durability,
-        &exit_session,
-        &served_path,
-        [checkpoint_task, wal_task, backup_task],
-        serve_result,
-    )
-    .await
+fn spawn_backup_task(
+    cli: &Cli,
+    backend: &KgliteBackend,
+    served_path: &Path,
+    backup_dir: Option<PathBuf>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let (interval, dir) = cli.backup_interval.zip(backup_dir)?;
+    let stem = served_path
+        .file_stem()
+        .map_or_else(|| "graph".to_string(), |s| s.to_string_lossy().into_owned());
+    tracing::info!(
+        interval_secs = interval.as_secs(),
+        keep = cli.backup_keep,
+        dir = %dir.display(),
+        "scheduled backups enabled"
+    );
+    Some(backup::spawn_scheduler(
+        backend.backup_service(),
+        dir,
+        stem,
+        interval,
+        cli.backup_keep,
+    ))
 }
 
 /// Everything between the parsed flags and the accept loop. Split from
