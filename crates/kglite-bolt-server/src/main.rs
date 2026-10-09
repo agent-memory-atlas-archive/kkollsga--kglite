@@ -1495,7 +1495,8 @@ mod tests {
     async fn the_wal_size_task_checkpoints_online_while_writers_keep_committing() {
         use kglite::api::session::{execute_mut, CommitOutcome, ExecuteOptions};
         use std::collections::HashMap;
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::time::Instant;
 
         let scratch = scratch_dir("walonline");
         let path = scratch.join("graph.kgl");
@@ -1515,8 +1516,13 @@ mod tests {
         let lease = started.writer_lease;
         let state: CheckpointState = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(AtomicU64::new(0));
         let writer = {
-            let (session, stop) = (Arc::clone(&session), Arc::clone(&stop));
+            let (session, stop, progress) = (
+                Arc::clone(&session),
+                Arc::clone(&stop),
+                Arc::clone(&progress),
+            );
             std::thread::spawn(move || {
                 let mut acked = 0u64;
                 while !stop.load(Ordering::Relaxed) {
@@ -1529,7 +1535,10 @@ mod tests {
                     )
                     .expect("mutation");
                     match session.commit(tx, true) {
-                        CommitOutcome::Committed { .. } => acked += 1,
+                        CommitOutcome::Committed { .. } => {
+                            acked += 1;
+                            progress.store(acked, Ordering::Relaxed);
+                        }
                         other => panic!("commit must not fail: {other:?}"),
                     }
                 }
@@ -1544,24 +1553,42 @@ mod tests {
             8 * 1024,
             poll,
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while state.lock().unwrap().is_none() && std::time::Instant::now() < deadline {
+        // Let the writer outrun the poller until the untrimmed log would be
+        // several thresholds long, so a bounded log can only mean trims ran.
+        let wal = kglite::api::durable::wal_path(&path);
+        let wal_len = || std::fs::metadata(&wal).map_or(0, |m| m.len());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while state.lock().unwrap().is_none() && Instant::now() < deadline {
             tokio::time::sleep(poll).await;
         }
-        tokio::time::sleep(poll * 20).await;
+        while progress.load(Ordering::Relaxed) < 600 && Instant::now() < deadline {
+            tokio::time::sleep(poll).await;
+        }
         stop.store(true, Ordering::Relaxed);
         let acked = writer.join().expect("writer thread");
-        task.abort();
-        let _ = task.await;
         assert!(
             state.lock().unwrap().is_some(),
             "an online checkpoint must have run"
         );
-        let wal = kglite::api::durable::wal_path(&path);
-        let wal_len = std::fs::metadata(&wal).map_or(0, |m| m.len());
+        // With the writer quiet the poller must settle the log under the larger
+        // of the threshold and the checkpoint it extends (the policy's floor,
+        // `Session::needs_checkpoint`); the load-independent proof that trimming happened is that
+        // far more than the threshold was acknowledged.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let bound = || (8 * 1024).max(std::fs::metadata(&path).map_or(0, |m| m.len()));
+        while wal_len() > bound() && Instant::now() < deadline {
+            tokio::time::sleep(poll).await;
+        }
+        task.abort();
+        let _ = task.await;
         assert!(
-            wal_len < acked * 40,
-            "the log must have been trimmed along the way: {wal_len} bytes for {acked} commits"
+            acked >= 600,
+            "the writer must have outrun the threshold ({acked} commits)"
+        );
+        let settled = wal_len();
+        assert!(
+            settled <= bound(),
+            "the log must have been trimmed along the way: {settled} bytes for {acked} commits"
         );
         drop(session);
         drop(lease);
