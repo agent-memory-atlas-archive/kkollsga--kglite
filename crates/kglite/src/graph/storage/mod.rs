@@ -19,6 +19,10 @@ pub mod backend;
 pub mod column_store;
 pub mod disk;
 pub(crate) mod forked;
+pub(crate) mod forked_edge_iters;
+pub(crate) mod forked_edges;
+#[cfg(test)]
+mod forked_model_tests;
 pub mod interner;
 pub mod lookups;
 pub mod mapped;

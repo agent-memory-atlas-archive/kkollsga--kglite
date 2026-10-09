@@ -6,7 +6,8 @@
 //! `Session`, an open `Transaction` — made the next write deep-copy the entire
 //! graph. Measured 2026-08-10 at 1M nodes: **36.3 ms** against a 3.0 µs
 //! control, of which the backend row was **37.8 ms of a 41.6 ms**
-//! `DirGraph::clone` on a plain graph. This module makes that row O(changes).
+//! `DirGraph::clone` on a plain graph. This module makes that row O(changes),
+//! for node writes and for adjacency writes alike.
 //!
 //! ## The structural fact that forces this shape
 //!
@@ -18,43 +19,25 @@
 //! deadlock hazard traded for a latency cliff). So the *reader's* graph is
 //! left byte-for-byte untouched and the *writer* builds the delta.
 //!
-//! ## What the overlay covers, and what it deliberately does not
+//! ## What the overlay holds
 //!
 //! | write | forked behaviour |
 //! |---|---|
 //! | node weight (`SET`, `REMOVE`, labels, title, id) | copied into `nodes` on first touch, O(1) |
-//! | `add_node` (`CREATE`, `MERGE` insert) | appended to `nodes` at a predicted index, O(1) |
+//! | `add_node` (`CREATE`, `MERGE` insert) | stored in `nodes` at a predicted slot, O(1) |
+//! | `remove_node` | the slot joins `dead` (a base node) or leaves `extra` (an overlay node); incident edges go first |
+//! | `add_edge` | stored in the [`EdgeLayer`] at a predicted slot, O(1) |
+//! | `remove_edge` | a tombstone (base edge) or an unlink (overlay edge), O(1) |
+//! | edge weight (`SET r.p`) | copied into the edge layer on first touch, O(1) |
 //! | column-store writes | the overlay owns its own map, O(types) `Arc` bumps at fork |
-//! | **edge weight (`SET r.p`), `add_edge`, `remove_node`, `remove_edge`** | **materialise, then proceed** |
 //!
-//! The last row is a deliberate scope boundary, not an oversight, and its two
-//! halves are out of scope for different reasons.
-//!
-//! `StableDiGraph` threads adjacency through per-node linked lists, so
-//! `add_edge` / `remove_node` / `remove_edge` each rewrite *existing* nodes'
-//! adjacency — which an overlay cannot express without reimplementing
-//! `edges_directed`, `edges_directed_filtered`, `edges_connecting`,
-//! `neighbors_*` and `edge_references` as base⊕overlay chains behind their GAT
-//! iterator types.
-//!
-//! An **edge weight** would need that same rewrite for a different reason:
-//! those iterators hand out `&EdgeData` borrowed out of the base, so a weight
-//! parked in a delta would be served by `edge_weight`'s point lookup and missed
-//! by every iterating read — `WHERE r.p = x` silently filtering on the
-//! pre-write value, which is what it did until 2026-08-23
-//! (`held_reader::an_edge_property_write_under_a_held_reader_reaches_traversal_reads`).
-//! Node weights have no such split: `node_indices` is the only node-level
-//! iterator and it yields indices, which every caller resolves through
-//! `node_weight`.
-//!
-//! **Because no edit reaches base adjacency or a base edge weight, the overlay
-//! needs no edge chaining at all** — traversal and edge iteration delegate
-//! straight to the base, only `node_indices` gains a variant, and the read path
-//! is unchanged apart from the node-weight probe.
-//!
-//! `materialise` is exactly today's cost — a base deep clone plus the overlay
-//! replayed — so a topology write while a reader is held is no worse than
-//! before this module existed, and everything else is O(changes).
+//! `StableDiGraph` threads adjacency through per-node linked lists with head
+//! insertion, so the overlay never touches the base's lists: the edges a node
+//! reads are "the overlay's, newest first, then the base's minus the removed"
+//! (`forked_edges`), which is exactly the folded graph's order. Reads chain the
+//! two behind the shared `Graph*` iterator enums (`forked_edge_iters`); a fork
+//! that wrote only nodes hands out the base's own iterators, so the no-overlay
+//! read path is unchanged.
 //!
 //! ## Slot identity, and why forking is *conditional*
 //!
@@ -62,37 +45,54 @@
 //! `NodeIndex`/`EdgeIndex` it vacated (`dir_graph/rollback.rs`), and
 //! `NodeIndex` is the key of every index structure on `DirGraph`. So the
 //! indices the overlay hands out must be the indices the base will produce when
-//! the overlay is folded back in. `StableGraph::add_node` reuses free-list
-//! slots (LIFO) and offers no index-controlled insertion, so the overlay
-//! allocates exactly as `add_node` would: each index is the
-//! [`SlotMirror`](super::slot_mirror) prediction — the free-list head while
-//! the base has vacated slots, then contiguous slots past every occupied one.
-//! Replaying the appends in allocation order then reproduces every index
-//! (issue #195 was an overlay that appended past `node_bound()` while slots
-//! were still listed).
+//! the overlay is folded back in. `StableGraph::add_node` and `add_edge` reuse
+//! free-list slots (LIFO) and offer no index-controlled insertion, so the
+//! overlay allocates exactly as they would: each index is the
+//! [`SlotMirror`](super::slot_mirror) prediction — the free-list head while the
+//! list is non-empty, then the next slot past every one ever allocated.
+//!
+//! Removals feed the same free lists, so a fold cannot replay "the appended
+//! nodes in allocation order" any more: it replays the **operation log**
+//! (`Op`) — every add and remove, in the order the writer issued them —
+//! against the base's own `add_node` / `add_edge` / `remove_edge` /
+//! `remove_node`, and each add must come back on the slot the overlay handed
+//! out. A log that reproduces every slot reproduces both free lists and the
+//! adjacency order, because the same operations ran against the same state.
+//! Issue #195 was an overlay that appended past `node_bound()` while slots
+//! were still listed.
 //!
 //! That needs a mirror whose free-list order is known, which is what
-//! [`can_fork`] checks. Edges need nothing: the overlay never allocates one.
-//! The fold (`Overlay::apply`) replays the appends against the fold target's
-//! mirror before anything changes, then checks each slot petgraph actually
-//! allocates and undoes the appends on a mismatch, leaving the overlay
-//! serving. A base that cannot be forked falls back to the deep clone, which is
-//! slower and never wrong — the same fail-safe direction
+//! [`can_fork`] checks. The fold simulates the log against a copy of the
+//! target's mirror before anything changes (`Overlay::check`), then replays it
+//! checking each slot petgraph actually allocates. A slot mismatch while the
+//! replay has only added things is undone and the overlay keeps serving; once a
+//! removal has run the replay cannot be reversed (re-adding an edge puts it at
+//! the head of its lists, not where it was), so a mismatch there can only
+//! panic. It cannot happen while the mirror agrees with petgraph, which the
+//! debug assertion in `SlotMirror::note_*_added` checks on every insert the
+//! test suites perform. A base that cannot be forked falls back to the deep
+//! clone, which is slower and never wrong — the same fail-safe direction
 //! `rollback::journal_covers` takes.
 
 use std::collections::{BTreeSet, HashMap};
-use std::ops::Range;
 use std::sync::Arc;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
-use petgraph::stable_graph::StableDiGraph;
-use petgraph::visit::NodeIndexable;
+use petgraph::visit::{EdgeIndexable, NodeIndexable};
 use rustc_hash::FxHashMap;
 
 use crate::datatypes::Value;
-use crate::graph::core::iterators::{ForkedReusedIndices, GraphNodeIndices};
+use crate::graph::core::iterators::{
+    ForkedMergedIndices, GraphEdgeIndices, GraphEdgeReferences, GraphEdges, GraphEdgesConnecting,
+    GraphNeighbors, GraphNodeIndices,
+};
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
+use crate::graph::storage::forked_edge_iters::{
+    ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
+};
+use crate::graph::storage::forked_edges::{EdgeLayer, OverlayBits};
+use crate::graph::storage::property_storage::PropertyStorage;
 use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite, MemoryGraph};
 
@@ -104,12 +104,8 @@ pub struct ForkedGraph {
     /// fingerprint in `dir_graph::rollback_tests::held_reader` is the
     /// golden-snapshot guard for it.
     base: Arc<MemoryGraph>,
-    /// Node weights that diverge from the base: copies taken on first write,
-    /// plus every node appended since the fork. Keyed by raw node index.
-    nodes: OverlayNodes,
-    /// Which slots the appended nodes took, in the order the fold-back must
-    /// replay them.
-    appended: Appended,
+    /// Everything the fold-back replays into the base.
+    delta: Delta,
     /// The overlay's own column-store map, seeded with one `Arc` bump per type
     /// at fork time. Complete, so reads never chain into the base for it.
     column_stores: FxHashMap<InternedKey, Arc<ColumnStore>>,
@@ -120,6 +116,42 @@ pub struct ForkedGraph {
     /// Continues the base's mirror. Predictions must stay in step across the
     /// fork or the fold-back would allocate different slots.
     slot_mirror: super::slot_mirror::SlotMirror,
+}
+
+/// One topology operation, in the order the writer issued it.
+///
+/// Weights are not logged: a node or edge that is live at the end has its
+/// final weight in the delta, and one that is not is replayed with a
+/// placeholder.
+#[derive(Clone, Copy)]
+enum Op {
+    AddNode(u32),
+    /// The node's incident edges were removed by `RemoveEdge` ops before this.
+    RemoveNode(u32),
+    AddEdge {
+        slot: u32,
+        src: u32,
+        dst: u32,
+    },
+    RemoveEdge(u32),
+}
+
+/// The overlay's node and edge delta, kept apart from the base so a fold can
+/// write into the base the overlay sits on ([`ForkedGraph::fold_in_place`]).
+#[derive(Clone, Default)]
+struct Delta {
+    /// Node weights that diverge from the base: copies taken on first write,
+    /// plus every live node the overlay allocated. Keyed by raw node index.
+    nodes: OverlayNodes,
+    /// Live slots the overlay allocated where the base holds no live node: a
+    /// slot the base had vacated, or one past every base slot. Sorted, for
+    /// merging into `node_indices`.
+    extra: BTreeSet<u32>,
+    /// Base nodes the overlay removed and has not re-created.
+    dead: OverlayBits,
+    dead_count: usize,
+    edges: EdgeLayer,
+    ops: Vec<Op>,
 }
 
 /// The overlay's node weights, keyed by raw index, with a bitmap in front.
@@ -133,15 +165,13 @@ pub struct ForkedGraph {
 #[derive(Clone, Default)]
 struct OverlayNodes {
     map: FxHashMap<u32, NodeData>,
-    present: Vec<u64>,
+    present: OverlayBits,
 }
 
 impl OverlayNodes {
     #[inline]
     fn holds(&self, idx: u32) -> bool {
-        self.present
-            .get((idx >> 6) as usize)
-            .is_some_and(|word| (word >> (idx & 63)) & 1 == 1)
+        self.present.holds(idx)
     }
 
     #[inline]
@@ -159,23 +189,17 @@ impl OverlayNodes {
     }
 
     fn insert(&mut self, idx: u32, data: NodeData) {
-        let word = (idx >> 6) as usize;
-        if word >= self.present.len() {
-            self.present.resize(word + 1, 0);
-        }
-        self.present[word] |= 1 << (idx & 63);
+        self.present.set(idx);
         self.map.insert(idx, data);
     }
 
     fn remove(&mut self, idx: u32) -> Option<NodeData> {
-        if let Some(word) = self.present.get_mut((idx >> 6) as usize) {
-            *word &= !(1 << (idx & 63));
-        }
+        self.present.clear(idx);
         self.map.remove(&idx)
     }
 
     fn drain(&mut self) -> impl Iterator<Item = (u32, NodeData)> + '_ {
-        self.present.clear();
+        self.present = OverlayBits::default();
         self.map.drain()
     }
 
@@ -184,87 +208,79 @@ impl OverlayNodes {
     }
 }
 
-/// The slots an overlay's appended nodes took.
-///
-/// Allocation has two phases, because `StableGraph::add_node` does: it pops
-/// the free list (LIFO) until it is empty, and only then appends past every
-/// slot. Once the overlay's mirror runs out of free slots it never gains one
-/// (the overlay frees nothing), so every fresh slot follows every reused one.
-#[derive(Clone, Default)]
-struct Appended {
-    /// Slots reused from the base's free list, in allocation order.
-    reused_order: Vec<u32>,
-    /// The same slots, sorted, for merging into `node_indices`.
-    reused: BTreeSet<u32>,
-    /// Slots past every base and reused slot, contiguous by construction.
-    fresh: Range<u32>,
-}
-
-impl Appended {
-    fn len(&self) -> usize {
-        self.reused_order.len() + self.fresh.len()
-    }
-
-    /// One past the highest slot taken, or 0 when none was.
-    fn bound(&self) -> usize {
-        let reused = self.reused.last().map_or(0, |&idx| idx as usize + 1);
-        reused.max(self.fresh.end as usize)
-    }
-
-    /// Every slot in allocation order: the order the fold-back replays.
-    fn in_order(&self) -> impl Iterator<Item = u32> + '_ {
-        self.reused_order.iter().copied().chain(self.fresh.clone())
-    }
-
-    fn push(&mut self, idx: u32, reused: bool) {
-        if reused {
-            self.reused_order.push(idx);
-            self.reused.insert(idx);
-        } else if self.fresh.is_empty() {
-            self.fresh = idx..idx + 1;
-        } else {
-            debug_assert_eq!(idx, self.fresh.end, "fresh slots must be contiguous");
-            self.fresh.end += 1;
-        }
-    }
-}
-
 /// A [`ForkedGraph`]'s overlay state, borrowed apart from its base so a fold
 /// can write into the base the overlay sits on ([`ForkedGraph::fold_in_place`]).
 struct Overlay<'a> {
-    nodes: &'a mut OverlayNodes,
-    appended: &'a mut Appended,
+    delta: &'a mut Delta,
     column_stores: &'a mut FxHashMap<InternedKey, Arc<ColumnStore>>,
     undo: &'a mut Option<Box<UndoJournal>>,
 }
 
+/// A node that stands in for one the log adds and later removes: the final
+/// weights are written after the replay, so only the slot matters here.
+fn placeholder_node() -> NodeData {
+    NodeData {
+        id: Value::Null,
+        title: Value::Null,
+        node_type: InternedKey::default(),
+        properties: PropertyStorage::Map(HashMap::new()),
+    }
+}
+
+fn placeholder_edge() -> EdgeData {
+    EdgeData {
+        connection_type: InternedKey::default(),
+        properties: Vec::new(),
+    }
+}
+
 impl Overlay<'_> {
-    /// Check that folding into `target` reproduces every appended index,
-    /// without mutating anything.
+    /// Check that folding into `target` reproduces every slot the overlay
+    /// handed out, without mutating anything.
     ///
-    /// Replays the appends in allocation order against a copy of `target`'s
-    /// slot mirror: each prediction must be the index the overlay handed out,
-    /// and that index must carry its weight. A refusal here leaves both the
+    /// Simulates the operation log against a copy of `target`'s slot mirror:
+    /// each add must be predicted onto the slot the overlay chose, and every
+    /// live overlay node must carry its weight. A refusal here leaves both the
     /// overlay and `target` untouched (issue #195).
     fn check(&self, target: &MemoryGraph) -> Result<(), String> {
-        let mut mirror = target.slot_mirror.clone();
-        // What `node_bound()` would read before each replayed `add_node`.
-        let mut bound = target.inner().node_bound();
-        for idx in self.appended.in_order() {
-            if !self.nodes.holds(idx) {
+        for &idx in &self.delta.extra {
+            if !self.delta.nodes.holds(idx) {
                 return Err(format!("appended node {idx} has no weight in the overlay"));
             }
-            let idx = idx as usize;
-            match mirror.predict_next_node(bound) {
-                Some(predicted) if predicted.index() == idx => {
-                    mirror.note_node_added(bound, predicted);
-                    bound = bound.max(idx + 1);
-                }
-                other => {
-                    return Err(format!(
-                        "the overlay handed out node {idx}, but the fold target \
-                         would allocate {other:?}"
-                    ));
+        }
+        let mut mirror = target.slot_mirror.clone();
+        // What `node_bound()` / `edge_bound()` would read before each add.
+        let mut node_bound = target.inner().node_bound();
+        let mut edge_bound = EdgeIndexable::edge_bound(target.inner());
+        for op in &self.delta.ops {
+            match *op {
+                Op::AddNode(idx) => match mirror.predict_next_node(node_bound) {
+                    Some(predicted) if predicted.index() == idx as usize => {
+                        mirror.note_node_added(node_bound, predicted);
+                        node_bound = node_bound.max(idx as usize + 1);
+                    }
+                    other => {
+                        return Err(format!(
+                            "the overlay handed out node {idx}, but the fold target \
+                             would allocate {other:?}"
+                        ));
+                    }
+                },
+                Op::AddEdge { slot, .. } => match mirror.predict_next_edge(edge_bound) {
+                    Some(predicted) if predicted.index() == slot as usize => {
+                        mirror.note_edge_added(edge_bound, predicted);
+                        edge_bound = edge_bound.max(slot as usize + 1);
+                    }
+                    other => {
+                        return Err(format!(
+                            "the overlay handed out edge {slot}, but the fold target \
+                             would allocate {other:?}"
+                        ));
+                    }
+                },
+                Op::RemoveEdge(slot) => mirror.note_edge_removed(EdgeIndex::new(slot as usize)),
+                Op::RemoveNode(idx) => {
+                    mirror.note_node_removed(NodeIndex::new(idx as usize), std::iter::empty());
                 }
             }
         }
@@ -272,26 +288,53 @@ impl Overlay<'_> {
     }
 
     /// Replay the overlay into `target`, which must be a graph in the base's
-    /// exact pre-fork state. All or nothing: on `Err` neither the overlay nor
-    /// the node set of `target` has changed.
+    /// exact pre-fork state. All or nothing for the failures a refusal can
+    /// name: on `Err` neither the overlay nor `target` has changed.
     ///
     /// **This is the fold-back path, and the slot-identity proof lives here.**
     /// [`check`](Self::check) refuses a fold the mirror says would allocate
-    /// different slots. [`append`](Self::append) then checks each slot petgraph
+    /// different slots. [`replay`](Self::replay) then checks each slot petgraph
     /// actually allocates — the mirror itself could disagree with petgraph —
-    /// and undoes the appends on a mismatch: a different index would silently
-    /// mis-key every `DirGraph` index that recorded the overlay's number.
+    /// because a different index would silently mis-key every `DirGraph` index
+    /// that recorded the overlay's number.
     fn apply(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
         self.check(target)?;
-        self.append(target)?;
-        // Then the copy-on-write weights, which are pure overwrites.
-        for (idx, data) in self.nodes.drain() {
+        self.replay(target)?;
+        let touched_edges = self
+            .delta
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::AddEdge { .. } | Op::RemoveEdge(_)))
+            || !self.delta.edges.weights.is_empty();
+        // The final weights, which are pure overwrites of the placeholders.
+        for (idx, data) in self.delta.nodes.drain() {
             if let Some(slot) = target
                 .inner_mut()
                 .node_weight_mut(NodeIndex::new(idx as usize))
             {
                 *slot = data;
             }
+        }
+        let edges = &mut self.delta.edges;
+        for (slot, edge) in edges.added.drain() {
+            if let Some(weight) = target
+                .inner_mut()
+                .edge_weight_mut(EdgeIndex::new(slot as usize))
+            {
+                *weight = edge.weight;
+            }
+        }
+        for (slot, data) in edges.weights.drain() {
+            if let Some(weight) = target
+                .inner_mut()
+                .edge_weight_mut(EdgeIndex::new(slot as usize))
+            {
+                *weight = data;
+            }
+        }
+        *self.delta = Delta::default();
+        if touched_edges {
+            target.invalidate_peer_counts();
         }
         target.column_stores = std::mem::take(self.column_stores);
         // The base's stores went with the assignment above, so on compaction
@@ -306,53 +349,100 @@ impl Overlay<'_> {
         Ok(())
     }
 
-    /// Add the appended nodes to `target` in allocation order, so each
-    /// `add_node` pops the slot the overlay took. A slot other than the one
-    /// handed out removes the nodes this call added, newest first — each
-    /// removal pushes its slot back on the free-list head, so the lists end
-    /// in the order they started — and returns the weights to the overlay.
-    fn append(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
-        let order: Vec<u32> = self.appended.in_order().collect();
-        for (placed, &idx) in order.iter().enumerate() {
-            let data = self
-                .nodes
-                .remove(idx)
-                .expect("check proved every appended index carries a weight");
-            let bound_before = target.inner().node_bound();
-            let actual = target.inner_mut().add_node(data);
-            if actual.index() as u32 == idx {
-                target.slot_mirror.note_node_added(bound_before, actual);
-                continue;
-            }
-            let data = target.inner_mut().remove_node(actual).expect("added above");
-            self.nodes.insert(idx, data);
-            for &earlier in order[..placed].iter().rev() {
-                let slot = NodeIndex::new(earlier as usize);
-                let data = target.inner_mut().remove_node(slot).expect("added above");
-                target
-                    .slot_mirror
-                    .note_node_removed(slot, std::iter::empty());
-                self.nodes.insert(earlier, data);
-            }
-            return Err(format!(
-                "fold-back allocated node {} where the overlay handed out {idx}; \
-                 the slot mirror disagrees with petgraph (see storage/slot_mirror.rs)",
-                actual.index()
-            ));
+    /// Run the log against `target`'s own petgraph, so each `add_node` /
+    /// `add_edge` pops the slot the overlay took. A slot other than the one
+    /// handed out undoes the adds this call made — newest first, since each
+    /// removal pushes its slot back on the free-list head and the lists end in
+    /// the order they started — and returns an error with the overlay intact.
+    fn replay(&mut self, target: &mut MemoryGraph) -> Result<(), String> {
+        for (done, op) in self.delta.ops.iter().enumerate() {
+            let mismatch = match *op {
+                Op::AddNode(idx) => {
+                    let bound_before = target.inner().node_bound();
+                    let actual = target.inner_mut().add_node(placeholder_node());
+                    if actual.index() as u32 == idx {
+                        target.slot_mirror.note_node_added(bound_before, actual);
+                        continue;
+                    }
+                    target.inner_mut().remove_node(actual);
+                    format!(
+                        "fold-back allocated node {} where the overlay handed out {idx}; \
+                         the slot mirror disagrees with petgraph (see storage/slot_mirror.rs)",
+                        actual.index()
+                    )
+                }
+                Op::AddEdge { slot, src, dst } => {
+                    let bound_before = EdgeIndexable::edge_bound(target.inner());
+                    let actual = target.inner_mut().add_edge(
+                        NodeIndex::new(src as usize),
+                        NodeIndex::new(dst as usize),
+                        placeholder_edge(),
+                    );
+                    if actual.index() as u32 == slot {
+                        target.slot_mirror.note_edge_added(bound_before, actual);
+                        continue;
+                    }
+                    target.inner_mut().remove_edge(actual);
+                    format!(
+                        "fold-back allocated edge {} where the overlay handed out {slot}; \
+                         the slot mirror disagrees with petgraph (see storage/slot_mirror.rs)",
+                        actual.index()
+                    )
+                }
+                Op::RemoveEdge(slot) => {
+                    let edge = EdgeIndex::new(slot as usize);
+                    let removed = target.inner_mut().remove_edge(edge);
+                    debug_assert!(removed.is_some(), "the log removed a dead edge");
+                    target.slot_mirror.note_edge_removed(edge);
+                    continue;
+                }
+                Op::RemoveNode(idx) => {
+                    let node = NodeIndex::new(idx as usize);
+                    let removed = target.inner_mut().remove_node(node);
+                    debug_assert!(removed.is_some(), "the log removed a dead node");
+                    target
+                        .slot_mirror
+                        .note_node_removed(node, std::iter::empty());
+                    continue;
+                }
+            };
+            return Err(self.unwind_adds(target, done, mismatch));
         }
-        if target.undo.is_some() {
-            let added: Vec<_> = order
-                .iter()
-                .map(|&idx| NodeIndex::new(idx as usize))
-                .filter_map(|slot| Some((slot, target.inner().node_weight(slot)?.node_type)))
-                .collect();
-            let journal = target.undo.as_deref_mut().expect("checked above");
-            for (slot, kind) in added {
-                journal.note_node_added(slot, kind);
-            }
-        }
-        *self.appended = Appended::default();
         Ok(())
+    }
+
+    /// Reverse the first `done` replayed ops, which must all be adds.
+    ///
+    /// A removal cannot be reversed: re-adding an edge links it at the head of
+    /// its lists, not where it was, so the base would read in a different
+    /// order than the overlay promised. Reaching one means the slot mirror
+    /// disagreed with petgraph *after* removals ran, which `check` rules out
+    /// for any mirror that tracks petgraph.
+    fn unwind_adds(&self, target: &mut MemoryGraph, done: usize, reason: String) -> String {
+        let ops = &self.delta.ops[..done];
+        assert!(
+            ops.iter()
+                .all(|op| matches!(op, Op::AddNode(_) | Op::AddEdge { .. })),
+            "{reason}; a removal had already been replayed, so the base cannot be restored"
+        );
+        for op in ops.iter().rev() {
+            match *op {
+                Op::AddNode(idx) => {
+                    let node = NodeIndex::new(idx as usize);
+                    target.inner_mut().remove_node(node);
+                    target
+                        .slot_mirror
+                        .note_node_removed(node, std::iter::empty());
+                }
+                Op::AddEdge { slot, .. } => {
+                    let edge = EdgeIndex::new(slot as usize);
+                    target.inner_mut().remove_edge(edge);
+                    target.slot_mirror.note_edge_removed(edge);
+                }
+                Op::RemoveEdge(_) | Op::RemoveNode(_) => unreachable!("asserted above"),
+            }
+        }
+        reason
     }
 }
 
@@ -368,6 +458,7 @@ pub(crate) fn can_fork(base: &MemoryGraph) -> bool {
 }
 
 impl ForkedGraph {
+    /// Incoming bindings of `node`, excluding a self-loop's second incidence.
     pub(super) fn count_incoming_nonself_edges_filtered(
         &self,
         node: NodeIndex,
@@ -375,7 +466,7 @@ impl ForkedGraph {
         other_node_type: Option<InternedKey>,
         deadline: Option<std::time::Instant>,
     ) -> Result<usize, String> {
-        self.base.count_edges_filtered_impl(
+        self.count_edges(
             node,
             petgraph::Direction::Incoming,
             conn_type,
@@ -385,14 +476,120 @@ impl ForkedGraph {
         )
     }
 
+    /// `MemoryGraph::count_edges_filtered_impl` over this view: the base's
+    /// answer while the edge layer is clean, a walk of the chained edges once
+    /// it is not (the base knows nothing of an overlay node's type).
+    fn count_edges(
+        &self,
+        node: NodeIndex,
+        dir: petgraph::Direction,
+        conn_type: Option<InternedKey>,
+        other_node_type: Option<InternedKey>,
+        deadline: Option<std::time::Instant>,
+        exclude_self: bool,
+    ) -> Result<usize, String> {
+        if self.delta.edges.is_clean() {
+            return self.base.count_edges_filtered_impl(
+                node,
+                dir,
+                conn_type,
+                other_node_type,
+                deadline,
+                exclude_self,
+            );
+        }
+        let mut count = 0;
+        for (i, edge) in GraphRead::edges_directed(self, node, dir).enumerate() {
+            if i.is_multiple_of(1 << 20)
+                && deadline.is_some_and(|dl| std::time::Instant::now() > dl)
+            {
+                return Err("Query timed out".to_string());
+            }
+            if conn_type.is_some_and(|ct| edge.connection_type() != ct) {
+                continue;
+            }
+            let other = if dir == petgraph::Direction::Outgoing {
+                edge.target()
+            } else {
+                edge.source()
+            };
+            if exclude_self && other == node {
+                continue;
+            }
+            if let Some(required) = other_node_type {
+                if self.node_type_of(other) != Some(required) {
+                    continue;
+                }
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Every live edge's `(source, target, connection type)`, base-direct
+    /// while the edge layer is clean.
+    pub(crate) fn for_each_edge_endpoint_key(
+        &self,
+        mut f: impl FnMut(NodeIndex, NodeIndex, InternedKey),
+    ) {
+        use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+        if self.delta.edges.is_clean() {
+            for er in self.base.inner().edge_references() {
+                f(er.source(), er.target(), er.weight().connection_type);
+            }
+            return;
+        }
+        for edge in GraphRead::edge_references(self) {
+            f(edge.source(), edge.target(), edge.connection_type());
+        }
+    }
+
+    /// Edges of one connection type with their slot and property slice; the
+    /// callback returns `false` to stop.
+    pub(crate) fn for_each_edge_of_conn_type(
+        &self,
+        conn_type: InternedKey,
+        mut f: impl FnMut(NodeIndex, NodeIndex, u32, &[(InternedKey, Value)]) -> bool,
+    ) {
+        use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+        if self.delta.edges.is_clean() {
+            for er in self.base.inner().edge_references() {
+                let w = er.weight();
+                if w.connection_type == conn_type
+                    && !f(
+                        er.source(),
+                        er.target(),
+                        er.id().index() as u32,
+                        w.properties.as_slice(),
+                    )
+                {
+                    return;
+                }
+            }
+            return;
+        }
+        for edge in GraphRead::edge_references(self) {
+            let w = edge.weight();
+            if w.connection_type == conn_type
+                && !f(
+                    edge.source(),
+                    edge.target(),
+                    edge.id().index() as u32,
+                    w.properties.as_slice(),
+                )
+            {
+                return;
+            }
+        }
+    }
+
     /// Fork `base` — O(types), no node or edge is copied.
     pub(crate) fn new(base: Arc<MemoryGraph>) -> Self {
         let column_stores = base.column_stores.clone();
         let slot_mirror = base.slot_mirror.clone();
         Self {
             base,
-            nodes: OverlayNodes::default(),
-            appended: Appended::default(),
+            delta: Delta::default(),
             column_stores,
             undo: None,
             slot_mirror,
@@ -405,14 +602,13 @@ impl ForkedGraph {
     #[cfg(test)]
     #[inline]
     pub(crate) fn overlay_node_count(&self) -> usize {
-        self.nodes.len()
+        self.delta.nodes.len()
     }
 
     /// The overlay's own state, borrowed apart from its base.
     fn overlay(&mut self) -> Overlay<'_> {
         Overlay {
-            nodes: &mut self.nodes,
-            appended: &mut self.appended,
+            delta: &mut self.delta,
             column_stores: &mut self.column_stores,
             undo: &mut self.undo,
         }
@@ -434,16 +630,14 @@ impl ForkedGraph {
     pub(crate) fn fold_in_place(&mut self) -> Option<MemoryGraph> {
         let Self {
             base,
-            nodes,
-            appended,
+            delta,
             column_stores,
             undo,
             ..
         } = self;
         let target = Arc::get_mut(base)?;
         let mut overlay = Overlay {
-            nodes,
-            appended,
+            delta,
             column_stores,
             undo,
         };
@@ -451,9 +645,10 @@ impl ForkedGraph {
         Some(std::mem::replace(target, MemoryGraph::new()))
     }
 
-    /// Deep-copy the base and fold into the copy. Used when a write cannot be
-    /// expressed in the overlay while a reader is still holding the base — the
-    /// whole-graph copy the overlay exists to avoid, paid only on that write.
+    /// Deep-copy the base and fold into the copy, for the whole-graph
+    /// operations that need one concrete `StableDiGraph` while a reader still
+    /// holds the base. The only deep copy left on a write path is a caller
+    /// choosing this one.
     ///
     /// `Err` when the fold would not reproduce the overlay's indices; the
     /// overlay is then untouched and the copy is dropped.
@@ -471,8 +666,7 @@ impl ForkedGraph {
     pub(crate) fn to_memory_graph(&self) -> Result<MemoryGraph, String> {
         let mut clone = ForkedGraph {
             base: Arc::clone(&self.base),
-            nodes: self.nodes.clone(),
-            appended: self.appended.clone(),
+            delta: self.delta.clone(),
             column_stores: self.column_stores.clone(),
             undo: None,
             slot_mirror: self.slot_mirror.clone(),
@@ -501,15 +695,18 @@ impl ForkedGraph {
     ///
     /// This is the single point where a base node stops being shared, and the
     /// reason the base is never mutated: every `&mut NodeData` this backend
-    /// hands out points into `self.nodes`.
+    /// hands out points into `self.delta.nodes`.
     #[inline]
     fn cow_node(&mut self, idx: NodeIndex) -> Option<&mut NodeData> {
         let raw = idx.index() as u32;
-        if !self.nodes.holds(raw) {
+        if !self.delta.nodes.holds(raw) {
+            if self.delta.dead_count != 0 && self.delta.dead.holds(raw) {
+                return None;
+            }
             let base = self.base.inner().node_weight(idx)?.clone();
-            self.nodes.insert(raw, base);
+            self.delta.nodes.insert(raw, base);
         }
-        self.nodes.get_mut(raw)
+        self.delta.nodes.get_mut(raw)
     }
 
     /// Clone `idx`'s current weight into the journal as its pre-statement
@@ -521,6 +718,18 @@ impl ForkedGraph {
         let current = GraphRead::node_weight(self, idx).cloned();
         if let Some(journal) = self.undo.as_deref_mut() {
             journal.note_node_weight(idx, || current);
+        }
+    }
+
+    /// Edge counterpart of [`Self::capture_node_weight`]; the clone is lazy, so
+    /// a second write to the same edge in a statement copies nothing.
+    #[cold]
+    fn capture_edge_weight(&mut self, idx: EdgeIndex) {
+        let Self {
+            base, delta, undo, ..
+        } = self;
+        if let Some(journal) = undo.as_deref_mut() {
+            journal.note_edge_weight(idx, || delta.edges.weight(base.inner(), idx).cloned());
         }
     }
 
@@ -570,9 +779,57 @@ impl ForkedGraph {
             .map(|row_id| (nd.node_type, row_id))
     }
 
-    #[inline]
-    pub(crate) fn base_stable_digraph(&self) -> &StableDiGraph<NodeData, EdgeData> {
-        self.base.inner()
+    /// Take a live node's weight out of the view. A base node becomes `dead`;
+    /// an overlay node leaves `extra`.
+    fn take_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
+        let raw = idx.index() as u32;
+        let own = self.delta.nodes.remove(raw);
+        match self.base.inner().node_weight(idx) {
+            Some(base) => {
+                if self.delta.dead_count != 0 && self.delta.dead.holds(raw) {
+                    return None;
+                }
+                self.delta.dead.set(raw);
+                self.delta.dead_count += 1;
+                Some(own.unwrap_or_else(|| base.clone()))
+            }
+            None => {
+                self.delta.extra.remove(&raw);
+                own
+            }
+        }
+    }
+
+    /// Hide the master row a just-removed node owned, and journal the flip —
+    /// the columnar half of a node deletion (`impl_heap_pre_image_capture!`).
+    fn tombstone_removed_row(&mut self, removed: &NodeData) {
+        let Some(row_id) = removed.properties.columnar_row_id() else {
+            return;
+        };
+        let type_key = removed.node_type;
+        let Some(store) = self.column_stores.get_mut(&type_key) else {
+            return;
+        };
+        Arc::make_mut(store).tombstone(row_id);
+        if let Some(journal) = self.undo.as_deref_mut() {
+            journal.note_columnar_tombstone(type_key, row_id);
+        }
+    }
+
+    /// The edges `remove_node` detaches, in the order the folded graph's
+    /// petgraph would free them: outgoing head-first, then incoming, with a
+    /// self-loop counted once.
+    fn incident_edges(&self, idx: NodeIndex) -> Vec<EdgeIndex> {
+        let mut edges: Vec<EdgeIndex> =
+            GraphRead::edges_directed(self, idx, petgraph::Direction::Outgoing)
+                .map(|edge| edge.id())
+                .collect();
+        edges.extend(
+            GraphRead::edges_directed(self, idx, petgraph::Direction::Incoming)
+                .filter(|edge| edge.source() != idx)
+                .map(|edge| edge.id()),
+        );
+        edges
     }
 }
 
@@ -581,8 +838,7 @@ impl Clone for ForkedGraph {
     fn clone(&self) -> Self {
         Self {
             base: Arc::clone(&self.base),
-            nodes: self.nodes.clone(),
-            appended: self.appended.clone(),
+            delta: self.delta.clone(),
             column_stores: self.column_stores.clone(),
             undo: None,
             slot_mirror: self.slot_mirror.clone(),
@@ -595,47 +851,67 @@ impl std::fmt::Debug for ForkedGraph {
         write!(
             f,
             "ForkedGraph {{ base: {} nodes / {} edges, overlay: {} node weights, \
-             {} appended }}",
+             {} nodes allocated, {} edges added, {} removed }}",
             self.base.inner().node_count(),
             self.base.inner().edge_count(),
-            self.nodes.len(),
-            self.appended.len()
+            self.delta.nodes.len(),
+            self.delta.extra.len(),
+            self.delta.edges.added.len(),
+            self.delta.edges.removed.len()
         )
     }
 }
 
-// Node weights are overlay-then-base; adjacency and edge weights are all the
-// base's, because no write this backend accepts touches either (module doc).
+// Node weights and edges are overlay-then-base: a slot the overlay holds an
+// opinion about is answered from the delta, every other from the base.
 impl GraphRead for ForkedGraph {
     type NodeIndicesIter<'a> = GraphNodeIndices<'a>;
-    type EdgeIndicesIter<'a> = <MemoryGraph as GraphRead>::EdgeIndicesIter<'a>;
-    type EdgesIter<'a> = <MemoryGraph as GraphRead>::EdgesIter<'a>;
-    type EdgeReferencesIter<'a> = <MemoryGraph as GraphRead>::EdgeReferencesIter<'a>;
-    type EdgesConnectingIter<'a> = <MemoryGraph as GraphRead>::EdgesConnectingIter<'a>;
-    type NeighborsIter<'a> = <MemoryGraph as GraphRead>::NeighborsIter<'a>;
+    type EdgeIndicesIter<'a> = GraphEdgeIndices<'a>;
+    type EdgesIter<'a> = GraphEdges<'a>;
+    type EdgeReferencesIter<'a> = GraphEdgeReferences<'a>;
+    type EdgesConnectingIter<'a> = GraphEdgesConnecting<'a>;
+    type NeighborsIter<'a> = GraphNeighbors<'a>;
 
     #[inline]
     fn node_count(&self) -> usize {
-        self.base.inner().node_count() + self.appended.len()
+        self.base.inner().node_count() - self.delta.dead_count + self.delta.extra.len()
     }
 
     #[inline]
     fn edge_count(&self) -> usize {
-        self.base.inner().edge_count()
+        (self.base.inner().edge_count() as isize + self.delta.edges.count_delta()) as usize
     }
 
-    /// Highest occupied slot + 1, as petgraph's own `node_bound()` would read
-    /// after the same appends.
-    #[inline]
+    /// One past the highest live slot, as petgraph's own `node_bound()` reads
+    /// (`StableGraph` trims to the last live node). A removed trailing base
+    /// node walks the bound down over the dead and vacant slots below it.
     fn node_bound(&self) -> usize {
-        self.base.inner().node_bound().max(self.appended.bound())
+        let base = self.base.inner();
+        let mut bound = base.node_bound();
+        if self.delta.dead_count != 0 {
+            while bound > 0
+                && (self.delta.dead.holds(bound as u32 - 1)
+                    || base.node_weight(NodeIndex::new(bound - 1)).is_none())
+            {
+                bound -= 1;
+            }
+        }
+        bound.max(self.delta.extra.last().map_or(0, |&top| top as usize + 1))
     }
 
-    /// The base's, unmodified — for the same reason `edge_count` is: no edit
-    /// this overlay expresses creates or frees an edge slot (module doc).
-    #[inline]
+    /// One past the highest live edge slot; see [`Self::node_bound`].
     fn edge_bound(&self) -> usize {
-        GraphRead::edge_bound(&*self.base)
+        let base = self.base.inner();
+        let mut bound = EdgeIndexable::edge_bound(base);
+        let removed = &self.delta.edges.removed;
+        while !removed.is_empty()
+            && bound > 0
+            && (removed.contains(&(bound as u32 - 1))
+                || base.edge_weight(EdgeIndex::new(bound - 1)).is_none())
+        {
+            bound -= 1;
+        }
+        bound.max(self.delta.edges.added_bound())
     }
 
     #[inline]
@@ -645,8 +921,10 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn node_weight(&self, idx: NodeIndex) -> Option<&NodeData> {
-        match self.nodes.get(idx.index() as u32) {
+        let raw = idx.index() as u32;
+        match self.delta.nodes.get(raw) {
             Some(data) => Some(data),
+            None if self.delta.dead_count != 0 && self.delta.dead.holds(raw) => None,
             None => self.base.inner().node_weight(idx),
         }
     }
@@ -676,25 +954,26 @@ impl GraphRead for ForkedGraph {
         self.node_view(idx)?.str_prop_eq(key, target)
     }
 
-    // Edge delegation from here down, structure and weights alike: no write
-    // this backend accepts reaches base adjacency *or* a base `EdgeData`
-    // (module doc), so the base's answer is the whole answer and the iterating
-    // reads below agree with `edge_weight`'s point lookup by construction.
-
     #[inline]
     fn edges_directed_filtered(
         &self,
         idx: NodeIndex,
         dir: petgraph::Direction,
-        conn_type_filter: Option<InternedKey>,
+        _conn_type_filter: Option<InternedKey>,
     ) -> Self::EdgesIter<'_> {
-        GraphRead::edges_directed_filtered(&*self.base, idx, dir, conn_type_filter)
+        GraphRead::edges_directed(self, idx, dir)
     }
 
     fn edge_endpoint_keys<'a>(
         &'a self,
     ) -> Box<dyn Iterator<Item = (NodeIndex, NodeIndex, InternedKey)> + 'a> {
-        GraphRead::edge_endpoint_keys(&*self.base)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edge_endpoint_keys(&*self.base);
+        }
+        Box::new(
+            GraphRead::edge_references(self)
+                .map(|edge| (edge.source(), edge.target(), edge.connection_type())),
+        )
     }
 
     fn count_edges_grouped_by_peer(
@@ -703,7 +982,26 @@ impl GraphRead for ForkedGraph {
         dir: petgraph::Direction,
         deadline: Option<std::time::Instant>,
     ) -> Result<HashMap<u32, i64>, String> {
-        GraphRead::count_edges_grouped_by_peer(&*self.base, conn_type, dir, deadline)
+        if self.delta.edges.is_clean() {
+            return GraphRead::count_edges_grouped_by_peer(&*self.base, conn_type, dir, deadline);
+        }
+        let mut counts: HashMap<u32, i64> = HashMap::new();
+        for (i, edge) in GraphRead::edge_references(self).enumerate() {
+            if i.is_multiple_of(1 << 20)
+                && deadline.is_some_and(|dl| std::time::Instant::now() > dl)
+            {
+                return Err("Query timed out".to_string());
+            }
+            if edge.connection_type() != conn_type {
+                continue;
+            }
+            let peer = match dir {
+                petgraph::Direction::Outgoing => edge.target(),
+                petgraph::Direction::Incoming => edge.source(),
+            };
+            *counts.entry(peer.index() as u32).or_insert(0) += 1;
+        }
+        Ok(counts)
     }
 
     fn count_edges_filtered(
@@ -714,14 +1012,7 @@ impl GraphRead for ForkedGraph {
         other_node_type: Option<InternedKey>,
         deadline: Option<std::time::Instant>,
     ) -> Result<usize, String> {
-        GraphRead::count_edges_filtered(
-            &*self.base,
-            node,
-            dir,
-            conn_type,
-            other_node_type,
-            deadline,
-        )
+        self.count_edges(node, dir, conn_type, other_node_type, deadline, false)
     }
 
     #[inline]
@@ -737,68 +1028,122 @@ impl GraphRead for ForkedGraph {
 
     /// Every live index in ascending order — the unforked graph's scan order,
     /// which `type_indices` bucket order and the rollback fidelity tests both
-    /// pin. Fresh slots lie above every base slot, so without reused ones a
-    /// chain suffices; reused slots sit in base gaps and are merged in.
+    /// pin. With no node removed and the overlay's slots one run past the base,
+    /// a chain suffices; otherwise they are merged in.
     #[inline]
     fn node_indices(&self) -> Self::NodeIndicesIter<'_> {
         let base = self.base.inner().node_indices();
-        let fresh = self.appended.fresh.start as usize..self.appended.fresh.end as usize;
-        if self.appended.reused.is_empty() {
-            GraphNodeIndices::Forked {
-                base: Box::new(base),
-                appended: fresh,
+        let delta = &self.delta;
+        if delta.dead_count == 0 {
+            match (delta.extra.first(), delta.extra.last()) {
+                (None, _) => {
+                    return GraphNodeIndices::Forked {
+                        base: Box::new(base),
+                        appended: 0..0,
+                    };
+                }
+                (Some(&first), Some(&last))
+                    if first as usize >= self.base.inner().node_bound()
+                        && last as usize - first as usize + 1 == delta.extra.len() =>
+                {
+                    return GraphNodeIndices::Forked {
+                        base: Box::new(base),
+                        appended: first as usize..last as usize + 1,
+                    };
+                }
+                _ => {}
             }
-        } else {
-            GraphNodeIndices::ForkedReused(Box::new(ForkedReusedIndices::new(
-                base,
-                self.appended.reused.iter(),
-                fresh,
-            )))
         }
+        GraphNodeIndices::ForkedMerged(Box::new(ForkedMergedIndices::new(
+            base,
+            delta.extra.iter(),
+            (delta.dead_count != 0).then_some(&delta.dead),
+        )))
     }
 
     #[inline]
     fn edge_indices(&self) -> Self::EdgeIndicesIter<'_> {
-        GraphRead::edge_indices(&*self.base)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edge_indices(&*self.base);
+        }
+        GraphEdgeIndices::Forked(Box::new(ForkedEdgeRefs::new(
+            &self.delta.edges,
+            petgraph::visit::IntoEdgeReferences::edge_references(self.base.inner()),
+        )))
     }
 
     #[inline]
     fn edge_references(&self) -> Self::EdgeReferencesIter<'_> {
-        GraphRead::edge_references(&*self.base)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edge_references(&*self.base);
+        }
+        GraphEdgeReferences::Forked(Box::new(ForkedEdgeRefs::new(
+            &self.delta.edges,
+            petgraph::visit::IntoEdgeReferences::edge_references(self.base.inner()),
+        )))
     }
 
     fn edge_weights<'a>(&'a self) -> Box<dyn Iterator<Item = &'a EdgeData> + 'a> {
-        GraphRead::edge_weights(&*self.base)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edge_weights(&*self.base);
+        }
+        Box::new(GraphRead::edge_references(self).map(|edge| edge.weight()))
     }
 
     #[inline]
     fn edges_directed(&self, idx: NodeIndex, dir: petgraph::Direction) -> Self::EdgesIter<'_> {
-        GraphRead::edges_directed(&*self.base, idx, dir)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edges_directed(&*self.base, idx, dir);
+        }
+        GraphEdges::Forked(Box::new(ForkedEdges::new(
+            &self.delta.edges,
+            idx,
+            dir,
+            self.base.inner().edges_directed(idx, dir),
+        )))
     }
 
     #[inline]
     fn edges(&self, idx: NodeIndex) -> Self::EdgesIter<'_> {
-        GraphRead::edges(&*self.base, idx)
+        GraphRead::edges_directed(self, idx, petgraph::Direction::Outgoing)
     }
 
     #[inline]
     fn edges_connecting(&self, a: NodeIndex, b: NodeIndex) -> Self::EdgesConnectingIter<'_> {
-        GraphRead::edges_connecting(&*self.base, a, b)
+        if self.delta.edges.is_clean() {
+            return GraphRead::edges_connecting(&*self.base, a, b);
+        }
+        GraphEdgesConnecting::Forked(Box::new(ForkedEdgesConnecting::new(
+            ForkedEdges::new(
+                &self.delta.edges,
+                a,
+                petgraph::Direction::Outgoing,
+                self.base
+                    .inner()
+                    .edges_directed(a, petgraph::Direction::Outgoing),
+            ),
+            b,
+        )))
     }
 
     #[inline]
     fn edge_weight(&self, idx: EdgeIndex) -> Option<&EdgeData> {
-        self.base.inner().edge_weight(idx)
+        self.delta.edges.weight(self.base.inner(), idx)
     }
 
     #[inline]
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex> {
-        GraphRead::find_edge(&*self.base, a, b)
+        if self.delta.edges.is_clean() {
+            return GraphRead::find_edge(&*self.base, a, b);
+        }
+        GraphRead::edges_connecting(self, a, b)
+            .next()
+            .map(|edge| edge.id())
     }
 
     #[inline]
     fn edge_endpoints(&self, idx: EdgeIndex) -> Option<(NodeIndex, NodeIndex)> {
-        GraphRead::edge_endpoints(&*self.base, idx)
+        self.delta.edges.endpoints(self.base.inner(), idx)
     }
 
     #[inline]
@@ -807,18 +1152,46 @@ impl GraphRead for ForkedGraph {
         idx: NodeIndex,
         dir: petgraph::Direction,
     ) -> Self::NeighborsIter<'_> {
-        GraphRead::neighbors_directed(&*self.base, idx, dir)
+        if self.delta.edges.is_clean() {
+            return GraphRead::neighbors_directed(&*self.base, idx, dir);
+        }
+        let walk = |dir| {
+            ForkedEdges::new(
+                &self.delta.edges,
+                idx,
+                dir,
+                self.base.inner().edges_directed(idx, dir),
+            )
+        };
+        let (out, inn) = match dir {
+            petgraph::Direction::Outgoing => (Some(walk(dir)), None),
+            petgraph::Direction::Incoming => (None, Some(walk(dir))),
+        };
+        GraphNeighbors::Forked(Box::new(ForkedNeighbors::new(out, inn, None)))
     }
 
     #[inline]
     fn neighbors_undirected(&self, idx: NodeIndex) -> Self::NeighborsIter<'_> {
-        GraphRead::neighbors_undirected(&*self.base, idx)
+        if self.delta.edges.is_clean() {
+            return GraphRead::neighbors_undirected(&*self.base, idx);
+        }
+        let walk = |dir| {
+            ForkedEdges::new(
+                &self.delta.edges,
+                idx,
+                dir,
+                self.base.inner().edges_directed(idx, dir),
+            )
+        };
+        GraphNeighbors::Forked(Box::new(ForkedNeighbors::new(
+            Some(walk(petgraph::Direction::Outgoing)),
+            Some(walk(petgraph::Direction::Incoming)),
+            Some(idx),
+        )))
     }
 }
 
-// Every mutation lands in the overlay. The three that cannot be expressed here
-// are intercepted one level up, in `GraphBackend` — the only place that can
-// replace a `Forked` with a `Memory`.
+// Every mutation lands in the overlay.
 impl GraphWrite for ForkedGraph {
     #[inline]
     fn node_weight_mut(&mut self, idx: NodeIndex) -> Option<&mut NodeData> {
@@ -833,12 +1206,23 @@ impl GraphWrite for ForkedGraph {
         self.cow_node(idx)
     }
 
-    /// Unreachable for the same reason as the three below, though not for the
-    /// same cause: `GraphBackend` materialises before dispatching an edge-weight
-    /// write, because an overlay copy of one would be invisible to every
-    /// iterating read (see the module doc).
-    fn edge_weight_mut(&mut self, _idx: EdgeIndex) -> Option<&mut EdgeData> {
-        unreachable!("forked backend must be materialised before edge_weight_mut")
+    /// An edge weight is copied into the edge layer on first write, so the
+    /// reader's base keeps the weight it was forked with, and every iterating
+    /// read serves the copy (`forked_edge_iters`).
+    fn edge_weight_mut(&mut self, idx: EdgeIndex) -> Option<&mut EdgeData> {
+        let raw = idx.index() as u32;
+        if self.undo.is_some() {
+            self.capture_edge_weight(idx);
+        }
+        let edges = &mut self.delta.edges;
+        if edges.added.contains_key(&raw) {
+            return edges.added.get_mut(&raw).map(|edge| &mut edge.weight);
+        }
+        if edges.removed.contains(&raw) {
+            return None;
+        }
+        let base = self.base.inner().edge_weight(idx)?;
+        Some(edges.weight_mut(raw, base))
     }
 
     #[inline]
@@ -966,41 +1350,107 @@ impl GraphWrite for ForkedGraph {
         }
     }
 
-    #[inline]
     fn add_node(&mut self, data: NodeData) -> NodeIndex {
         let node_type = data.node_type;
-        let bound_before = self.node_bound();
+        let bound_before = GraphRead::node_bound(self);
         // The slot petgraph would hand out (module doc): `can_fork` admits only
         // a synced mirror, so there is always a prediction.
-        let reused = self.slot_mirror.has_free_nodes();
         let idx = self
             .slot_mirror
             .predict_next_node(bound_before)
             .expect("can_fork admits only a base whose slot mirror is synced");
-        self.nodes.insert(idx.index() as u32, data);
-        self.appended.push(idx.index() as u32, reused);
+        let raw = idx.index() as u32;
+        if self.delta.dead_count != 0 && self.delta.dead.holds(raw) {
+            // A base slot the overlay removed and is now reusing.
+            self.delta.dead.clear(raw);
+            self.delta.dead_count -= 1;
+        } else {
+            self.delta.extra.insert(raw);
+        }
+        self.delta.nodes.insert(raw, data);
         self.slot_mirror.note_node_added(bound_before, idx);
+        self.delta.ops.push(Op::AddNode(raw));
         if let Some(journal) = self.undo.as_deref_mut() {
             journal.note_node_added(idx, node_type);
         }
         idx
     }
 
-    /// Unreachable: `GraphBackend` materialises before dispatching any of the
-    /// three adjacency-mutating writes here (see the module doc). The panic is
-    /// the assertion that the interception is complete, not a stub — reaching
-    /// it would mean a base adjacency edit was about to happen under a live
-    /// reader.
-    fn remove_node(&mut self, _idx: NodeIndex) -> Option<NodeData> {
-        unreachable!("forked backend must be materialised before remove_node")
+    /// Detaches the node's edges one at a time through [`Self::remove_edge`]
+    /// (so each is logged, journalled and freed in the order petgraph would
+    /// free it), then frees the node's slot.
+    fn remove_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
+        GraphRead::node_weight(self, idx)?;
+        for edge in self.incident_edges(idx) {
+            GraphWrite::remove_edge(self, edge);
+        }
+        let removed = self.take_node(idx)?;
+        self.slot_mirror.note_node_removed(idx, std::iter::empty());
+        self.delta.ops.push(Op::RemoveNode(idx.index() as u32));
+        if let Some(journal) = self.undo.as_deref_mut() {
+            journal.note_node_removed(idx, removed.clone());
+        }
+        self.tombstone_removed_row(&removed);
+        Some(removed)
     }
 
-    fn add_edge(&mut self, _a: NodeIndex, _b: NodeIndex, _data: EdgeData) -> EdgeIndex {
-        unreachable!("forked backend must be materialised before add_edge")
+    fn add_edge(&mut self, a: NodeIndex, b: NodeIndex, data: EdgeData) -> EdgeIndex {
+        for endpoint in [a, b] {
+            assert!(
+                GraphRead::node_weight(self, endpoint).is_some(),
+                "StableGraph::add_edge: node index {} is not a node in the graph",
+                endpoint.index()
+            );
+        }
+        // The bound only matters when no slot has been vacated, so the exact
+        // `edge_bound` (a scan of the overlay's edges) is not needed here.
+        let bound_before = self
+            .delta
+            .edges
+            .append_bound(EdgeIndexable::edge_bound(self.base.inner()));
+        let idx = self
+            .slot_mirror
+            .predict_next_edge(bound_before)
+            .expect("can_fork admits only a base whose slot mirror is synced");
+        let slot = idx.index() as u32;
+        let (src, dst) = (a.index() as u32, b.index() as u32);
+        self.delta.edges.insert_added(slot, src, dst, data);
+        self.slot_mirror.note_edge_added(bound_before, idx);
+        self.delta.ops.push(Op::AddEdge { slot, src, dst });
+        if let Some(journal) = self.undo.as_deref_mut() {
+            journal.note_edge_added(idx);
+        }
+        idx
     }
 
-    fn remove_edge(&mut self, _idx: EdgeIndex) -> Option<EdgeData> {
-        unreachable!("forked backend must be materialised before remove_edge")
+    fn remove_edge(&mut self, idx: EdgeIndex) -> Option<EdgeData> {
+        let raw = idx.index() as u32;
+        let (src, dst, removed) = match self.delta.edges.take_added(raw) {
+            Some(edge) => (edge.src, edge.dst, edge.weight),
+            None => {
+                if self.delta.edges.removed.contains(&raw) {
+                    return None;
+                }
+                let (src, dst) = self.base.inner().edge_endpoints(idx)?;
+                let weight = match self.delta.edges.weights.remove(&raw) {
+                    Some(own) => own,
+                    None => self.base.inner().edge_weight(idx)?.clone(),
+                };
+                self.delta.edges.tombstone(raw);
+                (src.index() as u32, dst.index() as u32, weight)
+            }
+        };
+        self.slot_mirror.note_edge_removed(idx);
+        self.delta.ops.push(Op::RemoveEdge(raw));
+        if let Some(journal) = self.undo.as_deref_mut() {
+            journal.note_edge_removed(
+                idx,
+                NodeIndex::new(src as usize),
+                NodeIndex::new(dst as usize),
+                removed.clone(),
+            );
+        }
+        Some(removed)
     }
 }
 
@@ -1054,7 +1504,11 @@ mod tests {
             2,
             "the target must be untouched"
         );
-        assert_eq!(forked.appended.len(), 1, "the overlay must keep its append");
+        assert_eq!(
+            forked.delta.extra.len(),
+            1,
+            "the overlay must keep its append"
+        );
         assert!(
             GraphRead::node_weight(&forked, appended).is_some(),
             "the overlay must still serve the appended node"
@@ -1083,7 +1537,11 @@ mod tests {
             forked.fold_in_place().is_none(),
             "the fold must refuse a misplaced slot"
         );
-        assert_eq!(forked.appended.len(), 1, "the overlay must keep its append");
+        assert_eq!(
+            forked.delta.extra.len(),
+            1,
+            "the overlay must keep its append"
+        );
         assert!(GraphRead::node_weight(&forked, appended).is_some());
         assert_eq!(forked.base.inner().node_count(), 3, "the base is unchanged");
     }

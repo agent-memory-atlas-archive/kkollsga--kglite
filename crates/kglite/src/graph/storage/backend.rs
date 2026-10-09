@@ -908,14 +908,7 @@ impl GraphBackend {
                     );
                 }
             }
-            // The overlay never adds, removes or rewrites an edge (module doc),
-            // so the base holds every edge exactly as this backend reads it.
-            GraphBackend::Forked(g) => {
-                for er in g.base_stable_digraph().edge_references() {
-                    let w = er.weight();
-                    f(er.source(), er.target(), w.connection_type);
-                }
-            }
+            GraphBackend::Forked(g) => g.for_each_edge_endpoint_key(f),
             GraphBackend::Recording(rg) => {
                 rg.inner().for_each_edge_endpoint_key(f);
             }
@@ -986,25 +979,7 @@ impl GraphBackend {
                     f(src, tgt, edge_idx, props)
                 });
             }
-            // Reads the base's `properties` directly, which is sound only
-            // because an edge weight is one of the writes the overlay refuses
-            // (module doc) — an overlay that parked one would serve the
-            // pre-write properties here.
-            GraphBackend::Forked(g) => {
-                for er in g.base_stable_digraph().edge_references() {
-                    let w = er.weight();
-                    if w.connection_type == conn_type
-                        && !f(
-                            er.source(),
-                            er.target(),
-                            er.id().index() as u32,
-                            w.properties.as_slice(),
-                        )
-                    {
-                        return;
-                    }
-                }
-            }
+            GraphBackend::Forked(g) => g.for_each_edge_of_conn_type(conn_type, f),
             GraphBackend::Recording(rg) => {
                 rg.inner().for_each_edge_of_conn_type(conn_type, f);
             }

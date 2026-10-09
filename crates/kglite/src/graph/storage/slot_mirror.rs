@@ -175,13 +175,6 @@ impl SlotMirror {
         self.synced
     }
 
-    /// Whether the next `add_node` reuses a vacated slot rather than
-    /// appending. Meaningful only while synced.
-    #[inline]
-    pub(crate) fn has_free_nodes(&self) -> bool {
-        !self.free_nodes.is_empty()
-    }
-
     /// The index `add_node` will return next, or `None` when unsynced.
     ///
     /// `bound` is the caller's `node_bound()`; the mirror deliberately does not

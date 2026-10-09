@@ -9,6 +9,10 @@
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::disk::csr::{CsrEdge, TOMBSTONE_EDGE};
 use crate::graph::storage::disk::graph::DiskGraph;
+use crate::graph::storage::forked_edge_iters::{
+    ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
+};
+use crate::graph::storage::forked_edges::OverlayBits;
 use crate::graph::storage::mapped::mmap_vec::MmapOrVec;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -214,63 +218,73 @@ pub enum GraphNodeIndices<'a> {
         base: Box<petgraph::stable_graph::NodeIndices<'a, NodeData, u32>>,
         appended: std::ops::Range<usize>,
     },
-    /// A `GraphBackend::Forked` overlay that reused vacated base slots.
-    ForkedReused(Box<ForkedReusedIndices<'a>>),
+    /// A `GraphBackend::Forked` overlay that removed base nodes or took slots
+    /// inside the base's range.
+    ForkedMerged(Box<ForkedMergedIndices<'a>>),
 }
 
-/// Ascending merge of a base's live indices with the vacated base slots an
-/// overlay reused, then the overlay's fresh run above both.
-pub struct ForkedReusedIndices<'a> {
+/// Ascending merge of a base's live indices, minus the base nodes the overlay
+/// removed, with every slot the overlay allocated where the base holds no
+/// live node (a vacated slot it reused, or a fresh slot past the bound).
+pub struct ForkedMergedIndices<'a> {
     base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
-    /// A base index read ahead while a smaller reused slot was yielded.
+    /// A base index read ahead while a smaller overlay slot was yielded.
     pending: Option<NodeIndex>,
-    reused: std::collections::btree_set::Iter<'a, u32>,
-    /// The smallest reused slot not yet yielded; `usize::MAX` once exhausted,
+    extra: std::collections::btree_set::Iter<'a, u32>,
+    /// The smallest overlay slot not yet yielded; `usize::MAX` once exhausted,
     /// so the common step is one comparison.
-    next_reused: usize,
-    fresh: std::ops::Range<usize>,
+    next_extra: usize,
+    dead: Option<&'a OverlayBits>,
 }
 
-impl<'a> ForkedReusedIndices<'a> {
+impl<'a> ForkedMergedIndices<'a> {
     pub(crate) fn new(
         base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
-        mut reused: std::collections::btree_set::Iter<'a, u32>,
-        fresh: std::ops::Range<usize>,
+        mut extra: std::collections::btree_set::Iter<'a, u32>,
+        dead: Option<&'a OverlayBits>,
     ) -> Self {
-        let next_reused = reused.next().map_or(usize::MAX, |&idx| idx as usize);
+        let next_extra = extra.next().map_or(usize::MAX, |&idx| idx as usize);
         Self {
             base,
             pending: None,
-            reused,
-            next_reused,
-            fresh,
+            extra,
+            next_extra,
+            dead,
         }
     }
 
     #[inline]
-    fn take_reused(&mut self) -> NodeIndex {
-        let idx = self.next_reused;
-        self.next_reused = self.reused.next().map_or(usize::MAX, |&next| next as usize);
+    fn take_extra(&mut self) -> NodeIndex {
+        let idx = self.next_extra;
+        self.next_extra = self.extra.next().map_or(usize::MAX, |&next| next as usize);
         NodeIndex::new(idx)
     }
 
-    /// A reused slot was vacant in the base, so the two never collide.
+    /// An overlay slot was vacant in the base, so the two never collide.
     #[inline]
     fn next_index(&mut self) -> Option<NodeIndex> {
-        match self.pending.take().or_else(|| self.base.next()) {
-            Some(base) if base.index() < self.next_reused => Some(base),
-            Some(base) => {
-                self.pending = Some(base);
-                Some(self.take_reused())
+        loop {
+            match self.pending.take().or_else(|| self.base.next()) {
+                Some(base)
+                    if self
+                        .dead
+                        .is_some_and(|dead| dead.holds(base.index() as u32)) =>
+                {
+                    continue;
+                }
+                Some(base) if base.index() < self.next_extra => return Some(base),
+                Some(base) => {
+                    self.pending = Some(base);
+                    return Some(self.take_extra());
+                }
+                None if self.next_extra != usize::MAX => return Some(self.take_extra()),
+                None => return None,
             }
-            None if self.next_reused != usize::MAX => Some(self.take_reused()),
-            None => self.fresh.next().map(NodeIndex::new),
         }
     }
 
     fn remaining_extra(&self) -> usize {
-        let reused = self.reused.len() + usize::from(self.next_reused != usize::MAX);
-        reused + usize::from(self.pending.is_some()) + self.fresh.len()
+        self.extra.len() + usize::from(self.next_extra != usize::MAX)
     }
 }
 
@@ -317,7 +331,7 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
             GraphNodeIndices::Forked { base, appended } => {
                 base.next().or_else(|| appended.next().map(NodeIndex::new))
             }
-            GraphNodeIndices::ForkedReused(iter) => iter.next_index(),
+            GraphNodeIndices::ForkedMerged(iter) => iter.next_index(),
         }
     }
 
@@ -331,9 +345,11 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
                 let extra = appended.len();
                 (blo + extra, bhi.map(|h| h + extra))
             }
-            GraphNodeIndices::ForkedReused(iter) => {
+            GraphNodeIndices::ForkedMerged(iter) => {
                 let (blo, bhi) = iter.base.size_hint();
                 let extra = iter.remaining_extra();
+                // Removed base nodes make the base's lower bound too high.
+                let blo = if iter.dead.is_some() { 0 } else { blo };
                 (blo + extra, bhi.map(|h| h + extra))
             }
         }
@@ -347,6 +363,8 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
 pub enum GraphEdges<'a> {
     InMemory(petgraph::stable_graph::Edges<'a, EdgeData, petgraph::Directed, u32>),
     Disk(DiskEdges<'a>),
+    /// A fork with edge changes: overlay edges, then the base's.
+    Forked(Box<ForkedEdges<'a>>),
 }
 
 /// Iterates CSR edges for a specific node, materializing EdgeData on the fly.
@@ -506,6 +524,7 @@ impl<'a> Iterator for GraphEdges<'a> {
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
             GraphEdges::Disk(iter) => iter.next(),
+            GraphEdges::Forked(iter) => iter.next(),
         }
     }
 
@@ -514,6 +533,7 @@ impl<'a> Iterator for GraphEdges<'a> {
         match self {
             GraphEdges::InMemory(iter) => iter.size_hint(),
             GraphEdges::Disk(iter) => iter.size_hint(),
+            GraphEdges::Forked(_) => (0, None),
         }
     }
 }
@@ -525,6 +545,7 @@ impl<'a> Iterator for GraphEdges<'a> {
 pub enum GraphEdgeReferences<'a> {
     InMemory(petgraph::stable_graph::EdgeReferences<'a, EdgeData, u32>),
     Disk(DiskEdgeReferences<'a>),
+    Forked(Box<ForkedEdgeRefs<'a>>),
 }
 
 /// Iterates all edges in the DiskGraph by scanning edge_endpoints.
@@ -577,6 +598,7 @@ impl<'a> Iterator for GraphEdgeReferences<'a> {
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
             GraphEdgeReferences::Disk(iter) => iter.next(),
+            GraphEdgeReferences::Forked(iter) => iter.next(),
         }
     }
 }
@@ -588,6 +610,7 @@ impl<'a> Iterator for GraphEdgeReferences<'a> {
 pub enum GraphEdgeIndices<'a> {
     InMemory(petgraph::stable_graph::EdgeIndices<'a, EdgeData, u32>),
     Disk(DiskEdgeIndices<'a>),
+    Forked(Box<ForkedEdgeRefs<'a>>),
 }
 
 /// Iterates valid edge indices by scanning edge_endpoints for non-tombstones.
@@ -630,6 +653,7 @@ impl<'a> Iterator for GraphEdgeIndices<'a> {
         match self {
             GraphEdgeIndices::InMemory(iter) => iter.next(),
             GraphEdgeIndices::Disk(iter) => iter.next(),
+            GraphEdgeIndices::Forked(iter) => iter.next().map(|edge| edge.id()),
         }
     }
 }
@@ -641,6 +665,7 @@ impl<'a> Iterator for GraphEdgeIndices<'a> {
 pub enum GraphEdgesConnecting<'a> {
     InMemory(petgraph::stable_graph::EdgesConnecting<'a, EdgeData, petgraph::Directed, u32>),
     Disk(DiskEdgesConnecting<'a>),
+    Forked(Box<ForkedEdgesConnecting<'a>>),
 }
 
 /// Iterates edges connecting two specific nodes via the outgoing CSR + overflow.
@@ -678,6 +703,7 @@ impl<'a> Iterator for GraphEdgesConnecting<'a> {
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
             GraphEdgesConnecting::Disk(iter) => iter.next(),
+            GraphEdgesConnecting::Forked(iter) => iter.next(),
         }
     }
 }
@@ -689,6 +715,7 @@ impl<'a> Iterator for GraphEdgesConnecting<'a> {
 pub enum GraphNeighbors<'a> {
     InMemory(petgraph::stable_graph::Neighbors<'a, EdgeData, u32>),
     Disk(DiskNeighbors),
+    Forked(Box<ForkedNeighbors<'a>>),
 }
 
 /// Iterates neighbor nodes. Uses pre-collected Vec of NodeIndex.
@@ -759,6 +786,7 @@ impl<'a> Iterator for GraphNeighbors<'a> {
         match self {
             GraphNeighbors::InMemory(iter) => iter.next(),
             GraphNeighbors::Disk(iter) => iter.next(),
+            GraphNeighbors::Forked(iter) => iter.next(),
         }
     }
 
@@ -767,6 +795,7 @@ impl<'a> Iterator for GraphNeighbors<'a> {
         match self {
             GraphNeighbors::InMemory(iter) => iter.size_hint(),
             GraphNeighbors::Disk(iter) => iter.size_hint(),
+            GraphNeighbors::Forked(_) => (0, None),
         }
     }
 }
