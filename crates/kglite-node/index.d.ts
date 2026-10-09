@@ -329,6 +329,8 @@ export interface OpenOptions {
   validTimeDefault?: string
   /** Write-ahead log size in MiB past which a commit starts a background checkpoint (online: writers keep committing; it never runs on the JS thread or delays the commit's promise). Default 16; `0` disables it. Not combinable with `readOnly`. */
   autoCheckpointWalMib?: number
+  /** What a call does when its job queue (4096 jobs per lane) is full: `'reject'` (default) rejects it `QueueFull`; `'wait'` parks it until a slot frees, in arrival order, and it stays abortable with `signal` while it waits. Memory stays bounded only if callers await: each waiting call holds its promise and arguments. */
+  onQueueFull?: 'reject' | 'wait'
 }
 
 /** Named parameters, referenced in Cypher as `$name`. */

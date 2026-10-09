@@ -47,7 +47,7 @@ use crate::abort::{cancelled_error, wire_query, AbortHandle, Signal};
 use crate::contain;
 use crate::embedder::JsEmbedder;
 use crate::errors::{to_sync_error, JsErr, JsRes, CODE_CLOSED, CODE_NOT_DURABLE, CODE_READ_ONLY};
-use crate::pool::{self, Settle};
+use crate::pool::{self, FullPolicy, Settle};
 use crate::tx::TxShared;
 use crate::typings::{OpenAdvisory, OpenInfo};
 use crate::values::{FromJs, IntegerMode, ToJs};
@@ -85,6 +85,8 @@ pub(crate) struct Inner {
     /// Background online checkpoints in flight, so `close` can wait them out.
     pub(crate) background: Mutex<usize>,
     pub(crate) background_idle: Condvar,
+    /// What a call does when its job queue is full (`onQueueFull`).
+    pub(crate) queue_policy: FullPolicy,
 }
 
 impl Inner {
@@ -211,6 +213,7 @@ struct OpenConfig {
     valid_time_default: Option<ValidTimeDefault>,
     /// Log size in MiB that triggers a background checkpoint; `0` disables it.
     auto_checkpoint_wal_mib: Option<u64>,
+    queue_policy: FullPolicy,
 }
 
 fn count(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
@@ -278,6 +281,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
     let mut lock_explicit = false;
     let mut valid_time_default = None;
     let mut auto_checkpoint_wal_mib = None;
+    let mut queue_policy = FullPolicy::Reject;
     let known = [
         "durability",
         "storage",
@@ -288,6 +292,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
         "integers",
         "validTimeDefault",
         "autoCheckpointWalMib",
+        "onQueueFull",
     ];
     for (key, val) in option_entries(f, v, &known, "open option")? {
         match key.as_str() {
@@ -350,6 +355,17 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
             "autoCheckpointWalMib" => {
                 auto_checkpoint_wal_mib = Some(expect_number(f, val, "autoCheckpointWalMib")?);
             }
+            "onQueueFull" => {
+                queue_policy = match expect_string(f, val, "onQueueFull")?.as_str() {
+                    "reject" => FullPolicy::Reject,
+                    "wait" => FullPolicy::Wait,
+                    other => {
+                        return Err(JsErr::arg(format!(
+                            "onQueueFull must be 'reject' or 'wait', got '{other}'"
+                        )))
+                    }
+                };
+            }
             _ => unreachable!("filtered by option_entries"),
         }
     }
@@ -366,6 +382,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
         ));
     }
     Ok(OpenConfig {
+        queue_policy,
         auto_checkpoint_wal_mib,
         spec,
         read_only,
@@ -640,7 +657,7 @@ impl Graph {
         }
         let handle = args.cancel.clone();
         let inner = Arc::clone(&self.inner);
-        let promise = pool::spawn_for(write, env, move || {
+        let promise = pool::spawn_for(write, self.inner.queue_policy, env, move || {
             if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
                 return failed(cancelled_error());
             }
@@ -683,7 +700,8 @@ impl Graph {
         work: impl FnOnce(&Inner) -> Settle + Send + 'static,
     ) -> napi::Result<Object<'e>, &'static str> {
         let inner = Arc::clone(&self.inner);
-        pool::spawn_write(env, move || work(&inner)).map_err(|e| to_sync_error(JsErr::from(e)))
+        pool::spawn_write(inner.queue_policy, env, move || work(&inner))
+            .map_err(|e| to_sync_error(JsErr::from(e)))
     }
 }
 
@@ -952,6 +970,7 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         embedder: Mutex::new(None),
         background: Mutex::new(0),
         background_idle: Condvar::new(),
+        queue_policy: config.queue_policy,
     })
 }
 
@@ -994,6 +1013,7 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         embedder: Mutex::new(None),
         background: Mutex::new(0),
         background_idle: Condvar::new(),
+        queue_policy: config.queue_policy,
     })
 }
 

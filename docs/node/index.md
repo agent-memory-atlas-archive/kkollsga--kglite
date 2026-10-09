@@ -229,7 +229,7 @@ try {
 | Engine codes such as `CypherSyntax`, `CypherTimeout`, `ConstraintViolation`, `OntologyViolation` | The engine rejects the statement. They match the other bindings. |
 | `InvalidArgument` | An argument or parameter is invalid, or `executeRead` got a write. |
 | `WriterLeaseHeld` | Another writer owns the path. `e.holder` carries `pid`, `since`, `label` and `self`. |
-| `QueueFull` | A job queue is at capacity (4096 jobs). See [Job queues and bursts](#job-queues-and-bursts). |
+| `QueueFull` | A job queue is at capacity (4096 jobs) and the graph opened with `onQueueFull: 'reject'` (the default). See [Job queues and bursts](#job-queues-and-bursts). |
 | `Closed` | The graph handle is closed. |
 | `ReadOnly` | A write on a `readOnly` graph. |
 | `NotDurable` | `sync()` on a graph without a write-ahead log. |
@@ -247,7 +247,19 @@ Converting a result to JavaScript objects runs on the JavaScript thread at about
 
 ### Job queues and bursts
 
-Reads and writes each have a bounded queue of 4096 jobs. A call that finds its queue full rejects at once with `QueueFull`; nothing is buffered without bound and nothing waits. A loop that starts more than 4096 un-awaited calls (for example `Promise.all` over 10,000 `executeWrite` calls) loses the overflow.
+Reads and writes each have a bounded queue of 4096 jobs. By default a call that finds its queue full rejects at once with `QueueFull`; nothing is buffered without bound and nothing waits. A loop that starts more than 4096 un-awaited calls (for example `Promise.all` over 10,000 `executeWrite` calls) loses the overflow.
+
+Open with `onQueueFull: 'wait'` to park those calls instead:
+
+```js
+const graph = await kglite.open('app.kgl', { onQueueFull: 'wait' });
+await Promise.all(rows.map((r) => graph.executeWrite(q, r))); // 20,000 rows: no QueueFull
+```
+
+- **Order:** a waiting call joins the queue in arrival order as workers free slots, so writes keep the order they were started in.
+- **Abort:** a waiting call stays abortable with `signal`. It rejects `Cancelled` at once and never runs.
+- **Memory:** the waiting promises are the backpressure. Each parked call holds its promise and arguments, so the bound is the number of calls your code has started and not yet awaited. Cap that number as below when it can be large.
+- **Scope:** the setting is per graph and covers `executeRead`, `executeWrite`, transactions and their calls. `stream()` batches always reject on a full queue.
 
 Cap the number of calls in flight. A counting semaphore does it in a few lines, or use a package such as `p-limit`:
 

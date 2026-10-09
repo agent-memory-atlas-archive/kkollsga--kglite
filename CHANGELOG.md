@@ -56,6 +56,12 @@ before upgrading.
   an `error` maximum over data already above it is refused. `cardinality.min`
   stays audit-only. Cost is the degree of each touched source, zero when no
   maximum is enforced.
+- **Node: opt-in backpressure when the job queue is full.**
+  `OpenOptions.onQueueFull: 'reject' | 'wait'` (default `'reject'`, as before).
+  With `'wait'` a call that finds its 4096-job queue full waits for a slot, in
+  arrival order, and stays abortable with `signal`. A 20,000-call
+  `Promise.all` of writes then completes with no `QueueFull`.
+
 - **Durable sessions checkpoint on their own.** A log that grows past
   `autoCheckpointWalMib` / `auto_checkpoint_wal_mib` (default 16 MiB; `0`
   disables) is folded into the checkpoint without stopping other writers. The

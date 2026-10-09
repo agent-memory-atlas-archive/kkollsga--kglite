@@ -14,6 +14,13 @@
 //! commit free memory another thread's heap owned, which measured 25-30 %
 //! slower on a 1M-node delete and 20-30 % on a 100k-node relationship write.
 //!
+//! Each lane's queue holds [`QUEUE_CAPACITY`] jobs. A call that finds it full is
+//! rejected `QueueFull` ([`FullPolicy::Reject`], the default) or parked in a FIFO
+//! waiting list ([`FullPolicy::Wait`], `onQueueFull: 'wait'`) that feeds the
+//! queue as workers take jobs. A parked call holds its promise, its closure and
+//! the caller's arguments and nothing else; how many there are is the caller's
+//! to bound by awaiting.
+//!
 //! A job returns a [`Settle`] closure; the worker hands it to a napi `JsDeferred`,
 //! which runs it back on the JS thread (building JS values needs the `Env`) and
 //! resolves the promise with its result.
@@ -48,6 +55,16 @@ type Deferred = JsDeferred<RawJs, Box<dyn FnOnce(Env) -> napi::Result<RawJs> + S
 /// Per-lane queue ceiling. A burst past it is refused rather than buffered without bound.
 const QUEUE_CAPACITY: usize = 4096;
 
+/// What a call does when its lane's queue is full.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FullPolicy {
+    /// Reject the call with `QueueFull`.
+    #[default]
+    Reject,
+    /// Park the call until a slot frees, in arrival order.
+    Wait,
+}
+
 /// Which thread set a job runs on.
 #[derive(Clone, Copy)]
 enum Lane {
@@ -60,13 +77,25 @@ enum Lane {
 type Job = Box<dyn FnOnce() + Send>;
 
 struct Queue {
-    jobs: Mutex<VecDeque<Job>>,
+    state: Mutex<LaneState>,
     ready: Condvar,
+}
+
+struct LaneState {
+    /// Jobs a worker may take, at most [`QUEUE_CAPACITY`].
+    jobs: VecDeque<Job>,
+    /// Calls parked by [`FullPolicy::Wait`]. Non-empty only while `jobs` is at
+    /// capacity: a worker moves the oldest one in under the same lock that
+    /// frees the slot, so arrival order is preserved.
+    waiting: VecDeque<Job>,
 }
 
 fn start_lane(threads: usize, name: &str) -> Arc<Queue> {
     let queue = Arc::new(Queue {
-        jobs: Mutex::new(VecDeque::new()),
+        state: Mutex::new(LaneState {
+            jobs: VecDeque::new(),
+            waiting: VecDeque::new(),
+        }),
         ready: Condvar::new(),
     });
     for n in 0..threads {
@@ -115,14 +144,17 @@ fn worker(queue: &Queue) {
 fn worker_loop(queue: &Queue) {
     loop {
         let job = {
-            let mut jobs = queue.jobs.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = queue.state.lock().unwrap_or_else(PoisonError::into_inner);
             loop {
-                if let Some(job) = jobs.pop_front() {
+                if let Some(job) = state.jobs.pop_front() {
+                    if let Some(parked) = state.waiting.pop_front() {
+                        state.jobs.push_back(parked);
+                    }
                     break job;
                 }
-                jobs = queue
+                state = queue
                     .ready
-                    .wait(jobs)
+                    .wait(state)
                     .unwrap_or_else(PoisonError::into_inner);
             }
         };
@@ -130,14 +162,18 @@ fn worker_loop(queue: &Queue) {
     }
 }
 
-fn enqueue(lane: Lane, job: Job) -> Result<(), Job> {
+fn enqueue(lane: Lane, policy: FullPolicy, job: Job) -> Result<(), Job> {
     let queue = lane_queue(lane);
-    let mut jobs = queue.jobs.lock().unwrap_or_else(PoisonError::into_inner);
-    if jobs.len() >= QUEUE_CAPACITY {
-        return Err(job);
+    let mut state = queue.state.lock().unwrap_or_else(PoisonError::into_inner);
+    if state.jobs.len() >= QUEUE_CAPACITY {
+        if policy == FullPolicy::Reject {
+            return Err(job);
+        }
+        state.waiting.push_back(job);
+        return Ok(());
     }
-    jobs.push_back(job);
-    drop(jobs);
+    state.jobs.push_back(job);
+    drop(state);
     queue.ready.notify_one();
     Ok(())
 }
@@ -166,34 +202,43 @@ fn settle_now(deferred: Deferred, settle: Settle) {
 
 /// Run `work` on a read-pool thread and return the promise it settles.
 ///
-/// `work` runs inside `catch_unwind`; a panic rejects with `Internal`.
+/// `work` runs inside `catch_unwind`; a panic rejects with `Internal`. A full
+/// queue rejects `QueueFull`; [`spawn_for`] takes the graph's policy instead.
 pub fn spawn<'e>(
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,
 ) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
-    spawn_on(Lane::Read, env, work)
+    spawn_on(Lane::Read, FullPolicy::Reject, env, work)
 }
 
 /// [`spawn`] on the writer thread, for jobs that take the graph's write lock
 /// or mutate through a transaction.
 pub fn spawn_write<'e>(
+    policy: FullPolicy,
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,
 ) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
-    spawn_on(Lane::Write, env, work)
+    spawn_on(Lane::Write, policy, env, work)
 }
 
-/// [`spawn_write`] when `write`, else [`spawn`].
+/// [`spawn_write`] when `write`, else [`spawn`] with the same full-queue `policy`.
 pub fn spawn_for<'e>(
     write: bool,
+    policy: FullPolicy,
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,
 ) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
-    spawn_on(if write { Lane::Write } else { Lane::Read }, env, work)
+    spawn_on(
+        if write { Lane::Write } else { Lane::Read },
+        policy,
+        env,
+        work,
+    )
 }
 
 fn spawn_on<'e>(
     lane: Lane,
+    policy: FullPolicy,
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,
 ) -> napi::Result<napi::bindgen_prelude::Object<'e>> {
@@ -219,7 +264,7 @@ fn spawn_on<'e>(
             settle_now(d, settle);
         }
     });
-    if enqueue(lane, job).is_err() {
+    if enqueue(lane, policy, job).is_err() {
         if let Some(d) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() {
             let e = JsErr::new(CODE_QUEUE_FULL, "the query queue is full; retry later");
             settle_now(d, Box::new(move |_| Err(e)));

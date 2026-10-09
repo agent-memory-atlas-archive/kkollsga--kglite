@@ -200,6 +200,7 @@ fn commit_tx(shared: &TxShared) -> JsRes<()> {
                         message: error,
                     }))
                 }
+                CommitOutcome::OntologyViolated { error } => Err(JsErr::from_kg(&error)),
                 _ => Err(JsErr::internal("commit returned an unrecognised outcome")),
             }
         }
@@ -245,18 +246,23 @@ impl Transaction {
             }
             let handle = args.cancel.clone();
             let shared = Arc::clone(&self.shared);
-            let promise = pool::spawn_for(!shared.read_only, env, move || {
-                if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
-                    return failed(cancelled_error());
-                }
-                match run_in_tx(&shared, &args) {
-                    Ok(outcome) => {
-                        let ints = shared.graph.ints;
-                        Box::new(move |env: Env| build_result(env.raw(), &outcome, ints))
+            let promise = pool::spawn_for(
+                !shared.read_only,
+                shared.graph.queue_policy,
+                env,
+                move || {
+                    if args.cancel.as_ref().is_some_and(|c| !c.begin()) {
+                        return failed(cancelled_error());
                     }
-                    Err(e) => failed(e),
-                }
-            })
+                    match run_in_tx(&shared, &args) {
+                        Ok(outcome) => {
+                            let ints = shared.graph.ints;
+                            Box::new(move |env: Env| build_result(env.raw(), &outcome, ints))
+                        }
+                        Err(e) => failed(e),
+                    }
+                },
+            )
             .map_err(|e| to_sync_error(JsErr::from(e)))?;
             wire_signal(env, signal.as_ref(), handle.as_ref(), promise)
         })
@@ -267,10 +273,15 @@ impl Transaction {
     pub fn commit<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             let shared = Arc::clone(&self.shared);
-            pool::spawn_for(!shared.read_only, env, move || match commit_tx(&shared) {
-                Ok(()) => done(),
-                Err(e) => failed(e),
-            })
+            pool::spawn_for(
+                !shared.read_only,
+                shared.graph.queue_policy,
+                env,
+                move || match commit_tx(&shared) {
+                    Ok(()) => done(),
+                    Err(e) => failed(e),
+                },
+            )
             .map_err(|e| to_sync_error(JsErr::from(e)))
         })
     }
@@ -280,13 +291,18 @@ impl Transaction {
     pub fn rollback<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
             let shared = Arc::clone(&self.shared);
-            pool::spawn_for(!shared.read_only, env, move || {
-                let mut state = shared.state();
-                if matches!(*state, State::Open(_) | State::Aborted) {
-                    *state = State::Finished(Finish::RolledBack);
-                }
-                done()
-            })
+            pool::spawn_for(
+                !shared.read_only,
+                shared.graph.queue_policy,
+                env,
+                move || {
+                    let mut state = shared.state();
+                    if matches!(*state, State::Open(_) | State::Aborted) {
+                        *state = State::Finished(Finish::RolledBack);
+                    }
+                    done()
+                },
+            )
             .map_err(|e| to_sync_error(JsErr::from(e)))
         })
     }
@@ -348,7 +364,9 @@ impl Graph {
                 Err(e) => return err_promise(env, e),
             };
             let inner = Arc::clone(&self.inner);
-            pool::spawn_for(!read_only, env, move || match begin_tx(&inner, read_only) {
+            pool::spawn_for(!read_only, inner.queue_policy, env, move || match begin_tx(
+                &inner, read_only,
+            ) {
                 Ok(tx) => Box::new(move |env: Env| {
                     unsafe { Transaction::to_napi_value(env.raw(), tx) }.map_err(JsErr::from)
                 }),
