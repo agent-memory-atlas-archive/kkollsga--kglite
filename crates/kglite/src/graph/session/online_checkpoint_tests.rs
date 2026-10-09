@@ -116,6 +116,34 @@ fn commits_during_the_write_survive_the_trim_and_the_reopen() {
     assert_eq!(ids(&open(&path, DurabilityLevel::Full).snapshot()), live);
 }
 
+/// A trim that cannot publish its staged log (the rename is what Windows
+/// refuses while another handle pins the target) is an error from the
+/// checkpoint, never a success over a log that stayed long.
+#[test]
+fn a_failing_trim_surfaces_as_a_checkpoint_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("g.kgl");
+    let session = Arc::new(open(&path, DurabilityLevel::Full));
+    commit(&session, "CREATE (:N {id: 1})");
+    // A directory squatting on the staging name fails the trim's temp create.
+    let mut staged = wal_path(&path).into_os_string();
+    staged.push(".trim");
+    std::fs::create_dir(&staged).unwrap();
+    let during = Arc::clone(&session);
+    hooks::set(Stage::AfterSnapshot, move || {
+        commit(&during, "CREATE (:N {id: 2})");
+    });
+    assert!(session.checkpoint_online().is_err());
+    assert_eq!(frames(&path), 2, "a failed trim leaves the log whole");
+    std::fs::remove_dir(&staged).unwrap();
+    commit(&session, "CREATE (:N {id: 3})");
+    drop(session);
+    assert_eq!(
+        ids(&open(&path, DurabilityLevel::Full).snapshot()),
+        vec![1, 2, 3]
+    );
+}
+
 /// A crash between the checkpoint's rename and the log trim: the new file is
 /// stamped, the log still holds every frame, and replay must apply only the
 /// frames past the stamp.
@@ -374,8 +402,18 @@ fn concurrent_writers_lose_nothing_across_repeated_checkpoints() {
         live, acked,
         "every acknowledged commit is in the live graph"
     );
+    // The policy fires only when the log reaches max(threshold, the checkpoint
+    // it extends) and only when this thread gets scheduled, so a slow runner
+    // can leave the writers' final commits unswept. One drain pass makes the
+    // bound deterministic: afterwards the frames are below that trigger.
+    let _ = session.maybe_checkpoint_online().unwrap();
     let log = std::fs::metadata(wal_path(&path)).unwrap().len();
-    assert!(log < 32 * 1024, "log stayed bounded, is {log} bytes");
+    let checkpoint = std::fs::metadata(&path).unwrap().len();
+    let bound = 4096.max(checkpoint) + 64;
+    assert!(
+        log < bound,
+        "log stayed bounded, is {log} bytes (checkpoint {checkpoint})"
+    );
     drop(session);
     assert_eq!(ids(&open(&path, DurabilityLevel::Normal).snapshot()), acked);
 }
