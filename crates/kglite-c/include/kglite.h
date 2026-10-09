@@ -1065,6 +1065,71 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
                                             const char **out_error_msg);
 
 /**
+ * Declare the session graph's ontology from a JSON document.
+ *
+ * `ontology_json` uses the same dialect as the Python wheel's
+ * `define_ontology` (`classes`, `relationships`, `closed_labels`,
+ * `enforcement`, `version`), parsed by the same core function. Stored data is
+ * checked against the declaration first. An `error`-level rule that stored
+ * data already breaks refuses the declaration: nothing changes and the
+ * previous ontology stays.
+ *
+ * On success `out_warnings_json` is an owned JSON array of strings (the
+ * `warn`-level findings; empty when there are none). On an
+ * `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` refusal it is an owned JSON array
+ * of report objects `{rule, entity, entity_type, property, count}` and
+ * `out_error_msg` carries the readable report. On any other failure it is
+ * null. `out_warnings_json` may be null when the caller wants neither. Free
+ * both with [`kglite_free_string`](crate::kglite_free_string).
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` or `ontology_json` is null.
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `ontology_json` is not valid UTF-8.
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the JSON did not parse, is not in
+ *   the dialect, or the ontology is locked by the operator.
+ * - `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` — stored data breaks an
+ *   `error`-level rule of the declaration.
+ *
+ * **The declaration is not durable until saved** (or logged by a durable
+ * session): call [`kglite_session_save`](crate::kglite_session_save).
+ *
+ * # Safety
+ *
+ * `session` must be a valid handle from
+ * [`kglite_session_new`](crate::kglite_session_new); `ontology_json` a
+ * null-terminated UTF-8 string; `out_warnings_json` and `out_error_msg` null
+ * or valid writable slots.
+ */
+
+KgliteStatusCode kglite_session_define_ontology(const struct KgliteSession *session,
+                                                const char *ontology_json,
+                                                const char **out_warnings_json,
+                                                const char **out_error_msg);
+
+/**
+ * Remove the session graph's declared ontology.
+ *
+ * A no-op success when none is declared. Refused with
+ * `KGLITE_STATUS_CODE_INVALID_ARGUMENT` when the operator locked the
+ * ontology.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` is null.
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the ontology is locked.
+ *
+ * # Safety
+ *
+ * `session` must be a valid handle from
+ * [`kglite_session_new`](crate::kglite_session_new); `out_error_msg` null or
+ * a valid writable slot.
+ */
+
+KgliteStatusCode kglite_session_clear_ontology(const struct KgliteSession *session,
+                                               const char **out_error_msg);
+
+/**
  * Take the cross-process single-writer lease for a graph path.
  *
  * **The contract: any caller that may `save` to a path must hold this lease

@@ -26,6 +26,8 @@
 //!   the session.
 //! - [`schema`] — declarative schema installation (`kglite_define_schema`),
 //!   sharing Python's one schema dialect.
+//! - [`ontology`] — ontology declaration (`kglite_session_define_ontology`),
+//!   sharing Python's one ontology dialect.
 //! - [`result`] — `KgliteCypherResult` opaque handle + JSON accessors.
 //! - [`alloc`] — tracking global allocator + `kglite_memory_stats`.
 //!
@@ -39,6 +41,7 @@ pub mod embeddings;
 pub mod export;
 mod ffi;
 pub mod graph;
+pub mod ontology;
 pub mod open;
 pub mod result;
 pub mod schema;
@@ -57,6 +60,7 @@ pub use embedder::*;
 pub use embeddings::*;
 pub use export::*;
 pub use graph::*;
+pub use ontology::*;
 pub use open::*;
 pub use result::*;
 pub use schema::*;
