@@ -32,5 +32,12 @@ chrono = { version = "0.4.45", default-features = false }
 # Same allocator and v2 pin as kglite-py and kglite-c; see kglite-py/src/lib.rs.
 mimalloc = { version = "0.1.49", default-features = false, features = ["v2"] }
 
+# musl's loader cannot satisfy initial-exec TLS in a dlopen'd library, and
+# mimalloc compiles its thread-local heap pointer that way by default; the
+# resulting addon dies at require() on Alpine. local-dynamic TLS is valid in a
+# dlopen'd object. Feature unification adds it to the dependency above.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1.49", default-features = false, features = ["v2", "local_dynamic_tls"] }
+
 [build-dependencies]
 napi-build = "2.6.0"
