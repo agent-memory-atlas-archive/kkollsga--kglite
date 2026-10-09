@@ -603,6 +603,7 @@ fn options(row_limit: u64) -> KgliteExecuteOptions {
         row_limit,
         flags: 1,
         reserved: 0,
+        cancel: std::ptr::null(),
     }
 }
 

@@ -6,6 +6,7 @@
 //! free the graph handle afterwards. A failed call moves nothing and
 //! leaves the handle the caller's to free.
 
+use crate::cancel::KgliteCancelToken;
 use crate::graph::{GraphState, KgliteGraph};
 use crate::result::{result_to_json_object, KgliteCypherResult, ResultState};
 use crate::status::KgliteStatusCode;
@@ -271,6 +272,7 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
         timeout_ms,
         max_work_units,
         row_limit: None,
+        cancel: None,
     };
     unsafe {
         run_read(
@@ -287,15 +289,18 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
 /// Per-call budgets shared by the `_opts` and `_ex` execute symbols. `0` in
 /// `timeout_ms` / `max_work_units` disables that budget; `row_limit` is a
 /// retention cap, where `Some(0)` is legal and keeps no rows.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct RunLimits {
     pub(crate) timeout_ms: u64,
     pub(crate) max_work_units: u64,
     pub(crate) row_limit: Option<u64>,
+    /// A clone taken when the options were read, so the handle behind the
+    /// caller's pointer can be freed while the call runs.
+    pub(crate) cancel: Option<kglite::api::session::CancelToken>,
 }
 
 impl RunLimits {
-    pub(crate) fn apply(self, opts: &mut ExecuteOptions<'_>) {
+    pub(crate) fn apply(&self, opts: &mut ExecuteOptions<'_>) {
         if self.timeout_ms > 0 {
             opts.set_timeout_ms(Some(self.timeout_ms));
         }
@@ -304,6 +309,9 @@ impl RunLimits {
         }
         if let Some(limit) = self.row_limit {
             opts.row_limit = Some(limit as usize);
+        }
+        if let Some(token) = &self.cancel {
+            opts.cancel = Some(token.clone());
         }
     }
 }
@@ -453,6 +461,11 @@ pub struct KgliteExecuteOptions {
     pub flags: u32,
     /// Reserved; set to zero.
     pub reserved: u32,
+    /// Cancellation token from [`kglite_cancel_token_new`]; null for none.
+    /// Read only when `struct_size` covers this field. The call takes its own
+    /// reference before it starts, so the token may be freed while the call
+    /// runs. Cancelling it makes the call return `KGLITE_STATUS_CODE_CANCELLED`.
+    pub cancel: *const KgliteCancelToken,
 }
 
 /// `KgliteExecuteOptions.flags` bit 0: apply `row_limit`. Not exported to the
@@ -480,7 +493,12 @@ pub(crate) fn read_execute_options(
             take,
         );
     }
+    let cancel_end = std::mem::offset_of!(KgliteExecuteOptions, cancel)
+        + std::mem::size_of::<*const KgliteCancelToken>();
+    let cancel = (declared >= cancel_end && !local.cancel.is_null())
+        .then(|| unsafe { (*local.cancel).clone_token() });
     Ok(RunLimits {
+        cancel,
         timeout_ms: local.timeout_ms,
         max_work_units: local.max_work_units,
         row_limit: (local.flags & EXECUTE_ROW_LIMIT != 0).then_some(local.row_limit),
@@ -589,6 +607,7 @@ unsafe fn execute_mut_impl(
         timeout_ms,
         max_work_units,
         row_limit: None,
+        cancel: None,
     };
     unsafe {
         run_mut(

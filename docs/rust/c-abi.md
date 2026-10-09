@@ -201,6 +201,28 @@ batches commit atomically.
   session run independently.
 - Free every transaction before freeing or closing its session.
 
+### Cancelling a running query
+
+| Call | Effect |
+| --- | --- |
+| `kglite_cancel_token_new(&token)` | Creates an owned `KgliteCancelToken`. |
+| `kglite_cancel_token_cancel(token)` | Asks every call carrying the token to stop. Callable from any thread. |
+| `kglite_cancel_token_free(token)` | Frees the handle. |
+
+- Attach the token through `KgliteExecuteOptions.cancel`, the field after
+  `reserved`. It is read only when `struct_size` covers it, so a caller built
+  before the field existed is unaffected. It applies to
+  `kglite_session_execute_read_ex`, `kglite_session_execute_mut_ex` and
+  `kglite_tx_execute`.
+- A stopped query returns `KGLITE_STATUS_CODE_CANCELLED` (17) at its next
+  check. A cancelled write publishes nothing.
+- A cancelled token stays cancelled. Make one token per query you may want to
+  stop.
+- Each call takes its own reference to the token before it starts, so
+  `kglite_cancel_token_free` is safe while the call runs. Never pass a freed
+  handle to a new call or to `cancel`, and never race `cancel` against `free`
+  on the same handle.
+
 Query parameter JSON is checked recursively before execution. Integer tokens
 must fit signed 64-bit; decimal or exponent tokens must fit a finite 64-bit
 float. A refusal returns `KGLITE_STATUS_CODE_INVALID_ARGUMENT`, leaves the

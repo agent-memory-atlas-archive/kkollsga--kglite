@@ -15,6 +15,7 @@
 //! ## Module structure
 //!
 //! - [`abi`] — ABI version probe + status code helpers.
+//! - [`cancel`] — `KgliteCancelToken`, the cancel handle for a running query.
 //! - [`status`] — `KgliteStatusCode` enum + `KgErrorCode` mapping.
 //! - [`strings`] — owned-out-string allocation + `kglite_free_string`.
 //! - [`graph`] — `KgliteGraph` opaque handle + load/save/free.
@@ -39,6 +40,7 @@
 
 pub mod abi;
 pub mod alloc;
+pub mod cancel;
 pub mod details;
 pub mod embedder;
 pub mod embeddings;
@@ -62,6 +64,7 @@ pub mod tx;
 // for binding authors to navigate.
 pub use abi::*;
 pub use alloc::*;
+pub use cancel::*;
 pub use details::*;
 pub use embedder::*;
 pub use embeddings::*;

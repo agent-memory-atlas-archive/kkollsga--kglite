@@ -35,6 +35,12 @@ before upgrading.
 
 ### Added
 
+- **C ABI: cancellation tokens.** `kglite_cancel_token_new`,
+  `kglite_cancel_token_cancel` (callable from any thread) and
+  `kglite_cancel_token_free` manage a `KgliteCancelToken`. Attach it through the
+  new `cancel` field at the end of `KgliteExecuteOptions` on the session `_ex`
+  executes and `kglite_tx_execute`; a stopped query returns
+  `CANCELLED` (17). Callers built against the earlier struct are unaffected.
 - **C ABI: explicit transactions.** `kglite_session_begin(session, read_only,
   &tx, &err)` returns an owned `KgliteTx`; `kglite_tx_execute`,
   `kglite_tx_commit`, `kglite_tx_rollback` and `kglite_tx_free` drive it. A

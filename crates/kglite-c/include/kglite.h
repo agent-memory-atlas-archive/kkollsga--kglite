@@ -227,6 +227,14 @@ typedef struct KgMemStats {
 } KgMemStats;
 
 /**
+ * Opaque handle for a cancellation token. See
+ * [`KgliteGraph`](crate::KgliteGraph) for the empty-`#[repr(C)]` facade.
+ */
+typedef struct KgliteCancelToken {
+  uint8_t _opaque[0];
+} KgliteCancelToken;
+
+/**
  * Opaque handle for an embedder. See
  * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the
  * empty `#[repr(C)]` facade pattern — cbindgen renders only a
@@ -321,6 +329,13 @@ typedef struct KgliteExecuteOptions {
    * Reserved; set to zero.
    */
   uint32_t reserved;
+  /**
+   * Cancellation token from [`kglite_cancel_token_new`]; null for none.
+   * Read only when `struct_size` covers this field. The call takes its own
+   * reference before it starts, so the token may be freed while the call
+   * runs. Cancelling it makes the call return `KGLITE_STATUS_CODE_CANCELLED`.
+   */
+  const struct KgliteCancelToken *cancel;
 } KgliteExecuteOptions;
 
 /**
@@ -383,6 +398,52 @@ typedef struct KgliteTx {
  * kglite's memory footprint in its own metrics.
  */
  struct KgMemStats kglite_memory_stats(void);
+
+/**
+ * Create a cancellation token.
+ *
+ * Attach it to a query through `KgliteExecuteOptions.cancel` on
+ * `kglite_session_execute_read_ex`, `kglite_session_execute_mut_ex` or
+ * `kglite_tx_execute`. A token that has been cancelled stays cancelled: a
+ * later call that carries it returns `KGLITE_STATUS_CODE_CANCELLED` at once.
+ * Make one token per query you may want to stop.
+ *
+ * # Arguments
+ *
+ * - `out_token` (out, owned): the new token; free it with
+ *   [`kglite_cancel_token_free`].
+ *
+ * # Safety
+ *
+ * `out_token` a valid writable slot.
+ */
+ KgliteStatusCode kglite_cancel_token_new(struct KgliteCancelToken **out_token);
+
+/**
+ * Ask every call carrying `token` to stop. Safe to call from any thread, at
+ * any time, any number of times; it only sets a flag. A running query
+ * returns `KGLITE_STATUS_CODE_CANCELLED` at its next check, without
+ * publishing a partial write. A query that has already finished is
+ * unaffected.
+ *
+ * # Safety
+ *
+ * `token` a handle from [`kglite_cancel_token_new`] not yet freed. Do not
+ * call this concurrently with [`kglite_cancel_token_free`] on the same
+ * handle.
+ */
+ KgliteStatusCode kglite_cancel_token_cancel(const struct KgliteCancelToken *token);
+
+/**
+ * Free a token. Null is a no-op. A call already running with the token keeps
+ * its own reference and is unaffected; do not pass the handle to a new call
+ * or to [`kglite_cancel_token_cancel`] afterwards.
+ *
+ * # Safety
+ *
+ * `token` null or a handle from [`kglite_cancel_token_new`] not yet freed.
+ */
+ void kglite_cancel_token_free(struct KgliteCancelToken *token);
 
 /**
  * Structured detail of the most recent failed call **on the calling thread**,
