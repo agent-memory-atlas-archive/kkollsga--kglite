@@ -40,6 +40,8 @@ export declare class Graph {
   executeRead(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
   /** Run a Cypher statement that may write, as one auto-committed transaction. */
   executeWrite(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
+  /** Stream a read-only query as an async iterator of row objects, converted a batch per event-loop turn. */
+  stream(cypher: string, params?: Params | null, options?: StreamOptions): AsyncIterableIterator<KgMap>
   /** Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one. */
   checkpoint(): Promise<void>
   /** Flush the write-ahead log to stable storage (the power-safe point at durability `normal`). */
@@ -108,6 +110,12 @@ export declare class Point {
   /** WKT, `POINT(longitude latitude)`. */
   toString(): string
   toJSON(): { latitude: number; longitude: number }
+}
+
+/** The async iterator `Graph.stream` returns. */
+export declare class RowStream {
+  next(): Promise<IteratorResult<KgMap, undefined>>
+  return(): Promise<IteratorResult<KgMap, undefined>>
 }
 
 /** An open transaction, from `graph.begin()` or passed to the `graph.transaction()` callback. */
@@ -314,6 +322,20 @@ export interface QueryResult {
   warnings: Array<string>
   /** Present only when `rowLimit` dropped rows. */
   truncated?: Truncated
+}
+
+export interface StreamOptions {
+  /** Deadline in milliseconds for the query; `0` disables it. */
+  timeoutMs?: number
+  /** Cap on rows streamed; the query's own `LIMIT` still applies first. */
+  rowLimit?: number
+  /** Work budget (not a row cap); exceeding it fails the query. */
+  maxWorkUnits?: number
+  /**
+   * Rows delivered per event-loop turn (default 1000, minimum 1). Between
+   * batches the loop runs timers and I/O.
+   */
+  batchSize?: number
 }
 
 export interface Truncated {

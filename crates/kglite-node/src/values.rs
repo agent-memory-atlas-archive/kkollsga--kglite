@@ -87,6 +87,15 @@ impl ToJs {
         Ok(out)
     }
 
+    pub fn undefined(&self) -> JsRes<sys::napi_value> {
+        let mut out = ptr::null_mut();
+        ck(
+            unsafe { sys::napi_get_undefined(self.env, &mut out) },
+            "get undefined",
+        )?;
+        Ok(out)
+    }
+
     pub fn boolean(&self, b: bool) -> JsRes<sys::napi_value> {
         let mut out = ptr::null_mut();
         ck(

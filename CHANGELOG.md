@@ -50,6 +50,11 @@ before upgrading.
 - **C ABI: `kglite_session_execute_read_ex` / `_mut_ex`.** A versioned
   `KgliteExecuteOptions` block (timeout, work budget, result-row cap). The row
   cap truncates and reports `row_limit` and `total_rows` in the diagnostics.
+- **Node.js binding: `graph.stream()`.** `graph.stream(cypher, params?, { batchSize?,
+  timeoutMs?, rowLimit?, maxWorkUnits? })` returns an async iterator of row
+  objects. Conversion to JavaScript objects yields to the event loop every
+  `batchSize` rows (default 1000), so a 300,000-row result no longer stalls the
+  loop for one long conversion. The engine still builds the whole result first.
 - **Node.js binding: `validTimeDefault` open option and JavaScript embedders.**
   `open(path, { validTimeDefault: 'today' | 'all' | 'YYYY-MM-DD' })` sets the
   instant an unprefixed statement reads on a graph with declared validity

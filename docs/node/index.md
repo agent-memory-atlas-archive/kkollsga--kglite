@@ -134,6 +134,23 @@ The value classes expose their fields and `toString()` (ISO-8601, or WKT for `Po
 
 `JSON.stringify` throws on a `bigint`. This is a JavaScript rule. Pass a replacer or define `BigInt.prototype.toJSON` when a result may hold one.
 
+## Streaming rows
+
+`graph.stream(cypher, params?, options?)` runs a read-only query and returns an async iterator of row objects. Rows are the same objects `executeRead` puts in `rows`.
+
+```js
+for await (const row of graph.stream('MATCH (p:Person) RETURN p.name AS name')) {
+  console.log(row.name);
+}
+```
+
+- **Options:** `timeoutMs`, `rowLimit`, `maxWorkUnits` as for `executeRead`, plus `batchSize` (default 1000, minimum 1).
+- **Event loop:** the stream converts rows to objects one at a time and returns to the event loop after every `batchSize` rows. Timers and I/O run between batches, so a large result no longer stalls the loop for one long conversion.
+- **Memory:** the engine builds the whole result before the first row arrives. The result stays in memory until the stream ends, you `break`, or the stream is garbage collected.
+- **Early exit:** `break`, `return()` and a thrown error in the loop body release the result. Writes, `close()` and new streams work straight away.
+- **Errors:** a bad argument or a failing query rejects the first `next()` with the same typed error `executeRead` would reject with. The stream is finished after that.
+- **Scope:** `stream()` runs on the graph, not inside a transaction. A mutating statement rejects `InvalidArgument`.
+
 ## Transactions
 
 `graph.begin(options?)` starts a transaction on a snapshot of the graph and resolves to a `Transaction`. Settle every transaction with `commit()` or `rollback()`.
@@ -199,7 +216,7 @@ try {
 
 Queries run on a worker pool, never on the JavaScript thread. The pool has `min(4, cores)` threads. Set `KGLITE_NODE_THREADS` to change it.
 
-Converting a result to JavaScript objects runs on the JavaScript thread at about 0.5 µs per row. A query that returns millions of rows stalls the event loop for that conversion. Bound results with `LIMIT` or `rowLimit`.
+Converting a result to JavaScript objects runs on the JavaScript thread at about 0.5 µs per row. A query that returns millions of rows stalls the event loop for that conversion. Bound results with `LIMIT` or `rowLimit`, or read them with [`stream()`](#streaming-rows).
 
 ## Several processes
 
@@ -292,4 +309,4 @@ A function that throws, rejects, returns the wrong shape or the wrong width fail
 ## Not in version 1
 
 - `AbortSignal` cancellation. Use `timeoutMs`.
-- Streaming results. Use `LIMIT` and `rowLimit`.
+- Streaming rows out of the engine. `graph.stream()` streams the conversion only; the engine still builds the whole result first.

@@ -126,7 +126,7 @@ fn count(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
     }
 }
 
-fn expect_number(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
+pub(crate) fn expect_number(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
     if !f.kind(v)?.is_number() {
         return Err(JsErr::arg(format!("{what} must be a number")));
     }
@@ -282,6 +282,19 @@ pub(crate) fn parse_query_args(
     params: Option<sys::napi_value>,
     options: Option<sys::napi_value>,
 ) -> JsRes<QueryArgs> {
+    parse_query_args_with(f, cypher, params, options, &[]).map(|(args, _)| args)
+}
+
+/// [`parse_query_args`] for a call that accepts options of its own on top of the
+/// query options: those named in `extra` come back as `(name, value)` for the
+/// caller to interpret, anything else unknown is still rejected.
+pub(crate) fn parse_query_args_with(
+    f: &mut FromJs,
+    cypher: sys::napi_value,
+    params: Option<sys::napi_value>,
+    options: Option<sys::napi_value>,
+    extra: &[&str],
+) -> JsRes<(QueryArgs, Vec<(String, sys::napi_value)>)> {
     let cypher = expect_string(f, cypher, "cypher")?;
     let params = f.params(params)?;
     let mut args = QueryArgs {
@@ -291,8 +304,14 @@ pub(crate) fn parse_query_args(
         row_limit: None,
         max_work_units: None,
     };
-    let known = ["timeoutMs", "rowLimit", "maxWorkUnits"];
+    let mut known = vec!["timeoutMs", "rowLimit", "maxWorkUnits"];
+    known.extend_from_slice(extra);
+    let mut own = Vec::new();
     for (key, val) in option_entries(f, options, &known, "query option")? {
+        if extra.contains(&key.as_str()) {
+            own.push((key, val));
+            continue;
+        }
         let n = expect_number(f, val, &key)?;
         match key.as_str() {
             "timeoutMs" => args.timeout_ms = Some(n),
@@ -300,7 +319,7 @@ pub(crate) fn parse_query_args(
             _ => args.max_work_units = Some(n as usize),
         }
     }
-    Ok(args)
+    Ok((args, own))
 }
 
 // ------------------------------------------------------------------ results
@@ -538,6 +557,30 @@ impl Graph {
         options: Option<Unknown>,
     ) -> napi::Result<Object<'e>, &'static str> {
         contain(|| self.run(env, true, cypher, params, options))
+    }
+
+    /// Stream a read-only query as an async iterator of row objects, converted a batch per event-loop turn.
+    #[napi(
+        ts_args_type = "cypher: string, params?: Params | null, options?: StreamOptions",
+        ts_return_type = "AsyncIterableIterator<KgMap>"
+    )]
+    pub fn stream<'e>(
+        &self,
+        env: &'e Env,
+        cypher: Unknown,
+        params: Option<Unknown>,
+        options: Option<Unknown>,
+    ) -> napi::Result<Object<'e>, &'static str> {
+        contain(|| {
+            crate::stream::open_stream(
+                env,
+                &self.inner,
+                cypher.raw(),
+                params.as_ref().map(|p| p.raw()),
+                options.as_ref().map(|o| o.raw()),
+            )
+            .map_err(to_sync_error)
+        })
     }
 
     /// Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one.

@@ -240,6 +240,19 @@ pub struct QueryOptions {
 }
 
 #[napi(object)]
+pub struct StreamOptions {
+    /// Deadline in milliseconds for the query; `0` disables it.
+    pub timeout_ms: Option<f64>,
+    /// Cap on rows streamed; the query's own `LIMIT` still applies first.
+    pub row_limit: Option<f64>,
+    /// Work budget (not a row cap); exceeding it fails the query.
+    pub max_work_units: Option<f64>,
+    /// Rows delivered per event-loop turn (default 1000, minimum 1). Between
+    /// batches the loop runs timers and I/O.
+    pub batch_size: Option<f64>,
+}
+
+#[napi(object)]
 pub struct MutationStats {
     pub nodes_created: f64,
     pub relationships_created: f64,

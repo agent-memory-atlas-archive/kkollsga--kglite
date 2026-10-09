@@ -20,6 +20,7 @@ mod embedder;
 mod errors;
 mod graph;
 mod pool;
+mod stream;
 mod tx;
 // `pub` so the type-only declarations are not dead code: nothing constructs them.
 pub mod typings;
