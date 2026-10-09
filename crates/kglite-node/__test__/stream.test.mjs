@@ -190,3 +190,89 @@ test('timers fire between batches while rows are being consumed', async () => {
   assert.equal(n, 20_000);
   assert.ok(ticks > 0, 'a 1 ms timer ran during the stream');
 });
+
+// The cursor tests below stream `MATCH … RETURN`, the shape the engine produces
+// a batch at a time, from a real node store rather than a constant range.
+test('a MATCH stream equals executeRead, in order, across batch sizes', async () => {
+  const { graph: g, cleanup: done } = await freshGraph();
+  try {
+    await g.executeWrite("UNWIND range(1, 5000) AS i CREATE (:Item {seq: i, name: 'n' + toString(i)})");
+    const q = 'MATCH (n:Item) WHERE n.seq % 7 <> 0 RETURN n.seq AS s, n.name AS name';
+    const eager = await g.executeRead(q);
+    for (const batchSize of [1, 3, 1000, 100_000]) {
+      assert.deepEqual(await collect(g.stream(q, null, { batchSize })), eager.rows, `batchSize ${batchSize}`);
+    }
+    const sorted = 'MATCH (n:Item) RETURN n.seq AS s ORDER BY s DESC';
+    assert.deepEqual(await collect(g.stream(sorted)), (await g.executeRead(sorted)).rows);
+  } finally {
+    await g.close();
+    done();
+  }
+});
+
+test('next() calls made without awaiting still deliver every row once, in order', async () => {
+  const { graph: g, cleanup: done } = await freshGraph();
+  try {
+    await g.executeWrite('UNWIND range(1, 2500) AS i CREATE (:Item {seq: i})');
+    const s = g.stream('MATCH (n:Item) RETURN n.seq AS s', null, { batchSize: 100 });
+    const results = await Promise.all(Array.from({ length: 2600 }, () => s.next()));
+    const values = results.filter((r) => !r.done).map((r) => r.value.s);
+    assert.equal(values.length, 2500);
+    assert.deepEqual(values, Array.from({ length: 2500 }, (_, i) => i + 1));
+    assert.equal(results.filter((r) => r.done).length, 100);
+  } finally {
+    await g.close();
+    done();
+  }
+});
+
+test('a stream reads the graph as it was at its first next(), whatever commits meanwhile', async () => {
+  const { graph: g, cleanup: done } = await freshGraph();
+  try {
+    await g.executeWrite('UNWIND range(1, 3000) AS i CREATE (:Item {seq: i})');
+    const s = g.stream('MATCH (n:Item) RETURN n.seq AS s', null, { batchSize: 100 });
+    assert.equal((await s.next()).value.s, 1);
+    await g.executeWrite('UNWIND range(1, 500) AS i CREATE (:Item {seq: 100000 + i})');
+    await g.executeWrite('MATCH (n:Item) WHERE n.seq <= 1500 DETACH DELETE n');
+    let seen = 1;
+    for await (const row of s) {
+      seen++;
+      assert.ok(row.s <= 3000, 'no row from a later commit');
+    }
+    assert.equal(seen, 3000);
+    assert.equal((await g.executeRead('MATCH (n:Item) RETURN count(n) AS c')).rows[0].c, 1500 + 500);
+  } finally {
+    await g.close();
+    done();
+  }
+});
+
+// Memory. A plain MATCH … RETURN must not be built whole: streaming 600k rows
+// may grow the process by a few batches. executeRead of the same query builds
+// roughly the whole result (hundreds of MB in a release build), so the bound
+// fails against an engine that materialises first.
+test('streaming a large MATCH keeps resident memory bounded', async () => {
+  const { graph: g, cleanup: done } = await freshGraph();
+  try {
+    const total = 600_000;
+    for (let from = 1; from <= total; from += 100_000) {
+      await g.executeWrite(`UNWIND range(${from}, ${from + 99_999}) AS i CREATE (:Item {seq: i, name: 'name-' + toString(i)})`);
+    }
+    global.gc?.();
+    await sleep(200);
+    const base = process.memoryUsage().rss;
+    let peak = base;
+    let n = 0;
+    for await (const row of g.stream('MATCH (n:Item) RETURN n.seq AS s, n.name AS name')) {
+      if (++n % 5000 === 0) peak = Math.max(peak, process.memoryUsage().rss);
+      assert.ok(row.s > 0);
+    }
+    assert.equal(n, total);
+    const growthMb = (peak - base) / 1048576;
+    console.log(`# stream rss growth over ${total} rows: ${growthMb.toFixed(0)} MB`);
+    assert.ok(growthMb < 120, `stream grew resident memory by ${growthMb.toFixed(0)} MB`);
+  } finally {
+    await g.close();
+    done();
+  }
+});

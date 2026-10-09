@@ -1,22 +1,30 @@
 //! `Graph.stream`: a read query delivered as an async iterator of row objects.
 //!
-//! The engine hands back a fully materialised result (`execute_read` has no row
-//! cursor), so the result sits in memory until the stream finishes, is
-//! released with `return()`, or is dropped. What streams is the conversion to
-//! JavaScript objects, the cost that blocks the event loop (~0.5 us per row):
-//! each `next()` converts one row, and every `batchSize`-th row is requested
-//! through the worker pool, so the loop runs timers and I/O between batches.
-//! Rows inside a batch are separated by microtasks only.
+//! The query runs through the engine's row cursor (`execute_read_cursor`). A
+//! plain `MATCH … RETURN <expressions>` is produced a batch at a time as the
+//! stream is consumed, so memory is a few batches, not the result. Queries that
+//! need their whole input first (ORDER BY, DISTINCT, aggregation, UNION) are
+//! materialised by the engine before the first row, as `executeRead` does, and
+//! the cursor then hands the finished rows over in batches.
+//!
+//! Conversion to JavaScript objects is the cost that blocks the event loop
+//! (~0.5 us per row): each `next()` converts one row, and every `batchSize`-th
+//! row is requested through the worker pool, which pulls the next batch from the
+//! cursor, so the loop runs timers and I/O between batches. Rows inside a batch
+//! are separated by microtasks only.
 //!
 //! Lifecycle: the query starts on the first `next()`. A failure rejects that
 //! `next()` once with the usual typed error; the stream is finished after it.
-//! `return()` (what `break` calls) releases the result and makes every later
-//! `next()` resolve `done`.
+//! `return()` (what `break` calls) drops the cursor, which stops the engine
+//! worker and releases the snapshot, and makes every later `next()` resolve
+//! `done`.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use kglite::api::session::ExecuteOutcome;
+use kglite::api::session::Cursor;
+use kglite::api::Value;
 use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env};
 use napi_derive::napi;
@@ -36,10 +44,93 @@ const STREAM_OPTIONS: &[&str] = &["batchSize"];
 
 enum Slot {
     Unstarted(Option<QueryArgs>),
-    Ready(Arc<ExecuteOutcome>),
+    Ready(Arc<Live>),
     /// The error waits here until the `next()` that observes it rejects with it.
     Failed(Option<JsErr>),
     Finished,
+}
+
+/// One batch of pulled rows. A row is taken as it is converted, so the memory
+/// of a batch is released as the stream consumes it.
+struct Window {
+    base: usize,
+    rows: Vec<Option<Vec<Value>>>,
+    remaining: usize,
+}
+
+struct Windows {
+    list: VecDeque<Window>,
+    /// Rows pulled from the cursor so far.
+    loaded_to: usize,
+    /// The row count once the cursor is exhausted.
+    total: Option<usize>,
+}
+
+/// An open cursor and the batches pulled from it that `next()` has not consumed.
+struct Live {
+    columns: Vec<String>,
+    /// `None` once exhausted, which releases the engine's snapshot early.
+    cursor: Mutex<Option<Cursor>>,
+    windows: Mutex<Windows>,
+}
+
+impl Live {
+    fn windows(&self) -> std::sync::MutexGuard<'_, Windows> {
+        self.windows.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether row `idx` can be served without touching the cursor.
+    fn covers(&self, idx: usize) -> bool {
+        let w = self.windows();
+        idx < w.loaded_to || w.total.is_some()
+    }
+
+    /// Pulls batches of `batch` rows until row `idx` is loaded or the cursor ends.
+    fn load_through(&self, idx: usize, batch: usize) -> JsRes<()> {
+        let mut guard = self.cursor.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            {
+                let w = self.windows();
+                if idx < w.loaded_to || w.total.is_some() {
+                    return Ok(());
+                }
+            }
+            let Some(cursor) = guard.as_mut() else {
+                return Ok(());
+            };
+            let rows = cursor.next_batch(batch).map_err(|e| JsErr::from_kg(&e))?;
+            let mut w = self.windows();
+            if rows.is_empty() {
+                w.total = Some(w.loaded_to);
+                *guard = None;
+            } else {
+                let base = w.loaded_to;
+                w.loaded_to += rows.len();
+                let remaining = rows.len();
+                w.list.push_back(Window {
+                    base,
+                    rows: rows.into_iter().map(Some).collect(),
+                    remaining,
+                });
+            }
+        }
+    }
+
+    /// Row `idx`, removed from its batch; `None` past the end.
+    fn take_row(&self, idx: usize) -> Option<Vec<Value>> {
+        let mut w = self.windows();
+        let pos = w
+            .list
+            .iter()
+            .position(|win| idx >= win.base && idx < win.base + win.rows.len())?;
+        let win = &mut w.list[pos];
+        let row = win.rows[idx - win.base].take();
+        win.remaining -= 1;
+        if win.remaining == 0 {
+            w.list.remove(pos);
+        }
+        row
+    }
 }
 
 struct Shared {
@@ -59,7 +150,7 @@ impl Shared {
         self.slot.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs the query on a worker unless an earlier call already did.
+    /// Opens the cursor on a worker unless an earlier call already did.
     fn ensure_started(&self) {
         let _one = self.start.lock().unwrap_or_else(PoisonError::into_inner);
         let args = match &mut *self.slot() {
@@ -67,7 +158,7 @@ impl Shared {
             _ => return,
         };
         let outcome = match args {
-            Some(args) => self.run_query(&args),
+            Some(args) => self.open_cursor(&args),
             None => Err(JsErr::internal("stream started twice")),
         };
         let mut slot = self.slot();
@@ -75,21 +166,53 @@ impl Shared {
             Slot::Finished
         } else {
             match outcome {
-                Ok(o) => Slot::Ready(Arc::new(o)),
+                Ok(live) => Slot::Ready(Arc::new(live)),
                 Err(e) => Slot::Failed(Some(e)),
             }
         };
     }
 
-    fn run_query(&self, args: &QueryArgs) -> JsRes<ExecuteOutcome> {
+    fn open_cursor(&self, args: &QueryArgs) -> JsRes<Live> {
         if self.cancel.as_ref().is_some_and(|c| !c.begin()) {
             return Err(cancelled_error());
         }
         let session = self.inner.session()?;
         let opts = self.inner.execute_options(args);
-        let snapshot = session.snapshot();
-        kglite::api::session::execute_read(&snapshot, &args.cypher, &opts)
-            .map_err(|e| JsErr::from_kg(&e))
+        let cursor = session
+            .execute_read_cursor(&args.cypher, &opts)
+            .map_err(|e| JsErr::from_kg(&e))?;
+        Ok(Live {
+            columns: cursor.columns().to_vec(),
+            cursor: Mutex::new(Some(cursor)),
+            windows: Mutex::new(Windows {
+                list: VecDeque::new(),
+                loaded_to: 0,
+                total: None,
+            }),
+        })
+    }
+
+    /// Makes row `idx` available, pulling from the cursor if it is not loaded yet.
+    fn ensure_loaded(&self, idx: usize) {
+        self.ensure_started();
+        let live = match &*self.slot() {
+            Slot::Ready(live) if !self.stopped.load(Ordering::Acquire) => Arc::clone(live),
+            _ => return,
+        };
+        if let Err(e) = live.load_through(idx, self.batch) {
+            let mut slot = self.slot();
+            if matches!(&*slot, Slot::Ready(_)) && !self.stopped.load(Ordering::Acquire) {
+                *slot = Slot::Failed(Some(e));
+            }
+        }
+    }
+
+    /// Whether `next()` for row `idx` can settle on the JS thread without the pool.
+    fn loaded(&self, idx: usize) -> bool {
+        match &*self.slot() {
+            Slot::Ready(live) => live.covers(idx),
+            _ => false,
+        }
     }
 
     /// The iterator result for the `idx`-th row, built on the JS thread.
@@ -121,11 +244,10 @@ impl Shared {
             }
         };
         let result = js.object()?;
-        let row = ready.as_ref().and_then(|o| o.result.rows.get(idx));
+        let row = ready.as_ref().and_then(|live| live.take_row(idx));
+        // Past the end is `done` without finishing the stream: rows of an earlier
+        // `next()` may still be waiting to settle, and they need the slot.
         let Some(row) = row else {
-            if ready.is_some() {
-                *self.slot() = Slot::Finished;
-            }
             js.set(result, "value", js.undefined()?)?;
             js.set(result, "done", js.boolean(true)?)?;
             return Ok(result);
@@ -133,8 +255,8 @@ impl Shared {
         let obj = js.object()?;
         let columns = ready
             .as_ref()
-            .map_or(&[][..], |o| o.result.columns.as_slice());
-        for (name, value) in columns.iter().zip(row) {
+            .map_or(&[][..], |live| live.columns.as_slice());
+        for (name, value) in columns.iter().zip(&row) {
             js.set(obj, name, js.value(value, 0)?)?;
         }
         js.set(result, "value", obj)?;
@@ -156,13 +278,12 @@ impl RowStream {
         contain(|| {
             let shared = Arc::clone(&self.shared);
             let idx = shared.claimed.fetch_add(1, Ordering::AcqRel);
-            let started = !matches!(*shared.slot(), Slot::Unstarted(_));
-            if started && !idx.is_multiple_of(shared.batch) {
+            if shared.loaded(idx) {
                 return immediate(env, shared.step(env.raw(), idx)).map_err(to_sync_error);
             }
             let s = Arc::clone(&shared);
             pool::spawn(env, move || {
-                s.ensure_started();
+                s.ensure_loaded(idx);
                 Box::new(move |env: Env| s.step(env.raw(), idx)) as Settle
             })
             .map_err(|e| to_sync_error(JsErr::from(e)))

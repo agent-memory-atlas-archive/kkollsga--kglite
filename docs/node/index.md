@@ -155,7 +155,8 @@ for await (const row of graph.stream('MATCH (p:Person) RETURN p.name AS name')) 
 
 - **Options:** `timeoutMs`, `rowLimit`, `maxWorkUnits` as for `executeRead`, plus `batchSize` (default 1000, minimum 1).
 - **Event loop:** the stream converts rows to objects one at a time and returns to the event loop after every `batchSize` rows. Timers and I/O run between batches, so a large result no longer stalls the loop for one long conversion.
-- **Memory:** the engine builds the whole result before the first row arrives. The result stays in memory until the stream ends, you `break`, or the stream is garbage collected.
+- **Memory:** a plain `MATCH … RETURN <expressions>` is produced a batch at a time, so memory stays at a few batches whatever the row count. A query that needs its whole input first (`ORDER BY`, `DISTINCT`, aggregation, `UNION`, several clauses) or runs with `rowLimit`, `maxWorkUnits` or a disk graph is built whole by the engine before the first row, as `executeRead` builds it, and stays in memory until the stream ends, you `break`, or the stream is garbage collected.
+- **Snapshot:** the stream reads the graph as it was when the first `next()` ran. It holds that snapshot until it ends or is released, so a write that commits meanwhile does not change the stream, and the old version stays in memory until the stream is released.
 - **Early exit:** `break`, `return()` and a thrown error in the loop body release the result. Writes, `close()` and new streams work straight away.
 - **Errors:** a bad argument or a failing query rejects the first `next()` with the same typed error `executeRead` would reject with. The stream is finished after that.
 - **Scope:** `stream()` runs on the graph, not inside a transaction. A mutating statement rejects `InvalidArgument`.
@@ -365,4 +366,4 @@ A function that throws, rejects, returns the wrong shape or the wrong width fail
 
 ## Not in version 1
 
-- Streaming rows out of the engine. `graph.stream()` streams the conversion to JavaScript objects only; the engine still builds the whole result first.
+- Streaming every query shape. `graph.stream()` streams a single-pattern `MATCH … RETURN` out of the engine; shapes that need their whole input first are still built whole.
