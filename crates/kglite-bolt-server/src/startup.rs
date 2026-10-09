@@ -108,11 +108,13 @@ pub(crate) fn start_graph(
         valid_time_default,
     };
     let opened = open_path_observed(path, &spec, record).map_err(|e| match e {
-        OpenError::Lease(io) => anyhow::Error::new(io).context(format!(
-            "acquiring the writer lease for {}; pass --readonly to serve this graph \
+        OpenError::Lease(refusal) => {
+            anyhow::Error::new(std::io::Error::from(refusal)).context(format!(
+                "acquiring the writer lease for {}; pass --readonly to serve this graph \
              alongside its writer",
-            path.display()
-        )),
+                path.display()
+            ))
+        }
         OpenError::Open(io) => {
             anyhow::Error::new(io).context(format!("opening or creating {}", path.display()))
         }

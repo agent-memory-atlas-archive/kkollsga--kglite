@@ -663,28 +663,22 @@ fn io_error(io: &std::io::Error) -> JsErr {
 
 fn open_error(e: &OpenError) -> JsErr {
     match e {
-        // The lease is taken separately (see `acquire_lease`); a contention
-        // refusal never reaches here, so this is an I/O failure.
-        OpenError::Lease(io) | OpenError::Open(io) => io_error(io),
+        OpenError::Lease(refusal) => match &refusal.holder {
+            Some(h) if refusal.error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut err = JsErr::new(CODE_LEASE_HELD, refusal.error.to_string());
+                err.holder = Some(Holder {
+                    is_self: h.pid == Some(std::process::id()),
+                    pid: h.pid,
+                    since: h.since.clone(),
+                    label: h.label.clone(),
+                });
+                err
+            }
+            _ => io_error(&refusal.error),
+        },
+        OpenError::Open(io) => io_error(io),
         OpenError::Session { message, .. } => JsErr::new("FileIo", message.clone()),
     }
-}
-
-/// Take the writer lease, keeping the holder structured on a refusal.
-fn acquire_lease(path: &Path, timeout: StdDuration) -> JsRes<GraphWriterLease> {
-    GraphWriterLease::acquire_ex(path, timeout).map_err(|refusal| match refusal.holder {
-        Some(h) if refusal.error.kind() == std::io::ErrorKind::WouldBlock => {
-            let mut err = JsErr::new(CODE_LEASE_HELD, refusal.error.to_string());
-            err.holder = Some(Holder {
-                is_self: h.pid == Some(std::process::id()),
-                pid: h.pid,
-                since: h.since,
-                label: h.label,
-            });
-            err
-        }
-        _ => io_error(&refusal.error),
-    })
 }
 
 fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
@@ -696,11 +690,7 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
     if spec.storage.is_none() && !existed {
         spec.storage = Some(StorageMode::Memory);
     }
-    // The lease comes first (before the graph is read), exactly as `open_path`
-    // orders it; it is taken here so a refusal keeps its structured holder.
-    let timeout = spec.lease_timeout.unwrap_or(StdDuration::ZERO);
-    let lease = acquire_lease(p, timeout)?;
-    spec.lease_timeout = None;
+    spec.lease_timeout = Some(spec.lease_timeout.unwrap_or(StdDuration::ZERO));
     let opened = open_path(p, &spec).map_err(|e| open_error(&e))?;
     let mut warnings: Vec<String> = opened
         .advisories
@@ -724,7 +714,7 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
     Ok(Inner {
         open_version: session.version(),
         session: Mutex::new(Some(Arc::new(session))),
-        lease: Mutex::new(Some(lease)),
+        lease: Mutex::new(opened.lease),
         path: path.to_string(),
         durability: opened.durability,
         read_only: false,

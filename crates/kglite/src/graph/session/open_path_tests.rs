@@ -38,7 +38,15 @@ fn a_second_writer_is_refused_at_the_lease_and_reads_nothing() {
     let err = open_path_observed(&path, &OpenSpec::writer(), &mut |s| steps.push(s))
         .err()
         .expect("lease held");
-    assert!(matches!(err, OpenError::Lease(_)), "{err}");
+    let OpenError::Lease(refusal) = &err else {
+        panic!("expected a lease refusal, got {err}");
+    };
+    assert_eq!(refusal.error.kind(), std::io::ErrorKind::WouldBlock);
+    let holder = refusal
+        .holder
+        .as_ref()
+        .expect("contention names the holder");
+    assert_eq!(holder.pid, Some(std::process::id()));
     assert!(steps.is_empty(), "the graph must not be read first");
 }
 

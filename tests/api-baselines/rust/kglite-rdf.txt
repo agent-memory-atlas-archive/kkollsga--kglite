@@ -2950,7 +2950,7 @@ pub type kglite::api::recipes::CatalogResult<T> = core::result::Result<T, kglite
 pub mod kglite::api::session
 pub mod kglite::api::session::open_path
 pub enum kglite::api::session::open_path::OpenError
-pub kglite::api::session::open_path::OpenError::Lease(core::io::error::Error)
+pub kglite::api::session::open_path::OpenError::Lease(kglite::api::io::LeaseRefusal)
 pub kglite::api::session::open_path::OpenError::Open(core::io::error::Error)
 pub kglite::api::session::open_path::OpenError::Session
 pub kglite::api::session::open_path::OpenError::Session::durability: kglite::api::durable::DurabilityLevel
@@ -3035,7 +3035,7 @@ impl core::fmt::Debug for kglite::api::session::CsvImportPolicy
 pub fn kglite::api::session::CsvImportPolicy::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::session::CsvImportPolicy
 pub enum kglite::api::session::OpenError
-pub kglite::api::session::OpenError::Lease(core::io::error::Error)
+pub kglite::api::session::OpenError::Lease(kglite::api::io::LeaseRefusal)
 pub kglite::api::session::OpenError::Open(core::io::error::Error)
 pub kglite::api::session::OpenError::Session
 pub kglite::api::session::OpenError::Session::durability: kglite::api::durable::DurabilityLevel

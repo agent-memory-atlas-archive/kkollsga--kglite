@@ -21,7 +21,9 @@ use std::time::Duration;
 use super::transaction::Session;
 use crate::graph::advisories::{data_advisories, DataAdvisory};
 use crate::graph::features::temporal::ValidTimeDefault;
-use crate::graph::io::open::{open_or_create_graph_in_mode, GraphWriterLease, OpenDisposition};
+use crate::graph::io::open::{
+    open_or_create_graph_in_mode, GraphWriterLease, LeaseRefusal, OpenDisposition,
+};
 use crate::graph::storage::mode::{live_storage_mode, StorageMode};
 use crate::graph::wal::DurabilityLevel;
 
@@ -101,8 +103,10 @@ pub struct OpenedSession {
 /// Which step of [`open_path`] failed.
 #[derive(Debug)]
 pub enum OpenError {
-    /// The writer lease could not be taken (another writer holds it).
-    Lease(io::Error),
+    /// The writer lease could not be taken. On contention the refusal carries
+    /// the holder structured (`pid`, `since`, `label`) so a binding can
+    /// re-render it without parsing the message.
+    Lease(LeaseRefusal),
     /// The graph could not be opened, created or converted.
     Open(io::Error),
     /// The session (and its write-ahead log) could not be opened.
@@ -115,7 +119,8 @@ pub enum OpenError {
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::Lease(e) | OpenError::Open(e) => e.fmt(f),
+            OpenError::Lease(refusal) => refusal.error.fmt(f),
+            OpenError::Open(e) => e.fmt(f),
             OpenError::Session { message, .. } => f.write_str(message),
         }
     }
@@ -124,7 +129,8 @@ impl fmt::Display for OpenError {
 impl std::error::Error for OpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            OpenError::Lease(e) | OpenError::Open(e) => Some(e),
+            OpenError::Lease(refusal) => Some(&refusal.error),
+            OpenError::Open(e) => Some(e),
             OpenError::Session { .. } => None,
         }
     }
@@ -151,7 +157,7 @@ pub fn open_path_observed(
     let lease = match spec.lease_timeout {
         None => None,
         Some(timeout) => {
-            let lease = GraphWriterLease::acquire(path, timeout).map_err(OpenError::Lease)?;
+            let lease = GraphWriterLease::acquire_ex(path, timeout).map_err(OpenError::Lease)?;
             observe(OpenStep::LeaseAcquired);
             Some(lease)
         }
