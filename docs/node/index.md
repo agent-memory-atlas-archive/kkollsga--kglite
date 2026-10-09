@@ -15,6 +15,17 @@ Run `npm install kglite-node`. The package ships prebuilt binaries, so you need 
 
 Node 20 or newer is required.
 
+### Building from source
+
+Run `make node-build` from the repository root. It needs a Rust toolchain and runs `napi build --platform` in `crates/kglite-node`.
+
+On some Windows machines the napi CLI times out on its file-system reconciliation lock (seen with `@napi-rs/cli` 3.10.7 to 3.10.8, Node 22.12 and Defender on). Build with cargo and copy the library instead:
+
+1. Run `cargo build -p kglite-node`. Add `--release` for a release build.
+2. Copy `target\debug\kglite_node.dll` (or `target\release\kglite_node.dll`) to `crates\kglite-node\kglite-node.win32-x64-msvc.node`.
+
+Published packages are unaffected, because they ship prebuilt binaries.
+
 ## Quick start
 
 ```js
