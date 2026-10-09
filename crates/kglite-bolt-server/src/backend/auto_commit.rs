@@ -57,8 +57,8 @@ impl KgliteBackend {
             });
         }
         if self.readonly {
-            return Err(BoltError::Forbidden(
-                "server is read-only — mutations rejected (--readonly flag)".into(),
+            return Err(read_only_refusal(
+                "server is read-only — mutations rejected (--readonly flag)",
             ));
         }
         if read_mode {

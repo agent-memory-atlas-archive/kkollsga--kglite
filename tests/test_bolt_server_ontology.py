@@ -81,6 +81,11 @@ def test_ontology_is_enforced_and_locked_against_runtime_changes(tmp_path):
     try:
         err = _run_error(url, "CREATE (:Person {id: 50, title: 'NoCity'})")
         assert err.code == "Neo.ClientError.Schema.ConstraintValidationFailed", err.code
+        # The status is shared with ConstraintViolation, so the refusal is told
+        # apart by the documented structured message prefix.
+        assert err.message.startswith(
+            '[kglite.OntologyViolation rule=required_property entity=node type="Person" property="city"] '
+        ), err.message
 
         redeclare = _run_error(
             url, "CALL db.ontology.declare({classes: {Person: {required_properties: ['title'], enforcement: 'error'}}})"

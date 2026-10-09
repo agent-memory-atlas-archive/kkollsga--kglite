@@ -109,11 +109,20 @@ pub(crate) fn start_graph(
     };
     let opened = open_path_observed(path, &spec, record).map_err(|e| match e {
         OpenError::Lease(refusal) => {
-            anyhow::Error::new(std::io::Error::from(refusal)).context(format!(
-                "acquiring the writer lease for {}; pass --readonly to serve this graph \
+            // Contention is a typed `KgError::WriterLeaseHeld` (holder
+            // structured) rather than a bare I/O error, so the root cause of
+            // the chain carries the same identity every other surface reports.
+            let context = format!(
+                "{}: acquiring the writer lease for {}; pass --readonly to serve this graph \
              alongside its writer",
+                if refusal.holder.is_some() {
+                    kglite::api::KgErrorCode::WriterLeaseHeld.as_str()
+                } else {
+                    kglite::api::KgErrorCode::FileIo.as_str()
+                },
                 path.display()
-            ))
+            );
+            anyhow::Error::new(kglite::api::KgError::from(refusal)).context(context)
         }
         OpenError::Open(io) => {
             anyhow::Error::new(io).context(format!("opening or creating {}", path.display()))
@@ -316,6 +325,14 @@ mod tests {
             message.contains("only one process may write a graph at a time"),
             "refusal must explain the constraint: {message}"
         );
+        assert!(
+            message.starts_with("WriterLeaseHeld: "),
+            "the startup message leads with the shared code name: {message}"
+        );
+        let root = error
+            .downcast_ref::<kglite::api::KgError>()
+            .expect("the root cause is the typed core error");
+        assert_eq!(root.code(), kglite::api::KgErrorCode::WriterLeaseHeld);
         assert!(
             steps.is_empty(),
             "a refused writer must not have touched the graph: {steps:?}"

@@ -153,7 +153,8 @@ async fn readonly_servers_still_refuse_auto_commit_writes() {
         .await
         .expect_err("--readonly refuses writes");
     assert!(
-        matches!(&err, BoltError::Forbidden(msg) if msg.contains("--readonly")),
+        matches!(&err, BoltError::Query { code, message }
+            if code == "Neo.ClientError.General.ReadOnly" && message.contains("--readonly")),
         "unexpected error: {err:?}"
     );
 }

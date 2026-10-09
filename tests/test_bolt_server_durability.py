@@ -417,9 +417,33 @@ def test_checkpoint_is_refused_on_a_readonly_server(tmp_path):
                     session.run(CHECKPOINT).single()
     finally:
         _teardown_bolt_server(proc)
-    assert excinfo.value.code == "Neo.ClientError.Security.Forbidden"
+    # The one read-only identity every surface shares (`KgErrorCode::ReadOnly`),
+    # as the permanent `Forbidden` driver class rather than a retried transient.
+    assert excinfo.value.code == "Neo.ClientError.General.ReadOnly"
     assert "--readonly" in excinfo.value.message
     assert fixture.stat().st_mtime_ns == before, "a refused checkpoint writes nothing"
+
+
+def test_a_write_on_a_readonly_server_is_the_shared_read_only_error(tmp_path):
+    """Auto-commit and explicit-transaction writes against `--readonly` publish
+    `General.ReadOnly`, the same identity the wheel (`ReadOnlyError`) and the
+    Node binding (`ReadOnly`) report, and never the unrelated `Security.Forbidden`
+    used for permission refusals."""
+    _require_binary()
+    fixture = tmp_path / "readonly-write.kgl"
+    _build_bolt_fixture_graph(fixture)
+    proc, url = _spawn_bolt_server(fixture, readonly=True)
+    try:
+        with neo4j.GraphDatabase.driver(url, auth=("neo4j", "password")) as driver:
+            with driver.session() as session:
+                with pytest.raises(neo4j.exceptions.Forbidden) as auto:
+                    session.run("CREATE (:Person {id: 900, title: 'Nope'})").consume()
+                with pytest.raises(neo4j.exceptions.Forbidden) as explicit:
+                    session.begin_transaction()
+    finally:
+        _teardown_bolt_server(proc)
+    assert auto.value.code == "Neo.ClientError.General.ReadOnly", auto.value.code
+    assert explicit.value.code == "Neo.ClientError.General.ReadOnly", explicit.value.code
 
 
 def test_checkpoint_is_refused_for_a_disk_graph_over_the_wire(tmp_path):

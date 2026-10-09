@@ -26,7 +26,7 @@ use kglite::api::session::CsvImportPolicy;
 use kglite::api::{cypher, Value};
 
 use crate::backup::{BackupError, BackupPolicy, BackupService};
-use crate::error_map::kg_to_bolt;
+use crate::error_map::{kg_to_bolt, read_only_refusal};
 
 /// The Neo4j server version reported by [`ServerIdentity::Neo4jCompatible`].
 ///
@@ -649,8 +649,8 @@ impl BoltBackend for KgliteBackend {
     ) -> Result<TransactionHandle, BoltError> {
         reject_unsupported_tx_timeout(extra)?;
         if self.readonly {
-            return Err(BoltError::Forbidden(
-                "server is read-only — explicit transactions rejected (--readonly flag)".into(),
+            return Err(read_only_refusal(
+                "server is read-only — explicit transactions rejected (--readonly flag)",
             ));
         }
         let meta = TxMeta::from_extra(extra)?;
@@ -1042,7 +1042,7 @@ impl KgliteBackend {
     /// **Refusals, in order.** Inside an explicit transaction it is a
     /// `Protocol` error: the save covers the *committed* graph, so the client
     /// would get a file omitting the work it just did plus a success record
-    /// saying otherwise. `--readonly` and disk-mode graphs are `Forbidden`, for
+    /// saying otherwise. `--readonly` is `General.ReadOnly` and disk-mode graphs are `Forbidden`, for
     /// the same reasons `--save-on-exit` refuses them at startup. A failed save
     /// is `Backend` — fail-closed: the client is told it did not happen.
     ///
@@ -1063,8 +1063,8 @@ impl KgliteBackend {
             ));
         }
         if self.readonly {
-            return Err(BoltError::Forbidden(
-                "server is read-only — db.checkpoint() rejected (--readonly flag)".into(),
+            return Err(read_only_refusal(
+                "server is read-only — db.checkpoint() rejected (--readonly flag)",
             ));
         }
         // The snapshot stays a temporary, dropped at the end of this statement:
@@ -1235,8 +1235,8 @@ impl KgliteBackend {
         if is_mutation && self.readonly {
             // Shouldn't happen — we reject begin_transaction under
             // --readonly — but defensive.
-            return Err(BoltError::Forbidden(
-                "server is read-only — mutations rejected (--readonly flag)".into(),
+            return Err(read_only_refusal(
+                "server is read-only — mutations rejected (--readonly flag)",
             ));
         }
 
@@ -2138,7 +2138,8 @@ mod tests {
             .await
             .expect_err("a read-only server must refuse the checkpoint verb");
         assert!(
-            matches!(&err, BoltError::Forbidden(msg) if msg.contains("--readonly")),
+            matches!(&err, BoltError::Query { code, message }
+                if code == "Neo.ClientError.General.ReadOnly" && message.contains("--readonly")),
             "unexpected error: {err:?}"
         );
         assert!(!path.exists(), "a refused checkpoint writes nothing");
