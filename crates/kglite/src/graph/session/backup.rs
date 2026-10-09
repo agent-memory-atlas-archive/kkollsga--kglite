@@ -252,7 +252,7 @@ fn write_backup(
 /// Publish `snapshot` at `dest` stamped with `lsn`, preparing a private copy
 /// first when writing it as it stands would differ from a normal save. The
 /// published `Arc` is never written through. Returns the file's size.
-pub(super) fn write_stamped(
+pub(crate) fn write_stamped(
     snapshot: &Arc<DirGraph>,
     dest: &str,
     lsn: u64,

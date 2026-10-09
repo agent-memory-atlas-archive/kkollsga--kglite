@@ -59,6 +59,7 @@ use std::sync::Arc;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::handle::make_dir_graph_mut;
 use crate::graph::mutation::wal_replay::{prepare_replay_folded, ReplayFold};
+use crate::graph::storage::GraphRead;
 use crate::graph::wal::{recover_for_append, recover_with, wal_path, DurabilityLevel, Wal};
 
 mod save_as;
@@ -304,6 +305,78 @@ pub fn checkpoint_epilogue(wal: &mut Wal, graph: &mut DirGraph) -> io::Result<()
     // stream must see them before they are dropped.
     crate::graph::cdc::drain_at_commit(graph);
     wal.reset()
+}
+
+/// A point in time fixed for an online checkpoint of a log owner that is not a
+/// [`Session`](crate::graph::session::Session) (the Python wheel owns its log
+/// directly): the newest logged LSN, the log offset and epoch just past it, and
+/// the file the stamped checkpoint replaces.
+///
+/// Take it with [`begin_online_checkpoint`] on the thread that owns the log,
+/// beside an `Arc` clone of the graph at the same commit boundary. Hand both to
+/// [`write_online_checkpoint`] on any thread, then close with
+/// [`finish_online_checkpoint`] on the log's owner. Between begin and finish
+/// the owner may keep appending; it must not reset the log or write the
+/// checkpoint file (the epoch check refuses a stale trim, but a competing
+/// save would be overwritten by the older stamped file).
+#[derive(Debug)]
+pub struct OnlineCheckpointPoint {
+    lsn: u64,
+    offset: u64,
+    epoch: u64,
+    checkpoint: std::path::PathBuf,
+    barrier: Option<std::fs::File>,
+}
+
+/// Fix the snapshot point; `sync_barrier` is true for every level but `Full`
+/// (whose frames are already on stable storage) and orders the log's pending
+/// frames before the checkpoint file that supersedes them.
+pub fn begin_online_checkpoint(
+    wal: &Wal,
+    next_lsn: u64,
+    checkpoint: &Path,
+    sync_barrier: bool,
+) -> io::Result<OnlineCheckpointPoint> {
+    let barrier = if sync_barrier {
+        Some(wal.sync_handle()?)
+    } else {
+        None
+    };
+    Ok(OnlineCheckpointPoint {
+        lsn: next_lsn.saturating_sub(1),
+        offset: wal.end_offset(),
+        epoch: wal.epoch(),
+        checkpoint: checkpoint.to_owned(),
+        barrier,
+    })
+}
+
+/// Barrier the logged frames, then publish `snapshot` over the checkpoint file
+/// stamped with the point's LSN (temp + fsync + rename). Needs no lock on the
+/// log. Returns the file size.
+pub fn write_online_checkpoint(
+    snapshot: &Arc<DirGraph>,
+    point: &OnlineCheckpointPoint,
+) -> Result<u64, String> {
+    if snapshot.graph.is_disk() {
+        return Err("online checkpoint cannot write a disk-mode graph".to_string());
+    }
+    if let Some(barrier) = &point.barrier {
+        barrier.sync_data().map_err(|e| e.to_string())?;
+    }
+    let dest = point
+        .checkpoint
+        .to_str()
+        .ok_or("checkpoint path is not valid UTF-8")?;
+    crate::graph::session::backup::write_stamped(snapshot, dest, point.lsn)
+        .map_err(|e| e.to_string())
+}
+
+/// Drop the frames the written checkpoint contains, keeping those appended
+/// since. Refused (the log stays whole) when the log was reset after the point
+/// was taken.
+pub fn finish_online_checkpoint(wal: &mut Wal, point: &OnlineCheckpointPoint) -> io::Result<()> {
+    wal.trim_through(point.offset, point.epoch)
 }
 
 /// Refuse a **log-less** open of `checkpoint_path` while its sidecar still

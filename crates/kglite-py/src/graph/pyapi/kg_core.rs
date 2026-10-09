@@ -717,9 +717,18 @@ impl KnowledgeGraph {
         // A contended save-as target keeps its typed refusal here; the
         // `SaveError` channel below carries only a message.
         let mut lease_contention: Option<crate::error::KgError> = None;
-        py.detach(|| -> Result<(), io::SaveError> {
+        let mut checkpoint_warning: Option<String> = None;
+        let saved = py.detach(|| -> Result<(), io::SaveError> {
             use kglite_core::api::durable::{self, DurabilityLevel};
             use std::path::Path;
+            // A background checkpoint still writing the stamped file must land
+            // (and have its log trim applied) before this save touches either:
+            // its older stamp would otherwise be renamed over this checkpoint.
+            checkpoint_warning = self
+                .lifecycle
+                .durable
+                .as_mut()
+                .and_then(|state| state.settle_checkpoint(true));
             let io_error = |error: std::io::Error| io::SaveError::Io(error.to_string());
             let same_target = self
                 .lifecycle
@@ -791,8 +800,11 @@ impl KnowledgeGraph {
                 self.lifecycle.source_path = Some(target);
             }
             Ok(())
-        })
-        .map_err(|error| match (error, lease_contention.take()) {
+        });
+        if let Some(text) = checkpoint_warning {
+            crate::graph::bg_checkpoint::warn_user(text);
+        }
+        saved.map_err(|error| match (error, lease_contention.take()) {
             (_, Some(contended)) => crate::error_py::kg_to_pyerr(contended),
             (io::SaveError::Refused(message), None) => {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(message)

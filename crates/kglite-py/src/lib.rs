@@ -798,6 +798,7 @@ fn setup_durable(
             },
             checkpoint_floor: None,
             retry_after_wal_bytes: 0,
+            inflight: None,
         });
     }
     Ok(())

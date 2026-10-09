@@ -830,8 +830,9 @@ pub mod api {
         /// that same refusal for an opener that attaches no log at all, and is
         /// already applied by `io::open_or_create_graph`.
         pub use crate::graph::durability::{
-            checkpoint_epilogue, checkpoint_prologue, ensure_recovered, open_log,
-            prepare_save_as_target, DurableOpenError,
+            begin_online_checkpoint, checkpoint_epilogue, checkpoint_prologue, ensure_recovered,
+            finish_online_checkpoint, open_log, prepare_save_as_target, write_online_checkpoint,
+            DurableOpenError, OnlineCheckpointPoint,
         };
         pub use crate::graph::mutation::wal_replay::apply_frames;
         pub use crate::graph::storage::recording::{

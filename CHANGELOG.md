@@ -71,9 +71,14 @@ before upgrading.
   - Node: `OpenOptions.autoCheckpointWalMib`. The checkpoint runs on a
     background thread after the commit resolves, never on the JavaScript
     thread.
-  - Python: `kglite.open(..., auto_checkpoint_wal_mib=)`. It runs inline in the
-    commit that crosses the bound, with the GIL released, so that call takes
-    about as long as `save()`.
+  - Python: `kglite.open(..., auto_checkpoint_wal_mib=)`. The commit that
+    crosses the bound starts the checkpoint write on a background thread and
+    returns at once (0.5 ms against 28 ms at 100k nodes, release build; the
+    longest commit falls from 29 ms to about 10 ms).
+    The log trim runs on the committing thread at the first commit after the
+    write finishes, and `save()`, `close()` and leaving a `with` block wait for
+    a running checkpoint first. A failed background checkpoint raises a
+    `UserWarning` from the call that settles it.
   - C and Java: `"auto_checkpoint_wal_mib"` in `kglite_open_session` options,
     `OpenOptions.autoCheckpointWalMib(long)`. It runs inline in the commit that
     crosses the bound.

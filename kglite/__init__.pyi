@@ -1230,13 +1230,17 @@ def open(
         auto_checkpoint_wal_mib: Log size, in MiB, past which a durable graph
             folds its write-ahead log into the checkpoint on its own. Default
             ``16`` (``None``); ``0`` disables it. The commit that crosses the
-            bound runs the checkpoint inline, with the GIL released for the
-            file write, so that one call takes about as long as ``save()``;
-            every other commit is unaffected. The checkpoint is skipped while
-            the log is smaller than the checkpoint file it would rewrite. A
-            failed automatic checkpoint emits a ``UserWarning`` (the commit is
-            already in the log) and is retried after another bound of log
-            growth. No effect at ``durable="off"``.
+            bound starts the checkpoint write on a background thread and
+            returns at once; at most one runs at a time and triggers meanwhile
+            coalesce into it. The log is trimmed by the first commit after the
+            write finishes (a few milliseconds), and ``save()``, ``close()``
+            and leaving a ``with`` block wait for a running checkpoint first.
+            The checkpoint is skipped while the log is smaller than the
+            checkpoint file it would rewrite. A failed automatic checkpoint
+            emits a ``UserWarning`` from the call that settles it (the commit
+            is already in the log) and is retried after another bound of log
+            growth. A crash at any point loses nothing: the log keeps every
+            frame until a trim. No effect at ``durable="off"``.
 
     Returns:
         A KnowledgeGraph bound to ``path``.

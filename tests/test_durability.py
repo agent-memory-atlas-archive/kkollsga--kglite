@@ -39,6 +39,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+import time
 import warnings
 
 import pytest
@@ -3078,17 +3079,100 @@ def _count(g):
     return g.cypher("MATCH (n:T) RETURN count(n) AS c")[0]["c"]
 
 
+def _commit_until(g, done, *, start=0, limit=400):
+    """Commit small writes until `done()`: the log trim of a background
+    checkpoint runs on the first commit after its write finishes."""
+    i = start
+    while not done() and i < start + limit:
+        g.cypher("CREATE (:T {id: $i})", params={"i": i})
+        i += 1
+        time.sleep(0.01)
+    return i
+
+
 @pytest.mark.parametrize("level", LOGGING_LEVELS)
 def test_auto_checkpoint_bounds_the_log_and_reopen_loses_nothing(tmp_path, level):
     path = tmp_path / "app.kgl"
     g = kglite.open(str(path), durable=level, auto_checkpoint_wal_mib=1)
     for i in range(40):
         g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+    end = _commit_until(g, lambda: path.exists() and _wal_bytes(path) < 1024 * 1024, start=40)
     assert path.exists(), "the log crossed 1 MiB, so a checkpoint was written on its own"
-    assert _wal_bytes(path) < 2 * 1024 * 1024
+    assert _wal_bytes(path) < 1024 * 1024, "the finished checkpoint's frames were trimmed"
     del g  # never saved: the checkpoint plus the log hold everything
     again = kglite.open(str(path), durable=level)
-    assert _count(again) == 40
+    assert _count(again) == end
+
+
+def test_auto_checkpoint_runs_off_the_committing_call(tmp_path):
+    """The crossing commit hands the file write to a thread: no commit takes
+    anything like a `save()`, and the log is only trimmed by a later commit."""
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=0)
+    g.cypher("UNWIND range(1, 200000) AS i CREATE (:B {id: i, name: 'n' + toString(i)})")
+    g.save()
+    g.close()
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=1)
+    started = time.perf_counter()
+    g.save()  # the cost an inline checkpoint of this graph would add to a commit
+    save_seconds = time.perf_counter() - started
+    before = path.stat().st_mtime_ns
+    slowest = 0.0
+    i = 0
+    deadline = time.monotonic() + 90
+    while path.stat().st_mtime_ns == before and time.monotonic() < deadline:
+        t = time.perf_counter()
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+        slowest = max(slowest, time.perf_counter() - t)
+        i += 1
+        time.sleep(0.01)
+    assert path.stat().st_mtime_ns != before, "a background checkpoint was published"
+    assert slowest < save_seconds / 2, f"a commit took {slowest:.3f}s against a {save_seconds:.3f}s save()"
+    # Published but not yet trimmed: the log still holds the frames it covers.
+    end = _commit_until(g, lambda: _wal_bytes(path) < 1024 * 1024, start=i)
+    assert _wal_bytes(path) < 1024 * 1024
+    del g
+    assert _count(kglite.open(str(path), durable="normal")) == end
+
+
+def test_auto_checkpoint_wal_stays_bounded_under_a_sustained_writer(tmp_path):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=1)
+    peak = 0
+    for i in range(300):
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": "x" * 8192})
+        peak = max(peak, _wal_bytes(path))
+        if i % 20 == 0:
+            time.sleep(0.02)  # give the background write room to finish
+    assert peak < 4 * 1024 * 1024, f"log peaked at {peak} bytes against a 1 MiB bound"
+    del g
+    assert _count(kglite.open(str(path), durable="normal")) == 300
+
+
+def test_close_waits_for_a_running_checkpoint_and_loses_nothing(tmp_path):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=1)
+    for i in range(40):
+        g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+    g.close()  # may land while the first checkpoint is still being written
+    assert _wal_bytes(path) < 64, "close() saved and reset the log to its header"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert _count(kglite.open(str(path), durable="normal")) == 40
+
+
+def test_background_checkpoint_failure_is_a_warning_not_silence(tmp_path):
+    path = tmp_path / "app.kgl"
+    g = kglite.open(str(path), durable="normal", auto_checkpoint_wal_mib=1)
+    os.mkdir(path)  # the checkpoint file cannot be renamed over a directory
+    try:
+        with pytest.warns(UserWarning, match="automatic checkpoint"):
+            for i in range(60):
+                g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
+            _commit_until(g, lambda: False, start=100, limit=100)
+        assert _count(g) >= 60, "the commits themselves were never refused"
+    finally:
+        del g
+        os.rmdir(path)
 
 
 def test_auto_checkpoint_zero_leaves_the_log_growing(tmp_path):
