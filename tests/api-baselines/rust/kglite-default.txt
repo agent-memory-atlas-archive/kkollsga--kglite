@@ -1349,6 +1349,9 @@ pub fn kglite::api::durable::BeforeImage::eq(&self, other: &kglite::api::durable
 impl core::fmt::Debug for kglite::api::durable::BeforeImage
 pub fn kglite::api::durable::BeforeImage::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::durable::BeforeImage
+pub struct kglite::api::durable::OnlineCheckpointPoint
+impl core::fmt::Debug for kglite::api::durable::OnlineCheckpointPoint
+pub fn kglite::api::durable::OnlineCheckpointPoint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::durable::RecordingGraph<G: kglite::api::GraphRead>
 impl<G: kglite::api::GraphRead> kglite::api::durable::RecordingGraph<G>
 pub fn kglite::api::durable::RecordingGraph<G>::backfill_node_before_labels(&mut self, idx: petgraph::graph_impl::NodeIndex, labels: alloc::vec::Vec<alloc::string::String>)
@@ -1469,15 +1472,18 @@ pub fn kglite::api::durable::WalFrame::serialize<__S>(&self, __serializer: __S) 
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::durable::WalFrame
 pub fn kglite::api::durable::WalFrame::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub fn kglite::api::durable::apply_frames(graph: &mut kglite::api::DirGraph, frames: &[kglite::api::durable::WalFrame], after_lsn: u64) -> core::result::Result<u64, alloc::string::String>
+pub fn kglite::api::durable::begin_online_checkpoint(wal: &kglite::api::durable::Wal, next_lsn: u64, checkpoint: &std::path::Path, sync_barrier: bool) -> core::io::error::Result<kglite::api::durable::OnlineCheckpointPoint>
 pub fn kglite::api::durable::checkpoint_epilogue(wal: &mut kglite::api::durable::Wal, graph: &mut kglite::api::DirGraph) -> core::io::error::Result<()>
 pub fn kglite::api::durable::checkpoint_prologue(wal: &mut kglite::api::durable::Wal, next_lsn: u64, graph: &mut kglite::api::DirGraph) -> core::io::error::Result<()>
 pub fn kglite::api::durable::ensure_recovered(checkpoint_path: &std::path::Path, checkpoint_lsn: u64) -> core::result::Result<(), kglite::api::durable::DurableOpenError>
+pub fn kglite::api::durable::finish_online_checkpoint(wal: &mut kglite::api::durable::Wal, point: &kglite::api::durable::OnlineCheckpointPoint) -> core::io::error::Result<()>
 pub fn kglite::api::durable::open_log(graph: &mut alloc::sync::Arc<kglite::api::DirGraph>, checkpoint_path: &std::path::Path, level: kglite::api::durable::DurabilityLevel) -> core::result::Result<core::option::Option<(kglite::api::durable::Wal, u64)>, kglite::api::durable::DurableOpenError>
 pub fn kglite::api::durable::prepare_save_as_target(checkpoint_path: &std::path::Path, level: kglite::api::durable::DurabilityLevel) -> core::result::Result<core::option::Option<kglite::api::durable::Wal>, kglite::api::durable::DurableOpenError>
 pub fn kglite::api::durable::recover(path: &std::path::Path) -> core::io::error::Result<alloc::vec::Vec<kglite::api::durable::WalFrame>>
 pub fn kglite::api::durable::resolve_ops(raw: &[kglite::api::durable::RawOp], dir: &kglite::api::DirGraph) -> alloc::vec::Vec<kglite::graph::wal::MutationOp>
 pub fn kglite::api::durable::wal_path(checkpoint: &std::path::Path) -> std::path::PathBuf
 pub fn kglite::api::durable::wrap_for_durability(dir: &mut kglite::api::DirGraph) -> core::result::Result<(), kglite::api::durable::DurableOpenError>
+pub fn kglite::api::durable::write_online_checkpoint(snapshot: &alloc::sync::Arc<kglite::api::DirGraph>, point: &kglite::api::durable::OnlineCheckpointPoint) -> core::result::Result<u64, alloc::string::String>
 pub mod kglite::api::embeddings
 pub enum kglite::api::embeddings::EmbedError
 pub kglite::api::embeddings::EmbedError::Column(alloc::string::String)
@@ -2660,7 +2666,7 @@ pub fn kglite::api::mutation::add_properties(graph: &mut kglite::api::DirGraph, 
 pub fn kglite::api::mutation::check_connections(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, connection_type: &str, source_type: &str, source_id_field: &str, target_type: &str, target_id_field: &str) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::mutation::create_connections(graph: &mut kglite::api::DirGraph, selection: &kglite::api::CurrentSelection, connection_type: alloc::string::String, conflict_handling: core::option::Option<alloc::string::String>, copy_properties: core::option::Option<std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>>, source_type_filter: core::option::Option<alloc::string::String>, target_type_filter: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::ConnectionOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::extend_graph(target: &mut kglite::api::DirGraph, source: &kglite::api::DirGraph, conflict_handling: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::ExtendReport, alloc::string::String>
-pub fn kglite::api::mutation::purge_provisional_nodes(graph: &mut kglite::api::DirGraph) -> (usize, usize)
+pub fn kglite::api::mutation::purge_provisional_nodes(graph: &mut kglite::api::DirGraph) -> core::result::Result<(usize, usize), alloc::string::String>
 pub fn kglite::api::mutation::replace_connections(graph: &mut kglite::api::DirGraph, df_data: kglite::datatypes::values::DataFrame, connection_type: alloc::string::String, source_type: alloc::string::String, source_id_field: alloc::string::String, target_type: alloc::string::String, target_id_field: alloc::string::String, source_title_field: core::option::Option<alloc::string::String>, target_title_field: core::option::Option<alloc::string::String>, conflict_handling: core::option::Option<alloc::string::String>) -> core::result::Result<kglite::api::mutation::ConnectionOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::update_node_properties(graph: &mut kglite::api::DirGraph, nodes: &[(core::option::Option<petgraph::graph_impl::NodeIndex>, kglite::datatypes::values::Value)], property: &str) -> core::result::Result<kglite::api::mutation::NodeOperationReport, alloc::string::String>
 pub fn kglite::api::mutation::update_node_property_set(graph: &mut kglite::api::DirGraph, nodes: &[petgraph::graph_impl::NodeIndex], properties: &[(alloc::string::String, kglite::datatypes::values::Value)]) -> core::result::Result<kglite::api::mutation::NodeOperationReport, alloc::string::String>
@@ -2974,6 +2980,8 @@ pub kglite::api::session::CommitOutcome::ConflictDetected::current_version: u64
 pub kglite::api::session::CommitOutcome::DurabilityFailed
 pub kglite::api::session::CommitOutcome::DurabilityFailed::error: alloc::string::String
 pub kglite::api::session::CommitOutcome::NoWritesNoOp
+pub kglite::api::session::CommitOutcome::OntologyViolated
+pub kglite::api::session::CommitOutcome::OntologyViolated::error: alloc::boxed::Box<kglite::error::KgError>
 impl core::fmt::Debug for kglite::api::session::CommitOutcome
 pub fn kglite::api::session::CommitOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum kglite::api::session::CsvImportPolicy
@@ -3049,6 +3057,14 @@ impl core::default::Default for kglite::api::session::CancelToken
 pub fn kglite::api::session::CancelToken::default() -> Self
 impl core::fmt::Debug for kglite::api::session::CancelToken
 pub fn kglite::api::session::CancelToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::session::Cursor
+impl kglite::api::session::Cursor
+pub fn kglite::api::session::Cursor::columns(&self) -> &[alloc::string::String]
+pub fn kglite::api::session::Cursor::next_batch(&mut self, n: usize) -> core::result::Result<alloc::vec::Vec<alloc::vec::Vec<kglite::datatypes::values::Value>>, kglite::error::KgError>
+pub fn kglite::api::session::Cursor::streamed(&self) -> bool
+pub fn kglite::api::session::Cursor::warnings(&self) -> &[alloc::string::String]
+impl core::ops::drop::Drop for kglite::api::session::Cursor
+pub fn kglite::api::session::Cursor::drop(&mut self)
 pub struct kglite::api::session::ExecuteOptions<'a>
 pub kglite::api::session::ExecuteOptions::cancel: core::option::Option<kglite::api::session::CancelToken>
 pub kglite::api::session::ExecuteOptions::csv_import: kglite::api::session::CsvImportPolicy
@@ -3138,6 +3154,7 @@ impl kglite::api::session::Session
 pub fn kglite::api::session::Session::begin(&self) -> kglite::api::session::Transaction
 pub fn kglite::api::session::Session::begin_read(&self) -> kglite::api::session::Transaction
 pub fn kglite::api::session::Session::commit(&self, tx: kglite::api::session::Transaction, check_occ: bool) -> kglite::api::session::CommitOutcome
+pub fn kglite::api::session::Session::commit_reporting(&self, tx: kglite::api::session::Transaction, check_occ: bool) -> (kglite::api::session::CommitOutcome, alloc::vec::Vec<alloc::string::String>)
 pub fn kglite::api::session::Session::from_arc(graph: alloc::sync::Arc<kglite::api::DirGraph>) -> Self
 pub fn kglite::api::session::Session::lock_ontology(&self)
 pub fn kglite::api::session::Session::new(graph: kglite::api::DirGraph) -> Self
@@ -3161,6 +3178,8 @@ pub fn kglite::api::session::Session::checkpoint_online(&self) -> core::result::
 pub fn kglite::api::session::Session::maybe_checkpoint_online(&self) -> core::result::Result<core::option::Option<kglite::api::session::OnlineCheckpointReport>, alloc::string::String>
 pub fn kglite::api::session::Session::needs_checkpoint(&self) -> bool
 pub fn kglite::api::session::Session::set_auto_checkpoint_wal_bytes(&self, bytes: core::option::Option<u64>)
+impl kglite::api::session::Session
+pub fn kglite::api::session::Session::execute_read_cursor(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::Cursor, kglite::error::KgError>
 pub struct kglite::api::session::Transaction
 impl kglite::api::session::Transaction
 pub fn kglite::api::session::Transaction::base_version(&self) -> u64
@@ -3177,6 +3196,7 @@ pub fn kglite::api::session::deadline_from(timeout_ms: core::option::Option<u64>
 pub fn kglite::api::session::deadline_span(timeout_ms: core::option::Option<u64>) -> core::option::Option<(std::time::Instant, std::time::Instant)>
 pub fn kglite::api::session::execute_mut(graph: &mut kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::execute_read(graph: &kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
+pub fn kglite::api::session::execute_read_cursor(graph: alloc::sync::Arc<kglite::api::DirGraph>, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::Cursor, kglite::error::KgError>
 pub fn kglite::api::session::open_path(path: &std::path::Path, spec: &kglite::api::session::OpenSpec) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
 pub fn kglite::api::session::open_path_observed(path: &std::path::Path, spec: &kglite::api::session::OpenSpec, observe: &mut dyn core::ops::function::FnMut(kglite::api::session::OpenStep)) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
 pub fn kglite::api::session::resolve_noderef_value<'v>(graph: &kglite::api::storage::GraphBackend, value: &'v kglite::datatypes::values::Value) -> alloc::borrow::Cow<'v, kglite::datatypes::values::Value>
@@ -4165,11 +4185,17 @@ pub fn kglite::api::ManagedLabelState::serialize<__S>(&self, __serializer: __S) 
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::ManagedLabelState
 pub fn kglite::api::ManagedLabelState::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum kglite::api::OntologyRule
+pub kglite::api::OntologyRule::Cardinality
 pub kglite::api::OntologyRule::ClosedLabels
 pub kglite::api::OntologyRule::Domain
+pub kglite::api::OntologyRule::Inverse
+pub kglite::api::OntologyRule::MinCardinality
 pub kglite::api::OntologyRule::PropertyType
 pub kglite::api::OntologyRule::Range
 pub kglite::api::OntologyRule::RequiredProperty
+pub kglite::api::OntologyRule::RequiredRelationship
+pub kglite::api::OntologyRule::Symmetric
+pub kglite::api::OntologyRule::Transitive
 impl kglite::api::OntologyRule
 pub fn kglite::api::OntologyRule::as_str(self) -> &'static str
 impl core::clone::Clone for kglite::api::OntologyRule
@@ -4501,7 +4527,7 @@ pub kglite::api::DirGraph::ontology: alloc::sync::Arc<kglite::api::OntologyStore
 pub kglite::api::DirGraph::parent_types: alloc::sync::Arc<std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>>
 pub kglite::api::DirGraph::property_index_keys: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub kglite::api::DirGraph::property_indices: std::collections::hash::map::HashMap<(alloc::string::String, alloc::string::String), kglite::graph::dir_graph::index_layer::LayeredIndex<kglite::datatypes::values::Value>>
-pub kglite::api::DirGraph::property_ndv_cache: alloc::sync::Arc<std::sync::poison::rwlock::RwLock<(u64, std::collections::hash::map::HashMap<(alloc::string::String, alloc::string::String), usize>)>>
+pub kglite::api::DirGraph::property_ndv_cache: alloc::sync::Arc<std::sync::poison::rwlock::RwLock<std::collections::hash::map::HashMap<(alloc::string::String, alloc::string::String), kglite::graph::dir_graph::caches::NdvEntry>>>
 pub kglite::api::DirGraph::property_shapes: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::PropertyShape>
 pub kglite::api::DirGraph::range_index_keys: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub kglite::api::DirGraph::range_indices: std::collections::hash::map::HashMap<(alloc::string::String, alloc::string::String), kglite::graph::dir_graph::range_index_layer::LayeredRangeIndex<kglite::datatypes::values::Value>>
@@ -4703,6 +4729,8 @@ pub fn kglite::api::DirGraph::populate_index_keys(&mut self)
 pub fn kglite::api::DirGraph::rebuild_indices_from_keys(&mut self)
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::insert_node_routed(&mut self, id: kglite::datatypes::values::Value, title: kglite::datatypes::values::Value, node_type: &str, properties: std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>) -> petgraph::graph_impl::NodeIndex
+impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::judge_transaction_end(&mut self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::set_valid_time_default(&mut self, default: kglite::api::temporal::ValidTimeDefault, persist: bool)
 impl kglite::api::DirGraph
