@@ -89,10 +89,12 @@ jobs:
   # Linux builds on 22.04, not `ubuntu-latest`: an addon linked against a newer
   # glibc than the deployment has fails at require() time in the user's
   # application. 22.04 puts the floor at glibc 2.35, asserted per gnu leg
-  # below. The musl legs build inside node:22-alpine via `docker run` on the
-  # native-arch runner (JS actions cannot run inside an alpine job container).
-  # If a musl build ever needs a cross toolchain, `napi build --zig` is the
-  # fallback; it is not used while the native path works.
+  # below. The musl legs build on the same-arch glibc runner with
+  # cargo-zigbuild (`napi build -x`) — a native-arch build against zig's musl
+  # libc, not emulation — and are then load-tested inside node:22-alpine.
+  # Building inside Alpine itself linked Rust's self-contained libunwind into
+  # the cdylib, which musl's loader refuses at dlopen ("_Unwind_Resume:
+  # initial-exec TLS resolves to dynamic definition").
   build:
     name: Build ${{ matrix.platform }}
     needs: [version-check]
@@ -124,10 +126,12 @@ jobs:
             glibc_floor: '2.35'
           - platform: linux-x64-musl
             runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
             musl: true
             node_arch: x64
           - platform: linux-arm64-musl
             runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
             musl: true
             node_arch: arm64
           - platform: win32-x64-msvc
@@ -142,26 +146,35 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
-        if: ${{ !matrix.musl }}
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: ${{ env.RUST_STABLE }}
           targets: ${{ matrix.target }}
 
       - name: Set up Node 22
-        if: ${{ !matrix.musl }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '22'
 
       - name: Cache cargo registry + target
-        if: ${{ !matrix.musl }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: node-native-${{ matrix.platform }}
 
+      - name: Install cargo-zigbuild for the musl legs
+        if: ${{ matrix.musl }}
+        # napi's `-x` drives cargo-zigbuild, which needs `zig` on PATH; the
+        # ziglang wheel ships zig as `python3 -m ziglang`, hence the shim.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user "ziglang==0.14.1" "cargo-zigbuild==0.20.1"
+          bin="$HOME/.local/bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$bin/zig"
+          chmod +x "$bin/zig"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/zig" version
+
       - name: Build the addon (release, no test-hooks)
-        if: ${{ !matrix.musl }}
         shell: bash
         working-directory: crates/kglite-node
         # No `--features`: the `test-hooks` feature (exports __panic) must never
@@ -169,26 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
-          npx napi build --platform --release --target "${{ matrix.target }}"
-
-      - name: Build the addon in Alpine (release, no test-hooks)
-        if: ${{ matrix.musl }}
-        # Native arch inside node:22-alpine, so the result links against musl
-        # without emulation. -crt-static is required for a cdylib on musl.
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -e RUST_STABLE -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-            -e RUSTFLAGS="-C target-feature=-crt-static" \
-            -v "$PWD:/work" -w /work/crates/kglite-node \
-            node:22-alpine sh -euc '
-              apk add --no-cache build-base curl git
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_STABLE"
-              . "$HOME/.cargo/env"
-              npm install --no-audit --no-fund
-              npx napi build --platform --release
-              chown -R "$HOST_UID:$HOST_GID" /work/target /work/crates/kglite-node
-            '
+          npx napi build --platform --release --target "${{ matrix.target }}" ${{ matrix.musl && '-x' || '' }}
 
       - name: Assert the glibc floor
         if: ${{ matrix.glibc_floor }}

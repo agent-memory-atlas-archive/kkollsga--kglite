@@ -2517,7 +2517,7 @@ def test_node_published_builds_exclude_test_hooks_and_prove_it() -> None:
         )
     build = _node_job("build")
     builds = [s for s in _steps(build) if any("napi build" in line for line in _step_commands(s))]
-    assert len(builds) == 2, "expected one native and one Alpine addon build step"
+    assert len(builds) == 1, "expected one addon build step shared by every leg (musl cross-builds with -x)"
     for step in builds:
         assert any("napi build --platform --release" in line for line in _step_commands(step)), step.get("name")
     smokes = [s for s in _steps(build) if any("node scripts/smoke.cjs" in line for line in _step_commands(s))]
