@@ -461,13 +461,13 @@ fn a_reader_arriving_mid_statement_waits_for_it_and_sees_all_of_it() {
             (seen, Instant::now())
         })
     };
-    let writer_done = writer.join().unwrap();
-    let (seen, reader_done) = reader.join().unwrap();
+    writer.join().unwrap();
+    let (seen, _) = reader.join().unwrap();
+    // The reader started mid-statement, so seeing all 100 rows proves it waited
+    // for the statement to finish. A timestamp comparison is no proof: the
+    // writer can only stamp its finish after releasing the lock, and the reader
+    // may take the lock and stamp first.
     assert_eq!(seen, 100, "the reader saw the whole statement, not part");
-    assert!(
-        reader_done >= writer_done,
-        "the reader waited for the statement instead of reading beside it"
-    );
 }
 
 #[test]
