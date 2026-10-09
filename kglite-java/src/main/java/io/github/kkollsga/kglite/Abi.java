@@ -26,8 +26,8 @@ import java.util.Set;
  * exact set the ABI contract test checks against the header.
  *
  * <p>Hand-written rather than {@code jextract}-generated: the bound surface is
- * 23 functions of pointers, {@code uint32}/{@code uint64} scalars and one
- * three-word return struct, with no unions, callbacks or varargs, so the
+ * functions of pointers and {@code uint32}/{@code uint64} scalars, one
+ * three-word return struct and one by-pointer options struct, with no unions, callbacks or varargs, so the
  * generator would add a separate early-access toolchain to every build in
  * exchange for a class that must stay package-private anyway. Header drift is
  * caught by the contract test instead, which is the check that actually matters.
@@ -53,6 +53,12 @@ final class Abi {
     /** {@code KGLITE_STATUS_CODE_READ_ONLY} — a write on a read-only handle. */
     static final int STATUS_READ_ONLY = 24;
 
+    /** {@code KGLITE_STATUS_CODE_CANCELLED} — the query's cancel token fired. */
+    static final int STATUS_CANCELLED = 17;
+
+    /** {@code KGLITE_STATUS_CODE_TRANSACTION_CONFLICT} — an optimistic commit lost its race. */
+    static final int STATUS_TRANSACTION_CONFLICT = 20;
+
     /** Status code reported for failures raised by the wrapper, not the engine. */
     static final int STATUS_WRAPPER = -1;
 
@@ -77,6 +83,20 @@ final class Abi {
     /** {@code struct KgliteStorageFormat { uint32_t kgl, wal, min_readable_wal; }}. */
     private static final StructLayout STORAGE_FORMAT_LAYOUT = MemoryLayout.structLayout(
             I32.withName("kgl"), I32.withName("wal"), I32.withName("min_readable_wal"));
+
+    /**
+     * {@code struct KgliteExecuteOptions}: {@code struct_size, timeout_ms,
+     * max_work_units, row_limit} (word each), {@code flags, reserved} (u32 each),
+     * {@code cancel} (pointer). Fields appended later are additive, so the
+     * struct is sized by what this wrapper was compiled against.
+     */
+    private static final StructLayout EXECUTE_OPTIONS_LAYOUT = MemoryLayout.structLayout(
+            USIZE.withName("struct_size"), I64.withName("timeout_ms"),
+            I64.withName("max_work_units"), I64.withName("row_limit"),
+            I32.withName("flags"), I32.withName("reserved"), PTR.withName("cancel"));
+
+    /** {@code KgliteExecuteOptions.flags} bit 0: apply {@code row_limit}. */
+    private static final int FLAG_ROW_LIMIT = 1;
 
     // ---- linkage ----------------------------------------------------------
     // Declaration order matters: LINKER / LOOKUP / BOUND must be initialized
@@ -176,6 +196,45 @@ final class Abi {
             bind("kglite_last_error_details_json", FunctionDescriptor.of(PTR));
     private static final MethodHandle FREE_STRING =
             bind("kglite_free_string", FunctionDescriptor.ofVoid(PTR));
+    // Durable open: (path, options_json, out_session, out_info_json, out_error_msg).
+    private static final MethodHandle OPEN_SESSION = bind(
+            "kglite_open_session", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
+    private static final MethodHandle SESSION_SYNC =
+            bind("kglite_session_sync", FunctionDescriptor.of(I32, PTR, PTR));
+    private static final MethodHandle SESSION_CHECKPOINT = bind(
+            "kglite_session_checkpoint", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR));
+    private static final MethodHandle SESSION_CLOSE =
+            bind("kglite_session_close", FunctionDescriptor.of(I32, PTR, PTR));
+    // The `_ex` forms take the versioned options struct by pointer.
+    private static final FunctionDescriptor EXECUTE_EX_DESCRIPTOR =
+            FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR, PTR);
+    private static final MethodHandle SESSION_EXECUTE_READ_EX =
+            bind("kglite_session_execute_read_ex", EXECUTE_EX_DESCRIPTOR);
+    private static final MethodHandle SESSION_EXECUTE_MUT_EX =
+            bind("kglite_session_execute_mut_ex", EXECUTE_EX_DESCRIPTOR);
+    private static final MethodHandle SESSION_BEGIN = bind(
+            "kglite_session_begin",
+            FunctionDescriptor.of(I32, PTR, ValueLayout.JAVA_BOOLEAN, PTR, PTR));
+    private static final MethodHandle TX_EXECUTE =
+            bind("kglite_tx_execute", EXECUTE_EX_DESCRIPTOR);
+    private static final MethodHandle TX_COMMIT =
+            bind("kglite_tx_commit", FunctionDescriptor.of(I32, PTR, PTR));
+    private static final MethodHandle TX_ROLLBACK =
+            bind("kglite_tx_rollback", FunctionDescriptor.of(I32, PTR));
+    private static final MethodHandle TX_FREE =
+            bind("kglite_tx_free", FunctionDescriptor.ofVoid(PTR));
+    private static final MethodHandle CANCEL_TOKEN_NEW =
+            bind("kglite_cancel_token_new", FunctionDescriptor.of(I32, PTR));
+    private static final MethodHandle CANCEL_TOKEN_CANCEL =
+            bind("kglite_cancel_token_cancel", FunctionDescriptor.of(I32, PTR));
+    private static final MethodHandle CANCEL_TOKEN_FREE =
+            bind("kglite_cancel_token_free", FunctionDescriptor.ofVoid(PTR));
+    private static final MethodHandle SESSION_BACKUP = bind(
+            "kglite_session_backup", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
+    private static final MethodHandle SESSION_DEFINE_ONTOLOGY = bind(
+            "kglite_session_define_ontology", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR));
+    private static final MethodHandle SESSION_CLEAR_ONTOLOGY =
+            bind("kglite_session_clear_ontology", FunctionDescriptor.of(I32, PTR, PTR));
 
     @SuppressWarnings("restricted") // downcallHandle: the whole point of this class
     private static MethodHandle bind(String symbol, FunctionDescriptor descriptor) {
@@ -330,21 +389,27 @@ final class Abi {
                 graphFree(graph);
                 throw new KgliteException(rc, statusName(rc), statusName(rc) + ": kglite_session_new");
             }
-            MemorySegment session = outSession.get(PTR, 0);
-            // Typed values (dates, durations, points, NaN and the infinities)
-            // come back as the one-key tags a parameter accepts, which Json
-            // decodes to LocalDate, LocalDateTime, KgliteDuration, Point and
-            // Double, instead of the default strings, maps and JSON null.
-            int encoded = (int) SESSION_SET_RESULT_ENCODING.invokeExact(session, RESULT_ENCODING_TAGGED);
-            if (encoded != STATUS_OK) {
-                SESSION_FREE.invokeExact(session);
-                throw new KgliteException(
-                        encoded, statusName(encoded), statusName(encoded) + ": kglite_session_set_result_encoding");
-            }
-            return session;
+            return useTaggedResults(outSession.get(PTR, 0));
         } catch (Throwable t) {
             throw rethrow(t);
         }
+    }
+
+    /**
+     * Typed values (dates, durations, points, NaN and the infinities) come back
+     * as the one-key tags a parameter accepts, which Json decodes to
+     * LocalDate, LocalDateTime, KgliteDuration, Point and Double, instead of
+     * the default strings, maps and JSON null. Frees the session if the switch
+     * fails.
+     */
+    private static MemorySegment useTaggedResults(MemorySegment session) throws Throwable {
+        int encoded = (int) SESSION_SET_RESULT_ENCODING.invokeExact(session, RESULT_ENCODING_TAGGED);
+        if (encoded != STATUS_OK) {
+            SESSION_FREE.invokeExact(session);
+            throw new KgliteException(
+                    encoded, statusName(encoded), statusName(encoded) + ": kglite_session_set_result_encoding");
+        }
+        return session;
     }
 
     /**
@@ -695,6 +760,260 @@ final class Abi {
         }
     }
 
+    // ---- durable sessions, transactions, cancellation, backup, ontology ----
+
+    /**
+     * {@code kglite_open_session} — returns an owned durable session and writes
+     * the open-info JSON into {@code infoOut[0]}.
+     */
+    static MemorySegment openSession(String path, String optionsJson, String[] infoOut) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outSession = arena.allocate(PTR);
+            MemorySegment outInfo = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) OPEN_SESSION.invokeExact(
+                    cstr(arena, path), cstr(arena, optionsJson), outSession, outInfo, outError);
+            check(rc, outError);
+            infoOut[0] = takeString(outInfo.get(PTR, 0));
+            return useTaggedResults(outSession.get(PTR, 0));
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_session_sync}. */
+    static void sessionSync(MemorySegment session) {
+        callWithError(outError -> (int) SESSION_SYNC.invokeExact(session, outError));
+    }
+
+    /**
+     * {@code kglite_session_checkpoint}.
+     *
+     * @return {@code {written (0|1), version}}
+     */
+    static long[] sessionCheckpoint(MemorySegment session) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment written = arena.allocate(U8);
+            MemorySegment version = arena.allocate(I64);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) SESSION_CHECKPOINT.invokeExact(session, written, version, outError);
+            check(rc, outError);
+            return new long[] {written.get(U8, 0) & 0xFF, version.get(I64, 0)};
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_session_close} — checkpoint if dirty, release the lease; does not free. */
+    static void sessionClose(MemorySegment session) {
+        callWithError(outError -> (int) SESSION_CLOSE.invokeExact(session, outError));
+    }
+
+    /** A native call whose only out-parameter is the error string. */
+    private interface ErrorOnlyCall {
+        int call(MemorySegment outError) throws Throwable;
+    }
+
+    private static void callWithError(ErrorOnlyCall body) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = body.call(outError);
+            check(rc, outError);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** Marshal {@code QueryOptions} (plus the cancel token pointer) into the options struct. */
+    private static MemorySegment allocOptions(
+            Arena arena, QueryOptions options, MemorySegment cancel) {
+        MemorySegment struct = arena.allocate(EXECUTE_OPTIONS_LAYOUT);
+        struct.set(USIZE, 0, EXECUTE_OPTIONS_LAYOUT.byteSize());
+        struct.set(I64, 8, options.timeoutMillis());
+        struct.set(I64, 16, options.maxWorkUnits());
+        struct.set(I64, 24, options.hasRowLimit() ? options.rowLimit() : 0L);
+        struct.set(I32, 32, options.hasRowLimit() ? FLAG_ROW_LIMIT : 0);
+        struct.set(I32, 36, 0);
+        struct.set(PTR, 40, cancel);
+        return struct;
+    }
+
+    /**
+     * {@code kglite_session_execute_read_ex} / {@code _mut_ex}.
+     *
+     * @param cancel the cancel token pointer, or {@link MemorySegment#NULL}
+     */
+    static QueryResult executeEx(
+            MemorySegment session, String query, String paramsJson, boolean mutating,
+            QueryOptions options, MemorySegment cancel) {
+        return executeWith(
+                mutating ? SESSION_EXECUTE_MUT_EX : SESSION_EXECUTE_READ_EX,
+                session, query, paramsJson, options, cancel);
+    }
+
+    /** {@code kglite_tx_execute}. */
+    static QueryResult txExecute(
+            MemorySegment tx, String query, String paramsJson,
+            QueryOptions options, MemorySegment cancel) {
+        return executeWith(TX_EXECUTE, tx, query, paramsJson, options, cancel);
+    }
+
+    private static QueryResult executeWith(
+            MethodHandle handle, MemorySegment target, String query, String paramsJson,
+            QueryOptions options, MemorySegment cancel) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outResult = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) handle.invokeExact(
+                    target, cstr(arena, query), cstr(arena, paramsJson),
+                    allocOptions(arena, options, cancel), outResult, outError);
+            check(rc, outError);
+            MemorySegment result = outResult.get(PTR, 0);
+            try {
+                java.util.List<Map<String, Object>> rows = decodeRows(result);
+                MemorySegment diagnosticsPtr =
+                        (MemorySegment) RESULT_DIAGNOSTICS_JSON.invokeExact(result);
+                return Json.toQueryResult(rows, takeString(diagnosticsPtr));
+            } finally {
+                RESULT_FREE.invokeExact(result);
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_session_begin}. */
+    static MemorySegment txBegin(MemorySegment session, boolean readOnly) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outTx = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) SESSION_BEGIN.invokeExact(session, readOnly, outTx, outError);
+            check(rc, outError);
+            return outTx.get(PTR, 0);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_tx_commit} — the transaction is finished afterwards, on every outcome. */
+    static void txCommit(MemorySegment tx) {
+        callWithError(outError -> (int) TX_COMMIT.invokeExact(tx, outError));
+    }
+
+    /** {@code kglite_tx_rollback}. */
+    static void txRollback(MemorySegment tx) {
+        try {
+            int rc = (int) TX_ROLLBACK.invokeExact(tx);
+            if (rc != STATUS_OK) {
+                throw new KgliteException(rc, statusName(rc), statusName(rc) + ": kglite_tx_rollback");
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_tx_free} — an open transaction is rolled back, never committed. */
+    static void txFree(MemorySegment tx) {
+        try {
+            TX_FREE.invokeExact(tx);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_cancel_token_new}. */
+    static MemorySegment cancelTokenNew() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outToken = arena.allocate(PTR);
+            int rc = (int) CANCEL_TOKEN_NEW.invokeExact(outToken);
+            if (rc != STATUS_OK) {
+                throw new KgliteException(
+                        rc, statusName(rc), statusName(rc) + ": kglite_cancel_token_new");
+            }
+            return outToken.get(PTR, 0);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_cancel_token_cancel}. */
+    static void cancelTokenCancel(MemorySegment token) {
+        try {
+            int rc = (int) CANCEL_TOKEN_CANCEL.invokeExact(token);
+            if (rc != STATUS_OK) {
+                throw new KgliteException(
+                        rc, statusName(rc), statusName(rc) + ": kglite_cancel_token_cancel");
+            }
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_cancel_token_free} — null-safe. */
+    static void cancelTokenFree(MemorySegment token) {
+        try {
+            CANCEL_TOKEN_FREE.invokeExact(token);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_session_backup} — returns the report JSON. */
+    static String sessionBackup(MemorySegment session, String dest, String livePath) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outReport = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) SESSION_BACKUP.invokeExact(
+                    session, cstr(arena, dest), cstr(arena, livePath), outReport, outError);
+            check(rc, outError);
+            String json = takeString(outReport.get(PTR, 0));
+            if (json == null) {
+                throw new KgliteException("the engine reported a successful backup with no report");
+            }
+            return json;
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /**
+     * {@code kglite_session_define_ontology}.
+     *
+     * @return the {@code warn}-level findings; a refusal throws
+     *     {@link OntologyViolationException}
+     */
+    static java.util.List<String> defineOntology(MemorySegment session, String ontologyJson) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment outWarnings = arena.allocate(PTR);
+            MemorySegment outError = arena.allocate(PTR);
+            int rc = (int) SESSION_DEFINE_ONTOLOGY.invokeExact(
+                    session, cstr(arena, ontologyJson), outWarnings, outError);
+            // Owned on success (warnings) and on a refusal (the report, which
+            // the exception also carries); freed on every path.
+            String warningsJson = takeString(outWarnings.get(PTR, 0));
+            check(rc, outError);
+            if (warningsJson == null) {
+                return java.util.List.of();
+            }
+            Object parsed = Json.parse(warningsJson);
+            if (!(parsed instanceof java.util.List<?> items)) {
+                throw new KgliteException("expected a JSON array of warnings, got " + parsed);
+            }
+            java.util.List<String> warnings = new java.util.ArrayList<>(items.size());
+            for (Object item : items) {
+                warnings.add(String.valueOf(item));
+            }
+            return java.util.Collections.unmodifiableList(warnings);
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+    }
+
+    /** {@code kglite_session_clear_ontology}. */
+    static void clearOntology(MemorySegment session) {
+        callWithError(outError -> (int) SESSION_CLEAR_ONTOLOGY.invokeExact(session, outError));
+    }
+
     // ---- marshalling helpers ---------------------------------------------
 
     /** Allocate a null-terminated UTF-8 copy, or {@code NULL} for a null String. */
@@ -767,19 +1086,24 @@ final class Abi {
         if (code == STATUS_OK) {
             return;
         }
+        // Read before anything else: every status-returning export clears it.
+        String details = code == STATUS_ONTOLOGY_VIOLATION || code == STATUS_WRITER_LEASE_HELD
+                ? lastErrorDetails() : null;
         String detail = takeString(outError.get(PTR, 0));
         String name = statusName(code);
         String message = detail == null || detail.isEmpty() ? name : name + ": " + detail;
-        if (code == STATUS_WRITER_LEASE_HELD) {
-            throw new WriterLeaseHeldException(code, name, message, detail, holderJson);
+        switch (code) {
+            case STATUS_WRITER_LEASE_HELD ->
+                    throw new WriterLeaseHeldException(
+                            code, name, message, detail, holderJson != null ? holderJson : details);
+            case STATUS_READ_ONLY -> throw new ReadOnlyGraphException(code, name, message);
+            case STATUS_ONTOLOGY_VIOLATION ->
+                    throw new OntologyViolationException(code, name, message, details);
+            case STATUS_CANCELLED -> throw new QueryCancelledException(code, name, message);
+            case STATUS_TRANSACTION_CONFLICT ->
+                    throw new TransactionConflictException(code, name, message);
+            default -> throw new KgliteException(code, name, message);
         }
-        if (code == STATUS_READ_ONLY) {
-            throw new ReadOnlyGraphException(code, name, message);
-        }
-        if (code == STATUS_ONTOLOGY_VIOLATION) {
-            throw new OntologyViolationException(code, name, message, lastErrorDetails());
-        }
-        throw new KgliteException(code, name, message);
     }
 
     /** The structured detail of the failure just reported, or {@code null}. */

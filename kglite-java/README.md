@@ -25,7 +25,9 @@ ship in **0.15.10**; the **Embeddings and vector search** section ships in
 **0.15.11**; the **Warnings and diagnostics** section's `queryResult` and
 `cypherResult` ship in **0.18.1**; and the **As of an instant** section
 (`ValidAt`, `queryBatch`), `Transaction.commitResults()` and
-`QueryResult.profile()` ship in **0.19.0**. Each section works from the
+`QueryResult.profile()` ship in **0.19.0**; and **Durable sessions**,
+**Interactive transactions**, **Limits and cancellation**, **Backup** and
+**Ontology** ship in the release after 0.19.5. Each section works from the
 release named there onward.
 
 ```xml
@@ -345,8 +347,7 @@ behaviour, and each one is what a JDBC-shaped reading of `commit()` gets wrong:
    Read-your-writes still holds, *inside the engine*: every statement runs
    against the same working graph, so a staged `MATCH` sees a staged `CREATE`
    and its rows come back from `commit()` in position. If you need the Java-side
-   branch, use `cypher()` per statement and give up atomicity — or open an
-   issue, because a named use case is what moves the ABI to a stateful handle.
+   branch, use [`begin()`](#interactive-transactions).
 2. **`commit()` is not durability.** It publishes into the session — the
    in-memory graph this instance serves — and writes no bytes. `save(Path)` is
    still the only thing that persists, and a committed transaction that is never
@@ -363,6 +364,136 @@ behaviour, and each one is what a JDBC-shaped reading of `commit()` gets wrong:
    sessions and serialize nothing between them; the second `save()` still wins
    outright and silently. The `WriterLease` below is the cross-process
    mechanism, it is advisory, and nothing here changes that.
+
+## Interactive transactions
+
+`begin()` returns a `Tx` whose statements run **as you issue them**, so Java can
+read a result and decide the next statement. It is a separate type from the
+staged `Transaction` above, which is unchanged: `Transaction` has shipped in
+Maven releases and its stage-then-run behaviour is something callers depend on,
+so the stateful handle arrives under its own name and neither replaces the
+other. Use `Tx` when you branch on a result, `Transaction` when you only need
+one atomic batch.
+
+```java
+try (Tx tx = graph.begin()) {
+    long n = ((Number) tx.run("MATCH (p:Person) RETURN count(p) AS n")
+            .get(0).get("n")).longValue();
+    if (n < 10) {
+        tx.run("CREATE (:Person {id: $id})", Map.of("id", n + 1));
+    }
+    tx.commit();
+}   // commit() not reached -> rolled back
+```
+
+- **Isolation.** Statements see the transaction's own earlier writes and
+  nothing other writers committed since `begin()`. Writes stay private until
+  `commit()`.
+- **A failed statement is undone on its own** and the transaction stays open.
+- **Conflicts.** If another writer committed since `begin()`, `commit()`
+  applies nothing and throws `TransactionConflictException` (status 20).
+  `graph.transaction(tx -> ..., retries)` begins, runs your function, commits,
+  and retries a conflicted attempt up to `retries` more times (default 3);
+  your function may therefore run more than once. Any other exception rolls
+  the attempt back and propagates.
+- **`begin(true)`** is a read-only transaction: one fixed snapshot, every write
+  refused with `ReadOnlyGraphException`.
+- **Finished means finished.** After `commit()`, `rollback()` or a failed
+  commit, `run` throws `IllegalStateException` and `close()` is a no-op.
+- `graph.close()` rolls back every `Tx` still open on it.
+- On a [durable session](#durable-sessions) the commit is logged before it is
+  published; on any other graph it publishes into the session and `save()`
+  persists, as everywhere.
+
+## Durable sessions
+
+`KnowledgeGraph.open(path, OpenOptions)` is the open to use when commits must
+survive a crash. The existing `open(path)` / `open(path, StorageMode)` load a
+checkpoint and attach nothing; this one takes the writer lease, opens or
+creates the graph, replays the write-ahead log, and logs every later commit:
+
+```java
+OpenOptions options = OpenOptions.defaults()
+        .createIfMissing(true)
+        .durability(Durability.FULL)             // FULL (default) | NORMAL | OFF
+        .lockTimeout(Duration.ofSeconds(5));     // default: fail fast
+try (KnowledgeGraph graph = KnowledgeGraph.open(path, options)) {
+    graph.cypher("CREATE (:Person {id: 1})");
+}   // close() checkpoints unsaved changes and releases the lease
+```
+
+- **`close()` is the persistence story.** It checkpoints only if something
+  changed, then releases the lease. If the checkpoint fails it throws and the
+  graph stays open with the lease held, so nothing is lost; fix the cause and
+  close again. `checkpoint()` does it on demand and returns whether a file was
+  written; `sync()` is the power-safe point at `NORMAL`.
+- **Lease contention** throws `WriterLeaseHeldException` with the holder's
+  `pid()`, `since()` and `self()`; `lockTimeout` waits instead.
+- **A missing path is an error** unless `createIfMissing(true)`, so a typo'd
+  path never becomes an empty database.
+- **`readOnly(true)`** takes no lease and writes nothing — not a lease file, not
+  a checkpoint — and every write, `begin()`, `sync()` and `checkpoint()` is
+  refused with `ReadOnlyGraphException`. It cannot be combined with `storage`,
+  `createIfMissing`, `lockTimeout` or an explicit durability.
+- `graph.openInfo()` reports the mode and durability actually in force
+  (a disk-mode graph has no log and runs at `OFF`, reported as `degradedFrom`),
+  any storage conversion, and `graph.openWarnings()` the advisories (a
+  quarantined log, a saved torn tail) an operator should read.
+- Schema, text-index and embedding ingest bypass the log and are refused with
+  `DurabilityFailed` unless the durability is `OFF`; checkpoint first or open
+  with `OFF` to use them.
+
+## Limits and cancellation
+
+`QueryOptions` bounds a single statement and applies to `cypher`, `query`,
+`cypherResult`, `queryResult` and `Tx.run`:
+
+```java
+try (CancelToken token = new CancelToken()) {
+    QueryOptions options = QueryOptions.none()
+            .timeout(Duration.ofSeconds(5))   // CypherTimeout past it
+            .maxWorkUnits(1_000_000)          // a budget: exceeding it fails
+            .rowLimit(1000)                   // truncates, reports, never fails
+            .cancel(token);
+    QueryResult result = graph.queryResult("MATCH (n) RETURN n", Map.of(), options);
+}
+```
+
+- **`rowLimit` truncates**: the query runs to completion and the rows kept stop
+  at the cap; `result.warnings()` and `result.diagnostics()` (`row_limit`,
+  `total_rows`) say so. On a write only the rows the trailing `RETURN` reports
+  are capped; every write still happens.
+- **`CancelToken.cancel()`** is safe from any thread, any number of times. The
+  running query throws `QueryCancelledException` (status 17) at its next check
+  and a cancelled write publishes nothing; the graph, or the transaction, stays
+  usable. A token stays cancelled, so make one per query you may want to stop,
+  and close it after the queries that carry it have returned.
+
+## Backup
+
+`graph.backup(dest)` writes a consistent single-file `.kgl` copy while writers
+keep committing and returns a `BackupReport` (`path`, `bytes`, `nodes`,
+`relationships`, `graphVersion`, `lsn`, `lockHoldMs`, `elapsedMs`,
+`preparedCopy`). It takes no lease, writes no log sidecar and leaves the live
+checkpoint alone; an existing `dest` is replaced atomically. A backup over the
+graph's own file, and a disk-mode graph, are refused.
+
+## Ontology
+
+```java
+List<String> warnings = graph.declareOntology(Map.of("classes", Map.of(
+        "Person", Map.of("required_properties", List.of("email"), "enforcement", "error"))));
+graph.ontology();       // Optional<Map> of the declaration, or empty
+graph.clearOntology();
+```
+
+`declareOntology` takes a JSON string or a map in the Python `define_ontology`
+dialect and returns the `warn`-level findings. Stored data is checked first: a
+rule it already breaks refuses the declaration with `OntologyViolationException`
+(`rule()`, `entity()`, `entityType()`, `property()`, `report()`) and the previous
+ontology stays. A write the ontology refuses throws the same exception. On a
+durable session the declaration is logged; elsewhere it is not durable until
+`save()`.
 
 ## The Cypher DSL
 
@@ -621,10 +752,15 @@ rather than a table here, so they cannot drift: `CypherSyntax`,
 raised by the wrapper before it reached the engine reports `WrapperError` /
 `-1`. A failed query never poisons the graph — the instance stays usable.
 
-Four shapes worth knowing:
+Shapes worth knowing:
 
-- **`WriterLeaseHeldException`** (a `KgliteException` subclass, status 102) is
-  the one failure you retry rather than fix. `holder()` names the pid holding
+- **`QueryCancelledException`** (status 17) is a query stopped through its
+  `CancelToken`; **`TransactionConflictException`** (status 20) is an
+  interactive commit that lost its race. Both are retriable decisions, not
+  faults.
+- **`WriterLeaseHeldException`** (a `KgliteException` subclass, status 102)
+  is the failure you retry rather than fix; it also comes from the durable
+  `open(path, OpenOptions)`. `holder()` names the pid holding
   it and since when, as prose; `pid()`, `since()` and `self()` are the same
   facts as fields, so a retry policy or a dashboard never has to regex the
   sentence. `self()` is the case worth branching on — the lease is held by an
@@ -675,8 +811,10 @@ every location tried.
 Same engine as the Python package and the CLI — same Cypher, same `.kgl` files,
 same performance. What differs is the shell around it: **Python is the richest
 one** (fluent API, dataset loaders, embedders, introspection helpers), and this
-binding is deliberately the lean one. Its entire surface is open/create, `cypher`
-/ `query`, `save`, `close`, transactions, the writer lease, error mapping,
+binding is deliberately the lean one. Its entire surface is open/create
+(including the durable open), `cypher` / `query` with per-query limits and
+cancellation, `save`, `checkpoint`, `backup`, `close`, staged and interactive
+transactions, the writer lease, ontology declaration, error mapping,
 embedding ingest (`setEmbeddings` / `addEmbeddings` / `buildVectorIndex` /
 `listEmbeddings`), and the Cypher DSL that builds the text those two methods
 take. That is not a staging post; it is the design. A per-query capability needs
@@ -710,13 +848,13 @@ There is no ORM, no object mapping, no typed rows and no Spring integration —
 third parties can build those on top; they are not this project's maintenance
 surface, and the DSL is not a step toward them.
 
-**Expansions happen on demand.** The two designated ones have shipped:
-multi-statement transactions over the C ABI's existing
-`kglite_session_execute_mut_batch` (see [Transactions](#transactions)) and the
-bundled DSL (see [The Cypher DSL](#the-cypher-dsl)). The next two are gated on a
-named use case rather than scheduled: a stateful transaction handle (needed only
-to branch in Java on an intermediate result) and a batch call reporting *which*
-statement failed. Open an issue if you want either — that is what moves it.
+**Expansions happen on demand.** The designated ones have shipped:
+multi-statement transactions (see [Transactions](#transactions)), the stateful
+transaction handle (see [Interactive transactions](#interactive-transactions)),
+the durable open, cancellation, backup and ontology declaration, and the bundled
+DSL (see [The Cypher DSL](#the-cypher-dsl)). The next one is gated on a named use
+case rather than scheduled: a batch call reporting *which* statement failed.
+Open an issue if you want it — that is what moves it.
 
 ## Pre-22 JVMs: the Bolt sidecar
 

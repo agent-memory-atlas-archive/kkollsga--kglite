@@ -35,6 +35,22 @@ before upgrading.
 
 ### Added
 
+- **Java: durable open, interactive transactions, cancellation, backup and
+  ontology.** All reach the C ABI symbols that already shipped.
+  - `KnowledgeGraph.open(path, OpenOptions)` takes the writer lease, replays
+    the write-ahead log and logs commits at `Durability` `FULL`, `NORMAL` or
+    `OFF`. `close()` checkpoints if changed and releases the lease;
+    `checkpoint()`, `sync()`, `openInfo()` and `openWarnings()` are new. A
+    contended lease throws `WriterLeaseHeldException` with the holder's fields.
+  - `begin()` / `begin(readOnly)` return a `Tx` that runs statements
+    immediately; `transaction(fn, retries)` retries a
+    `TransactionConflictException`. The staged `Transaction` is unchanged.
+  - `QueryOptions` (`timeout`, `maxWorkUnits`, `rowLimit`, `cancel`) on
+    `cypher`, `query`, their `*Result` forms and `Tx.run`; `CancelToken` stops a
+    running query from another thread with `QueryCancelledException`.
+  - `backup(path)` returns a `BackupReport`; `declareOntology`,
+    `clearOntology` and `ontology()` manage the declared ontology.
+
 - **C ABI: cancellation tokens.** `kglite_cancel_token_new`,
   `kglite_cancel_token_cancel` (callable from any thread) and
   `kglite_cancel_token_free` manage a `KgliteCancelToken`. Attach it through the

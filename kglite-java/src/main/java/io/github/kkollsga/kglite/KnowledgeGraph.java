@@ -6,6 +6,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * An open kglite knowledge graph: open or create it, run Cypher against it,
@@ -163,13 +166,31 @@ public final class KnowledgeGraph implements AutoCloseable {
     private final StorageMode convertedFrom;
     private final boolean readOnly;
 
+    /** What the durable open reported, or {@code null} for a graph not opened through it. */
+    private final OpenInfo info;
+
+    /** Interactive transactions still open; rolled back before the session is freed. */
+    private final Set<Tx> openTransactions = ConcurrentHashMap.newKeySet();
+
     private KnowledgeGraph(
             MemorySegment session, StorageMode storageMode, StorageMode convertedFrom,
-            boolean readOnly) {
-        this.session = new NativeHandle(session, "KnowledgeGraph", Abi::sessionFree);
+            boolean readOnly, OpenInfo info) {
+        this.session = new NativeHandle(session, "KnowledgeGraph", this::releaseSession);
         this.storageMode = storageMode;
         this.convertedFrom = convertedFrom;
         this.readOnly = readOnly;
+        this.info = info;
+    }
+
+    /** Runs under the handle's write lock: no {@code begin()} can interleave. */
+    private void releaseSession(MemorySegment pointer) {
+        try {
+            for (Tx open : openTransactions) {
+                open.close();
+            }
+        } finally {
+            Abi.sessionFree(pointer);
+        }
     }
 
     // ---- factories --------------------------------------------------------
@@ -219,7 +240,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * @throws KgliteException if the path is absent, unreadable, or not a graph
      */
     public static KnowledgeGraph open(Path path) {
-        return open(path, null);
+        return open(path, (StorageMode) null);
     }
 
     /**
@@ -336,6 +357,66 @@ public final class KnowledgeGraph implements AutoCloseable {
                 graph, converted[0] == null ? null : StorageMode.fromWire(converted[0]), false);
     }
 
+    /**
+     * Open the graph at {@code path} as a <strong>durable session</strong>: take
+     * the single-writer lease, open (or create) the graph, recover from the
+     * write-ahead log, and return a graph whose commits are logged at the
+     * chosen {@link Durability}.
+     *
+     * <p>This is the open to use when commits must survive a crash. It differs
+     * from {@link #open(Path)}, which loads a checkpoint and attaches nothing:
+     *
+     * <ul>
+     *   <li>The session owns the writer lease until {@link #close()}; a
+     *       contender gets {@link WriterLeaseHeldException} with the holder's
+     *       {@link WriterLeaseHeldException#pid() pid} and
+     *       {@link WriterLeaseHeldException#since() since}, unless
+     *       {@link OpenOptions#lockTimeout(java.time.Duration)} waits for it.</li>
+     *   <li>Every {@code cypher()} and {@link Tx} commit is logged at the
+     *       durability level, so a crash loses nothing the level promised.
+     *       Reopening replays the log.</li>
+     *   <li>{@link #close()} checkpoints unsaved changes and releases the lease,
+     *       so try-with-resources is the whole persistence story.
+     *       {@link #checkpoint()} does it on demand and {@link #sync()} makes
+     *       a {@link Durability#NORMAL} session power-safe.</li>
+     *   <li>A missing path is an error unless
+     *       {@link OpenOptions#createIfMissing(boolean)}.</li>
+     * </ul>
+     *
+     * <p>Schema, text-index and embedding ingest calls bypass the log and are
+     * refused with {@code DurabilityFailed} on a session whose durability is
+     * not {@link Durability#OFF}; checkpoint, or open with {@code OFF}, to use
+     * them. {@link OpenOptions#readOnly(boolean)} opens without a lease and
+     * writes nothing.
+     *
+     * @param path    the graph path (a {@code .kgl} file or a disk-graph directory)
+     * @param options the open options; {@link OpenOptions#defaults()} for none
+     * @return the open graph; {@link #openInfo()} reports what the open did
+     * @throws WriterLeaseHeldException if another writer holds the path
+     * @throws KgliteException if the path is absent without {@code createIfMissing},
+     *     an option is refused, or the file or its log cannot be read
+     */
+    public static KnowledgeGraph open(Path path, OpenOptions options) {
+        if (path == null) {
+            throw new KgliteException("KnowledgeGraph.open requires a path");
+        }
+        if (options == null) {
+            throw new KgliteException("options cannot be null; pass OpenOptions.defaults()");
+        }
+        String[] infoJson = new String[1];
+        MemorySegment handle = Abi.openSession(
+                path.toAbsolutePath().toString(), options.toJson(), infoJson);
+        OpenInfo info;
+        try {
+            info = OpenInfo.parse(infoJson[0]);
+        } catch (RuntimeException e) {
+            Abi.sessionFree(handle);
+            throw e;
+        }
+        return new KnowledgeGraph(
+                handle, info.storage(), info.convertedFrom().orElse(null), info.readOnly(), info);
+    }
+
     private static KnowledgeGraph sessionOver(
             MemorySegment graph, StorageMode convertedFrom, boolean readOnly) {
         // Read the mode while we still hold a graph handle: kglite_session_new
@@ -350,7 +431,7 @@ public final class KnowledgeGraph implements AutoCloseable {
             throw e;
         }
         // Abi.sessionNew moves the graph handle in, and frees it if the move fails.
-        return new KnowledgeGraph(Abi.sessionNew(graph), mode, convertedFrom, readOnly);
+        return new KnowledgeGraph(Abi.sessionNew(graph), mode, convertedFrom, readOnly, null);
     }
 
     // ---- queries ----------------------------------------------------------
@@ -933,6 +1014,334 @@ public final class KnowledgeGraph implements AutoCloseable {
         return new Transaction(session);
     }
 
+    // ---- limits, cancellation ---------------------------------------------
+
+    /**
+     * Run a parameterised statement of any kind (the <strong>write</strong>
+     * path) under {@link QueryOptions}.
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param options deadline, work budget, row cap and cancel token
+     * @return the rows, truncated at {@link QueryOptions#rowLimit(long)} when set
+     * @throws QueryCancelledException if the options' token fired
+     * @throws KgliteException on any engine failure, including the timeout
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<Map<String, Object>> cypher(
+            String query, Map<String, Object> params, QueryOptions options) {
+        return cypherResult(query, params, options).rows();
+    }
+
+    /**
+     * As {@link #cypher(String, Map, QueryOptions)}, with the warnings and
+     * diagnostics — a row-limit truncation is reported in
+     * {@link QueryResult#diagnostics()} ({@code row_limit}, {@code total_rows}).
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param options deadline, work budget, row cap and cancel token
+     * @return the rows with their warnings and diagnostics
+     */
+    public QueryResult cypherResult(
+            String query, Map<String, Object> params, QueryOptions options) {
+        return runEx(query, params, true, options);
+    }
+
+    /**
+     * Run a read-only statement under {@link QueryOptions}.
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param options deadline, work budget, row cap and cancel token
+     * @return the rows, truncated at {@link QueryOptions#rowLimit(long)} when set
+     * @throws QueryCancelledException if the options' token fired
+     * @throws KgliteException on any engine failure, including the timeout
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<Map<String, Object>> query(
+            String query, Map<String, Object> params, QueryOptions options) {
+        return queryResult(query, params, options).rows();
+    }
+
+    /**
+     * As {@link #query(String, Map, QueryOptions)}, with the warnings and
+     * diagnostics.
+     *
+     * @param query   the Cypher text, referring to bindings as {@code $name}
+     * @param params  the bindings; may be empty, never {@code null}
+     * @param options deadline, work budget, row cap and cancel token
+     * @return the rows with their warnings and diagnostics
+     */
+    public QueryResult queryResult(
+            String query, Map<String, Object> params, QueryOptions options) {
+        return runEx(query, params, false, options);
+    }
+
+    private QueryResult runEx(
+            String query, Map<String, Object> params, boolean mutating, QueryOptions options) {
+        if (options == null) {
+            throw new KgliteException("options cannot be null; pass QueryOptions.none()");
+        }
+        String paramsJson = prepareRun(query, params, mutating);
+        return options.withCancel(cancel -> session.use(handle ->
+                Abi.executeEx(handle, query, paramsJson, mutating, options, cancel)));
+    }
+
+    // ---- interactive transactions -----------------------------------------
+
+    /**
+     * Begin an interactive read-write transaction.
+     *
+     * <p>Unlike {@link #beginTransaction()}, which stages statements until
+     * commit, a {@link Tx} runs each statement immediately, so Java can branch
+     * on a result. See {@link Tx} for isolation, conflicts and durability.
+     *
+     * @return the open transaction; close it (try-with-resources rolls back
+     *     what was not committed)
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public Tx begin() {
+        return begin(false);
+    }
+
+    /**
+     * Begin an interactive transaction.
+     *
+     * @param readOnly {@code true} reads one fixed snapshot and refuses writes
+     * @return the open transaction
+     * @throws ReadOnlyGraphException if a read-write transaction was asked of a
+     *     graph opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public Tx begin(boolean readOnly) {
+        if (!readOnly) {
+            requireWritable("begin()");
+        }
+        return session.use(handle -> {
+            Tx tx = new Tx(Abi.txBegin(handle, readOnly), readOnly, openTransactions::remove);
+            openTransactions.add(tx);
+            return tx;
+        });
+    }
+
+    /**
+     * Run {@code work} in a transaction, committing when it returns and
+     * retrying up to 3 more times when the commit loses a race.
+     *
+     * @param <T>  the result type
+     * @param work the unit of work; it may run more than once, so keep side
+     *     effects outside the graph out of it
+     * @return what {@code work} returned on the attempt that committed
+     * @throws TransactionConflictException if every attempt conflicted
+     * @see #transaction(Function, int)
+     */
+    public <T> T transaction(Function<Tx, T> work) {
+        return transaction(work, 3);
+    }
+
+    /**
+     * Run {@code work} in a transaction and retry it when the commit loses an
+     * optimistic-concurrency race.
+     *
+     * <p>Each attempt begins afresh, calls {@code work}, then commits. A
+     * {@link TransactionConflictException} from the commit starts the next
+     * attempt; any other exception rolls the attempt back and propagates
+     * unchanged. {@code work} must not commit or roll back the {@code Tx} it is
+     * handed.
+     *
+     * @param <T>     the result type
+     * @param work    the unit of work; it may run more than once
+     * @param retries how many times to retry after the first attempt
+     * @return what {@code work} returned on the attempt that committed
+     * @throws TransactionConflictException if the first attempt and every retry conflicted
+     * @throws IllegalArgumentException if {@code retries} is negative
+     */
+    public <T> T transaction(Function<Tx, T> work, int retries) {
+        if (retries < 0) {
+            throw new IllegalArgumentException("retries cannot be negative: " + retries);
+        }
+        for (int attempt = 0; ; attempt++) {
+            try (Tx tx = begin()) {
+                T result = work.apply(tx);
+                tx.commit();
+                return result;
+            } catch (TransactionConflictException conflict) {
+                if (attempt >= retries) {
+                    throw conflict;
+                }
+            }
+        }
+    }
+
+    private void requireWritable(String what) {
+        if (readOnly) {
+            throw new ReadOnlyGraphException(
+                    "this graph was opened read-only; " + what + " is refused. "
+                            + "Use query() for reads, or open() for a writable handle.");
+        }
+    }
+
+    // ---- durable session ---------------------------------------------------
+
+    /**
+     * What the durable open reported: the mode and durability in force, any
+     * degradation or conversion, and the advisories.
+     *
+     * @return the open report, or empty for a graph not opened through
+     *     {@link #open(Path, OpenOptions)}
+     */
+    public Optional<OpenInfo> openInfo() {
+        return Optional.ofNullable(info);
+    }
+
+    /**
+     * The notices the durable open raised, such as a quarantined log or a saved
+     * torn tail an operator should read.
+     *
+     * @return the advisories; empty for a clean open and for a graph not
+     *     opened through {@link #open(Path, OpenOptions)}
+     */
+    public List<OpenInfo.Advisory> openWarnings() {
+        return info == null ? List.of() : info.advisories();
+    }
+
+    /**
+     * Flush the write-ahead log to stable storage — the power-safe point at
+     * {@link Durability#NORMAL} (a no-op at {@link Durability#FULL}).
+     *
+     * @throws KgliteException with status {@code InvalidArgument} if the session
+     *     has no log (not durably opened, or {@link Durability#OFF}), or
+     *     {@code DurabilityFailed} if the flush failed
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public void sync() {
+        session.run(Abi::sessionSync);
+    }
+
+    /**
+     * Write a checkpoint to the path this graph was opened from, unless nothing
+     * changed since this handle's last one; a durable session's checkpoint also
+     * truncates its log.
+     *
+     * @return whether a file was written and the version checkpointed
+     * @throws KgliteException with status {@code InvalidArgument} if the graph
+     *     was not opened through {@link #open(Path, OpenOptions)} (use
+     *     {@link #save(Path)}), or {@code FileIo} if the write failed; the
+     *     graph stays as it was and the call can be retried
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public Checkpoint checkpoint() {
+        long[] result = session.use(Abi::sessionCheckpoint);
+        return new Checkpoint(result[0] != 0, result[1]);
+    }
+
+    // ---- backup ------------------------------------------------------------
+
+    /**
+     * Write a consistent single-file {@code .kgl} backup to {@code dest} while
+     * writers keep committing.
+     *
+     * <p>Unlike {@link #save(Path)}, a backup is an independent copy: it takes
+     * no writer lease, creates no log sidecar and does not touch this graph's
+     * checkpoint. An existing {@code dest} is replaced atomically. In-memory
+     * and mapped graphs are supported; a disk-mode graph is refused. A graph
+     * opened through {@link #open(Path, OpenOptions)} also refuses a
+     * {@code dest} that is its own file.
+     *
+     * @param dest the backup file
+     * @return what was written
+     * @throws KgliteException with status {@code FileIo} if the write failed or
+     *     the backup was refused; the message says which
+     * @throws IllegalStateException if this graph is closed
+     */
+    public BackupReport backup(Path dest) {
+        if (dest == null) {
+            throw new KgliteException("backup requires a destination path");
+        }
+        String destination = dest.toAbsolutePath().toString();
+        String live = info == null ? null : info.path();
+        return BackupReport.parse(
+                session.use(handle -> Abi.sessionBackup(handle, destination, live)));
+    }
+
+    // ---- ontology ----------------------------------------------------------
+
+    /**
+     * Declare the graph's ontology from a JSON document ({@code classes},
+     * {@code relationships}, {@code closed_labels}, {@code enforcement},
+     * {@code version}).
+     *
+     * <p>Stored data is checked first: an {@code error}-level rule the data
+     * already breaks refuses the declaration, nothing changes and the previous
+     * ontology stays. On a durable session the declaration is logged; on any
+     * other graph it is not durable until {@link #save(Path)}.
+     *
+     * @param ontologyJson the declaration
+     * @return the {@code warn}-level findings; empty when there are none
+     * @throws OntologyViolationException if stored data breaks an error-level
+     *     rule; its fields and {@link OntologyViolationException#report()} give
+     *     the per-rule breakdown
+     * @throws KgliteException with status {@code InvalidArgument} if the JSON is
+     *     not in the dialect or the ontology is locked by the operator
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public List<String> declareOntology(String ontologyJson) {
+        if (ontologyJson == null) {
+            throw new KgliteException("an ontology declaration cannot be null");
+        }
+        requireWritable("declareOntology()");
+        return session.use(handle -> Abi.defineOntology(handle, ontologyJson));
+    }
+
+    /**
+     * As {@link #declareOntology(String)}, from a map the wrapper serializes.
+     *
+     * @param ontology the declaration
+     * @return the {@code warn}-level findings
+     */
+    public List<String> declareOntology(Map<String, Object> ontology) {
+        if (ontology == null) {
+            throw new KgliteException("an ontology declaration cannot be null");
+        }
+        return declareOntology(Json.writeObject(ontology));
+    }
+
+    /**
+     * Remove the declared ontology. A no-op when none is declared.
+     *
+     * @throws KgliteException with status {@code InvalidArgument} if the
+     *     operator locked the ontology
+     * @throws ReadOnlyGraphException if this graph was opened read-only
+     * @throws IllegalStateException if this graph is closed
+     */
+    public void clearOntology() {
+        requireWritable("clearOntology()");
+        session.run(Abi::clearOntology);
+    }
+
+    /**
+     * The declared ontology: the {@code ontology} column of
+     * {@code CALL db.ontology.show()}.
+     *
+     * @return the declaration ({@code classes}, {@code relationships}, ...), or
+     *     empty when none is declared
+     * @throws IllegalStateException if this graph is closed
+     */
+    @SuppressWarnings("unchecked")
+    public Optional<Map<String, Object>> ontology() {
+        List<Map<String, Object>> rows = query("CALL db.ontology.show()");
+        if (!rows.isEmpty() && rows.get(0).get("ontology") instanceof Map<?, ?> declared) {
+            return Optional.of((Map<String, Object>) declared);
+        }
+        return Optional.empty();
+    }
+
     // ---- embeddings -------------------------------------------------------
 
     /**
@@ -1315,17 +1724,35 @@ public final class KnowledgeGraph implements AutoCloseable {
      * calls interleave. A call that is already running in another thread
      * completes first — this waits for it — and every call that arrives
      * afterwards throws {@link IllegalStateException} instead of touching freed
-     * memory.
+     * memory. Open {@link Tx} transactions are rolled back first.
      *
-     * <p>Unsaved mutations are discarded; {@link #save(Path)} is the only thing
-     * that persists them.
+     * <p>A graph from {@link #open(Path, OpenOptions)} then checkpoints
+     * unsaved changes and releases the writer lease (nothing is written when
+     * nothing changed, or when opened read-only). If the checkpoint fails this
+     * throws {@link KgliteException} and the graph stays open with the lease
+     * held, so the changes are not lost: fix the cause and close again. Do not
+     * close concurrently with writes on the same graph.
      *
+     * <p>On every other graph unsaved mutations are discarded;
+     * {@link #save(Path)} is the only thing that persists them.
+     *
+     * @throws KgliteException if the closing checkpoint failed
      * @throws IllegalStateException if called from inside one of this graph's
      *     own calls, which cannot happen through this class's own surface (no
      *     call runs caller-supplied code) and would otherwise deadlock
      */
     @Override
     public void close() {
+        if (info != null && !info.readOnly() && !session.isClosed()) {
+            for (Tx open : openTransactions) {
+                open.close();
+            }
+            try {
+                session.run(Abi::sessionClose);
+            } catch (IllegalStateException closedByAnotherThread) {
+                // A concurrent close won; there is nothing left to do.
+            }
+        }
         session.close();
     }
 }

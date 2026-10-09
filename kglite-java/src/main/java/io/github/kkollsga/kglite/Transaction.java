@@ -40,9 +40,9 @@ import java.util.Objects;
  * Read-your-writes still holds, but it holds <em>inside the engine</em>: every
  * statement runs against the same working graph, so a staged {@code MATCH} sees
  * a staged {@code CREATE}, and its rows come back from {@code commit()} in
- * position. If you need the branch, run the statements through
- * {@link KnowledgeGraph#cypher(String, Map)} and give up the atomicity, or open
- * an issue — a named use case is what moves the ABI to a stateful handle.
+ * position. If you need the branch, use
+ * {@link KnowledgeGraph#begin()}, whose {@link Tx} runs each statement as you
+ * issue it.
  *
  * <p><strong>2. {@code commit()} is not durability.</strong> It publishes the
  * batch into the session — the in-memory graph every later {@code query()} and

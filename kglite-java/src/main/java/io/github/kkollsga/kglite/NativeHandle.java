@@ -93,6 +93,20 @@ final class NativeHandle implements AutoCloseable {
     }
 
     /**
+     * Whether {@link #close()} already freed the pointer.
+     *
+     * @return {@code true} once closed
+     */
+    boolean isClosed() {
+        gate.readLock().lock();
+        try {
+            return pointer == null;
+        } finally {
+            gate.readLock().unlock();
+        }
+    }
+
+    /**
      * Run a native call with no result against the live pointer.
      *
      * @param body the native call
