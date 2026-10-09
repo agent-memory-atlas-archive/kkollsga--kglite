@@ -62,6 +62,18 @@ before upgrading.
   arrival order, and stays abortable with `signal`. A 20,000-call
   `Promise.all` of writes then completes with no `QueueFull`.
 
+- **Streaming reads with bounded memory.** `kglite::api::session::execute_read_cursor`
+  opens a `Cursor` over a read query and returns rows in batches, holding its
+  graph snapshot until dropped. A plain `MATCH <one pattern> [WHERE] RETURN
+  <expressions>` is produced as it is pulled; `ORDER BY`, `DISTINCT`,
+  aggregation, `UNION`, several clauses, `row_limit`, `max_work_units` and disk
+  graphs are built whole first (`Cursor::streamed()` says which). The C ABI adds
+  `kglite_session_cursor_open`, `kglite_cursor_columns_json`,
+  `kglite_cursor_streamed`, `kglite_cursor_next_batch` and `kglite_cursor_free`.
+  Node `graph.stream()` uses it: a 1M-row `MATCH ... RETURN` grows resident
+  memory by about 55 MB instead of about 900 MB, and the first row arrives in
+  2 ms instead of 176 ms. Bolt PULL is unchanged: the `boltr` crate takes a
+  complete record list per `RUN`.
 - **Durable sessions checkpoint on their own.** A log that grows past
   `autoCheckpointWalMib` / `auto_checkpoint_wal_mib` (default 16 MiB; `0`
   disables) is folded into the checkpoint without stopping other writers. The
