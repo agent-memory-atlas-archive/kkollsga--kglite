@@ -347,7 +347,7 @@ fn run_case(case: u64, steps: usize) -> (usize, usize) {
     };
     let base = holey_base(&mut rng, &mut maker);
     let mut flat = base.deep_clone();
-    let reader = case % 2 == 0;
+    let reader = case.is_multiple_of(2);
     let shared = Arc::new(base);
     let reader_dump = dump(&*shared);
     let held = reader.then(|| Arc::clone(&shared));
