@@ -5,11 +5,13 @@
 //! per-entity predicates the write gates use) and the closed-label
 //! predicate, then filters by severity — there is no third implementation of
 //! any rule. Only the rules a write gate enforces can refuse a declaration
-//! (required/typed properties, closed labels, domain, range); the remaining
-//! audit-only checks (cardinality, inverse, …) are reported as warnings.
+//! (required/typed properties, closed labels, domain, range, and the
+//! *maximum* side of cardinality); the remaining audit-only checks (the
+//! cardinality minimum, inverse, …) are reported as warnings.
 
 use std::collections::BTreeMap;
 
+use super::cardinality_gate::stored_max_violations;
 use super::predicates::label_allowed;
 use super::violation::{
     DefineOntologyError, OntologyDeclarationRefused, OntologyReportEntry, OntologyRule,
@@ -25,6 +27,7 @@ fn write_rule(check: &str) -> Option<OntologyRule> {
         "property_types" => Some(OntologyRule::PropertyType),
         "domain" => Some(OntologyRule::Domain),
         "range" => Some(OntologyRule::Range),
+        "cardinality" => Some(OntologyRule::Cardinality),
         _ => None,
     }
 }
@@ -90,8 +93,16 @@ pub(crate) fn verify_declaration(graph: &DirGraph) -> Result<Vec<String>, Define
                 warnings.push(format!("ontology: {summary}"));
                 continue;
             }
+            // The audit's cardinality line also counts nodes below `min`,
+            // which no write gate enforces: only the stored maximum
+            // violators can refuse a declaration.
+            let count = if check == "cardinality" {
+                stored_max_violations(graph, entity_type) as usize
+            } else {
+                line.violations
+            };
             match (line.severity, write_rule(check)) {
-                (Enforcement::Error, Some(rule)) => {
+                (Enforcement::Error, Some(rule)) if count > 0 => {
                     refused.push(OntologyReportEntry {
                         rule,
                         entity: if line.entity_kind == "edge" {
@@ -101,7 +112,7 @@ pub(crate) fn verify_declaration(graph: &DirGraph) -> Result<Vec<String>, Define
                         },
                         entity_type: entity_type.to_string(),
                         property: line.property.clone(),
-                        count: line.violations as u64,
+                        count: count as u64,
                     });
                     lines.push(summary);
                 }

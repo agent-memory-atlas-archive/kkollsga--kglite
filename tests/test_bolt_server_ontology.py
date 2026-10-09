@@ -201,3 +201,31 @@ def test_warn_level_findings_ride_the_kglite_ontology_summary_key(tmp_path):
             assert "kglite.ontology" not in clean.metadata
     finally:
         _teardown_bolt_server(proc)
+
+
+def test_cardinality_violation_carries_its_rule_in_the_prefix(tmp_path):
+    graph = _setup(tmp_path)
+    doc = {
+        "classes": {"Person": {}},
+        "relationships": {
+            "FOLLOWS": {
+                "domain": "Person",
+                "range": "Person",
+                "cardinality": {"max": 1},
+                "enforcement": "error",
+            }
+        },
+    }
+    ont = _write_ontology(tmp_path / "o.json", doc)
+    proc, url = _spawn_bolt_server(graph, extra_args=["--ontology", ont, "--durability", "off"])
+    try:
+        with _driver(url) as driver, driver.session() as session:
+            session.run("CREATE (:Person {id: 60}), (:Person {id: 61}), (:Person {id: 62})").consume()
+            session.run("MATCH (a {id: 60}), (b {id: 61}) CREATE (a)-[:FOLLOWS]->(b)").consume()
+        err = _run_error(url, "MATCH (a {id: 60}), (b {id: 62}) CREATE (a)-[:FOLLOWS]->(b)")
+        assert err.code == "Neo.ClientError.Schema.ConstraintValidationFailed", err.code
+        assert err.message.startswith(
+            '[kglite.OntologyViolation rule=cardinality entity=relationship type="FOLLOWS" property=null] '
+        ), err.message
+    finally:
+        _teardown_bolt_server(proc)

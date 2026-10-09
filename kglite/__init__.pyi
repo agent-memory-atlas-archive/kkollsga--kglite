@@ -198,11 +198,11 @@ class OntologyViolationError(ConstraintViolationError):
     Subclasses :class:`ConstraintViolationError`, so existing ``except`` clauses
     still catch it; ``.code`` is ``"OntologyViolation"``. The graph is
     unchanged. The message names the rule (``required_property``,
-    ``property_type``, ``closed_labels``, ``domain`` or ``range``), the label or
+    ``property_type``, ``closed_labels``, ``domain``, ``range`` or ``cardinality``), the label or
     relationship type, and the property where one applies.
 
     ``rule`` is the rule that fired (``"required_property"``,
-    ``"property_type"``, ``"closed_labels"``, ``"domain"`` or ``"range"``; for a
+    ``"property_type"``, ``"closed_labels"``, ``"domain"``, ``"range"`` or ``"cardinality"``; for a
     refused declaration, the first report entry's rule). ``entity`` is ``"node"``
     or ``"relationship"``, ``entity_type`` the node primary label or relationship
     type judged, and ``property`` the offending property for the property rules,

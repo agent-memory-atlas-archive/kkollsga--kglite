@@ -18,10 +18,11 @@
 //! `exempt[required_properties|property_types]` excuses that property check
 //! (decision D9); domain and range are not exemptable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::EdgeIndex;
 
+use super::cardinality_gate::{self, CardinalityRule};
 use super::node_gate::Tally;
 use super::predicates::{domain_violated, edge_exempt, edge_property_failures, range_violated};
 use super::violation::{OntologyRule, OntologyViolation};
@@ -62,6 +63,8 @@ fn rel_rule_where(store: &OntologyStore, severity_matches: impl Fn(Enforcement) 
     store.relationships.values().any(|decl| {
         (decl.domain.is_some() && severity_matches(decl.enforcement_for("domain")))
             || (decl.range.is_some() && severity_matches(decl.enforcement_for("range")))
+            || (cardinality_gate::max_bound(decl).is_some()
+                && severity_matches(decl.enforcement_for("cardinality")))
             || PROPERTY_CHECKS.iter().any(|&check| {
                 severity_matches(decl.enforcement_for(check)) && declared_properties(decl, check)
             })
@@ -74,6 +77,7 @@ pub(crate) struct RelRules {
     domain: Option<Enforcement>,
     range: Option<Enforcement>,
     checks: Vec<(&'static str, Enforcement)>,
+    cardinality: Option<CardinalityRule>,
 }
 
 impl RelRules {
@@ -92,17 +96,41 @@ impl RelRules {
                 severity(declared_properties(decl, check), check).map(|s| (check, s))
             })
             .collect();
-        (domain.is_some() || range.is_some() || !checks.is_empty()).then(|| Self {
-            decl: decl.clone(),
-            domain,
-            range,
-            checks,
-        })
+        let cardinality = CardinalityRule::build(decl);
+        (domain.is_some() || range.is_some() || !checks.is_empty() || cardinality.is_some()).then(
+            || Self {
+                decl: decl.clone(),
+                domain,
+                range,
+                checks,
+                cardinality,
+            },
+        )
     }
 
     /// Whether an endpoint rule (domain or range) binds this type.
     pub(crate) fn has_endpoint_rules(&self) -> bool {
         self.domain.is_some() || self.range.is_some()
+    }
+
+    /// Whether an enforced maximum cardinality binds this type.
+    pub(crate) fn has_cardinality(&self) -> bool {
+        self.cardinality.is_some()
+    }
+
+    /// The maximum-cardinality verdict for a source of `source_type` that
+    /// holds `count` relationships of `rel_type`.
+    pub(crate) fn judge_cardinality(
+        &self,
+        store: &OntologyStore,
+        rel_type: &str,
+        source_type: &str,
+        count: u64,
+        tally: &mut Tally,
+    ) {
+        if let Some(rule) = &self.cardinality {
+            rule.judge(store, rel_type, source_type, count, tally);
+        }
     }
 
     /// The property names the enforced property checks read.
@@ -288,6 +316,7 @@ impl DirGraph {
                 (InternedKey, InternedKey, InternedKey),
                 EndpointVerdicts,
             > = HashMap::new();
+            let mut sources: HashSet<(InternedKey, petgraph::graph::NodeIndex)> = HashSet::new();
             for edge in touched {
                 let (Some(weight), Some((source, target))) = (
                     graph.graph.edge_weight(edge),
@@ -302,6 +331,9 @@ impl DirGraph {
                 let Some(rules) = rules else {
                     continue;
                 };
+                if rules.has_cardinality() {
+                    sources.insert((rel_key, source));
+                }
                 let rel_type = graph.interner.resolve(rel_key);
                 let (Some(source_key), Some(target_key)) = (
                     graph.graph.node_type_of(source),
@@ -341,6 +373,9 @@ impl DirGraph {
                 if tally.is_refused() {
                     break;
                 }
+            }
+            if !tally.is_refused() {
+                cardinality_gate::judge_sources(graph, &sources, &rules_by_type, tally);
             }
         }
         match tally.take_refusal() {

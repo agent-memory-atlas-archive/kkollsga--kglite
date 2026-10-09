@@ -19,7 +19,7 @@ pub mod maintain;
 mod ontology_frame_gate;
 mod pending_edges;
 pub mod property_updates;
-mod rel_constraint_gate;
+pub(crate) mod rel_constraint_gate;
 pub mod set_ops;
 pub mod subgraph;
 pub mod subgraph_streaming;

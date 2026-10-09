@@ -56,7 +56,7 @@
 //! ```
 //!
 //! `rule` is `required_property`, `property_type`, `closed_labels`, `domain`,
-//! `range` (or `declaration` for a refused declaration with no entries);
+//! `range`, `cardinality` (or `declaration` for a refused declaration with no entries);
 //! `type` and `property` are JSON-quoted strings. The prefix is present on
 //! every `OntologyViolation` FAILURE and on no other; a refused declaration's
 //! per-rule breakdown stays in the readable message after it.

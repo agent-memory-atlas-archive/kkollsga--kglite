@@ -288,8 +288,13 @@ g.cypher("CREATE (:Person {id: 2})")                # OntologyViolationError
 | `closed_labels` | top-level `closed_labels: True` | A node whose primary label is not a declared class. |
 | `domain` | relationship `domain` | An edge whose source primary type is not the domain. |
 | `range` | relationship `range` | An edge whose target primary type is not the range. |
+| `cardinality` | relationship `cardinality.max` with a `domain` | A source of the domain holding more outgoing edges of the type than `max`. |
 
 - A node is judged on its **primary** label only. It answers to its own class and to every declared ancestor, each at that class's severity. Secondary labels never enroll a node and `closed_labels` never reads them. Materialized (managed) labels are engine-written and are not judged.
+- `cardinality.max` counts a source's **outgoing** edges of the type, parallel edges individually, exactly as `cardinality_violation` does. It needs a `domain` and judges sources of the domain or a declared descendant.
+- A Cypher statement is judged on each touched source's stored end state. A bulk loader counts the frame's effect on each source before writing: a repeated pair under `add_connections` adds nothing, and `replace_connections` drops the source's stored edges first.
+- `cardinality.min` is a "must exist" rule and stays audit-only: it is never refused at write time, and a declaration at `error` is not refused for it.
+- Cost is the degree of each touched source. A graph with no enforced maximum pays nothing.
 - `domain` and `range` naming an abstract class widen to its declared descendants.
 - Types are permissive, exactly as the audit counts them: `float` admits integers, an unknown type name passes, and `list` checks the outer container only. For strict typing use `CREATE CONSTRAINT ... IS ::`.
 - `exempt` excuses the write as well as the audit count, under the same predicate.
@@ -311,7 +316,7 @@ N-Triples are loaded without per-row judgement. The loader is refused while any 
 
 Declaring checks stored data first, at each rule's severity:
 
-- A rule at `error` that stored data already breaks **refuses the whole declaration**. The previous ontology stays and nothing is changed.
+- A rule at `error` that stored data already breaks (for `cardinality`, a source above `max`) **refuses the whole declaration**. The previous ontology stays and nothing is changed.
 - A rule at `warn` installs, and the findings come back as warnings.
 - A rule at `advisory` costs no scan.
 - `.kgl` load and write-ahead-log replay restore an accepted declaration without re-checking it.

@@ -79,9 +79,12 @@
 //!   always wins. Resolution happens at parse time, so a persisted
 //!   declaration carries its effective severity.
 
+pub(crate) mod cardinality_gate;
 pub(crate) mod declare_check;
 pub(crate) mod edge_gate;
 pub(crate) mod node_gate;
+#[cfg(test)]
+mod ontology_cardinality_tests;
 #[cfg(test)]
 mod ontology_gate_tests;
 #[cfg(test)]

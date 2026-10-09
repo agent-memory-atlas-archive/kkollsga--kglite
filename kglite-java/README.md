@@ -778,7 +778,7 @@ Shapes worth knowing:
   contention to wait out. `WriterLease.acquire(path, Duration)` retries for you.
 - **`OntologyViolationException`** (status 22) carries the refusal as fields,
   so a caller never parses the message: `rule()` (`required_property`,
-  `property_type`, `closed_labels`, `domain` or `range`), `entity()` (`node` or
+  `property_type`, `closed_labels`, `domain`, `range` or `cardinality`), `entity()` (`node` or
   `relationship`), `entityType()`, `property()` (or `null`) and `report()` (the
   per-rule breakdown of a refused declaration; empty for a refused write).
 - **`openReadOnly(path[, mode])` writes nothing**: it loads the graph as stored

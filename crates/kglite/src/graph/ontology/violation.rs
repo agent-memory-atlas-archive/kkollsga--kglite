@@ -17,6 +17,7 @@ pub enum OntologyRule {
     ClosedLabels,
     Domain,
     Range,
+    Cardinality,
 }
 
 impl OntologyRule {
@@ -27,6 +28,7 @@ impl OntologyRule {
             OntologyRule::ClosedLabels => "closed_labels",
             OntologyRule::Domain => "domain",
             OntologyRule::Range => "range",
+            OntologyRule::Cardinality => "cardinality",
         }
     }
 }

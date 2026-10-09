@@ -58,6 +58,7 @@ use crate::datatypes::values::Value;
 use crate::datatypes::DataFrame;
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::features::temporal::{EmptyIntervals, StartKey};
+use crate::graph::ontology::cardinality_gate::{self, FrameEdges};
 use crate::graph::ontology::edge_gate::RelRules;
 use crate::graph::ontology::node_gate::Tally;
 use crate::graph::storage::interner::InternedKey;
@@ -301,7 +302,10 @@ impl ConnectionBatchGate<'_> {
             tally: Tally::default(),
         };
         self.judge_endpoints(graph, &mut plan);
-        self.run_rows(graph, &mut plan)?;
+        if !plan.names.is_empty() || plan.constrained {
+            self.run_rows(graph, &mut plan)?;
+        }
+        self.judge_cardinality(graph, &mut plan);
         graph.settle_ontology_tally(plan.tally)
     }
 
@@ -346,6 +350,31 @@ impl ConnectionBatchGate<'_> {
                 &mut plan.tally,
             );
         }
+    }
+
+    /// The maximum out-degree of each source after the frame lands.
+    fn judge_cardinality(&self, graph: &DirGraph, plan: &mut FramePlan) {
+        let Some(rules) = plan.rules.as_ref().filter(|r| r.has_cardinality()) else {
+            return;
+        };
+        // A declared temporal type never merges rows.
+        let folding = if self.start_key.is_some() {
+            RowFolding::Independent
+        } else {
+            self.folding
+        };
+        cardinality_gate::judge_frame(
+            graph,
+            rules,
+            self.connection_type,
+            &FrameEdges {
+                matched: self.matched,
+                deferred: self.deferred,
+                folding,
+                endpoint_types: self.endpoint_types,
+            },
+            &mut plan.tally,
+        );
     }
 
     fn run_rows(&self, graph: &mut DirGraph, plan: &mut FramePlan) -> Result<(), String> {

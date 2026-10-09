@@ -47,6 +47,15 @@ before upgrading.
 
 ### Added
 
+- **A declared maximum cardinality binds writes.** A relationship declaring
+  `domain` and `cardinality.max` at `warn` or `error` is judged on every
+  write: a source of the domain holding more outgoing edges of the type than
+  `max` is refused (`error`, rolled back) or reported (`warn`) with rule
+  `cardinality` on every interface. Cypher judges each touched source at
+  statement end; bulk loaders count the frame's effect before writing. Declaring
+  an `error` maximum over data already above it is refused. `cardinality.min`
+  stays audit-only. Cost is the degree of each touched source, zero when no
+  maximum is enforced.
 - **Durable sessions checkpoint on their own.** A log that grows past
   `autoCheckpointWalMib` / `auto_checkpoint_wal_mib` (default 16 MiB; `0`
   disables) is folded into the checkpoint without stopping other writers. The
