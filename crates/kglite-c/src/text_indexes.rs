@@ -90,6 +90,9 @@ pub unsafe extern "C" fn kglite_session_build_text_index(
             };
 
             let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_direct_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut working = session_state.inner.write();
             match build_text_index(&mut working, node_type, property, None) {
                 Ok(report) => {

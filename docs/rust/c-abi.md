@@ -95,6 +95,27 @@ The header exposes:
   The full write cycle is: acquire the lease → `kglite_open_or_create_graph_in_mode`
   → `kglite_session_new` → `kglite_session_execute_mut` → `kglite_session_save`
   → free the session → free the lease;
+- `kglite_open_session`, the durable open. One call takes the writer lease,
+  opens or creates the graph, and replays the write-ahead log. It returns a
+  session whose commits are logged at the chosen level.
+  - Options are a JSON object: `storage`, `durability` (`full` | `normal` |
+    `off`), `lock_timeout_ms`, `valid_time_default`, `create_if_missing`. An
+    unknown key is `INVALID_ARGUMENT`.
+  - `lock_timeout_ms = -1` takes no lease and opens read-only. Nothing is
+    created, converted, logged or written, and every write is `READ_ONLY` (24).
+  - A contended lease is `WRITER_LEASE_HELD` (102). The holder is in
+    `kglite_last_error_details_json`.
+  - The session owns the lease. `kglite_session_free` releases it.
+    `kglite_session_close` checkpoints unsaved changes first; it is idempotent
+    and the handle is still freed separately.
+  - `kglite_session_sync` flushes the log, the power-safe point at `normal`.
+    `kglite_session_checkpoint` writes the opened path unless nothing changed.
+  - Writes that bypass the log are refused with `DURABILITY_FAILED` on a logged
+    session: schema, text and vector indexes, embedding ingest. `execute_mut`,
+    `execute_mut_batch`, `create_edges_batch` and ontology declaration are
+    logged.
+  - A session from `kglite_session_new` has no log. Persist it with
+    `kglite_session_save`;
 - atomic/durable save, byte serialization, and schema JSON;
 - `kglite_session_backup`, an online single-file `.kgl` snapshot of a session's
   published graph that does not stall writers. It takes no lease and writes no
@@ -116,8 +137,9 @@ The header exposes:
   findings. After any 22, `kglite_last_error_details_json` returns the
   structured fields (`rule`, `entity`, `entity_type`, `property`, `report`) as
   JSON for the failing call on the calling thread, so a caller does not parse
-  the message. The declaration is durable once `kglite_session_save` runs: the
-  C ABI has no write-ahead log;
+  the message. The declaration is durable once it is committed to a session
+  opened by `kglite_open_session` (the write-ahead log holds it), or once
+  `kglite_session_save` runs on any other session;
 - `kglite_session_save`, the checkpoint for a graph that has been moved into a
   session. `kglite_session_new` takes ownership of the graph handle, so a graph
   mutated through `kglite_session_execute_mut` is persisted from the session
@@ -128,7 +150,12 @@ The header exposes:
   handle is consumed **only on `KGLITE_STATUS_CODE_OK`**. A failed
   `kglite_session_new` leaves ownership with the caller, who must still
   `kglite_graph_free` it;
-- session construction plus read/mutation execution with timeout/row budgets;
+- session construction plus read/mutation execution. `_opts` takes a timeout
+  and a work budget. `_ex` takes a versioned `KgliteExecuteOptions` block that
+  adds a result-row cap. The cap truncates instead of failing and reports
+  `row_limit` and `total_rows` in the result's diagnostics. The block carries
+  its own `struct_size`. The library reads only that many bytes and treats
+  later fields as zero, so a field appended later is additive;
 - read and mutation batches, including atomic edge batches;
 - JSON result metadata/rows, memory statistics, and embedder binding.
 
@@ -141,8 +168,8 @@ against this engine before it is handed one.
 
 ## Sessions and transactions
 
-Use `kglite_session_execute_read[_opts]` for reads and
-`kglite_session_execute_mut[_opts]` for auto-committed mutations. Mutation
+Use `kglite_session_execute_read[_opts|_ex]` for reads and
+`kglite_session_execute_mut[_opts|_ex]` for auto-committed mutations. Mutation
 batches commit atomically. ABI v1 does **not** expose explicit begin/commit
 transaction handles; do not invent wrapper calls such as
 `kglite_session_begin`. A future ABI revision should add them only with a real

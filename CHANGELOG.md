@@ -35,6 +35,21 @@ before upgrading.
 
 ### Added
 
+- **C ABI: durable open.** `kglite_open_session(path, options_json, ...)`
+  takes the writer lease, opens or creates the graph, replays the write-ahead
+  log and returns a session whose commits are logged at `full` (default),
+  `normal` or `off`. Options: `storage`, `durability`, `lock_timeout_ms`,
+  `valid_time_default`, `create_if_missing`. `lock_timeout_ms = -1` opens
+  read-only: nothing is created, converted, logged or written, and every write
+  returns status 24. A contended lease returns status 102 with the holder in
+  `kglite_last_error_details_json`. The session owns the lease:
+  `kglite_session_free` releases it and `kglite_session_close` checkpoints
+  unsaved changes first.
+- **C ABI: `kglite_session_sync`, `kglite_session_checkpoint`.** `sync` flushes
+  the log; `checkpoint` writes the opened path unless nothing changed.
+- **C ABI: `kglite_session_execute_read_ex` / `_mut_ex`.** A versioned
+  `KgliteExecuteOptions` block (timeout, work budget, result-row cap). The row
+  cap truncates and reports `row_limit` and `total_rows` in the diagnostics.
 - **Node.js binding: `validTimeDefault` open option and JavaScript embedders.**
   `open(path, { validTimeDefault: 'today' | 'all' | 'YYYY-MM-DD' })` sets the
   instant an unprefixed statement reads on a graph with declared validity

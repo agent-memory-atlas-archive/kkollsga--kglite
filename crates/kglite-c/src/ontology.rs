@@ -106,6 +106,9 @@ pub unsafe extern "C" fn kglite_session_define_ontology(
                 }
             };
             let state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = state.guard_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut tx = state.inner.begin();
             let working = match tx.working_mut() {
                 Ok(working) => working,
@@ -176,6 +179,9 @@ pub unsafe extern "C" fn kglite_session_clear_ontology(
                 return KgliteStatusCode::NullPointer;
             }
             let state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = state.guard_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut tx = state.inner.begin();
             let working = match tx.working_mut() {
                 Ok(working) => working,

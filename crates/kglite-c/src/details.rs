@@ -60,6 +60,14 @@ pub(crate) fn record(error: &KgError) {
             "property": property,
             "report": report_json(report),
         }),
+        KgError::WriterLeaseHeld { message, holder } => serde_json::json!({
+            "code": "WriterLeaseHeld",
+            "pid": holder.pid,
+            "since": holder.since,
+            "label": holder.label,
+            "self": holder.is_self(),
+            "message": message,
+        }),
         _ => return,
     };
     LAST.with(|slot| *slot.borrow_mut() = Some(json.to_string()));
@@ -68,7 +76,12 @@ pub(crate) fn record(error: &KgError) {
 /// Structured detail of the most recent failed call **on the calling thread**,
 /// as an owned JSON object, or null when that call had none (or succeeded).
 ///
-/// Today only `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries detail:
+/// Two codes carry detail. `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` (from
+/// [`kglite_open_session`](crate::kglite_open_session)) returns
+/// `{"code":"WriterLeaseHeld","pid","since","label","self","message"}`, where
+/// `pid`, `since` and `label` are null when the holder's record could not be
+/// read or published none, and `self` is true when the holder is the calling
+/// process. `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries:
 /// `{"code":"OntologyViolation","rule","entity","entity_type","property",
 /// "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
 /// `required_property` / `property_type` / `closed_labels` / `domain` /

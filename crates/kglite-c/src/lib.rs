@@ -20,6 +20,8 @@
 //! - [`graph`] — `KgliteGraph` opaque handle + load/save/free.
 //! - [`open`] — `KgliteWriterLease` opaque handle + mode-aware
 //!   open-or-create.
+//! - [`lifecycle`] — `kglite_open_session` (durable open with lease and
+//!   recovery), `sync`, `checkpoint` and `close`.
 //! - [`session`] — `KgliteSession` opaque handle + execute_read /
 //!   execute_mut.
 //! - [`embeddings`] — packed-float embedding ingest + vector-index build on
@@ -42,6 +44,7 @@ pub mod embeddings;
 pub mod export;
 mod ffi;
 pub mod graph;
+pub mod lifecycle;
 pub mod ontology;
 pub mod open;
 pub mod result;
@@ -62,6 +65,7 @@ pub use embedder::*;
 pub use embeddings::*;
 pub use export::*;
 pub use graph::*;
+pub use lifecycle::*;
 pub use ontology::*;
 pub use open::*;
 pub use result::*;

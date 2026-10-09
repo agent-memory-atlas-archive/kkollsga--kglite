@@ -50,16 +50,29 @@ pub(crate) struct SessionState {
     /// when a result is created, so a result keeps the encoding in force at
     /// its own execution.
     pub(crate) tagged_floats: AtomicBool,
+    /// Path, read-only flag and writer lease of a session opened through
+    /// [`kglite_open_session`](crate::kglite_open_session); inert for a
+    /// session wrapped around a graph handle. Declared last so the session
+    /// (and its write-ahead log) drops before the lease is released.
+    pub(crate) life: crate::lifecycle::Lifecycle,
 }
 
 impl SessionState {
     fn into_handle(session: Session) -> *mut KgliteSession {
-        let boxed = Box::new(SessionState {
+        Self::with_lifecycle(session, crate::lifecycle::Lifecycle::plain()).into_handle_boxed()
+    }
+
+    pub(crate) fn with_lifecycle(session: Session, life: crate::lifecycle::Lifecycle) -> Self {
+        SessionState {
             inner: session,
             embedder: Mutex::new(None),
             tagged_floats: AtomicBool::new(false),
-        });
-        Box::into_raw(boxed).cast::<KgliteSession>()
+            life,
+        }
+    }
+
+    pub(crate) fn into_handle_boxed(self) -> *mut KgliteSession {
+        Box::into_raw(Box::new(self)).cast::<KgliteSession>()
     }
 
     pub(crate) unsafe fn from_handle<'a>(handle: *const KgliteSession) -> &'a SessionState {
@@ -252,6 +265,55 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
     out_result: *mut *mut KgliteCypherResult,
     out_error_msg: *mut *const c_char,
 ) -> KgliteStatusCode {
+    let limits = RunLimits {
+        timeout_ms,
+        max_work_units,
+        row_limit: None,
+    };
+    unsafe {
+        run_read(
+            session,
+            query,
+            params_json,
+            limits,
+            out_result,
+            out_error_msg,
+        )
+    }
+}
+
+/// Per-call budgets shared by the `_opts` and `_ex` execute symbols. `0` in
+/// `timeout_ms` / `max_work_units` disables that budget; `row_limit` is a
+/// retention cap, where `Some(0)` is legal and keeps no rows.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RunLimits {
+    pub(crate) timeout_ms: u64,
+    pub(crate) max_work_units: u64,
+    pub(crate) row_limit: Option<u64>,
+}
+
+impl RunLimits {
+    fn apply(self, opts: &mut ExecuteOptions<'_>) {
+        if self.timeout_ms > 0 {
+            opts.set_timeout_ms(Some(self.timeout_ms));
+        }
+        if self.max_work_units > 0 {
+            opts.max_work_units = Some(self.max_work_units as usize);
+        }
+        if let Some(limit) = self.row_limit {
+            opts.row_limit = Some(limit as usize);
+        }
+    }
+}
+
+unsafe fn run_read(
+    session: *const KgliteSession,
+    query: *const c_char,
+    params_json: *const c_char,
+    limits: RunLimits,
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
     crate::ffi::status_boundary(
         out_error_msg,
         || crate::ffi::init_out(out_result, std::ptr::null_mut()),
@@ -271,41 +333,39 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
             let session_state = unsafe { SessionState::from_handle(session) };
             let snapshot = session_state.inner.snapshot();
             let mut opts = session_state.make_opts(&params);
-            if timeout_ms > 0 {
-                opts.set_timeout_ms(Some(timeout_ms));
-            }
-            if max_work_units > 0 {
-                opts.max_work_units = Some(max_work_units as usize);
-            }
+            limits.apply(&mut opts);
 
-            match execute_read(&snapshot, query_str, &opts) {
-                Ok(outcome) => {
-                    unsafe {
-                        *out_result =
-                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
-                    }
-                    if !out_error_msg.is_null() {
-                        unsafe {
-                            *out_error_msg = std::ptr::null();
-                        }
-                    }
-                    KgliteStatusCode::Ok
-                }
-                Err(err) => {
-                    unsafe {
-                        *out_result = std::ptr::null_mut();
-                    }
-                    let code = KgliteStatusCode::from_kg_error(&err);
-                    if !out_error_msg.is_null() {
-                        unsafe {
-                            *out_error_msg = alloc_c_string(&err.to_string());
-                        }
-                    }
-                    code
-                }
-            }
+            let outcome = execute_read(&snapshot, query_str, &opts);
+            finish_query(session_state, outcome, out_result, out_error_msg)
         },
     )
+}
+
+/// Publish one query outcome to the caller's out-slots.
+fn finish_query(
+    session_state: &SessionState,
+    outcome: Result<kglite::api::session::ExecuteOutcome, kglite::api::KgError>,
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    match outcome {
+        Ok(outcome) => {
+            unsafe {
+                *out_result =
+                    ResultState::into_handle(outcome.result, session_state.tagged_floats());
+            }
+            KgliteStatusCode::Ok
+        }
+        Err(err) => {
+            let code = KgliteStatusCode::from_kg_error(&err);
+            if !out_error_msg.is_null() {
+                unsafe {
+                    *out_error_msg = alloc_c_string(&err.to_string());
+                }
+            }
+            code
+        }
+    }
 }
 
 /// Run a mutating Cypher query. Same shape as
@@ -362,6 +422,151 @@ pub unsafe extern "C" fn kglite_session_execute_mut_opts(
     }
 }
 
+/// Execution options for [`kglite_session_execute_read_ex`] and
+/// [`kglite_session_execute_mut_ex`]. A versioned struct: the caller sets
+/// `struct_size` to `sizeof(KgliteExecuteOptions)` as it was compiled, and the
+/// library reads only that many bytes, treating every field beyond them as
+/// zero. A field appended in a later release is therefore an additive change —
+/// an older caller's struct keeps meaning exactly what it did. Zero-initialise
+/// the struct, then set `struct_size` and the fields you want.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct KgliteExecuteOptions {
+    /// `sizeof(KgliteExecuteOptions)` in the caller's build. Must cover at
+    /// least this field.
+    pub struct_size: usize,
+    /// Wall-clock budget in milliseconds; past it the query fails with
+    /// `KGLITE_STATUS_CODE_CYPHER_TIMEOUT`. `0` = no deadline.
+    pub timeout_ms: u64,
+    /// Work budget, as in [`kglite_session_execute_read_opts`]: exceeding it
+    /// fails the query. `0` = no explicit budget.
+    pub max_work_units: u64,
+    /// Result-row retention cap, honoured only when `flags` bit 0 (value `1`)
+    /// is set. The query still runs to completion; only
+    /// the rows kept stop at the cap, and the truncation is reported in the
+    /// result's diagnostics JSON (`row_limit`, `total_rows`, a `warnings`
+    /// entry). `0` with the flag set keeps no rows and reports the total.
+    pub row_limit: u64,
+    /// Bit set. Bit 0 (`1`): apply `row_limit`.
+    pub flags: u32,
+    /// Reserved; set to zero.
+    pub reserved: u32,
+}
+
+/// `KgliteExecuteOptions.flags` bit 0: apply `row_limit`. Not exported to the
+/// header (cbindgen is configured for no constants); the field doc names the
+/// value.
+const EXECUTE_ROW_LIMIT: u32 = 1;
+
+fn read_execute_options(options: *const KgliteExecuteOptions) -> Result<RunLimits, String> {
+    if options.is_null() {
+        return Ok(RunLimits::default());
+    }
+    let declared = unsafe { std::ptr::addr_of!((*options).struct_size).read_unaligned() };
+    if declared < std::mem::size_of::<usize>() {
+        return Err("KgliteExecuteOptions.struct_size is smaller than its first field".to_string());
+    }
+    // SAFETY: zero is a valid bit pattern for every field.
+    let mut local: KgliteExecuteOptions = unsafe { std::mem::zeroed() };
+    let take = declared.min(std::mem::size_of::<KgliteExecuteOptions>());
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            options.cast::<u8>(),
+            std::ptr::addr_of_mut!(local).cast::<u8>(),
+            take,
+        );
+    }
+    Ok(RunLimits {
+        timeout_ms: local.timeout_ms,
+        max_work_units: local.max_work_units,
+        row_limit: (local.flags & EXECUTE_ROW_LIMIT != 0).then_some(local.row_limit),
+    })
+}
+
+/// [`kglite_session_execute_read`] with a [`KgliteExecuteOptions`] block:
+/// timeout, work budget and a result-row cap that truncates with a report
+/// rather than failing. `options` may be null (no limits). A block whose
+/// `struct_size` is smaller than its first field is
+/// `KGLITE_STATUS_CODE_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// As [`kglite_session_execute_read`]; `options` null or a valid pointer to at
+/// least `options->struct_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn kglite_session_execute_read_ex(
+    session: *const KgliteSession,
+    query: *const c_char,
+    params_json: *const c_char,
+    options: *const KgliteExecuteOptions,
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    match read_execute_options(options) {
+        Ok(limits) => unsafe {
+            run_read(
+                session,
+                query,
+                params_json,
+                limits,
+                out_result,
+                out_error_msg,
+            )
+        },
+        Err(message) => unsafe { reject_options(out_result, out_error_msg, &message) },
+    }
+}
+
+/// [`kglite_session_execute_mut`] with a [`KgliteExecuteOptions`] block. The
+/// row cap bounds only the rows the trailing `RETURN` reports; every write
+/// still happens. On a session opened by
+/// [`kglite_open_session`](crate::kglite_open_session) the statement is
+/// write-ahead logged at the session's durability level, and a read-only or
+/// closed session refuses it (`KGLITE_STATUS_CODE_READ_ONLY` for the former).
+///
+/// # Safety
+///
+/// As [`kglite_session_execute_mut`]; `options` as for
+/// [`kglite_session_execute_read_ex`].
+#[no_mangle]
+pub unsafe extern "C" fn kglite_session_execute_mut_ex(
+    session: *mut KgliteSession,
+    query: *const c_char,
+    params_json: *const c_char,
+    options: *const KgliteExecuteOptions,
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    match read_execute_options(options) {
+        Ok(limits) => unsafe {
+            run_mut(
+                session,
+                query,
+                params_json,
+                limits,
+                out_result,
+                out_error_msg,
+            )
+        },
+        Err(message) => unsafe { reject_options(out_result, out_error_msg, &message) },
+    }
+}
+
+unsafe fn reject_options(
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+    message: &str,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || crate::ffi::init_out(out_result, std::ptr::null_mut()),
+        || {
+            crate::ffi::init_out(out_error_msg, alloc_c_string(message));
+            KgliteStatusCode::InvalidArgument
+        },
+    )
+}
+
 // The arity is the published C ABI's: this is the shared body of
 // kglite_session_execute_mut and _mut_opts, so its parameters are exactly the
 // wider exported signature and cannot be grouped into a struct without
@@ -373,6 +578,35 @@ unsafe fn execute_mut_impl(
     params_json: *const c_char,
     timeout_ms: u64,
     max_work_units: u64,
+    out_result: *mut *mut KgliteCypherResult,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    let limits = RunLimits {
+        timeout_ms,
+        max_work_units,
+        row_limit: None,
+    };
+    unsafe {
+        run_mut(
+            session,
+            query,
+            params_json,
+            limits,
+            out_result,
+            out_error_msg,
+        )
+    }
+}
+
+/// Attempts a durable session's auto-committed statement makes while its
+/// commit loses an optimistic race against another writer.
+const DURABLE_WRITE_ATTEMPTS: u32 = 3;
+
+unsafe fn run_mut(
+    session: *mut KgliteSession,
+    query: *const c_char,
+    params_json: *const c_char,
+    limits: RunLimits,
     out_result: *mut *mut KgliteCypherResult,
     out_error_msg: *mut *const c_char,
 ) -> KgliteStatusCode {
@@ -396,51 +630,30 @@ unsafe fn execute_mut_impl(
             // shared here: the mutation is serialized by the Session's own
             // lock, taken below.
             let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut opts = session_state.make_opts(&params);
-            if timeout_ms > 0 {
-                opts.set_timeout_ms(Some(timeout_ms));
-            }
-            if max_work_units > 0 {
-                opts.max_work_units = Some(max_work_units as usize);
-            }
+            limits.apply(&mut opts);
 
-            // Hold the core Session write guard across execution. This serializes the
-            // complete mutation (preventing last-writer-loses races) and reaches the
-            // unique-owner path without the old redundant working-copy clone.
-            let mut working = session_state.inner.write();
-            let exec_result = execute_mut(&mut working, query_str, &opts);
-
-            match exec_result {
-                Ok(outcome) => {
-                    unsafe {
-                        *out_result =
-                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
-                    }
-                    if !out_error_msg.is_null() {
-                        unsafe {
-                            *out_error_msg = std::ptr::null();
-                        }
-                    }
-                    KgliteStatusCode::Ok
-                }
-                Err(err) => {
-                    // `execute_mut` rolled its own statement checkpoint back
-                    // before returning, so the graph under the guard is
-                    // unmutated. The guard has no commit step of its own —
-                    // anything that reached it is already in the session's
-                    // stored Arc.
-                    unsafe {
-                        *out_result = std::ptr::null_mut();
-                    }
-                    let code = KgliteStatusCode::from_kg_error(&err);
-                    if !out_error_msg.is_null() {
-                        unsafe {
-                            *out_error_msg = alloc_c_string(&err.to_string());
-                        }
-                    }
-                    code
-                }
-            }
+            let outcome = if session_state.inner.durability().is_some() {
+                // A durable session's mutations must reach its write-ahead
+                // log, which only `begin`/`commit` writes; the direct write
+                // guard below would latch the log as diverged.
+                session_state
+                    .inner
+                    .execute_auto_commit(query_str, &opts, DURABLE_WRITE_ATTEMPTS)
+            } else {
+                // Hold the core Session write guard across execution. This
+                // serializes the complete mutation (preventing last-writer-loses
+                // races) and reaches the unique-owner path without the old
+                // redundant working-copy clone. `execute_mut` rolls its own
+                // statement checkpoint back on error, so the graph under the
+                // guard is unmutated on failure.
+                let mut working = session_state.inner.write();
+                execute_mut(&mut working, query_str, &opts)
+            };
+            finish_query(session_state, outcome, out_result, out_error_msg)
         },
     )
 }
@@ -562,19 +775,27 @@ pub unsafe extern "C" fn kglite_session_execute_mut_batch(
                 Err(error) => return report_query_param_error(error, out_error_msg),
             };
             let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
+            let run_all = |working: &mut kglite::api::DirGraph| {
+                let mut results = Vec::with_capacity(queries.len());
+                for (query, params) in &queries {
+                    let opts = session_state.make_opts(params);
+                    let outcome = execute_mut(working, query, &opts).map_err(Box::new)?;
+                    results.push(result_to_json_object(
+                        &outcome.result,
+                        session_state.tagged_floats(),
+                    ));
+                }
+                Ok(results)
+            };
             let transaction: Result<Vec<serde_json::Value>, Box<kglite::api::KgError>> =
-                session_state.inner.transact(|working| {
-                    let mut results = Vec::with_capacity(queries.len());
-                    for (query, params) in &queries {
-                        let opts = session_state.make_opts(params);
-                        let outcome = execute_mut(working, query, &opts).map_err(Box::new)?;
-                        results.push(result_to_json_object(
-                            &outcome.result,
-                            session_state.tagged_floats(),
-                        ));
-                    }
-                    Ok(results)
-                });
+                if session_state.inner.durability().is_some() {
+                    crate::lifecycle::durable_transaction(&session_state.inner, run_all, Box::new)
+                } else {
+                    session_state.inner.transact(run_all)
+                };
             let results = match transaction {
                 Ok(results) => results,
                 Err(err) => {
@@ -657,6 +878,9 @@ pub unsafe extern "C" fn kglite_create_edges_batch(
                 Err(rc) => return rc,
             };
             let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             // Route through `Session::transact` so the whole batch runs
             // under the Session write lock: serialized with concurrent
             // execute_mut writers (no last-writer-wins Arc-swap losing
@@ -664,13 +888,21 @@ pub unsafe extern "C" fn kglite_create_edges_batch(
             // no partial writes.
             // A refusal by a declared constraint is taken off the fork before
             // `transact` drops it, so it surfaces as `ConstraintViolation`.
+            let add_edges = |working: &mut kglite::api::DirGraph| {
+                add_edges_from_specs(working, specs).map_err(|message| {
+                    let typed = working.take_constraint_error(&message).map(Box::new);
+                    (message, typed)
+                })
+            };
             let transaction: Result<_, (String, Option<Box<kglite::api::KgError>>)> =
-                session_state.inner.transact(|working| {
-                    add_edges_from_specs(working, specs).map_err(|message| {
-                        let typed = working.take_constraint_error(&message).map(Box::new);
-                        (message, typed)
+                if session_state.inner.durability().is_some() {
+                    // Logged: a durable session's edges must reach its log.
+                    crate::lifecycle::durable_transaction(&session_state.inner, add_edges, |e| {
+                        (e.to_string(), Some(Box::new(e)))
                     })
-                });
+                } else {
+                    session_state.inner.transact(add_edges)
+                };
             match transaction {
                 Ok(report) => {
                     let json = serde_json::json!({
@@ -932,7 +1164,7 @@ impl SessionState {
     /// defaults with the streaming aggregate pipeline on (its rows are
     /// materialized too), plus the session's embedder. Centralized so the
     /// read / mut / batch paths can't drift on per-call option defaults.
-    fn make_opts<'a>(&self, params: &'a HashMap<String, Value>) -> ExecuteOptions<'a> {
+    pub(crate) fn make_opts<'a>(&self, params: &'a HashMap<String, Value>) -> ExecuteOptions<'a> {
         let mut opts = ExecuteOptions::eager(params);
         opts.streaming = true;
         opts.embedder = self

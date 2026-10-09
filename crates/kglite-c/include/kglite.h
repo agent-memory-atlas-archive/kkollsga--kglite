@@ -250,6 +250,49 @@ typedef struct KgliteCypherResult {
 } KgliteCypherResult;
 
 /**
+ * Execution options for [`kglite_session_execute_read_ex`] and
+ * [`kglite_session_execute_mut_ex`]. A versioned struct: the caller sets
+ * `struct_size` to `sizeof(KgliteExecuteOptions)` as it was compiled, and the
+ * library reads only that many bytes, treating every field beyond them as
+ * zero. A field appended in a later release is therefore an additive change —
+ * an older caller's struct keeps meaning exactly what it did. Zero-initialise
+ * the struct, then set `struct_size` and the fields you want.
+ */
+typedef struct KgliteExecuteOptions {
+  /**
+   * `sizeof(KgliteExecuteOptions)` in the caller's build. Must cover at
+   * least this field.
+   */
+  uintptr_t struct_size;
+  /**
+   * Wall-clock budget in milliseconds; past it the query fails with
+   * `KGLITE_STATUS_CODE_CYPHER_TIMEOUT`. `0` = no deadline.
+   */
+  uint64_t timeout_ms;
+  /**
+   * Work budget, as in [`kglite_session_execute_read_opts`]: exceeding it
+   * fails the query. `0` = no explicit budget.
+   */
+  uint64_t max_work_units;
+  /**
+   * Result-row retention cap, honoured only when `flags` bit 0 (value `1`)
+   * is set. The query still runs to completion; only
+   * the rows kept stop at the cap, and the truncation is reported in the
+   * result's diagnostics JSON (`row_limit`, `total_rows`, a `warnings`
+   * entry). `0` with the flag set keeps no rows and reports the total.
+   */
+  uint64_t row_limit;
+  /**
+   * Bit set. Bit 0 (`1`): apply `row_limit`.
+   */
+  uint32_t flags;
+  /**
+   * Reserved; set to zero.
+   */
+  uint32_t reserved;
+} KgliteExecuteOptions;
+
+/**
  * Return the C ABI version this library was built against.
  * Bindings should call this on startup and refuse to proceed if
  * the major version doesn't match what they were compiled
@@ -306,7 +349,12 @@ typedef struct KgliteCypherResult {
  * Structured detail of the most recent failed call **on the calling thread**,
  * as an owned JSON object, or null when that call had none (or succeeded).
  *
- * Today only `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries detail:
+ * Two codes carry detail. `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` (from
+ * [`kglite_open_session`](crate::kglite_open_session)) returns
+ * `{"code":"WriterLeaseHeld","pid","since","label","self","message"}`, where
+ * `pid`, `since` and `label` are null when the holder's record could not be
+ * read or published none, and `self` is true when the holder is the calling
+ * process. `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries:
  * `{"code":"OntologyViolation","rule","entity","entity_type","property",
  * "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
  * `required_property` / `property_type` / `closed_labels` / `domain` /
@@ -1098,6 +1146,165 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
                                             const char **out_error_msg);
 
 /**
+ * Open the graph at `path` as a durable session: take the single-writer
+ * lease, open (or create) the graph, recover from the write-ahead log, and
+ * return a session whose commits are logged at the chosen level.
+ *
+ * This is the one-call open for a binding that serves a path. It is the
+ * composition `kglite_writer_lease_acquire` → `kglite_open_or_create_graph_in_mode`
+ * → `kglite_session_new`, with the log opened and replayed in the right
+ * order, so use it instead of that sequence whenever commits must survive a
+ * crash.
+ *
+ * `options_json` is null, `"{}"`, or a JSON object; an unknown key is
+ * `KGLITE_STATUS_CODE_INVALID_ARGUMENT`, so a misspelt option never silently
+ * does nothing. Keys:
+ *
+ * - `"storage"`: `"memory"` (alias `"default"`), `"mapped"` or `"disk"`.
+ *   Creates a missing path in that mode and converts an existing graph to it
+ *   (reported in `converted_from`). Absent: an existing graph keeps the mode
+ *   its checkpoint recorded and a created one is `"memory"`.
+ * - `"durability"`: `"full"` (default; every commit is on stable storage when
+ *   the call returns), `"normal"` (the log is written but flushed only by
+ *   [`kglite_session_sync`] or a checkpoint) or `"off"` (no log; changes
+ *   persist only through [`kglite_session_checkpoint`], [`kglite_session_save`]
+ *   or [`kglite_session_close`]). A disk-mode graph has no logical log: left
+ *   at the default it runs at `"off"` and reports `degraded_from`; asked for
+ *   explicitly it is an error.
+ * - `"lock_timeout_ms"`: how long to retry a contended lease. `0` (default)
+ *   fails fast. **`-1` takes no lease and opens read-only**: the last
+ *   checkpoint is loaded with nothing created, converted, logged or written,
+ *   every write is `KGLITE_STATUS_CODE_READ_ONLY`, and `"storage"`,
+ *   `"create_if_missing"` and a logging `"durability"` are refused.
+ * - `"valid_time_default"`: `"today"` (default), `"all"` or a `YYYY-MM-DD`
+ *   date; the instant unprefixed statements read on a graph that declares
+ *   validity intervals.
+ * - `"create_if_missing"`: boolean, default `false`. A missing path is
+ *   `KGLITE_STATUS_CODE_FILE_NOT_FOUND` unless this is true, so a typo'd path
+ *   never becomes an empty database.
+ *
+ * On success `out_info_json` (nullable) is an owned JSON object: `path`,
+ * `read_only`, `created`, `storage` (the mode now running), `durability`
+ * (the level actually in force), `degraded_from` (the requested level when it
+ * was degraded to `"off"`, else null), `converted_from` (null when nothing was
+ * converted) and `advisories` (`[{code, message, affected}]`, such as a
+ * quarantined log or a saved torn tail an operator should read). Free it with
+ * [`kglite_free_string`](crate::kglite_free_string).
+ *
+ * A contended lease returns `KGLITE_STATUS_CODE_WRITER_LEASE_HELD`; the holder
+ * is in the message and, as JSON, in `kglite_last_error_details_json`.
+ *
+ * **Ownership.** The session owns the lease. [`kglite_session_free`] releases
+ * it (the log already holds every logged commit); [`kglite_session_close`]
+ * first checkpoints unsaved changes, then releases it. A binding ties one of
+ * them to its deterministic teardown: a never-freed session holds the lease
+ * until the process exits.
+ *
+ * Mutations through [`kglite_session_execute_mut`] and the `_opts`/`_ex`
+ * variants, `kglite_session_execute_mut_batch`, `kglite_create_edges_batch`
+ * and ontology declaration are logged. Schema, text-index and embedding
+ * ingest calls bypass the log and are refused with
+ * `KGLITE_STATUS_CODE_DURABILITY_FAILED` on a session whose durability is not
+ * `"off"`; checkpoint, or open with `"durability":"off"`, to use them.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `path` or `out_session` is null
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `path` or `options_json` isn't UTF-8
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — malformed or unknown option, or a
+ *   conversion that cannot happen in place
+ * - `KGLITE_STATUS_CODE_FILE_NOT_FOUND` — missing path without `create_if_missing`
+ * - `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` — another writer holds the path
+ * - `KGLITE_STATUS_CODE_FILE_FORMAT` / `KGLITE_STATUS_CODE_FILE_IO` — as
+ *   [`kglite_load_file`](crate::kglite_load_file); a log that cannot be
+ *   replayed is `FILE_IO`
+ *
+ * # Safety
+ *
+ * `path` must be a null-terminated UTF-8 string; `options_json` null or the
+ * same; `out_session` a valid writable slot; `out_info_json` and
+ * `out_error_msg` null or valid writable slots.
+ */
+
+KgliteStatusCode kglite_open_session(const char *path,
+                                     const char *options_json,
+                                     struct KgliteSession **out_session,
+                                     const char **out_info_json,
+                                     const char **out_error_msg);
+
+/**
+ * Flush the write-ahead log to stable storage — the power-safe point at
+ * durability `"normal"` (a no-op at `"full"`, where every commit already is).
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` is null
+ * - `KGLITE_STATUS_CODE_READ_ONLY` — the session is read-only
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the session has no write-ahead log
+ *   (not opened by [`kglite_open_session`], or durability `"off"`); use
+ *   [`kglite_session_checkpoint`] instead
+ * - `KGLITE_STATUS_CODE_DURABILITY_FAILED` — the flush failed, or direct
+ *   writes have left the log not describing the graph
+ *
+ * # Safety
+ *
+ * `session` must be a valid session pointer not yet freed; `out_error_msg`
+ * null or a valid writable slot.
+ */
+
+KgliteStatusCode kglite_session_sync(const struct KgliteSession *session,
+                                     const char **out_error_msg);
+
+/**
+ * Write a checkpoint of the session to the path it was opened from, unless
+ * nothing changed since this handle's last one. The first call always writes.
+ * A durable session's checkpoint also truncates its log.
+ *
+ * `out_written` (nullable) is set to 1 when a file was written and 0 when the
+ * graph was unchanged; `out_version` (nullable) to the graph version
+ * checkpointed. A failed write changes neither and can be retried.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` is null
+ * - `KGLITE_STATUS_CODE_READ_ONLY` — the session is read-only
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the session was not opened by
+ *   [`kglite_open_session`] (use [`kglite_session_save`] with a path), or is closed
+ * - `KGLITE_STATUS_CODE_FILE_IO` — the write failed
+ *
+ * # Safety
+ *
+ * `session` must be a valid session pointer not yet freed; the out pointers
+ * null or valid writable slots.
+ */
+
+KgliteStatusCode kglite_session_checkpoint(struct KgliteSession *session,
+                                           uint8_t *out_written,
+                                           uint64_t *out_version,
+                                           const char **out_error_msg);
+
+/**
+ * Checkpoint unsaved changes, then release the writer lease. Idempotent: a
+ * second call returns `KGLITE_STATUS_CODE_OK` and does nothing.
+ *
+ * Mirrors the Node binding's `close()`. A read-only session, and a session not
+ * opened by [`kglite_open_session`], skips the checkpoint. If the checkpoint
+ * fails the call returns `KGLITE_STATUS_CODE_FILE_IO` and the session stays
+ * open with the lease held, so the caller can retry rather than lose the
+ * changes. After a successful close every write is refused
+ * (`KGLITE_STATUS_CODE_INVALID_ARGUMENT`, "this session is closed"); reads of
+ * the in-memory graph still work. The handle is **not** freed — call
+ * [`kglite_session_free`] afterwards. Do not call it concurrently with writes
+ * on the same session.
+ *
+ * # Safety
+ *
+ * `session` must be a valid session pointer not yet freed; `out_error_msg`
+ * null or a valid writable slot.
+ */
+ KgliteStatusCode kglite_session_close(struct KgliteSession *session, const char **out_error_msg);
+
+/**
  * Declare the session graph's ontology from a JSON document.
  *
  * `ontology_json` uses the same dialect as the Python wheel's
@@ -1645,6 +1852,47 @@ KgliteStatusCode kglite_session_execute_mut_opts(struct KgliteSession *session,
                                                  uint64_t max_work_units,
                                                  struct KgliteCypherResult **out_result,
                                                  const char **out_error_msg);
+
+/**
+ * [`kglite_session_execute_read`] with a [`KgliteExecuteOptions`] block:
+ * timeout, work budget and a result-row cap that truncates with a report
+ * rather than failing. `options` may be null (no limits). A block whose
+ * `struct_size` is smaller than its first field is
+ * `KGLITE_STATUS_CODE_INVALID_ARGUMENT`.
+ *
+ * # Safety
+ *
+ * As [`kglite_session_execute_read`]; `options` null or a valid pointer to at
+ * least `options->struct_size` readable bytes.
+ */
+
+KgliteStatusCode kglite_session_execute_read_ex(const struct KgliteSession *session,
+                                                const char *query,
+                                                const char *params_json,
+                                                const struct KgliteExecuteOptions *options,
+                                                struct KgliteCypherResult **out_result,
+                                                const char **out_error_msg);
+
+/**
+ * [`kglite_session_execute_mut`] with a [`KgliteExecuteOptions`] block. The
+ * row cap bounds only the rows the trailing `RETURN` reports; every write
+ * still happens. On a session opened by
+ * [`kglite_open_session`](crate::kglite_open_session) the statement is
+ * write-ahead logged at the session's durability level, and a read-only or
+ * closed session refuses it (`KGLITE_STATUS_CODE_READ_ONLY` for the former).
+ *
+ * # Safety
+ *
+ * As [`kglite_session_execute_mut`]; `options` as for
+ * [`kglite_session_execute_read_ex`].
+ */
+
+KgliteStatusCode kglite_session_execute_mut_ex(struct KgliteSession *session,
+                                               const char *query,
+                                               const char *params_json,
+                                               const struct KgliteExecuteOptions *options,
+                                               struct KgliteCypherResult **out_result,
+                                               const char **out_error_msg);
 
 /**
  * Run several read-only Cypher queries against a single consistent

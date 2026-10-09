@@ -323,6 +323,9 @@ unsafe fn ingest_impl(
             // `write()` is the locked receiver: same session lock as execute_mut,
             // in place in the steady state. The primitive is validate-then-apply,
             // so a failed call has written nothing and needs no rollback.
+            if let Err(refusal) = session_state.guard_direct_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut working = session_state.inner.write();
             let result = match which {
                 Ingest::Set => {
@@ -408,6 +411,9 @@ pub unsafe extern "C" fn kglite_session_build_vector_index(
             let opt = |v: usize| (v != 0).then_some(v);
 
             let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_direct_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let mut working = session_state.inner.write();
             let result = build_vector_index(
                 &mut working,
