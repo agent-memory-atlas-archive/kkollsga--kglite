@@ -1066,6 +1066,11 @@ jobs:
         with:
           shared-key: native-lifecycle-${{ matrix.os }}
           workspaces: ". -> target"
+      # Clippy otherwise runs on Linux only, so cfg(windows)/cfg(not(unix)) code
+      # (dead code under a unix-only gate, unused imports) is never linted.
+      - name: Clippy engine and Bolt server (Windows)
+        if: runner.os == 'Windows'
+        run: cargo clippy -p kglite -p kglite-bolt-server --all-targets -- -D warnings
       - name: Test core cross-process lease recovery
         run: cargo test -p kglite --lib graph::io::open::tests::crashed_process_releases_writer_lease -- --exact --nocapture
       - name: Test core lease-protected publication

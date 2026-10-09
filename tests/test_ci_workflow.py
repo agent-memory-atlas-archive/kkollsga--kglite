@@ -2624,3 +2624,12 @@ def test_node_publish_is_dispatched_by_the_release_train_on_the_tag() -> None:
         "crates/kglite-node/**",
         ".github/workflows/publish_node.yml",
     }, triggers["pull_request"]
+
+
+def test_windows_clippy_runs_in_the_native_lifecycle_job() -> None:
+    """Linux-only clippy cannot see dead code or unused imports behind a `cfg(unix)` gate."""
+    job = _ci_job("native-lifecycle-locks")
+    assert "windows-latest" in job["strategy"]["matrix"]["os"]
+    step = _step_running(job, "cargo clippy -p kglite -p kglite-bolt-server --all-targets -- -D warnings")
+    assert step.get("if") == "runner.os == 'Windows'", step
+    assert "continue-on-error" not in step and "continue-on-error" not in job
