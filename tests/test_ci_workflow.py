@@ -2633,3 +2633,8 @@ def test_windows_clippy_runs_in_the_native_lifecycle_job() -> None:
     step = _step_running(job, "cargo clippy -p kglite -p kglite-bolt-server --all-targets -- -D warnings")
     assert step.get("if") == "runner.os == 'Windows'", step
     assert "continue-on-error" not in step and "continue-on-error" not in job
+    # A minimal toolchain has no clippy: the step then fails with
+    # "'cargo-clippy.exe' is not installed", which is not a lint verdict.
+    toolchains = [s for s in _steps(job) if "rust-toolchain" in str(s.get("uses", ""))]
+    assert toolchains, "the job installs no Rust toolchain"
+    assert "clippy" in str(toolchains[0].get("with", {}).get("components", "")), toolchains[0]
