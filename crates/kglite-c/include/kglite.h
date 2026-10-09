@@ -107,6 +107,13 @@ enum KgliteStatusCode
    */
   KGLITE_STATUS_CODE_DURABILITY_FAILED = 23,
   /**
+   * A write was refused because the handle is read-only. Its own code
+   * rather than an `InvalidArgument`: the call was well-formed and the
+   * handle, not the arguments, refused it. Appended to keep the existing
+   * discriminants stable across this ABI major version.
+   */
+  KGLITE_STATUS_CODE_READ_ONLY = 24,
+  /**
    * A string argument failed UTF-8 validation. The C-side
    * caller passed a `*const c_char` whose bytes didn't decode
    * as UTF-8 — typically a corrupted buffer or a non-UTF-8
@@ -294,6 +301,23 @@ typedef struct KgliteCypherResult {
  * kglite's memory footprint in its own metrics.
  */
  struct KgMemStats kglite_memory_stats(void);
+
+/**
+ * Structured detail of the most recent failed call **on the calling thread**,
+ * as an owned JSON object, or null when that call had none (or succeeded).
+ *
+ * Today only `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries detail:
+ * `{"code":"OntologyViolation","rule","entity","entity_type","property",
+ * "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
+ * `required_property` / `property_type` / `closed_labels` / `domain` /
+ * `range`, `entity` is `node` / `relationship`, `property` may be null, and
+ * `report` is empty for a refused write and the per-rule breakdown for a
+ * refused declaration. Read it right after the failing call: every
+ * status-returning export on the same thread clears it on entry.
+ *
+ * Free the string with [`kglite_free_string`](crate::kglite_free_string).
+ */
+ const char *kglite_last_error_details_json(void);
 
 /**
  * Free an embedder handle. Idempotent on null.
@@ -1086,8 +1110,10 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
  * On success `out_warnings_json` is an owned JSON array of strings (the
  * `warn`-level findings; empty when there are none). On an
  * `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` refusal it is an owned JSON array
- * of report objects `{rule, entity, entity_type, property, count}` and
- * `out_error_msg` carries the readable report. On any other failure it is
+ * of report objects `{rule, entity, entity_type, property, count}`,
+ * `out_error_msg` carries the readable report, and
+ * [`kglite_last_error_details_json`](crate::details::kglite_last_error_details_json)
+ * returns the headline fields with the same report. On any other failure it is
  * null. `out_warnings_json` may be null when the caller wants neither. Free
  * both with [`kglite_free_string`](crate::kglite_free_string).
  *
@@ -1100,8 +1126,8 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
  * - `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` — stored data breaks an
  *   `error`-level rule of the declaration.
  *
- * **The declaration is not durable until saved** (or logged by a durable
- * session): call [`kglite_session_save`](crate::kglite_session_save).
+ * **The declaration is not durable until saved**: the C ABI has no
+ * write-ahead log, so call [`kglite_session_save`](crate::kglite_session_save).
  *
  * # Safety
  *
@@ -1814,6 +1840,28 @@ KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
                                        const char **out_error_msg);
 
 /**
+ * Choose how this session's JSON results spell a non-finite float.
+ *
+ * JSON has no NaN or infinity. With `enabled` zero (the default for a new
+ * session) a non-finite float renders as `null`, as it always has. With
+ * `enabled` non-zero it renders as the tagged object
+ * `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
+ * — the same tag a query parameter accepts, so a value read back and bound
+ * again is unchanged. The setting governs
+ * [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
+ * of results produced afterwards and the rows of the batch-execute results;
+ * a result already returned keeps the encoding it was created with. Finite
+ * floats, including `-0.0`, are unaffected.
+ *
+ * A null `session` is a no-op.
+ *
+ * # Safety
+ *
+ * `session` must be null or a valid session pointer not yet freed.
+ */
+ void kglite_session_set_tagged_floats(const struct KgliteSession *session, uint8_t enabled);
+
+/**
  * Free a session handle. Idempotent on null (no-op).
  *
  * # Safety
@@ -1839,28 +1887,6 @@ KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
  *
  * Same text (`"CypherSyntax"`, `"NodeNotFound"`, `"InvalidUtf8"`, …) and the
  * same null on `Ok`, but the pointer is a `'static` constant in the library's
-/**
- * Choose how this session's JSON results spell a non-finite float.
- *
- * JSON has no NaN or infinity. With `enabled` zero (the default for a new
- * session) a non-finite float renders as `null`, as it always has. With
- * `enabled` non-zero it renders as the tagged object
- * `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
- * — the same tag a query parameter accepts, so a value read back and bound
- * again is unchanged. The setting governs
- * [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
- * of results produced afterwards and the rows of the batch-execute results;
- * a result already returned keeps the encoding it was created with. Finite
- * floats, including `-0.0`, are unaffected.
- *
- * A null `session` is a no-op.
- *
- * # Safety
- *
- * `session` must be null or a valid session pointer not yet freed.
- */
- void kglite_session_set_tagged_floats(const struct KgliteSession *session, uint8_t enabled);
-
  * own read-only data rather than a fresh heap copy.
  *
  * **Do NOT free the returned pointer.** Handing it to
@@ -1901,10 +1927,9 @@ KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
  * 400 for `CypherSyntax`, 404 for `NodeNotFound`, 500 for
  * `Internal`). Useful for REST/gRPC bindings.
  *
- * Returns 0 for `Ok` and 500 for C-ABI-only codes (`InvalidUtf8`
- * = 400 / bad request from caller, `NullPointer` = 400,
- * `WriterLeaseHeld` = 409 / conflict, retriable as-is — the same
- * mapping core gives `TransactionConflict`, the other lost-race code).
+ * Returns 0 for `Ok`; the C-ABI-only codes answer directly (`InvalidUtf8`
+ * and `NullPointer` = 400, bad request from the caller). `WriterLeaseHeld`
+ * delegates to core (409, retriable as-is, like `TransactionConflict`).
  */
  uint16_t kglite_status_code_http_status(KgliteStatusCode code);
 

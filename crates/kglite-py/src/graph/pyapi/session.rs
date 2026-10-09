@@ -382,7 +382,7 @@ impl Session {
                     base_version,
                 }),
                 CommitOutcome::DurabilityFailed { error } => {
-                    Err(KgError::FileIo(std::io::Error::other(error)))
+                    Err(KgError::DurabilityFailed { message: error })
                 }
                 other => Err(KgError::Internal {
                     message: format!("Unexpected Session commit outcome: {other:?}"),
@@ -449,10 +449,9 @@ impl Session {
         let pre_parsed = cypher::parse_cypher(query).map_err(crate::error_py::kg_to_pyerr)?;
         if cypher::is_mutation_query(&pre_parsed) {
             return Err(crate::error_py::kg_to_pyerr(
-                crate::error::KgError::Argument(
+                crate::error::KgError::read_only(
                     "Session.cypher() is read-only — CREATE/SET/DELETE/REMOVE/MERGE are not \
-                     allowed here. Use Session.execute() for serialized writes."
-                        .to_string(),
+                     allowed here. Use Session.execute() for serialized writes.",
                 ),
             ));
         }

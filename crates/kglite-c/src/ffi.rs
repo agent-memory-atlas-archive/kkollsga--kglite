@@ -41,6 +41,7 @@ pub(crate) fn status_boundary(
 ) -> KgliteStatusCode {
     reset_outputs();
     init_out(out_error_msg, std::ptr::null());
+    crate::details::clear();
     let silenced = || with_query_warning_sink(QueryWarningSink::Silent, body);
     match catch_unwind(AssertUnwindSafe(silenced)) {
         Ok(status) => status,

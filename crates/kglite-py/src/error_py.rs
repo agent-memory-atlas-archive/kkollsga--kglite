@@ -38,8 +38,10 @@
 //!     ├── kglite.FileError                     (FileNotFound)
 //!     ├── kglite.FileFormatError
 //!     ├── kglite.FileIoError
+//!     │   └── kglite.WriterLeaseHeldError
 //!     ├── kglite.LoadMemoryLimitError
 //!     ├── kglite.ArgumentError
+//!     │   └── kglite.ReadOnlyError
 //!     ├── kglite.MissingArgumentError
 //!     ├── kglite.InternerCollisionError
 //!     └── kglite.InternalError
@@ -223,6 +225,13 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(
     kglite,
+    WriterLeaseHeldError,
+    FileIoError,
+    "Another process (or an un-closed handle in this one) holds the writer lease for the path. Subclass of `FileIoError`, so an existing `except FileIoError` still catches it. Retriable as it stands: wait and try again. `.holder` is a dict with `pid`, `since`, `label` (each `None` when unknown) and `self` (True when the holder is this process)."
+);
+
+pyo3::create_exception!(
+    kglite,
     LoadMemoryLimitError,
     KgError,
     "A .kgl load exceeded max_load_mb / KGLITE_MAX_LOAD_MB at the metadata precheck or the pre-publication legacy portable-normalization check. The file is valid."
@@ -235,6 +244,13 @@ pyo3::create_exception!(
     ArgumentError,
     KgError,
     "A user-supplied argument violated a precondition."
+);
+
+pyo3::create_exception!(
+    kglite,
+    ReadOnlyError,
+    ArgumentError,
+    "A write was refused because the handle is read-only (`read_only(True)` or a read-only transaction). Subclass of `ArgumentError`, so an existing `except ArgumentError` still catches it; the graph is unchanged."
 );
 
 pyo3::create_exception!(
@@ -329,10 +345,14 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
             report,
         ),
         RustKgError::TransactionConflict { .. } => TransactionConflictError::new_err(message),
-        // No `DurabilityFailedError` class: `Session.run_write` has always
-        // reported a rejected log append as `FileIoError`, and a wheel caller
-        // handling that keeps working.
+        // No `DurabilityFailedError` class: a rejected log append has always
+        // been a `FileIoError`, and a wheel caller handling that keeps
+        // working. Its `.code` (`DurabilityFailed`) is what separates it.
         RustKgError::DurabilityFailed { .. } => FileIoError::new_err(message),
+        RustKgError::WriterLeaseHeld { holder, .. } => {
+            with_holder_attr(WriterLeaseHeldError::new_err(message), holder)
+        }
+        RustKgError::ReadOnly { .. } => ReadOnlyError::new_err(message),
         RustKgError::Expr(_) => ExprError::new_err(message),
         RustKgError::NodeNotFound { .. } => NodeNotFoundError::new_err(message),
         RustKgError::ConnectionNotFound { .. } => ConnectionNotFoundError::new_err(message),
@@ -369,6 +389,36 @@ fn with_code_attr(err: PyErr, code: &'static str) -> PyErr {
         let _ = value.setattr("code", code);
     });
     err
+}
+
+/// `.holder` on a [`WriterLeaseHeldError`]: `{pid, since, label, self}`, each
+/// `None` when the holder's record could not be read.
+fn with_holder_attr(err: PyErr, holder: kglite_core::api::io::LeaseHolder) -> PyErr {
+    Python::attach(|py| {
+        let value = err.value(py);
+        let dict = pyo3::types::PyDict::new(py);
+        let _ = dict.set_item("pid", holder.pid);
+        let _ = dict.set_item("since", holder.since.as_deref());
+        let _ = dict.set_item("label", holder.label.as_deref());
+        let _ = dict.set_item("self", holder.is_self());
+        let _ = value.setattr("holder", dict);
+    });
+    err
+}
+
+/// A write-ahead-log failure as the wheel reports it: a `FileIoError` whose
+/// `.code` is `DurabilityFailed`, carrying `message` verbatim.
+///
+/// Every logged-write path (`cypher()`, the fluent writers, `Session`) raises
+/// this one identity. The message is the caller's rather than `KgError`'s
+/// rendering, because the two paths differ in what is true: a `Session` commit
+/// was not applied, while a `KnowledgeGraph` statement is applied in memory
+/// and only its log append failed.
+pub(crate) fn durability_failed_pyerr(message: String) -> PyErr {
+    with_code_attr(
+        FileIoError::new_err(message),
+        crate::error::KgErrorCode::DurabilityFailed.as_str(),
+    )
 }
 
 fn with_position_attrs(err: PyErr, line: Option<usize>, col: Option<usize>) -> PyErr {
@@ -487,12 +537,17 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add("FileFormatError", py.get_type::<FileFormatError>())?;
     m.add("FileIoError", py.get_type::<FileIoError>())?;
     m.add(
+        "WriterLeaseHeldError",
+        py.get_type::<WriterLeaseHeldError>(),
+    )?;
+    m.add(
         "LoadMemoryLimitError",
         py.get_type::<LoadMemoryLimitError>(),
     )?;
 
     // Argument validation
     m.add("ArgumentError", py.get_type::<ArgumentError>())?;
+    m.add("ReadOnlyError", py.get_type::<ReadOnlyError>())?;
     m.add(
         "MissingArgumentError",
         py.get_type::<MissingArgumentError>(),
@@ -562,6 +617,10 @@ fn register_class_codes(py: Python<'_>) -> PyResult<()> {
         .setattr("code", C::FileFormat.as_str())?;
     py.get_type::<FileIoError>()
         .setattr("code", C::FileIo.as_str())?;
+    py.get_type::<WriterLeaseHeldError>()
+        .setattr("code", C::WriterLeaseHeld.as_str())?;
+    py.get_type::<ReadOnlyError>()
+        .setattr("code", C::ReadOnly.as_str())?;
     py.get_type::<LoadMemoryLimitError>()
         .setattr("code", C::LoadMemoryLimit.as_str())?;
     py.get_type::<ArgumentError>()
@@ -592,6 +651,57 @@ mod tests {
             };
             let error = kg_to_pyerr(RustKgError::InternerCollision(collision));
             assert!(error.is_instance_of::<InternerCollisionError>(py));
+        });
+    }
+
+    #[test]
+    fn durability_failed_is_a_file_io_error_with_its_own_code_on_every_route() {
+        Python::initialize();
+        Python::attach(|py| {
+            // The `Session` route (a `KgError` through `kg_to_pyerr`) and the
+            // `KnowledgeGraph` route (`durability_failed_pyerr`) are one identity.
+            for error in [
+                kg_to_pyerr(RustKgError::DurabilityFailed {
+                    message: "log refused".into(),
+                }),
+                durability_failed_pyerr("log refused".into()),
+            ] {
+                assert!(error.is_instance_of::<FileIoError>(py));
+                let code: String = error.value(py).getattr("code").unwrap().extract().unwrap();
+                assert_eq!(code, "DurabilityFailed");
+            }
+        });
+    }
+
+    #[test]
+    fn lease_and_read_only_map_to_their_subclasses_with_code_and_holder() {
+        Python::initialize();
+        Python::attach(|py| {
+            let lease = kg_to_pyerr(RustKgError::WriterLeaseHeld {
+                message: "held".into(),
+                holder: kglite_core::api::io::LeaseHolder {
+                    pid: Some(7),
+                    since: Some("t".into()),
+                    label: None,
+                },
+            });
+            assert!(lease.is_instance_of::<WriterLeaseHeldError>(py));
+            assert!(lease.is_instance_of::<FileIoError>(py));
+            let holder = lease.value(py).getattr("holder").unwrap();
+            let pid: u32 = holder.get_item("pid").unwrap().extract().unwrap();
+            assert_eq!(pid, 7);
+            assert!(holder.get_item("label").unwrap().is_none());
+
+            let read_only = kg_to_pyerr(RustKgError::read_only("ro"));
+            assert!(read_only.is_instance_of::<ReadOnlyError>(py));
+            assert!(read_only.is_instance_of::<ArgumentError>(py));
+            let code: String = read_only
+                .value(py)
+                .getattr("code")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(code, "ReadOnly");
         });
     }
 

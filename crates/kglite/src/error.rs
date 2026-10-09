@@ -46,6 +46,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::graph::blueprint::expr::ExprError;
+use crate::graph::io::open::{LeaseHolder, LeaseRefusal};
 use crate::graph::languages::cypher::planner::schema_check::SchemaError;
 use crate::graph::schema::ValidationError;
 use crate::graph::storage::interner::InternerCollision;
@@ -97,6 +98,17 @@ pub enum KgErrorCode {
     // surface routes it as a server fault that names the lost write.
     DurabilityFailed,
 
+    // Another process (or an un-closed handle in this one) holds the
+    // cross-process writer lease for the path. Split from `FileIo` because the
+    // reaction is opposite: this one is retriable as it stands, and a binding
+    // must not have to string-match prose to tell the two apart.
+    WriterLeaseHeld,
+
+    // A write aimed at a handle opened or put into read-only mode. Split from
+    // `InvalidArgument` because the call was well-formed: the handle, not the
+    // arguments, refused it, and the fix is to write through a writable handle.
+    ReadOnly,
+
     NodeNotFound,
     ConnectionNotFound,
     PropertyNotFound,
@@ -122,11 +134,42 @@ pub enum KgErrorCode {
 }
 
 impl KgErrorCode {
+    /// Every code, in declaration order. A binding's exhaustiveness test
+    /// iterates this to prove its own table covers each one; the
+    /// `all_lists_every_code` test keeps it complete.
+    pub const ALL: &'static [KgErrorCode] = &[
+        KgErrorCode::CypherSyntax,
+        KgErrorCode::CypherTimeout,
+        KgErrorCode::CypherExecution,
+        KgErrorCode::CypherTypeMismatch,
+        KgErrorCode::Cancelled,
+        KgErrorCode::Schema,
+        KgErrorCode::Validation,
+        KgErrorCode::Expr,
+        KgErrorCode::ConstraintViolation,
+        KgErrorCode::ConstraintCreationFailed,
+        KgErrorCode::OntologyViolation,
+        KgErrorCode::TransactionConflict,
+        KgErrorCode::DurabilityFailed,
+        KgErrorCode::WriterLeaseHeld,
+        KgErrorCode::ReadOnly,
+        KgErrorCode::NodeNotFound,
+        KgErrorCode::ConnectionNotFound,
+        KgErrorCode::PropertyNotFound,
+        KgErrorCode::FileNotFound,
+        KgErrorCode::FileFormat,
+        KgErrorCode::FileIo,
+        KgErrorCode::LoadMemoryLimit,
+        KgErrorCode::InvalidArgument,
+        KgErrorCode::MissingArgument,
+        KgErrorCode::Internal,
+    ];
+
     /// Stable string representation (the PascalCase variant name). Published
     /// as the MCP server's `kglite_code`, the wheel's `.code` exception
     /// attribute, and the C ABI's `kglite_status_code_name`. The Bolt server
     /// reports [`Self::neo4j_status_code`] instead.
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             KgErrorCode::CypherSyntax => "CypherSyntax",
             KgErrorCode::CypherTimeout => "CypherTimeout",
@@ -141,6 +184,8 @@ impl KgErrorCode {
             KgErrorCode::OntologyViolation => "OntologyViolation",
             KgErrorCode::TransactionConflict => "TransactionConflict",
             KgErrorCode::DurabilityFailed => "DurabilityFailed",
+            KgErrorCode::WriterLeaseHeld => "WriterLeaseHeld",
+            KgErrorCode::ReadOnly => "ReadOnly",
             KgErrorCode::NodeNotFound => "NodeNotFound",
             KgErrorCode::ConnectionNotFound => "ConnectionNotFound",
             KgErrorCode::PropertyNotFound => "PropertyNotFound",
@@ -164,7 +209,8 @@ impl KgErrorCode {
     /// - `NodeNotFound`, `ConnectionNotFound`, `PropertyNotFound`,
     ///   `FileNotFound` → 404 Not Found
     /// - `CypherTimeout` → 408 Request Timeout
-    /// - `TransactionConflict` → 409 Conflict
+    /// - `TransactionConflict`, `WriterLeaseHeld` → 409 Conflict
+    /// - `ReadOnly` → 403 Forbidden
     /// - `Schema`, `Validation`, `Expr`, `ConstraintViolation`,
     ///   `ConstraintCreationFailed`, `OntologyViolation`, `CypherExecution` → 422 Unprocessable
     ///   Entity
@@ -190,7 +236,11 @@ impl KgErrorCode {
             // 409 Conflict — the request was well-formed but lost an
             // optimistic-concurrency race. Retriable as-is, unlike every
             // other 4xx here.
-            KgErrorCode::TransactionConflict => 409,
+            KgErrorCode::TransactionConflict | KgErrorCode::WriterLeaseHeld => 409,
+
+            // 403 Forbidden — well-formed, but this handle does not accept
+            // writes. Retrying it unchanged fails the same way.
+            KgErrorCode::ReadOnly => 403,
 
             // 499 Client Closed Request (nginx convention) — the caller
             // interrupted the query before it finished.
@@ -256,6 +306,19 @@ impl KgErrorCode {
             // tests/test_bolt_server_transactions.py, and the JS/Java
             // conformance corpora).
             KgErrorCode::TransactionConflict => "Neo.TransientError.Transaction.Outdated",
+            // Neo4j's code for a database that cannot take the request yet;
+            // its `TransientError` class matches the retriable-as-is reaction a
+            // held lease calls for.
+            KgErrorCode::WriterLeaseHeld => "Neo.TransientError.General.DatabaseUnavailable",
+            // Neo4j's published code for "this is a read only database,
+            // writing is not allowed". Deliberately not
+            // `General.ForbiddenOnReadOnlyDatabase`: the Neo4j drivers class
+            // that one as a *transient* routing signal and re-run a managed
+            // transaction against it, so a write to a read-only server would
+            // retry for the driver's whole retry window instead of failing
+            // once. `General.ReadOnly` is a permanent `ClientError` (the
+            // drivers' `Forbidden`).
+            KgErrorCode::ReadOnly => "Neo.ClientError.General.ReadOnly",
             // `CypherExecution` is a statement that failed on its inputs (see
             // `http_status_code`); publishing it as `DatabaseError` told a
             // driver the server broke when the query was at fault.
@@ -438,6 +501,20 @@ pub enum KgError {
     /// `message` is the log's own error text.
     DurabilityFailed { message: String },
 
+    /// Another process (or an un-closed handle in this one) holds the writer
+    /// lease for the path. `holder` is the structured record the holder
+    /// published, best effort: a contender that loses a startup race can read an
+    /// empty one. `message` is the engine's prose for a human.
+    WriterLeaseHeld {
+        message: String,
+        holder: LeaseHolder,
+    },
+
+    /// A write was refused because the handle is read-only (a `readOnly` open,
+    /// `read_only(True)`, a read-only transaction or session). The graph is
+    /// unchanged.
+    ReadOnly { message: String },
+
     /// Blueprint expression evaluation failure. Wraps the existing
     /// 7-variant [`ExprError`] enum verbatim.
     Expr(ExprError),
@@ -555,6 +632,8 @@ impl KgError {
             KgError::OntologyViolation { .. } => KgErrorCode::OntologyViolation,
             KgError::TransactionConflict { .. } => KgErrorCode::TransactionConflict,
             KgError::DurabilityFailed { .. } => KgErrorCode::DurabilityFailed,
+            KgError::WriterLeaseHeld { .. } => KgErrorCode::WriterLeaseHeld,
+            KgError::ReadOnly { .. } => KgErrorCode::ReadOnly,
             KgError::Expr(_) => KgErrorCode::Expr,
             KgError::NodeNotFound { .. } => KgErrorCode::NodeNotFound,
             KgError::ConnectionNotFound { .. } => KgErrorCode::ConnectionNotFound,
@@ -658,6 +737,9 @@ impl fmt::Display for KgError {
                 "commit was NOT applied — the write-ahead log rejected it, and a write \
                  that cannot be logged is not acknowledged: {message}"
             ),
+            KgError::WriterLeaseHeld { message, .. } | KgError::ReadOnly { message } => {
+                f.write_str(message)
+            }
             KgError::Expr(e) => write!(f, "Expression error: {}", e),
             KgError::NodeNotFound { node_type, id } => {
                 write!(f, "Node not found: {} with id {:?}", node_type, id)
@@ -738,6 +820,30 @@ impl From<std::io::Error> for KgError {
             // recoverable from an `io::Error` — keeps the original error for
             // downstream inspection.
             _ => KgError::FileIo(e),
+        }
+    }
+}
+
+impl From<LeaseRefusal> for KgError {
+    /// A contended acquisition becomes [`KgError::WriterLeaseHeld`] with the
+    /// holder structured; any other refusal is plain I/O (nobody holds
+    /// anything), so it stays [`KgError::FileIo`].
+    fn from(refusal: LeaseRefusal) -> Self {
+        match refusal.holder {
+            Some(holder) => KgError::WriterLeaseHeld {
+                message: refusal.error.to_string(),
+                holder,
+            },
+            None => KgError::from(refusal.error),
+        }
+    }
+}
+
+impl KgError {
+    /// A write refused because the handle is read-only.
+    pub fn read_only(message: impl Into<String>) -> Self {
+        KgError::ReadOnly {
+            message: message.into(),
         }
     }
 }
@@ -859,6 +965,91 @@ mod tests {
         let s = format!("{}", e);
         assert!(s.contains("div by zero"));
         assert!(!s.contains("line"));
+    }
+
+    /// Position of each code in [`KgErrorCode::ALL`]. The match has no
+    /// wildcard, so a new variant is a compile error here and its author must
+    /// pick the next ordinal, which `all_lists_every_code` then holds `ALL` to.
+    fn ordinal(code: KgErrorCode) -> usize {
+        match code {
+            KgErrorCode::CypherSyntax => 0,
+            KgErrorCode::CypherTimeout => 1,
+            KgErrorCode::CypherExecution => 2,
+            KgErrorCode::CypherTypeMismatch => 3,
+            KgErrorCode::Cancelled => 4,
+            KgErrorCode::Schema => 5,
+            KgErrorCode::Validation => 6,
+            KgErrorCode::Expr => 7,
+            KgErrorCode::ConstraintViolation => 8,
+            KgErrorCode::ConstraintCreationFailed => 9,
+            KgErrorCode::OntologyViolation => 10,
+            KgErrorCode::TransactionConflict => 11,
+            KgErrorCode::DurabilityFailed => 12,
+            KgErrorCode::WriterLeaseHeld => 13,
+            KgErrorCode::ReadOnly => 14,
+            KgErrorCode::NodeNotFound => 15,
+            KgErrorCode::ConnectionNotFound => 16,
+            KgErrorCode::PropertyNotFound => 17,
+            KgErrorCode::FileNotFound => 18,
+            KgErrorCode::FileFormat => 19,
+            KgErrorCode::FileIo => 20,
+            KgErrorCode::LoadMemoryLimit => 21,
+            KgErrorCode::InvalidArgument => 22,
+            KgErrorCode::MissingArgument => 23,
+            KgErrorCode::Internal => 24,
+        }
+    }
+
+    #[test]
+    fn all_lists_every_code() {
+        let mut seen: Vec<usize> = KgErrorCode::ALL.iter().map(|c| ordinal(*c)).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..seen.len()).collect::<Vec<_>>());
+        let max = seen.last().copied().unwrap();
+        assert_eq!(ordinal(KgErrorCode::Internal), max, "Internal is last");
+        for (i, code) in KgErrorCode::ALL.iter().enumerate() {
+            assert_eq!(ordinal(*code), i, "{code:?} is out of declaration order");
+        }
+    }
+
+    #[test]
+    fn lease_and_read_only_identities() {
+        assert_eq!(KgErrorCode::WriterLeaseHeld.as_str(), "WriterLeaseHeld");
+        assert_eq!(KgErrorCode::WriterLeaseHeld.http_status_code(), 409);
+        assert_eq!(KgErrorCode::ReadOnly.as_str(), "ReadOnly");
+        assert_eq!(KgErrorCode::ReadOnly.http_status_code(), 403);
+        assert_eq!(
+            KgErrorCode::ReadOnly.neo4j_status_code(),
+            "Neo.ClientError.General.ReadOnly"
+        );
+        assert!(KgErrorCode::WriterLeaseHeld
+            .neo4j_status_code()
+            .starts_with("Neo.TransientError."));
+    }
+
+    #[test]
+    fn contended_refusal_becomes_writer_lease_held_and_io_refusal_stays_file_io() {
+        let contended = LeaseRefusal {
+            holder: Some(LeaseHolder {
+                pid: Some(4242),
+                since: Some("2026-10-09T00:00:00Z".into()),
+                label: Some("tester".into()),
+            }),
+            error: std::io::Error::new(std::io::ErrorKind::WouldBlock, "held"),
+        };
+        match KgError::from(contended) {
+            KgError::WriterLeaseHeld { message, holder } => {
+                assert_eq!(message, "held");
+                assert_eq!(holder.pid, Some(4242));
+                assert_eq!(holder.label.as_deref(), Some("tester"));
+            }
+            other => panic!("expected WriterLeaseHeld, got {other:?}"),
+        }
+        let plain = LeaseRefusal {
+            holder: None,
+            error: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        };
+        assert_eq!(KgError::from(plain).code(), KgErrorCode::FileIo);
     }
 
     #[test]

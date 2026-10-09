@@ -81,6 +81,11 @@ pub enum KgliteStatusCode {
     /// Appended to keep the existing discriminants stable across this ABI
     /// major version.
     DurabilityFailed = 23,
+    /// A write was refused because the handle is read-only. Its own code
+    /// rather than an `InvalidArgument`: the call was well-formed and the
+    /// handle, not the arguments, refused it. Appended to keep the existing
+    /// discriminants stable across this ABI major version.
+    ReadOnly = 24,
 
     // 100+: C-ABI-only errors.
     /// A string argument failed UTF-8 validation. The C-side
@@ -133,18 +138,30 @@ impl KgliteStatusCode {
             KgErrorCode::LoadMemoryLimit => Self::LoadMemoryLimit,
             KgErrorCode::OntologyViolation => Self::OntologyViolation,
             KgErrorCode::DurabilityFailed => Self::DurabilityFailed,
+            // 102 predates the core code: the ABI numbers the boundary codes
+            // from 100, and the lease code shipped there before core named it.
+            KgErrorCode::WriterLeaseHeld => Self::WriterLeaseHeld,
+            KgErrorCode::ReadOnly => Self::ReadOnly,
         }
+    }
+
+    /// Map a core error to its status, recording any structured detail the
+    /// code alone cannot carry (see [`crate::details`]) for
+    /// `kglite_last_error_details_json`.
+    pub(crate) fn from_kg_error(error: &kglite::api::KgError) -> Self {
+        crate::details::record(error);
+        Self::from_kg_error_code(error.code())
     }
 
     /// Reverse: C-ABI code → `KgErrorCode` so the helper accessors
     /// can delegate. Returns `None` for `Ok` and the C-ABI-only
-    /// codes (`InvalidUtf8`, `NullPointer`, `WriterLeaseHeld`) which
-    /// have no `KgErrorCode` counterpart.
+    /// codes (`InvalidUtf8`, `NullPointer`) which have no `KgErrorCode`
+    /// counterpart.
     pub(crate) fn to_kg_error_code(self) -> Option<KgErrorCode> {
         Some(match self {
-            Self::Ok | Self::InvalidUtf8 | Self::NullPointer | Self::WriterLeaseHeld => {
-                return None
-            }
+            Self::Ok | Self::InvalidUtf8 | Self::NullPointer => return None,
+            Self::WriterLeaseHeld => KgErrorCode::WriterLeaseHeld,
+            Self::ReadOnly => KgErrorCode::ReadOnly,
             Self::CypherSyntax => KgErrorCode::CypherSyntax,
             Self::CypherTimeout => KgErrorCode::CypherTimeout,
             Self::CypherExecution => KgErrorCode::CypherExecution,
@@ -185,7 +202,6 @@ pub extern "C" fn kglite_status_code_name(code: KgliteStatusCode) -> *const c_ch
             KgliteStatusCode::Ok => return std::ptr::null(),
             KgliteStatusCode::InvalidUtf8 => "InvalidUtf8",
             KgliteStatusCode::NullPointer => "NullPointer",
-            KgliteStatusCode::WriterLeaseHeld => "WriterLeaseHeld",
             other => match other.to_kg_error_code() {
                 Some(kg) => kg.as_str(),
                 None => return std::ptr::null(),
@@ -258,6 +274,7 @@ fn static_name(code: KgliteStatusCode) -> Option<&'static CStr> {
         KgliteStatusCode::LoadMemoryLimit => c"LoadMemoryLimit",
         KgliteStatusCode::OntologyViolation => c"OntologyViolation",
         KgliteStatusCode::DurabilityFailed => c"DurabilityFailed",
+        KgliteStatusCode::ReadOnly => c"ReadOnly",
         KgliteStatusCode::InvalidUtf8 => c"InvalidUtf8",
         KgliteStatusCode::NullPointer => c"NullPointer",
         KgliteStatusCode::WriterLeaseHeld => c"WriterLeaseHeld",
@@ -285,16 +302,14 @@ pub extern "C" fn kglite_status_code_neo4j_status(code: KgliteStatusCode) -> *co
 /// 400 for `CypherSyntax`, 404 for `NodeNotFound`, 500 for
 /// `Internal`). Useful for REST/gRPC bindings.
 ///
-/// Returns 0 for `Ok` and 500 for C-ABI-only codes (`InvalidUtf8`
-/// = 400 / bad request from caller, `NullPointer` = 400,
-/// `WriterLeaseHeld` = 409 / conflict, retriable as-is — the same
-/// mapping core gives `TransactionConflict`, the other lost-race code).
+/// Returns 0 for `Ok`; the C-ABI-only codes answer directly (`InvalidUtf8`
+/// and `NullPointer` = 400, bad request from the caller). `WriterLeaseHeld`
+/// delegates to core (409, retriable as-is, like `TransactionConflict`).
 #[no_mangle]
 pub extern "C" fn kglite_status_code_http_status(code: KgliteStatusCode) -> u16 {
     crate::ffi::value_boundary(500, || match code {
         KgliteStatusCode::Ok => 0,
         KgliteStatusCode::InvalidUtf8 | KgliteStatusCode::NullPointer => 400,
-        KgliteStatusCode::WriterLeaseHeld => 409,
         other => match other.to_kg_error_code() {
             Some(kg) => kg.http_status_code(),
             None => 500,
@@ -334,6 +349,7 @@ mod tests {
         KgliteStatusCode::LoadMemoryLimit,
         KgliteStatusCode::OntologyViolation,
         KgliteStatusCode::DurabilityFailed,
+        KgliteStatusCode::ReadOnly,
         KgliteStatusCode::InvalidUtf8,
         KgliteStatusCode::NullPointer,
         KgliteStatusCode::WriterLeaseHeld,
@@ -396,26 +412,10 @@ mod tests {
 
     #[test]
     fn every_kg_error_code_round_trips() {
-        // Exhaustive check — every KgErrorCode maps to a
-        // KgliteStatusCode and back.
-        for code in [
-            KgErrorCode::CypherSyntax,
-            KgErrorCode::CypherTimeout,
-            KgErrorCode::CypherExecution,
-            KgErrorCode::CypherTypeMismatch,
-            KgErrorCode::Schema,
-            KgErrorCode::Validation,
-            KgErrorCode::Expr,
-            KgErrorCode::NodeNotFound,
-            KgErrorCode::ConnectionNotFound,
-            KgErrorCode::PropertyNotFound,
-            KgErrorCode::FileNotFound,
-            KgErrorCode::FileFormat,
-            KgErrorCode::FileIo,
-            KgErrorCode::InvalidArgument,
-            KgErrorCode::MissingArgument,
-            KgErrorCode::Internal,
-        ] {
+        // Iterates core's own list, so a code added there without a status
+        // here fails this test (and `from_kg_error_code`'s exhaustive match
+        // fails to compile first).
+        for &code in KgErrorCode::ALL {
             let c = KgliteStatusCode::from_kg_error_code(code);
             let back = c.to_kg_error_code();
             assert_eq!(back, Some(code), "round-trip failed for {code:?}");
@@ -442,16 +442,12 @@ mod tests {
 
     /// The boundary-only codes have no `KgErrorCode` to delegate to, so each
     /// accessor answers for them directly — and must keep answering, since a
-    /// binding routes on exactly these three.
+    /// binding routes on exactly these two.
     #[test]
     fn boundary_only_codes_have_their_own_accessors() {
         for (code, name, http) in [
             (KgliteStatusCode::InvalidUtf8, "InvalidUtf8", 400),
             (KgliteStatusCode::NullPointer, "NullPointer", 400),
-            // 409, not 500: a held lease is a retriable conflict, and a
-            // binding that saw a 5xx here would surface an outage instead of
-            // a wait-and-retry.
-            (KgliteStatusCode::WriterLeaseHeld, "WriterLeaseHeld", 409),
         ] {
             let named = kglite_status_code_name(code);
             assert!(!named.is_null(), "{name} must name itself");
@@ -461,6 +457,33 @@ mod tests {
             assert_eq!(kglite_status_code_http_status(code), http, "{name}");
             // No Neo4j wire code exists for a boundary-only failure.
             assert!(kglite_status_code_neo4j_status(code).is_null(), "{name}");
+        }
+    }
+
+    /// The writer lease and read-only codes are core codes: the ABI numbers
+    /// stay (102, 24) and the name, HTTP and Neo4j spellings come from core.
+    /// 409, not 500: a held lease is a retriable conflict, and a binding that
+    /// saw a 5xx here would surface an outage instead of a wait-and-retry.
+    #[test]
+    fn lease_and_read_only_are_core_codes() {
+        assert_eq!(KgliteStatusCode::WriterLeaseHeld as u32, 102);
+        assert_eq!(KgliteStatusCode::ReadOnly as u32, 24);
+        for (code, kg, http) in [
+            (
+                KgliteStatusCode::WriterLeaseHeld,
+                KgErrorCode::WriterLeaseHeld,
+                409,
+            ),
+            (KgliteStatusCode::ReadOnly, KgErrorCode::ReadOnly, 403),
+        ] {
+            assert_eq!(code.to_kg_error_code(), Some(kg));
+            assert_eq!(KgliteStatusCode::from_kg_error_code(kg), code);
+            assert_eq!(kglite_status_code_http_status(code), http);
+            let neo = kglite_status_code_neo4j_status(code);
+            assert!(!neo.is_null());
+            let text = unsafe { CStr::from_ptr(neo) }.to_str().unwrap();
+            assert_eq!(text, kg.neo4j_status_code());
+            unsafe { crate::kglite_free_string(neo) };
         }
     }
 

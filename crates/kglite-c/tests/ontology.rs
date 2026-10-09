@@ -135,3 +135,61 @@ fn bad_documents_and_null_pointers_are_refused() {
     );
     unsafe { kglite_session_free(session) };
 }
+
+fn details() -> Option<serde_json::Value> {
+    take(kglite_last_error_details_json()).map(|text| serde_json::from_str(&text).unwrap())
+}
+
+#[test]
+fn a_refused_write_exposes_rule_entity_type_and_property_through_the_details_channel() {
+    let session = new_session();
+    let (status, _, error) = define(session, PERSON);
+    assert_eq!(status, KgliteStatusCode::Ok, "{error:?}");
+    assert_eq!(
+        mutate(session, "CREATE (:Person {id: 1})"),
+        KgliteStatusCode::OntologyViolation
+    );
+    let detail = details().expect("an ontology refusal carries detail");
+    assert_eq!(detail["code"], "OntologyViolation");
+    assert_eq!(detail["rule"], "required_property");
+    assert_eq!(detail["entity"], "node");
+    assert_eq!(detail["entity_type"], "Person");
+    assert_eq!(detail["property"], "email");
+    assert_eq!(detail["report"], serde_json::json!([]));
+    // A later successful call clears the slot, so detail never outlives its
+    // failure.
+    assert_eq!(
+        mutate(session, "CREATE (:Other {id: 2})"),
+        KgliteStatusCode::Ok
+    );
+    assert!(details().is_none());
+    unsafe { kglite_session_free(session) };
+}
+
+#[test]
+fn a_refused_declaration_exposes_the_headline_and_the_report() {
+    let session = new_session();
+    assert_eq!(
+        mutate(session, "CREATE (:Person {id: 1})"),
+        KgliteStatusCode::Ok
+    );
+    let (status, _, _) = define(session, PERSON);
+    assert_eq!(status, KgliteStatusCode::OntologyViolation);
+    let detail = details().expect("a refused declaration carries detail");
+    assert_eq!(detail["rule"], "required_property");
+    assert_eq!(detail["entity_type"], "Person");
+    assert_eq!(detail["property"], "email");
+    assert_eq!(detail["report"][0]["count"], 1);
+    unsafe { kglite_session_free(session) };
+}
+
+#[test]
+fn an_error_with_no_structure_leaves_the_details_empty() {
+    let session = new_session();
+    assert_eq!(
+        mutate(session, "THIS IS NOT CYPHER"),
+        KgliteStatusCode::CypherSyntax
+    );
+    assert!(details().is_none());
+    unsafe { kglite_session_free(session) };
+}

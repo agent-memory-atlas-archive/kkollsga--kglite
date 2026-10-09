@@ -214,10 +214,9 @@ impl Transaction {
         // entry point for a wheel `graph.begin_read()` caller).
         if is_mut && tx.is_read_only() {
             return Err(crate::error_py::kg_to_pyerr(
-                crate::error::KgError::Argument(
+                crate::error::KgError::read_only(
                     "Read-only transaction does not support mutations \
-                 (CREATE, SET, DELETE, REMOVE, MERGE). Use begin() for read-write."
-                        .to_string(),
+                 (CREATE, SET, DELETE, REMOVE, MERGE). Use begin() for read-write.",
                 ),
             ));
         }

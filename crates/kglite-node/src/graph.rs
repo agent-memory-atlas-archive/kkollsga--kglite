@@ -35,16 +35,13 @@ use kglite::api::session::{
     open_path, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec, QueryDefaults, Session,
 };
 use kglite::api::storage::StorageMode;
-use kglite::api::Value;
+use kglite::api::{KgError, Value};
 use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
 
 use crate::contain;
-use crate::errors::{
-    to_sync_error, Holder, JsErr, JsRes, CODE_CLOSED, CODE_LEASE_HELD, CODE_NOT_DURABLE,
-    CODE_READ_ONLY,
-};
+use crate::errors::{to_sync_error, JsErr, JsRes, CODE_CLOSED, CODE_NOT_DURABLE, CODE_READ_ONLY};
 use crate::pool::{self, Settle};
 use crate::tx::TxShared;
 use crate::values::{FromJs, IntegerMode, ToJs};
@@ -674,17 +671,11 @@ fn io_error(io: &std::io::Error) -> JsErr {
 fn open_error(e: &OpenError) -> JsErr {
     match e {
         OpenError::Lease(refusal) => match &refusal.holder {
-            Some(h) if refusal.error.kind() == std::io::ErrorKind::WouldBlock => {
-                let mut err = JsErr::new(CODE_LEASE_HELD, refusal.error.to_string());
-                err.holder = Some(Holder {
-                    is_self: h.pid == Some(std::process::id()),
-                    pid: h.pid,
-                    since: h.since.clone(),
-                    label: h.label.clone(),
-                });
-                err
-            }
-            _ => io_error(&refusal.error),
+            Some(holder) => JsErr::from_kg(&KgError::WriterLeaseHeld {
+                message: refusal.error.to_string(),
+                holder: holder.clone(),
+            }),
+            None => io_error(&refusal.error),
         },
         OpenError::Open(io) => io_error(io),
         OpenError::Session { message, .. } => JsErr::new("FileIo", message.clone()),

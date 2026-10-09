@@ -37,7 +37,7 @@ final class Abi {
     private Abi() {}
 
     // ---- status codes we branch on ---------------------------------------
-    // Only these two are mirrored in Java; every other code is rendered through
+    // Only these four are mirrored in Java; every other code is rendered through
     // kglite_status_code_name_static() so the wrapper cannot drift from the
     // header. AbiContractTest asserts both numbers against kglite.h.
 
@@ -46,6 +46,12 @@ final class Abi {
 
     /** {@code KGLITE_STATUS_CODE_WRITER_LEASE_HELD} — contended writer lease. */
     static final int STATUS_WRITER_LEASE_HELD = 102;
+
+    /** {@code KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION} — a write or declaration the ontology refused. */
+    static final int STATUS_ONTOLOGY_VIOLATION = 22;
+
+    /** {@code KGLITE_STATUS_CODE_READ_ONLY} — a write on a read-only handle. */
+    static final int STATUS_READ_ONLY = 24;
 
     /** Status code reported for failures raised by the wrapper, not the engine. */
     static final int STATUS_WRAPPER = -1;
@@ -92,14 +98,14 @@ final class Abi {
             bind("kglite_graph_free", FunctionDescriptor.ofVoid(PTR));
     private static final MethodHandle SESSION_NEW =
             bind("kglite_session_new", FunctionDescriptor.of(I32, PTR, PTR));
+    private static final MethodHandle SESSION_SET_TAGGED_FLOATS =
+            bind("kglite_session_set_tagged_floats", FunctionDescriptor.ofVoid(PTR, U8));
     private static final MethodHandle SESSION_EXECUTE_READ = bind(
             "kglite_session_execute_read", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
     private static final MethodHandle SESSION_EXECUTE_MUT = bind(
             "kglite_session_execute_mut", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
     // The `_opts` forms add (timeout_ms, max_work_units) as two uint64
     // arguments between params_json and the out-slots. `0` disables each
-    private static final MethodHandle SESSION_SET_TAGGED_FLOATS =
-            bind("kglite_session_set_tagged_floats", FunctionDescriptor.ofVoid(PTR, U8));
     // option (no deadline / no work budget), per the header — the wrapper maps
     // an absent timeout or an unlimited work budget to `0`.
     private static final MethodHandle SESSION_EXECUTE_READ_OPTS = bind(
@@ -157,6 +163,12 @@ final class Abi {
     // FREE_STRING.
     private static final MethodHandle STATUS_CODE_NAME_STATIC =
             bind("kglite_status_code_name_static", FunctionDescriptor.of(PTR, I32));
+    // Structured detail of the last failed call on this thread; the only way an
+    // OntologyViolation's rule/entity/type/property reach Java without parsing
+    // the message. Downcalls run on the calling thread, so the thread-local slot
+    // it reads is the one the failing call just filled.
+    private static final MethodHandle LAST_ERROR_DETAILS_JSON =
+            bind("kglite_last_error_details_json", FunctionDescriptor.of(PTR));
     private static final MethodHandle FREE_STRING =
             bind("kglite_free_string", FunctionDescriptor.ofVoid(PTR));
 
@@ -697,7 +709,7 @@ final class Abi {
      * {@code kglite_status_code_name_static}. The pointer is static library
      * data, so it is read and never freed.
      */
-    private static String statusName(int code) {
+    static String statusName(int code) {
         try {
             MemorySegment name = (MemorySegment) STATUS_CODE_NAME_STATIC.invokeExact(code);
             String value = readString(name);
@@ -732,7 +744,22 @@ final class Abi {
         if (code == STATUS_WRITER_LEASE_HELD) {
             throw new WriterLeaseHeldException(code, name, message, detail, holderJson);
         }
+        if (code == STATUS_READ_ONLY) {
+            throw new ReadOnlyGraphException(code, name, message);
+        }
+        if (code == STATUS_ONTOLOGY_VIOLATION) {
+            throw new OntologyViolationException(code, name, message, lastErrorDetails());
+        }
         throw new KgliteException(code, name, message);
+    }
+
+    /** The structured detail of the failure just reported, or {@code null}. */
+    private static String lastErrorDetails() {
+        try {
+            return takeString((MemorySegment) LAST_ERROR_DETAILS_JSON.invokeExact());
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
     }
 
     /** Rethrow a {@link MethodHandle} {@code Throwable} without wrapping our own. */

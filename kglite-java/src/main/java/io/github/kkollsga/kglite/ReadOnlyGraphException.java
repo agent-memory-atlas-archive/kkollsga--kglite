@@ -4,6 +4,11 @@ package io.github.kkollsga.kglite;
  * A mutation was attempted on a graph opened read-only through
  * {@link KnowledgeGraph#openReadOnly(java.nio.file.Path)}.
  *
+ * <p>{@link #statusCode()} and {@link #statusName()} are the engine's
+ * {@code ReadOnly} code (24), the same identity the Python, Node and Bolt
+ * surfaces report for this refusal, even though the wrapper raises it before
+ * the call reaches native code.
+ *
  * <p>Its own type so a caller can catch exactly this — a write reaching a
  * handle it meant to keep read-only — without catching every other engine
  * failure. It is raised by the wrapper <em>before</em> the call crosses into
@@ -28,6 +33,17 @@ public final class ReadOnlyGraphException extends KgliteException {
      * @param message the human-readable description
      */
     ReadOnlyGraphException(String message) {
-        super(message);
+        this(Abi.STATUS_READ_ONLY, Abi.statusName(Abi.STATUS_READ_ONLY), message);
+    }
+
+    /**
+     * A read-only refusal reported by the engine.
+     *
+     * @param statusCode the {@code KgliteStatusCode} value
+     * @param statusName the canonical name of that code
+     * @param message    the full message
+     */
+    ReadOnlyGraphException(int statusCode, String statusName, String message) {
+        super(statusCode, statusName, message);
     }
 }

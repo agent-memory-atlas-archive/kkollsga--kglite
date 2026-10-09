@@ -383,6 +383,8 @@ const fn kg_error_category(code: KgErrorCode) -> &'static str {
         KgErrorCode::OntologyViolation => "ontology_violation",
         KgErrorCode::TransactionConflict => "transaction_conflict",
         KgErrorCode::DurabilityFailed => "durability_failed",
+        KgErrorCode::WriterLeaseHeld => "writer_lease_held",
+        KgErrorCode::ReadOnly => "read_only",
         KgErrorCode::NodeNotFound => "node_not_found",
         KgErrorCode::ConnectionNotFound => "connection_not_found",
         KgErrorCode::PropertyNotFound => "property_not_found",

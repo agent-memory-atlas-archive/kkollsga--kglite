@@ -214,7 +214,7 @@ pub unsafe extern "C" fn kglite_session_execute_read(
                     unsafe {
                         *out_result = std::ptr::null_mut();
                     }
-                    let code = KgliteStatusCode::from_kg_error_code(err.code());
+                    let code = KgliteStatusCode::from_kg_error(&err);
                     if !out_error_msg.is_null() {
                         unsafe {
                             *out_error_msg = alloc_c_string(&err.to_string());
@@ -295,7 +295,7 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
                     unsafe {
                         *out_result = std::ptr::null_mut();
                     }
-                    let code = KgliteStatusCode::from_kg_error_code(err.code());
+                    let code = KgliteStatusCode::from_kg_error(&err);
                     if !out_error_msg.is_null() {
                         unsafe {
                             *out_error_msg = alloc_c_string(&err.to_string());
@@ -432,7 +432,7 @@ unsafe fn execute_mut_impl(
                     unsafe {
                         *out_result = std::ptr::null_mut();
                     }
-                    let code = KgliteStatusCode::from_kg_error_code(err.code());
+                    let code = KgliteStatusCode::from_kg_error(&err);
                     if !out_error_msg.is_null() {
                         unsafe {
                             *out_error_msg = alloc_c_string(&err.to_string());
@@ -504,7 +504,7 @@ pub unsafe extern "C" fn kglite_session_execute_read_batch(
                         unsafe {
                             *out_results_json = std::ptr::null();
                         }
-                        let code = KgliteStatusCode::from_kg_error_code(err.code());
+                        let code = KgliteStatusCode::from_kg_error(&err);
                         if !out_error_msg.is_null() {
                             unsafe {
                                 *out_error_msg = alloc_c_string(&err.to_string());
@@ -581,7 +581,7 @@ pub unsafe extern "C" fn kglite_session_execute_mut_batch(
                     unsafe {
                         *out_results_json = std::ptr::null();
                     }
-                    let code = KgliteStatusCode::from_kg_error_code(err.code());
+                    let code = KgliteStatusCode::from_kg_error(&err);
                     if !out_error_msg.is_null() {
                         unsafe {
                             *out_error_msg = alloc_c_string(&err.to_string());
@@ -695,10 +695,7 @@ pub unsafe extern "C" fn kglite_create_edges_batch(
                         *out_report_json = std::ptr::null();
                     }
                     let (code, message) = match typed {
-                        Some(err) => (
-                            KgliteStatusCode::from_kg_error_code(err.code()),
-                            err.to_string(),
-                        ),
+                        Some(err) => (KgliteStatusCode::from_kg_error(&err), err.to_string()),
                         None => (KgliteStatusCode::Internal, message),
                     };
                     if !out_error_msg.is_null() {
@@ -881,6 +878,9 @@ pub unsafe extern "C" fn kglite_session_backup(
                 }
             }
         },
+    )
+}
+
 /// Choose how this session's JSON results spell a non-finite float.
 ///
 /// JSON has no NaN or infinity. With `enabled` zero (the default for a new
@@ -911,9 +911,6 @@ pub unsafe extern "C" fn kglite_session_set_tagged_floats(
         let state = unsafe { SessionState::from_handle(session) };
         state.tagged_floats.store(enabled != 0, Ordering::Relaxed);
     });
-}
-
-    )
 }
 
 /// Free a session handle. Idempotent on null (no-op).

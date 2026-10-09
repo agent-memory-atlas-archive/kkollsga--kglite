@@ -247,10 +247,9 @@ fn skill_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
 
 fn refuse_if_read_only(graph: &DirGraph) -> Result<(), KgError> {
     if graph.read_only {
-        return Err(KgError::Argument(
+        return Err(KgError::read_only(
             "Graph is in read-only mode — skills cannot be created, updated or \
-             deleted. Re-enable mutations before writing skills."
-                .to_string(),
+             deleted. Re-enable mutations before writing skills.",
         ));
     }
     Ok(())

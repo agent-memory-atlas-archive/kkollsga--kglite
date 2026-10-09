@@ -498,7 +498,7 @@ impl KnowledgeGraph {
         // or append a source WAL for an independently mutated derived handle.
         self.check_durable_owner()?;
         self.flush_wal()
-            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))
+            .map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))
     }
 
     /// The tail every `store_as=` writer (`calculate`, `count`,
@@ -638,9 +638,9 @@ impl KnowledgeGraph {
             .as_ref()
             .is_some_and(|ds| ds.diverged)
         {
-            return Err(crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(
-                wal_diverged_io_error(),
-            )));
+            return Err(crate::error_py::durability_failed_pyerr(
+                wal_diverged_io_error().to_string(),
+            ));
         }
         Ok(())
     }

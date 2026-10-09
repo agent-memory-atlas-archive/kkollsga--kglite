@@ -2,23 +2,24 @@
 //!
 //! Core errors keep the engine's own code string (`KgErrorCode::as_str`, e.g.
 //! `CypherSyntax`), so a message and a code mean the same thing on every
-//! binding. Codes the binding itself raises are `Internal` (a contained panic),
-//! `WriterLeaseHeld` (another writer owns the path; carries a `holder`), `QueueFull`,
-//! `Closed` (the handle was closed), `ReadOnly` (a write on a `readOnly` handle)
-//! `NotDurable` (`sync()` on a handle with no write-ahead log) and `TransactionClosed`
-//! (a transaction that is already committed, rolled back or aborted).
+//! binding. `WriterLeaseHeld` (another writer owns the path; carries a
+//! `holder`) and `ReadOnly` (a write on a `readOnly` handle) are core codes too:
+//! their strings are `KgErrorCode`'s, not spellings of this crate. Codes the
+//! binding itself raises are `Internal` (a contained panic), `QueueFull`,
+//! `Closed` (the handle was closed), `NotDurable` (`sync()` on a handle with no
+//! write-ahead log) and `TransactionClosed` (a transaction that is already
+//! committed, rolled back or aborted).
 
 use std::ffi::c_char;
 use std::ptr;
 
-use kglite::api::{EntityKind, KgError, OntologyReportEntry};
+use kglite::api::{EntityKind, KgError, KgErrorCode, OntologyReportEntry};
 use napi::sys;
 
 pub const CODE_INTERNAL: &str = "Internal";
-pub const CODE_LEASE_HELD: &str = "WriterLeaseHeld";
 pub const CODE_QUEUE_FULL: &str = "QueueFull";
 pub const CODE_CLOSED: &str = "Closed";
-pub const CODE_READ_ONLY: &str = "ReadOnly";
+pub const CODE_READ_ONLY: &str = KgErrorCode::ReadOnly.as_str();
 pub const CODE_NOT_DURABLE: &str = "NotDurable";
 pub const CODE_TX_CLOSED: &str = "TransactionClosed";
 const CODE_ARGUMENT: &str = "InvalidArgument";
@@ -78,6 +79,14 @@ impl JsErr {
 
     pub fn from_kg(err: &KgError) -> Self {
         let mut out = Self::new(err.code().as_str(), err.to_string());
+        if let KgError::WriterLeaseHeld { holder, .. } = err {
+            out.holder = Some(Holder {
+                pid: holder.pid,
+                since: holder.since.clone(),
+                label: holder.label.clone(),
+                is_self: holder.is_self(),
+            });
+        }
         if let KgError::OntologyViolation {
             rule,
             entity,
@@ -344,6 +353,23 @@ mod tests {
             (d.rule, d.entity, d.entity_type.as_str()),
             ("domain", "relationship", "WORKS_AT")
         );
+    }
+
+    #[test]
+    fn read_only_and_lease_codes_are_the_core_codes() {
+        assert_eq!(CODE_READ_ONLY, KgErrorCode::ReadOnly.as_str());
+        let e = JsErr::from_kg(&KgError::WriterLeaseHeld {
+            message: "held".into(),
+            holder: kglite::api::io::LeaseHolder {
+                pid: Some(std::process::id()),
+                since: None,
+                label: Some("me".into()),
+            },
+        });
+        assert_eq!(e.code, "WriterLeaseHeld");
+        let holder = e.holder.expect("holder");
+        assert!(holder.is_self);
+        assert_eq!(holder.label.as_deref(), Some("me"));
     }
 
     #[test]

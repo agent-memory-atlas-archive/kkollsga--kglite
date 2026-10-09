@@ -598,30 +598,28 @@ fn open(
                 )
             })
             .map_err(|refusal| {
-                // `holder` is `Some` only on a contention refusal (filled from
-                // the owner record), so it is the classification itself rather
-                // than a proxy for one.
-                let contended = refusal.holder.is_some();
-                let error = refusal.error;
-                if !contended {
-                    // A genuine I/O failure: the engine's message already names
-                    // path and fault, and there is no second process to route
-                    // around.
-                    return crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(error));
+                // Contention converts to `KgError::WriterLeaseHeld` (the holder
+                // structured); any other refusal is a genuine I/O failure whose
+                // message already names path and fault, with no second process
+                // to route around.
+                match crate::error::KgError::from(refusal) {
+                    crate::error::KgError::WriterLeaseHeld { message, holder } => {
+                        // The engine's message is binding-neutral by design, so
+                        // the Python-specific way out is appended here rather
+                        // than baked into core: most callers who hit this
+                        // wanted to *read* a graph someone else is writing.
+                        crate::error_py::kg_to_pyerr(crate::error::KgError::WriterLeaseHeld {
+                            message: format!(
+                                "{message} To read this graph while another process writes it, \
+                                 use kglite.load(path) or kglite.open_session(path), which take \
+                                 no lease. Pass kglite.open(..., lock=False) only if you are \
+                                 coordinating writers yourself.",
+                            ),
+                            holder,
+                        })
+                    }
+                    other => crate::error_py::kg_to_pyerr(other),
                 }
-                // The engine's message is binding-neutral by design, so the
-                // Python-specific way out is appended here rather than baked
-                // into core: most callers who hit this wanted to *read* a graph
-                // someone else is writing.
-                crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "{error} To read this graph while another process writes it, use \
-                         kglite.load(path) or kglite.open_session(path), which take no \
-                         lease. Pass kglite.open(..., lock=False) only if you are \
-                         coordinating writers yourself.",
-                    ),
-                )))
             })?,
         )
     } else {

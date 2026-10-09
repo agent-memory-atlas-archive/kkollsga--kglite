@@ -107,8 +107,11 @@ The header exposes:
   batch. Declaring over stored data that breaks an `error` rule also returns 22;
   `out_warnings_json` then holds the per-rule report (`rule`, `entity`,
   `entity_type`, `property`, `count`). On success it holds the `warn`-level
-  findings. The declaration is durable once `kglite_session_save` runs, or
-  through the write-ahead log of a durable session;
+  findings. After any 22, `kglite_last_error_details_json` returns the
+  structured fields (`rule`, `entity`, `entity_type`, `property`, `report`) as
+  JSON for the failing call on the calling thread, so a caller does not parse
+  the message. The declaration is durable once `kglite_session_save` runs: the
+  C ABI has no write-ahead log;
 - `kglite_session_save`, the checkpoint for a graph that has been moved into a
   session. `kglite_session_new` takes ownership of the graph handle, so a graph
   mutated through `kglite_session_execute_mut` is persisted from the session
@@ -157,15 +160,15 @@ and wrapped in its tag matches the stored value. A bare string stays a string.
 An object with any other key, or with a tag key beside other keys, is an
 ordinary map. A malformed payload is refused like an unrepresentable number.
 
-Every JSON input decodes the same tags: `kglite_create_edges_batch` edge
-properties and endpoint ids, recipe record parameters, `from_records` records
-and Cypher `parse_json()`. Those tolerant paths keep a tagged object whose
 JSON has no NaN or infinity, so a non-finite float parameter is the tagged
 object `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`. Any
 other payload is refused like an unrepresentable number. A bare JSON number
 never carries them, and a parameter is never turned into `null`. `-0.0` is an
 ordinary number and keeps its sign.
 
+Every JSON input decodes the same tags: `kglite_create_edges_batch` edge
+properties and endpoint ids, recipe record parameters, `from_records` records
+and Cypher `parse_json()`. Those tolerant paths keep a tagged object whose
 payload is malformed as an ordinary map instead of refusing it.
 
 ## Result access
@@ -176,9 +179,6 @@ portable decoding in the host language. Copy/parse data before freeing the
 result, and free every independently returned string with
 `kglite_free_string`.
 
-Query warnings (an unknown label or relationship type, a row-cap truncation)
-arrive only in `kglite_cypher_result_diagnostics_json`'s `warnings` array. The
-library does not print them to the host process's stderr.
 Result rows spell a non-finite float as `null` by default, which is the
 rendering every earlier release produced. Call
 `kglite_session_set_tagged_floats(session, 1)` to render it as the same
@@ -191,6 +191,9 @@ adds one symbol and changes no existing one; the Java binding turns it on and
 decodes the tag to `Double`. A map whose only key is `$float` with one of those
 three payloads reads as the float.
 
+Query warnings (an unknown label or relationship type, a row-cap truncation)
+arrive only in `kglite_cypher_result_diagnostics_json`'s `warnings` array. The
+library does not print them to the host process's stderr.
 
 A `PROFILE` query's diagnostics also carry a `profile` array: one
 `{"clause", "rows_in", "rows_out", "elapsed_us"}` object per executed clause,

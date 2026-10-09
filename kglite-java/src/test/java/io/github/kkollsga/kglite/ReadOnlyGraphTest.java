@@ -53,7 +53,9 @@ class ReadOnlyGraphTest {
         try (KnowledgeGraph graph = KnowledgeGraph.openReadOnly(path)) {
             ReadOnlyGraphException e = assertThrows(ReadOnlyGraphException.class,
                     () -> graph.cypher("CREATE (:Person {id: 2, title: 'Grace'})"));
-            assertEquals("WrapperError", e.statusName(), "raised by the wrapper, not the engine");
+            // Raised by the wrapper, but under the engine's own ReadOnly identity.
+            assertEquals("ReadOnly", e.statusName());
+            assertEquals(24, e.statusCode());
             // The refusal is before native code: the graph is untouched and still reads.
             assertEquals(1, graph.query("MATCH (p:Person) RETURN p.id").size());
         }

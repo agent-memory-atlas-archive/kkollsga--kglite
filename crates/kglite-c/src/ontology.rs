@@ -5,7 +5,8 @@
 //! `define_ontology` also reaches) and installs it through
 //! `DirGraph::define_ontology`, so the declare-over-data verification and the
 //! operator lock are the engine's. [`kglite_session_clear_ontology`] removes
-//! it. Both run in a session transaction, which a durable session logs.
+//! it. Both run in a session transaction; the C ABI has no write-ahead log, so
+//! persistence is `kglite_session_save`.
 
 use crate::session::{KgliteSession, SessionState};
 use crate::status::KgliteStatusCode;
@@ -44,27 +45,6 @@ fn commit_status(outcome: CommitOutcome, out_error_msg: *mut *const c_char) -> K
     }
 }
 
-fn report_json(entries: &[kglite::api::OntologyReportEntry]) -> String {
-    serde_json::Value::Array(
-        entries
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "rule": e.rule.as_str(),
-                    "entity": match e.entity {
-                        kglite::api::EntityKind::Node => "node",
-                        kglite::api::EntityKind::Relationship => "relationship",
-                    },
-                    "entity_type": e.entity_type,
-                    "property": e.property,
-                    "count": e.count,
-                })
-            })
-            .collect(),
-    )
-    .to_string()
-}
-
 /// Declare the session graph's ontology from a JSON document.
 ///
 /// `ontology_json` uses the same dialect as the Python wheel's
@@ -77,8 +57,10 @@ fn report_json(entries: &[kglite::api::OntologyReportEntry]) -> String {
 /// On success `out_warnings_json` is an owned JSON array of strings (the
 /// `warn`-level findings; empty when there are none). On an
 /// `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` refusal it is an owned JSON array
-/// of report objects `{rule, entity, entity_type, property, count}` and
-/// `out_error_msg` carries the readable report. On any other failure it is
+/// of report objects `{rule, entity, entity_type, property, count}`,
+/// `out_error_msg` carries the readable report, and
+/// [`kglite_last_error_details_json`](crate::details::kglite_last_error_details_json)
+/// returns the headline fields with the same report. On any other failure it is
 /// null. `out_warnings_json` may be null when the caller wants neither. Free
 /// both with [`kglite_free_string`](crate::kglite_free_string).
 ///
@@ -91,8 +73,8 @@ fn report_json(entries: &[kglite::api::OntologyReportEntry]) -> String {
 /// - `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` — stored data breaks an
 ///   `error`-level rule of the declaration.
 ///
-/// **The declaration is not durable until saved** (or logged by a durable
-/// session): call [`kglite_session_save`](crate::kglite_session_save).
+/// **The declaration is not durable until saved**: the C ABI has no
+/// write-ahead log, so call [`kglite_session_save`](crate::kglite_session_save).
 ///
 /// # Safety
 ///
@@ -131,7 +113,7 @@ pub unsafe extern "C" fn kglite_session_define_ontology(
                     return emit(
                         out_error_msg,
                         &e.to_string(),
-                        KgliteStatusCode::from_kg_error_code(e.code()),
+                        KgliteStatusCode::from_kg_error(&e),
                     )
                 }
             };
@@ -143,13 +125,13 @@ pub unsafe extern "C" fn kglite_session_define_ontology(
                 Err(DefineOntologyError::Refused(refused)) => {
                     crate::ffi::init_out(
                         out_warnings_json,
-                        alloc_c_string(&report_json(&refused.entries)),
+                        alloc_c_string(&crate::details::report_json(&refused.entries).to_string()),
                     );
                     let error = KgError::from(refused);
                     return emit(
                         out_error_msg,
                         &error.to_string(),
-                        KgliteStatusCode::from_kg_error_code(error.code()),
+                        KgliteStatusCode::from_kg_error(&error),
                     );
                 }
             };
@@ -201,7 +183,7 @@ pub unsafe extern "C" fn kglite_session_clear_ontology(
                     return emit(
                         out_error_msg,
                         &e.to_string(),
-                        KgliteStatusCode::from_kg_error_code(e.code()),
+                        KgliteStatusCode::from_kg_error(&e),
                     )
                 }
             };

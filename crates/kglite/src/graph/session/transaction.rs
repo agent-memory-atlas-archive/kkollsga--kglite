@@ -467,19 +467,18 @@ impl Transaction {
     /// after the first mutation route through the same working
     /// copy automatically.
     ///
-    /// Rejected with `KgError::Argument` if:
-    /// - The tx is read-only (`begin_read`).
+    /// Rejected if:
+    /// - The tx is read-only (`begin_read`): `KgError::ReadOnly`.
     /// - The tx has been committed/rolled back (no snapshot, no
-    ///   working).
+    ///   working): `KgError::Argument`.
     // KgError carries transaction context; boxing it would only burden an error path.
     #[allow(clippy::result_large_err)]
     pub fn working_mut(&mut self) -> Result<&mut DirGraph, KgError> {
         if self.read_only {
-            return Err(KgError::Argument(
+            return Err(KgError::read_only(
                 "read-only transaction does not support mutations \
                  (CREATE/SET/DELETE/REMOVE/MERGE) — open a read-write tx \
-                 via Session::begin"
-                    .to_string(),
+                 via Session::begin",
             ));
         }
         if self.working.is_none() {
@@ -890,8 +889,8 @@ mod tests {
         let mut tx = s.begin_read();
         assert!(tx.is_read_only());
         match tx.working_mut() {
-            Err(KgError::Argument(msg)) => assert!(msg.contains("read-only")),
-            Err(other) => panic!("expected Argument, got different error: {other}"),
+            Err(KgError::ReadOnly { message }) => assert!(message.contains("read-only")),
+            Err(other) => panic!("expected ReadOnly, got different error: {other}"),
             Ok(_) => panic!("expected read-only rejection but got Ok"),
         }
     }

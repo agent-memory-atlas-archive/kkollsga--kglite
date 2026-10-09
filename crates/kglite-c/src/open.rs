@@ -12,6 +12,7 @@ use crate::strings::alloc_c_string;
 use kglite::api::durable::DurabilityLevel;
 use kglite::api::io::{open_or_create_graph_in_mode, GraphWriterLease, LeaseHolder};
 use kglite::api::storage::StorageMode;
+use kglite::api::KgError;
 use std::ffi::{c_char, CStr};
 use std::path::Path;
 use std::time::Duration;
@@ -201,23 +202,18 @@ unsafe fn acquire_lease(
                     KgliteStatusCode::Ok
                 }
                 Err(refusal) => {
-                    // Contention is `WouldBlock` — its own retriable code,
-                    // rather than the `FileIo` the generic classifier would
-                    // give it, so a binding can tell "wait and retry" from
-                    // "this path is broken" without parsing a message.
-                    let message = refusal.error.to_string();
-                    let (code, message) = if refusal.error.kind() == std::io::ErrorKind::WouldBlock
-                    {
-                        (KgliteStatusCode::WriterLeaseHeld, message)
+                    // Contention is its own retriable code, derived from core's
+                    // `KgError::WriterLeaseHeld` rather than a local kind check,
+                    // so every binding classifies the same refusal the same way.
+                    let (code, message) = if refusal.holder.is_some() {
+                        let error = KgError::from(refusal);
+                        if let KgError::WriterLeaseHeld { message, holder } = &error {
+                            set_out_json(out_holder_json, &holder_json(Some(holder), message));
+                        }
+                        (KgliteStatusCode::from_kg_error(&error), error.to_string())
                     } else {
                         classify_io_error(&refusal.error)
                     };
-                    if code == KgliteStatusCode::WriterLeaseHeld {
-                        set_out_json(
-                            out_holder_json,
-                            &holder_json(refusal.holder.as_ref(), &message),
-                        );
-                    }
                     set_out_error(out_error_msg, &message);
                     code
                 }

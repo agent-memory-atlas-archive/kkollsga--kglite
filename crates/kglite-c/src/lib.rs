@@ -36,6 +36,7 @@
 
 pub mod abi;
 pub mod alloc;
+pub mod details;
 pub mod embedder;
 pub mod embeddings;
 pub mod export;
@@ -56,6 +57,7 @@ pub mod text_indexes;
 // for binding authors to navigate.
 pub use abi::*;
 pub use alloc::*;
+pub use details::*;
 pub use embedder::*;
 pub use embeddings::*;
 pub use export::*;

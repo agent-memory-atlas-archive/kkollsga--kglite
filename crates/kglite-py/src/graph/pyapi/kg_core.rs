@@ -142,19 +142,18 @@ pub(crate) fn concurrent_access_pyerr() -> PyErr {
 /// `kg.read_only(True)` — the graph-wide flag, separate from a transaction's
 /// per-tx `read_only`.
 ///
-/// `Argument`, not `CypherExecution`: the query did not fail to execute, it was
-/// refused for the handle it was aimed at — the same policy `Session`,
-/// `FrozenGraph` and a read-only `Transaction` refuse under, and one a caller
-/// routes on by class.
+/// `ReadOnly` (a `ReadOnlyError`, subclass of `ArgumentError`), not
+/// `CypherExecution`: the query did not fail to execute, it was refused for the
+/// handle it was aimed at — the same policy `Session`, `FrozenGraph` and a
+/// read-only `Transaction` refuse under, and one a caller routes on by class.
 fn refuse_mutation_on_a_read_only_graph(slf: &Bound<'_, KnowledgeGraph>) -> PyResult<()> {
     let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
     if this.inner.read_only {
         return Err(crate::error_py::kg_to_pyerr(
-            crate::error::KgError::Argument(
+            crate::error::KgError::read_only(
                 "Graph is in read-only mode — CREATE, SET, DELETE, REMOVE, \
                  MERGE, and schema DDL (CREATE INDEX / DROP INDEX) are \
-                 disabled. Use kg.read_only(False) to re-enable mutations."
-                    .to_string(),
+                 disabled. Use kg.read_only(False) to re-enable mutations.",
             ),
         ));
     }
@@ -715,6 +714,9 @@ impl KnowledgeGraph {
                     )
                 })?,
         };
+        // A contended save-as target keeps its typed refusal here; the
+        // `SaveError` channel below carries only a message.
+        let mut lease_contention: Option<crate::error::KgError> = None;
         py.detach(|| -> Result<(), io::SaveError> {
             use kglite_core::api::durable::{self, DurabilityLevel};
             use std::path::Path;
@@ -733,10 +735,17 @@ impl KnowledgeGraph {
                 effective.into()
             };
             let target_lease = if !same_target && self.lifecycle.writer_lease.is_some() {
-                Some(
-                    io::GraphWriterLease::acquire(&target, std::time::Duration::ZERO)
-                        .map_err(io_error)?,
-                )
+                match io::GraphWriterLease::acquire_ex(&target, std::time::Duration::ZERO) {
+                    Ok(lease) => Some(lease),
+                    Err(refusal) => {
+                        let error = crate::error::KgError::from(refusal);
+                        let message = error.to_string();
+                        if matches!(error, crate::error::KgError::WriterLeaseHeld { .. }) {
+                            lease_contention = Some(error);
+                        }
+                        return Err(io::SaveError::Io(message));
+                    }
+                }
             } else {
                 None
             };
@@ -783,11 +792,12 @@ impl KnowledgeGraph {
             }
             Ok(())
         })
-        .map_err(|error| match error {
-            io::SaveError::Refused(message) => {
+        .map_err(|error| match (error, lease_contention.take()) {
+            (_, Some(contended)) => crate::error_py::kg_to_pyerr(contended),
+            (io::SaveError::Refused(message), None) => {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
             }
-            io::SaveError::Io(message) => file_io_err(std::io::Error::other(message)),
+            (io::SaveError::Io(message), None) => file_io_err(std::io::Error::other(message)),
         })?;
         Ok(())
     }

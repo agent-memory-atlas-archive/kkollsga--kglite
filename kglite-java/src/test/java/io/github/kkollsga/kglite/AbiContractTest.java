@@ -75,14 +75,18 @@ class AbiContractTest {
     }
 
     @Test
-    @DisplayName("the two status codes the wrapper hard-codes match the header")
+    @DisplayName("the status codes the wrapper hard-codes match the header")
     void statusCodesMatchHeader() {
-        // Every other code is rendered via kglite_status_code_name_static(); these two
+        // Every other code is rendered via kglite_status_code_name_static(); these
         // are the ones Java branches on, so they are the only ones that can drift.
         Map<String, Integer> codes = AbiHeader.statusCodes(AbiHeader.read(AbiHeader.headerPath()));
         assertEquals(codes.get("OK"), Abi.STATUS_OK, "KGLITE_STATUS_CODE_OK moved");
         assertEquals(codes.get("WRITER_LEASE_HELD"), Abi.STATUS_WRITER_LEASE_HELD,
                 "KGLITE_STATUS_CODE_WRITER_LEASE_HELD moved");
+        assertEquals(codes.get("ONTOLOGY_VIOLATION"), Abi.STATUS_ONTOLOGY_VIOLATION,
+                "KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION moved");
+        assertEquals(codes.get("READ_ONLY"), Abi.STATUS_READ_ONLY,
+                "KGLITE_STATUS_CODE_READ_ONLY moved");
     }
 
     @Test

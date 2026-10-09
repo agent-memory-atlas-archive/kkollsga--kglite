@@ -157,7 +157,7 @@ pub unsafe extern "C" fn kglite_define_schema(
             match working.set_schema(schema, mode) {
                 Ok(()) => KgliteStatusCode::Ok,
                 Err(e) => {
-                    let code = KgliteStatusCode::from_kg_error_code(e.code());
+                    let code = KgliteStatusCode::from_kg_error(&e);
                     emit(e.to_string(), code)
                 }
             }
