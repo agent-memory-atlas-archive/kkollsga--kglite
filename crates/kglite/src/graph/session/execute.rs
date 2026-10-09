@@ -570,8 +570,42 @@ pub fn execute_mut(
     query: &str,
     opts: &ExecuteOptions<'_>,
 ) -> Result<ExecuteOutcome, KgError> {
-    let (outcome, id_warnings) =
-        crate::graph::dir_graph::collect_id_warnings(|| mut_statement(graph, query, opts));
+    let (outcome, id_warnings) = crate::graph::dir_graph::collect_id_warnings(|| {
+        mut_statement(
+            graph,
+            query,
+            opts,
+            &mut StatementCheckpoint::None,
+            false,
+            false,
+        )
+    });
+    outcome.map(|outcome| with_id_warnings(outcome, id_warnings))
+}
+
+/// [`execute_mut`] for a caller that must still be able to undo the statement
+/// after it succeeded (a write-ahead-log append that fails, a panic unwinding
+/// past the statement): the statement's rollback checkpoint is parked in
+/// `held` instead of being closed.
+///
+/// The caller owns closing it: `held.take()` then `commit` once the write is
+/// final, or `rollback` to restore the pre-statement graph. A checkpoint
+/// parked in `held` is also what a caught panic rolls back, so it is stored
+/// there *before* the statement's first write. `keep_undo` forces a checkpoint
+/// even for the shapes `can_skip_rollback_checkpoint` proves cannot fail, since
+/// the caller's own later step can.
+// KgError deliberately carries structured context; boxing it would change the public result type.
+#[allow(clippy::result_large_err)]
+pub(super) fn execute_mut_held(
+    graph: &mut DirGraph,
+    query: &str,
+    opts: &ExecuteOptions<'_>,
+    held: &mut StatementCheckpoint,
+    keep_undo: bool,
+) -> Result<ExecuteOutcome, KgError> {
+    let (outcome, id_warnings) = crate::graph::dir_graph::collect_id_warnings(|| {
+        mut_statement(graph, query, opts, held, true, keep_undo)
+    });
     outcome.map(|outcome| with_id_warnings(outcome, id_warnings))
 }
 
@@ -600,6 +634,9 @@ fn mut_statement(
     graph: &mut DirGraph,
     query: &str,
     opts: &ExecuteOptions<'_>,
+    slot: &mut StatementCheckpoint,
+    parked: bool,
+    keep_undo: bool,
 ) -> Result<ExecuteOutcome, KgError> {
     let started = Instant::now();
     let (
@@ -654,7 +691,7 @@ fn mut_statement(
     // (O(V+E)) otherwise; `dir_graph::rollback` owns that decision. Either way
     // it MUST be closed on every exit path — `commit` is what uninstalls the
     // capture journal.
-    let checkpoint = if is_mutation && !can_skip_rollback_checkpoint(graph, &parsed, opts) {
+    *slot = if is_mutation && (keep_undo || !can_skip_rollback_checkpoint(graph, &parsed, opts)) {
         StatementCheckpoint::open_for_statement(
             graph,
             cypher::executor::write::mutates_cdc_configuration(&parsed),
@@ -667,7 +704,7 @@ fn mut_statement(
 
     if is_mutation {
         if let Err(error) = graph.prepare_mutation() {
-            checkpoint.rollback(graph);
+            std::mem::replace(slot, StatementCheckpoint::None).rollback(graph);
             return Err(KgError::FileIo(error));
         }
     }
@@ -712,7 +749,7 @@ fn mut_statement(
         // checkpoint-free statement polled for the last time before its first
         // write, and a deadline error must never follow writes it cannot undo.
         let r = r.and_then(|result| {
-            if matches!(checkpoint, StatementCheckpoint::None) {
+            if matches!(slot, StatementCheckpoint::None) {
                 return Ok(result);
             }
             cypher::executor::check_statement_interrupt(&interrupt).map(|()| result)
@@ -724,11 +761,13 @@ fn mut_statement(
                 // the typed error never depends on what a checkpoint restore
                 // does to the graph's transient fields.
                 let error = mutation_err(graph, opts, started, message);
-                checkpoint.rollback(graph);
+                std::mem::replace(slot, StatementCheckpoint::None).rollback(graph);
                 return Err(error);
             }
         };
-        checkpoint.commit(graph);
+        if !parked {
+            std::mem::replace(slot, StatementCheckpoint::None).commit(graph);
+        }
         // A Cypher write occurred — advance the graph version so any
         // version-keyed caches (the plan cache) and OCC see the change.
         // Bumps the working copy directly so a read-after-write *within* the
@@ -742,7 +781,11 @@ fn mut_statement(
         // property permanently escapes the only bound a caller can place on
         // the columnar heap. A no-op (one `Option` test) with no limit set, an
         // O(columns) heap sum with one; materialisation runs only when over.
-        graph.maybe_spill_columns();
+        // A parked checkpoint can still be rolled back, and a spill moves the
+        // columns the journal replays into: the caller spills once final.
+        if !parked {
+            graph.maybe_spill_columns();
+        }
         r
     } else {
         cypher::CypherExecutor::with_params(graph, &params, opts.deadline)

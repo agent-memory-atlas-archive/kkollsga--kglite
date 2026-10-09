@@ -542,6 +542,8 @@ impl Session {
             graph: Mutex::new(graph),
             durable: Mutex::new(Some(state)),
             checkpoint_gate: Mutex::new(()),
+            in_place_commits: Default::default(),
+            forked_commits: Default::default(),
         }
     }
 }

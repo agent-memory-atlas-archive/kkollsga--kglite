@@ -577,7 +577,15 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/session/auto_commit.rs::fn:execute_auto_commit_in_place:pub(crate) fn execute_auto_commit_in_place( &self, query: &str, opts: &ExecuteOptions<'_>, ) -> Option<Result<ExecuteOutcome, KgError>>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/auto_commit.rs::fn:execute_auto_commit_observed:pub fn execute_auto_commit_observed( &self, query: &str, opts: &ExecuteOptions<'_>, attempts: u32, between: &mut dyn FnMut(u32), ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/auto_commit.rs::fn:in_place_with:pub(super) fn in_place_with( &self, query: &str, opts: &ExecuteOptions<'_>, run: impl FnOnce( &mut crate::graph::dir_graph::DirGraph, &str, &ExecuteOptions<'_>, &mut StatementCheckpoint, bool, ) -> Result<ExecuteOutcome, KgError>, ) -> Option<Result<ExecuteOutcome, KgError>>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
@@ -601,11 +609,15 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:execute_mut_held:pub(super) fn execute_mut_held( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, held: &mut StatementCheckpoint, keep_undo: bool, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:execute_read:pub fn execute_read( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:mut_statement:fn mut_statement( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:mut_statement:fn mut_statement( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, slot: &mut StatementCheckpoint, parked: bool, keep_undo: bool, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {
@@ -622,6 +634,14 @@
     },
     {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:timeless_route:pub(super) fn timeless_route( graph: &DirGraph, query: &str, prepared: PreparedQuery, opts: &ExecuteOptions<'_>, ) -> Result<(PreparedQuery, Option<TemporalDiagnostics>), KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/in_place_tests.rs::fn:run_then_linger:fn run_then_linger( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, held: &mut StatementCheckpoint, keep_undo: bool, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/in_place_tests.rs::fn:run_then_panic:fn run_then_panic( graph: &mut DirGraph, query: &str, opts: &ExecuteOptions<'_>, held: &mut StatementCheckpoint, keep_undo: bool, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {

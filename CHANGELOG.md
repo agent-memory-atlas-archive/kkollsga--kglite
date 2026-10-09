@@ -327,6 +327,26 @@ before upgrading.
   node `CREATE`, 30-32% for `SET`, 12-18% for `add_nodes`, 40-45% for
   `add_connections`, 5-9% for edge `CREATE`, and none measured for `MERGE`.
   Cost scales with the write, not the graph.
+- **Performance: an auto-commit write runs in place when nothing else holds
+  the graph.** One-shot writes (Bolt auto-commit, Node `executeWrite`, C
+  `kglite_session_execute_mut*`) skip the whole-graph copy and the free of the
+  replaced graph. On 1M nodes / 3M edges, release build, median:
+  relationship `CREATE`/`DELETE` 61-62 ms -> 0.013 ms, `DETACH DELETE` 82 ms ->
+  4.1 ms, and the +390 MB transient per relationship commit is gone. At 100k
+  nodes: 6.3 ms -> 0.012 ms and 8.3 ms -> 0.27 ms. Node-only `CREATE` and point
+  reads are unchanged. A statement that fails, is refused by the ontology or a
+  constraint, times out, is cancelled, or cannot be logged restores the exact
+  previous graph.
+  - **In place needs** a plain data statement (`MATCH`/`WITH`/`RETURN` family,
+    `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, `FOREACH`), memory or mapped
+    storage, no embedder, and no reader snapshot, cursor, backup image or open
+    transaction. Schema DDL, procedure calls, `LOAD CSV`, subqueries, disk
+    graphs and explicit transactions use the copy path as before.
+- **A reader arriving while an in-place write runs waits for that statement.**
+  The session lock is held for the whole statement, so `snapshot()` blocks for
+  the statement's duration (4 ms for a 1M-node `DETACH DELETE`) and then sees
+  all of it. Readers already holding a snapshot are unaffected and never see the
+  write. The copy path never blocked readers.
 
 ### Fixed
 

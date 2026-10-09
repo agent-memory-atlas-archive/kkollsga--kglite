@@ -112,6 +112,10 @@ pub struct Session {
     /// Serializes checkpoints (`save` and the online checkpoint). Taken before
     /// the graph lock, so it sits first in the lock order.
     pub(super) checkpoint_gate: Mutex<()>,
+    /// Auto-commit statements that ran in place on the published graph, and
+    /// those that forked because it was shared. Test observability only.
+    pub(super) in_place_commits: std::sync::atomic::AtomicU64,
+    pub(super) forked_commits: std::sync::atomic::AtomicU64,
 }
 
 /// Serialized mutable access to a Session graph. The guard holds the Session
@@ -169,6 +173,8 @@ impl Session {
             graph: Mutex::new(graph),
             durable: Mutex::new(None),
             checkpoint_gate: Mutex::new(()),
+            in_place_commits: Default::default(),
+            forked_commits: Default::default(),
         }
     }
 

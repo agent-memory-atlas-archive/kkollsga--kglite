@@ -2446,7 +2446,7 @@ pub struct GraphInfo {
 mod dir_graph_tests;
 
 #[cfg(test)]
-mod rollback_tests;
+pub(crate) mod rollback_tests;
 
 #[cfg(test)]
 mod fork_apportionment_tests;

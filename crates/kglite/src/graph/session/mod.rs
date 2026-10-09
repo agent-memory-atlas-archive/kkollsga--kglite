@@ -93,6 +93,8 @@ pub(crate) mod durable;
 mod endpoint_contract_tests;
 pub(crate) mod execute;
 #[cfg(test)]
+mod in_place_tests;
+#[cfg(test)]
 mod merge_unwind_index_tests;
 pub(crate) mod noderefs;
 mod online_checkpoint;

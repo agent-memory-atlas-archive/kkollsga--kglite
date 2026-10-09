@@ -280,6 +280,12 @@ fn fingerprint_user_indexes(graph: &DirGraph) -> Vec<(String, String, Vec<usize>
     user_indexes
 }
 
+/// [`fingerprint`] as one comparable string, for tests outside this module
+/// that prove a graph is exactly as it was.
+pub(crate) fn digest(graph: &mut DirGraph) -> String {
+    format!("{:#?}", fingerprint(graph))
+}
+
 fn fingerprint(graph: &mut DirGraph) -> Fingerprint {
     let nodes = fingerprint_nodes(graph);
     let edges = fingerprint_edges(graph);
