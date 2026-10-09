@@ -244,58 +244,12 @@ typedef struct KgliteCancelToken {
 } KgliteCancelToken;
 
 /**
- * Opaque handle for an embedder. See
- * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the
- * empty `#[repr(C)]` facade pattern — cbindgen renders only a
- * forward declaration; the actual state lives in
- * [`EmbedderState`].
- */
-typedef struct KgliteEmbedder {
-  uint8_t _opaque[0];
-} KgliteEmbedder;
-
-/**
  * Opaque handle for a session. See [`KgliteGraph`](crate::KgliteGraph)
  * for the rationale on the empty `#[repr(C)]` facade pattern.
  */
 typedef struct KgliteSession {
   uint8_t _opaque[0];
 } KgliteSession;
-
-/**
- * Opaque handle for a knowledge graph. The C-side caller only
- * ever sees `KgliteGraph*`; allocation, deallocation, and field
- * access happen inside `kglite-c`.
- *
- * cbindgen sees the `#[repr(C)]` empty struct and renders only a
- * forward declaration in `kglite.h`. The actual state lives in
- * the private [`GraphState`] sidecar: every `*mut KgliteGraph`
- * the C side holds is really a `*mut GraphState` cast through
- * the opaque facade.
- */
-typedef struct KgliteGraph {
-  uint8_t _opaque[0];
-} KgliteGraph;
-
-/**
- * Opaque handle for a held writer lease. See
- * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the empty
- * `#[repr(C)]` facade pattern — cbindgen renders only a forward
- * declaration; the actual state lives in [`LeaseState`].
- */
-typedef struct KgliteWriterLease {
-  uint8_t _opaque[0];
-} KgliteWriterLease;
-
-/**
- * Opaque handle for a Cypher result. See
- * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the
- * empty `#[repr(C)]` facade pattern — cbindgen renders only a
- * forward declaration; the actual state lives in [`ResultState`].
- */
-typedef struct KgliteCypherResult {
-  uint8_t _opaque[0];
-} KgliteCypherResult;
 
 /**
  * Execution options for [`kglite_session_execute_read_ex`] and
@@ -346,6 +300,59 @@ typedef struct KgliteExecuteOptions {
    */
   const struct KgliteCancelToken *cancel;
 } KgliteExecuteOptions;
+
+/**
+ * Opaque handle for an open read cursor. Free with [`kglite_cursor_free`].
+ */
+typedef struct KgliteCursor {
+  uint8_t _opaque[0];
+} KgliteCursor;
+
+/**
+ * Opaque handle for an embedder. See
+ * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the
+ * empty `#[repr(C)]` facade pattern — cbindgen renders only a
+ * forward declaration; the actual state lives in
+ * [`EmbedderState`].
+ */
+typedef struct KgliteEmbedder {
+  uint8_t _opaque[0];
+} KgliteEmbedder;
+
+/**
+ * Opaque handle for a knowledge graph. The C-side caller only
+ * ever sees `KgliteGraph*`; allocation, deallocation, and field
+ * access happen inside `kglite-c`.
+ *
+ * cbindgen sees the `#[repr(C)]` empty struct and renders only a
+ * forward declaration in `kglite.h`. The actual state lives in
+ * the private [`GraphState`] sidecar: every `*mut KgliteGraph`
+ * the C side holds is really a `*mut GraphState` cast through
+ * the opaque facade.
+ */
+typedef struct KgliteGraph {
+  uint8_t _opaque[0];
+} KgliteGraph;
+
+/**
+ * Opaque handle for a held writer lease. See
+ * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the empty
+ * `#[repr(C)]` facade pattern — cbindgen renders only a forward
+ * declaration; the actual state lives in [`LeaseState`].
+ */
+typedef struct KgliteWriterLease {
+  uint8_t _opaque[0];
+} KgliteWriterLease;
+
+/**
+ * Opaque handle for a Cypher result. See
+ * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the
+ * empty `#[repr(C)]` facade pattern — cbindgen renders only a
+ * forward declaration; the actual state lives in [`ResultState`].
+ */
+typedef struct KgliteCypherResult {
+  uint8_t _opaque[0];
+} KgliteCypherResult;
 
 /**
  * Opaque handle for an explicit transaction. See
@@ -455,6 +462,86 @@ typedef struct KgliteTx {
  void kglite_cancel_token_free(struct KgliteCancelToken *token);
 
 /**
+ * Open a cursor over a read-only Cypher query. Arguments as for
+ * [`kglite_session_execute_read_ex`](crate::kglite_session_execute_read_ex):
+ * `params_json` null or a JSON object, `options` null or a
+ * [`KgliteExecuteOptions`] block. The timeout and cancel token in `options`
+ * apply for the cursor's whole life, including between batches; a `row_limit`
+ * makes the engine build the result whole (see [`kglite_cursor_streamed`]).
+ *
+ * A parse or planning error is returned here; an execution error arrives from
+ * [`kglite_cursor_next_batch`].
+ *
+ * # Safety
+ *
+ * `session` a live session handle; `query` a NUL-terminated string;
+ * `out_cursor` a writable `*mut KgliteCursor` slot, set to null on failure and
+ * otherwise owned by the caller (free with [`kglite_cursor_free`]). The cursor
+ * keeps its own snapshot, so the session may be used or freed afterwards.
+ */
+
+KgliteStatusCode kglite_session_cursor_open(const struct KgliteSession *session,
+                                            const char *query,
+                                            const char *params_json,
+                                            const struct KgliteExecuteOptions *options,
+                                            struct KgliteCursor **out_cursor,
+                                            const char **out_error_msg);
+
+/**
+ * The result column names as an owned JSON array string, known before the
+ * first row. Free with [`kglite_free_string`](crate::kglite_free_string).
+ * Null for a null handle.
+ *
+ * # Safety
+ *
+ * `cursor` null or a live cursor handle.
+ */
+ const char *kglite_cursor_columns_json(const struct KgliteCursor *cursor);
+
+/**
+ * Whether rows are produced as they are pulled (`true`) or the engine built
+ * the whole result before the first batch (`false`), in which case the cursor
+ * only slices it. A null handle returns `false`.
+ *
+ * # Safety
+ *
+ * `cursor` null or a live cursor handle.
+ */
+ bool kglite_cursor_streamed(const struct KgliteCursor *cursor);
+
+/**
+ * Pull up to `max_rows` further rows (at least one is asked for) as an owned
+ * JSON array of row objects keyed by column name, in the encoding of
+ * [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json).
+ * An empty array (`[]`) with `KGLITE_STATUS_CODE_OK` means the cursor is
+ * exhausted. A failure, cancellation or timeout while producing rows returns
+ * its status here, once, and ends the cursor: later calls return `[]`.
+ *
+ * Free `*out_rows_json` with [`kglite_free_string`](crate::kglite_free_string).
+ *
+ * # Safety
+ *
+ * `cursor` a live handle; `out_rows_json` a writable slot, set to null on
+ * failure.
+ */
+
+KgliteStatusCode kglite_cursor_next_batch(struct KgliteCursor *cursor,
+                                          uintptr_t max_rows,
+                                          const char **out_rows_json,
+                                          const char **out_error_msg);
+
+/**
+ * Free a cursor handle, stopping its engine worker and releasing the snapshot
+ * it held. Idempotent on null.
+ *
+ * # Safety
+ *
+ * `cursor` null or a handle from [`kglite_session_cursor_open`] not yet freed,
+ * and not in use by another call.
+ */
+ void kglite_cursor_free(struct KgliteCursor *cursor);
+
+/**
  * Structured detail of the most recent failed call **on the calling thread**,
  * as an owned JSON object, or null when that call had none (or succeeded).
  *
@@ -467,14 +554,15 @@ typedef struct KgliteTx {
  * `{"code":"OntologyViolation","rule","entity","entity_type","property",
  * "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
  * `required_property` / `property_type` / `closed_labels` / `domain` /
- * `range` / `cardinality`, `entity` is `node` / `relationship`, `property` may be null, and
+ * `range` / `cardinality` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`, `entity` is `node` / `relationship`, `property` may be null, and
  * `report` is empty for a refused write and the per-rule breakdown for a
  * refused declaration. Read it right after the failing call: every
  * status-returning export on the same thread clears it on entry.
  *
  * Free the string with [`kglite_free_string`](crate::kglite_free_string).
  */
- const char *kglite_last_error_details_json(void);
+
+const char *kglite_last_error_details_json(void);
 
 /**
  * Free an embedder handle. Idempotent on null.
@@ -1704,9 +1792,10 @@ KgliteStatusCode kglite_open_or_create_graph_in_mode(const char *path,
  * [`kglite_session_set_result_encoding`](crate::kglite_session_set_result_encoding)
  * `Tagged`, which renders them as the one-key tags a query parameter accepts.
  *
- * For large result sets this materializes the entire JSON blob
- * in memory. Future v2 will add pull-row-by-row accessors; for
- * now this is fine for the common-case query sizes.
+ * This materializes the entire JSON blob in memory. For a large result
+ * open a [`KgliteCursor`](crate::KgliteCursor) with
+ * [`kglite_session_cursor_open`](crate::kglite_session_cursor_open) and pull
+ * it a batch at a time instead.
  *
  * The returned string is OWNED by the caller and must be freed
  * via [`kglite_free_string`](crate::kglite_free_string). Returns

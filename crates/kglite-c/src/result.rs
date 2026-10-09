@@ -62,21 +62,31 @@ pub(crate) fn rows_to_json_array(
     result: &CypherResult,
     tagged_results: bool,
 ) -> Vec<serde_json::Value> {
+    rows_to_json(&result.columns, &result.rows, tagged_results)
+}
+
+/// [`rows_to_json_array`] over any run of rows with their columns, for the
+/// cursor, which hands rows over a batch at a time.
+pub(crate) fn rows_to_json(
+    columns: &[String],
+    rows: &[Vec<Value>],
+    tagged_results: bool,
+) -> Vec<serde_json::Value> {
     let render = if tagged_results {
         kglite_value_to_json_tagged
     } else {
         kglite_value_to_json
     };
-    let mut rows = Vec::with_capacity(result.rows.len());
-    for row in &result.rows {
-        let mut obj = serde_json::Map::with_capacity(result.columns.len());
-        for (idx, col) in result.columns.iter().enumerate() {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut obj = serde_json::Map::with_capacity(columns.len());
+        for (idx, col) in columns.iter().enumerate() {
             let cell = row.get(idx).unwrap_or(&Value::Null);
             obj.insert(col.clone(), render(cell));
         }
-        rows.push(serde_json::Value::Object(obj));
+        out.push(serde_json::Value::Object(obj));
     }
-    rows
+    out
 }
 
 /// Build a `columns`/`rows`/`diagnostics` JSON object for a
@@ -160,9 +170,10 @@ pub unsafe extern "C" fn kglite_cypher_result_columns_json(
 /// [`kglite_session_set_result_encoding`](crate::kglite_session_set_result_encoding)
 /// `Tagged`, which renders them as the one-key tags a query parameter accepts.
 ///
-/// For large result sets this materializes the entire JSON blob
-/// in memory. Future v2 will add pull-row-by-row accessors; for
-/// now this is fine for the common-case query sizes.
+/// This materializes the entire JSON blob in memory. For a large result
+/// open a [`KgliteCursor`](crate::KgliteCursor) with
+/// [`kglite_session_cursor_open`](crate::kglite_session_cursor_open) and pull
+/// it a batch at a time instead.
 ///
 /// The returned string is OWNED by the caller and must be freed
 /// via [`kglite_free_string`](crate::kglite_free_string). Returns

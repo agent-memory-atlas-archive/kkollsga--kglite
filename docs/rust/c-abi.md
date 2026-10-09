@@ -302,6 +302,31 @@ A `PROFILE` query's diagnostics also carry a `profile` array: one
 in execution order. The key is absent for an unprofiled query. Batch results
 carry the same object under each statement's `diagnostics`.
 
+### Reading a large result in batches
+
+`kglite_session_cursor_open` runs a read query and returns a `KgliteCursor`.
+`kglite_cursor_next_batch(cursor, max_rows, &rows_json, &error)` returns up to
+`max_rows` rows as a JSON array in the same encoding as
+`kglite_cypher_result_rows_json`. An empty array means the cursor is exhausted.
+
+- **Memory:** a plain `MATCH ... RETURN <expressions>` is produced as it is
+  pulled, so a caller that drops each batch holds a few batches whatever the
+  row count. `kglite_cursor_streamed` returns `true` for that shape.
+- **Everything else:** `ORDER BY`, `DISTINCT`, aggregation, `UNION`, several
+  clauses, a `row_limit`, `max_work_units` and a disk graph are built whole by
+  the engine, exactly as `kglite_session_execute_read` builds them. The cursor
+  then slices the finished rows, and `kglite_cursor_streamed` returns `false`.
+- **Snapshot:** the cursor reads the graph as it was at open and keeps it alive
+  until `kglite_cursor_free`. A later commit does not change the cursor, and
+  freeing the session does not invalidate it.
+- **Errors:** a parse or planning error is returned by `open`. An execution
+  error, a cancellation or a timeout is returned once by `next_batch`, and the
+  cursor then reports exhausted.
+- **Limits:** the `KgliteExecuteOptions` timeout and cancel token apply for the
+  cursor's life, including between batches.
+- **Not carried:** the diagnostics JSON of a result. Schema warnings are not
+  available from a cursor.
+
 ## Binding checklist
 
 1. Validate UTF-8 and nullability before calls.
