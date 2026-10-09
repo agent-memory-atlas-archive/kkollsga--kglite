@@ -2,7 +2,7 @@
 //! that never forks (issue #195).
 //!
 //! Each step is a create, a targeted delete, a delete-all, a MERGE, an edge
-//! write, or taking/dropping a snapshot, and each write goes through either
+//! create, delete or weight write, or taking/dropping a snapshot, and each write goes through either
 //! `Session::begin`/`commit` or the `Session::write` guard. Deletes leave slots
 //! on the free lists in arbitrary orders, so forks, fold-backs and the
 //! deep-copy fallback all occur. After every step:
@@ -127,7 +127,7 @@ fn run_machine_with(mode: StorageMode, seed: u64, steps: usize, reloads: bool) -
 
     for step in 0..steps {
         let context = format!("{mode:?} seed {seed} step {step}");
-        let query = match rng.below(10) {
+        let query = match rng.below(12) {
             0..=2 => {
                 let keys: Vec<String> = (0..1 + rng.below(3))
                     .map(|_| {
@@ -156,6 +156,10 @@ fn run_machine_with(mode: StorageMode, seed: u64, steps: usize, reloads: bool) -
                 let a = live[rng.below(live.len())].clone();
                 let b = live[rng.below(live.len())].clone();
                 format!("MATCH (a:T {{k: '{a}'}}), (b:T {{k: '{b}'}}) CREATE (a)-[:R]->(b)")
+            }
+            10 if live.len() >= 2 => "MATCH (:T)-[r:R]->(:T) WITH r LIMIT 1 DELETE r".to_string(),
+            11 if live.len() >= 2 => {
+                format!("MATCH (:T)-[r:R]->(:T) SET r.w = {step}")
             }
             8 => {
                 held = match held.take() {
@@ -247,7 +251,7 @@ fn run_machine_with(mode: StorageMode, seed: u64, steps: usize, reloads: bool) -
 
 #[test]
 fn random_writes_in_memory_match_a_graph_that_never_forks() {
-    for seed in 0..24 {
+    for seed in 0..120 {
         run_machine(StorageMode::Memory, seed, 80);
     }
 }
@@ -273,5 +277,86 @@ fn random_writes_in_mapped_mode_match_a_graph_that_never_forks() {
 fn random_writes_in_disk_mode_match_a_graph_that_never_forks() {
     for seed in 0..3 {
         run_machine(StorageMode::Disk, seed, 40);
+    }
+}
+
+/// Issue #195's shape with relationships: delete everything, create a batch
+/// and connect it, round after round, with a reader held on every third round.
+/// Every round's nodes and edges land on slots the previous round vacated, in
+/// the order its deletes freed them, so a fork-back that allocated any other
+/// slot would lose or duplicate rows. Counts must be exact at every step, on
+/// the forked graph and on a graph that never forks.
+#[test]
+fn two_hundred_delete_all_and_create_rounds_with_edges_keep_exact_counts() {
+    let session = Session::new(new_graph(StorageMode::Memory, None));
+    let mut reference = new_graph(StorageMode::Memory, None);
+    let mut held: Option<(Arc<DirGraph>, Fingerprint)> = None;
+    for round in 0..200 {
+        let queries = [
+            format!(
+                "UNWIND range(1, {n}) AS i CREATE (:T {{k: 'r{round}-' + toString(i)}})",
+                n = 3 + round % 4
+            ),
+            "MATCH (a:T), (b:T) WHERE a.k < b.k CREATE (a)-[:R]->(b)".to_string(),
+        ];
+        for query in &queries {
+            if round % 2 == 0 {
+                let mut tx = session.begin();
+                run(tx.working_mut().expect("read-write tx"), query);
+                assert!(matches!(
+                    session.commit(tx, true),
+                    CommitOutcome::Committed { .. }
+                ));
+            } else {
+                run(&mut session.write(), query);
+            }
+            run(&mut reference, query);
+        }
+        if round % 3 == 0 {
+            let snapshot = session.snapshot();
+            let print = content(&snapshot);
+            held = Some((snapshot, print));
+        }
+        let snapshot = session.snapshot();
+        let n = 3 + round % 4;
+        assert_eq!(
+            count(&snapshot, "MATCH (n:T) RETURN count(n)"),
+            n,
+            "round {round}"
+        );
+        assert_eq!(
+            count(&snapshot, "MATCH (:T)-[r:R]->(:T) RETURN count(r)"),
+            n * (n - 1) / 2,
+            "round {round}: edges"
+        );
+        // Slot for slot, but not the column stores: only the session compacts
+        // the rows its deletes leave behind.
+        let (mine, theirs) = (content(&snapshot), content(&reference));
+        assert_eq!(mine.nodes, theirs.nodes, "round {round}: nodes");
+        assert_eq!(mine.edges, theirs.edges, "round {round}: edges");
+        assert_eq!(mine.type_indices, theirs.type_indices, "round {round}");
+        drop(snapshot);
+
+        let query = "MATCH (n) DETACH DELETE n";
+        run(&mut session.write(), query);
+        run(&mut reference, query);
+        let snapshot = session.snapshot();
+        assert_eq!(
+            count(&snapshot, "MATCH (n) RETURN count(n)"),
+            0,
+            "round {round}"
+        );
+        assert_eq!(
+            snapshot.graph.edge_count(),
+            0,
+            "round {round}: edges after delete"
+        );
+        if let Some((reader, print)) = &held {
+            assert_eq!(
+                &content(reader),
+                print,
+                "round {round}: held snapshot moved"
+            );
+        }
     }
 }

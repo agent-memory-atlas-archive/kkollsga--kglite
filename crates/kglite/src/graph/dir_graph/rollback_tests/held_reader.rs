@@ -103,6 +103,55 @@ fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
     }
 }
 
+/// A statement that detach-deletes a node with edges and then fails must be
+/// reversed through the overlay: the node, its edges (on their old slots) and
+/// the tombstones the removal left, with the reader's base untouched.
+///
+/// The removal used to flatten the overlay, so this reversal ran on a plain
+/// graph. It now removes the node's edges and the node inside the overlay, and
+/// the journal has to put them back on the exact slots they vacated — the same
+/// slot identity the fold-back later replays.
+#[test]
+fn a_rolled_back_detach_delete_under_a_held_reader_restores_the_overlay() {
+    use crate::graph::handle::make_dir_graph_mut;
+    use std::sync::Arc;
+
+    for (name, build) in [
+        ("plain", seeded as fn() -> DirGraph),
+        ("columnar", seeded_columnar as fn() -> DirGraph),
+        ("indexed", seeded_indexed as fn() -> DirGraph),
+    ] {
+        let mut writer = Arc::new(build());
+        let reader = Arc::clone(&writer);
+        let reader_before = fingerprint(&mut (*reader).clone());
+
+        let graph = make_dir_graph_mut(&mut writer);
+        assert!(graph.graph.is_forked(), "{name}: precondition — an overlay");
+        let edges_before = graph.graph.edge_count();
+        let before = fingerprint(&mut graph.clone());
+        expect_failure(
+            graph,
+            "MATCH (n:Item {id: 1}) DETACH DELETE n CREATE (:Blocked {id: 5000})",
+            Some(&["Item"]),
+        );
+        assert!(
+            graph.graph.is_forked(),
+            "{name}: the rollback must stay in the overlay"
+        );
+        assert_eq!(graph.graph.edge_count(), edges_before, "{name}: edges back");
+        assert_eq!(
+            fingerprint(&mut graph.clone()),
+            before,
+            "{name}: the failed detach-delete must roll back exactly"
+        );
+        assert_eq!(
+            fingerprint(&mut (*reader).clone()),
+            reader_before,
+            "{name}: the reader's base must not see the delete or its rollback"
+        );
+    }
+}
+
 /// The **clone fallback**: a graph whose free-list order is unknown cannot be
 /// forked, so a write taken while a reader holds it must deep-copy — and be
 /// correct.
@@ -202,9 +251,8 @@ fn a_write_under_a_held_reader_after_a_delete_takes_the_clone_path() {
     );
 }
 
-/// The forked backend must take the **journal** path, not the clone checkpoint
-/// — and the one write it cannot express must cost exactly one copy, not one
-/// per statement.
+/// The forked backend must take the **journal** path, not the clone checkpoint,
+/// and no statement it runs — adjacency edits included — may copy a node.
 ///
 /// `journal_covers` has exactly one term left, `supports_undo_journal()`. If
 /// `Forked` answered `false` there, every statement taken while a view is held
@@ -213,43 +261,44 @@ fn a_write_under_a_held_reader_after_a_delete_takes_the_clone_path() {
 /// introducing a cliff worse than the defect. The zeros below are what would
 /// break.
 ///
-/// The middle assertion is the honest half. An overlay cannot express an
-/// adjacency edit (`storage/forked.rs` module doc), so the edge `CREATE`
-/// flattens the overlay — one deep copy, the cost every statement used to pay.
-/// What matters is that it happens **once**: the backend is a plain `Memory`
-/// afterwards, so every later statement is back to mutating in place. A
-/// per-statement copy here would be that same accident wearing a different hat.
+/// Edge creates, edge deletes, edge-weight writes and `DETACH DELETE` are in
+/// the list on purpose: they used to flatten the overlay (one whole-graph copy
+/// per fork) and now land in the overlay's edge layer. A statement that leaves
+/// the backend plain `Memory` is the regression.
 #[test]
-fn forked_statements_copy_zero_nodes_except_one_flatten() {
+fn forked_statements_copy_zero_nodes() {
     use crate::graph::handle::make_dir_graph_mut;
     use crate::graph::storage::backend::{backend_clone_nodes, reset_backend_clone_count};
     use std::sync::Arc;
 
-    /// Overlay-expressible: node adds and weight writes.
-    const OVERLAY_QUERIES: &[&str] = &[
+    const QUERIES: &[&str] = &[
         "CREATE (:Item {id: 2000, name: 'x'})",
         "MATCH (n:Item {id: 1}) SET n.qty = 11, n.name = 'renamed'",
         "MATCH (n:Item {id: 2000}) SET n:Featured",
         "MERGE (n:Item {id: 2001}) ON CREATE SET n.name = 'merged'",
+        "MATCH (a:Item {id: 1}), (b:Item {id: 3}) CREATE (a)-[:LINKS {weight: 2}]->(b)",
+        "MATCH (:Item {id: 1})-[r:LINKS]->(:Item {id: 3}) SET r.weight = 3",
+        "MATCH (a:Item {id: 2000}), (b:Item {id: 2001}) CREATE (a)-[:LINKS]->(b)",
+        "MATCH (:Item {id: 1})-[r:LINKS]->(:Item {id: 3}) DELETE r",
+        "MATCH (n:Item {id: 2000}) DETACH DELETE n",
+        "CREATE (:Item {id: 2002, name: 'after'})",
     ];
-    /// Rewrites existing nodes' petgraph adjacency, so it flattens first.
-    const ADJACENCY_QUERY: &str =
-        "MATCH (a:Item {id: 1}), (b:Item {id: 3}) CREATE (a)-[:LINKS {weight: 2}]->(b)";
 
     let mut writer = Arc::new(seeded());
     let reader = Arc::clone(&writer);
     let fixture_nodes = reader.graph.node_count();
+    let fixture_edges = reader.graph.edge_count();
 
     let graph = make_dir_graph_mut(&mut writer);
     assert!(graph.graph.is_forked(), "precondition: the write forked");
 
-    for &query in OVERLAY_QUERIES {
+    for &query in QUERIES {
         reset_backend_clone_count();
         run(graph, query);
         assert_eq!(
             backend_clone_nodes(),
             0,
-            "an overlay-expressible statement on a forked backend must copy no node: {query}"
+            "a statement on a forked backend must copy no node: {query}"
         );
         assert!(
             graph.graph.is_forked(),
@@ -257,31 +306,10 @@ fn forked_statements_copy_zero_nodes_except_one_flatten() {
         );
     }
 
-    reset_backend_clone_count();
-    run(graph, ADJACENCY_QUERY);
-    assert_eq!(
-        backend_clone_nodes(),
-        fixture_nodes,
-        "the adjacency write flattens the overlay — exactly one copy of the base"
-    );
-    assert!(
-        !graph.graph.is_forked(),
-        "flattening must leave a plain backend, so the copy is paid once"
-    );
-
-    reset_backend_clone_count();
-    run(graph, "MATCH (n:Item {id: 2000}) DETACH DELETE n");
-    run(graph, "CREATE (:Item {id: 2002, name: 'after'})");
-    assert_eq!(
-        backend_clone_nodes(),
-        0,
-        "after flattening, later statements mutate in place — one copy per fork, \
-         not one per statement"
-    );
-
     // The reader is still holding the pre-fork base and must be untouched by
     // any of it.
     assert_eq!(reader.graph.node_count(), fixture_nodes);
+    assert_eq!(reader.graph.edge_count(), fixture_edges);
 }
 
 /// A replace-all write on a forked columnar row must roll back the cells it
@@ -382,10 +410,9 @@ fn a_replace_write_on_a_forked_columnar_row_rolls_back_the_cells_it_nulled() {
 /// `GraphBackend::edge_weight_mut`, and both verbs reach it, but only the write
 /// that runs *while the backend is still forked* can see whether it does.
 ///
-/// The clone counts are the cost half of the same contract: the write flattens
-/// the overlay, and it does so **once** — the backend is a plain `Memory`
-/// afterwards, so a second edge write copies nothing. A per-write copy would be
-/// the fix introducing a cliff worse than the defect.
+/// The clone counts are the cost half of the same contract: the write copies
+/// the one edge weight into the overlay's edge layer and nothing else, and the
+/// backend stays forked.
 ///
 /// The reader assertion is the third half: the write is the writer's alone, so
 /// the held snapshot must still read the pre-write weight.
@@ -404,8 +431,6 @@ fn an_edge_property_write_under_a_held_reader_reaches_traversal_reads() {
     ] {
         let mut writer = Arc::new(seeded());
         let reader = Arc::clone(&writer);
-        let fixture_nodes = reader.graph.node_count();
-
         let graph = make_dir_graph_mut(&mut writer);
         assert!(
             graph.graph.is_forked(),
@@ -416,12 +441,12 @@ fn an_edge_property_write_under_a_held_reader_reaches_traversal_reads() {
         run(graph, &format!("{PAIR} {verb}"));
         assert_eq!(
             backend_clone_nodes(),
-            fixture_nodes,
-            "{verb}: the edge-property write flattens the overlay — one copy of the base"
+            0,
+            "{verb}: the edge-property write copies one weight, not the base"
         );
         assert!(
-            !graph.graph.is_forked(),
-            "{verb}: flattening must leave a plain backend, so the copy is paid once"
+            graph.graph.is_forked(),
+            "{verb}: the write must leave the backend forked"
         );
 
         reset_backend_clone_count();
@@ -432,7 +457,7 @@ fn an_edge_property_write_under_a_held_reader_reaches_traversal_reads() {
         assert_eq!(
             backend_clone_nodes(),
             0,
-            "{verb}: after flattening, a second edge-property write copies nothing"
+            "{verb}: a second edge-property write copies nothing"
         );
 
         let params = HashMap::new();

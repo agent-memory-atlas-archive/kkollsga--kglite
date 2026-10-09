@@ -168,7 +168,7 @@ def test_dropping_the_view_returns_the_graph_to_the_flat_representation(
 def test_a_held_view_survives_indexed_and_deleting_writes(graph: kglite.KnowledgeGraph) -> None:
     """The index families and the delete path, which fork differently.
 
-    User indexes are layered per bucket and a delete *flattens* its buckets, so
+    User indexes are layered per bucket and a delete copies its buckets, so
     this exercises the two paths the plain `SET`/`CREATE` case above does not:
     an indexed write's delta maintenance, and a removal that has to copy a
     bucket rather than mask it. A leak in either shows up as the reader
@@ -187,15 +187,11 @@ def test_a_held_view_survives_indexed_and_deleting_writes(graph: kglite.Knowledg
         "an indexed SET is overlay-expressible, so it must still fork rather than copy"
     )
 
-    # A node removal rewrites existing nodes' adjacency, which an overlay cannot
-    # express, so it **flattens** — one whole copy, paid once per fork rather
-    # than once per statement (a deliberate boundary, see
-    # `docs/rust/structural-sharing.md`). The reader is unaffected either way,
-    # which is what this asserts.
+    # A node removal is overlay-expressible too: it tombstones the node and its
+    # edges in the overlay and leaves the base alone.
     graph.cypher("MATCH (n:Item {id: 8}) DELETE n")
-    assert kglite._backend_is_forked(graph) is False, (
-        "a delete flattens the overlay by design; True here means the overlay "
-        "started expressing adjacency edits, which would need its own tests"
+    assert kglite._backend_is_forked(graph) is True, (
+        "a delete is overlay-expressible, so it must still fork rather than copy"
     )
     assert _rows(view) == before, "the held view must not see the indexed write or the delete"
     assert graph.cypher("MATCH (n:Item) WHERE n.qty = 1 RETURN count(*) AS n").to_list()[0]["n"] < qty_before
@@ -232,11 +228,10 @@ def test_a_failed_statement_rolls_back_while_a_view_is_held(
             "qty: duration({months: 2147483648})})"
         )
 
-    # The undo replay removes the node the first CREATE added, and a removal is
-    # not overlay-expressible, so the rollback flattens — again one copy on a
-    # failure path, not a per-statement cost. What must hold regardless is that
-    # none of the reversal reached the base the reader is reading.
-    assert kglite._backend_is_forked(graph) is False
+    # The undo replay removes the node the first CREATE added, inside the
+    # overlay. What must hold is that none of the reversal reached the base the
+    # reader is reading.
+    assert kglite._backend_is_forked(graph) is True
     assert _rows(view) == before, "the reader must be untouched by a statement that failed"
     assert graph.cypher("MATCH (n:Item) RETURN count(*) AS n").to_list()[0]["n"] == count_before, (
         "the failed statement must leave no node behind"

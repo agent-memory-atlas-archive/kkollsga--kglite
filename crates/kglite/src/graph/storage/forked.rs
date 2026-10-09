@@ -605,6 +605,23 @@ impl ForkedGraph {
         self.delta.nodes.len()
     }
 
+    /// Whether copying this overlay for a further fork costs enough that
+    /// collapsing it is cheaper over the next few forks.
+    ///
+    /// A fork of a fork duplicates the delta, and a reader held continuously
+    /// across commits keeps the base shared, so the delta only grows. The cap
+    /// is a fraction of the base: past it, one O(graph) collapse
+    /// ([`Self::to_memory_graph`]) resets the delta to nothing, amortised over
+    /// the changes that earned it. The floor keeps a small graph from
+    /// collapsing on every few edits.
+    pub(crate) fn delta_exceeds_clone_cap(&self) -> bool {
+        const FLOOR: usize = 4096;
+        const BASE_FRACTION: usize = 16;
+        let delta = self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len();
+        let base = self.base.inner();
+        delta > FLOOR.max((base.node_count() + base.edge_count()) / BASE_FRACTION)
+    }
+
     /// The overlay's own state, borrowed apart from its base.
     fn overlay(&mut self) -> Overlay<'_> {
         Overlay {
@@ -1469,6 +1486,10 @@ mod tests {
         )
     }
 
+    fn edge(interner: &mut StringInterner) -> EdgeData {
+        EdgeData::new("LINKS".to_string(), HashMap::new(), interner)
+    }
+
     fn graph_of(n: i64, interner: &mut StringInterner) -> MemoryGraph {
         let mut graph = MemoryGraph::new();
         for i in 0..n {
@@ -1563,5 +1584,39 @@ mod tests {
         assert_eq!(backend.node_indices().collect::<Vec<_>>(), before);
         assert_eq!(backend.node_count(), 4);
         assert!(backend.node_weight(appended).is_some());
+    }
+
+    /// A fork of a fork copies the delta, so a delta that only grows must be
+    /// collapsed at some size or every commit under a held reader pays for all
+    /// the commits before it.
+    #[test]
+    fn a_large_delta_collapses_instead_of_being_copied_again() {
+        use crate::graph::storage::backend::GraphBackend;
+        let mut interner = StringInterner::new();
+        let mut forked = ForkedGraph::new(Arc::new(graph_of(10, &mut interner)));
+        let first = GraphWrite::add_node(&mut forked, node(10, &mut interner));
+        let backend = GraphBackend::Forked(Box::new(forked));
+        assert!(
+            backend.clone().is_forked(),
+            "a small delta is copied, not collapsed"
+        );
+
+        let GraphBackend::Forked(mut forked) = backend else {
+            unreachable!("built as Forked")
+        };
+        for i in 11..5000 {
+            let a = GraphWrite::add_node(&mut *forked, node(i, &mut interner));
+            GraphWrite::add_edge(&mut *forked, first, a, edge(&mut interner));
+        }
+        let before: Vec<_> = GraphRead::node_indices(&*forked).collect();
+        let edges = GraphRead::edge_count(&*forked);
+        let backend = GraphBackend::Forked(forked);
+        let copy = backend.clone();
+        assert!(
+            !copy.is_forked(),
+            "a large delta must collapse on the next fork"
+        );
+        assert_eq!(copy.node_indices().collect::<Vec<_>>(), before);
+        assert_eq!(copy.edge_count(), edges);
     }
 }

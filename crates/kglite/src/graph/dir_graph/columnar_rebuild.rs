@@ -386,9 +386,12 @@ impl DirGraph {
     ///
     /// Unlike a vacuum no `NodeIndex` changes, so text/vector indexes, secondary
     /// labels and selections stay valid. Skipped where a rebuild would be
-    /// wrong or wasteful: a copy-on-write overlay (its deletes flatten it, so a
-    /// delete-bearing commit is never skipped for this reason), and the mapped
-    /// and disk backends, whose stores are file-backed on purpose.
+    /// wrong or wasteful: the mapped and disk backends, whose stores are
+    /// file-backed on purpose. A copy-on-write overlay is collapsed first,
+    /// because the rebuild re-points every live node at its renumbered row and
+    /// would otherwise copy each one into the overlay; the collapse is O(graph)
+    /// and runs only once the dead rows pass the floor and ratio above, so it
+    /// is amortised over the deletes that earned it.
     ///
     /// Must run outside a statement window: it renumbers rows, which an open
     /// undo journal still names.
@@ -396,7 +399,7 @@ impl DirGraph {
         let Some(threshold) = self.auto_vacuum_threshold else {
             return false;
         };
-        if self.graph.is_forked() || self.graph.is_mapped() || self.graph.is_disk() {
+        if self.graph.is_mapped() || self.graph.is_disk() {
             return false;
         }
         let (total, live) = self.columnar_row_census();
@@ -404,6 +407,7 @@ impl DirGraph {
         if dead <= 100 || (dead as f64 / total as f64) <= threshold {
             return false;
         }
+        self.graph.flatten_fork();
         self.rebuild_columns_to_heap();
         true
     }

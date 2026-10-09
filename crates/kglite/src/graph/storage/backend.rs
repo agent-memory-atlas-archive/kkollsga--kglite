@@ -514,13 +514,12 @@ impl GraphBackend {
     /// Collapse an overlay to a plain `Memory` backend **unconditionally**,
     /// deep-copying the base if a reader still holds it.
     ///
-    /// The escape hatch for the three writes an overlay cannot express
-    /// (`add_edge` / `remove_node` / `remove_edge`: `StableDiGraph` threads
-    /// adjacency through per-node linked lists, so each of them rewrites
-    /// *existing* nodes) and for the handful of whole-graph operations that need
-    /// one concrete `StableDiGraph`. Cost is the whole-graph deep copy the
-    /// overlay normally avoids, paid on that write only; every other write stays
-    /// O(changes).
+    /// No write needs it: node and adjacency edits alike land in the overlay.
+    /// It serves the whole-graph operations that need one concrete
+    /// `StableDiGraph` (vacuum, a disk conversion, an N-Triples load, the
+    /// column rebuild). Cost is the whole-graph deep copy the overlay normally
+    /// avoids, paid by the caller that asked.
+    ///
     pub(crate) fn flatten_fork(&mut self) {
         if let GraphBackend::Recording(rg) = self {
             rg.inner_mut().flatten_fork();
@@ -1075,8 +1074,17 @@ impl Clone for GraphBackend {
                 note_nodes_copied(g.inner().node_count());
                 GraphBackend::Mapped(Arc::new(g.deep_clone()))
             }
-            // Forking a fork: same base, only the delta is duplicated.
+            // Forking a fork: same base, only the delta is duplicated — until
+            // the delta is large enough that one collapse is cheaper than
+            // copying it again at every later fork.
             GraphBackend::Forked(g) => {
+                if g.delta_exceeds_clone_cap() {
+                    if let Ok(memory) = g.to_memory_graph() {
+                        #[cfg(test)]
+                        note_nodes_copied(memory.inner().node_count());
+                        return GraphBackend::Memory(Arc::new(memory));
+                    }
+                }
                 #[cfg(test)]
                 note_nodes_copied(g.overlay_node_count());
                 GraphBackend::Forked(Box::new((**g).clone()))
@@ -1943,17 +1951,9 @@ impl GraphWrite for GraphBackend {
 
     #[inline]
     fn edge_weight_mut(&mut self, idx: EdgeIndex) -> Option<&mut EdgeData> {
-        // An overlay cannot express an edge-weight edit either, for a reason
-        // that is not adjacency: `edges_directed`, `edge_references` and the
-        // rest hand out `&EdgeData` borrowed straight out of the base, so a
-        // weight held in a delta would be invisible to every iterating read
-        // while `edge_weight`'s point lookup saw it — `WHERE r.prop = x`
-        // filtering on the pre-write value with no error. Collapse first (see
-        // `flatten_fork`), hence the unreachable `Forked` arm below.
-        self.flatten_fork();
         match self {
             Self::Memory(g) => GraphWrite::edge_weight_mut(unique_heap_backend(g), idx),
-            Self::Forked(_) => unreachable!("flatten_fork above collapsed the overlay"),
+            Self::Forked(g) => GraphWrite::edge_weight_mut(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::edge_weight_mut(unique_heap_backend(g), idx),
             Self::Disk(g) => GraphWrite::edge_weight_mut(g.as_mut(), idx),
             Self::Recording(rg) => GraphWrite::edge_weight_mut(rg.as_mut(), idx),
@@ -1973,13 +1973,9 @@ impl GraphWrite for GraphBackend {
 
     #[inline]
     fn remove_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
-        // Adjacency edits rewrite *existing* nodes' petgraph links, which an
-        // overlay cannot express — collapse first (see `flatten_fork`), hence
-        // the unreachable `Forked` arm below.
-        self.flatten_fork();
         match self {
             Self::Memory(g) => GraphWrite::remove_node(unique_heap_backend(g), idx),
-            Self::Forked(_) => unreachable!("flatten_fork above collapsed the overlay"),
+            Self::Forked(g) => GraphWrite::remove_node(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::remove_node(unique_heap_backend(g), idx),
             Self::Disk(g) => GraphWrite::remove_node(g.as_mut(), idx),
             Self::Recording(rg) => GraphWrite::remove_node(rg.as_mut(), idx),
@@ -1988,13 +1984,9 @@ impl GraphWrite for GraphBackend {
 
     #[inline]
     fn add_edge(&mut self, a: NodeIndex, b: NodeIndex, data: EdgeData) -> EdgeIndex {
-        // Adjacency edits rewrite *existing* nodes' petgraph links, which an
-        // overlay cannot express — collapse first (see `flatten_fork`), hence
-        // the unreachable `Forked` arm below.
-        self.flatten_fork();
         match self {
             Self::Memory(g) => GraphWrite::add_edge(unique_heap_backend(g), a, b, data),
-            Self::Forked(_) => unreachable!("flatten_fork above collapsed the overlay"),
+            Self::Forked(g) => GraphWrite::add_edge(g.as_mut(), a, b, data),
             Self::Mapped(g) => GraphWrite::add_edge(unique_heap_backend(g), a, b, data),
             Self::Disk(g) => GraphWrite::add_edge(g.as_mut(), a, b, data),
             Self::Recording(rg) => GraphWrite::add_edge(rg.as_mut(), a, b, data),
@@ -2003,13 +1995,9 @@ impl GraphWrite for GraphBackend {
 
     #[inline]
     fn remove_edge(&mut self, idx: EdgeIndex) -> Option<EdgeData> {
-        // Adjacency edits rewrite *existing* nodes' petgraph links, which an
-        // overlay cannot express — collapse first (see `flatten_fork`), hence
-        // the unreachable `Forked` arm below.
-        self.flatten_fork();
         match self {
             Self::Memory(g) => GraphWrite::remove_edge(unique_heap_backend(g), idx),
-            Self::Forked(_) => unreachable!("flatten_fork above collapsed the overlay"),
+            Self::Forked(g) => GraphWrite::remove_edge(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::remove_edge(unique_heap_backend(g), idx),
             Self::Disk(g) => GraphWrite::remove_edge(g.as_mut(), idx),
             Self::Recording(rg) => GraphWrite::remove_edge(rg.as_mut(), idx),
