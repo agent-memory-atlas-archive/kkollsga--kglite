@@ -577,8 +577,13 @@ def hop1_graph_memory():
 
 
 @pytest.mark.benchmark
-def test_bench_hop1_deg3_memory(benchmark, hop1_graph_memory):
+def test_bench_hop1_deg3_expand_memory(benchmark, hop1_graph_memory):
     """Whole-graph typed 1-hop expansion, in-memory.
+
+    Renamed from ``test_bench_hop1_deg3_memory`` in 0.19.6: that name's
+    baselines before 0.19.5 measured the fused ``count(*)`` query (about 1 µs),
+    so comparing the expansion under the old name read as millions of percent
+    of drift in every longitudinal gate.
 
     The query sums ``b.pid`` so every edge is walked and its target read.
     ``count(*)`` is not an expansion: since 0.17.3 it plans as

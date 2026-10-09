@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (28_290_096, "0.19.5"),  # host release build
-    "linux": (34_684_792, "0.19.4"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (28_571_264, "0.19.6"),  # host release build
+    "linux": (34_792_952, "0.19.5"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.19.4-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "aca3d687db50da8f8ffbc6c5941123ff6a97a16159068531ca1550b1a3c502f0"
+LINUX_SIZE_WHEEL = "kglite-0.19.5-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "d97724330627d92acaf65e1b935f70a7ae26306ce5d0011818bcf6f3c827723c"
 
 
 @pytest.mark.binary_size
@@ -627,6 +627,14 @@ def test_binary_size_regression():
         with the unique-tuple probe, the WITH … LIMIT pushdown shapes,
         path-variable rebinding checks, unaliased column display names and
         the name/title index routing.
+
+      - 0.19.6:       28,571,264 bytes (≈27.2 MB), +281,168 (+1.0%) over
+        0.19.5: online backup and online/automatic checkpoints, write-time
+        ontology enforcement (statement and transaction-end judges, bulk
+        frame gates), the fork overlay's adjacency layer and op-log
+        fold-back, in-place auto-commit with its undo path, the batch read
+        cursor, the per-query cancel token, lazy property NDV and the
+        lifted durable-open / auto-commit session API.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

@@ -192,11 +192,17 @@
       "sha256": "e5974bbe71d8e30b62ccffc6ecef72b3709799bacddc7450f666810e964fb54c",
       "status": "rejected"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-08 18:42-18:54 UTC on Mac16,10 (M4, 16 GiB), load average 17 -> 11 from concurrent sessions (several labenv MCP servers + other Claude sessions). Uniform machine-wide shift: median min-delta +135% across 43 cells vs 0_19_4.json, controls cypher_match +160%, traversal +164%, var_length_1_8 +122%, return_id_10k +52% \u2014 the instrument moved, not the code. Same-session interleaved A/B (dev-docs bench results 2026-10-08-0.19.5-vs-0.19.4.md, ABAB x5 with in-run controls, release builds, published 0.19.4 wheel + source-built v0.19.4 control) measured the core suite at median +0.8% with controls within 3% and no cell beyond the 20% gate. hop1 cells changed query on purpose (5208ed47, unfused RETURN sum(b.pid)) so their delta vs 0_19_4 is not comparable. Reference stays 0_19_4.json.",
+    "0_19_6.json": {
+      "evidence": "Release capture 2026-10-09 22:30-22:32 local on Mac16,10 (M4, 16 GiB), load average 3.1-4.0 (concurrent sessions); repeat of a 22:21-22:28 capture at load 4.4-6.4 that agreed within 1-2% on every control. vs accepted 0_19_4.json, min: controls var_length_1_8 +0.0%, cypher_match +0.0%, khop3_unwind -0.4%, shortest_path -0.9%, khop3_in_list -2.0% (no uniform shift). test_bench_hop1_deg3_memory renamed to test_bench_hop1_deg3_expand_memory: the old name's pre-0.19.5 rows measured the fused count(*) (~1 us), so it read as millions of percent of drift; the renamed cell starts its longitudinal record here. Highest cell cypher_match_materialized +16.1% (twice; below the gate); release A/Bs vs the published 0.19.5 wheel (same interpreter, ABAB x2) on macOS and on Windows (Ryzen 9 3900X, -2.3/-1.9%) showed it flat, so the offset predates this release.",
       "platform": "Darwin/arm64",
-      "sha256": "e5974bbe71d8e30b62ccffc6ecef72b3709799bacddc7450f666810e964fb54c",
-      "status": "rejected"
+      "sha256": "2aba75082af0fcf960e2edf240bedd06fd87812026e23125048ca02e4589d844",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-09 22:30-22:32 local on Mac16,10 (M4, 16 GiB), load average 3.1-4.0 (concurrent sessions); repeat of a 22:21-22:28 capture at load 4.4-6.4 that agreed within 1-2% on every control. vs accepted 0_19_4.json, min: controls var_length_1_8 +0.0%, cypher_match +0.0%, khop3_unwind -0.4%, shortest_path -0.9%, khop3_in_list -2.0% (no uniform shift). test_bench_hop1_deg3_memory renamed to test_bench_hop1_deg3_expand_memory: the old name's pre-0.19.5 rows measured the fused count(*) (~1 us), so it read as millions of percent of drift; the renamed cell starts its longitudinal record here. Highest cell cypher_match_materialized +16.1% (twice; below the gate); release A/Bs vs the published 0.19.5 wheel (same interpreter, ABAB x2) on macOS and on Windows (Ryzen 9 3900X, -2.3/-1.9%) showed it flat, so the offset predates this release.",
+      "platform": "Darwin/arm64",
+      "sha256": "2aba75082af0fcf960e2edf240bedd06fd87812026e23125048ca02e4589d844",
+      "status": "accepted"
     },
     "current.linux.json": {
       "evidence": "reference_0_19_3_forked_cells.linux.json with one cell renamed, measurements unchanged: test_bench_write_tx_after_deletes is now test_bench_commit_tx_after_deletes (a 'write' name component made the persistence-cell registry treat it as a persistence writer). Original evidence: current.linux.json (reference_0_19_1_va4_cell.linux.json) plus two cells: the harness gained test_bench_write_tx_after_deletes and test_bench_scan_under_held_overlay_after_deletes (issue #195) and CI leg 2 requires an exact cell-set match. The new rows are PROVISIONAL scaled estimates, not Linux measurements: kglite 0.13.2 macOS slower-of-two min 38.07 ms x 3.9 = 148.5 ms and 11.03 ms x 3.9 = 43.0 ms, which only ever loosen the leg-2 gate for these cells; they are replaced by Linux measurements once a CI artifact carries the cells.",
@@ -260,7 +266,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_4.json",
+    "Darwin/arm64": "0_19_6.json",
     "Linux/x86_64": "reference_0_19_3_forked_cells_renamed.linux.json"
   },
   "schema_version": 1

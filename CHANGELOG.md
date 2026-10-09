@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.6] - 2026-10-09
+
 ### Breaking changes and migration
 
 - **A declared ontology at `warn` or `error` now binds writes.** `enforcement`
@@ -44,6 +46,16 @@ before upgrading.
     `WriterLeaseHeld` and a `.holder` (`FileIo` before). The class subclasses
     `FileIoError`.
   - Code that compares `.code` strings needs the new values.
+- **Rust API (`kglite::api`) changes for embedders.** `make semver-check`
+  against 0.19.5 reports:
+  - `KgError` and `KgErrorCode` gain variants (`OntologyViolation`,
+    `DurabilityFailed`, `NotDurable`, `WriterLeaseHeld`, `ReadOnly`), so an
+    exhaustive `match` needs new arms. `KgErrorCode`'s implicit discriminants
+    shift; use `as_str()` rather than casting. The C ABI status codes are a
+    separate explicit enum and are unchanged.
+  - `OntologyStore` gains public fields (`closed_labels`, `enforcement`), so a
+    struct literal needs them.
+  - `CommitOutcome` is no longer `UnwindSafe` / `RefUnwindSafe`.
 
 ### Added
 

@@ -64,7 +64,7 @@ def _hop1_frames():
     """100k `Person` nodes and 300k `KNOWS` edges with **uncorrelated** endpoints.
 
     Byte-identical to the core harness's generator, deliberately: this cell is
-    only readable next to `test_bench_hop1_deg3_memory`, and the two must be
+    only readable next to `test_bench_hop1_deg3_expand_memory`, and the two must be
     measuring the same graph. The endpoint draw is an inlined LCG so the
     fixture is identical on every interpreter, and uncorrelated endpoints are
     the point — a row order that already groups by source is the fast case.
@@ -123,7 +123,7 @@ def test_bench_param_list_conversion(benchmark, bench_graph):
 
 @pytest.mark.benchmark
 def test_bench_hop1_deg3_mapped(benchmark, hop1_graph_mapped):
-    """Mapped twin of the core harness's `hop1_deg3_memory` — a real expansion.
+    """Mapped twin of the core harness's `hop1_deg3_expand_memory` — a real expansion.
 
     The query sums ``b.pid`` so every edge is walked; ``count(*)`` would plan
     as the O(1) ``FusedCountTypedEdge :KNOWS`` and hide the in-memory/Mapped
