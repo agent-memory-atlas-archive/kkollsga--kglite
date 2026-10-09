@@ -96,6 +96,9 @@ fn dispatch(
     } else if name.starts_with("db.temporal.") {
         let yields = &call.yield_items;
         super::temporal_procedures::execute(graph, name, params, yields, ctx.diagnostics)
+    } else if name.starts_with("db.ontology.") {
+        let yields = &call.yield_items;
+        super::ontology_declare_procedures::execute(graph, name, params, yields, ctx.diagnostics)
     } else {
         super::cdc_procedures::execute_mutating_procedure(graph, name, params, &call.yield_items)
     }

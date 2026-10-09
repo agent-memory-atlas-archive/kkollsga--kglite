@@ -150,7 +150,7 @@ mod atomic_save_tests {
         let warnings = g.define_ontology(store).unwrap();
         assert_eq!(warnings.len(), 1);
         assert!(!g.ontology.is_empty());
-        g.clear_ontology();
+        g.clear_ontology().unwrap();
         assert!(g.ontology.is_empty());
     }
 

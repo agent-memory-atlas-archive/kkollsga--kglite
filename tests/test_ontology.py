@@ -1360,6 +1360,54 @@ def test_declaring_an_error_rule_over_violating_data_is_refused_and_changes_noth
     assert docs.ontology() == before
 
 
+def test_a_refused_declaration_exposes_the_structured_report(docs):
+    with pytest.raises(kglite.OntologyViolationError) as raised:
+        docs.define_ontology(_docs_decl("error"))
+    error = raised.value
+    assert error.report == [
+        {"rule": "required_property", "entity": "node", "entity_type": "Doc", "property": "owner", "count": 2}
+    ]
+    assert (error.rule, error.entity, error.entity_type, error.property) == (
+        "required_property",
+        "node",
+        "Doc",
+        "owner",
+    )
+
+
+def test_a_refused_write_carries_attributes_and_an_empty_report(docs):
+    docs.define_ontology({"classes": {"Doc": {"required_properties": ["title"]}}, "enforcement": "error"})
+    with pytest.raises(kglite.OntologyViolationError) as raised:
+        docs.cypher("CREATE (:Doc {id: 9})")
+    error = raised.value
+    assert (error.rule, error.entity, error.entity_type, error.property) == (
+        "required_property",
+        "node",
+        "Doc",
+        "title",
+    )
+    assert error.report == []
+
+
+def test_ontology_procedures_declare_and_clear(docs):
+    docs.cypher("MATCH (d:Doc) SET d.owner = 'x'")
+    row = docs.cypher(
+        "CALL db.ontology.declare({ontology: $doc}) YIELD declared, warnings", params={"doc": _docs_decl("error")}
+    )
+    assert list(row)[0]["declared"] is True
+    assert docs.ontology()["classes"]["Doc"]["required_properties"] == ["owner"]
+    with pytest.raises(kglite.OntologyViolationError):
+        docs.cypher("CREATE (:Doc {id: 9})")
+    assert list(docs.cypher("CALL db.ontology.clear() YIELD cleared"))[0]["cleared"] is True
+    assert docs.ontology() is None
+
+
+def test_ontology_procedure_refuses_over_violating_data(docs):
+    with pytest.raises(Exception, match=r"Doc\.required_properties"):
+        docs.cypher("CALL db.ontology.declare({ontology: $doc})", params={"doc": _docs_decl("error")})
+    assert docs.ontology() is None
+
+
 def test_declaring_a_warn_rule_installs_and_reports(docs):
     warnings = docs.define_ontology(_docs_decl("warn"))
     assert any("Doc.required_properties" in w and "2/3" in w for w in warnings), warnings

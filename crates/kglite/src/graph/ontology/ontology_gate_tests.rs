@@ -115,7 +115,7 @@ fn the_gate_follows_the_declared_severities() {
     assert!(graph.ontology_node_gate);
     declare(&mut graph, &person_ontology("error"));
     assert!(graph.ontology_node_gate);
-    graph.clear_ontology();
+    graph.clear_ontology().unwrap();
     assert!(!graph.ontology_node_gate);
     // A relationship-only ontology binds no node.
     declare(

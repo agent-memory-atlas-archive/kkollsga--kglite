@@ -316,7 +316,18 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
         RustKgError::Validation(_) => ValidationError::new_err(message),
         RustKgError::ConstraintViolation { .. } => ConstraintViolationError::new_err(message),
         RustKgError::ConstraintCreationFailed { .. } => ConstraintCreationError::new_err(message),
-        RustKgError::OntologyViolation { .. } => OntologyViolationError::new_err(message),
+        RustKgError::OntologyViolation {
+            rule,
+            entity,
+            entity_type,
+            property,
+            report,
+            ..
+        } => with_ontology_attrs(
+            OntologyViolationError::new_err(message),
+            (rule, entity, entity_type, property),
+            report,
+        ),
         RustKgError::TransactionConflict { .. } => TransactionConflictError::new_err(message),
         RustKgError::Expr(_) => ExprError::new_err(message),
         RustKgError::NodeNotFound { .. } => NodeNotFoundError::new_err(message),
@@ -361,6 +372,42 @@ fn with_position_attrs(err: PyErr, line: Option<usize>, col: Option<usize>) -> P
         let value = err.value(py);
         let _ = value.setattr("line", line);
         let _ = value.setattr("col", col);
+    });
+    err
+}
+
+/// `.rule` / `.entity` / `.entity_type` / `.property` (the headline) and
+/// `.report` (the per-rule breakdown of a refused declaration; empty for a
+/// refused write) on an [`OntologyViolationError`].
+fn with_ontology_attrs(
+    err: PyErr,
+    headline: (&'static str, &'static str, String, Option<String>),
+    report: Vec<kglite_core::api::OntologyReportEntry>,
+) -> PyErr {
+    Python::attach(|py| {
+        let value = err.value(py);
+        let (rule, entity, entity_type, property) = headline;
+        let _ = value.setattr("rule", rule);
+        let _ = value.setattr("entity", entity);
+        let _ = value.setattr("entity_type", entity_type);
+        let _ = value.setattr("property", property);
+        let rows = pyo3::types::PyList::empty(py);
+        for entry in report {
+            let row = pyo3::types::PyDict::new(py);
+            let _ = row.set_item("rule", entry.rule.as_str());
+            let _ = row.set_item(
+                "entity",
+                match entry.entity {
+                    kglite_core::api::EntityKind::Node => "node",
+                    kglite_core::api::EntityKind::Relationship => "relationship",
+                },
+            );
+            let _ = row.set_item("entity_type", entry.entity_type);
+            let _ = row.set_item("property", entry.property);
+            let _ = row.set_item("count", entry.count);
+            let _ = rows.append(row);
+        }
+        let _ = value.setattr("report", rows);
     });
     err
 }

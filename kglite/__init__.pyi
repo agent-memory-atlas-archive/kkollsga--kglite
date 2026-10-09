@@ -155,7 +155,27 @@ class OntologyViolationError(ConstraintViolationError):
     unchanged. The message names the rule (``required_property``,
     ``property_type``, ``closed_labels``, ``domain`` or ``range``), the label or
     relationship type, and the property where one applies.
+
+    Attributes:
+        rule: The rule that fired (``"required_property"``, ``"property_type"``,
+            ``"closed_labels"``, ``"domain"`` or ``"range"``). For a refused
+            declaration, the first report entry's rule.
+        entity: ``"node"`` or ``"relationship"``.
+        entity_type: The node primary label or relationship type judged.
+        property: The offending property for the property rules, else ``None``.
+        report: Empty for a refused write. For a refused declaration
+            (:meth:`KnowledgeGraph.define_ontology` over data that already
+            breaks an ``error``-level rule) a list of
+            ``{"rule", "entity", "entity_type", "property", "count"}`` dicts,
+            one per broken rule, where ``count`` is the number of stored
+            entities breaking it.
     """
+
+    rule: str
+    entity: str
+    entity_type: str
+    property: str | None
+    report: list[dict[str, Any]]
 
 class ConstraintCreationError(ConstraintError):
     """Declaring a constraint failed because the stored data already violates it.

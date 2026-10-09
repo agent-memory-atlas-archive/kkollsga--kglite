@@ -415,6 +415,12 @@ pub struct DirGraph {
     /// (`DirGraph::judge_touched_edges`). Empty between statements.
     #[serde(skip)]
     pub(crate) ontology_touched_edges: Vec<petgraph::graph::EdgeIndex>,
+    /// The operator supplied the ontology (the Bolt server's `--ontology`):
+    /// `define_ontology`, `clear_ontology` and the `db.ontology.*` procedures
+    /// refuse. The operator's runtime posture, so never persisted — a
+    /// restart decides it afresh.
+    #[serde(skip)]
+    pub(crate) ontology_locked: bool,
     /// WAL replay sets this while it rebuilds state: the write-funnel
     /// closure stamp must not run there — the log's whole-set label ops are
     /// authoritative, and re-deriving would un-apply a logged
@@ -957,6 +963,7 @@ impl DirGraph {
             ontology_touched: Vec::new(),
             ontology_rel_gate: false,
             ontology_touched_edges: Vec::new(),
+            ontology_locked: false,
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),
             build_info: None,

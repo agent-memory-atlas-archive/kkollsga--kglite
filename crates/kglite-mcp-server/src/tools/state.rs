@@ -440,7 +440,7 @@ impl GraphState {
         // baseline below is taken *after* it, so a manifest ontology installed
         // (or materialized) on this graph is part of what "clean" means rather
         // than reading as an unsaved change nobody made.
-        let unpersisted_config = self.apply_bound_embedder(&mut kg);
+        let unpersisted_config = self.apply_bound_embedder(&mut kg)?;
         let mut lease_since = eager_lease.is_some().then(SystemTime::now);
         let mut ownership = owns_writes.then(|| {
             WriteOwnership::new(
@@ -643,13 +643,18 @@ impl GraphState {
     /// yields `embedder: None`, and a swap that skips this step silently
     /// disables `text_score()` for the rest of the process.
     ///
+    /// Fails when the manifest ontology is refused for this graph (stored
+    /// data already breaks an `error`-level rule): the caller publishes
+    /// nothing, so a boot fails with the report instead of serving a graph
+    /// the manifest's enforcement does not hold on.
+    ///
     /// Returns whether a manifest ontology was applied — the caller stamps it
     /// into [`ActiveGraph::unpersisted_config`], because the application is
     /// deliberately invisible to the version counter and `save_graph` would
     /// otherwise have no way to tell this graph from the file it was read
     /// from. `true` covers `define` alone as well as `materialize`: both write
     /// state the file does not carry.
-    pub(crate) fn apply_bound_embedder(&self, kg: &mut KnowledgeGraph) -> bool {
+    pub(crate) fn apply_bound_embedder(&self, kg: &mut KnowledgeGraph) -> anyhow::Result<bool> {
         let bound = read_lock(&self.embedder).as_ref().map(Arc::clone);
         if let Some(embedder) = bound {
             kg.set_embedder_native(embedder);
@@ -697,10 +702,18 @@ impl GraphState {
                         }
                     }
                 }
-                Err(e) => tracing::error!("manifest ontology rejected for this graph: {e}"),
+                // The declaration runs the same data check as any other, and a
+                // graph already breaking an `error`-level rule must not be
+                // served as if the manifest's enforcement held.
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "the manifest ontology (extensions.ontology) was refused for this graph \
+                         and nothing was published: {e}"
+                    ))
+                }
             }
         }
-        applied
+        Ok(applied)
     }
 
     /// Bind the manifest-declared ontology; ["apply_bound_embedder"] installs

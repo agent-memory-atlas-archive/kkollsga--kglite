@@ -352,6 +352,7 @@ impl DirGraph {
         &mut self,
         store: crate::graph::ontology::OntologyStore,
     ) -> Result<Vec<String>, crate::graph::ontology::violation::DefineOntologyError> {
+        self.ensure_ontology_unlocked("declare")?;
         let mut warnings = self.check_ontology_declaration(&store)?;
         // The audit judges `self.ontology`, so install the candidate, judge,
         // and put the previous store back on refusal.
@@ -378,6 +379,7 @@ impl DirGraph {
         &mut self,
         store: crate::graph::ontology::OntologyStore,
     ) -> Result<Vec<String>, String> {
+        self.ensure_ontology_unlocked("declare")?;
         let warnings = self.check_ontology_declaration(&store)?;
         self.note_ontology_declaration(&store);
         self.ontology = std::sync::Arc::new(store);
@@ -437,7 +439,8 @@ impl DirGraph {
     /// Remove the declared semantic layer entirely. Materialized labels (if
     /// any) are withdrawn first — a store-less graph must not carry managed
     /// buckets nothing can explain.
-    pub fn clear_ontology(&mut self) {
+    pub fn clear_ontology(&mut self) -> Result<(), String> {
+        self.ensure_ontology_unlocked("clear")?;
         if !self.managed_labels.is_empty() {
             self.dematerialize_ontology();
         }
@@ -447,6 +450,30 @@ impl DirGraph {
         // no tombstone shape of its own — replaying this converges on the
         // same cleared state as replaying the declaration it replaces.
         self.note_ontology_declaration(&crate::graph::ontology::OntologyStore::default());
+        Ok(())
+    }
+
+    /// Lock the declared ontology against `define_ontology`/`clear_ontology`
+    /// for this graph's life in this process (not persisted). Set by a server
+    /// whose operator supplied the ontology at startup.
+    pub fn lock_ontology(&mut self) {
+        self.ontology_locked = true;
+    }
+
+    /// Whether [`Self::lock_ontology`] is in force.
+    pub fn ontology_locked(&self) -> bool {
+        self.ontology_locked
+    }
+
+    fn ensure_ontology_unlocked(&self, action: &str) -> Result<(), String> {
+        if self.ontology_locked {
+            return Err(format!(
+                "cannot {action} the ontology: it was supplied by the operator (--ontology) \
+                 and is locked. Change it by restarting the server with a different \
+                 --ontology file (add --ontology-replace to replace the stored declaration)"
+            ));
+        }
+        Ok(())
     }
 
     /// The declared structured shapes for `node_type`, as

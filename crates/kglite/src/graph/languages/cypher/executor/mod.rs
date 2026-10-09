@@ -1107,6 +1107,7 @@ mod mutation_support;
 mod node_embedding_procedures;
 mod node_ontology;
 mod node_text_index_procedures;
+mod ontology_declare_procedures;
 pub(crate) mod ontology_procedures;
 pub(crate) mod ordering;
 mod path_binding;

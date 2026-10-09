@@ -81,6 +81,9 @@ pub(super) fn finish_stream(
         if let Some(temporal) = &d.temporal {
             summary.insert("kglite.temporal".into(), temporal_metadata(temporal));
         }
+        if let Some(ontology) = ontology_metadata(&d.warnings) {
+            summary.insert("kglite.ontology".into(), ontology);
+        }
     }
     let mut columns = result.columns;
     let rows = result.rows;
@@ -129,6 +132,31 @@ pub(super) fn finish_stream(
         records,
         summary,
     })
+}
+
+/// The statement's `warn`-level ontology findings as `{warnings: [..]}`, also
+/// logged: Bolt has no notification channel here, so the namespaced summary
+/// key and the server log are the two places an operator or driver sees them.
+fn ontology_metadata(warnings: &[String]) -> Option<BoltValue> {
+    let lines: Vec<&String> = warnings
+        .iter()
+        .filter(|w| w.starts_with("ontology"))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    for line in &lines {
+        tracing::warn!(target: "kglite_bolt_server::ontology", "{line}");
+    }
+    Some(BoltValue::Dict(BoltDict::from([(
+        "warnings".to_string(),
+        BoltValue::List(
+            lines
+                .into_iter()
+                .map(|w| BoltValue::String(w.clone()))
+                .collect(),
+        ),
+    )])))
 }
 
 fn temporal_metadata(echo: &kglite::api::cypher::TemporalDiagnostics) -> BoltValue {

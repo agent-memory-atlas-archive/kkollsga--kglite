@@ -32,6 +32,7 @@ mod coalesce;
 mod discard;
 mod error_map;
 mod guard;
+mod ontology;
 mod startup;
 mod value_adapter;
 
@@ -271,6 +272,25 @@ struct Cli {
     /// touched.
     #[arg(long, value_name = "N", value_parser = backup::parse_backup_keep)]
     backup_keep: Option<usize>,
+
+    /// Declare this JSON ontology at startup and lock it.
+    ///
+    /// The file uses the `define_ontology` dialect (classes, relationships,
+    /// `closed_labels`, `enforcement`). It is declared through the normal
+    /// declaration path, so one that stored data already breaks at an `error`
+    /// rule stops the server from starting, with the report. Once declared the
+    /// ontology is locked: `CALL db.ontology.declare` and `db.ontology.clear`
+    /// are refused for every client; changing it means restarting with a
+    /// different file. A stored ontology that differs from the file also
+    /// stops the start, with a short diff, unless `--ontology-replace`.
+    /// Without this flag any authenticated client may declare an ontology
+    /// (the server has a single credential and no roles).
+    #[arg(long, value_name = "FILE")]
+    ontology: Option<PathBuf>,
+
+    /// Replace a stored ontology that differs from `--ontology FILE`.
+    #[arg(long, default_value_t = false, requires = "ontology")]
+    ontology_replace: bool,
 
     /// Authentication scheme. `none` (default) accepts any LOGON
     /// credentials; `basic` validates against `--auth-user` / `--auth-pass`.
@@ -970,6 +990,7 @@ async fn serve() -> Result<()> {
     // *default* level to `off` there, and the shutdown flush below must not
     // then call `sync()` on a session that has no log.
     durability.level = started.level;
+    ontology::apply_cli(&started.session, &cli)?;
     if !durability.level.logs() {
         // No log, nothing to bound: covers a default degraded to `off`.
         durability.checkpoint_wal_bytes = None;

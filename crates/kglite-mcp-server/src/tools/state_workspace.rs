@@ -225,7 +225,7 @@ impl GraphState {
         let mut kg = KnowledgeGraph::from_arc(graph);
         // A producer rebuild is a graph swap like any other: re-apply the
         // state's bound embedder so `text_score()` survives it.
-        let unpersisted_config = self.apply_bound_embedder(&mut kg);
+        let unpersisted_config = self.apply_bound_embedder(&mut kg)?;
         let active = ActiveGraph {
             kg,
             source_path: None,

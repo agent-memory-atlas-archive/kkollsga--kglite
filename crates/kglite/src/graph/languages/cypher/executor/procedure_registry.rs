@@ -301,6 +301,18 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
         columns: &["node", "score", "search_method", "type"],
     },
     ProcedureSpec {
+        name: "db.ontology.declare",
+        aliases: &[],
+        description: "Declare the ontology (classes, relationships, closed_labels, enforcement): {ontology: <map or JSON string>} or the document's own keys. Stored data is checked first: an error-level rule it already breaks refuses the declaration (the per-rule report is the error text); warn-level findings come back in warnings. Refused on a server whose operator locked the ontology (--ontology)",
+        columns: &["declared", "warnings"],
+    },
+    ProcedureSpec {
+        name: "db.ontology.clear",
+        aliases: &[],
+        description: "Remove the declared ontology entirely (managed labels are withdrawn). Refused on a server whose operator locked the ontology (--ontology)",
+        columns: &["cleared"],
+    },
+    ProcedureSpec {
         name: "db.temporal.declare",
         aliases: &[],
         description: "Declare which two properties (from, to) bound a node label's or relationship type's validity interval, and whether the to day belongs to it (convention 'closed') or ends it ('half_open'), with an optional empty_when: 'to_before_from' under 'closed' that keeps a row whose to is the day before its from as an empty interval; validates every stored bound and counts rows whose end meets another row's start. A relationship uses its source's source_type declaration first, the unkeyed one otherwise",
@@ -857,6 +869,8 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.relationship_text_index.drop",
     "db.temporal.declare",
     "db.temporal.undeclare",
+    "db.ontology.declare",
+    "db.ontology.clear",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) is a mutating

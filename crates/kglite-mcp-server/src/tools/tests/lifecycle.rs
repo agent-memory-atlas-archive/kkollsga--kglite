@@ -1574,6 +1574,30 @@ fn a_non_writable_server_still_publishes_its_manifest_ontology() {
     assert_ne!(file_stamp(&p), before, "the configuration reaches the file");
 }
 
+/// An `error`-level manifest ontology over data that already breaks it fails
+/// the open with the report and publishes nothing, instead of serving a graph
+/// the declared enforcement does not hold on.
+#[test]
+fn an_error_level_manifest_ontology_over_violating_data_fails_the_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("violating.kgl");
+    seed_people(&p, StorageMode::Memory);
+
+    let s = GraphState::default();
+    let store = kglite::api::ontology_from_json(
+        r#"{"classes": {"Person": {"required_properties": ["email"], "enforcement": "error"}}}"#,
+    )
+    .expect("ontology parses");
+    s.bind_ontology(BoundOntology {
+        store: Arc::new(store),
+        materialize: false,
+    });
+    let err = s.open_or_create(&p, None).unwrap_err().to_string();
+    assert!(err.contains("manifest ontology"), "{err}");
+    assert!(err.contains("Person.required_properties"), "{err}");
+    assert!(s.with_kg(|_| ()).is_none(), "nothing was published");
+}
+
 /// A save is refusable on a perfectly clean server — a `force` re-encode, a
 /// boot-configuration publish — and the refusal told that operator their
 /// unsaved changes were still here, inventing work they never did.

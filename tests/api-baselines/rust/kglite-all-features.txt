@@ -3052,6 +3052,7 @@ pub fn kglite::api::session::Session::begin(&self) -> kglite::api::session::Tran
 pub fn kglite::api::session::Session::begin_read(&self) -> kglite::api::session::Transaction
 pub fn kglite::api::session::Session::commit(&self, tx: kglite::api::session::Transaction, check_occ: bool) -> kglite::api::session::CommitOutcome
 pub fn kglite::api::session::Session::from_arc(graph: alloc::sync::Arc<kglite::api::DirGraph>) -> Self
+pub fn kglite::api::session::Session::lock_ontology(&self)
 pub fn kglite::api::session::Session::new(graph: kglite::api::DirGraph) -> Self
 pub fn kglite::api::session::Session::rollback(&self, _tx: kglite::api::session::Transaction)
 pub fn kglite::api::session::Session::save(&self, path: &str, fsync: bool) -> core::result::Result<(), alloc::string::String>
@@ -3841,7 +3842,7 @@ pub fn kglite::api::timeseries::validate_keys_sorted(keys: &[chrono::naive::date
 pub fn kglite::api::timeseries::validate_resolution(resolution: &str) -> core::result::Result<(), alloc::string::String>
 pub enum kglite::api::DefineOntologyError
 pub kglite::api::DefineOntologyError::Invalid(alloc::string::String)
-pub kglite::api::DefineOntologyError::Refused(kglite::graph::ontology::violation::OntologyDeclarationRefused)
+pub kglite::api::DefineOntologyError::Refused(kglite::api::OntologyDeclarationRefused)
 impl core::clone::Clone for kglite::api::DefineOntologyError
 pub fn kglite::api::DefineOntologyError::clone(&self) -> kglite::api::DefineOntologyError
 impl core::cmp::PartialEq for kglite::api::DefineOntologyError
@@ -3877,6 +3878,29 @@ impl serde_core::ser::Serialize for kglite::api::Enforcement
 pub fn kglite::api::Enforcement::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::Enforcement
 pub fn kglite::api::Enforcement::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum kglite::api::EntityKind
+pub kglite::api::EntityKind::Node
+pub kglite::api::EntityKind::Relationship
+impl kglite::api::EntityKind
+pub fn kglite::api::EntityKind::is_node(&self) -> bool
+pub fn kglite::api::EntityKind::keyword(self) -> &'static str
+impl core::clone::Clone for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::clone(&self) -> kglite::api::EntityKind
+impl core::cmp::Eq for kglite::api::EntityKind
+impl core::cmp::PartialEq for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::eq(&self, other: &kglite::api::EntityKind) -> bool
+impl core::default::Default for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::default() -> kglite::api::EntityKind
+impl core::fmt::Debug for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for kglite::api::EntityKind
+impl core::marker::StructuralPartialEq for kglite::api::EntityKind
+impl serde_core::ser::Serialize for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::EntityKind
+pub fn kglite::api::EntityKind::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub enum kglite::api::KgError
 pub kglite::api::KgError::Argument(alloc::string::String)
 pub kglite::api::KgError::Cancelled
@@ -3933,7 +3957,7 @@ pub kglite::api::KgError::OntologyViolation::entity: &'static str
 pub kglite::api::KgError::OntologyViolation::entity_type: alloc::string::String
 pub kglite::api::KgError::OntologyViolation::message: alloc::string::String
 pub kglite::api::KgError::OntologyViolation::property: core::option::Option<alloc::string::String>
-pub kglite::api::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::graph::ontology::violation::OntologyReportEntry>
+pub kglite::api::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::api::OntologyReportEntry>
 pub kglite::api::KgError::OntologyViolation::rule: &'static str
 pub kglite::api::KgError::PropertyNotFound
 pub kglite::api::KgError::PropertyNotFound::node_type: alloc::string::String
@@ -3952,6 +3976,8 @@ impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
 impl core::convert::From<kglite::api::InternerCollision> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::InternerCollision) -> Self
+impl core::convert::From<kglite::api::OntologyDeclarationRefused> for kglite::error::KgError
+pub fn kglite::error::KgError::from(r: kglite::api::OntologyDeclarationRefused) -> Self
 impl core::convert::From<kglite::api::ValidationError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::ValidationError) -> Self
 impl core::convert::From<kglite::api::cypher::planner::schema_check::SchemaError> for kglite::error::KgError
@@ -4022,6 +4048,25 @@ impl serde_core::ser::Serialize for kglite::api::ManagedLabelState
 pub fn kglite::api::ManagedLabelState::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::ManagedLabelState
 pub fn kglite::api::ManagedLabelState::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub enum kglite::api::OntologyRule
+pub kglite::api::OntologyRule::ClosedLabels
+pub kglite::api::OntologyRule::Domain
+pub kglite::api::OntologyRule::PropertyType
+pub kglite::api::OntologyRule::Range
+pub kglite::api::OntologyRule::RequiredProperty
+impl kglite::api::OntologyRule
+pub fn kglite::api::OntologyRule::as_str(self) -> &'static str
+impl core::clone::Clone for kglite::api::OntologyRule
+pub fn kglite::api::OntologyRule::clone(&self) -> kglite::api::OntologyRule
+impl core::cmp::Eq for kglite::api::OntologyRule
+impl core::cmp::PartialEq for kglite::api::OntologyRule
+pub fn kglite::api::OntologyRule::eq(&self, other: &kglite::api::OntologyRule) -> bool
+impl core::fmt::Debug for kglite::api::OntologyRule
+pub fn kglite::api::OntologyRule::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::api::OntologyRule
+pub fn kglite::api::OntologyRule::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for kglite::api::OntologyRule
+impl core::marker::StructuralPartialEq for kglite::api::OntologyRule
 pub enum kglite::api::PropertyIndexError
 pub kglite::api::PropertyIndexError::Build(alloc::string::String)
 pub kglite::api::PropertyIndexError::Refused(alloc::string::String)
@@ -4444,7 +4489,7 @@ pub fn kglite::api::DirGraph::set_timeseries_config(&mut self, node_type: &str, 
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::auto_timestamp_for(&self, node_type: &str) -> bool
 pub fn kglite::api::DirGraph::auto_timestamp_for_connection(&self, conn_type: &str) -> bool
-pub fn kglite::api::DirGraph::clear_ontology(&mut self)
+pub fn kglite::api::DirGraph::clear_ontology(&mut self) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::DirGraph::clear_schema(&mut self)
 pub fn kglite::api::DirGraph::constraints_dropped_by_replace(&self, incoming: &kglite::api::SchemaDefinition) -> alloc::vec::Vec<alloc::string::String>
 pub fn kglite::api::DirGraph::define_ontology(&mut self, store: kglite::api::OntologyStore) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::api::DefineOntologyError>
@@ -4452,6 +4497,8 @@ pub fn kglite::api::DirGraph::define_ontology_unverified(&mut self, store: kglit
 pub fn kglite::api::DirGraph::get_instructions(&self, channel: core::option::Option<&str>) -> core::option::Option<&str>
 pub fn kglite::api::DirGraph::get_schema(&self) -> core::option::Option<&kglite::api::SchemaDefinition>
 pub fn kglite::api::DirGraph::layer_for(&self, node_type: &str) -> core::option::Option<&str>
+pub fn kglite::api::DirGraph::lock_ontology(&mut self)
+pub fn kglite::api::DirGraph::ontology_locked(&self) -> bool
 pub fn kglite::api::DirGraph::primary_key_for(&self, node_type: &str) -> core::option::Option<&str>
 pub fn kglite::api::DirGraph::set_instructions(&mut self, text: &str, channel: core::option::Option<&str>)
 pub fn kglite::api::DirGraph::set_schema(&mut self, schema: kglite::api::SchemaDefinition, mode: kglite::api::SchemaInstall) -> core::result::Result<(), kglite::error::KgError>
@@ -4843,6 +4890,31 @@ pub fn kglite::api::NodeView<'_>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -
 impl<'a> core::clone::Clone for kglite::api::NodeView<'a>
 pub fn kglite::api::NodeView<'a>::clone(&self) -> kglite::api::NodeView<'a>
 impl<'a> core::marker::Copy for kglite::api::NodeView<'a>
+pub struct kglite::api::OntologyDeclarationRefused
+pub kglite::api::OntologyDeclarationRefused::entries: alloc::vec::Vec<kglite::api::OntologyReportEntry>
+pub kglite::api::OntologyDeclarationRefused::message: alloc::string::String
+impl core::clone::Clone for kglite::api::OntologyDeclarationRefused
+pub fn kglite::api::OntologyDeclarationRefused::clone(&self) -> kglite::api::OntologyDeclarationRefused
+impl core::cmp::PartialEq for kglite::api::OntologyDeclarationRefused
+pub fn kglite::api::OntologyDeclarationRefused::eq(&self, other: &kglite::api::OntologyDeclarationRefused) -> bool
+impl core::convert::From<kglite::api::OntologyDeclarationRefused> for kglite::error::KgError
+pub fn kglite::error::KgError::from(r: kglite::api::OntologyDeclarationRefused) -> Self
+impl core::fmt::Debug for kglite::api::OntologyDeclarationRefused
+pub fn kglite::api::OntologyDeclarationRefused::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::OntologyDeclarationRefused
+pub struct kglite::api::OntologyReportEntry
+pub kglite::api::OntologyReportEntry::count: u64
+pub kglite::api::OntologyReportEntry::entity: kglite::api::EntityKind
+pub kglite::api::OntologyReportEntry::entity_type: alloc::string::String
+pub kglite::api::OntologyReportEntry::property: core::option::Option<alloc::string::String>
+pub kglite::api::OntologyReportEntry::rule: kglite::api::OntologyRule
+impl core::clone::Clone for kglite::api::OntologyReportEntry
+pub fn kglite::api::OntologyReportEntry::clone(&self) -> kglite::api::OntologyReportEntry
+impl core::cmp::PartialEq for kglite::api::OntologyReportEntry
+pub fn kglite::api::OntologyReportEntry::eq(&self, other: &kglite::api::OntologyReportEntry) -> bool
+impl core::fmt::Debug for kglite::api::OntologyReportEntry
+pub fn kglite::api::OntologyReportEntry::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::OntologyReportEntry
 pub struct kglite::api::OntologyStore
 pub kglite::api::OntologyStore::classes: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::ClassDecl>
 pub kglite::api::OntologyStore::closed_labels: bool
@@ -5962,7 +6034,7 @@ pub kglite::error::KgError::OntologyViolation::entity: &'static str
 pub kglite::error::KgError::OntologyViolation::entity_type: alloc::string::String
 pub kglite::error::KgError::OntologyViolation::message: alloc::string::String
 pub kglite::error::KgError::OntologyViolation::property: core::option::Option<alloc::string::String>
-pub kglite::error::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::graph::ontology::violation::OntologyReportEntry>
+pub kglite::error::KgError::OntologyViolation::report: alloc::vec::Vec<kglite::api::OntologyReportEntry>
 pub kglite::error::KgError::OntologyViolation::rule: &'static str
 pub kglite::error::KgError::PropertyNotFound
 pub kglite::error::KgError::PropertyNotFound::node_type: alloc::string::String
@@ -5981,6 +6053,8 @@ impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
 impl core::convert::From<kglite::api::InternerCollision> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::InternerCollision) -> Self
+impl core::convert::From<kglite::api::OntologyDeclarationRefused> for kglite::error::KgError
+pub fn kglite::error::KgError::from(r: kglite::api::OntologyDeclarationRefused) -> Self
 impl core::convert::From<kglite::api::ValidationError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::ValidationError) -> Self
 impl core::convert::From<kglite::api::cypher::planner::schema_check::SchemaError> for kglite::error::KgError

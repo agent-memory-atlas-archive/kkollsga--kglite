@@ -214,6 +214,21 @@ impl Session {
         }
     }
 
+    /// Lock the declared ontology of the session's graph
+    /// ([`DirGraph::lock_ontology`]). The flag is the operator's runtime
+    /// posture, not graph data, so a durable session needs no log frame for
+    /// it and is not marked diverged; later forks and commits carry it.
+    pub fn lock_ontology(&self) {
+        let mut guard = self.graph.lock().unwrap_or_else(|p| p.into_inner());
+        if Arc::get_mut(&mut guard).is_none() {
+            let child = guard.fork_transaction();
+            *guard = Arc::new(child);
+        }
+        Arc::get_mut(&mut guard)
+            .expect("Session graph is uniquely owned after the fork")
+            .lock_ontology();
+    }
+
     /// Run a detached serialized transaction under one Session lock. The
     /// closure sees a transaction fork; success swaps it atomically and bumps
     /// the live version once, while error drops it with no partial writes.

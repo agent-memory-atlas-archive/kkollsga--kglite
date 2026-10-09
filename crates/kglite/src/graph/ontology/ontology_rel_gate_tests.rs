@@ -90,7 +90,7 @@ fn the_relationship_gate_follows_the_declared_severities() {
     declare(&mut graph, &works_at("warn"));
     assert!(graph.ontology_rel_gate);
     assert!(!graph.ontology_node_gate, "no class rule is declared");
-    graph.clear_ontology();
+    graph.clear_ontology().unwrap();
     assert!(!graph.ontology_rel_gate);
     // A class-only ontology binds no relationship.
     declare(

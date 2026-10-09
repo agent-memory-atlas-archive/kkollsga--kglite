@@ -85,6 +85,8 @@ pub(crate) mod node_gate;
 #[cfg(test)]
 mod ontology_gate_tests;
 #[cfg(test)]
+mod ontology_procedure_tests;
+#[cfg(test)]
 mod ontology_rel_gate_tests;
 pub mod predicates;
 pub mod violation;

@@ -1395,7 +1395,9 @@ impl KnowledgeGraph {
     /// Remove the declared semantic layer entirely.
     fn clear_ontology(&mut self) -> PyResult<()> {
         self.check_durable_owner()?;
-        get_graph_mut(&mut self.inner).clear_ontology();
+        get_graph_mut(&mut self.inner)
+            .clear_ontology()
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         self.commit_wal()
     }
 
