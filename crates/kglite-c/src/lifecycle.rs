@@ -53,6 +53,10 @@ impl Lifecycle {
         }
     }
 
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     fn dirty(&self, session: &Session, last: Option<u64>) -> bool {
         match last {
             Some(v) => session.version() != v,

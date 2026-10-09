@@ -324,6 +324,14 @@ typedef struct KgliteExecuteOptions {
 } KgliteExecuteOptions;
 
 /**
+ * Opaque handle for an explicit transaction. See
+ * [`KgliteGraph`](crate::KgliteGraph) for the empty-`#[repr(C)]` facade.
+ */
+typedef struct KgliteTx {
+  uint8_t _opaque[0];
+} KgliteTx;
+
+/**
  * Return the C ABI version this library was built against.
  * Bindings should call this on startup and refuse to proceed if
  * the major version doesn't match what they were compiled
@@ -1849,9 +1857,9 @@ KgliteStatusCode kglite_session_execute_read_opts(const struct KgliteSession *se
  * Run a mutating Cypher query. Same shape as
  * [`kglite_session_execute_read`] but accepts CREATE / SET /
  * DELETE / REMOVE / MERGE statements. The session's underlying
- * graph is auto-committed after a successful execute (no
- * explicit begin/commit in v1 — explicit transactions land in
- * a future ABI version once a binding needs them).
+ * graph is auto-committed after a successful execute; use
+ * [`kglite_session_begin`](crate::kglite_session_begin) for a multi-statement
+ * transaction.
  *
  * # Safety
  *
@@ -2293,5 +2301,112 @@ KgliteStatusCode kglite_session_build_text_index(struct KgliteSession *session,
                                                  const char *property,
                                                  const char **out_report_json,
                                                  const char **out_error_msg);
+
+/**
+ * Begin an explicit transaction on `session`.
+ *
+ * A read-write transaction (`read_only` false) is refused with
+ * `KGLITE_STATUS_CODE_READ_ONLY` on a session opened read-only, and with
+ * `KGLITE_STATUS_CODE_INVALID_ARGUMENT` on a closed one. A read-only
+ * transaction reads one fixed snapshot and refuses every write with
+ * `KGLITE_STATUS_CODE_READ_ONLY`.
+ *
+ * # Arguments
+ *
+ * - `session` (in): a session handle that outlives the transaction.
+ * - `read_only` (in): whether the transaction may write.
+ * - `out_tx` (out, owned): the transaction handle; free it with
+ *   [`kglite_tx_free`]. Null on error.
+ * - `out_error_msg` (out, owned, nullable): error message; free with
+ *   [`kglite_free_string`](crate::kglite_free_string).
+ *
+ * # Thread safety
+ *
+ * A transaction is single-threaded: do not call its functions concurrently.
+ * The session stays usable from other threads, and other transactions
+ * begun on it run independently.
+ *
+ * # Safety
+ *
+ * `session` a valid live session handle; `out_tx` a valid writable slot;
+ * `out_error_msg` null or a valid writable slot.
+ */
+
+KgliteStatusCode kglite_session_begin(struct KgliteSession *session,
+                                      bool read_only,
+                                      struct KgliteTx **out_tx,
+                                      const char **out_error_msg);
+
+/**
+ * Run one statement inside `tx`.
+ *
+ * Reads and writes both see this transaction's earlier writes and nothing
+ * that other writers committed since [`kglite_session_begin`]. The writes
+ * stay private until [`kglite_tx_commit`]. A failed statement is rolled
+ * back on its own; the transaction stays open. `options` is as for
+ * [`kglite_session_execute_read_ex`](crate::kglite_session_execute_read_ex);
+ * null means no limits.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_READ_ONLY`: a write in a read-only transaction.
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT`: the transaction was already
+ *   committed or rolled back.
+ *
+ * # Safety
+ *
+ * `tx` a live handle from [`kglite_session_begin`], not used concurrently;
+ * `query` a NUL-terminated UTF-8 string; `params_json` null or one;
+ * `options` null or readable for `options->struct_size` bytes; the out
+ * slots valid and writable (`out_error_msg` may be null).
+ */
+
+KgliteStatusCode kglite_tx_execute(struct KgliteTx *tx,
+                                   const char *query,
+                                   const char *params_json,
+                                   const struct KgliteExecuteOptions *options,
+                                   struct KgliteCypherResult **out_result,
+                                   const char **out_error_msg);
+
+/**
+ * Commit `tx`, publishing its writes atomically, then finish it.
+ *
+ * If another writer committed since [`kglite_session_begin`], nothing is
+ * applied and the status is `KGLITE_STATUS_CODE_TRANSACTION_CONFLICT`:
+ * begin a new transaction and redo the work. On a durable session the commit
+ * is logged before it is published; a log failure is
+ * `KGLITE_STATUS_CODE_DURABILITY_FAILED` and nothing is applied. In every
+ * case the transaction is finished afterwards; only
+ * [`kglite_tx_free`] remains to be called. Committing a read-only or
+ * write-free transaction succeeds and changes nothing.
+ *
+ * # Safety
+ *
+ * `tx` a live handle, not used concurrently; `out_error_msg` null or a valid
+ * writable slot.
+ */
+ KgliteStatusCode kglite_tx_commit(struct KgliteTx *tx, const char **out_error_msg);
+
+/**
+ * Discard `tx` and its writes, then finish it. Rolling back a finished
+ * transaction is a no-op that returns `KGLITE_STATUS_CODE_OK`.
+ *
+ * # Safety
+ *
+ * `tx` a live handle, not used concurrently.
+ */
+ KgliteStatusCode kglite_tx_rollback(struct KgliteTx *tx);
+
+/**
+ * Free a transaction handle. A transaction still open is rolled back; free
+ * never commits. Null is a no-op. Free every transaction before freeing or
+ * closing its session.
+ *
+ * # Safety
+ *
+ * `tx` null or a handle from [`kglite_session_begin`] not yet freed, not
+ * used concurrently.
+ */
+ void kglite_tx_free(struct KgliteTx *tx);
 
 #endif  /* KGLITE_H_INCLUDED */

@@ -24,6 +24,7 @@
 //!   recovery), `sync`, `checkpoint` and `close`.
 //! - [`session`] — `KgliteSession` opaque handle + execute_read /
 //!   execute_mut.
+//! - [`tx`] — `KgliteTx` explicit transactions on a session.
 //! - [`embeddings`] — packed-float embedding ingest + vector-index build on
 //!   the session.
 //! - [`schema`] — declarative schema installation (`kglite_define_schema`),
@@ -53,6 +54,7 @@ pub mod session;
 pub mod status;
 pub mod strings;
 pub mod text_indexes;
+pub mod tx;
 
 // Re-export every C-ABI item at the crate root. cbindgen picks
 // items up from any module reachable via this crate, but the
@@ -74,3 +76,4 @@ pub use session::*;
 pub use status::*;
 pub use strings::*;
 pub use text_indexes::*;
+pub use tx::*;

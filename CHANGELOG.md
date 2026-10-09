@@ -35,6 +35,13 @@ before upgrading.
 
 ### Added
 
+- **C ABI: explicit transactions.** `kglite_session_begin(session, read_only,
+  &tx, &err)` returns an owned `KgliteTx`; `kglite_tx_execute`,
+  `kglite_tx_commit`, `kglite_tx_rollback` and `kglite_tx_free` drive it. A
+  statement sees the transaction's earlier writes before commit. A commit that
+  loses to another writer returns `TRANSACTION_CONFLICT`; a durable session
+  logs the commit first. A read-only transaction refuses writes with
+  `READ_ONLY`. `kglite_tx_free` rolls an open transaction back.
 - **C ABI: tagged result encoding for every typed value.**
   `kglite_session_set_result_encoding(session, KGLITE_RESULT_ENCODING_TAGGED)`
   renders dates, datetimes, durations, points and non-finite floats as the tags

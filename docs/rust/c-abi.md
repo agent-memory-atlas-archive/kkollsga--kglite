@@ -170,10 +170,36 @@ against this engine before it is handed one.
 
 Use `kglite_session_execute_read[_opts|_ex]` for reads and
 `kglite_session_execute_mut[_opts|_ex]` for auto-committed mutations. Mutation
-batches commit atomically. ABI v1 does **not** expose explicit begin/commit
-transaction handles; do not invent wrapper calls such as
-`kglite_session_begin`. A future ABI revision should add them only with a real
-consumer and an ownership/error contract.
+batches commit atomically.
+
+### Explicit transactions
+
+| Call | Effect |
+| --- | --- |
+| `kglite_session_begin(session, read_only, &tx, &err)` | Takes a snapshot and returns an owned `KgliteTx`. |
+| `kglite_tx_execute(tx, query, params, options, &result, &err)` | Runs one statement; `options` is the `KgliteExecuteOptions` block. |
+| `kglite_tx_commit(tx, &err)` | Publishes the writes atomically, then finishes the transaction. |
+| `kglite_tx_rollback(tx)` | Discards the writes and finishes the transaction. |
+| `kglite_tx_free(tx)` | Frees the handle. An open transaction is rolled back, never committed. |
+
+- A statement sees the transaction's own earlier writes. Other readers and
+  transactions see none of them until commit.
+- A failed statement is rolled back on its own; the transaction stays open.
+- A commit that loses to another writer returns
+  `KGLITE_STATUS_CODE_TRANSACTION_CONFLICT` and applies nothing. Begin a new
+  transaction and redo the work.
+- On a durable session a commit is logged before it is published, like Bolt's
+  `COMMIT`. A log failure is `KGLITE_STATUS_CODE_DURABILITY_FAILED` and applies
+  nothing.
+- A read-only transaction reads one fixed snapshot and refuses writes with
+  `KGLITE_STATUS_CODE_READ_ONLY`. A read-write `begin` on a read-only session
+  is refused the same way.
+- After commit or rollback the transaction is finished. `execute` and `commit`
+  on it return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`; `rollback` returns OK.
+- A transaction is single-threaded: never call its functions concurrently.
+  The session stays usable from other threads, and several transactions on one
+  session run independently.
+- Free every transaction before freeing or closing its session.
 
 Query parameter JSON is checked recursively before execution. Integer tokens
 must fit signed 64-bit; decimal or exponent tokens must fit a finite 64-bit

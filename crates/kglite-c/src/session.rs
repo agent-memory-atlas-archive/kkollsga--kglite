@@ -295,7 +295,7 @@ pub(crate) struct RunLimits {
 }
 
 impl RunLimits {
-    fn apply(self, opts: &mut ExecuteOptions<'_>) {
+    pub(crate) fn apply(self, opts: &mut ExecuteOptions<'_>) {
         if self.timeout_ms > 0 {
             opts.set_timeout_ms(Some(self.timeout_ms));
         }
@@ -344,7 +344,7 @@ unsafe fn run_read(
 }
 
 /// Publish one query outcome to the caller's out-slots.
-fn finish_query(
+pub(crate) fn finish_query(
     session_state: &SessionState,
     outcome: Result<kglite::api::session::ExecuteOutcome, kglite::api::KgError>,
     out_result: *mut *mut KgliteCypherResult,
@@ -373,9 +373,9 @@ fn finish_query(
 /// Run a mutating Cypher query. Same shape as
 /// [`kglite_session_execute_read`] but accepts CREATE / SET /
 /// DELETE / REMOVE / MERGE statements. The session's underlying
-/// graph is auto-committed after a successful execute (no
-/// explicit begin/commit in v1 — explicit transactions land in
-/// a future ABI version once a binding needs them).
+/// graph is auto-committed after a successful execute; use
+/// [`kglite_session_begin`](crate::kglite_session_begin) for a multi-statement
+/// transaction.
 ///
 /// # Safety
 ///
@@ -460,7 +460,9 @@ pub struct KgliteExecuteOptions {
 /// value.
 const EXECUTE_ROW_LIMIT: u32 = 1;
 
-fn read_execute_options(options: *const KgliteExecuteOptions) -> Result<RunLimits, String> {
+pub(crate) fn read_execute_options(
+    options: *const KgliteExecuteOptions,
+) -> Result<RunLimits, String> {
     if options.is_null() {
         return Ok(RunLimits::default());
     }
@@ -554,7 +556,7 @@ pub unsafe extern "C" fn kglite_session_execute_mut_ex(
     }
 }
 
-unsafe fn reject_options(
+pub(crate) unsafe fn reject_options(
     out_result: *mut *mut KgliteCypherResult,
     out_error_msg: *mut *const c_char,
     message: &str,
@@ -1211,7 +1213,7 @@ impl SessionState {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct QueryParamDecodeError {
+pub(crate) struct QueryParamDecodeError {
     code: KgliteStatusCode,
     message: String,
 }
@@ -1225,7 +1227,7 @@ impl QueryParamDecodeError {
     }
 }
 
-fn report_query_param_error(
+pub(crate) fn report_query_param_error(
     error: QueryParamDecodeError,
     out_error_msg: *mut *const c_char,
 ) -> KgliteStatusCode {
@@ -1240,7 +1242,7 @@ fn report_query_param_error(
 /// Parse a JSON-string params argument into a HashMap. Null / empty /
 /// `null` / `{}` → empty map; a JSON object → its converted map. Any other
 /// top-level shape (array, scalar) → `InvalidArgument`.
-fn parse_params_json(
+pub(crate) fn parse_params_json(
     params_json: *const c_char,
 ) -> Result<HashMap<String, Value>, QueryParamDecodeError> {
     if params_json.is_null() {
