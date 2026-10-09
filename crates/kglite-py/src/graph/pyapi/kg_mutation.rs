@@ -1489,17 +1489,18 @@ impl KnowledgeGraph {
         build_extend_report_dict(py, &result)
     }
 
-    /// Refuse a relationship frame without writing it (used by `attach_rows`).
+    /// Refuse a relationship frame without writing it (used by `attach_rows`,
+    /// whose frame always carries its endpoints in `src` and `dst`).
     fn _check_relationships(
         &mut self,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         connection_type: String,
         source_type: String,
-        source_id_field: String,
         target_type: String,
-        target_id_field: String,
     ) -> PyResult<()> {
+        let source_id_field = "src".to_string();
+        let target_id_field = "dst".to_string();
         self.check_durable_owner()?;
         let (df, _) = build_connection_df_from_pandas(
             data,
