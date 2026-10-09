@@ -82,6 +82,7 @@ pub(super) fn snapshot(generation: &Path) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
+#[cfg(unix)]
 const SIBLINGS: [&str; 2] = ["Department", "Office"];
 
 /// Three types saved as generation 1 at `path`; the live handle maps them.
@@ -95,6 +96,8 @@ pub(super) fn saved_graph(path: &str) -> DirGraph {
     graph
 }
 
+// Only the unix-gated hard-link tests call this.
+#[cfg(unix)]
 /// Apply `change` to `Employee`, save, and report the files of generation 1
 /// and of the new one.
 fn save_after(

@@ -421,6 +421,8 @@ fn a_save_carries_a_global_bundle_exactly_when_no_write_could_have_changed_it() 
     }
 }
 
+// Only the unix-gated hard-link tests call this.
+#[cfg(unix)]
 /// `(id_indices.bin, type_indices.bin)` of the generation `path` is on.
 fn index_files(path: &str) -> [std::path::PathBuf; 2] {
     let generation = current_generation(path);

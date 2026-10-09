@@ -296,17 +296,20 @@ fn a_failed_backup_leaves_the_previous_one_untouched() {
 fn alias_destinations(live: &Path) -> Vec<(&'static str, PathBuf)> {
     let dir = live.parent().unwrap();
     let name = live.file_name().unwrap();
-    let mut out = vec![
+    let out = vec![
         ("same path", live.to_path_buf()),
         ("dot alias", dir.join(".").join(name)),
         ("parent hop", dir.join("sub").join("..").join(name)),
     ];
+    // Directory symlinks need a privilege Windows withholds by default.
     #[cfg(unix)]
-    {
+    let out = {
+        let mut out = out;
         let link = dir.join("link");
         std::os::unix::fs::symlink(dir, &link).unwrap();
         out.push(("symlinked directory", link.join(name)));
-    }
+        out
+    };
     out
 }
 
@@ -437,7 +440,14 @@ fn try_symlink(target: &Path, link: &Path) -> bool {
     let made = std::os::windows::fs::symlink_file(target, link);
     match made {
         Ok(()) => true,
-        Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => {
+        // Unelevated Windows without Developer Mode reports the missing
+        // privilege as ERROR_PRIVILEGE_NOT_HELD (1314), which std does not
+        // map to `PermissionDenied`.
+        Err(e)
+            if cfg!(windows)
+                && (e.kind() == std::io::ErrorKind::PermissionDenied
+                    || e.raw_os_error() == Some(1314)) =>
+        {
             eprintln!(
                 "SKIPPED: cannot create a symlink ({e}); enable Developer Mode or run \
                  elevated to exercise the symlink-alias refusal on Windows"
