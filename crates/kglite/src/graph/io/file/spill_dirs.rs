@@ -167,28 +167,24 @@ fn parse_spill_pid(name: &str) -> Option<u32> {
 
 /// Whether `pid` still names a running process.
 ///
-/// Only `ESRCH` — "no such process" — counts as dead. `EPERM` (a process we
-/// may not signal) and every other errno are read as alive, so an unexpected
-/// kernel answer keeps the directory instead of removing a live one's.
-#[cfg(unix)]
+/// Delegates to the save-temp reaper's probe (`kill(pid, 0)` on Unix,
+/// `OpenProcess`/`GetExitCodeProcess` on Windows). Only a definite "gone"
+/// counts as dead: `None` (an unexpected OS answer, or a platform with no
+/// probe) is read as alive, so the directory is kept instead of removing a
+/// live process's.
 fn pid_is_alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return true;
-    };
-    // SAFETY: signal 0 sends nothing — `kill` only runs its existence and
-    // permission checks. `parse_spill_pid` rejects 0, so `pid` is strictly
-    // positive and this can address neither a process group nor every process.
-    if unsafe { libc::kill(pid, 0) } == 0 {
+    // A pid above `i32::MAX` would wrap negative in `kill(2)` and address a
+    // process group; no OS hands one out, so treat it as not ours to judge.
+    if i32::try_from(pid).is_err() {
         return true;
     }
-    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    super::save_temps::process_is_alive(pid).unwrap_or(true)
 }
 
 /// What one sweep did. Returned rather than logged so the tests can assert the
 /// counts; a failed removal is counted and stepped over, never propagated —
 /// the load that triggered the sweep must not fail over another process's
 /// leftovers.
-#[cfg(unix)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SweepOutcome {
     removed: usize,
@@ -199,7 +195,6 @@ struct SweepOutcome {
 /// a real directory (not a symlink), named exactly like a spill dir, belonging
 /// to neither us nor any live process, and old enough to be past the pid-reuse
 /// window.
-#[cfg(unix)]
 fn is_reclaimable(path: &Path, name: &str, self_pid: u32, now: SystemTime) -> bool {
     let Some(pid) = parse_spill_pid(name) else {
         return false;
@@ -232,7 +227,6 @@ fn is_reclaimable(path: &Path, name: &str, self_pid: u32, now: SystemTime) -> bo
 }
 
 /// Remove every reclaimable spill directory directly under `root`.
-#[cfg(unix)]
 fn sweep_orphans(root: &Path, self_pid: u32, now: SystemTime) -> SweepOutcome {
     let mut outcome = SweepOutcome::default();
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -256,12 +250,11 @@ fn sweep_orphans(root: &Path, self_pid: u32, now: SystemTime) -> SweepOutcome {
 
 /// Sweep the current spill root, at most once in this process.
 ///
-/// Once-guarded because the cost is a `read_dir` plus one `kill(2)` per
+/// Once-guarded because the cost is a `read_dir` plus one liveness probe per
 /// candidate and the orphans it finds cannot reappear while we run — nothing
 /// but a *dead* process's leftovers is ever eligible. A consequence worth
 /// knowing when reading the tests: a later change to `KGLITE_TMPDIR` moves
 /// where spills land but does not earn the new root a sweep.
-#[cfg(unix)]
 fn sweep_once() {
     static SWEEP: std::sync::Once = std::sync::Once::new();
     SWEEP.call_once(|| {
@@ -269,27 +262,35 @@ fn sweep_once() {
     });
 }
 
-/// No janitor off unix.
-///
-/// The sweep turns on a liveness probe, and the Windows equivalent —
-/// `OpenProcess`/`GetExitCodeProcess` — has its own pid-reuse and
-/// access-denied semantics that nothing here has been run against. Shipping an
-/// unverified one would put `remove_dir_all` behind a guess; leaving it off
-/// leaves Windows exactly where it was, with drop-based cleanup and no sweep.
-#[cfg(not(unix))]
-fn sweep_once() {}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A handle on a directory that may have its mtime set. Windows refuses
+    /// `File::open` on a directory, and `set_modified` needs write-attributes
+    /// access plus backup semantics to open one.
+    fn open_dir_for_mtime(dir: &Path) -> fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(dir)
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        fs::File::open(dir).unwrap()
+    }
 
     fn mint(root: &Path, name: &str, age: Duration) -> PathBuf {
         let dir = root.join(name);
         fs::create_dir_all(dir.join("type_0")).unwrap();
         fs::write(dir.join("type_0").join("col.bin"), b"payload").unwrap();
-        fs::File::open(&dir)
-            .unwrap()
+        open_dir_for_mtime(&dir)
             .set_modified(SystemTime::now() - age)
             .unwrap();
         dir
@@ -299,10 +300,19 @@ mod tests {
     /// has not wrapped its pid counter back onto it, which no constant can
     /// promise.
     fn dead_pid() -> u32 {
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .unwrap();
+        #[cfg(windows)]
+        let mut command = {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "exit 0"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut c = std::process::Command::new("/bin/sh");
+            c.args(["-c", "exit 0"]);
+            c
+        };
+        let mut child = command.spawn().unwrap();
         let pid = child.id();
         child.wait().unwrap();
         pid
@@ -448,6 +458,7 @@ mod tests {
         assert!(!from_a_limit.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn spares_a_symlink_wearing_a_spill_name() {
         let root = tempfile::tempdir().unwrap();
@@ -465,6 +476,8 @@ mod tests {
         assert!(link.symlink_metadata().is_ok());
     }
 
+    // Needs a read-only directory that blocks unlink; Windows ACLs differ.
+    #[cfg(unix)]
     #[test]
     fn a_failed_removal_does_not_stop_the_sweep() {
         let root = tempfile::tempdir().unwrap();

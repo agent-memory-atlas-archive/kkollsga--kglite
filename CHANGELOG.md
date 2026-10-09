@@ -366,6 +366,10 @@ before upgrading.
 
 ### Fixed
 
+- **Windows never removed orphaned spill directories.** The sweep that reclaims
+  `kglite_portable_*` and `kglite_spill_*` directories left by killed processes ran
+  on Unix only. It now runs on Windows too, with the same rules (dead pid, at
+  least one hour old).
 - **Node: more than 10 concurrent calls on one `AbortSignal` printed
   `MaxListenersExceededWarning`.** The signal now carries one `abort` listener
   however many calls are in flight, and it is removed when the last settles.

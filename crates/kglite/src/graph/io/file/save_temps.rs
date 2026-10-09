@@ -113,7 +113,7 @@ fn temp_is_older_than(entry: &std::fs::DirEntry, max_age: Duration) -> bool {
 /// process exists and belongs to another user, which is still "alive"; `ESRCH`
 /// is the only answer that licenses a delete.
 #[cfg(unix)]
-fn process_is_alive(pid: u32) -> Option<bool> {
+pub(super) fn process_is_alive(pid: u32) -> Option<bool> {
     // SAFETY: `kill` with signal 0 performs no action beyond the existence and
     // permission check, and `pid > 0` (checked by `temp_owner_pid`) keeps it
     // from addressing a process *group*.
@@ -138,7 +138,7 @@ fn process_is_alive(pid: u32) -> Option<bool> {
 /// only makes the reaper keep a temp it could have deleted. Any other error
 /// answers `None` and leaves the decision to the age fallback.
 #[cfg(windows)]
-fn process_is_alive(pid: u32) -> Option<bool> {
+pub(super) fn process_is_alive(pid: u32) -> Option<bool> {
     use std::ffi::c_void;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
@@ -169,6 +169,6 @@ fn process_is_alive(pid: u32) -> Option<bool> {
 
 /// Platforms with neither probe: the age fallback owns the decision.
 #[cfg(not(any(unix, windows)))]
-fn process_is_alive(_pid: u32) -> Option<bool> {
+pub(super) fn process_is_alive(_pid: u32) -> Option<bool> {
     None
 }
