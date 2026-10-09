@@ -150,7 +150,7 @@ fn settle_now(deferred: Deferred, settle: Settle) {
 
 /// Run `work` on a pool thread and return the promise it settles.
 ///
-/// `work` runs inside `catch_unwind`; a panic rejects with `INTERNAL`.
+/// `work` runs inside `catch_unwind`; a panic rejects with `Internal`.
 pub fn spawn<'e>(
     env: &'e Env,
     work: impl FnOnce() -> Settle + Send + 'static,

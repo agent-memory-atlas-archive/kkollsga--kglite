@@ -26,10 +26,22 @@ export declare class Graph {
   executeRead(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
   /** Run a Cypher statement that may write, as one auto-committed transaction. */
   executeWrite(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
+  /** Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one. */
+  checkpoint(): Promise<void>
+  /** Flush the write-ahead log to stable storage (the power-safe point at durability `normal`). */
+  sync(): Promise<void>
+  /** Checkpoint if there are unsaved changes (writable graphs), release the writer lease and close the graph. Idempotent. */
+  close(): Promise<void>
   /** The path this graph was opened at. */
   get path(): string
-  /** The durability level in force (an inherited level degrades to `off` on a disk graph). */
+  /** The durability level in force (`off` on a `readOnly` graph; an inherited level degrades to `off` on a disk graph). */
   get durability(): 'full' | 'normal' | 'off'
+  /** Whether the graph was opened with `readOnly: true`. */
+  get readOnly(): boolean
+  /** Whether `close()` has completed. */
+  get closed(): boolean
+  /** Notices from opening the graph (a quarantined or repaired write-ahead log, a degraded durability level, a storage conversion). */
+  get openWarnings(): Array<string>
 }
 
 /**
@@ -84,12 +96,15 @@ export declare class Point {
 export interface KgliteError {
   /**
    * Engine error code (`CypherSyntax`, `CypherTimeout`, `ConstraintViolation`,
-   * `TransactionConflict`, ...), or `INTERNAL` / `WRITER_LEASE_HELD` / `QUEUE_FULL`.
+   * `TransactionConflict`, ...) or a binding code: `Internal`, `QueueFull`,
+   * `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`.
    */
   code: string
   /** Always `"KgliteError"`. */
   name: string
   message: string
+  /** Present on `WriterLeaseHeld`. */
+  holder?: LeaseHolderInfo
 }
 
 /** A node as returned in a row. */
@@ -126,6 +141,18 @@ export interface KgRelationship {
  */
 export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | Record<string, KgValue>
 
+/**
+ * Who holds a writer lease. `pid`, `since` and `label` are what the holder published
+ * (null when it had not yet, or an older build wrote the record); `self` is true when
+ * the holder is this very process, i.e. a handle that was opened and never closed.
+ */
+export interface LeaseHolderInfo {
+  pid?: number
+  since?: string
+  label?: string
+  self: boolean
+}
+
 export interface MutationStats {
   nodesCreated: number
   relationshipsCreated: number
@@ -146,7 +173,10 @@ export interface OpenOptions {
   /** Default `'full'`. Refused for `storage: 'disk'` when set explicitly. */
   durability?: 'full' | 'normal' | 'off'
   storage?: 'memory' | 'mapped' | 'disk'
-  /** Not supported yet; `true` rejects. */
+  /**
+   * Load the last checkpoint and take no lease; writes reject `ReadOnly`. Not
+   * combinable with `durability`, `storage` or `lockTimeoutMs`.
+   */
   readOnly?: boolean
   /** How long to wait for another writer to release the path. Default 0 (fail fast). */
   lockTimeoutMs?: number

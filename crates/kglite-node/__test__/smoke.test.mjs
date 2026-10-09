@@ -13,11 +13,11 @@ test('version() matches [workspace.package] version', () => {
   assert.equal(addon.version(), workspaceVersion);
 });
 
-test('a panic inside an export becomes a JS Error with code INTERNAL', () => {
+test('a panic inside an export becomes a JS Error with code Internal', () => {
   assert.equal(typeof addon.__panic, 'function', 'build with --features test-hooks (make test-node)');
   assert.throws(
     () => addon.__panic(),
-    (e) => e instanceof Error && e.code === 'INTERNAL' && /deliberate test panic/.test(e.message),
+    (e) => e instanceof Error && e.code === 'Internal' && /deliberate test panic/.test(e.message),
   );
   // The process survived and the addon still works.
   assert.equal(addon.version(), workspaceVersion);

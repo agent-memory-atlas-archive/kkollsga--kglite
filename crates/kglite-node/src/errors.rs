@@ -2,8 +2,10 @@
 //!
 //! Core errors keep the engine's own code string (`KgErrorCode::as_str`, e.g.
 //! `CypherSyntax`), so a message and a code mean the same thing on every
-//! binding. Codes the binding itself raises are `INTERNAL` (a contained panic),
-//! `WRITER_LEASE_HELD` (another writer owns the path) and `QUEUE_FULL`.
+//! binding. Codes the binding itself raises are `Internal` (a contained panic),
+//! `WriterLeaseHeld` (another writer owns the path; carries a `holder`), `QueueFull`,
+//! `Closed` (the handle was closed), `ReadOnly` (a write on a `readOnly` handle)
+//! and `NotDurable` (`sync()` on a handle with no write-ahead log).
 
 use std::ffi::c_char;
 use std::ptr;
@@ -11,16 +13,32 @@ use std::ptr;
 use kglite::api::KgError;
 use napi::sys;
 
-pub const CODE_INTERNAL: &str = "INTERNAL";
-pub const CODE_LEASE_HELD: &str = "WRITER_LEASE_HELD";
-pub const CODE_QUEUE_FULL: &str = "QUEUE_FULL";
+pub const CODE_INTERNAL: &str = "Internal";
+pub const CODE_LEASE_HELD: &str = "WriterLeaseHeld";
+pub const CODE_QUEUE_FULL: &str = "QueueFull";
+pub const CODE_CLOSED: &str = "Closed";
+pub const CODE_READ_ONLY: &str = "ReadOnly";
+pub const CODE_NOT_DURABLE: &str = "NotDurable";
 const CODE_ARGUMENT: &str = "InvalidArgument";
+
+/// Who holds a writer lease, as published by the holder (best effort: a
+/// contender that loses a startup race can read an empty record).
+#[derive(Debug, Clone)]
+pub struct Holder {
+    pub pid: Option<u32>,
+    pub since: Option<String>,
+    pub label: Option<String>,
+    /// The holder is this very process (an un-closed handle opened the path).
+    pub is_self: bool,
+}
 
 /// A failure on its way to becoming a JS `Error` with a `code` property.
 #[derive(Debug)]
 pub struct JsErr {
     pub code: &'static str,
     pub message: String,
+    /// Set on `WriterLeaseHeld`; becomes the error's `holder` property.
+    pub holder: Option<Holder>,
 }
 
 pub type JsRes<T> = std::result::Result<T, JsErr>;
@@ -30,6 +48,7 @@ impl JsErr {
         Self {
             code,
             message: message.into(),
+            holder: None,
         }
     }
 
@@ -80,6 +99,59 @@ fn utf8(env: sys::napi_env, s: &str) -> JsRes<sys::napi_value> {
     Ok(out)
 }
 
+fn set_prop(
+    env: sys::napi_env,
+    obj: sys::napi_value,
+    key: &std::ffi::CStr,
+    value: sys::napi_value,
+) -> JsRes<()> {
+    check(
+        unsafe { sys::napi_set_named_property(env, obj, key.as_ptr(), value) },
+        "set property",
+    )
+}
+
+fn holder_object(env: sys::napi_env, h: &Holder) -> JsRes<sys::napi_value> {
+    let mut obj = ptr::null_mut();
+    check(
+        unsafe { sys::napi_create_object(env, &mut obj) },
+        "create object",
+    )?;
+    let nullable = |v: Option<sys::napi_value>| -> JsRes<sys::napi_value> {
+        match v {
+            Some(v) => Ok(v),
+            None => {
+                let mut n = ptr::null_mut();
+                check(unsafe { sys::napi_get_null(env, &mut n) }, "get null")?;
+                Ok(n)
+            }
+        }
+    };
+    let pid = match h.pid {
+        Some(p) => {
+            let mut v = ptr::null_mut();
+            check(
+                unsafe { sys::napi_create_uint32(env, p, &mut v) },
+                "create number",
+            )?;
+            Some(v)
+        }
+        None => None,
+    };
+    set_prop(env, obj, c"pid", nullable(pid)?)?;
+    let since = h.since.as_deref().map(|s| utf8(env, s)).transpose()?;
+    set_prop(env, obj, c"since", nullable(since)?)?;
+    let label = h.label.as_deref().map(|s| utf8(env, s)).transpose()?;
+    set_prop(env, obj, c"label", nullable(label)?)?;
+    let mut flag = ptr::null_mut();
+    check(
+        unsafe { sys::napi_get_boolean(env, h.is_self, &mut flag) },
+        "create boolean",
+    )?;
+    set_prop(env, obj, c"self", flag)?;
+    Ok(obj)
+}
+
 /// A JS `Error` with `.code` set and `.name === "KgliteError"`.
 pub fn make_error(env: sys::napi_env, e: &JsErr) -> JsRes<sys::napi_value> {
     let code = utf8(env, e.code)?;
@@ -94,6 +166,9 @@ pub fn make_error(env: sys::napi_env, e: &JsErr) -> JsRes<sys::napi_value> {
         unsafe { sys::napi_set_named_property(env, err, c"name".as_ptr(), name) },
         "set error name",
     )?;
+    if let Some(h) = &e.holder {
+        set_prop(env, err, c"holder", holder_object(env, h)?)?;
+    }
     Ok(err)
 }
 

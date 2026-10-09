@@ -213,7 +213,7 @@ test('params must be a plain object; options are validated, not ignored', async 
   await assert.rejects(graph.executeRead(42), (e) => e.code === 'InvalidArgument');
   await assert.rejects(kglite.open('x', { durabilty: 'off' }), (e) => e.code === 'InvalidArgument');
   await assert.rejects(kglite.open('x', { durability: 'sometimes' }), (e) => e.code === 'InvalidArgument');
-  await assert.rejects(kglite.open('x', { readOnly: true }), (e) => e.code === 'InvalidArgument');
+  await assert.rejects(kglite.open('x', { readOnly: 'yes' }), (e) => e.code === 'InvalidArgument');
 });
 
 test('result shape: columns, stats, warnings, truncated', async () => {

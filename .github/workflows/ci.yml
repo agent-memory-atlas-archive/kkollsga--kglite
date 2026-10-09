@@ -1391,9 +1391,23 @@ jobs:
       - name: Run the Node binding suite
         run: node --test 'crates/kglite-node/__test__/*.test.mjs'
 
-      # Cross-binding parity leg (lean wheel + bolt server, KGLITE_NODE_PARITY=1
-      # so a missing toolchain is a failure and not a skip) is added here by
-      # the parity phase, after the step above.
+      - name: Build the Python extension and bolt server for the cross-binding parity leg
+        # Lean feature set (the parity test uses only the core engine) and the
+        # debug profile, the same choices as the kglite-java leg above.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest pytest-timeout pandas neo4j
+          .venv/bin/maturin develop --no-default-features --features abi3,python-extension
+          cargo build -p kglite-bolt-server
+
+      - name: Run the cross-binding file-format parity suite
+        # KGLITE_NODE_PARITY=1 makes a missing node, unbuilt addon, absent neo4j
+        # driver or unbuilt bolt server a hard failure instead of a skip, so
+        # this proof cannot pass by not running. Node->Python, Node->bolt-server
+        # and Python->Node, each checkpointed and WAL-ahead.
+        env:
+          KGLITE_NODE_PARITY: '1'
+        run: .venv/bin/pytest tests/test_node_python_parity.py -v --tb=short
 
   ci-success:
     name: CI success

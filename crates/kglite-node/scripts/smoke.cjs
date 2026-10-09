@@ -34,5 +34,28 @@ if (binary && readFileSync(binary).includes('deliberate test panic')) {
   fail(`${binary} contains the test-hooks panic message`);
 }
 
-// Extend with a write/read round trip once the binding exports the engine.
-console.log(`smoke ok: kglite-node ${addon.version()} on ${process.platform}-${process.arch}`);
+// A durable write/read round trip through close and a reopen: the packaged
+// binary persists, recovers and releases its lease, not merely loads.
+async function roundTrip() {
+  const { mkdtempSync, rmSync } = require('node:fs');
+  const { tmpdir } = require('node:os');
+  const { join } = require('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'kglite-node-smoke-'));
+  try {
+    const path = join(dir, 'smoke.kgl');
+    const g = await addon.open(path, { durability: 'normal' });
+    await g.executeWrite('CREATE (:Smoke {n: $n})', { n: 42 });
+    await g.close();
+    const back = await addon.open(path, { durability: 'normal' });
+    const rows = (await back.executeRead('MATCH (s:Smoke) RETURN s.n AS n')).rows;
+    await back.close();
+    if (rows.length !== 1 || rows[0].n !== 42) fail(`round trip returned ${JSON.stringify(rows)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+roundTrip().then(
+  () => console.log(`smoke ok: kglite-node ${addon.version()} on ${process.platform}-${process.arch}`),
+  (e) => fail(`write/read round trip rejected: ${e && e.code} ${e && e.message}`),
+);

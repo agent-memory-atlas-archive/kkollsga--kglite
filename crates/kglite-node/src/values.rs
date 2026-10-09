@@ -16,9 +16,14 @@ use napi::sys;
 use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, Point};
 use crate::errors::{JsErr, JsRes};
 
-/// Deepest list/map nesting converted in either direction. The parser bounds
-/// query expressions at 512, so any value a query can build fits.
+/// Deepest list/map nesting converted into JS. The parser bounds query
+/// expressions at 512, so any value a query can build fits.
 pub const MAX_DEPTH: usize = 1024;
+
+/// Deepest nesting accepted in a parameter. Conversion recurses on the JS
+/// thread, whose stack is the host's; a debug build overflows it (SIGSEGV, not
+/// an error) a little past 600 levels, so the ceiling sits well under that.
+pub const MAX_PARAM_DEPTH: usize = 256;
 
 /// Largest integer a JS number holds exactly.
 const MAX_SAFE: i64 = (1 << 53) - 1;
@@ -500,9 +505,9 @@ impl FromJs {
 
     /// Convert one parameter value. `path` names it in error messages.
     pub fn value(&mut self, v: sys::napi_value, path: &str, depth: usize) -> JsRes<Value> {
-        if depth > MAX_DEPTH {
+        if depth > MAX_PARAM_DEPTH {
             return Err(JsErr::arg(format!(
-                "{path}: nests deeper than {MAX_DEPTH} levels"
+                "{path}: nests deeper than {MAX_PARAM_DEPTH} levels"
             )));
         }
         match self.kind(v)?.0 {

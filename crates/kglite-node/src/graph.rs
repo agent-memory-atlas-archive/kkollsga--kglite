@@ -1,16 +1,38 @@
-//! `open`, `Graph.executeRead` and `Graph.executeWrite`.
+//! `open`, `Graph.executeRead`, `Graph.executeWrite` and the graph lifecycle.
 //!
 //! Every method validates its arguments on the JS thread, ships the engine work
 //! to the worker pool, and builds the result back on the JS thread. A bad
 //! argument rejects the returned promise; it never throws synchronously.
+//!
+//! Lifecycle contract:
+//! - A writable graph owns the path's writer lease from `open` until `close`
+//!   (or until the handle is garbage collected). A second writable `open` of
+//!   the same path, from another process or from this one, rejects
+//!   `WriterLeaseHeld` carrying the holder; `holder.self` is true when the
+//!   holder is this process. The OS frees the lease when a process dies, so
+//!   `kill -9` never leaves one stale.
+//! - `readOnly` takes no lease and loads the last checkpoint on disk. While a
+//!   durable writer is live, commits since its last checkpoint sit only in the
+//!   write-ahead log, which a lease-less reader does not read: it sees the
+//!   state as of that checkpoint, never a torn one, and cannot disturb the
+//!   writer. It never creates the path.
+//! - `close()` checkpoints when there are unsaved changes (so `durability:
+//!   'off'` loses nothing on a clean exit), then closes the log and releases
+//!   the lease. A failed checkpoint leaves the graph open. Idempotent; every
+//!   other call afterwards rejects `Closed`.
+//! - A writable graph that is dropped without `close()` keeps what its
+//!   durability level promises: `full`/`normal` recover from the log on the
+//!   next open; `off` loses whatever was never checkpointed.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration as StdDuration;
 
 use kglite::api::durable::DurabilityLevel;
+use kglite::api::io::{load_file, GraphWriterLease};
 use kglite::api::session::{
-    open_path, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec, OpenedSession, QueryDefaults,
+    open_path, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec, QueryDefaults, Session,
 };
 use kglite::api::storage::StorageMode;
 use kglite::api::Value;
@@ -19,7 +41,10 @@ use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
 
 use crate::contain;
-use crate::errors::{to_sync_error, JsErr, JsRes, CODE_LEASE_HELD};
+use crate::errors::{
+    to_sync_error, Holder, JsErr, JsRes, CODE_CLOSED, CODE_LEASE_HELD, CODE_NOT_DURABLE,
+    CODE_READ_ONLY,
+};
 use crate::pool::{self, Settle};
 use crate::values::{FromJs, IntegerMode, ToJs};
 
@@ -28,12 +53,47 @@ use crate::values::{FromJs, IntegerMode, ToJs};
 const WRITE_ATTEMPTS: u32 = 5;
 
 struct Inner {
-    opened: OpenedSession,
+    /// `None` once [`Graph::close`] has run; taking it out is what finally closes
+    /// the write-ahead log, so a successor writer never meets a live handle on it.
+    session: Mutex<Option<Arc<Session>>>,
+    /// Held for as long as the graph is writable; `None` for a `readOnly` graph.
+    lease: Mutex<Option<GraphWriterLease>>,
     path: String,
+    durability: DurabilityLevel,
+    read_only: bool,
+    /// The path did not hold a graph when it was opened.
+    created: bool,
+    /// Version right after open (and recovery), the baseline for "unchanged".
+    open_version: u64,
+    /// Version of the last checkpoint this handle wrote.
+    last_checkpoint: Mutex<Option<u64>>,
+    closed: AtomicBool,
+    warnings: Vec<String>,
     defaults: QueryDefaults,
     ints: IntegerMode,
-    /// Serialises auto-commit writes so they never race one another to commit.
+    /// Serialises auto-commit writes, checkpoints and `close` so none races another.
     write_lock: Mutex<()>,
+}
+
+impl Inner {
+    fn session(&self) -> JsRes<Arc<Session>> {
+        self.session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(closed_error)
+    }
+}
+
+fn closed_error() -> JsErr {
+    JsErr::new(CODE_CLOSED, "this graph is closed")
+}
+
+fn read_only_error(what: &str) -> JsErr {
+    JsErr::new(
+        CODE_READ_ONLY,
+        format!("{what} is not available: this graph was opened with readOnly: true"),
+    )
 }
 
 /// A graph opened by [`open`].
@@ -46,6 +106,7 @@ pub struct Graph {
 
 struct OpenConfig {
     spec: OpenSpec,
+    read_only: bool,
     defaults: QueryDefaults,
     ints: IntegerMode,
 }
@@ -111,6 +172,8 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
     spec.storage = None;
     let mut defaults = QueryDefaults::default();
     let mut ints = IntegerMode::Safe;
+    let mut read_only = false;
+    let mut lock_explicit = false;
     let known = [
         "durability",
         "storage",
@@ -151,11 +214,10 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
                 if !f.kind(val)?.is_boolean() {
                     return Err(JsErr::arg("readOnly must be a boolean"));
                 }
-                if f.get_bool(val)? {
-                    return Err(JsErr::arg("readOnly is not supported yet"));
-                }
+                read_only = f.get_bool(val)?;
             }
             "lockTimeoutMs" => {
+                lock_explicit = true;
                 spec.lease_timeout = Some(StdDuration::from_millis(expect_number(
                     f,
                     val,
@@ -178,8 +240,15 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
             _ => unreachable!("filtered by option_entries"),
         }
     }
+    if read_only && (spec.durability_explicit || spec.storage.is_some() || lock_explicit) {
+        return Err(JsErr::arg(
+            "readOnly cannot be combined with durability, storage or lockTimeoutMs: \
+             a read-only graph loads the last checkpoint and takes no lease",
+        ));
+    }
     Ok(OpenConfig {
         spec,
+        read_only,
         defaults,
         ints,
     })
@@ -297,6 +366,50 @@ fn err_promise<'e>(env: &'e Env, e: JsErr) -> napi::Result<Object<'e>, &'static 
     pool::settled(env, failed(e)).map_err(|e| to_sync_error(JsErr::from(e)))
 }
 
+fn undefined(env: sys::napi_env) -> JsRes<sys::napi_value> {
+    let mut out = std::ptr::null_mut();
+    if unsafe { sys::napi_get_undefined(env, &mut out) } != sys::Status::napi_ok {
+        return Err(JsErr::internal("napi_get_undefined failed"));
+    }
+    Ok(out)
+}
+
+fn done() -> Settle {
+    Box::new(|env: Env| undefined(env.raw()))
+}
+
+fn save_error(message: String) -> JsErr {
+    JsErr::new("FileIo", message)
+}
+
+impl Inner {
+    /// Write a checkpoint unless nothing changed since this handle's last one.
+    /// The caller holds `write_lock`.
+    fn checkpoint_locked(&self, session: &Session) -> JsRes<()> {
+        let mut last = self
+            .last_checkpoint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        session
+            .checkpoint_if_changed(Path::new(&self.path), &mut last)
+            .map(|_| ())
+            .map_err(save_error)
+    }
+
+    /// Whether `close` has anything to write: a change since the last checkpoint
+    /// (or, with none yet, since open), or a graph that has no file yet.
+    fn dirty(&self, session: &Session) -> bool {
+        let last = *self
+            .last_checkpoint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match last {
+            Some(v) => session.version() != v,
+            None => self.created || session.version() != self.open_version,
+        }
+    }
+}
+
 impl Graph {
     fn run<'e>(
         &self,
@@ -317,6 +430,9 @@ impl Graph {
             Ok(a) => a,
             Err(e) => return err_promise(env, e),
         };
+        if write && self.inner.read_only {
+            return err_promise(env, read_only_error("executeWrite"));
+        }
         let inner = Arc::clone(&self.inner);
         let resolved = inner
             .defaults
@@ -328,16 +444,23 @@ impl Graph {
             opts.deadline_origin = resolved.deadline_origin;
             opts.max_work_units = resolved.max_work_units;
             opts.row_limit = resolved.row_limit;
-            let session = &inner.opened.session;
             let outcome = if write {
                 let _serial = inner
                     .write_lock
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                session.execute_auto_commit(&args.cypher, &opts, WRITE_ATTEMPTS)
+                match inner.session() {
+                    Ok(session) => session.execute_auto_commit(&args.cypher, &opts, WRITE_ATTEMPTS),
+                    Err(e) => return failed(e),
+                }
             } else {
-                let snapshot = session.snapshot();
-                kglite::api::session::execute_read(&snapshot, &args.cypher, &opts)
+                match inner.session() {
+                    Ok(session) => {
+                        let snapshot = session.snapshot();
+                        kglite::api::session::execute_read(&snapshot, &args.cypher, &opts)
+                    }
+                    Err(e) => return failed(e),
+                }
             };
             let ints = inner.ints;
             match outcome {
@@ -346,6 +469,16 @@ impl Graph {
             }
         });
         promise.map_err(|e| to_sync_error(JsErr::from(e)))
+    }
+
+    /// Ship `work` to the pool, rejecting at once when the graph is already closed.
+    fn lifecycle<'e>(
+        &self,
+        env: &'e Env,
+        work: impl FnOnce(&Inner) -> Settle + Send + 'static,
+    ) -> napi::Result<Object<'e>, &'static str> {
+        let inner = Arc::clone(&self.inner);
+        pool::spawn(env, move || work(&inner)).map_err(|e| to_sync_error(JsErr::from(e)))
     }
 }
 
@@ -381,17 +514,114 @@ impl Graph {
         contain(|| self.run(env, true, cypher, params, options))
     }
 
+    /// Write a checkpoint (folding the write-ahead log) unless nothing changed since this handle's last one.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn checkpoint<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
+        contain(|| {
+            if self.inner.read_only {
+                return err_promise(env, read_only_error("checkpoint()"));
+            }
+            self.lifecycle(env, |inner| {
+                let _serial = inner
+                    .write_lock
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let session = match inner.session() {
+                    Ok(s) => s,
+                    Err(e) => return failed(e),
+                };
+                match inner.checkpoint_locked(&session) {
+                    Ok(()) => done(),
+                    Err(e) => failed(e),
+                }
+            })
+        })
+    }
+
+    /// Flush the write-ahead log to stable storage (the power-safe point at durability `normal`).
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn sync<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
+        contain(|| {
+            if self.inner.read_only {
+                return err_promise(env, read_only_error("sync()"));
+            }
+            self.lifecycle(env, |inner| {
+                let session = match inner.session() {
+                    Ok(s) => s,
+                    Err(e) => return failed(e),
+                };
+                if session.durability().is_none() {
+                    return failed(JsErr::new(
+                        CODE_NOT_DURABLE,
+                        "sync() needs durability 'full' or 'normal'; this graph has no write-ahead log \
+                         (use checkpoint() to write it to disk)",
+                    ));
+                }
+                match session.sync() {
+                    Ok(()) => done(),
+                    Err(m) => failed(JsErr::new("DurabilityFailed", m)),
+                }
+            })
+        })
+    }
+
+    /// Checkpoint if there are unsaved changes (writable graphs), release the writer lease and close the graph. Idempotent.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn close<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
+        contain(|| {
+            self.lifecycle(env, |inner| {
+                let _serial = inner
+                    .write_lock
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if inner.closed.load(Ordering::Acquire) {
+                    return done();
+                }
+                if !inner.read_only {
+                    let session = match inner.session() {
+                        Ok(s) => s,
+                        Err(e) => return failed(e),
+                    };
+                    if inner.dirty(&session) {
+                        // A failed checkpoint leaves the graph open and the lease held,
+                        // so the caller can retry rather than lose the changes.
+                        if let Err(e) = inner.checkpoint_locked(&session) {
+                            return failed(e);
+                        }
+                    }
+                }
+                inner.closed.store(true, Ordering::Release);
+                // Session first (closes the log), lease second (admits a successor).
+                drop(
+                    inner
+                        .session
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take(),
+                );
+                drop(
+                    inner
+                        .lease
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take(),
+                );
+                done()
+            })
+        })
+    }
+
     /// The path this graph was opened at.
     #[napi(getter)]
     pub fn path(&self) -> napi::Result<String, &'static str> {
         contain(|| Ok(self.inner.path.clone()))
     }
 
-    /// The durability level in force (an inherited level degrades to `off` on a disk graph).
+    /// The durability level in force (`off` on a `readOnly` graph; an inherited level degrades to `off` on a disk graph).
     #[napi(getter, ts_return_type = "'full' | 'normal' | 'off'")]
     pub fn durability(&self) -> napi::Result<String, &'static str> {
         contain(|| {
-            Ok(match self.inner.opened.durability {
+            Ok(match self.inner.durability {
                 DurabilityLevel::Full => "full",
                 DurabilityLevel::Normal => "normal",
                 DurabilityLevel::Off => "off",
@@ -399,22 +629,140 @@ impl Graph {
             .to_string())
         })
     }
+
+    /// Whether the graph was opened with `readOnly: true`.
+    #[napi(getter)]
+    pub fn read_only(&self) -> napi::Result<bool, &'static str> {
+        contain(|| Ok(self.inner.read_only))
+    }
+
+    /// Whether `close()` has completed.
+    #[napi(getter)]
+    pub fn closed(&self) -> napi::Result<bool, &'static str> {
+        contain(|| Ok(self.inner.closed.load(Ordering::Acquire)))
+    }
+
+    /// Notices from opening the graph (a quarantined or repaired write-ahead log, a degraded durability level, a storage conversion).
+    #[napi(getter)]
+    pub fn open_warnings(&self) -> napi::Result<Vec<String>, &'static str> {
+        contain(|| Ok(self.inner.warnings.clone()))
+    }
+}
+
+fn io_error(io: &std::io::Error) -> JsErr {
+    use std::io::ErrorKind;
+    JsErr::new(
+        match io.kind() {
+            ErrorKind::NotFound => "FileNotFound",
+            ErrorKind::InvalidData => "FileFormat",
+            _ => "FileIo",
+        },
+        io.to_string(),
+    )
 }
 
 fn open_error(e: &OpenError) -> JsErr {
-    use std::io::ErrorKind;
     match e {
-        OpenError::Lease(io) => JsErr::new(CODE_LEASE_HELD, io.to_string()),
-        OpenError::Open(io) => JsErr::new(
-            match io.kind() {
-                ErrorKind::NotFound => "FileNotFound",
-                ErrorKind::InvalidData => "FileFormat",
-                _ => "FileIo",
-            },
-            io.to_string(),
-        ),
+        // The lease is taken separately (see `acquire_lease`); a contention
+        // refusal never reaches here, so this is an I/O failure.
+        OpenError::Lease(io) | OpenError::Open(io) => io_error(io),
         OpenError::Session { message, .. } => JsErr::new("FileIo", message.clone()),
     }
+}
+
+/// Take the writer lease, keeping the holder structured on a refusal.
+fn acquire_lease(path: &Path, timeout: StdDuration) -> JsRes<GraphWriterLease> {
+    GraphWriterLease::acquire_ex(path, timeout).map_err(|refusal| match refusal.holder {
+        Some(h) if refusal.error.kind() == std::io::ErrorKind::WouldBlock => {
+            let mut err = JsErr::new(CODE_LEASE_HELD, refusal.error.to_string());
+            err.holder = Some(Holder {
+                is_self: h.pid == Some(std::process::id()),
+                pid: h.pid,
+                since: h.since,
+                label: h.label,
+            });
+            err
+        }
+        _ => io_error(&refusal.error),
+    })
+}
+
+fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
+    let p = Path::new(path);
+    let mut spec = config.spec;
+    let existed = p.exists();
+    // A missing path is created in memory unless the caller chose a mode;
+    // an existing one keeps whatever mode its checkpoint is in.
+    if spec.storage.is_none() && !existed {
+        spec.storage = Some(StorageMode::Memory);
+    }
+    // The lease comes first (before the graph is read), exactly as `open_path`
+    // orders it; it is taken here so a refusal keeps its structured holder.
+    let timeout = spec.lease_timeout.unwrap_or(StdDuration::ZERO);
+    let lease = acquire_lease(p, timeout)?;
+    spec.lease_timeout = None;
+    let opened = open_path(p, &spec).map_err(|e| open_error(&e))?;
+    let mut warnings: Vec<String> = opened
+        .advisories
+        .iter()
+        .map(|a| format!("{}: {}", a.code, a.message))
+        .collect();
+    if let Some(requested) = opened.degraded_from {
+        warnings.push(format!(
+            "durability '{}' is not available for storage 'disk'; running at 'off' (use checkpoint() to persist)",
+            requested.name()
+        ));
+    }
+    if let Some(from) = opened.converted_from {
+        warnings.push(format!(
+            "storage converted from '{}' to '{}'",
+            from.as_str(),
+            opened.live_mode.as_str()
+        ));
+    }
+    let session = opened.session;
+    Ok(Inner {
+        open_version: session.version(),
+        session: Mutex::new(Some(Arc::new(session))),
+        lease: Mutex::new(Some(lease)),
+        path: path.to_string(),
+        durability: opened.durability,
+        read_only: false,
+        created: !existed,
+        last_checkpoint: Mutex::new(None),
+        closed: AtomicBool::new(false),
+        warnings,
+        defaults: config.defaults,
+        ints: config.ints,
+        write_lock: Mutex::new(()),
+    })
+}
+
+/// A lease-less open: the last checkpoint on disk, with no write-ahead log read
+/// and nothing published back. It never creates the path.
+fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
+    let graph = load_file(path).map_err(|e| io_error(&e))?;
+    let warnings = graph
+        .advisories
+        .iter()
+        .map(|a| format!("{}: {}", a.code, a.message))
+        .collect();
+    let session = Session::from_arc(graph);
+    Ok(Inner {
+        open_version: session.version(),
+        session: Mutex::new(Some(Arc::new(session))),
+        lease: Mutex::new(None),
+        path: path.to_string(),
+        durability: DurabilityLevel::Off,
+        read_only: true,
+        created: false,
+        last_checkpoint: Mutex::new(None),
+        closed: AtomicBool::new(false),
+        warnings,
+        defaults: config.defaults,
+        ints: config.ints,
+        write_lock: Mutex::new(()),
+    })
 }
 
 /// Open (or create) the graph at `path`.
@@ -440,27 +788,20 @@ pub fn open<'e>(
             Err(e) => return err_promise(env, e),
         };
         pool::spawn(env, move || {
-            let mut spec = config.spec;
-            // A missing path is created in memory unless the caller chose a mode;
-            // an existing one keeps whatever mode its checkpoint is in.
-            if spec.storage.is_none() && !Path::new(&path).exists() {
-                spec.storage = Some(StorageMode::Memory);
-            }
-            match open_path(Path::new(&path), &spec) {
-                Ok(opened) => {
-                    let inner = Arc::new(Inner {
-                        opened,
-                        path,
-                        defaults: config.defaults,
-                        ints: config.ints,
-                        write_lock: Mutex::new(()),
-                    });
+            let opened = if config.read_only {
+                open_reader(&path, config)
+            } else {
+                open_writer(&path, config)
+            };
+            match opened {
+                Ok(inner) => {
+                    let inner = Arc::new(inner);
                     Box::new(move |env: Env| {
                         unsafe { Graph::to_napi_value(env.raw(), Graph { inner }) }
                             .map_err(JsErr::from)
                     })
                 }
-                Err(e) => failed(open_error(&e)),
+                Err(e) => failed(e),
             }
         })
         .map_err(|e| to_sync_error(JsErr::from(e)))

@@ -76,13 +76,13 @@ test('declared constraints reject with ConstraintViolation', async () => {
   assert.equal(r.rows[0].c, 1);
 });
 
-test('opening a held path rejects WRITER_LEASE_HELD', async () => {
+test('opening a held path rejects WriterLeaseHeld', async () => {
   const { graph: held, dir, cleanup: done } = await freshGraph();
   try {
     // freshGraph opened `durability: off`, which still takes the writer lease.
     await assert.rejects(
       kglite.open(`${dir}/g.kgl`, { durability: 'off' }),
-      (e) => e.code === 'WRITER_LEASE_HELD',
+      (e) => e.code === 'WriterLeaseHeld',
     );
     assert.equal(held.path, `${dir}/g.kgl`);
   } finally {
@@ -90,14 +90,14 @@ test('opening a held path rejects WRITER_LEASE_HELD', async () => {
   }
 });
 
-test('panics become INTERNAL errors and the process keeps running', async () => {
+test('panics become Internal errors and the process keeps running', async () => {
   assert.equal(typeof kglite.__panic, 'function', 'build with --features test-hooks (make test-node)');
   // On the JS thread (the export boundary).
-  assert.throws(() => kglite.__panic(), (e) => e.code === 'INTERNAL' && /deliberate test panic/.test(e.message));
+  assert.throws(() => kglite.__panic(), (e) => e.code === 'Internal' && /deliberate test panic/.test(e.message));
   // On a pool thread.
-  await assert.rejects(kglite.__panicInWorker(), (e) => e.code === 'INTERNAL' && /deliberate worker panic/.test(e.message));
+  await assert.rejects(kglite.__panicInWorker(), (e) => e.code === 'Internal' && /deliberate worker panic/.test(e.message));
   // While building the result on the JS thread.
-  await assert.rejects(kglite.__panicInSettle(), (e) => e.code === 'INTERNAL' && /deliberate settle panic/.test(e.message));
+  await assert.rejects(kglite.__panicInSettle(), (e) => e.code === 'Internal' && /deliberate settle panic/.test(e.message));
   // Every pool thread survived: more panics than workers, then real queries.
   await Promise.allSettled(Array.from({ length: 16 }, () => kglite.__panicInWorker()));
   const rows = await Promise.all(Array.from({ length: 16 }, (_, i) => graph.executeRead('RETURN $i AS i', { i })));

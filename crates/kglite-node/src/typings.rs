@@ -68,15 +68,30 @@ pub type ParamValueType = Either3<KgValueType, KgFloat, Date<'static>>;
 #[napi(js_name = "Params")]
 pub type ParamsType = HashMap<String, ParamValueType>;
 
+/// Who holds a writer lease. `pid`, `since` and `label` are what the holder published
+/// (null when it had not yet, or an older build wrote the record); `self` is true when
+/// the holder is this very process, i.e. a handle that was opened and never closed.
+#[napi(object)]
+pub struct LeaseHolderInfo {
+    pub pid: Option<u32>,
+    pub since: Option<String>,
+    pub label: Option<String>,
+    #[napi(js_name = "self")]
+    pub is_self: bool,
+}
+
 /// The `Error` every rejection carries.
 #[napi(object, js_name = "KgliteError")]
 pub struct KgliteErrorShape {
     /// Engine error code (`CypherSyntax`, `CypherTimeout`, `ConstraintViolation`,
-    /// `TransactionConflict`, ...), or `INTERNAL` / `WRITER_LEASE_HELD` / `QUEUE_FULL`.
+    /// `TransactionConflict`, ...) or a binding code: `Internal`, `QueueFull`,
+    /// `WriterLeaseHeld`, `Closed`, `ReadOnly`, `NotDurable`.
     pub code: String,
     /// Always `"KgliteError"`.
     pub name: String,
     pub message: String,
+    /// Present on `WriterLeaseHeld`.
+    pub holder: Option<LeaseHolderInfo>,
 }
 
 /// A node as returned in a row.
@@ -112,7 +127,8 @@ pub struct OpenOptions {
     pub durability: Option<String>,
     #[napi(ts_type = "'memory' | 'mapped' | 'disk'")]
     pub storage: Option<String>,
-    /// Not supported yet; `true` rejects.
+    /// Load the last checkpoint and take no lease; writes reject `ReadOnly`. Not
+    /// combinable with `durability`, `storage` or `lockTimeoutMs`.
     pub read_only: Option<bool>,
     /// How long to wait for another writer to release the path. Default 0 (fail fast).
     pub lock_timeout_ms: Option<f64>,
