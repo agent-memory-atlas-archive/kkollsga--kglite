@@ -205,9 +205,9 @@
       "status": "accepted"
     },
     "current.linux.json": {
-      "evidence": "reference_0_19_3_forked_cells.linux.json with one cell renamed, measurements unchanged: test_bench_write_tx_after_deletes is now test_bench_commit_tx_after_deletes (a 'write' name component made the persistence-cell registry treat it as a persistence writer). Original evidence: current.linux.json (reference_0_19_1_va4_cell.linux.json) plus two cells: the harness gained test_bench_write_tx_after_deletes and test_bench_scan_under_held_overlay_after_deletes (issue #195) and CI leg 2 requires an exact cell-set match. The new rows are PROVISIONAL scaled estimates, not Linux measurements: kglite 0.13.2 macOS slower-of-two min 38.07 ms x 3.9 = 148.5 ms and 11.03 ms x 3.9 = 43.0 ms, which only ever loosen the leg-2 gate for these cells; they are replaced by Linux measurements once a CI artifact carries the cells.",
+      "evidence": "reference_0_19_3_forked_cells_renamed.linux.json with one cell renamed: test_bench_hop1_deg3_memory is now test_bench_hop1_deg3_expand_memory (0.19.6), because the old name's earlier rows measured the fused count(*) query and every longitudinal gate read the expansion as millions of percent of drift. The renamed row is PROVISIONAL: its stats are the old row scaled to 157.4 ms min, the slowest Linux CI min observed for the expansion query on this branch (PR #223 perf-gate logs: 152.6, 151.8, 157.4 ms), so it only loosens the leg-2 gate; it is replaced by a Linux measurement once a CI artifact carries the cell. All other rows unchanged.",
       "platform": "Linux/x86_64",
-      "sha256": "f00f2540075e6c5b4e0910b88fb28fe09abfed5d8477a33034252e792ab4735d",
+      "sha256": "99bd2cd25cca9925e3bd1881ae510f1c5f4002401f3335b3207c53569b2ca221",
       "status": "accepted"
     },
     "reference_0_16_23.linux.json": {
@@ -263,11 +263,17 @@
       "platform": "Linux/x86_64",
       "sha256": "f00f2540075e6c5b4e0910b88fb28fe09abfed5d8477a33034252e792ab4735d",
       "status": "accepted"
+    },
+    "reference_0_19_6_hop1_renamed.linux.json": {
+      "evidence": "reference_0_19_3_forked_cells_renamed.linux.json with one cell renamed: test_bench_hop1_deg3_memory is now test_bench_hop1_deg3_expand_memory (0.19.6), because the old name's earlier rows measured the fused count(*) query and every longitudinal gate read the expansion as millions of percent of drift. The renamed row is PROVISIONAL: its stats are the old row scaled to 157.4 ms min, the slowest Linux CI min observed for the expansion query on this branch (PR #223 perf-gate logs: 152.6, 151.8, 157.4 ms), so it only loosens the leg-2 gate; it is replaced by a Linux measurement once a CI artifact carries the cell. All other rows unchanged.",
+      "platform": "Linux/x86_64",
+      "sha256": "99bd2cd25cca9925e3bd1881ae510f1c5f4002401f3335b3207c53569b2ca221",
+      "status": "accepted"
     }
   },
   "references": {
     "Darwin/arm64": "0_19_6.json",
-    "Linux/x86_64": "reference_0_19_3_forked_cells_renamed.linux.json"
+    "Linux/x86_64": "reference_0_19_6_hop1_renamed.linux.json"
   },
   "schema_version": 1
 }
