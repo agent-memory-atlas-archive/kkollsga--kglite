@@ -445,9 +445,12 @@ NODE_FEATURES ?=
 node-build: check-free-space
 	cd crates/kglite-node && { [ -d node_modules ] || npm install --no-audit --no-fund; } && npx napi build --platform $(if $(NODE_FEATURES),--features $(NODE_FEATURES))
 
+# The test-hooks build regenerates index.js/index.d.ts with `__panic`; the
+# closing plain build restores the committed (hook-free) bindings.
 test-node:
 	$(MAKE) node-build NODE_FEATURES=test-hooks
 	node --test 'crates/kglite-node/__test__/*.test.mjs'
+	$(MAKE) node-build
 	cd crates/kglite-node && npx tsc --noEmit -p .
 
 PRUNE_TARGET_GB := 40
