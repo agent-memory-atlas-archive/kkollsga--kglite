@@ -35,11 +35,6 @@ pub(super) fn access_mode_error(scope: &str) -> BoltError {
     }
 }
 
-fn is_conflict(error: &BoltError) -> bool {
-    matches!(error, BoltError::Query { code, .. }
-        if code == kglite::api::KgErrorCode::TransactionConflict.neo4j_status_code())
-}
-
 impl KgliteBackend {
     /// Run one auto-commit statement. `read_mode` is the RUN's `mode: "r"`.
     pub(super) async fn execute_auto_commit(
@@ -80,7 +75,12 @@ impl KgliteBackend {
             (None, OPTIMISTIC_ATTEMPTS)
         };
         let opts = self.execute_opts(&kg_params, meta);
-        let result = off_async_worker(|| self.one_shot_write(query, &opts, attempts, &mut |_| {}))?;
+        let result = off_async_worker(|| {
+            self.session
+                .execute_auto_commit(query, &opts, attempts)
+                .map(|outcome| outcome.result)
+                .map_err(kg_to_bolt_logged)
+        })?;
         // Neo4j's summary types: `s` schema, `rw` a write that returns rows,
         // `w` a write that does not.
         let type_str = if is_schema_ddl(query) {
@@ -103,34 +103,17 @@ impl KgliteBackend {
         let running = permit.activity().begin_query();
         Ok((permit, running))
     }
+}
 
-    /// Begin, execute and publish `query` as one transaction, making up to
-    /// `attempts` tries while the commit loses an OCC race. A lost race
-    /// published nothing, so a re-run on a fresh begin cannot double-apply.
-    /// `between` runs after each execution and before its commit, with the
-    /// attempt number (1-based); tests use it to land a competing commit.
-    pub(super) fn one_shot_write(
-        &self,
-        query: &str,
-        opts: &kglite::api::session::ExecuteOptions<'_>,
-        attempts: u32,
-        between: &mut dyn FnMut(u32),
-    ) -> Result<cypher::CypherResult, BoltError> {
-        let mut attempt = 1;
-        loop {
-            let mut tx = self.session.begin();
-            let working = tx.working_mut().map_err(kg_to_bolt)?;
-            let outcome =
-                kglite::api::session::execute_mut(working, query, opts).map_err(kg_to_bolt)?;
-            between(attempt);
-            match self.publish(tx, "auto-commit", "auto-commit") {
-                Ok(()) => return Ok(outcome.result),
-                Err(e) if is_conflict(&e) && attempt < attempts => {
-                    tracing::debug!(attempt, "auto-commit write lost a commit race; retrying");
-                    attempt += 1;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+/// [`kg_to_bolt`], logging the one failure an operator must see: a write the
+/// log rejected, which the engine did not publish and the server does not
+/// acknowledge.
+fn kg_to_bolt_logged(error: kglite::api::KgError) -> BoltError {
+    if error.code() == kglite::api::KgErrorCode::DurabilityFailed {
+        tracing::error!(
+            error = %error,
+            "auto-commit rejected: the write could not be logged, so it was not applied"
+        );
     }
+    kg_to_bolt(error)
 }

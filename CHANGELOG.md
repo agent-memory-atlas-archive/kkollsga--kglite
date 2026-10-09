@@ -35,6 +35,12 @@ before upgrading.
 
 ### Added
 
+- **C ABI: `KGLITE_STATUS_CODE_DURABILITY_FAILED` (23).** A commit the
+  write-ahead log rejected is not published. `kglite_session_define_ontology`
+  and `kglite_session_clear_ontology` returned `FILE_IO` for it; they now
+  return 23. The Rust engine gains the matching `KgErrorCode::DurabilityFailed`
+  (HTTP 500, Neo4j `Neo.DatabaseError.General.UnknownError`). The wheel still
+  raises `FileIoError` for it.
 - **Enforceable ontology (#222).** Declare an ontology once and every client
   gets the same guarantee.
   - **Rules:** class `required_properties` and `property_types`, the new

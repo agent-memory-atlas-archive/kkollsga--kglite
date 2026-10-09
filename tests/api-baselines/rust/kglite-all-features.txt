@@ -2950,6 +2950,67 @@ pub fn kglite::api::recipes::validate(record: &kglite::api::recipes::RecipeRecor
 pub fn kglite::api::recipes::validate_identifier(identifier: &str, label: &str) -> kglite::api::recipes::CatalogResult<()>
 pub type kglite::api::recipes::CatalogResult<T> = core::result::Result<T, kglite::api::recipes::RecipeCatalogError>
 pub mod kglite::api::session
+pub mod kglite::api::session::open_path
+pub enum kglite::api::session::open_path::OpenError
+pub kglite::api::session::open_path::OpenError::Lease(core::io::error::Error)
+pub kglite::api::session::open_path::OpenError::Open(core::io::error::Error)
+pub kglite::api::session::open_path::OpenError::Session
+pub kglite::api::session::open_path::OpenError::Session::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::open_path::OpenError::Session::message: alloc::string::String
+impl core::error::Error for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum kglite::api::session::open_path::OpenStep
+pub kglite::api::session::open_path::OpenStep::GraphOpened
+pub kglite::api::session::open_path::OpenStep::LeaseAcquired
+pub kglite::api::session::open_path::OpenStep::SessionOpened
+impl core::clone::Clone for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::clone(&self) -> kglite::api::session::OpenStep
+impl core::cmp::Eq for kglite::api::session::OpenStep
+impl core::cmp::PartialEq for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::eq(&self, other: &kglite::api::session::OpenStep) -> bool
+impl core::fmt::Debug for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::session::OpenStep
+impl core::marker::StructuralPartialEq for kglite::api::session::OpenStep
+pub struct kglite::api::session::open_path::OpenSpec
+pub kglite::api::session::open_path::OpenSpec::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::open_path::OpenSpec::durability_explicit: bool
+pub kglite::api::session::open_path::OpenSpec::lease_timeout: core::option::Option<core::time::Duration>
+pub kglite::api::session::open_path::OpenSpec::storage: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::session::open_path::OpenSpec::valid_time_default: core::option::Option<kglite::api::temporal::ValidTimeDefault>
+impl kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::writer() -> Self
+impl core::clone::Clone for kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::clone(&self) -> kglite::api::session::OpenSpec
+impl core::fmt::Debug for kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::session::open_path::OpenedSession
+pub kglite::api::session::open_path::OpenedSession::advisories: alloc::vec::Vec<kglite::api::DataAdvisory>
+pub kglite::api::session::open_path::OpenedSession::converted_from: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::session::open_path::OpenedSession::degraded_from: core::option::Option<kglite::api::durable::DurabilityLevel>
+pub kglite::api::session::open_path::OpenedSession::disposition: kglite::api::io::OpenDisposition
+pub kglite::api::session::open_path::OpenedSession::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::open_path::OpenedSession::lease: core::option::Option<kglite::api::io::GraphWriterLease>
+pub kglite::api::session::open_path::OpenedSession::live_mode: kglite::api::storage::StorageMode
+pub kglite::api::session::open_path::OpenedSession::session: kglite::api::session::Session
+pub fn kglite::api::session::open_path::open_path(path: &std::path::Path, spec: &kglite::api::session::OpenSpec) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
+pub fn kglite::api::session::open_path::open_path_observed(path: &std::path::Path, spec: &kglite::api::session::OpenSpec, observe: &mut dyn core::ops::function::FnMut(kglite::api::session::OpenStep)) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
+pub enum kglite::api::session::CheckpointOutcome
+pub kglite::api::session::CheckpointOutcome::Skipped(u64)
+pub kglite::api::session::CheckpointOutcome::Written(u64)
+impl core::clone::Clone for kglite::api::session::CheckpointOutcome
+pub fn kglite::api::session::CheckpointOutcome::clone(&self) -> kglite::api::session::CheckpointOutcome
+impl core::cmp::Eq for kglite::api::session::CheckpointOutcome
+impl core::cmp::PartialEq for kglite::api::session::CheckpointOutcome
+pub fn kglite::api::session::CheckpointOutcome::eq(&self, other: &kglite::api::session::CheckpointOutcome) -> bool
+impl core::fmt::Debug for kglite::api::session::CheckpointOutcome
+pub fn kglite::api::session::CheckpointOutcome::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::session::CheckpointOutcome
+impl core::marker::StructuralPartialEq for kglite::api::session::CheckpointOutcome
 #[non_exhaustive] pub enum kglite::api::session::CommitOutcome
 pub kglite::api::session::CommitOutcome::Committed
 pub kglite::api::session::CommitOutcome::Committed::new_version: u64
@@ -2975,6 +3036,31 @@ pub fn kglite::api::session::CsvImportPolicy::default() -> kglite::api::session:
 impl core::fmt::Debug for kglite::api::session::CsvImportPolicy
 pub fn kglite::api::session::CsvImportPolicy::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::session::CsvImportPolicy
+pub enum kglite::api::session::OpenError
+pub kglite::api::session::OpenError::Lease(core::io::error::Error)
+pub kglite::api::session::OpenError::Open(core::io::error::Error)
+pub kglite::api::session::OpenError::Session
+pub kglite::api::session::OpenError::Session::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::OpenError::Session::message: alloc::string::String
+impl core::error::Error for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::api::session::OpenError
+pub fn kglite::api::session::OpenError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum kglite::api::session::OpenStep
+pub kglite::api::session::OpenStep::GraphOpened
+pub kglite::api::session::OpenStep::LeaseAcquired
+pub kglite::api::session::OpenStep::SessionOpened
+impl core::clone::Clone for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::clone(&self) -> kglite::api::session::OpenStep
+impl core::cmp::Eq for kglite::api::session::OpenStep
+impl core::cmp::PartialEq for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::eq(&self, other: &kglite::api::session::OpenStep) -> bool
+impl core::fmt::Debug for kglite::api::session::OpenStep
+pub fn kglite::api::session::OpenStep::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::session::OpenStep
+impl core::marker::StructuralPartialEq for kglite::api::session::OpenStep
 pub struct kglite::api::session::BackupOptions
 pub kglite::api::session::BackupOptions::live_path: core::option::Option<std::path::PathBuf>
 impl core::clone::Clone for kglite::api::session::BackupOptions
@@ -3025,6 +3111,27 @@ pub kglite::api::session::ExecuteOutcome::explain: bool
 pub kglite::api::session::ExecuteOutcome::is_mutation: bool
 pub kglite::api::session::ExecuteOutcome::output_format: kglite::api::cypher::OutputFormat
 pub kglite::api::session::ExecuteOutcome::result: kglite::api::cypher::CypherResult
+pub struct kglite::api::session::OpenSpec
+pub kglite::api::session::OpenSpec::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::OpenSpec::durability_explicit: bool
+pub kglite::api::session::OpenSpec::lease_timeout: core::option::Option<core::time::Duration>
+pub kglite::api::session::OpenSpec::storage: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::session::OpenSpec::valid_time_default: core::option::Option<kglite::api::temporal::ValidTimeDefault>
+impl kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::writer() -> Self
+impl core::clone::Clone for kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::clone(&self) -> kglite::api::session::OpenSpec
+impl core::fmt::Debug for kglite::api::session::OpenSpec
+pub fn kglite::api::session::OpenSpec::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::session::OpenedSession
+pub kglite::api::session::OpenedSession::advisories: alloc::vec::Vec<kglite::api::DataAdvisory>
+pub kglite::api::session::OpenedSession::converted_from: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::session::OpenedSession::degraded_from: core::option::Option<kglite::api::durable::DurabilityLevel>
+pub kglite::api::session::OpenedSession::disposition: kglite::api::io::OpenDisposition
+pub kglite::api::session::OpenedSession::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::OpenedSession::lease: core::option::Option<kglite::api::io::GraphWriterLease>
+pub kglite::api::session::OpenedSession::live_mode: kglite::api::storage::StorageMode
+pub kglite::api::session::OpenedSession::session: kglite::api::session::Session
 pub struct kglite::api::session::QueryDefaults
 pub kglite::api::session::QueryDefaults::max_work_units: core::option::Option<usize>
 pub kglite::api::session::QueryDefaults::row_limit: core::option::Option<usize>
@@ -3065,6 +3172,10 @@ pub fn kglite::api::session::Session::check_direct_write_allowed(&self) -> core:
 pub fn kglite::api::session::Session::durability(&self) -> core::option::Option<kglite::api::durable::DurabilityLevel>
 pub fn kglite::api::session::Session::open_durable(graph: alloc::sync::Arc<kglite::api::DirGraph>, checkpoint_path: &str, level: kglite::api::durable::DurabilityLevel) -> core::result::Result<kglite::api::session::Session, alloc::string::String>
 pub fn kglite::api::session::Session::sync(&self) -> core::result::Result<(), alloc::string::String>
+impl kglite::api::session::Session
+pub fn kglite::api::session::Session::checkpoint_if_changed(&self, path: &std::path::Path, last_version: &mut core::option::Option<u64>) -> core::result::Result<kglite::api::session::CheckpointOutcome, alloc::string::String>
+pub fn kglite::api::session::Session::execute_auto_commit(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>, attempts: u32) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
+pub fn kglite::api::session::Session::execute_auto_commit_observed(&self, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>, attempts: u32, between: &mut dyn core::ops::function::FnMut(u32)) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub struct kglite::api::session::Transaction
 impl kglite::api::session::Transaction
 pub fn kglite::api::session::Transaction::base_version(&self) -> u64
@@ -3080,6 +3191,8 @@ pub fn kglite::api::session::deadline_from(timeout_ms: core::option::Option<u64>
 pub fn kglite::api::session::deadline_span(timeout_ms: core::option::Option<u64>) -> core::option::Option<(std::time::Instant, std::time::Instant)>
 pub fn kglite::api::session::execute_mut(graph: &mut kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
 pub fn kglite::api::session::execute_read(graph: &kglite::api::DirGraph, query: &str, opts: &kglite::api::session::ExecuteOptions<'_>) -> core::result::Result<kglite::api::session::ExecuteOutcome, kglite::error::KgError>
+pub fn kglite::api::session::open_path(path: &std::path::Path, spec: &kglite::api::session::OpenSpec) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
+pub fn kglite::api::session::open_path_observed(path: &std::path::Path, spec: &kglite::api::session::OpenSpec, observe: &mut dyn core::ops::function::FnMut(kglite::api::session::OpenStep)) -> core::result::Result<kglite::api::session::OpenedSession, kglite::api::session::OpenError>
 pub fn kglite::api::session::resolve_noderef_value<'v>(graph: &kglite::api::storage::GraphBackend, value: &'v kglite::datatypes::values::Value) -> alloc::borrow::Cow<'v, kglite::datatypes::values::Value>
 pub fn kglite::api::session::resolve_noderefs(graph: &kglite::api::storage::GraphBackend, rows: &mut [alloc::vec::Vec<kglite::datatypes::values::Value>])
 pub mod kglite::api::skills
@@ -3933,6 +4046,8 @@ pub kglite::api::KgError::CypherTypeMismatch
 pub kglite::api::KgError::CypherTypeMismatch::context: alloc::string::String
 pub kglite::api::KgError::CypherTypeMismatch::expected: alloc::string::String
 pub kglite::api::KgError::CypherTypeMismatch::found: alloc::string::String
+pub kglite::api::KgError::DurabilityFailed
+pub kglite::api::KgError::DurabilityFailed::message: alloc::string::String
 pub kglite::api::KgError::Expr(kglite::graph::blueprint::expr::ExprError)
 pub kglite::api::KgError::FileFormat
 pub kglite::api::KgError::FileFormat::message: alloc::string::String
@@ -3999,6 +4114,7 @@ pub kglite::api::KgErrorCode::CypherExecution
 pub kglite::api::KgErrorCode::CypherSyntax
 pub kglite::api::KgErrorCode::CypherTimeout
 pub kglite::api::KgErrorCode::CypherTypeMismatch
+pub kglite::api::KgErrorCode::DurabilityFailed
 pub kglite::api::KgErrorCode::Expr
 pub kglite::api::KgErrorCode::FileFormat
 pub kglite::api::KgErrorCode::FileIo
@@ -6010,6 +6126,8 @@ pub kglite::error::KgError::CypherTypeMismatch
 pub kglite::error::KgError::CypherTypeMismatch::context: alloc::string::String
 pub kglite::error::KgError::CypherTypeMismatch::expected: alloc::string::String
 pub kglite::error::KgError::CypherTypeMismatch::found: alloc::string::String
+pub kglite::error::KgError::DurabilityFailed
+pub kglite::error::KgError::DurabilityFailed::message: alloc::string::String
 pub kglite::error::KgError::Expr(kglite::graph::blueprint::expr::ExprError)
 pub kglite::error::KgError::FileFormat
 pub kglite::error::KgError::FileFormat::message: alloc::string::String
@@ -6076,6 +6194,7 @@ pub kglite::error::KgErrorCode::CypherExecution
 pub kglite::error::KgErrorCode::CypherSyntax
 pub kglite::error::KgErrorCode::CypherTimeout
 pub kglite::error::KgErrorCode::CypherTypeMismatch
+pub kglite::error::KgErrorCode::DurabilityFailed
 pub kglite::error::KgErrorCode::Expr
 pub kglite::error::KgErrorCode::FileFormat
 pub kglite::error::KgErrorCode::FileIo

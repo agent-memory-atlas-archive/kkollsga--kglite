@@ -12,15 +12,14 @@
 //! lease this module already takes.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use kglite::api::durable::DurabilityLevel;
-use kglite::api::io::{open_or_create_graph_in_mode, GraphWriterLease, OpenDisposition};
-use kglite::api::session::Session;
-use kglite::api::storage::{live_storage_mode, StorageMode};
+use kglite::api::io::{GraphWriterLease, OpenDisposition};
+use kglite::api::session::{open_path_observed, OpenError, OpenSpec, OpenStep, Session};
+use kglite::api::storage::StorageMode;
 use kglite::api::temporal::ValidTimeDefault;
 
 /// How long startup waits for another writer to release the graph.
@@ -32,16 +31,6 @@ use kglite::api::temporal::ValidTimeDefault;
 /// indistinguishable from a hung one, and `systemd`'s `Restart=`/`RestartSec=`
 /// already expresses "try again shortly" better than a blocking sleep can.
 const WRITER_LEASE_TIMEOUT: Duration = Duration::ZERO;
-
-/// Ordered startup steps, recorded through an injected sink so a test can
-/// assert the lease is taken *before* the graph is read instead of inferring
-/// it from a timing race between two processes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StartupStep {
-    LeaseAcquired,
-    GraphOpened,
-    SessionOpened,
-}
 
 /// What the operator asked of the write-ahead log, and whether they asked.
 ///
@@ -109,80 +98,43 @@ pub(crate) fn start_graph(
     readonly: bool,
     durability: DurabilityRequest,
     valid_time_default: Option<ValidTimeDefault>,
-    record: &mut dyn FnMut(StartupStep),
+    record: &mut dyn FnMut(OpenStep),
 ) -> Result<StartedGraph> {
-    let writer_lease = if readonly {
-        None
-    } else {
-        let lease = GraphWriterLease::acquire(path, WRITER_LEASE_TIMEOUT).with_context(|| {
-            format!(
-                "acquiring the writer lease for {}; pass --readonly to serve this graph \
-                 alongside its writer",
-                path.display()
-            )
-        })?;
-        record(StartupStep::LeaseAcquired);
-        Some(lease)
+    let spec = OpenSpec {
+        storage: requested_mode,
+        durability: durability.level,
+        durability_explicit: durability.explicit,
+        lease_timeout: (!readonly).then_some(WRITER_LEASE_TIMEOUT),
+        valid_time_default,
     };
-    let opened = open_or_create_graph_in_mode(path, requested_mode, durability.level)
-        .with_context(|| format!("opening or creating {}", path.display()))?;
-    record(StartupStep::GraphOpened);
-    let live_mode = live_storage_mode(&opened.graph);
-    // The one refusal that becomes a degrade: a disk graph has no logical WAL
-    // at any level, so an operator who asked for one hears the engine's error
-    // below, while a graph merely inheriting the server's default is served
-    // unlogged rather than refused. Decided here because it is the first point
-    // where the *live* mode is known — `--storage` may have converted, and a
-    // graph opened without the flag reports whatever it was saved in.
-    let level = if durability.level.logs() && !durability.explicit && live_mode == StorageMode::Disk
-    {
+    let opened = open_path_observed(path, &spec, record).map_err(|e| match e {
+        OpenError::Lease(io) => anyhow::Error::new(io).context(format!(
+            "acquiring the writer lease for {}; pass --readonly to serve this graph \
+             alongside its writer",
+            path.display()
+        )),
+        OpenError::Open(io) => {
+            anyhow::Error::new(io).context(format!("opening or creating {}", path.display()))
+        }
+        OpenError::Session {
+            durability,
+            message,
+        } => anyhow::anyhow!(
+            "opening {} at --durability {}: {message}",
+            path.display(),
+            durability.name()
+        ),
+    })?;
+    if let Some(requested) = opened.degraded_from {
         tracing::info!(
-            default_level = durability.level.name(),
+            default_level = requested.name(),
             "disk-mode graph: serving at durability off (a disk graph commits by \
              publishing a generation, so it carries no write-ahead log)"
         );
-        DurabilityLevel::Off
-    } else {
-        durability.level
-    };
-    let mut opened = opened;
-    if let Some(default) = valid_time_default {
-        // Runtime only (`--valid-time-default`): set before the session wraps
-        // the graph, which is still the only reference to it.
-        if let Some(graph) = Arc::get_mut(&mut opened.graph) {
-            graph.valid_time_default = default;
-        }
     }
-    // `opened.graph` is the only reference to this graph, which is what
-    // `open_durable` requires: a shared Arc would be deep-cloned here and the
-    // other holder would keep mutating an unlogged copy.
-    let session =
-        Session::open_durable(opened.graph, &path.to_string_lossy(), level).map_err(|e| {
-            anyhow::anyhow!(
-                "opening {} at --durability {}: {e}",
-                path.display(),
-                level.name()
-            )
-        })?;
-    record(StartupStep::SessionOpened);
-    log_wal_advisories(&session);
-    Ok(StartedGraph {
-        session,
-        level,
-        disposition: opened.disposition,
-        live_mode,
-        converted_from: opened.converted_from,
-        writer_lease,
-    })
-}
-
-/// The engine's open reports a quarantined log or a saved torn tail as
-/// advisories; the operator reads them here, before any client connects.
-fn log_wal_advisories(session: &Session) {
-    for advisory in kglite::api::data_advisories(&session.snapshot())
-        .iter()
-        .filter(|a| a.code == "wal_quarantined" || a.code == "wal_tail_saved")
-    {
+    // The engine's open reports a quarantined log or a saved torn tail as
+    // advisories; the operator reads them here, before any client connects.
+    for advisory in &opened.advisories {
         tracing::error!(
             code = %advisory.code,
             saved = ?advisory.affected,
@@ -190,6 +142,14 @@ fn log_wal_advisories(session: &Session) {
             advisory.message
         );
     }
+    Ok(StartedGraph {
+        session: opened.session,
+        level: opened.durability,
+        disposition: opened.disposition,
+        live_mode: opened.live_mode,
+        converted_from: opened.converted_from,
+        writer_lease: opened.lease,
+    })
 }
 
 #[cfg(test)]
@@ -311,9 +271,9 @@ mod tests {
         assert_eq!(
             steps,
             vec![
-                StartupStep::LeaseAcquired,
-                StartupStep::GraphOpened,
-                StartupStep::SessionOpened
+                OpenStep::LeaseAcquired,
+                OpenStep::GraphOpened,
+                OpenStep::SessionOpened
             ]
         );
         assert!(
@@ -449,9 +409,9 @@ mod tests {
             assert_eq!(
                 steps,
                 vec![
-                    StartupStep::LeaseAcquired,
-                    StartupStep::GraphOpened,
-                    StartupStep::SessionOpened
+                    OpenStep::LeaseAcquired,
+                    OpenStep::GraphOpened,
+                    OpenStep::SessionOpened
                 ],
                 "converting must not disturb the acquire-then-open order"
             );
@@ -496,10 +456,7 @@ mod tests {
         )
         .expect("readonly startup beside a live writer");
 
-        assert_eq!(
-            steps,
-            vec![StartupStep::GraphOpened, StartupStep::SessionOpened]
-        );
+        assert_eq!(steps, vec![OpenStep::GraphOpened, OpenStep::SessionOpened]);
         assert!(
             started.writer_lease.is_none(),
             "a readonly server must not take write ownership"

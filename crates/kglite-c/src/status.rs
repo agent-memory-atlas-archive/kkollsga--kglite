@@ -74,6 +74,13 @@ pub enum KgliteStatusCode {
     /// The graph is unchanged. Appended to keep the existing discriminants
     /// stable across this ABI major version.
     OntologyViolation = 22,
+    /// A commit the write-ahead log could not record, so it was not published
+    /// and the graph is unchanged. Its own code rather than a `FileIo`: the
+    /// statement was fine, and "the write was refused, nothing was lost
+    /// silently" calls for a different reaction than "the disk is broken".
+    /// Appended to keep the existing discriminants stable across this ABI
+    /// major version.
+    DurabilityFailed = 23,
 
     // 100+: C-ABI-only errors.
     /// A string argument failed UTF-8 validation. The C-side
@@ -125,6 +132,7 @@ impl KgliteStatusCode {
             KgErrorCode::TransactionConflict => Self::TransactionConflict,
             KgErrorCode::LoadMemoryLimit => Self::LoadMemoryLimit,
             KgErrorCode::OntologyViolation => Self::OntologyViolation,
+            KgErrorCode::DurabilityFailed => Self::DurabilityFailed,
         }
     }
 
@@ -147,6 +155,7 @@ impl KgliteStatusCode {
             Self::TransactionConflict => KgErrorCode::TransactionConflict,
             Self::LoadMemoryLimit => KgErrorCode::LoadMemoryLimit,
             Self::OntologyViolation => KgErrorCode::OntologyViolation,
+            Self::DurabilityFailed => KgErrorCode::DurabilityFailed,
             Self::Validation => KgErrorCode::Validation,
             Self::Expr => KgErrorCode::Expr,
             Self::NodeNotFound => KgErrorCode::NodeNotFound,
@@ -248,6 +257,7 @@ fn static_name(code: KgliteStatusCode) -> Option<&'static CStr> {
         KgliteStatusCode::TransactionConflict => c"TransactionConflict",
         KgliteStatusCode::LoadMemoryLimit => c"LoadMemoryLimit",
         KgliteStatusCode::OntologyViolation => c"OntologyViolation",
+        KgliteStatusCode::DurabilityFailed => c"DurabilityFailed",
         KgliteStatusCode::InvalidUtf8 => c"InvalidUtf8",
         KgliteStatusCode::NullPointer => c"NullPointer",
         KgliteStatusCode::WriterLeaseHeld => c"WriterLeaseHeld",
@@ -323,6 +333,7 @@ mod tests {
         KgliteStatusCode::TransactionConflict,
         KgliteStatusCode::LoadMemoryLimit,
         KgliteStatusCode::OntologyViolation,
+        KgliteStatusCode::DurabilityFailed,
         KgliteStatusCode::InvalidUtf8,
         KgliteStatusCode::NullPointer,
         KgliteStatusCode::WriterLeaseHeld,

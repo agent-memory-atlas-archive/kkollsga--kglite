@@ -965,6 +965,8 @@ pub mod api {
         /// `LOAD CSV` filesystem capability. Every binding decides what its
         /// callers get; see `ExecuteOptions::csv_import`.
         pub use crate::graph::languages::cypher::executor::load_csv::CsvImportPolicy;
+        /// `Session::checkpoint_if_changed`'s result.
+        pub use crate::graph::session::CheckpointOutcome;
         /// `Session::backup`'s options and result, and `backup_snapshot` for a holder
         /// that fixed its own snapshot.
         pub use crate::graph::session::{backup_snapshot, BackupOptions, BackupReport};
@@ -978,6 +980,13 @@ pub mod api {
         pub use crate::graph::session::{
             execute_mut, execute_read, resolve_noderef_value, resolve_noderefs, CommitOutcome,
             ExecuteOptions, ExecuteOutcome, Session, Transaction, QUERY_THREAD_STACK_SIZE,
+        };
+        /// `open_path`: writer lease + open/create in a storage mode + durable
+        /// session in one ordered call, with the recovery advisories returned as
+        /// data. A binding that serves a path (Bolt, the Node binding) calls
+        /// this rather than re-sequencing the four steps.
+        pub use crate::graph::session::{
+            open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
         };
     }
 }

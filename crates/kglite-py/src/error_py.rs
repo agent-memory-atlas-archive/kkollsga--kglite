@@ -329,6 +329,10 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
             report,
         ),
         RustKgError::TransactionConflict { .. } => TransactionConflictError::new_err(message),
+        // No `DurabilityFailedError` class: `Session.run_write` has always
+        // reported a rejected log append as `FileIoError`, and a wheel caller
+        // handling that keeps working.
+        RustKgError::DurabilityFailed { .. } => FileIoError::new_err(message),
         RustKgError::Expr(_) => ExprError::new_err(message),
         RustKgError::NodeNotFound { .. } => NodeNotFoundError::new_err(message),
         RustKgError::ConnectionNotFound { .. } => ConnectionNotFoundError::new_err(message),

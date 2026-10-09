@@ -98,6 +98,15 @@ enum KgliteStatusCode
    */
   KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION = 22,
   /**
+   * A commit the write-ahead log could not record, so it was not published
+   * and the graph is unchanged. Its own code rather than a `FileIo`: the
+   * statement was fine, and "the write was refused, nothing was lost
+   * silently" calls for a different reaction than "the disk is broken".
+   * Appended to keep the existing discriminants stable across this ABI
+   * major version.
+   */
+  KGLITE_STATUS_CODE_DURABILITY_FAILED = 23,
+  /**
    * A string argument failed UTF-8 validation. The C-side
    * caller passed a `*const c_char` whose bytes didn't decode
    * as UTF-8 — typically a corrupted buffer or a non-UTF-8

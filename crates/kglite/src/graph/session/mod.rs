@@ -50,12 +50,16 @@
 //!   they publish, and [`Session::save`] is the four-step checkpoint.
 //!   See [`durable`] for the orderings that are correctness.
 
+pub use self::auto_commit::CheckpointOutcome;
 pub use self::backup::{backup_snapshot, BackupOptions, BackupReport};
 pub use self::execute::{execute_mut, execute_read, ExecuteOptions, ExecuteOutcome};
 pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,
 };
 pub use self::noderefs::{resolve_noderef_value, resolve_noderefs};
+pub use self::open_path::{
+    open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
+};
 pub use self::query_defaults::{
     deadline_from, deadline_span, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,
 };
@@ -63,6 +67,9 @@ pub use self::transaction::{CommitOutcome, Session, Transaction};
 
 #[cfg(test)]
 mod append_capacity_tests;
+pub(crate) mod auto_commit;
+#[cfg(test)]
+mod auto_commit_tests;
 pub(crate) mod backup;
 #[cfg(test)]
 mod backup_tests;
@@ -81,6 +88,9 @@ pub(crate) mod execute;
 #[cfg(test)]
 mod merge_unwind_index_tests;
 pub(crate) mod noderefs;
+pub(crate) mod open_path;
+#[cfg(test)]
+mod open_path_tests;
 #[cfg(test)]
 mod param_presence_tests;
 #[cfg(test)]

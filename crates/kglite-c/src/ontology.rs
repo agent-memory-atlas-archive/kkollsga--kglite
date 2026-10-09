@@ -31,9 +31,11 @@ fn commit_status(outcome: CommitOutcome, out_error_msg: *mut *const c_char) -> K
             "the graph changed while the ontology was being declared; retry",
             KgliteStatusCode::from_kg_error_code(kglite::api::KgErrorCode::TransactionConflict),
         ),
-        CommitOutcome::DurabilityFailed { error } => {
-            emit(out_error_msg, &error, KgliteStatusCode::FileIo)
-        }
+        CommitOutcome::DurabilityFailed { error } => emit(
+            out_error_msg,
+            &error,
+            KgliteStatusCode::from_kg_error_code(kglite::api::KgErrorCode::DurabilityFailed),
+        ),
         other => emit(
             out_error_msg,
             &format!("the ontology change was not committed ({other:?})"),

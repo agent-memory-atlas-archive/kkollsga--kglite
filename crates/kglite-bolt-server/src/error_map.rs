@@ -141,6 +141,7 @@ mod tests {
             KgErrorCode::TransactionConflict,
             KgErrorCode::LoadMemoryLimit,
             KgErrorCode::OntologyViolation,
+            KgErrorCode::DurabilityFailed,
         ] {
             let s = code.neo4j_status_code();
             assert!(

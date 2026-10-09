@@ -557,6 +557,14 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite/src/graph/session/auto_commit.rs::fn:execute_auto_commit:pub fn execute_auto_commit( &self, query: &str, opts: &ExecuteOptions<'_>, attempts: u32, ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/session/auto_commit.rs::fn:execute_auto_commit_observed:pub fn execute_auto_commit_observed( &self, query: &str, opts: &ExecuteOptions<'_>, attempts: u32, between: &mut dyn FnMut(u32), ) -> Result<ExecuteOutcome, KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/session/execute.rs::fn:embed_into_params:fn embed_into_params( opts: &ExecuteOptions<'_>, rewrite: &cypher::planner::simplification::TextScoreRewrite, ) -> Result<HashMap<String, Value>, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },

@@ -542,24 +542,27 @@ async fn optimistic_auto_commit_retries_a_lost_race_and_gives_up_after_three() {
 
     // Two lost races, then the third attempt commits.
     let mut runs = 0;
-    b.one_shot_write(AUTO_WRITE, &opts, 3, &mut |attempt| {
-        runs = attempt;
-        if attempt <= 2 {
-            commit_competitor(&b);
-        }
-    })
-    .expect("the third attempt wins");
+    b.session
+        .execute_auto_commit_observed(AUTO_WRITE, &opts, 3, &mut |attempt| {
+            runs = attempt;
+            if attempt <= 2 {
+                commit_competitor(&b);
+            }
+        })
+        .expect("the third attempt wins");
     assert_eq!(runs, 3);
     assert_eq!(scalar(&b, "MATCH (n:Item) RETURN count(n)"), 1);
     assert_eq!(scalar(&b, "MATCH (n:Rival) RETURN count(n)"), 2);
 
     // A race lost on every attempt surfaces the conflict, applying nothing.
     let err = b
-        .one_shot_write("CREATE (:Item {id: 3})", &opts, 3, &mut |_| {
+        .session
+        .execute_auto_commit_observed("CREATE (:Item {id: 3})", &opts, 3, &mut |_| {
             commit_competitor(&b)
         })
-        .expect_err("three lost races");
-    assert_eq!(code_of(&err), OUTDATED);
+        .err()
+        .expect("three lost races");
+    assert_eq!(code_of(&kg_to_bolt(err)), OUTDATED);
     assert_eq!(scalar(&b, "MATCH (n:Item) RETURN count(n)"), 1);
     assert_eq!(scalar(&b, "MATCH (n:Rival) RETURN count(n)"), 5);
 }

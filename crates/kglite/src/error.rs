@@ -91,6 +91,12 @@ pub enum KgErrorCode {
     // drivers route on that difference.
     TransactionConflict,
 
+    // A commit the write-ahead log could not record, so it was not published
+    // (`CommitOutcome::DurabilityFailed`). Split from `FileIo` because the
+    // statement was fine and nothing client-side can repair the log: a
+    // surface routes it as a server fault that names the lost write.
+    DurabilityFailed,
+
     NodeNotFound,
     ConnectionNotFound,
     PropertyNotFound,
@@ -134,6 +140,7 @@ impl KgErrorCode {
             KgErrorCode::ConstraintCreationFailed => "ConstraintCreationFailed",
             KgErrorCode::OntologyViolation => "OntologyViolation",
             KgErrorCode::TransactionConflict => "TransactionConflict",
+            KgErrorCode::DurabilityFailed => "DurabilityFailed",
             KgErrorCode::NodeNotFound => "NodeNotFound",
             KgErrorCode::ConnectionNotFound => "ConnectionNotFound",
             KgErrorCode::PropertyNotFound => "PropertyNotFound",
@@ -163,7 +170,7 @@ impl KgErrorCode {
     ///   Entity
     /// - `LoadMemoryLimit` → 507 Insufficient Storage
     /// - `Cancelled` → 499 Client Closed Request
-    /// - `FileFormat`, `FileIo`, `Internal` → 500 Internal Server Error
+    /// - `FileFormat`, `FileIo`, `DurabilityFailed`, `Internal` → 500 Internal Server Error
     ///
     /// Companion to [`Self::neo4j_status_code`] for HTTP-shaped bindings.
     pub fn http_status_code(&self) -> u16 {
@@ -208,7 +215,10 @@ impl KgErrorCode {
             | KgErrorCode::ConstraintCreationFailed
             | KgErrorCode::OntologyViolation => 422,
 
-            KgErrorCode::FileFormat | KgErrorCode::FileIo | KgErrorCode::Internal => 500,
+            KgErrorCode::FileFormat
+            | KgErrorCode::FileIo
+            | KgErrorCode::DurabilityFailed
+            | KgErrorCode::Internal => 500,
         }
     }
 
@@ -267,6 +277,7 @@ impl KgErrorCode {
             KgErrorCode::FileNotFound
             | KgErrorCode::FileFormat
             | KgErrorCode::FileIo
+            | KgErrorCode::DurabilityFailed
             | KgErrorCode::Internal => "Neo.DatabaseError.General.UnknownError",
         }
     }
@@ -420,6 +431,13 @@ pub enum KgError {
         current_version: u64,
     },
 
+    /// A commit the write-ahead log could not record (`--durability full` /
+    /// `normal`), so the engine did not publish it and the graph is unchanged.
+    /// The statement itself was fine and a re-run may succeed, but nothing the
+    /// caller can change repairs the log; a surface must not acknowledge it.
+    /// `message` is the log's own error text.
+    DurabilityFailed { message: String },
+
     /// Blueprint expression evaluation failure. Wraps the existing
     /// 7-variant [`ExprError`] enum verbatim.
     Expr(ExprError),
@@ -536,6 +554,7 @@ impl KgError {
             KgError::ConstraintCreationFailed { .. } => KgErrorCode::ConstraintCreationFailed,
             KgError::OntologyViolation { .. } => KgErrorCode::OntologyViolation,
             KgError::TransactionConflict { .. } => KgErrorCode::TransactionConflict,
+            KgError::DurabilityFailed { .. } => KgErrorCode::DurabilityFailed,
             KgError::Expr(_) => KgErrorCode::Expr,
             KgError::NodeNotFound { .. } => KgErrorCode::NodeNotFound,
             KgError::ConnectionNotFound { .. } => KgErrorCode::ConnectionNotFound,
@@ -633,6 +652,11 @@ impl fmt::Display for KgError {
                  not applied. Retry the transaction — re-run the work against \
                  a fresh begin().",
                 base_version, current_version
+            ),
+            KgError::DurabilityFailed { message } => write!(
+                f,
+                "commit was NOT applied — the write-ahead log rejected it, and a write \
+                 that cannot be logged is not acknowledged: {message}"
             ),
             KgError::Expr(e) => write!(f, "Expression error: {}", e),
             KgError::NodeNotFound { node_type, id } => {
@@ -931,6 +955,7 @@ mod tests {
             KgErrorCode::ConstraintCreationFailed,
             KgErrorCode::OntologyViolation,
             KgErrorCode::TransactionConflict,
+            KgErrorCode::DurabilityFailed,
             KgErrorCode::NodeNotFound,
             KgErrorCode::ConnectionNotFound,
             KgErrorCode::PropertyNotFound,

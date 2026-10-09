@@ -37,7 +37,7 @@ if (status != KGLITE_STATUS_CODE_OK) {
 ```
 
 Engine codes are `KGLITE_STATUS_CODE_CYPHER_SYNTAX` through
-`KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (1–22). Boundary-only failures use 100+ such as
+`KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` (1–23). Boundary-only failures use 100+ such as
 `INVALID_UTF8` and `NULL_POINTER`. Output handles/messages are reset before
 validation, and any returned error string is Rust-owned until freed with
 `kglite_free_string`.

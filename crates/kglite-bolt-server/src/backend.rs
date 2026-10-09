@@ -923,51 +923,22 @@ fn _query_appears_multi_statement(query: &str) -> bool {
 /// one write plus one skip.
 pub(crate) type CheckpointState = Arc<Mutex<Option<u64>>>;
 
-/// What a checkpoint did, and at which graph version.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CheckpointOutcome {
-    Written(u64),
-    /// Unchanged since the last successful checkpoint at this version.
-    Skipped(u64),
-}
+pub(crate) use kglite::api::session::CheckpointOutcome;
 
 /// Save `session` to `path` unless it is unchanged since the last successful
 /// checkpoint recorded in `last`.
 ///
-/// The one place a checkpoint of the served graph happens: the
-/// `db.checkpoint()` verb and the periodic task both call it, so the skip
-/// rule, the lock discipline and the version-recording order cannot drift
-/// apart.
-///
-/// **First call always writes.** `last` starts at `None` for the process, and
-/// the on-disk file may predate this process entirely (an operator's stale
-/// `.kgl`, or a graph mutated and never checkpointed by a previous run), so
-/// there is nothing on disk a version comparison could trust. The first
-/// checkpoint of a process establishes the correspondence the skips then rely
-/// on.
-///
-/// **Version read before the save, never after.** A commit landing between the
-/// read and the save's lock acquisition makes the recorded version one behind
-/// what reached disk, so the next checkpoint re-saves — a redundant write.
-/// Recording afterwards fails the other way: that same commit would be
-/// recorded as saved when it was not, and the next checkpoint would skip it.
-///
-/// A failed save leaves the recorded version untouched, so a later retry still
-/// writes.
+/// The lock on `last` is held across the save, which is what serializes the
+/// `db.checkpoint()` verb and the periodic task into one write plus one skip;
+/// the skip rule and the version-recording order are
+/// [`Session::checkpoint_if_changed`]'s.
 pub(crate) fn checkpoint_if_changed(
     session: &kglite::api::session::Session,
     path: &std::path::Path,
     last: &Mutex<Option<u64>>,
 ) -> Result<CheckpointOutcome, String> {
-    // Held across the save — see the type alias' doc comment.
     let mut last = last.lock().unwrap_or_else(|p| p.into_inner());
-    let version = session.version();
-    if *last == Some(version) {
-        return Ok(CheckpointOutcome::Skipped(version));
-    }
-    session.save(&path.to_string_lossy(), true)?;
-    *last = Some(version);
-    Ok(CheckpointOutcome::Written(version))
+    session.checkpoint_if_changed(path, &mut last)
 }
 
 impl KgliteBackend {

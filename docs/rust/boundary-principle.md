@@ -92,6 +92,13 @@ Direct Rust api is for things Cypher can't express:
 
 - The Cypher pipeline itself (`session::execute_*`, `cypher::parse_*`)
 - Lifecycle: `load_file`, `save_graph`, `from_blueprint`
+- Serving a path: `session::open_path` (writer lease, open or create in a
+  storage mode, durable session; recovery advisories returned as data)
+- Auto-commit writes: `Session::execute_auto_commit` (one-shot transaction
+  with optimistic-commit retry; a rejected log append is
+  `KgErrorCode::DurabilityFailed`)
+- Checkpointing: `Session::checkpoint_if_changed` (save unless the version is
+  unchanged since the last successful save)
 - Error types and codes (errors fire before/after Cypher)
 - Embedder registration (bindings hand kglite an `Arc<dyn Embedder>`)
 - Storage backend configuration
