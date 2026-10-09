@@ -165,7 +165,8 @@ Hand-rolled `begin_transaction` code needs its own retry loop.
 
 Error codes:
 
-- A `--readonly` server or a disk-mode graph answers a write with
+- A `--readonly` server answers a write with
+  `Neo.ClientError.General.ReadOnly`. A disk-mode graph answers a write with
   `Neo.ClientError.Security.Forbidden`. No rewrite of the request helps there.
 - A write in a read-mode session or transaction is
   `Neo.ClientError.Statement.AccessMode`.
@@ -519,7 +520,7 @@ disk-mode server into a startup error:
 | Configuration | `--durability full`/`normal` (asked for) | `--durability` (default) | `--save-on-exit`, `--checkpoint-interval`, `--checkpoint-wal-mib` (asked for) | `CALL db.checkpoint()` |
 |---|---|---|---|---|
 | `.kgl`, writable | serves at that level | serves at `normal` | supported | supported |
-| `--readonly` | startup error | serves at `off`, logged | startup error | `Neo.ClientError.Security.Forbidden` |
+| `--readonly` | startup error | serves at `off`, logged | startup error | `Neo.ClientError.General.ReadOnly` |
 | disk-mode graph | startup error | serves at `off`, logged | startup error | `Neo.ClientError.Security.Forbidden` |
 
 The one refusal that is about *data* rather than configuration is `off` over a

@@ -992,7 +992,8 @@ public final class KnowledgeGraph implements AutoCloseable {
      * }</pre>
      *
      * <p>{@code commit()} publishes into this session; it writes nothing to
-     * disk. {@link #save(Path)} is still the only thing that persists. Read
+     * disk on a session that is not durable, where {@link #save(Path)} persists.
+     * On a session from {@link #open(Path, OpenOptions)} the commit is logged. Read
      * {@link Transaction} before using it — three more of its behaviours differ
      * from what the JDBC-shaped API suggests.
      *
@@ -1601,10 +1602,12 @@ public final class KnowledgeGraph implements AutoCloseable {
      * checkpoint survives power loss. The storage mode is written with it, so
      * {@link #open(Path)} brings the graph back in the mode it was saved in.
      *
-     * <p><strong>This is the only thing that persists anything.</strong> A
-     * mutation that is never saved is discarded at {@link #close()} with no
-     * error and no warning, including on a graph that was opened from this very
-     * path — {@code open} loads, it does not attach. {@code path} need not be
+     * <p><strong>On a session that is not durable this is the only thing that
+     * persists anything.</strong> A mutation that is never saved is discarded at
+     * {@link #close()} with no error and no warning, including on a graph that
+     * was opened from this very path — {@code open(Path)} loads, it does not
+     * attach. A session from {@link #open(Path, OpenOptions)} logs its commits
+     * and {@code close()} checkpoints them. {@code path} need not be
      * the path the graph was opened from; saving elsewhere is how you copy or
      * branch one.
      *

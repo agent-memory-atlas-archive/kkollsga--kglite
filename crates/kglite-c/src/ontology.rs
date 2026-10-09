@@ -5,8 +5,9 @@
 //! `define_ontology` also reaches) and installs it through
 //! `DirGraph::define_ontology`, so the declare-over-data verification and the
 //! operator lock are the engine's. [`kglite_session_clear_ontology`] removes
-//! it. Both run in a session transaction; the C ABI has no write-ahead log, so
-//! persistence is `kglite_session_save`.
+//! it. Both run in a session transaction. On a durable session
+//! (`kglite_open_session`) the commit is logged; otherwise persistence is
+//! `kglite_session_save`.
 
 use crate::session::{KgliteSession, SessionState};
 use crate::status::KgliteStatusCode;
@@ -73,8 +74,9 @@ fn commit_status(outcome: CommitOutcome, out_error_msg: *mut *const c_char) -> K
 /// - `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` — stored data breaks an
 ///   `error`-level rule of the declaration.
 ///
-/// **The declaration is not durable until saved**: the C ABI has no
-/// write-ahead log, so call [`kglite_session_save`](crate::kglite_session_save).
+/// On a durable session from [`kglite_open_session`](crate::kglite_open_session)
+/// the declaration is write-ahead logged. On a session without a log it is not
+/// durable until [`kglite_session_save`](crate::kglite_session_save).
 ///
 /// # Safety
 ///

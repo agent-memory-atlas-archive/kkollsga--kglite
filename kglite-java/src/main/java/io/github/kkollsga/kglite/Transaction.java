@@ -44,12 +44,13 @@ import java.util.Objects;
  * {@link KnowledgeGraph#begin()}, whose {@link Tx} runs each statement as you
  * issue it.
  *
- * <p><strong>2. {@code commit()} is not durability.</strong> It publishes the
- * batch into the session — the in-memory graph every later {@code query()} and
- * {@code cypher()} on this instance sees. It writes no bytes. Only
- * {@link KnowledgeGraph#save(Path)} persists anything, and a committed
- * transaction that is never saved is discarded at {@link KnowledgeGraph#close()}
- * exactly like any other mutation.
+ * <p><strong>2. {@code commit()} is durable only on a durable session.</strong> It
+ * publishes the batch into the session — the in-memory graph every later
+ * {@code query()} and {@code cypher()} on this instance sees. On a session from
+ * {@link KnowledgeGraph#open(Path, OpenOptions)} the commit is also logged. On
+ * any other session it writes no bytes: {@link KnowledgeGraph#save(Path)}
+ * persists, and a committed transaction that is never saved is discarded at
+ * {@link KnowledgeGraph#close()} exactly like any other mutation.
  *
  * <p><strong>3. The batch holds the session's write lock for its whole
  * duration.</strong> {@code KnowledgeGraph} promises that readers run

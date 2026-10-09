@@ -105,8 +105,11 @@ fn parse_mode(mode: *const c_char) -> Result<SchemaInstall, String> {
 /// - A constraint status (`KGLITE_STATUS_CODE_CONSTRAINT_VIOLATION` and friends) when
 ///   existing data violates a declared constraint; the message names it.
 ///
-/// **The schema is not durable until saved.** Call
-/// [`kglite_session_save`](crate::kglite_session_save) to persist it.
+/// **Schemas have no write-ahead-log frame.** On a durable session from
+/// [`kglite_open_session`](crate::kglite_open_session) this call returns
+/// `KGLITE_STATUS_CODE_DURABILITY_FAILED` and changes nothing. On a session
+/// without a log the schema is not durable until
+/// [`kglite_session_save`](crate::kglite_session_save).
 ///
 /// # Safety
 ///

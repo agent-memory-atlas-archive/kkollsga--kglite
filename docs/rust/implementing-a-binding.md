@@ -74,10 +74,10 @@ finalizer. Every returned Rust string uses `kglite_free_string`; every graph,
 session, result, and embedder uses its matching free function. Decode result
 JSON before freeing its owning result handle.
 
-ABI v1 supports sessions, read/mutation options, and atomic mutation batches.
-It does not expose explicit transaction begin/commit calls. Model explicit
-transactions only after the ABI grows a real handle contract; never invent
-`kglite_session_begin` in wrapper code.
+The ABI supports sessions, read/mutation options, atomic mutation batches and
+explicit transactions. `kglite_session_begin` returns a transaction handle that
+you finish with `kglite_tx_commit` or `kglite_tx_rollback` and release with
+`kglite_tx_free`. Use `kglite_open_session` when commits must survive a crash.
 
 ## Values and errors
 

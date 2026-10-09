@@ -326,5 +326,4 @@ A function that throws, rejects, returns the wrong shape or the wrong width fail
 
 ## Not in version 1
 
-- `AbortSignal` cancellation. Use `timeoutMs`.
-- Streaming rows out of the engine. `graph.stream()` streams the conversion only; the engine still builds the whole result first.
+- Streaming rows out of the engine. `graph.stream()` streams the conversion to JavaScript objects only; the engine still builds the whole result first.

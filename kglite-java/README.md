@@ -74,8 +74,8 @@ void main() {
                      Map.of("id", 1, "name", "Ada"));
         graph.cypher("CREATE (:Person {id: 2, title: 'Grace'})");
 
-        // Nothing reaches disk until save(). Closing without it discards
-        // every mutation above, with no error.
+        // This session is not durable: nothing reaches disk until save().
+        // Closing without it discards every mutation above, with no error.
         graph.save(path);
     }
 
@@ -118,7 +118,7 @@ the engine. Choosing wrong is an exception, not a subtle difference.
 | Accepts | everything, reads included | reads only |
 | Given the other's input | runs a read fine, just on the write path | throws `KgliteException`, `statusName() == "InvalidArgument"`, *"execute_read called with a mutation query"* |
 | Concurrency | serializes with other writes and with `save()` | runs concurrently on a snapshot |
-| Persists anything | no — only `save()` does | no |
+| Persists anything | no — only `save()` does, unless the session is durable (`open(Path, OpenOptions)`) | no |
 
 Use `cypher` for anything that changes the graph, `query` for everything else.
 Nearly everything the engine can do — graph algorithms, aggregations,
@@ -301,7 +301,9 @@ byte-identical `.kgl` across runs.
 **Durability.** The store lives in the session until `save()`. Because
 embeddings ride the checkpoint rather than the write-ahead log, `save()` after
 an ingest is what persists them — the same rule every mutation follows, and more
-load-bearing here because there is no intermediate log to replay.
+load-bearing here because there is no intermediate log to replay. On a durable
+session (`open(Path, OpenOptions)`) embedding writes are refused with
+`DurabilityFailed`, because they have no log frame.
 
 **Listing.** `listEmbeddings()` returns one map per store — `node_type`,
 `text_column`, `dimension`, `count`, `metric` — the same shape the Python
@@ -348,10 +350,11 @@ behaviour, and each one is what a JDBC-shaped reading of `commit()` gets wrong:
    against the same working graph, so a staged `MATCH` sees a staged `CREATE`
    and its rows come back from `commit()` in position. If you need the Java-side
    branch, use [`begin()`](#interactive-transactions).
-2. **`commit()` is not durability.** It publishes into the session — the
-   in-memory graph this instance serves — and writes no bytes. `save(Path)` is
-   still the only thing that persists, and a committed transaction that is never
-   saved is discarded at `close()` like any other mutation.
+2. **`commit()` is durable only on a durable session.** It publishes into the
+   session — the in-memory graph this instance serves. On a session from
+   `open(Path, OpenOptions)` the commit is also written to the write-ahead log.
+   On any other session it writes no bytes: `save(Path)` is what persists, and a
+   committed transaction that is never saved is discarded at `close()`.
 3. **The batch holds the session's write lock for its whole duration.** The
    concurrency promise in [Threading](#threading) — readers run concurrently and
    are not blocked by a writer — is scoped to the short statements `cypher()`
@@ -695,9 +698,11 @@ deletes the graph when it arrives as raw.
 
 ## Durability, and the writer lease
 
-**`save(Path)` is the only thing that persists anything.** `open()` loads a
-graph, it does not attach to the file: mutations live in the session, and
-`close()` without a save discards them with no error. `save(path, false)` skips
+**On a session from `open(Path)` or `open(Path, StorageMode)`, `save(Path)` is
+the only thing that persists anything.** Those calls load a graph, they do not
+attach to the file: mutations live in the session, and `close()` without a save
+discards them with no error. A session from `open(Path, OpenOptions)` is
+durable: commits are logged and `close()` checkpoints (see [Durable sessions](#durable-sessions)). `save(path, false)` skips
 the fsync — still atomic (no torn file), but an OS crash can lose a save that
 returned successfully. Use `save(path)` unless you are bulk-loading something
 you can rebuild.

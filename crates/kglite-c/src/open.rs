@@ -343,7 +343,7 @@ pub unsafe extern "C" fn kglite_open_or_create_graph_in_mode(
 
             // `DurabilityLevel::Off`: this entry point attaches no
             // write-ahead log, so it inherits the unrecovered-sidecar refusal.
-            // A durable C-ABI open is a separate symbol when one ships.
+            // `kglite_open_session` is the durable open.
             match open_or_create_graph_in_mode(Path::new(path_str), requested, DurabilityLevel::Off)
             {
                 Ok(opened) => {

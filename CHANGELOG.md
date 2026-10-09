@@ -299,9 +299,10 @@ before upgrading.
   `Neo.ClientError.Schema.ConstraintValidationFailed` and starts the message
   with `[kglite.OntologyViolation rule=… entity=… type="…" property=…]`, which a
   `ConstraintViolation` never carries.
-- **`docs/rust/c-abi.md` no longer claims a C session can log to a write-ahead
-  log.** The C ABI has no durable open; an ontology declaration persists through
-  `kglite_session_save`.
+- **`docs/rust/c-abi.md` no longer claims a C session cannot log to a write-ahead
+  log.** The durable session from `kglite_open_session` logs commits, including
+  ontology declarations. Schema, text-index and embedding calls on a durable
+  session return `DurabilityFailed`, because they have no log frame.
 - **The Bolt server's error-mapping table is complete.** It lists every
   `KgErrorCode`, and a test fails when a code is missing from the table or its
   status disagrees with the mapping.

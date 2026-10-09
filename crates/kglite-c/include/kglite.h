@@ -582,10 +582,11 @@ KgliteStatusCode kglite_embedder_fastembed_new(const char *model_name,
  *   (unknown node type, inconsistent dimension, unknown metric); the message
  *   explains which.
  *
- * **The store is not durable until saved.** This ABI has no durable open —
- * that is a separate symbol when one ships — so nothing here is write-ahead
- * logged; call [`kglite_session_save`](crate::kglite_session_save) to persist
- * the vectors.
+ * **Embedding stores have no write-ahead-log frame.** On a durable session
+ * from [`kglite_open_session`](crate::kglite_open_session) this call returns
+ * `KGLITE_STATUS_CODE_DURABILITY_FAILED` and changes nothing. On a session
+ * without a log the store is not durable until
+ * [`kglite_session_save`](crate::kglite_session_save).
  *
  * # Safety
  *
@@ -1433,8 +1434,9 @@ KgliteStatusCode kglite_session_checkpoint(struct KgliteSession *session,
  * - `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` — stored data breaks an
  *   `error`-level rule of the declaration.
  *
- * **The declaration is not durable until saved**: the C ABI has no
- * write-ahead log, so call [`kglite_session_save`](crate::kglite_session_save).
+ * On a durable session from [`kglite_open_session`](crate::kglite_open_session)
+ * the declaration is write-ahead logged. On a session without a log it is not
+ * durable until [`kglite_session_save`](crate::kglite_session_save).
  *
  * # Safety
  *
@@ -1797,8 +1799,11 @@ KgliteStatusCode kglite_open_or_create_graph_in_mode(const char *path,
  * - A constraint status (`KGLITE_STATUS_CODE_CONSTRAINT_VIOLATION` and friends) when
  *   existing data violates a declared constraint; the message names it.
  *
- * **The schema is not durable until saved.** Call
- * [`kglite_session_save`](crate::kglite_session_save) to persist it.
+ * **Schemas have no write-ahead-log frame.** On a durable session from
+ * [`kglite_open_session`](crate::kglite_open_session) this call returns
+ * `KGLITE_STATUS_CODE_DURABILITY_FAILED` and changes nothing. On a session
+ * without a log the schema is not durable until
+ * [`kglite_session_save`](crate::kglite_session_save).
  *
  * # Safety
  *

@@ -172,10 +172,11 @@ unsafe fn emit_ingest(
 ///   (unknown node type, inconsistent dimension, unknown metric); the message
 ///   explains which.
 ///
-/// **The store is not durable until saved.** This ABI has no durable open —
-/// that is a separate symbol when one ships — so nothing here is write-ahead
-/// logged; call [`kglite_session_save`](crate::kglite_session_save) to persist
-/// the vectors.
+/// **Embedding stores have no write-ahead-log frame.** On a durable session
+/// from [`kglite_open_session`](crate::kglite_open_session) this call returns
+/// `KGLITE_STATUS_CODE_DURABILITY_FAILED` and changes nothing. On a session
+/// without a log the store is not durable until
+/// [`kglite_session_save`](crate::kglite_session_save).
 ///
 /// # Safety
 ///
