@@ -262,6 +262,47 @@ def test_attach_rows_normalized_modeling(g):
         kglite.attach_rows(g, "Order", "order-1", dup, row_type="LineItem", edge_type="HAS_LINE", key="sku")
 
 
+def _line_item_state(g):
+    return (
+        g.cypher("MATCH (n) RETURN count(n) AS c").to_list(),
+        g.cypher("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS c ORDER BY t").to_list(),
+    )
+
+
+def test_attach_rows_refused_by_a_relationship_constraint_adds_no_row_nodes(g):
+    """The edge step is refused (NOT NULL on an edge property the helper never sets);
+    the row nodes it would have followed must not be left behind."""
+    g.cypher("CREATE CONSTRAINT FOR ()-[r:HAS_LINE]-() REQUIRE r.since IS NOT NULL")
+    before = _line_item_state(g)
+    with pytest.raises(Exception, match="since"):
+        kglite.attach_rows(g, "Order", "order-1", _items(), row_type="LineItem", edge_type="HAS_LINE", key="sku")
+    assert _line_item_state(g) == before
+    assert g.cypher("MATCH (r:LineItem) RETURN count(r) AS c").to_list() == [{"c": 0}]
+
+
+def test_attach_rows_refusal_does_not_overwrite_an_existing_row(g):
+    """Re-attaching over an existing row node must not update it when the edge step refuses."""
+    g.cypher("CREATE (:LineItem {id: 'order-1:a-1', sku: 'a-1', qty: 99})")
+    g.cypher("CREATE CONSTRAINT FOR ()-[r:HAS_LINE]-() REQUIRE r.since IS NOT NULL")
+    changed = _items()
+    with pytest.raises(Exception, match="since"):
+        kglite.attach_rows(g, "Order", "order-1", changed, row_type="LineItem", edge_type="HAS_LINE", key="sku")
+    rows = g.cypher("MATCH (r:LineItem) RETURN r.id AS id, r.qty AS q").to_list()
+    assert rows == [{"id": "order-1:a-1", "q": 99}]
+
+
+def test_attach_rows_success_counts_and_edges_are_unchanged(g):
+    before = g.cypher("MATCH (n) RETURN count(n) AS c").to_list()[0]["c"]
+    n = kglite.attach_rows(g, "Order", "order-1", _items(), row_type="LineItem", edge_type="HAS_LINE", key="sku")
+    assert n == 3
+    assert g.cypher("MATCH (n) RETURN count(n) AS c").to_list()[0]["c"] == before + 3
+    edges = g.cypher(
+        "MATCH (:Order {id: 'order-1'})-[r:HAS_LINE]->(l:LineItem) RETURN l.id AS id, properties(r) AS p"
+    ).to_list()
+    assert sorted(e["id"] for e in edges) == ["order-1:a-1", "order-1:b-2", "order-1:c-3"]
+    assert all(e["p"] == {"type": "HAS_LINE"} for e in edges)
+
+
 def test_describe_reports_declared_and_inferred_shapes(g):
     g.set_table_property("Order", "order-1", "line_items", _items())
     text = g.describe(types=["Order"])

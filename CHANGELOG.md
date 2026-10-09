@@ -52,6 +52,7 @@ before upgrading.
 
 ### Fixed
 
+- `attach_rows` leaves no row nodes behind when its edge step is refused by a relationship constraint or an ontology rule.
 - **Documentation no longer calls a `.kgl` a backup of "any storage mode".**
   A disk-mode graph is a directory; `backup()` refuses it and `save(directory)`
   is the route.

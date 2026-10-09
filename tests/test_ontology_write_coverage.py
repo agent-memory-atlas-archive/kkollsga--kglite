@@ -687,12 +687,11 @@ def test_every_edge_writer_refuses_an_invalid_write(storage, name, entry, tmp_pa
 
 @pytest.mark.parametrize("storage", STORAGES)
 def test_attach_rows_refuses_an_invalid_edge(storage, tmp_path):
-    """The helper is two calls (row nodes, then edges), so a refused edge step
-    leaves the row nodes it had already added; no edge lands."""
+    """A refused edge step leaves no row nodes behind either."""
     g = make_rel_graph(storage, tmp_path)
-    before = rel_snapshot(g)[1]
+    before = rel_snapshot(g)
     _attach_rows_rel(g, tmp_path)
-    assert rel_snapshot(g)[1] == before
+    assert rel_snapshot(g) == before
 
 
 @pytest.mark.parametrize("storage", STORAGES)

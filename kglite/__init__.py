@@ -265,8 +265,10 @@ def attach_rows(graph, parent_type, parent_id, data, *, row_type, edge_type, key
     df = data.copy()
     row_ids = [f"{parent_id}:{v}" for v in df[key]]
     df.insert(0, "_row_id", row_ids)
-    graph.add_nodes(df, row_type, "_row_id", node_title_field=key)
     edges = pd.DataFrame({"src": [parent_id] * len(row_ids), "dst": row_ids})
+    # Judge the edges first: the node step cannot be undone, so a refusal has to come before it.
+    graph._check_relationships(edges, edge_type, parent_type, "src", row_type, "dst")
+    graph.add_nodes(df, row_type, "_row_id", node_title_field=key)
     graph.add_relationships(edges, edge_type, parent_type, "src", row_type, "dst")
     return len(row_ids)
 

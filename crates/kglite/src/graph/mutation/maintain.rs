@@ -1305,6 +1305,62 @@ pub(crate) fn add_connections_with_initial_load(
     )
 }
 
+/// Judge a connection frame against the declared relationship constraints and
+/// the enforced ontology relationship rules without writing it: the refusal
+/// [`add_connections`] would raise for the same frame, or `Ok`. A caller that
+/// writes nodes before the edges (`attach_rows`) runs it first, so a refused
+/// edge step cannot strand the nodes already added.
+///
+/// Endpoints that do not exist yet are judged as the vivified stubs the real
+/// load would create, under the default conflict handling. The `warn`-level
+/// lines are dropped; the real load reports them once.
+pub fn check_connections(
+    graph: &mut DirGraph,
+    mut df_data: DataFrame,
+    connection_type: &str,
+    source_type: &str,
+    source_id_field: &str,
+    target_type: &str,
+    target_id_field: &str,
+) -> Result<(), String> {
+    let conflict_mode = parse_conflict_mode(None)?;
+    require_id_columns(&df_data, source_id_field, target_id_field)?;
+    let (resolved, _titles, _empty_intervals) = prepare_connection_admission(
+        graph,
+        &mut df_data,
+        ConnectionAdmissionFields {
+            connection_type,
+            source_type,
+            source_id: source_id_field,
+            source_title: None,
+            target_type,
+            target_id: target_id_field,
+            target_title: None,
+        },
+    )?;
+    let is_initial_load = source_owns_its_edges(graph, connection_type, source_type);
+    let start_key = merge_start_key(graph, connection_type, Some(source_type));
+    ConnectionBatchGate {
+        connection_type,
+        rows: &df_data,
+        property_columns: &resolve_edge_property_columns(
+            &df_data,
+            source_id_field,
+            target_id_field,
+            None,
+            None,
+        ),
+        matched: &resolved.matched,
+        deferred: &resolved.deferred,
+        conflict_mode,
+        folding: RowFolding::for_load(is_initial_load),
+        start_key: start_key.as_ref(),
+        endpoint_types: Some((source_type, target_type)),
+    }
+    .run(graph)
+    .map(drop)
+}
+
 /// Both id columns of a connection frame must exist, or the load refuses.
 fn require_id_columns(frame: &DataFrame, source_id: &str, target_id: &str) -> Result<(), String> {
     for (role, field) in [("Source", source_id), ("Target", target_id)] {

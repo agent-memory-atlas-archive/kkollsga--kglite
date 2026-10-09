@@ -277,8 +277,8 @@ pub mod api {
         };
         pub use crate::graph::mutation::identical_rows::IdenticalRows;
         pub use crate::graph::mutation::maintain::{
-            add_connections, add_connections_with_identical_rows, add_nodes, create_connections,
-            purge_provisional_nodes, replace_connections,
+            add_connections, add_connections_with_identical_rows, add_nodes, check_connections,
+            create_connections, purge_provisional_nodes, replace_connections,
         };
         pub use crate::graph::mutation::property_updates::{
             update_node_properties, update_node_property_set,

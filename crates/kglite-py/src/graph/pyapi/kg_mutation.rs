@@ -1489,6 +1489,51 @@ impl KnowledgeGraph {
         build_extend_report_dict(py, &result)
     }
 
+    /// Refuse a relationship frame without writing it (used by `attach_rows`).
+    fn _check_relationships(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        connection_type: String,
+        source_type: String,
+        source_id_field: String,
+        target_type: String,
+        target_id_field: String,
+    ) -> PyResult<()> {
+        self.check_durable_owner()?;
+        let (df, _) = build_connection_df_from_pandas(
+            data,
+            &source_id_field,
+            &target_id_field,
+            None,
+            None,
+            None,
+            None,
+            None,
+            OnInvalid::Warn,
+        )?;
+        validate_interner_names(
+            &self.inner,
+            [
+                connection_type.as_str(),
+                source_type.as_str(),
+                target_type.as_str(),
+            ],
+        )?;
+        let graph = get_graph_mut(&mut self.inner);
+        detach_bulk_write(py, graph, |graph| {
+            kglite_core::api::mutation::check_connections(
+                graph,
+                df,
+                &connection_type,
+                &source_type,
+                &source_id_field,
+                &target_type,
+                &target_id_field,
+            )
+        })
+    }
+
     /// Add relationships from a DataFrame or read-only Cypher query.
     #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None, distinct=false))]
     // The public Python loader supports DataFrame and query modes with optional controls.
