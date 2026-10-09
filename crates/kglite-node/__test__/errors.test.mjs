@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kglite, freshGraph } from './helpers.mjs';
 
@@ -81,10 +82,10 @@ test('opening a held path rejects WriterLeaseHeld', async () => {
   try {
     // freshGraph opened `durability: off`, which still takes the writer lease.
     await assert.rejects(
-      kglite.open(`${dir}/g.kgl`, { durability: 'off' }),
+      kglite.open(join(dir, 'g.kgl'), { durability: 'off' }),
       (e) => e.code === 'WriterLeaseHeld',
     );
-    assert.equal(held.path, `${dir}/g.kgl`);
+    assert.equal(resolve(held.path), resolve(dir, 'g.kgl'));
   } finally {
     done();
   }

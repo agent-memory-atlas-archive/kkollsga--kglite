@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { runInNewContext } from 'node:vm';
 import { setFlagsFromString } from 'node:v8';
-import { freshGraph, kglite, startChild } from './helpers.mjs';
+import { crashChild, freshGraph, kglite, startChild } from './helpers.mjs';
 
 async function count(graph, label = 'Item') {
   return (await graph.executeRead(`MATCH (n:${label}) RETURN count(n) AS c`)).rows[0].c;
@@ -266,7 +266,7 @@ test('Symbol.asyncDispose rolls a transaction back', async (t) => {
   assert.equal(g.closed, true);
 });
 
-test('a committed transaction survives SIGKILL at durability full; an open one does not', { skip: process.platform === 'win32' }, async (t) => {
+test('a committed transaction survives SIGKILL at durability full; an open one does not', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'kglite-node-tx-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'g.kgl');
@@ -274,9 +274,8 @@ test('a committed transaction survives SIGKILL at durability full; an open one d
   try {
     await child.next((l) => l === 'ready');
   } finally {
-    child.proc.kill('SIGKILL');
+    await crashChild(child);
   }
-  await child.exited;
   const g = await kglite.open(path, { durability: 'full' });
   const ids = (await g.executeRead('MATCH (n:Item) RETURN n.i AS i ORDER BY i')).rows.map((r) => r.i);
   await g.close();

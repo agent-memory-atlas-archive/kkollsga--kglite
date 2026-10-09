@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -14,6 +15,13 @@ export async function freshGraph(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kglite-node-'));
   const graph = await kglite.open(join(dir, 'g.kgl'), { durability: 'off', ...options });
   return { graph, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** Hard-kill `child` (no cleanup: SIGKILL on POSIX, TerminateProcess on Windows) and check it did not exit normally. */
+export async function crashChild(child) {
+  child.proc.kill('SIGKILL');
+  const { code, signal } = await child.exited;
+  assert.ok(signal !== null || code !== 0, `child exited normally (code ${code}) instead of being killed`);
 }
 
 const childScript = fileURLToPath(new URL('./child.mjs', import.meta.url));

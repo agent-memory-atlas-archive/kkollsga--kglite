@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { kglite } from './helpers.mjs';
 
 const MIN_WINDOW_MS = 300;
@@ -73,7 +74,7 @@ const maxGap = (acks, start, end) => {
 /** Open `file` read-only in a fresh Node process and print its Seq summary as JSON. */
 function readInFreshProcess(file) {
   const script = `
-    const kglite = require(${JSON.stringify(new URL('../index.js', import.meta.url).pathname)});
+    const kglite = require(${JSON.stringify(fileURLToPath(new URL('../index.js', import.meta.url)))});
     (async () => {
       const g = await kglite.open(process.argv[1], { readOnly: true });
       const r = await g.executeRead('MATCH (s:Seq) RETURN count(s) AS c, min(s.id) AS lo, max(s.id) AS hi');
@@ -177,7 +178,7 @@ test('AC5: a backup onto the live graph or an alias of it is refused and changes
   await graph.executeWrite('CREATE (:Person {id: 1})');
   await graph.checkpoint();
   const before = statSync(path).size;
-  for (const alias of [path, join(dir, '.', 'g.kgl'), join(dir, '..', dir.split('/').pop(), 'g.kgl')]) {
+  for (const alias of [path, join(dir, '.', 'g.kgl'), join(dir, '..', basename(dir), 'g.kgl')]) {
     await assert.rejects(graph.backup(alias), (e) => {
       assert.equal(e.name, 'KgliteError');
       assert.match(e.message, /live|alias|same/i);

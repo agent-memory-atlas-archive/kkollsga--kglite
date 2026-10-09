@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { kglite, startChild } from './helpers.mjs';
+import { crashChild, kglite, startChild } from './helpers.mjs';
 
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'kglite-node-lease-'));
@@ -89,11 +89,10 @@ test('close() then a second writer succeeds, across processes', async (t) => {
   await child.exited;
 });
 
-test('the lease is freed by kill -9, and the next writer recovers the log', { skip: process.platform === 'win32' }, async (t) => {
+test('the lease is freed by kill -9, and the next writer recovers the log', async (t) => {
   const path = scratch(t);
   const child = await holder(t, path);
-  child.proc.kill('SIGKILL');
-  await child.exited;
+  await crashChild(child);
   const g = await kglite.open(path);
   assert.equal((await g.executeRead('MATCH (n:Item) RETURN count(n) AS c')).rows[0].c, 8);
   await g.close();
