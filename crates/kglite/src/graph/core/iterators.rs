@@ -13,6 +13,7 @@ use crate::graph::storage::forked_edge_iters::{
     ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
 };
 use crate::graph::storage::forked_edges::OverlayBits;
+use crate::graph::storage::forked_slots::ExtraIter;
 use crate::graph::storage::mapped::mmap_vec::MmapOrVec;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -230,7 +231,7 @@ pub struct ForkedMergedIndices<'a> {
     base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
     /// A base index read ahead while a smaller overlay slot was yielded.
     pending: Option<NodeIndex>,
-    extra: std::collections::btree_set::Iter<'a, u32>,
+    extra: ExtraIter<'a>,
     /// The smallest overlay slot not yet yielded; `usize::MAX` once exhausted,
     /// so the common step is one comparison.
     next_extra: usize,
@@ -240,10 +241,10 @@ pub struct ForkedMergedIndices<'a> {
 impl<'a> ForkedMergedIndices<'a> {
     pub(crate) fn new(
         base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
-        mut extra: std::collections::btree_set::Iter<'a, u32>,
+        mut extra: ExtraIter<'a>,
         dead: Option<&'a OverlayBits>,
     ) -> Self {
-        let next_extra = extra.next().map_or(usize::MAX, |&idx| idx as usize);
+        let next_extra = extra.next().map_or(usize::MAX, |idx| idx as usize);
         Self {
             base,
             pending: None,
@@ -256,7 +257,7 @@ impl<'a> ForkedMergedIndices<'a> {
     #[inline]
     fn take_extra(&mut self) -> NodeIndex {
         let idx = self.next_extra;
-        self.next_extra = self.extra.next().map_or(usize::MAX, |&next| next as usize);
+        self.next_extra = self.extra.next().map_or(usize::MAX, |next| next as usize);
         NodeIndex::new(idx)
     }
 

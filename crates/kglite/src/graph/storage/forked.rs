@@ -74,7 +74,7 @@
 //! clone, which is slower and never wrong — the same fail-safe direction
 //! `rollback::journal_covers` takes.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -92,6 +92,7 @@ use crate::graph::storage::forked_edge_iters::{
     ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
 };
 use crate::graph::storage::forked_edges::{EdgeLayer, OverlayBits};
+use crate::graph::storage::forked_slots::ExtraSlots;
 use crate::graph::storage::property_storage::PropertyStorage;
 use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite, MemoryGraph};
@@ -146,7 +147,7 @@ struct Delta {
     /// Live slots the overlay allocated where the base holds no live node: a
     /// slot the base had vacated, or one past every base slot. Sorted, for
     /// merging into `node_indices`.
-    extra: BTreeSet<u32>,
+    extra: ExtraSlots,
     /// Base nodes the overlay removed and has not re-created.
     dead: OverlayBits,
     dead_count: usize,
@@ -243,7 +244,7 @@ impl Overlay<'_> {
     /// live overlay node must carry its weight. A refusal here leaves both the
     /// overlay and `target` untouched (issue #195).
     fn check(&self, target: &MemoryGraph) -> Result<(), String> {
-        for &idx in &self.delta.extra {
+        for idx in self.delta.extra.iter() {
             if !self.delta.nodes.holds(idx) {
                 return Err(format!("appended node {idx} has no weight in the overlay"));
             }
@@ -605,21 +606,37 @@ impl ForkedGraph {
         self.delta.nodes.len()
     }
 
-    /// Whether copying this overlay for a further fork costs enough that
-    /// collapsing it is cheaper over the next few forks.
+    /// Whether copying this overlay for a further fork costs more than
+    /// collapsing it once.
     ///
     /// A fork of a fork duplicates the delta, and a reader held continuously
-    /// across commits keeps the base shared, so the delta only grows. The cap
-    /// is a fraction of the base: past it, one O(graph) collapse
-    /// ([`Self::to_memory_graph`]) resets the delta to nothing, amortised over
-    /// the changes that earned it. The floor keeps a small graph from
-    /// collapsing on every few edits.
+    /// across commits keeps the base shared, so the delta only grows. Past a
+    /// sixteenth of the base, one O(graph) collapse
+    /// ([`Self::to_memory_graph`]) resets it, amortised over the changes that
+    /// earned it.
     pub(crate) fn delta_exceeds_clone_cap(&self) -> bool {
+        self.delta_exceeds(16)
+    }
+
+    /// Whether an adjacency write should collapse the overlay before going on.
+    ///
+    /// Each edit runs twice if the overlay carries it: into the delta, then
+    /// into the base at the fold. A statement that rewrites a large share of the
+    /// graph is cheaper on a plain graph, so past a sixty-fourth of the base the
+    /// overlay collapses (`GraphBackend::flatten_fork`) and the rest of the
+    /// statement runs in place. The cost is then at most what these writes paid
+    /// before the overlay held adjacency: one whole-graph copy. The measured
+    /// crossover is in `docs/rust/structural-sharing.md`.
+    pub(crate) fn delta_exceeds_write_cap(&self) -> bool {
+        self.delta_exceeds(64)
+    }
+
+    /// The floor keeps a small graph from collapsing on every few edits.
+    fn delta_exceeds(&self, base_fraction: usize) -> bool {
         const FLOOR: usize = 4096;
-        const BASE_FRACTION: usize = 16;
         let delta = self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len();
         let base = self.base.inner();
-        delta > FLOOR.max((base.node_count() + base.edge_count()) / BASE_FRACTION)
+        delta > FLOOR.max((base.node_count() + base.edge_count()) / base_fraction)
     }
 
     /// The overlay's own state, borrowed apart from its base.
@@ -811,7 +828,7 @@ impl ForkedGraph {
                 Some(own.unwrap_or_else(|| base.clone()))
             }
             None => {
-                self.delta.extra.remove(&raw);
+                self.delta.extra.remove(raw);
                 own
             }
         }
@@ -830,6 +847,44 @@ impl ForkedGraph {
         Arc::make_mut(store).tombstone(row_id);
         if let Some(journal) = self.undo.as_deref_mut() {
             journal.note_columnar_tombstone(type_key, row_id);
+        }
+    }
+
+    /// Remove an edge from this view, journalling and logging it. The weight
+    /// comes back only when `want_weight` asks for it: detaching a node's edges
+    /// discards every one, and a base edge's weight can only be *copied* out of
+    /// the base, so an unwanted copy is a wasted allocation per edge.
+    fn unlink_edge(&mut self, idx: EdgeIndex, want_weight: bool) -> Option<EdgeData> {
+        let raw = idx.index() as u32;
+        let need_weight = want_weight || self.undo.is_some();
+        let (src, dst, weight) = match self.delta.edges.take_added(raw) {
+            Some(edge) => (edge.src, edge.dst, need_weight.then_some(edge.weight)),
+            None => {
+                if self.delta.edges.removed.contains(&raw) {
+                    return None;
+                }
+                let (src, dst) = self.base.inner().edge_endpoints(idx)?;
+                let base_weight = self.base.inner().edge_weight(idx)?;
+                let own = self.delta.edges.weights.remove(&raw);
+                let weight = need_weight.then(|| own.unwrap_or_else(|| base_weight.clone()));
+                self.delta.edges.tombstone(raw);
+                (src.index() as u32, dst.index() as u32, weight)
+            }
+        };
+        self.slot_mirror.note_edge_removed(idx);
+        self.delta.ops.push(Op::RemoveEdge(raw));
+        match (self.undo.as_deref_mut(), weight) {
+            (Some(journal), Some(weight)) => {
+                let (src, dst) = (NodeIndex::new(src as usize), NodeIndex::new(dst as usize));
+                if want_weight {
+                    journal.note_edge_removed(idx, src, dst, weight.clone());
+                    Some(weight)
+                } else {
+                    journal.note_edge_removed(idx, src, dst, weight);
+                    None
+                }
+            }
+            (_, weight) => weight,
         }
     }
 
@@ -913,7 +968,7 @@ impl GraphRead for ForkedGraph {
                 bound -= 1;
             }
         }
-        bound.max(self.delta.extra.last().map_or(0, |&top| top as usize + 1))
+        bound.max(self.delta.extra.last().map_or(0, |top| top as usize + 1))
     }
 
     /// One past the highest live edge slot; see [`Self::node_bound`].
@@ -1052,23 +1107,13 @@ impl GraphRead for ForkedGraph {
         let base = self.base.inner().node_indices();
         let delta = &self.delta;
         if delta.dead_count == 0 {
-            match (delta.extra.first(), delta.extra.last()) {
-                (None, _) => {
+            if let Some(run) = delta.extra.as_single_run() {
+                if run.is_empty() || run.start as usize >= self.base.inner().node_bound() {
                     return GraphNodeIndices::Forked {
                         base: Box::new(base),
-                        appended: 0..0,
+                        appended: run.start as usize..run.end as usize,
                     };
                 }
-                (Some(&first), Some(&last))
-                    if first as usize >= self.base.inner().node_bound()
-                        && last as usize - first as usize + 1 == delta.extra.len() =>
-                {
-                    return GraphNodeIndices::Forked {
-                        base: Box::new(base),
-                        appended: first as usize..last as usize + 1,
-                    };
-                }
-                _ => {}
             }
         }
         GraphNodeIndices::ForkedMerged(Box::new(ForkedMergedIndices::new(
@@ -1393,13 +1438,13 @@ impl GraphWrite for ForkedGraph {
         idx
     }
 
-    /// Detaches the node's edges one at a time through [`Self::remove_edge`]
+    /// Detaches the node's edges one at a time through [`Self::unlink_edge`]
     /// (so each is logged, journalled and freed in the order petgraph would
     /// free it), then frees the node's slot.
     fn remove_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
         GraphRead::node_weight(self, idx)?;
         for edge in self.incident_edges(idx) {
-            GraphWrite::remove_edge(self, edge);
+            self.unlink_edge(edge, false);
         }
         let removed = self.take_node(idx)?;
         self.slot_mirror.note_node_removed(idx, std::iter::empty());
@@ -1441,33 +1486,7 @@ impl GraphWrite for ForkedGraph {
     }
 
     fn remove_edge(&mut self, idx: EdgeIndex) -> Option<EdgeData> {
-        let raw = idx.index() as u32;
-        let (src, dst, removed) = match self.delta.edges.take_added(raw) {
-            Some(edge) => (edge.src, edge.dst, edge.weight),
-            None => {
-                if self.delta.edges.removed.contains(&raw) {
-                    return None;
-                }
-                let (src, dst) = self.base.inner().edge_endpoints(idx)?;
-                let weight = match self.delta.edges.weights.remove(&raw) {
-                    Some(own) => own,
-                    None => self.base.inner().edge_weight(idx)?.clone(),
-                };
-                self.delta.edges.tombstone(raw);
-                (src.index() as u32, dst.index() as u32, weight)
-            }
-        };
-        self.slot_mirror.note_edge_removed(idx);
-        self.delta.ops.push(Op::RemoveEdge(raw));
-        if let Some(journal) = self.undo.as_deref_mut() {
-            journal.note_edge_removed(
-                idx,
-                NodeIndex::new(src as usize),
-                NodeIndex::new(dst as usize),
-                removed.clone(),
-            );
-        }
-        Some(removed)
+        self.unlink_edge(idx, true)
     }
 }
 
@@ -1618,5 +1637,51 @@ mod tests {
         );
         assert_eq!(copy.node_indices().collect::<Vec<_>>(), before);
         assert_eq!(copy.edge_count(), edges);
+    }
+
+    /// A statement that rewrites a large share of the graph pays for two
+    /// replays if the overlay carries it, so it collapses once mid-statement:
+    /// the journal must come through the collapse, and what is left is a plain
+    /// graph that reads as the edits dictate.
+    #[test]
+    fn a_large_adjacency_delta_collapses_mid_statement_and_keeps_the_journal() {
+        use crate::graph::storage::backend::GraphBackend;
+        let mut interner = StringInterner::new();
+        let base = graph_of(10, &mut interner);
+        let mut backend = GraphBackend::Forked(Box::new(ForkedGraph::new(Arc::new(base))));
+        let hub = NodeIndex::new(0);
+        backend.begin_undo();
+        let mut edges = Vec::new();
+        for _ in 0..5000 {
+            edges.push(GraphWrite::add_edge(
+                &mut backend,
+                hub,
+                NodeIndex::new(1),
+                edge(&mut interner),
+            ));
+        }
+        assert!(
+            !backend.is_forked(),
+            "the cap must have collapsed the overlay"
+        );
+        assert_eq!(backend.edge_count(), 5000);
+        assert_eq!(
+            backend
+                .edges_directed(hub, petgraph::Direction::Outgoing)
+                .count(),
+            5000
+        );
+        let journal = backend
+            .take_undo()
+            .expect("the journal survives the collapse");
+        let entries = journal.into_replay_order().count();
+        assert_eq!(
+            entries, 5000,
+            "one EdgeAdded per edge, none lost or doubled"
+        );
+        for edge in edges.into_iter().rev() {
+            GraphWrite::remove_edge(&mut backend, edge);
+        }
+        assert_eq!(backend.edge_count(), 0);
     }
 }

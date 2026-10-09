@@ -1975,7 +1975,13 @@ impl GraphWrite for GraphBackend {
     fn remove_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
         match self {
             Self::Memory(g) => GraphWrite::remove_node(unique_heap_backend(g), idx),
-            Self::Forked(g) => GraphWrite::remove_node(g.as_mut(), idx),
+            Self::Forked(g) => {
+                let result = GraphWrite::remove_node(g.as_mut(), idx);
+                if g.delta_exceeds_write_cap() {
+                    self.flatten_fork();
+                }
+                result
+            }
             Self::Mapped(g) => GraphWrite::remove_node(unique_heap_backend(g), idx),
             Self::Disk(g) => GraphWrite::remove_node(g.as_mut(), idx),
             Self::Recording(rg) => GraphWrite::remove_node(rg.as_mut(), idx),
@@ -1986,7 +1992,13 @@ impl GraphWrite for GraphBackend {
     fn add_edge(&mut self, a: NodeIndex, b: NodeIndex, data: EdgeData) -> EdgeIndex {
         match self {
             Self::Memory(g) => GraphWrite::add_edge(unique_heap_backend(g), a, b, data),
-            Self::Forked(g) => GraphWrite::add_edge(g.as_mut(), a, b, data),
+            Self::Forked(g) => {
+                let result = GraphWrite::add_edge(g.as_mut(), a, b, data);
+                if g.delta_exceeds_write_cap() {
+                    self.flatten_fork();
+                }
+                result
+            }
             Self::Mapped(g) => GraphWrite::add_edge(unique_heap_backend(g), a, b, data),
             Self::Disk(g) => GraphWrite::add_edge(g.as_mut(), a, b, data),
             Self::Recording(rg) => GraphWrite::add_edge(rg.as_mut(), a, b, data),
@@ -1997,7 +2009,13 @@ impl GraphWrite for GraphBackend {
     fn remove_edge(&mut self, idx: EdgeIndex) -> Option<EdgeData> {
         match self {
             Self::Memory(g) => GraphWrite::remove_edge(unique_heap_backend(g), idx),
-            Self::Forked(g) => GraphWrite::remove_edge(g.as_mut(), idx),
+            Self::Forked(g) => {
+                let result = GraphWrite::remove_edge(g.as_mut(), idx);
+                if g.delta_exceeds_write_cap() {
+                    self.flatten_fork();
+                }
+                result
+            }
             Self::Mapped(g) => GraphWrite::remove_edge(unique_heap_backend(g), idx),
             Self::Disk(g) => GraphWrite::remove_edge(g.as_mut(), idx),
             Self::Recording(rg) => GraphWrite::remove_edge(rg.as_mut(), idx),
