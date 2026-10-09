@@ -9,7 +9,8 @@
 //!
 //! A locked graph (`DirGraph::lock_ontology`, the Bolt server's `--ontology`)
 //! refuses both. A declaration that stored data already breaks at an `error`
-//! rule is refused with the per-rule report as the error text; `warn`-level
+//! rule is refused with the per-rule report as the error text and parked
+//! as a typed `OntologyViolation` (code, rule, report) like a write refusal; `warn`-level
 //! findings come back in the `warnings` column and on the statement's
 //! warning sink.
 
@@ -19,6 +20,7 @@ use std::sync::Mutex;
 use crate::datatypes::values::Value;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::{QueryDiagnostics, ResultRow};
+use crate::graph::ontology::violation::DefineOntologyError;
 use crate::graph::ontology::ontology_from_value;
 use crate::graph::schema::DirGraph;
 
@@ -36,9 +38,15 @@ pub(super) fn execute(
         "db.ontology.declare" => {
             let store = ontology_from_value(&document(params)?)
                 .map_err(|e| format!("CALL {proc_name}: {e}"))?;
-            let warnings = graph
-                .define_ontology(store)
-                .map_err(|e| format!("CALL {proc_name}: {e}"))?;
+            let warnings = match graph.define_ontology(store) {
+                Ok(warnings) => warnings,
+                // The report's message goes out unwrapped: the typed refusal is
+                // recovered by message identity (see `PendingViolation`).
+                Err(DefineOntologyError::Refused(refusal)) => {
+                    return Err(graph.record_declaration_refusal(refusal));
+                }
+                Err(e) => return Err(format!("CALL {proc_name}: {e}")),
+            };
             {
                 let mut sink = diagnostics.lock().unwrap_or_else(|e| e.into_inner());
                 for warning in &warnings {

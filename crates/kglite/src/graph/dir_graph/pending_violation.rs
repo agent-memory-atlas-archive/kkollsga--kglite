@@ -11,6 +11,7 @@ use super::DirGraph;
 pub(crate) enum PendingViolation {
     Constraint(crate::graph::constraints::ConstraintViolation),
     Ontology(crate::graph::ontology::violation::OntologyViolation),
+    Declaration(crate::graph::ontology::violation::OntologyDeclarationRefused),
 }
 
 impl DirGraph {
@@ -50,6 +51,21 @@ impl DirGraph {
         message
     }
 
+    /// [`Self::record_ontology_violation`] for a declaration refused over
+    /// stored data: parks the report under its message, which the caller must
+    /// hand to `Err(..)` unchanged for the identity check to recover it.
+    pub(crate) fn record_declaration_refusal(
+        &mut self,
+        refusal: crate::graph::ontology::violation::OntologyDeclarationRefused,
+    ) -> String {
+        let message = refusal.message.clone();
+        self.pending_constraint_violation = Some(Box::new((
+            message.clone(),
+            PendingViolation::Declaration(refusal),
+        )));
+        message
+    }
+
     /// Clear any parked violation. Called before an execution begins so a
     /// violation left by an earlier run on the same working copy can never be
     /// attributed to a later, unrelated error.
@@ -72,7 +88,7 @@ impl DirGraph {
     ) -> Option<crate::graph::constraints::ConstraintViolation> {
         match self.take_pending_violation_for(message)? {
             PendingViolation::Constraint(violation) => Some(violation),
-            PendingViolation::Ontology(_) => None,
+            PendingViolation::Ontology(_) | PendingViolation::Declaration(_) => None,
         }
     }
 
@@ -98,6 +114,7 @@ impl DirGraph {
             .map(|parked| match parked {
                 PendingViolation::Constraint(v) => crate::error::KgError::from(v),
                 PendingViolation::Ontology(v) => crate::error::KgError::from(v),
+                PendingViolation::Declaration(r) => crate::error::KgError::from(r),
             })
     }
 }

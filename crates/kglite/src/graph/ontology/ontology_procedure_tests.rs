@@ -65,6 +65,34 @@ fn declare_over_violating_data_is_refused_with_the_report() {
 }
 
 #[test]
+fn a_declaration_refused_through_the_procedure_is_a_typed_violation_with_the_report() {
+    let mut graph = DirGraph::new();
+    run(&mut graph, "CREATE (:Person {id: 1})").unwrap();
+    let err = run(
+        &mut graph,
+        "CALL db.ontology.declare({classes: {Person: {required_properties: ['email'], \
+         enforcement: 'error'}}})",
+    )
+    .unwrap_err();
+    match *err {
+        crate::error::KgError::OntologyViolation {
+            rule,
+            entity_type,
+            property,
+            report,
+            ..
+        } => {
+            assert_eq!(rule, "required_property");
+            assert_eq!(entity_type, "Person");
+            assert_eq!(property.as_deref(), Some("email"));
+            assert_eq!(report.len(), 1);
+            assert_eq!(report[0].count, 1);
+        }
+        other => panic!("untyped: {other:?}"),
+    }
+}
+
+#[test]
 fn a_locked_graph_refuses_declare_and_clear_and_keeps_the_ontology() {
     let mut graph = DirGraph::new();
     declare_json(&mut graph, PERSON).unwrap();
