@@ -35,6 +35,15 @@ before upgrading.
 
 ### Added
 
+- **Node.js binding: `validTimeDefault` open option and JavaScript embedders.**
+  `open(path, { validTimeDefault: 'today' | 'all' | 'YYYY-MM-DD' })` sets the
+  instant an unprefixed statement reads on a graph with declared validity
+  intervals, as the Bolt server and the Python setter do. `graph.setEmbedder(name,
+  embed, { dimension?, modelId?, timeoutMs? })` registers a sync or async
+  function as the graph's text embedder for `text_score()`,
+  `db.embeddings.embed` and `db.embeddings.query({text})`; `clearEmbedder()`
+  removes it. A throw, a rejection, a wrong shape or a wrong width fails the
+  query with a typed error.
 - **`CALL db.ontology.show()` returns the declared ontology.** It yields
   `ontology` (the canonical document as a map, which
   `db.ontology.declare({ontology: ...})` accepts back unchanged; Null when none

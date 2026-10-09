@@ -32,6 +32,10 @@ export declare class Graph {
   declareOntology(ontology: object | string): Promise<OntologyDeclared>
   /** Remove the graph's declared ontology. */
   clearOntology(): Promise<void>
+  /** Use a JavaScript function as the graph's text embedder, for `text_score()` with a string query, `db.embeddings.embed` and `db.embeddings.query({text})`. Replaces any earlier embedder; not persisted. */
+  setEmbedder(name: string, embed: (texts: string[]) => Promise<ArrayLike<number>[]> | ArrayLike<number>[], options?: EmbedderOptions): void
+  /** Remove the registered embedder. With `name`, only when it is the one registered. Returns whether one was removed. */
+  clearEmbedder(name?: string | undefined | null): boolean
   /** Run a read-only Cypher statement. A mutating statement rejects with `InvalidArgument`. */
   executeRead(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
   /** Run a Cypher statement that may write, as one auto-committed transaction. */
@@ -141,6 +145,15 @@ export interface BackupReport {
   elapsedMs: number
   /** The snapshot needed a private copy first (costs a fork of the graph). */
   preparedCopy: boolean
+}
+
+export interface EmbedderOptions {
+  /** Vector width. Omitted: learned from the first vector the function returns (one probe call when a statement needs it up front). */
+  dimension?: number
+  /** Model identity stamped on stored embeddings; default is the registration name. */
+  modelId?: string
+  /** How long one call may wait for the function before it fails. Default 120000. */
+  timeoutMs?: number
 }
 
 /** The `Error` every rejection carries. */
@@ -266,6 +279,8 @@ export interface OpenOptions {
   rowLimit?: number
   /** `'safe'` (default): `number` when exact, `bigint` otherwise. `'bigint'`: always `bigint`. */
   integers?: 'safe' | 'bigint'
+  /** Which instant an unprefixed statement reads on a graph with declared validity intervals: `'today'` (default), `'all'` (no valid-time filtering) or a fixed `'YYYY-MM-DD'` day. Runtime only; not saved with the graph. */
+  validTimeDefault?: string
 }
 
 /** Named parameters, referenced in Cypher as `$name`. */

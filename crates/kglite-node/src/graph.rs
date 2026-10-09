@@ -35,12 +35,15 @@ use kglite::api::session::{
     open_path, ExecuteOptions, ExecuteOutcome, OpenError, OpenSpec, QueryDefaults, Session,
 };
 use kglite::api::storage::StorageMode;
+use kglite::api::temporal::ValidTimeDefault;
+use kglite::api::Embedder;
 use kglite::api::{KgError, Value};
 use napi::bindgen_prelude::{Object, ToNapiValue};
 use napi::{sys, Env, JsValue, Unknown};
 use napi_derive::napi;
 
 use crate::contain;
+use crate::embedder::JsEmbedder;
 use crate::errors::{to_sync_error, JsErr, JsRes, CODE_CLOSED, CODE_NOT_DURABLE, CODE_READ_ONLY};
 use crate::pool::{self, Settle};
 use crate::tx::TxShared;
@@ -73,6 +76,8 @@ pub(crate) struct Inner {
     pub(crate) write_lock: Mutex<()>,
     /// Open transactions, so `close` can roll them back.
     pub(crate) txs: Mutex<Vec<Weak<TxShared>>>,
+    /// The JavaScript embedder from `setEmbedder`, handed to every query.
+    pub(crate) embedder: Mutex<Option<Arc<JsEmbedder>>>,
 }
 
 impl Inner {
@@ -109,6 +114,7 @@ struct OpenConfig {
     read_only: bool,
     defaults: QueryDefaults,
     ints: IntegerMode,
+    valid_time_default: Option<ValidTimeDefault>,
 }
 
 fn count(f: &FromJs, v: sys::napi_value, what: &str) -> JsRes<u64> {
@@ -174,6 +180,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
     let mut ints = IntegerMode::Safe;
     let mut read_only = false;
     let mut lock_explicit = false;
+    let mut valid_time_default = None;
     let known = [
         "durability",
         "storage",
@@ -182,6 +189,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
         "timeoutMs",
         "rowLimit",
         "integers",
+        "validTimeDefault",
     ];
     for (key, val) in option_entries(f, v, &known, "open option")? {
         match key.as_str() {
@@ -237,9 +245,14 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
                     }
                 };
             }
+            "validTimeDefault" => {
+                let text = expect_string(f, val, "validTimeDefault")?;
+                valid_time_default = Some(ValidTimeDefault::parse(&text).map_err(JsErr::arg)?);
+            }
             _ => unreachable!("filtered by option_entries"),
         }
     }
+    spec.valid_time_default = valid_time_default;
     if read_only && (spec.durability_explicit || spec.storage.is_some() || lock_explicit) {
         return Err(JsErr::arg(
             "readOnly cannot be combined with durability, storage or lockTimeoutMs: \
@@ -251,6 +264,7 @@ fn parse_open_options(f: &mut FromJs, v: Option<sys::napi_value>) -> JsRes<OpenC
         read_only,
         defaults,
         ints,
+        valid_time_default,
     })
 }
 
@@ -394,6 +408,12 @@ impl Inner {
         opts.deadline_origin = resolved.deadline_origin;
         opts.max_work_units = resolved.max_work_units;
         opts.row_limit = resolved.row_limit;
+        opts.embedder = self
+            .embedder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .map(|e| e as Arc<dyn Embedder>);
         opts
     }
 
@@ -727,13 +747,20 @@ fn open_writer(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         ints: config.ints,
         write_lock: Mutex::new(()),
         txs: Mutex::new(Vec::new()),
+        embedder: Mutex::new(None),
     })
 }
 
 /// A lease-less open: the last checkpoint on disk, with no write-ahead log read
 /// and nothing published back. It never creates the path.
 fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
-    let graph = load_file(path).map_err(|e| io_error(&e))?;
+    let mut graph = load_file(path).map_err(|e| io_error(&e))?;
+    if let Some(default) = config
+        .valid_time_default
+        .filter(|d| *d != graph.valid_time_default)
+    {
+        kglite::api::make_dir_graph_mut_preserving_lineage(&mut graph).valid_time_default = default;
+    }
     let warnings = graph
         .advisories
         .iter()
@@ -755,6 +782,7 @@ fn open_reader(path: &str, config: OpenConfig) -> Result<Inner, JsErr> {
         ints: config.ints,
         write_lock: Mutex::new(()),
         txs: Mutex::new(Vec::new()),
+        embedder: Mutex::new(None),
     })
 }
 

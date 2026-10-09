@@ -215,6 +215,18 @@ pub struct OpenOptions {
     /// `'safe'` (default): `number` when exact, `bigint` otherwise. `'bigint'`: always `bigint`.
     #[napi(ts_type = "'safe' | 'bigint'")]
     pub integers: Option<String>,
+    /// Which instant an unprefixed statement reads on a graph with declared validity intervals: `'today'` (default), `'all'` (no valid-time filtering) or a fixed `'YYYY-MM-DD'` day. Runtime only; not saved with the graph.
+    pub valid_time_default: Option<String>,
+}
+
+#[napi(object)]
+pub struct EmbedderOptions {
+    /// Vector width. Omitted: learned from the first vector the function returns (one probe call when a statement needs it up front).
+    pub dimension: Option<f64>,
+    /// Model identity stamped on stored embeddings; default is the registration name.
+    pub model_id: Option<String>,
+    /// How long one call may wait for the function before it fails. Default 120000.
+    pub timeout_ms: Option<f64>,
 }
 
 #[napi(object)]

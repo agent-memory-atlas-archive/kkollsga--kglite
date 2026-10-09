@@ -50,6 +50,7 @@ For the query language itself, see the [Cypher reference](../reference/cypher-re
 | `timeoutMs` | `180000` | Per-query deadline. `0` disables it. |
 | `rowLimit` | none | Per-query cap on returned rows. |
 | `integers` | `'safe'` | `'bigint'` returns every integer as a `bigint`. |
+| `validTimeDefault` | `'today'` | Instant an unprefixed statement reads on a graph with declared validity intervals: `'today'`, `'all'` (no valid-time filtering) or a `'YYYY-MM-DD'` day. Runtime only; not saved. Any other value rejects `InvalidArgument`. |
 
 Opening quarantines or repairs a damaged write-ahead log and can degrade the durability level. Each case adds a notice to `graph.openWarnings`.
 
@@ -257,6 +258,36 @@ A refused write rejects with `OntologyViolation`. The error carries:
 | `report` | Per-rule breakdown of a refused declaration, as `{ rule, entity, entityType, property, count }` entries. Empty for a refused write. |
 
 An `error`-level violation rolls the write back. In a transaction it rolls back the earlier statements too. A declaration over data that already breaks an `error` rule is refused, and the previous ontology stays.
+
+## Embedders
+
+`graph.setEmbedder(name, embed, options?)` registers a JavaScript function that turns text into vectors. Cypher then embeds text through it: `text_score(n, prop, 'query text')`, `db.embeddings.embed` and `db.embeddings.query({text})`.
+
+```js
+graph.setEmbedder('minilm', async (texts) => model.embed(texts), { dimension: 384 });
+await graph.executeWrite(`MATCH (d:Doc) WITH collect(d) AS docs
+  CALL db.embeddings.embed({type: 'Doc', text_column: 'text', nodes: docs}) YIELD embedded RETURN embedded`);
+const top = await graph.executeRead(
+  "MATCH (d:Doc) RETURN d.id AS id, text_score(d, 'text', $q) AS s ORDER BY s DESC LIMIT 5",
+  { q: 'how do I reset my password' },
+);
+```
+
+| Part | Behavior |
+|---|---|
+| `embed(texts)` | Takes `string[]`. Returns, or resolves to, one array (or typed array) of finite numbers per text. |
+| `name` | Registration label. It is the model identity stamped on stored embeddings unless `modelId` is set. |
+| `dimension` | Vector width. Omitted: learned from the first vector, with one probe call when a statement needs the width first. A vector of another width is an error. |
+| `modelId` | Model identity for provenance. Default is `name`. |
+| `timeoutMs` | How long one call may wait for the function. Default `120000`. |
+
+`graph.clearEmbedder(name?)` removes it and returns whether one was removed. With `name`, it removes only that registration. One embedder is active per graph; a second `setEmbedder` replaces the first. The embedder is not saved: register it again after every `open`.
+
+A function that throws, rejects, returns the wrong shape or the wrong width fails the query with a `KgliteError` (the statement's code, normally `CypherExecution`) naming the cause. The process stays up.
+
+- **Threads.** The engine calls the function from a pool thread, and the function runs on the JavaScript thread. The event loop stays free while an async embedder works.
+- **Deadlock limit.** A pool thread waits for each call. An embedder that itself awaits queries on the same graph, while every pool thread is waiting on embedders, cannot finish. The call ends after `timeoutMs` with an error. Keep the function free of graph calls.
+- **No synchronous path.** Embedding never runs on the JavaScript thread. Code that would reach it there fails with an error instead of hanging.
 
 ## Not in version 1
 

@@ -16,6 +16,7 @@ use napi_derive::napi;
 
 mod admin;
 mod classes;
+mod embedder;
 mod errors;
 mod graph;
 mod pool;
