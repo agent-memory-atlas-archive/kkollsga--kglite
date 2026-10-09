@@ -1,0 +1,398 @@
+name: Publish Node
+
+# Dispatched by release.yml's tag-release job with `--ref v<version>`, after it
+# creates the release tag. There is deliberately no `push: tags` trigger: the
+# tag is created with GITHUB_TOKEN, and events created with GITHUB_TOKEN never
+# trigger other workflows, so a tag trigger could only ever fire for a
+# hand-pushed tag and would double-publish alongside the dispatch.
+#
+# IMPORTANT: npm's trusted publisher for every kglite-node package is bound to
+# THIS FILE NAME. Renaming it breaks publication of all eight packages.
+#
+# Packages: `kglite-node` (loader + types) with optionalDependencies on seven
+# `kglite-node-<platform>` packages, each carrying one .node. Install-time
+# prebuilds only; there is no postinstall compile.
+#
+# Release-time verification (the `release` skill): until the repository
+# variable NPM_PUBLISH_ENABLED is 'true', a release that publishes no npm
+# package is the expected outcome and not a failure.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm even if NPM_PUBLISH_ENABLED is unset (first publication). Only takes effect when the workflow runs on a v* tag.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# The published natives build on the toolchain CI tests; bump with ci.yml's pin.
+env:
+  RUST_STABLE: "1.98.0"
+
+jobs:
+  version-check:
+    name: Version check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Read the workspace version and check it against the tag
+        id: read
+        # The npm version comes from [workspace.package] in Cargo.toml, never
+        # from the tag. Publishing v0.19.6 from a tree that still says 0.19.5
+        # would publish a version under the wrong number, permanently: npm
+        # never lets a version be re-used, even after unpublish.
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m 1 '^version' Cargo.toml | cut -d '"' -f 2)
+          # The pipeline reports cut's status, which is always 0, so a grep
+          # matching nothing yields an empty VERSION and every comparison below
+          # becomes meaningless. Assert it looks like a version first.
+          if ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+'; then
+            echo "::error::could not read a version from Cargo.toml (got '$VERSION')"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $VERSION"
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "building kglite-node $VERSION"
+
+  # Seven natives on native runners, every leg must pass: a partial platform
+  # set is a broken install for the missing platform, so no leg is
+  # best-effort and nothing here is emulated.
+  #
+  # Linux builds on 22.04, not `ubuntu-latest`: an addon linked against a newer
+  # glibc than the deployment has fails at require() time in the user's
+  # application. 22.04 puts the floor at glibc 2.35, asserted per gnu leg
+  # below. The musl legs build inside node:22-alpine via `docker run` on the
+  # native-arch runner (JS actions cannot run inside an alpine job container).
+  # If a musl build ever needs a cross toolchain, `napi build --zig` is the
+  # fallback; it is not used while the native path works.
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [version-check]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            node_arch: arm64
+          # Cross-compiled from the arm64 runner; the smoke runs under Rosetta
+          # with an x64 Node (second setup-node step).
+          - platform: darwin-x64
+            runner: macos-14
+            target: x86_64-apple-darwin
+            node_arch: x64
+          - platform: linux-x64-gnu
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            node_arch: x64
+            glibc_floor: '2.35'
+          - platform: linux-arm64-gnu
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            node_arch: arm64
+            glibc_floor: '2.35'
+          - platform: linux-x64-musl
+            runner: ubuntu-22.04
+            musl: true
+            node_arch: x64
+          - platform: linux-arm64-musl
+            runner: ubuntu-22.04-arm
+            musl: true
+            node_arch: arm64
+          - platform: win32-x64-msvc
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            node_arch: x64
+    env:
+      VERSION: ${{ needs.version-check.outputs.version }}
+      ADDON: kglite-node.${{ matrix.platform }}.node
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        if: ${{ !matrix.musl }}
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: ${{ matrix.target }}
+
+      - name: Set up Node 22
+        if: ${{ !matrix.musl }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+
+      - name: Cache cargo registry + target
+        if: ${{ !matrix.musl }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: node-native-${{ matrix.platform }}
+
+      - name: Build the addon (release, no test-hooks)
+        if: ${{ !matrix.musl }}
+        shell: bash
+        working-directory: crates/kglite-node
+        # No `--features`: the `test-hooks` feature (exports __panic) must never
+        # be in a published addon. The smoke step proves it is absent.
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx napi build --platform --release --target "${{ matrix.target }}"
+
+      - name: Build the addon in Alpine (release, no test-hooks)
+        if: ${{ matrix.musl }}
+        # Native arch inside node:22-alpine, so the result links against musl
+        # without emulation. -crt-static is required for a cdylib on musl.
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e RUST_STABLE -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            -e RUSTFLAGS="-C target-feature=-crt-static" \
+            -v "$PWD:/work" -w /work/crates/kglite-node \
+            node:22-alpine sh -euc '
+              apk add --no-cache build-base curl git
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_STABLE"
+              . "$HOME/.cargo/env"
+              npm install --no-audit --no-fund
+              npx napi build --platform --release
+              chown -R "$HOST_UID:$HOST_GID" /work/target /work/crates/kglite-node
+            '
+
+      - name: Assert the glibc floor
+        if: ${{ matrix.glibc_floor }}
+        working-directory: crates/kglite-node
+        run: |
+          set -euo pipefail
+          need=$(objdump -T "$ADDON" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "highest glibc symbol version required: $need (floor ${{ matrix.glibc_floor }})"
+          test -n "$need"
+          test "$(printf '%s\n%s\n' "$need" "${{ matrix.glibc_floor }}" | sort -V | tail -1)" = "${{ matrix.glibc_floor }}"
+
+      - name: Set up x64 Node for the Rosetta smoke
+        if: ${{ matrix.platform == 'darwin-x64' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          architecture: x64
+
+      - name: Smoke-test the built addon on its own platform
+        if: ${{ !matrix.musl }}
+        shell: bash
+        working-directory: crates/kglite-node
+        env:
+          KGLITE_NODE_BINARY: ${{ env.ADDON }}
+        # Loads the addon just built, on its own OS and architecture, and fails
+        # if it exports the test-only __panic hook or contains its message.
+        run: |
+          set -euo pipefail
+          test "$(node -p process.arch)" = "${{ matrix.node_arch }}"
+          node scripts/smoke.cjs "$VERSION" ./index.js
+
+      - name: Smoke-test the built addon in Alpine
+        if: ${{ matrix.musl }}
+        run: |
+          set -euo pipefail
+          docker run --rm -e KGLITE_NODE_BINARY="$ADDON" -v "$PWD:/work" -w /work/crates/kglite-node \
+            node:22-alpine sh -euc '
+              test "$(node -p process.arch)" = "${{ matrix.node_arch }}"
+              node scripts/smoke.cjs "'"$VERSION"'" ./index.js
+            '
+
+      - name: Upload the addon
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: node-native-${{ matrix.platform }}
+          path: crates/kglite-node/${{ env.ADDON }}
+          # `error`: a build that exits 0 without producing an addon would
+          # otherwise upload nothing and let a platform go missing silently.
+          if-no-files-found: error
+
+  pack:
+    name: Pack tarballs
+    needs: [version-check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+
+      - name: Download every platform's addon
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: node-native-*
+          path: natives
+
+      - name: Stage and pack the main package and the seven platform packages
+        # Versions are stamped from [workspace.package] here, never hand-written.
+        # stage-packages.mjs fails unless every napi target has its addon.
+        run: |
+          set -euo pipefail
+          (cd crates/kglite-node && npm install --no-audit --no-fund)
+          node crates/kglite-node/scripts/stage-packages.mjs "${{ needs.version-check.outputs.version }}" natives tarballs
+
+      - name: Upload the tarballs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: node-tarballs
+          path: tarballs/*.tgz
+          if-no-files-found: error
+
+  # AC1: installing needs no toolchain. Each leg is a clean container with no
+  # compiler on a native-arch runner; verify-offline.sh asserts that first,
+  # installs the packed tarballs with --offline, and runs the smoke.
+  verify:
+    name: Verify install (${{ matrix.name }})
+    needs: [version-check, pack]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: slim-amd64
+            runner: ubuntu-22.04
+            image: node:22-slim
+            expect: kglite-node-linux-x64-gnu
+          - name: slim-arm64
+            runner: ubuntu-22.04-arm
+            image: node:22-slim
+            expect: kglite-node-linux-arm64-gnu
+          - name: alpine-amd64
+            runner: ubuntu-22.04
+            image: node:22-alpine
+            expect: kglite-node-linux-x64-musl
+          - name: alpine-arm64
+            runner: ubuntu-22.04-arm
+            image: node:22-alpine
+            expect: kglite-node-linux-arm64-musl
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download the tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: node-tarballs
+          path: tarballs
+
+      - name: Install the tarballs in a toolchain-free container and smoke
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/crates/kglite-node/scripts:/scripts:ro" -v "$PWD/tarballs:/tarballs:ro" \
+            "${{ matrix.image }}" \
+            sh /scripts/verify-offline.sh /tarballs "${{ needs.version-check.outputs.version }}" "${{ matrix.expect }}"
+
+  # --- publication ---------------------------------------------------------
+  #
+  # Gated on the repository variable NPM_PUBLISH_ENABLED (or the dispatch
+  # input, for the first publication) and only ever from a v* tag, so a branch
+  # dispatch builds and verifies but cannot publish. A repository *variable*,
+  # not a secret: the value is not sensitive and shows in the run, so "why did
+  # this not publish?" is answerable from the run itself.
+  #
+  # Authentication is npm trusted publishing (OIDC): no token. Each of the
+  # eight packages needs a trusted publisher bound to this workflow file.
+  publish:
+    name: Publish to npm
+    needs: [version-check, build, pack, verify]
+    if: ${{ (vars.NPM_PUBLISH_ENABLED == 'true' || inputs.publish) && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.version-check.outputs.version }}
+    steps:
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install npm >= 11.5.1 (trusted publishing)
+        run: |
+          set -euo pipefail
+          npm install -g npm@11
+          have=$(npm --version)
+          echo "npm $have"
+          test "$(printf '%s\n11.5.1\n' "$have" | sort -V | head -1)" = "11.5.1"
+
+      - name: Download the tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: node-tarballs
+          path: tarballs
+
+      - name: Publish the platform packages, then the main package
+        # Platform packages first: the main package's optionalDependencies pin
+        # them, so publishing it first would leave a window where it cannot
+        # install. A version that is already on the registry is skipped, which
+        # makes re-running a half-finished publish safe; any other `npm view`
+        # error fails the step.
+        run: |
+          set -euo pipefail
+          cd tarballs
+          ls -l
+          publish_one() {
+            tgz=$1
+            name=$(tar -xzOf "$tgz" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")
+            if out=$(npm view "$name@$VERSION" version 2>&1); then
+              echo "$name@$VERSION is already published; skipping"
+              return 0
+            fi
+            case "$out" in
+              *E404*) ;;
+              *) echo "::error::npm view $name@$VERSION failed: $out"; exit 1 ;;
+            esac
+            npm publish "$tgz" --provenance --access public
+          }
+          count=0
+          for tgz in kglite-node-*-"$VERSION".tgz; do
+            publish_one "$tgz"
+            count=$((count + 1))
+          done
+          if [ "$count" -ne 7 ]; then
+            echo "::error::expected 7 platform tarballs, found $count"
+            exit 1
+          fi
+          publish_one "kglite-node-$VERSION.tgz"
+
+  publish-skipped:
+    name: Report why publication was skipped
+    needs: [version-check, build, pack, verify]
+    if: ${{ !((vars.NPM_PUBLISH_ENABLED == 'true' || inputs.publish) && startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain
+        # A skipped job shows as a grey tick and explains nothing. The packages
+        # were still built, verified and uploaded, so the run is green.
+        run: |
+          echo "::notice::kglite-node packages built and verified but NOT published."
+          echo "Publishing needs a v* tag ref and either NPM_PUBLISH_ENABLED=true or the publish input."
+          echo "See the comments in .github/workflows/publish_node.yml."

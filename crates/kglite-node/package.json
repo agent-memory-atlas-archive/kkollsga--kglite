@@ -1,7 +1,7 @@
 {
   "name": "kglite-node",
   "version": "0.0.0-dev",
-  "description": "Node.js binding for kglite. The version here is a placeholder: the publish workflow stamps it from [workspace.package] in the root Cargo.toml.",
+  "description": "Node.js binding for kglite, the embedded graph database with Cypher.",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "MIT",

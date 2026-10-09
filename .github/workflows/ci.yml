@@ -1350,6 +1350,51 @@ jobs:
           KGLITE_JAVA_PARITY: '1'
         run: .venv/bin/pytest tests/test_java_python_embedding_parity.py -v --tb=short
 
+  kglite-node:
+    needs: [dedup]
+    if: needs.dedup.outputs.fresh == 'true'
+    name: kglite-node (Node binding)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The Node addon's only CI home on push/PR. publish_node.yml builds the
+    # release artifacts; this job is the correctness gate and, like the Java
+    # job, builds in the debug profile so the engine's debug assertions stay
+    # live. It builds WITH the `test-hooks` feature (exports __panic) because
+    # the suite proves panic containment through it; that feature is never in a
+    # published build (publish_node.yml asserts it).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+
+      - name: Set up Node 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: kglite-node
+          workspaces: ". -> target"
+
+      - name: Install the Node toolchain (napi CLI)
+        working-directory: crates/kglite-node
+        run: npm install --no-audit --no-fund
+
+      - name: Build the addon (debug, test-hooks)
+        working-directory: crates/kglite-node
+        run: npx napi build --platform --features test-hooks
+
+      - name: Run the Node binding suite
+        run: node --test 'crates/kglite-node/__test__/*.test.mjs'
+
+      # Cross-binding parity leg (lean wheel + bolt server, KGLITE_NODE_PARITY=1
+      # so a missing toolchain is a failure and not a skip) is added here by
+      # the parity phase, after the step above.
+
   ci-success:
     name: CI success
     # Single aggregate gate the publish workflows wait on. It fails if ANY CI
@@ -1374,6 +1419,7 @@ jobs:
       - rustsec-audit
       - kglite-c
       - kglite-java
+      - kglite-node
       - python-lint
       - python-tests
       - bolt-driver-conformance

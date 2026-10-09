@@ -96,6 +96,8 @@ REQUIRED_JOBS = {
     # regenerates both sides, so a renumber slips past it. Its loss would be
     # exactly the silent guarantee-disappearance this set guards against.
     "kglite-java",
+    # The Node addon's only CI home on push/PR (debug build, test-hooks suite).
+    "kglite-node",
 }
 
 
@@ -2221,7 +2223,7 @@ def test_parity_execution_guard_rejects_missing_owner_or_target(monkeypatch, rem
 #: Workflows whose output is a published artifact. Their Rust toolchain must be
 #: the one CI tests: a floating `stable` let 0.19.3 ship from rustc 1.99 while
 #: every CI job ran 1.98.
-SHIPPING_WORKFLOWS = ("release.yml", "publish_java.yml")
+SHIPPING_WORKFLOWS = ("release.yml", "publish_java.yml", "publish_node.yml")
 PINNED_TOOLCHAIN = "${{ env.RUST_STABLE }}"
 
 
@@ -2244,7 +2246,7 @@ def test_shipped_artifacts_build_on_the_pinned_toolchain() -> None:
                 assert step.get("with", {}).get(key) == PINNED_TOOLCHAIN, (
                     f"{name} `{job_name}` builds with {step.get('with', {}).get(key)!r}, not {PINNED_TOOLCHAIN}"
                 )
-    assert checked >= 9, f"found only {checked} toolchain installs across {SHIPPING_WORKFLOWS}; the scan is broken"
+    assert checked >= 10, f"found only {checked} toolchain installs across {SHIPPING_WORKFLOWS}; the scan is broken"
 
 
 def test_perf_ab_pin_legs_build_on_the_pinned_toolchain() -> None:
@@ -2407,3 +2409,210 @@ def test_perf_bisect_measures_only_published_wheels_in_isolation() -> None:
     assert "if missing or uneven or not names:" in summary["run"]
     (upload,) = _steps_using(job, "actions/upload-artifact@")
     assert upload.get("if") == "always()" and upload["with"]["if-no-files-found"] == "error"
+
+
+# --- the Node artifact: CI job and publish workflow --------------------------
+#
+# `publish_node.yml` ships eight npm packages (a loader plus seven per-platform
+# addons). Its silent failure modes: a platform leg that is allowed to fail (a
+# partial set is a broken install for that platform), the `test-hooks` feature
+# reaching a published addon, publication outrunning the gate, and an install
+# check that passes on a machine that had a compiler after all.
+
+NODE_PATH = WORKFLOWS / "publish_node.yml"
+NODE = _load_workflow(NODE_PATH)
+NODE_CRATE = REPO_ROOT / "crates" / "kglite-node"
+NODE_PUBLISH_GATE = "vars.NPM_PUBLISH_ENABLED == 'true' || inputs.publish"
+
+#: napi target triple -> platform package suffix, the names the loader requires.
+NODE_PLATFORMS = {
+    "aarch64-apple-darwin": "darwin-arm64",
+    "x86_64-apple-darwin": "darwin-x64",
+    "x86_64-unknown-linux-gnu": "linux-x64-gnu",
+    "aarch64-unknown-linux-gnu": "linux-arm64-gnu",
+    "x86_64-unknown-linux-musl": "linux-x64-musl",
+    "aarch64-unknown-linux-musl": "linux-arm64-musl",
+    "x86_64-pc-windows-msvc": "win32-x64-msvc",
+}
+
+
+def _node_job(name: str) -> _Job:
+    return _job(NODE, "publish_node.yml", name)
+
+
+def _node_package_json() -> dict:
+    import json
+
+    return json.loads((NODE_CRATE / "package.json").read_text(encoding="utf-8"))
+
+
+def _all_node_steps() -> list[tuple[str, dict]]:
+    return [(job_name, step) for job_name, job in NODE["jobs"].items() for step in _steps(job)]
+
+
+def test_node_ci_leg_is_a_blocking_gate() -> None:
+    """The kglite-node job builds the addon in debug and runs the suite.
+
+    Debug keeps the engine's debug assertions live; `test-hooks` is what the
+    panic-containment test needs. Neither step may tolerate failure at step or
+    job level, or the suite becomes decorative. `ci-success` wiring is covered
+    by the derived `test_ci_success_needs_every_job_defined_in_ci_yml`.
+    """
+    job = _ci_job("kglite-node")
+    assert _steps_using(job, "actions/setup-node@"), "kglite-node sets up no Node"
+    assert _steps_using(job, "dtolnay/rust-toolchain"), "kglite-node installs no Rust"
+    _assert_runs(job, "npx napi build --platform --features test-hooks")
+    _assert_runs(job, "node --test 'crates/kglite-node/__test__/*.test.mjs'")
+    build_step = _step_running(job, "npx napi build --platform --features test-hooks")
+    suite_step = _step_running(job, "node --test 'crates/kglite-node/__test__/*.test.mjs'")
+    assert "--release" not in build_step["run"], "the CI correctness build must stay debug"
+    assert _steps(job).index(build_step) < _steps(job).index(suite_step)
+    assert job.get("continue-on-error") is None, "job-level continue-on-error makes every gate inside it decorative"
+    assert [s for s in _steps(job) if s.get("continue-on-error") is True] == []
+    assert "kglite-node" in _ci_job("ci-success")["needs"]
+
+
+def test_node_matrix_builds_exactly_the_napi_targets_on_native_runners() -> None:
+    """One leg per napi target, all native, none tolerated, glibc floor pinned."""
+    targets = set(_node_package_json()["napi"]["targets"])
+    assert targets == set(NODE_PLATFORMS), (
+        f"package.json napi.targets {sorted(targets)} and NODE_PLATFORMS disagree; update both together"
+    )
+    build = _node_job("build")
+    legs = build["strategy"]["matrix"]["include"]
+    assert {leg["platform"] for leg in legs} == set(NODE_PLATFORMS.values())
+    assert len(legs) == len(NODE_PLATFORMS)
+    for leg in legs:
+        assert leg["runner"].startswith(("macos-", "ubuntu-22.04", "windows-")), leg
+        if leg["platform"].startswith("linux-"):
+            assert leg["runner"].startswith("ubuntu-22.04"), f"{leg['platform']} must pin the glibc floor image"
+        if leg["platform"].endswith("-gnu"):
+            assert leg.get("glibc_floor") == "2.35", f"{leg['platform']} does not assert the glibc floor"
+        if leg["platform"].endswith("-musl"):
+            assert leg.get("musl") is True
+    assert "fail-fast" in build["strategy"] and build["strategy"]["fail-fast"] is False
+    text = NODE_PATH.read_text(encoding="utf-8")
+    for emulation in ("setup-qemu", "qemu-user", "--platform linux/"):
+        assert emulation not in text, f"publish_node.yml emulates ({emulation}); legs must be native"
+
+
+def test_node_workflow_tolerates_no_failure_anywhere() -> None:
+    """Every leg is must-pass: a partial platform set breaks that platform's installs."""
+    for job_name, job in NODE["jobs"].items():
+        assert job.get("continue-on-error") is None, f"publish_node.yml `{job_name}` tolerates failure"
+    assert [(j, s.get("name")) for j, s in _all_node_steps() if "continue-on-error" in s] == []
+
+
+def test_node_published_builds_exclude_test_hooks_and_prove_it() -> None:
+    """`test-hooks` exports `__panic`; it must not be in any published addon.
+
+    The release build must not request the feature, and every leg must run the
+    smoke that fails when `__panic` is exported or its message is in the binary.
+    """
+    for job_name, step in _all_node_steps():
+        blob = " ".join([str(step.get("run", "")), str(step.get("with", "")), str(step.get("env", ""))])
+        assert "--features" not in blob and "-F " not in blob and "all-features" not in blob, (
+            f"publish_node.yml `{job_name}` step {step.get('name')!r} selects cargo features; "
+            "published addons build with the default feature set"
+        )
+    build = _node_job("build")
+    builds = [s for s in _steps(build) if any("napi build" in line for line in _step_commands(s))]
+    assert len(builds) == 2, "expected one native and one Alpine addon build step"
+    for step in builds:
+        assert any("napi build --platform --release" in line for line in _step_commands(step)), step.get("name")
+    smokes = [s for s in _steps(build) if any("node scripts/smoke.cjs" in line for line in _step_commands(s))]
+    assert {s.get("if") for s in smokes} == {"${{ !matrix.musl }}", "${{ matrix.musl }}"}, (
+        "the smoke must run on both the native and the Alpine legs"
+    )
+    for step in smokes:
+        assert "continue-on-error" not in step
+    uploads = _steps_using(build, "actions/upload-artifact@")
+    assert len(uploads) == 1
+    steps = _steps(build)
+    assert max(steps.index(s) for s in smokes) < steps.index(uploads[0]), "the smoke must run before the upload"
+    smoke_src = (NODE_CRATE / "scripts" / "smoke.cjs").read_text(encoding="utf-8")
+    assert "'__panic' in addon" in smoke_src and "deliberate test panic" in smoke_src
+    lib_src = (NODE_CRATE / "src" / "lib.rs").read_text(encoding="utf-8")
+    assert "deliberate test panic" in lib_src, "the byte-level check names a message the hook no longer carries"
+
+
+def test_node_install_is_verified_without_a_toolchain_on_both_architectures() -> None:
+    """AC1: a clean amd64 and arm64 container installs the packed tarballs offline."""
+    verify = _node_job("verify")
+    legs = verify["strategy"]["matrix"]["include"]
+    pairs = {(leg["image"], leg["runner"]) for leg in legs}
+    assert pairs == {
+        ("node:22-slim", "ubuntu-22.04"),
+        ("node:22-slim", "ubuntu-22.04-arm"),
+        ("node:22-alpine", "ubuntu-22.04"),
+        ("node:22-alpine", "ubuntu-22.04-arm"),
+    }
+    assert {leg["expect"] for leg in legs} == {
+        f"kglite-node-{p}" for p in NODE_PLATFORMS.values() if p.startswith("linux-")
+    }
+    script = (NODE_CRATE / "scripts" / "verify-offline.sh").read_text(encoding="utf-8")
+    lines = list(_logical_lines(script))
+    install = next(i for i, line in enumerate(lines) if line.startswith("npm install --offline"))
+    absent = next(
+        i for i, line in enumerate(lines) if line.startswith("for tool in") and "cargo" in line and " cc " in line
+    )
+    assert absent < install, "toolchain absence must be asserted before the install"
+    assert any("exit 1" in line for line in lines[absent : absent + 6])
+    assert any(line.startswith("node smoke.cjs") for line in lines)
+    assert not any(line.startswith("npm install") and "--offline" not in line for line in lines)
+
+
+def test_node_publication_is_gated_ordered_and_tokenless() -> None:
+    """Publish only from a v* tag under the variable/input gate, platforms before main."""
+    publish = _node_job("publish")
+    cond = str(publish.get("if"))
+    assert NODE_PUBLISH_GATE in cond and "startsWith(github.ref, 'refs/tags/v')" in cond, cond
+    assert set(publish["needs"]) >= {"version-check", "build", "pack", "verify"}
+    assert publish["permissions"].get("id-token") == "write"
+    assert "NODE_AUTH_TOKEN" not in NODE_PATH.read_text(encoding="utf-8"), "publishing must use trusted publishing"
+    for job_name, job in NODE["jobs"].items():
+        if job_name != "publish":
+            assert "id-token" not in (job.get("permissions") or {}), f"`{job_name}` has an OIDC token it does not need"
+            publishing = [s for s in _steps(job) if any("npm publish" in c for c in _step_commands(s))]
+            assert publishing == [], f"`{job_name}` publishes outside the gated job"
+    commands = _command_lines(publish)
+    assert any(c.startswith("npm publish") and "--provenance" in c and "--access public" in c for c in commands)
+    assert not any(c.startswith("npm publish") and "--dry-run" in c for c in commands)
+    loop = next(i for i, c in enumerate(commands) if c.startswith("for tgz in kglite-node-*-"))
+    main = next(i for i, c in enumerate(commands) if c == 'publish_one "kglite-node-$VERSION.tgz"')
+    assert loop < main, "the main package must be published after every platform package"
+    assert any(c.startswith("npm install -g npm@") for c in commands)
+    assert "11.5.1" in "\n".join(commands), "the npm >= 11.5.1 floor is not asserted"
+    skipped = _node_job("publish-skipped")
+    assert NODE_PUBLISH_GATE in str(skipped.get("if")), "the skip notice must be the exact complement of the gate"
+
+
+def test_node_tag_and_workspace_version_cannot_disagree() -> None:
+    check = _node_job("version-check")
+    steps = [s for s in _steps(check) if any("GITHUB_REF_NAME" in c for c in _step_commands(s))]
+    assert len(steps) == 1
+    commands = _step_commands(steps[0])
+    joined = "\n".join(commands)
+    assert SEMVER_GUARD in joined
+    assert any("$VERSION" in c and "$TAG_VERSION" in c and "!=" in c for c in commands), joined
+    assert commands.count("exit 1") >= 2, joined
+
+
+def test_node_artifact_uploads_cannot_be_empty() -> None:
+    uploads = _upload_steps(NODE)
+    assert len(uploads) >= 2, "publish_node.yml uploads nothing — the scan is broken"
+    for job_name, step in uploads:
+        assert (step.get("with") or {}).get("if-no-files-found") == "error", job_name
+
+
+def test_node_publish_is_dispatched_by_the_release_train_on_the_tag() -> None:
+    tag_release = _release_job("tag-release")
+    dispatches = [c for c in _command_lines(tag_release) if "publish_node.yml" in c]
+    assert len(dispatches) == 1, dispatches
+    assert dispatches[0].startswith("gh workflow run publish_node.yml")
+    assert '--ref "v${{ needs.version-check.outputs.version }}"' in dispatches[0], (
+        "the Node publish must run on the release tag, not on whatever main has become"
+    )
+    assert tag_release["permissions"].get("actions") == "write"
+    triggers = NODE.get("on", NODE.get(True))
+    assert set(triggers) == {"workflow_dispatch"}, "a tag trigger would double-publish next to the dispatch"

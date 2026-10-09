@@ -2,7 +2,7 @@ name: Release
 # The single push-to-main release pipeline: one version decision, five
 # crates.io publishes, two PyPI distributions (`kglite` wheels + sdist, and the
 # standalone `kglite-cli` binary wheels), and — only if the whole set shipped —
-# the `v<version>` tag, the GitHub Release, and the Java publish dispatch.
+# the `v<version>` tag, the GitHub Release, and the Java and Node publish dispatches.
 #
 # Merged from publish_crates.yml + build_wheels.yml + build_cli_wheels.yml
 # (2026-08-30). Those three each re-derived the version from Cargo.toml, each
@@ -911,7 +911,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-      actions: write  # Dispatch publish_java.yml (tag events from GITHUB_TOKEN can't)
+      actions: write  # Dispatch publish_java.yml / publish_node.yml (tag events from GITHUB_TOKEN can't)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download the published wheels for the release assets
@@ -964,5 +964,15 @@ jobs:
         # explicitly. publish_java.yml's own gates (tag-vs-Cargo.toml,
         # JAVA_CENTRAL_PUBLISH_ENABLED) still decide whether it deploys.
         run: gh workflow run publish_java.yml --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Dispatch Node publish
+        # Same GITHUB_TOKEN recursion guard as the Java dispatch above. Run on
+        # the release tag itself (`--ref`), so the packages are built from the
+        # exact tagged tree and publish_node.yml's tag-vs-Cargo.toml check is
+        # meaningful. Its own gates (NPM_PUBLISH_ENABLED, v* tag ref) still
+        # decide whether it publishes; the trusted publisher on npm is bound to
+        # the workflow file name publish_node.yml.
+        run: gh workflow run publish_node.yml --repo "$GITHUB_REPOSITORY" --ref "v${{ needs.version-check.outputs.version }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
