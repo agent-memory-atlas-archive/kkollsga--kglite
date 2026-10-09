@@ -605,7 +605,7 @@ The verb is off until the server starts with `--backup-dir`. Without it, `db.bac
 | Flag | Meaning |
 |---|---|
 | `--backup-dir DIR` | Enables `db.backup()`. Clients pass a bare file name and the server writes `DIR/<name>`. `DIR` is created if missing. |
-| `--backup-allow-any-path` | Lets clients name any path the server can write. Refused at startup with `--auth none`. With `--backup-dir` also set, bare names still land in `DIR` and only absolute paths go elsewhere. |
+| `--backup-allow-any-path` | Lets clients name any path the server can write. Refused at startup with `--auth none`. With `--backup-dir` also set, bare names still land in `DIR` and only absolute paths go elsewhere. On Windows a path with a root but no drive (`\x.kgl`) is refused as ambiguous. |
 | `--backup-interval SECS` | Writes a backup into `--backup-dir` every `SECS` seconds. Requires `--backup-dir`. |
 | `--backup-keep N` | Keeps only the newest `N` scheduled backups. Requires `--backup-interval`; `N` is at least 1. |
 

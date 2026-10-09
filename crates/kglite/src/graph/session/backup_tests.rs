@@ -428,9 +428,46 @@ fn a_disk_graph_is_refused_with_the_reason() {
     assert!(!backup.exists());
 }
 
-#[cfg(unix)]
+/// Create a file symlink; `false` (with a visible message) when Windows
+/// refuses it for lack of the symlink privilege, so the skip shows in the log.
+fn try_symlink(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    match made {
+        Ok(()) => true,
+        Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "SKIPPED: cannot create a symlink ({e}); enable Developer Mode or run \
+                 elevated to exercise the symlink-alias refusal on Windows"
+            );
+            false
+        }
+        Err(e) => panic!("symlink {} -> {}: {e}", link.display(), target.display()),
+    }
+}
+
 #[test]
-fn a_symlink_or_hardlink_to_the_live_graph_is_refused_but_other_links_are_replaced() {
+fn a_hardlink_to_the_live_graph_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("g.kgl");
+    let session = in_mode(StorageMode::Memory);
+    populate(&session);
+    session.save(live.to_str().unwrap(), true).unwrap();
+    let opts = BackupOptions {
+        live_path: Some(live.clone()),
+    };
+    let before = std::fs::read(&live).unwrap();
+    let hard = dir.path().join("hard.kgl");
+    std::fs::hard_link(&live, &hard).unwrap();
+    let message = refused(session.backup(&hard, &opts));
+    assert!(message.contains("hardlink"), "{message}");
+    assert_eq!(std::fs::read(&live).unwrap(), before);
+}
+
+#[test]
+fn a_symlink_to_the_live_graph_is_refused_but_other_links_are_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("g.kgl");
     let session = in_mode(StorageMode::Memory);
@@ -442,21 +479,18 @@ fn a_symlink_or_hardlink_to_the_live_graph_is_refused_but_other_links_are_replac
     let before = std::fs::read(&live).unwrap();
 
     let sym = dir.path().join("sym.kgl");
-    std::os::unix::fs::symlink(&live, &sym).unwrap();
+    if !try_symlink(&live, &sym) {
+        return;
+    }
     let message = refused(session.backup(&sym, &opts));
     assert!(message.contains("symlink"), "{message}");
-
-    let hard = dir.path().join("hard.kgl");
-    std::fs::hard_link(&live, &hard).unwrap();
-    let message = refused(session.backup(&hard, &opts));
-    assert!(message.contains("hardlink"), "{message}");
     assert_eq!(std::fs::read(&live).unwrap(), before);
 
     // A symlink to an unrelated file is still replaced by the atomic publish.
     let other = dir.path().join("other.kgl");
     std::fs::write(&other, b"unrelated").unwrap();
     let ok = dir.path().join("ok.kgl");
-    std::os::unix::fs::symlink(&other, &ok).unwrap();
+    assert!(try_symlink(&other, &ok));
     session.backup(&ok, &opts).unwrap();
     assert!(!std::fs::symlink_metadata(&ok)
         .unwrap()
@@ -465,7 +499,6 @@ fn a_symlink_or_hardlink_to_the_live_graph_is_refused_but_other_links_are_replac
     assert_eq!(std::fs::read(&other).unwrap(), b"unrelated");
 }
 
-#[cfg(unix)]
 #[test]
 fn a_durable_session_refuses_a_symlink_to_its_checkpoint_without_a_live_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -474,21 +507,29 @@ fn a_durable_session_refuses_a_symlink_to_its_checkpoint_without_a_live_path() {
     populate(&session);
     session.save(live.to_str().unwrap(), true).unwrap();
     let sym = dir.path().join("sym.kgl");
-    std::os::unix::fs::symlink(&live, &sym).unwrap();
+    if !try_symlink(&live, &sym) {
+        return;
+    }
     let message = refused(session.backup(&sym, &BackupOptions::default()));
     assert!(message.contains("symlink"), "{message}");
 }
 
-#[cfg(unix)]
 #[test]
 fn stale_destination_temps_are_reaped_and_live_ones_kept() {
     let session = in_mode(StorageMode::Memory);
     populate(&session);
     let dir = tempfile::tempdir().unwrap();
     let backup = dir.path().join("backup.kgl");
+    #[cfg(unix)]
     let mut child = std::process::Command::new("true").spawn().unwrap();
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", "exit 0"])
+        .spawn()
+        .unwrap();
     let dead_pid = child.id();
     child.wait().unwrap();
+    drop(child);
     let stale = dir.path().join(format!("backup.kgl.tmp.{dead_pid}.7"));
     let mine = dir
         .path()

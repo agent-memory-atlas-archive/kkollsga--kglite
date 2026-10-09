@@ -80,6 +80,10 @@ fn a_checkpoint_syncs_the_file_then_its_directory_entry_before_cutting_the_log()
 }
 
 /// A checkpoint whose rename cannot be made durable must not cut the log.
+///
+/// Unix-only: Windows has no directory fsync (a directory cannot be opened for
+/// sync, and a rename is made durable by the filesystem), and the failure is
+/// provoked with a mode-0o300 directory, which Windows has no equivalent of.
 #[cfg(unix)]
 #[test]
 fn a_checkpoint_that_cannot_sync_its_directory_keeps_the_log() {

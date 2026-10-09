@@ -86,6 +86,14 @@ impl BackupPolicy {
                     return Err("backup name contains a NUL byte".to_string());
                 }
                 let path = Path::new(name);
+                // Rooted without a drive (`\x.kgl`, Windows only) resolves against the
+                // current drive of whichever process runs, so it names no one place.
+                if path.has_root() && !path.is_absolute() {
+                    return Err(format!(
+                        "invalid backup name {name:?}: a path with a root but no drive is \
+                         ambiguous; give a full path such as 'C:\\backups\\x.kgl'"
+                    ));
+                }
                 match dir {
                     Some(dir) if !path.is_absolute() => {
                         validate_bare_name(name)?;
@@ -496,9 +504,11 @@ mod tests {
     fn backup_allow_any_path_takes_absolute_paths_but_dir_names_stay_bare() {
         let (dir, _) = dir_policy();
         let policy = BackupPolicy::from_flags(Some(dir.path()), true, false).unwrap();
+        let absolute = std::env::temp_dir().join("x.kgl");
+        assert!(absolute.is_absolute());
         assert_eq!(
-            policy.resolve("/var/backups/x.kgl").unwrap(),
-            PathBuf::from("/var/backups/x.kgl")
+            policy.resolve(absolute.to_str().unwrap()).unwrap(),
+            absolute
         );
         assert!(policy.resolve("../x.kgl").is_err());
         let bare = BackupPolicy::from_flags(None, true, false).unwrap();
@@ -506,6 +516,19 @@ mod tests {
             bare.resolve("rel/x.kgl").unwrap(),
             PathBuf::from("rel/x.kgl")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn backup_allow_any_path_refuses_a_rooted_path_without_a_drive() {
+        let (dir, _) = dir_policy();
+        for policy in [
+            BackupPolicy::from_flags(Some(dir.path()), true, false).unwrap(),
+            BackupPolicy::from_flags(None, true, false).unwrap(),
+        ] {
+            let err = policy.resolve("\\foo\\x.kgl").unwrap_err();
+            assert!(err.contains("no drive"), "{err}");
+        }
     }
 
     #[test]
