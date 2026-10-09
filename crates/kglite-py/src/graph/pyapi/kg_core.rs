@@ -854,7 +854,7 @@ impl KnowledgeGraph {
     ///   loss too.
     /// - `"full"` — returns immediately. Every commit was already barriered,
     ///   so the guarantee this call promises already holds.
-    /// - `"off"` / a non-durable graph — raises `ValueError`. There is no log
+    /// - `"off"` / a non-durable graph — raises `NotDurableError` (a `ValueError`). There is no log
     ///   to flush, so the call cannot deliver what its name promises, and a
     ///   caller who believes they bought power-safety and silently got
     ///   nothing is the failure direction that actually costs data.
@@ -869,12 +869,14 @@ impl KnowledgeGraph {
         // log exists, it just belongs to another handle.
         self.check_durable_owner()?;
         if self.lifecycle.durable.is_none() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "sync() needs a graph opened with a write-ahead log. This graph \
+            return Err(crate::error_py::kg_to_pyerr(
+                crate::error::KgError::not_durable(
+                    "sync() needs a graph opened with a write-ahead log. This graph \
                  has none (durable='off'), so there is nothing to flush and no \
                  power-safe point to take — call save() to write a checkpoint \
                  instead, or reopen with kglite.open(path, durable='normal') if \
                  you want per-commit logging with on-demand barriers.",
+                ),
             ));
         }
         // A barrier over a log that no longer describes the graph would report

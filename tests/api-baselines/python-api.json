@@ -54,6 +54,7 @@
     "LoadMemoryLimitError",
     "ArgumentError",
     "ReadOnlyError",
+    "NotDurableError",
     "MissingArgumentError",
     "InternerCollisionError",
     "InternalError"
@@ -1507,6 +1508,22 @@
     "NodeNotFoundError": {
       "bases": [
         "KgError"
+      ],
+      "constructible": true,
+      "constructor": null,
+      "kind": "class",
+      "members": {
+        "code": {
+          "kind": "attribute",
+          "type": "str"
+        }
+      },
+      "module": "kglite"
+    },
+    "NotDurableError": {
+      "bases": [
+        "KgError",
+        "ValueError"
       ],
       "constructible": true,
       "constructor": null,

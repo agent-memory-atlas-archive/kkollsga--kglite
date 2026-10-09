@@ -53,6 +53,17 @@ class DurableSessionTest {
     }
 
     @Test
+    @DisplayName("sync without a log is NotDurable, the identity every binding reports")
+    void syncWithoutALogIsNotDurable(@TempDir Path dir) {
+        try (KnowledgeGraph graph = KnowledgeGraph.open(
+                dir.resolve("g.kgl"), create().durability(Durability.OFF))) {
+            KgliteException refused = assertThrows(KgliteException.class, graph::sync);
+            assertEquals("NotDurable", refused.statusName());
+            assertEquals(25, refused.statusCode());
+        }
+    }
+
+    @Test
     @DisplayName("a missing path is an error unless createIfMissing")
     void missingPathNeedsCreate(@TempDir Path dir) {
         KgliteException refused = assertThrows(KgliteException.class,

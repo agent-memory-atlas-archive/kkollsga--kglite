@@ -3,12 +3,12 @@
 //! Core errors keep the engine's own code string (`KgErrorCode::as_str`, e.g.
 //! `CypherSyntax`), so a message and a code mean the same thing on every
 //! binding. `WriterLeaseHeld` (another writer owns the path; carries a
-//! `holder`) and `ReadOnly` (a write on a `readOnly` handle) are core codes too:
+//! `holder`), `ReadOnly` (a write on a `readOnly` handle) and `NotDurable`
+//! (`sync()` on a handle with no write-ahead log) are core codes too:
 //! their strings are `KgErrorCode`'s, not spellings of this crate. Codes the
 //! binding itself raises are `Internal` (a contained panic), `QueueFull`,
-//! `Closed` (the handle was closed), `NotDurable` (`sync()` on a handle with no
-//! write-ahead log) and `TransactionClosed` (a transaction that is already
-//! committed, rolled back or aborted).
+//! `Closed` (the handle was closed) and `TransactionClosed` (a transaction that
+//! is already committed, rolled back or aborted).
 
 use std::ffi::c_char;
 use std::ptr;
@@ -20,7 +20,7 @@ pub const CODE_INTERNAL: &str = "Internal";
 pub const CODE_QUEUE_FULL: &str = "QueueFull";
 pub const CODE_CLOSED: &str = "Closed";
 pub const CODE_READ_ONLY: &str = KgErrorCode::ReadOnly.as_str();
-pub const CODE_NOT_DURABLE: &str = "NotDurable";
+pub const CODE_NOT_DURABLE: &str = KgErrorCode::NotDurable.as_str();
 pub const CODE_TX_CLOSED: &str = "TransactionClosed";
 const CODE_ARGUMENT: &str = "InvalidArgument";
 
@@ -358,6 +358,7 @@ mod tests {
     #[test]
     fn read_only_and_lease_codes_are_the_core_codes() {
         assert_eq!(CODE_READ_ONLY, KgErrorCode::ReadOnly.as_str());
+        assert_eq!(CODE_NOT_DURABLE, KgErrorCode::NotDurable.as_str());
         let e = JsErr::from_kg(&KgError::WriterLeaseHeld {
             message: "held".into(),
             holder: kglite::api::io::LeaseHolder {

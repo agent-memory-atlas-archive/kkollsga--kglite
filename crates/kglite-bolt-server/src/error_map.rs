@@ -34,6 +34,7 @@
 //! | `DurabilityFailed`        | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
 //! | `WriterLeaseHeld`         | `Neo.TransientError.General.DatabaseUnavailable`    | TransientError |
 //! | `ReadOnly`                | `Neo.ClientError.General.ReadOnly`                  | ClientError    |
+//! | `NotDurable`              | `Neo.ClientError.Request.Invalid`                   | ClientError    |
 //! | `NodeNotFound`            | `Neo.ClientError.Statement.EntityNotFound`          | ClientError    |
 //! | `ConnectionNotFound`      | `Neo.ClientError.Statement.EntityNotFound`          | ClientError    |
 //! | `PropertyNotFound`        | `Neo.ClientError.Statement.EntityNotFound`          | ClientError    |
@@ -288,6 +289,10 @@ mod tests {
         for (err, status) in [
             (lease, "Neo.TransientError.General.DatabaseUnavailable"),
             (KgError::read_only("ro"), "Neo.ClientError.General.ReadOnly"),
+            (
+                KgError::not_durable("no log"),
+                "Neo.ClientError.Request.Invalid",
+            ),
             (
                 KgError::DurabilityFailed {
                     message: "m".into(),

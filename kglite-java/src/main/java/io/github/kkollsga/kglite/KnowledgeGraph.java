@@ -1213,7 +1213,7 @@ public final class KnowledgeGraph implements AutoCloseable {
      * Flush the write-ahead log to stable storage — the power-safe point at
      * {@link Durability#NORMAL} (a no-op at {@link Durability#FULL}).
      *
-     * @throws KgliteException with status {@code InvalidArgument} if the session
+     * @throws KgliteException with status {@code NotDurable} if the session
      *     has no log (not durably opened, or {@link Durability#OFF}), or
      *     {@code DurabilityFailed} if the flush failed
      * @throws ReadOnlyGraphException if this graph was opened read-only

@@ -494,7 +494,7 @@ pub unsafe extern "C" fn kglite_open_session(
 ///
 /// - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` is null
 /// - `KGLITE_STATUS_CODE_READ_ONLY` — the session is read-only
-/// - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the session has no write-ahead log
+/// - `KGLITE_STATUS_CODE_NOT_DURABLE` — the session has no write-ahead log
 ///   (not opened by [`kglite_open_session`], or durability `"off"`); use
 ///   [`kglite_session_checkpoint`] instead
 /// - `KGLITE_STATUS_CODE_DURABILITY_FAILED` — the flush failed, or direct
@@ -523,8 +523,9 @@ pub unsafe extern "C" fn kglite_session_sync(
             if state.inner.durability().is_none() {
                 return refuse(
                     out_error_msg,
-                    invalid(
-                        "sync needs durability 'full' or 'normal': this session has no write-ahead log (use kglite_session_checkpoint)",
+                    (
+                        KgliteStatusCode::NotDurable,
+                        "sync needs durability 'full' or 'normal': this session has no write-ahead log (use kglite_session_checkpoint)".to_string(),
                     ),
                 );
             }

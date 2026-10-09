@@ -109,6 +109,13 @@ pub enum KgErrorCode {
     // arguments, refused it, and the fix is to write through a writable handle.
     ReadOnly,
 
+    // `sync()` on a handle that keeps no write-ahead log (durability `off`,
+    // a disk graph, a read-only open). The call was well-formed but cannot
+    // deliver the power-safe point its name promises; the fix is a
+    // checkpoint or a durable open. Split from `InvalidArgument` so a caller
+    // can tell "no log here" from a bad argument without reading prose.
+    NotDurable,
+
     NodeNotFound,
     ConnectionNotFound,
     PropertyNotFound,
@@ -153,6 +160,7 @@ impl KgErrorCode {
         KgErrorCode::DurabilityFailed,
         KgErrorCode::WriterLeaseHeld,
         KgErrorCode::ReadOnly,
+        KgErrorCode::NotDurable,
         KgErrorCode::NodeNotFound,
         KgErrorCode::ConnectionNotFound,
         KgErrorCode::PropertyNotFound,
@@ -186,6 +194,7 @@ impl KgErrorCode {
             KgErrorCode::DurabilityFailed => "DurabilityFailed",
             KgErrorCode::WriterLeaseHeld => "WriterLeaseHeld",
             KgErrorCode::ReadOnly => "ReadOnly",
+            KgErrorCode::NotDurable => "NotDurable",
             KgErrorCode::NodeNotFound => "NodeNotFound",
             KgErrorCode::ConnectionNotFound => "ConnectionNotFound",
             KgErrorCode::PropertyNotFound => "PropertyNotFound",
@@ -211,6 +220,7 @@ impl KgErrorCode {
     /// - `CypherTimeout` → 408 Request Timeout
     /// - `TransactionConflict`, `WriterLeaseHeld` → 409 Conflict
     /// - `ReadOnly` → 403 Forbidden
+    /// - `NotDurable` → 400 Bad Request
     /// - `Schema`, `Validation`, `Expr`, `ConstraintViolation`,
     ///   `ConstraintCreationFailed`, `OntologyViolation`, `CypherExecution` → 422 Unprocessable
     ///   Entity
@@ -224,7 +234,8 @@ impl KgErrorCode {
             KgErrorCode::CypherSyntax
             | KgErrorCode::CypherTypeMismatch
             | KgErrorCode::InvalidArgument
-            | KgErrorCode::MissingArgument => 400,
+            | KgErrorCode::MissingArgument
+            | KgErrorCode::NotDurable => 400,
 
             KgErrorCode::NodeNotFound
             | KgErrorCode::ConnectionNotFound
@@ -319,6 +330,9 @@ impl KgErrorCode {
             // once. `General.ReadOnly` is a permanent `ClientError` (the
             // drivers' `Forbidden`).
             KgErrorCode::ReadOnly => "Neo.ClientError.General.ReadOnly",
+            // A well-formed call the configuration cannot honour; permanent
+            // until the handle is reopened with a log, like `InvalidArgument`.
+            KgErrorCode::NotDurable => "Neo.ClientError.Request.Invalid",
             // `CypherExecution` is a statement that failed on its inputs (see
             // `http_status_code`); publishing it as `DatabaseError` told a
             // driver the server broke when the query was at fault.
@@ -515,6 +529,10 @@ pub enum KgError {
     /// unchanged.
     ReadOnly { message: String },
 
+    /// `sync()` was called on a handle with no write-ahead log. Nothing was
+    /// flushed because there is no log to flush.
+    NotDurable { message: String },
+
     /// Blueprint expression evaluation failure. Wraps the existing
     /// 7-variant [`ExprError`] enum verbatim.
     Expr(ExprError),
@@ -634,6 +652,7 @@ impl KgError {
             KgError::DurabilityFailed { .. } => KgErrorCode::DurabilityFailed,
             KgError::WriterLeaseHeld { .. } => KgErrorCode::WriterLeaseHeld,
             KgError::ReadOnly { .. } => KgErrorCode::ReadOnly,
+            KgError::NotDurable { .. } => KgErrorCode::NotDurable,
             KgError::Expr(_) => KgErrorCode::Expr,
             KgError::NodeNotFound { .. } => KgErrorCode::NodeNotFound,
             KgError::ConnectionNotFound { .. } => KgErrorCode::ConnectionNotFound,
@@ -737,9 +756,9 @@ impl fmt::Display for KgError {
                 "commit was NOT applied — the write-ahead log rejected it, and a write \
                  that cannot be logged is not acknowledged: {message}"
             ),
-            KgError::WriterLeaseHeld { message, .. } | KgError::ReadOnly { message } => {
-                f.write_str(message)
-            }
+            KgError::WriterLeaseHeld { message, .. }
+            | KgError::ReadOnly { message }
+            | KgError::NotDurable { message } => f.write_str(message),
             KgError::Expr(e) => write!(f, "Expression error: {}", e),
             KgError::NodeNotFound { node_type, id } => {
                 write!(f, "Node not found: {} with id {:?}", node_type, id)
@@ -840,6 +859,13 @@ impl From<LeaseRefusal> for KgError {
 }
 
 impl KgError {
+    /// `sync()` refused because the handle keeps no write-ahead log.
+    pub fn not_durable(message: impl Into<String>) -> Self {
+        KgError::NotDurable {
+            message: message.into(),
+        }
+    }
+
     /// A write refused because the handle is read-only.
     pub fn read_only(message: impl Into<String>) -> Self {
         KgError::ReadOnly {
@@ -987,16 +1013,17 @@ mod tests {
             KgErrorCode::DurabilityFailed => 12,
             KgErrorCode::WriterLeaseHeld => 13,
             KgErrorCode::ReadOnly => 14,
-            KgErrorCode::NodeNotFound => 15,
-            KgErrorCode::ConnectionNotFound => 16,
-            KgErrorCode::PropertyNotFound => 17,
-            KgErrorCode::FileNotFound => 18,
-            KgErrorCode::FileFormat => 19,
-            KgErrorCode::FileIo => 20,
-            KgErrorCode::LoadMemoryLimit => 21,
-            KgErrorCode::InvalidArgument => 22,
-            KgErrorCode::MissingArgument => 23,
-            KgErrorCode::Internal => 24,
+            KgErrorCode::NotDurable => 15,
+            KgErrorCode::NodeNotFound => 16,
+            KgErrorCode::ConnectionNotFound => 17,
+            KgErrorCode::PropertyNotFound => 18,
+            KgErrorCode::FileNotFound => 19,
+            KgErrorCode::FileFormat => 20,
+            KgErrorCode::FileIo => 21,
+            KgErrorCode::LoadMemoryLimit => 22,
+            KgErrorCode::InvalidArgument => 23,
+            KgErrorCode::MissingArgument => 24,
+            KgErrorCode::Internal => 25,
         }
     }
 
@@ -1010,6 +1037,19 @@ mod tests {
         for (i, code) in KgErrorCode::ALL.iter().enumerate() {
             assert_eq!(ordinal(*code), i, "{code:?} is out of declaration order");
         }
+    }
+
+    #[test]
+    fn not_durable_identity() {
+        let e = KgError::not_durable("no log");
+        assert_eq!(e.code(), KgErrorCode::NotDurable);
+        assert_eq!(KgErrorCode::NotDurable.as_str(), "NotDurable");
+        assert_eq!(KgErrorCode::NotDurable.http_status_code(), 400);
+        assert_eq!(
+            KgErrorCode::NotDurable.neo4j_status_code(),
+            "Neo.ClientError.Request.Invalid"
+        );
+        assert_eq!(e.to_string(), "no log");
     }
 
     #[test]

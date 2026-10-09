@@ -114,6 +114,15 @@ enum KgliteStatusCode
    */
   KGLITE_STATUS_CODE_READ_ONLY = 24,
   /**
+   * `sync` was called on a session that keeps no write-ahead log
+   * (durability `"off"`, a disk-mode graph or a session from
+   * `kglite_session_new`). Its own code rather than an `InvalidArgument`:
+   * the call was well-formed and the session's configuration cannot honour
+   * it. Appended to keep the existing discriminants stable across this ABI
+   * major version.
+   */
+  KGLITE_STATUS_CODE_NOT_DURABLE = 25,
+  /**
    * A string argument failed UTF-8 validation. The C-side
    * caller passed a `*const c_char` whose bytes didn't decode
    * as UTF-8 — typically a corrupted buffer or a non-UTF-8
@@ -1341,7 +1350,7 @@ KgliteStatusCode kglite_open_session(const char *path,
  *
  * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` is null
  * - `KGLITE_STATUS_CODE_READ_ONLY` — the session is read-only
- * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the session has no write-ahead log
+ * - `KGLITE_STATUS_CODE_NOT_DURABLE` — the session has no write-ahead log
  *   (not opened by [`kglite_open_session`], or durability `"off"`); use
  *   [`kglite_session_checkpoint`] instead
  * - `KGLITE_STATUS_CODE_DURABILITY_FAILED` — the flush failed, or direct

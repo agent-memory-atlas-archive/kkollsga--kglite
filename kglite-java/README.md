@@ -429,7 +429,8 @@ try (KnowledgeGraph graph = KnowledgeGraph.open(path, options)) {
   changed, then releases the lease. If the checkpoint fails it throws and the
   graph stays open with the lease held, so nothing is lost; fix the cause and
   close again. `checkpoint()` does it on demand and returns whether a file was
-  written; `sync()` is the power-safe point at `NORMAL`.
+  written; `sync()` is the power-safe point at `NORMAL` and throws status
+  `NotDurable` when the session has no log.
 - **Lease contention** throws `WriterLeaseHeldException` with the holder's
   `pid()`, `since()` and `self()`; `lockTimeout` waits instead.
 - **A missing path is an error** unless `createIfMissing(true)`, so a typo'd

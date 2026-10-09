@@ -109,6 +109,7 @@ The header exposes:
     `kglite_session_close` checkpoints unsaved changes first; it is idempotent
     and the handle is still freed separately.
   - `kglite_session_sync` flushes the log, the power-safe point at `normal`.
+    On a session with no log it returns `NOT_DURABLE` (25).
     `kglite_session_checkpoint` writes the opened path unless nothing changed.
   - Writes that bypass the log are refused with `DURABILITY_FAILED` on a logged
     session: schema, text and vector indexes, embedding ingest. `execute_mut`,

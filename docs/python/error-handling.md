@@ -33,6 +33,7 @@ Exception
     ├── kglite.LoadMemoryLimitError
     ├── kglite.ArgumentError
     │   └── kglite.ReadOnlyError
+    ├── kglite.NotDurableError          (also a ValueError)
     ├── kglite.MissingArgumentError
     ├── kglite.InternerCollisionError
     └── kglite.InternalError
@@ -112,6 +113,14 @@ try:
 except kglite.TransactionConflictError:
     ...  # rebuild the transaction and try again
 ```
+
+## `sync()` on a graph with no log
+
+`sync()` on a graph that keeps no write-ahead log raises `NotDurableError` with
+code `NotDurable`. It subclasses `KgError` and `ValueError`, so an existing
+`except ValueError` still catches it. The Node binding (`NotDurable`), the C ABI
+(status 25) and Java (status `NotDurable`) report the same code. Call `save()`
+for a checkpoint, or reopen with `durable="normal"`.
 
 ## A write on a read handle
 

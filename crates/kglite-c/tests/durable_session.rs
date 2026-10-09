@@ -428,7 +428,7 @@ fn sync_and_checkpoint_semantics() {
     let off = open_ok(&path, serde_json::json!({"durability": "off"}));
     assert_eq!(
         unsafe { kglite_session_sync(off.session, &mut error) },
-        KgliteStatusCode::InvalidArgument
+        KgliteStatusCode::NotDurable
     );
     take(error);
     free(off.session);

@@ -8,6 +8,8 @@ surface. These tests pin the wheel's side of the shared identities in
   `.code == "WriterLeaseHeld"` and a structured `.holder`;
 - a write refused by a read-only handle is `ReadOnlyError` (an `ArgumentError`)
   with `.code == "ReadOnly"`;
+- `sync()` on a graph with no write-ahead log is `NotDurableError` (a `KgError`
+  and a `ValueError`) with `.code == "NotDurable"`;
 - a write-ahead-log failure is a `FileIoError` with `.code == "DurabilityFailed"`
   from every logged-write path.
 """
@@ -109,6 +111,21 @@ def test_an_io_failure_taking_the_lease_is_still_a_plain_file_io_error(tmp_path)
         os.chmod(locked, 0o700)
     assert not isinstance(caught.value, kglite.WriterLeaseHeldError)
     assert caught.value.code == "FileIo"
+
+
+# ─── NotDurable ──────────────────────────────────────────────────────────────
+
+
+def test_sync_without_a_log_raises_not_durable_error(tmp_path):
+    for graph in (kglite.KnowledgeGraph(), kglite.open(str(tmp_path / "off.kgl"), durable="off")):
+        with pytest.raises(kglite.NotDurableError) as caught:
+            graph.sync()
+        err = caught.value
+        assert isinstance(err, kglite.KgError)
+        assert isinstance(err, ValueError), "the pre-existing `except ValueError` must still catch it"
+        assert err.code == "NotDurable"
+        assert kglite.NotDurableError.code == "NotDurable"
+        assert "save()" in str(err)
 
 
 # ─── ReadOnly ────────────────────────────────────────────────────────────────

@@ -385,6 +385,7 @@ const fn kg_error_category(code: KgErrorCode) -> &'static str {
         KgErrorCode::DurabilityFailed => "durability_failed",
         KgErrorCode::WriterLeaseHeld => "writer_lease_held",
         KgErrorCode::ReadOnly => "read_only",
+        KgErrorCode::NotDurable => "not_durable",
         KgErrorCode::NodeNotFound => "node_not_found",
         KgErrorCode::ConnectionNotFound => "connection_not_found",
         KgErrorCode::PropertyNotFound => "property_not_found",

@@ -256,6 +256,14 @@ before upgrading.
 
 ### Fixed
 
+- **`sync()` on a handle with no write-ahead log reports one error identity.**
+  It was a bare `ValueError` in Python, `InvalidArgument` in the C ABI and Java,
+  and a Node-only `NotDurable`. Core now has `KgErrorCode::NotDurable`, and every
+  surface reports it. Python raises `kglite.NotDurableError`, a subclass of
+  `KgError` and `ValueError`, so `except ValueError` still catches it. The C ABI
+  adds `KGLITE_STATUS_CODE_NOT_DURABLE` (25), which Java surfaces as status
+  `NotDurable`. Code that matched `InvalidArgument` on a log-less `sync` must
+  match `NotDurable`.
 - Java `openReadOnly(path, mode)` never creates a missing graph or converts a
   stored storage mode; it loads the graph as stored and fails when `mode` differs.
 - `ontology()` emits a document `define_ontology()` accepts: per-check severities

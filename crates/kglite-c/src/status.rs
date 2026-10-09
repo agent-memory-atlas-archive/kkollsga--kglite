@@ -86,6 +86,13 @@ pub enum KgliteStatusCode {
     /// handle, not the arguments, refused it. Appended to keep the existing
     /// discriminants stable across this ABI major version.
     ReadOnly = 24,
+    /// `sync` was called on a session that keeps no write-ahead log
+    /// (durability `"off"`, a disk-mode graph or a session from
+    /// `kglite_session_new`). Its own code rather than an `InvalidArgument`:
+    /// the call was well-formed and the session's configuration cannot honour
+    /// it. Appended to keep the existing discriminants stable across this ABI
+    /// major version.
+    NotDurable = 25,
 
     // 100+: C-ABI-only errors.
     /// A string argument failed UTF-8 validation. The C-side
@@ -142,6 +149,7 @@ impl KgliteStatusCode {
             // from 100, and the lease code shipped there before core named it.
             KgErrorCode::WriterLeaseHeld => Self::WriterLeaseHeld,
             KgErrorCode::ReadOnly => Self::ReadOnly,
+            KgErrorCode::NotDurable => Self::NotDurable,
         }
     }
 
@@ -162,6 +170,7 @@ impl KgliteStatusCode {
             Self::Ok | Self::InvalidUtf8 | Self::NullPointer => return None,
             Self::WriterLeaseHeld => KgErrorCode::WriterLeaseHeld,
             Self::ReadOnly => KgErrorCode::ReadOnly,
+            Self::NotDurable => KgErrorCode::NotDurable,
             Self::CypherSyntax => KgErrorCode::CypherSyntax,
             Self::CypherTimeout => KgErrorCode::CypherTimeout,
             Self::CypherExecution => KgErrorCode::CypherExecution,
@@ -275,6 +284,7 @@ fn static_name(code: KgliteStatusCode) -> Option<&'static CStr> {
         KgliteStatusCode::OntologyViolation => c"OntologyViolation",
         KgliteStatusCode::DurabilityFailed => c"DurabilityFailed",
         KgliteStatusCode::ReadOnly => c"ReadOnly",
+        KgliteStatusCode::NotDurable => c"NotDurable",
         KgliteStatusCode::InvalidUtf8 => c"InvalidUtf8",
         KgliteStatusCode::NullPointer => c"NullPointer",
         KgliteStatusCode::WriterLeaseHeld => c"WriterLeaseHeld",
@@ -350,6 +360,7 @@ mod tests {
         KgliteStatusCode::OntologyViolation,
         KgliteStatusCode::DurabilityFailed,
         KgliteStatusCode::ReadOnly,
+        KgliteStatusCode::NotDurable,
         KgliteStatusCode::InvalidUtf8,
         KgliteStatusCode::NullPointer,
         KgliteStatusCode::WriterLeaseHeld,
@@ -468,6 +479,7 @@ mod tests {
     fn lease_and_read_only_are_core_codes() {
         assert_eq!(KgliteStatusCode::WriterLeaseHeld as u32, 102);
         assert_eq!(KgliteStatusCode::ReadOnly as u32, 24);
+        assert_eq!(KgliteStatusCode::NotDurable as u32, 25);
         for (code, kg, http) in [
             (
                 KgliteStatusCode::WriterLeaseHeld,
@@ -475,6 +487,7 @@ mod tests {
                 409,
             ),
             (KgliteStatusCode::ReadOnly, KgErrorCode::ReadOnly, 403),
+            (KgliteStatusCode::NotDurable, KgErrorCode::NotDurable, 400),
         ] {
             assert_eq!(code.to_kg_error_code(), Some(kg));
             assert_eq!(KgliteStatusCode::from_kg_error_code(kg), code);

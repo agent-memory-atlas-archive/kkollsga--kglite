@@ -188,8 +188,8 @@ and is far more expensive.
 
 - Under `"full"`, `sync()` returns immediately, because every commit was already
   barriered.
-- On a graph with no log, it raises `ValueError` rather than silently doing
-  nothing. A caller who believes they bought power-safety and got nothing is the
+- On a graph with no log, it raises `kglite.NotDurableError` (code `NotDurable`, also a
+  `ValueError`) rather than silently doing nothing. A caller who believes they bought power-safety and got nothing is the
   failure that costs data.
 
 ## How durability works

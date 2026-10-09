@@ -42,6 +42,7 @@
 //!     ├── kglite.LoadMemoryLimitError
 //!     ├── kglite.ArgumentError
 //!     │   └── kglite.ReadOnlyError
+//!     ├── kglite.NotDurableError               (also a ValueError)
 //!     ├── kglite.MissingArgumentError
 //!     ├── kglite.InternerCollisionError
 //!     └── kglite.InternalError
@@ -57,7 +58,8 @@
 //! their documented built-in exception families.
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyDict, PyModule, PyTuple, PyType};
 
 // Alias Rust types on import — every `create_exception!` macro call
 // below generates a Python-side struct (e.g. `KgError`, `SchemaError`)
@@ -237,6 +239,44 @@ pyo3::create_exception!(
     "A .kgl load exceeded max_load_mb / KGLITE_MAX_LOAD_MB at the metadata precheck or the pre-publication legacy portable-normalization check. The file is valid."
 );
 
+// ── No write-ahead log ───────────────────────────────────────────────
+
+/// `kglite.NotDurableError`, a subclass of both `KgError` and `ValueError`.
+/// `create_exception!` takes one base, and `sync()` raised a bare `ValueError`
+/// before the class existed, so it is built once with two bases and every
+/// `except ValueError` around `sync()` keeps working.
+static NOT_DURABLE_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+fn not_durable_class(py: Python<'_>) -> Bound<'_, PyType> {
+    NOT_DURABLE_ERROR
+        .get_or_init(py, || {
+            let build = || -> PyResult<Py<PyType>> {
+                let bases = PyTuple::new(
+                    py,
+                    [
+                        py.get_type::<KgError>(),
+                        py.get_type::<pyo3::exceptions::PyValueError>(),
+                    ],
+                )?;
+                let namespace = PyDict::new(py);
+                namespace.set_item("__module__", "kglite")?;
+                namespace.set_item(
+                    "__doc__",
+                    "`sync()` was called on a graph that keeps no write-ahead log (`durable='off'`, a disk graph or a non-durable graph). Subclass of `KgError` and `ValueError`; nothing was flushed. Call `save()` for a checkpoint, or reopen with `durable='normal'`.",
+                )?;
+                namespace.set_item("code", crate::error::KgErrorCode::NotDurable.as_str())?;
+                let class = py
+                    .import("builtins")?
+                    .getattr("type")?
+                    .call1(("NotDurableError", bases, namespace))?;
+                Ok(class.cast_into::<PyType>()?.unbind())
+            };
+            build().expect("NotDurableError class construction")
+        })
+        .bind(py)
+        .clone()
+}
+
 // ── Argument validation ──────────────────────────────────────────────
 
 pyo3::create_exception!(
@@ -353,6 +393,9 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
             with_holder_attr(WriterLeaseHeldError::new_err(message), holder)
         }
         RustKgError::ReadOnly { .. } => ReadOnlyError::new_err(message),
+        RustKgError::NotDurable { .. } => {
+            Python::attach(|py| PyErr::from_type(not_durable_class(py), message))
+        }
         RustKgError::Expr(_) => ExprError::new_err(message),
         RustKgError::NodeNotFound { .. } => NodeNotFoundError::new_err(message),
         RustKgError::ConnectionNotFound { .. } => ConnectionNotFoundError::new_err(message),
@@ -548,6 +591,7 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     // Argument validation
     m.add("ArgumentError", py.get_type::<ArgumentError>())?;
     m.add("ReadOnlyError", py.get_type::<ReadOnlyError>())?;
+    m.add("NotDurableError", not_durable_class(py))?;
     m.add(
         "MissingArgumentError",
         py.get_type::<MissingArgumentError>(),
@@ -702,6 +746,18 @@ mod tests {
                 .extract()
                 .unwrap();
             assert_eq!(code, "ReadOnly");
+        });
+    }
+
+    #[test]
+    fn not_durable_is_a_kg_error_and_a_value_error_with_its_code() {
+        Python::initialize();
+        Python::attach(|py| {
+            let err = kg_to_pyerr(RustKgError::not_durable("no log"));
+            assert!(err.is_instance_of::<KgError>(py));
+            assert!(err.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+            let code: String = err.value(py).getattr("code").unwrap().extract().unwrap();
+            assert_eq!(code, "NotDurable");
         });
     }
 

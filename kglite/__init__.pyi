@@ -156,6 +156,17 @@ class ReadOnlyError(ArgumentError):
     the same code the Node and Bolt surfaces report. The graph is unchanged.
     """
 
+class NotDurableError(KgError, ValueError):
+    """``sync()`` was called on a graph that keeps no write-ahead log.
+
+    Raised for durability ``"off"``, a disk graph and a graph opened without a
+    log. Subclasses :class:`KgError` and ``ValueError``, so an existing
+    ``except ValueError`` around ``sync()`` still catches it; ``.code`` is
+    ``"NotDurable"``, the code the C ABI, Java and Node report. Nothing was
+    flushed. Call :meth:`KnowledgeGraph.save`, or reopen with
+    ``durable="normal"``.
+    """
+
 class MissingArgumentError(KgError):
     """A required argument wasn't passed."""
 
@@ -5351,8 +5362,9 @@ class KnowledgeGraph:
           now survives power loss, not just process death.
         - ``"full"`` — returns immediately; every commit was already
           barriered, so the guarantee is already met.
-        - ``"off"`` or a graph opened without a log — raises ``ValueError``.
-          There is nothing to flush, and silently doing nothing would leave a
+        - ``"off"`` or a graph opened without a log — raises
+          :class:`NotDurableError` (a :class:`KgError` and a ``ValueError``;
+          ``code`` is ``"NotDurable"``). There is nothing to flush, and silently doing nothing would leave a
           caller believing they had bought power-safety.
 
         Pending mutations are folded into the log first, so this is also the
