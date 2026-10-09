@@ -1,6 +1,6 @@
 //! Tagged JSON objects for query parameter types JSON has no spelling for.
 //!
-//! An object with exactly one key, `$date`, `$datetime` or `$duration`, is a
+//! An object with exactly one key, `$date`, `$datetime`, `$duration` or `$float`, is a
 //! typed value rather than a map. The payloads are the shapes
 //! [`super::kglite_value_to_json`] renders those types as, so a result cell
 //! wrapped in its tag reads back as the value it came from:
@@ -10,6 +10,10 @@
 //!   as `datetime()` parses (an offset is applied, normalising to UTC)
 //! - `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` → `Value::Duration`
 //!   (each field optional, default 0; no other field allowed)
+//! - `{"$float": "NaN"}`, `{"$float": "inf"}`, `{"$float": "-inf"}` →
+//!   `Value::Float64` of that non-finite value. JSON has no spelling for
+//!   these; the tag is the one lossless spelling, for parameters and (opt-in)
+//!   results alike. Any other payload is invalid.
 //!
 //! Any other object, including one holding a tag key beside other keys, stays
 //! an ordinary map.
@@ -34,6 +38,12 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
                 .map(Value::Timestamp)
         }),
         "$duration" => decode_duration(payload),
+        "$float" => match payload.as_str() {
+            Some("NaN") => Some(Value::Float64(f64::NAN)),
+            Some("inf") => Some(Value::Float64(f64::INFINITY)),
+            Some("-inf") => Some(Value::Float64(f64::NEG_INFINITY)),
+            _ => None,
+        },
         _ => return None,
     })
 }

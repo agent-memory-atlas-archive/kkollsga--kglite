@@ -1347,7 +1347,10 @@ KgliteStatusCode kglite_open_or_create_graph_in_mode(const char *path,
  * Cell values are **natural** JSON (`2`, `"x"`, `[..]`, `{..}`) via
  * [`kglite_value_to_json`](kglite::api::param::kglite_value_to_json) —
  * not serde's externally-tagged enum encoding — so a binding parses
- * `{"n": 2}`, not `{"n": {"Int64": 2}}`.
+ * `{"n": 2}`, not `{"n": {"Int64": 2}}`. A NaN or infinite float has no
+ * JSON spelling and renders as `null` unless the producing session enabled
+ * [`kglite_session_set_tagged_floats`](crate::kglite_session_set_tagged_floats),
+ * which renders it as `{"$float": "NaN" | "inf" | "-inf"}`.
  *
  * For large result sets this materializes the entire JSON blob
  * in memory. Future v2 will add pull-row-by-row accessors; for
@@ -1836,6 +1839,28 @@ KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
  *
  * Same text (`"CypherSyntax"`, `"NodeNotFound"`, `"InvalidUtf8"`, …) and the
  * same null on `Ok`, but the pointer is a `'static` constant in the library's
+/**
+ * Choose how this session's JSON results spell a non-finite float.
+ *
+ * JSON has no NaN or infinity. With `enabled` zero (the default for a new
+ * session) a non-finite float renders as `null`, as it always has. With
+ * `enabled` non-zero it renders as the tagged object
+ * `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
+ * — the same tag a query parameter accepts, so a value read back and bound
+ * again is unchanged. The setting governs
+ * [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
+ * of results produced afterwards and the rows of the batch-execute results;
+ * a result already returned keeps the encoding it was created with. Finite
+ * floats, including `-0.0`, are unaffected.
+ *
+ * A null `session` is a no-op.
+ *
+ * # Safety
+ *
+ * `session` must be null or a valid session pointer not yet freed.
+ */
+ void kglite_session_set_tagged_floats(const struct KgliteSession *session, uint8_t enabled);
+
  * own read-only data rather than a fresh heap copy.
  *
  * **Do NOT free the returned pointer.** Handing it to

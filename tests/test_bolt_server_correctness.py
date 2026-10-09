@@ -417,32 +417,21 @@ def test_edge_unicode_in_property_name(bolt_server):
     assert _roundtrip(bolt_server, val) == val
 
 
-def test_edge_float_nan_parameter_rejected(bolt_server):
-    """NaN as a parameter — RB-4 rejects with Protocol → ClientError.
-    NaN has ill-defined comparison semantics in Cypher (NaN != NaN);
-    sending it usually signals a client-side bug."""
+def test_edge_non_finite_float_parameters_round_trip(bolt_server):
+    """NaN and the infinities are PackStream float64 values: a parameter binds
+    them and a result returns them unchanged (the rule every surface shares)."""
+    import math
+
     with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
         with driver.session() as session:
-            with pytest.raises(neo4j.exceptions.ClientError) as exc_info:
-                session.run("RETURN $x AS x", x=float("nan")).consume()
-            assert "non-finite" in str(exc_info.value).lower()
-
-
-def test_edge_float_infinity_parameter_rejected(bolt_server):
-    """+Infinity as a parameter — RB-4 rejects with Protocol → ClientError."""
-    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
-        with driver.session() as session:
-            with pytest.raises(neo4j.exceptions.ClientError) as exc_info:
-                session.run("RETURN $x AS x", x=float("inf")).consume()
-            assert "non-finite" in str(exc_info.value).lower()
-
-
-def test_edge_float_negative_infinity_parameter_rejected(bolt_server):
-    """-Infinity as a parameter — RB-4 rejects with Protocol → ClientError."""
-    with neo4j.GraphDatabase.driver(bolt_server, auth=("neo4j", "password")) as driver:
-        with driver.session() as session:
-            with pytest.raises(neo4j.exceptions.ClientError):
-                session.run("RETURN $x AS x", x=float("-inf")).consume()
+            for value in (float("nan"), float("inf"), float("-inf"), -0.0, 1.5):
+                got = session.run("RETURN $x AS x", x=value).single()["x"]
+                if math.isnan(value):
+                    assert math.isnan(got)
+                else:
+                    assert got == value and math.copysign(1.0, got) == math.copysign(1.0, value)
+            nested = session.run("RETURN $x AS x", x=[float("nan"), {"k": float("-inf")}]).single()["x"]
+            assert math.isnan(nested[0]) and nested[1]["k"] == float("-inf")
 
 
 def test_edge_bytes_parameter_rejected(bolt_server):

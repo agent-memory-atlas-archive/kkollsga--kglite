@@ -98,6 +98,8 @@ final class Abi {
             "kglite_session_execute_mut", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
     // The `_opts` forms add (timeout_ms, max_work_units) as two uint64
     // arguments between params_json and the out-slots. `0` disables each
+    private static final MethodHandle SESSION_SET_TAGGED_FLOATS =
+            bind("kglite_session_set_tagged_floats", FunctionDescriptor.ofVoid(PTR, U8));
     // option (no deadline / no work budget), per the header — the wrapper maps
     // an absent timeout or an unlimited work budget to `0`.
     private static final MethodHandle SESSION_EXECUTE_READ_OPTS = bind(
@@ -294,7 +296,11 @@ final class Abi {
                 graphFree(graph);
                 throw new KgliteException(rc, statusName(rc), statusName(rc) + ": kglite_session_new");
             }
-            return outSession.get(PTR, 0);
+            MemorySegment session = outSession.get(PTR, 0);
+            // NaN and the infinities come back as {"$float": ...} tags that
+            // Json decodes to Double, instead of the default JSON null.
+            SESSION_SET_TAGGED_FLOATS.invokeExact(session, (byte) 1);
+            return session;
         } catch (Throwable t) {
             throw rethrow(t);
         }

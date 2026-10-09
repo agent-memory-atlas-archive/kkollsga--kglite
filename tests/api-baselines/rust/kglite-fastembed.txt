@@ -2332,6 +2332,8 @@ pub kglite::api::io::LeaseRefusal::error: core::io::error::Error
 pub kglite::api::io::LeaseRefusal::holder: core::option::Option<kglite::api::io::LeaseHolder>
 impl core::convert::From<kglite::api::io::LeaseRefusal> for core::io::error::Error
 pub fn core::io::error::Error::from(refusal: kglite::api::io::LeaseRefusal) -> Self
+impl core::convert::From<kglite::api::io::LeaseRefusal> for kglite::error::KgError
+pub fn kglite::error::KgError::from(refusal: kglite::api::io::LeaseRefusal) -> Self
 impl core::fmt::Debug for kglite::api::io::LeaseRefusal
 pub fn kglite::api::io::LeaseRefusal::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::io::LoadMemoryEstimate
@@ -2713,6 +2715,7 @@ pub fn kglite::api::param::json_text_to_query_value_map(source: &str) -> core::r
 pub fn kglite::api::param::json_value_to_kglite_value(v: &serde_json::value::Value) -> kglite::datatypes::values::Value
 pub fn kglite::api::param::kglite_value_to_csv_text(v: &kglite::datatypes::values::Value) -> alloc::string::String
 pub fn kglite::api::param::kglite_value_to_json(v: &kglite::datatypes::values::Value) -> serde_json::value::Value
+pub fn kglite::api::param::kglite_value_to_json_tagged(v: &kglite::datatypes::values::Value) -> serde_json::value::Value
 pub fn kglite::api::param::validate_json_query_numbers_at(source: &str, pointer: &[&str]) -> core::result::Result<(), kglite::param::JsonQueryParameterError>
 pub mod kglite::api::recipes
 pub enum kglite::api::recipes::SetOutcome
@@ -4025,6 +4028,8 @@ pub kglite::api::KgError::OntologyViolation::rule: &'static str
 pub kglite::api::KgError::PropertyNotFound
 pub kglite::api::KgError::PropertyNotFound::node_type: alloc::string::String
 pub kglite::api::KgError::PropertyNotFound::property: alloc::string::String
+pub kglite::api::KgError::ReadOnly
+pub kglite::api::KgError::ReadOnly::message: alloc::string::String
 pub kglite::api::KgError::Schema
 pub kglite::api::KgError::Schema::kind: kglite::error::SchemaErrorKindRepr
 pub kglite::api::KgError::Schema::message: alloc::string::String
@@ -4032,9 +4037,14 @@ pub kglite::api::KgError::TransactionConflict
 pub kglite::api::KgError::TransactionConflict::base_version: u64
 pub kglite::api::KgError::TransactionConflict::current_version: u64
 pub kglite::api::KgError::Validation(kglite::api::ValidationError)
+pub kglite::api::KgError::WriterLeaseHeld
+pub kglite::api::KgError::WriterLeaseHeld::holder: kglite::api::io::LeaseHolder
+pub kglite::api::KgError::WriterLeaseHeld::message: alloc::string::String
 impl kglite::error::KgError
 pub fn kglite::error::KgError::code(&self) -> kglite::error::KgErrorCode
 pub fn kglite::error::KgError::position(&self) -> core::option::Option<(usize, usize)>
+impl kglite::error::KgError
+pub fn kglite::error::KgError::read_only(message: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
 impl core::convert::From<kglite::api::InternerCollision> for kglite::error::KgError
@@ -4045,6 +4055,8 @@ impl core::convert::From<kglite::api::ValidationError> for kglite::error::KgErro
 pub fn kglite::error::KgError::from(e: kglite::api::ValidationError) -> Self
 impl core::convert::From<kglite::api::cypher::planner::schema_check::SchemaError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::cypher::planner::schema_check::SchemaError) -> Self
+impl core::convert::From<kglite::api::io::LeaseRefusal> for kglite::error::KgError
+pub fn kglite::error::KgError::from(refusal: kglite::api::io::LeaseRefusal) -> Self
 impl core::convert::From<kglite::api::recipes::RecipeCatalogError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(error: kglite::api::recipes::RecipeCatalogError) -> Self
 impl core::error::Error for kglite::error::KgError
@@ -4074,11 +4086,14 @@ pub kglite::api::KgErrorCode::MissingArgument
 pub kglite::api::KgErrorCode::NodeNotFound
 pub kglite::api::KgErrorCode::OntologyViolation
 pub kglite::api::KgErrorCode::PropertyNotFound
+pub kglite::api::KgErrorCode::ReadOnly
 pub kglite::api::KgErrorCode::Schema
 pub kglite::api::KgErrorCode::TransactionConflict
 pub kglite::api::KgErrorCode::Validation
+pub kglite::api::KgErrorCode::WriterLeaseHeld
 impl kglite::error::KgErrorCode
-pub fn kglite::error::KgErrorCode::as_str(&self) -> &'static str
+pub const kglite::error::KgErrorCode::ALL: &'static [kglite::error::KgErrorCode]
+pub const fn kglite::error::KgErrorCode::as_str(&self) -> &'static str
 pub fn kglite::error::KgErrorCode::http_status_code(&self) -> u16
 pub fn kglite::error::KgErrorCode::neo4j_status_code(&self) -> &'static str
 impl core::clone::Clone for kglite::error::KgErrorCode
@@ -6105,6 +6120,8 @@ pub kglite::error::KgError::OntologyViolation::rule: &'static str
 pub kglite::error::KgError::PropertyNotFound
 pub kglite::error::KgError::PropertyNotFound::node_type: alloc::string::String
 pub kglite::error::KgError::PropertyNotFound::property: alloc::string::String
+pub kglite::error::KgError::ReadOnly
+pub kglite::error::KgError::ReadOnly::message: alloc::string::String
 pub kglite::error::KgError::Schema
 pub kglite::error::KgError::Schema::kind: kglite::error::SchemaErrorKindRepr
 pub kglite::error::KgError::Schema::message: alloc::string::String
@@ -6112,9 +6129,14 @@ pub kglite::error::KgError::TransactionConflict
 pub kglite::error::KgError::TransactionConflict::base_version: u64
 pub kglite::error::KgError::TransactionConflict::current_version: u64
 pub kglite::error::KgError::Validation(kglite::api::ValidationError)
+pub kglite::error::KgError::WriterLeaseHeld
+pub kglite::error::KgError::WriterLeaseHeld::holder: kglite::api::io::LeaseHolder
+pub kglite::error::KgError::WriterLeaseHeld::message: alloc::string::String
 impl kglite::error::KgError
 pub fn kglite::error::KgError::code(&self) -> kglite::error::KgErrorCode
 pub fn kglite::error::KgError::position(&self) -> core::option::Option<(usize, usize)>
+impl kglite::error::KgError
+pub fn kglite::error::KgError::read_only(message: impl core::convert::Into<alloc::string::String>) -> Self
 impl core::convert::From<core::io::error::Error> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: core::io::error::Error) -> Self
 impl core::convert::From<kglite::api::InternerCollision> for kglite::error::KgError
@@ -6125,6 +6147,8 @@ impl core::convert::From<kglite::api::ValidationError> for kglite::error::KgErro
 pub fn kglite::error::KgError::from(e: kglite::api::ValidationError) -> Self
 impl core::convert::From<kglite::api::cypher::planner::schema_check::SchemaError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(e: kglite::api::cypher::planner::schema_check::SchemaError) -> Self
+impl core::convert::From<kglite::api::io::LeaseRefusal> for kglite::error::KgError
+pub fn kglite::error::KgError::from(refusal: kglite::api::io::LeaseRefusal) -> Self
 impl core::convert::From<kglite::api::recipes::RecipeCatalogError> for kglite::error::KgError
 pub fn kglite::error::KgError::from(error: kglite::api::recipes::RecipeCatalogError) -> Self
 impl core::error::Error for kglite::error::KgError
@@ -6154,11 +6178,14 @@ pub kglite::error::KgErrorCode::MissingArgument
 pub kglite::error::KgErrorCode::NodeNotFound
 pub kglite::error::KgErrorCode::OntologyViolation
 pub kglite::error::KgErrorCode::PropertyNotFound
+pub kglite::error::KgErrorCode::ReadOnly
 pub kglite::error::KgErrorCode::Schema
 pub kglite::error::KgErrorCode::TransactionConflict
 pub kglite::error::KgErrorCode::Validation
+pub kglite::error::KgErrorCode::WriterLeaseHeld
 impl kglite::error::KgErrorCode
-pub fn kglite::error::KgErrorCode::as_str(&self) -> &'static str
+pub const kglite::error::KgErrorCode::ALL: &'static [kglite::error::KgErrorCode]
+pub const fn kglite::error::KgErrorCode::as_str(&self) -> &'static str
 pub fn kglite::error::KgErrorCode::http_status_code(&self) -> u16
 pub fn kglite::error::KgErrorCode::neo4j_status_code(&self) -> &'static str
 impl core::clone::Clone for kglite::error::KgErrorCode
@@ -6278,4 +6305,5 @@ pub fn kglite::param::json_text_to_query_value_map(source: &str) -> core::result
 pub fn kglite::param::json_value_to_kglite_value(v: &serde_json::value::Value) -> kglite::datatypes::values::Value
 pub fn kglite::param::kglite_value_to_csv_text(v: &kglite::datatypes::values::Value) -> alloc::string::String
 pub fn kglite::param::kglite_value_to_json(v: &kglite::datatypes::values::Value) -> serde_json::value::Value
+pub fn kglite::param::kglite_value_to_json_tagged(v: &kglite::datatypes::values::Value) -> serde_json::value::Value
 pub fn kglite::param::validate_json_query_numbers_at(source: &str, pointer: &[&str]) -> core::result::Result<(), kglite::param::JsonQueryParameterError>

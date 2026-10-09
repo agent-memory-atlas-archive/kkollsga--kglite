@@ -112,6 +112,8 @@ Reference parameters as `$name`. `QueryOptions` overrides per call:
 | `LocalDate`, `LocalDateTime`, `Duration`, `Point` | The matching Cypher type |
 | `Array`, plain object | List, map |
 
+`NaN`, `Infinity`, `-Infinity` and `-0` are sent as floats unchanged.
+
 A JavaScript `1` is an integer because JavaScript cannot tell `1` from `1.0`. Wrap it in `new KgFloat(1)` to send a float. `undefined` map entries are omitted.
 
 ### Results
@@ -120,7 +122,7 @@ A JavaScript `1` is an integer because JavaScript cannot tell `1` from `1.0`. Wr
 |---|---|
 | `NULL`, boolean, string | `null`, `boolean`, `string` |
 | Integer | `number` when exact, `bigint` beyond 2^53 - 1. With `integers: 'bigint'`, always `bigint`. |
-| Float | `number`. `NaN` and `-0` are kept. |
+| Float | `number`. `NaN`, `Infinity`, `-Infinity` and `-0` are kept. |
 | Date, datetime, duration, point | `LocalDate`, `LocalDateTime`, `Duration`, `Point` |
 | List, map | `Array`, plain object |
 | Node | `{ id, labels, properties }` |

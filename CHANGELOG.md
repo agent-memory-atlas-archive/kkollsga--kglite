@@ -153,6 +153,47 @@ before upgrading.
 - **Documentation no longer calls a `.kgl` a backup of "any storage mode".**
   A disk-mode graph is a directory; `backup()` refuses it and `save(directory)`
   is the route.
+- **NaN and the infinities now follow one rule on every interface.** A Bolt
+  parameter binds them instead of being refused. In the C ABI a parameter takes
+  `{"$float": "NaN" | "inf" | "-inf"}` and `kglite_session_set_tagged_floats`
+  renders results in the same form (the default stays `null`); Java turns it on
+  and returns `Double`. Cypher `parse_json` decodes the tag.
+- **Writer-lease contention is one error on every interface.** Python raised
+  `FileIoError` (`.code == "FileIo"`) with the holder only in the message. It now
+  raises `WriterLeaseHeldError`, a `FileIoError` subclass with
+  `.code == "WriterLeaseHeld"` and a `.holder` dict (`pid`, `since`, `label`,
+  `self`), so an existing `except FileIoError` still works. The same applies to a
+  `save()` onto a path another writer holds. The core code is
+  `KgErrorCode::WriterLeaseHeld`; the C ABI keeps status 102, and the Node
+  binding and Java wrapper report the core name. The Bolt server's startup
+  refusal names the code.
+- **A write on a read-only handle is one error on every interface.** The wheel
+  raises `ReadOnlyError` (an `ArgumentError` subclass) with `.code == "ReadOnly"`
+  for `read_only(True)`, a `begin_read()` transaction, `Session.cypher()` and
+  `FrozenGraph.cypher()`. The C ABI adds status 24 (`KGLITE_STATUS_CODE_READ_ONLY`),
+  Java's `ReadOnlyGraphException` reports it, and Node's `ReadOnly` is the core
+  code. A `--readonly` Bolt server answers `Neo.ClientError.General.ReadOnly`
+  instead of `Neo.ClientError.Security.Forbidden`. `ForbiddenOnReadOnlyDatabase`
+  was not used: the Neo4j drivers retry it as a transient error.
+- **A refused write-ahead-log append is `DurabilityFailed` from every Python
+  path.** `Session.run_write` reported `FileIo` and `cypher()` reported
+  `FileIo` for a refused append; both now raise `FileIoError` with
+  `.code == "DurabilityFailed"`, as do a transaction's `commit()` and the
+  latched refusals after the first failure.
+- **`OntologyViolation` keeps its rule, entity, type and property on the C ABI,
+  Java and Bolt.** C adds `kglite_last_error_details_json`, which returns them
+  (and a declaration's `report`) as JSON for the failing call on the calling
+  thread. Java throws `OntologyViolationException` with `rule()`, `entity()`,
+  `entityType()`, `property()` and `report()`. Bolt keeps
+  `Neo.ClientError.Schema.ConstraintValidationFailed` and starts the message
+  with `[kglite.OntologyViolation rule=… entity=… type="…" property=…]`, which a
+  `ConstraintViolation` never carries.
+- **`docs/rust/c-abi.md` no longer claims a C session can log to a write-ahead
+  log.** The C ABI has no durable open; an ontology declaration persists through
+  `kglite_session_save`.
+- **The Bolt server's error-mapping table is complete.** It lists every
+  `KgErrorCode`, and a test fails when a code is missing from the table or its
+  status disagrees with the mapping.
 
 ## [0.19.5] - 2026-10-08
 

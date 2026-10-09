@@ -19,6 +19,7 @@ use kglite::api::session::{execute_mut, execute_read, BackupOptions, ExecuteOpti
 use kglite::api::{Embedder, Value};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Opaque handle for a session. See [`KgliteGraph`](crate::KgliteGraph)
@@ -44,6 +45,11 @@ pub(crate) struct SessionState {
     /// through the handle would alias those `&` reads (UB). The lock
     /// is held only for the clone/store — never across a query.
     pub(crate) embedder: Mutex<Option<Arc<dyn Embedder>>>,
+    /// Whether JSON results render non-finite floats as `{"$float": …}` tags
+    /// instead of `null`; set by [`kglite_session_set_tagged_floats`]. Read
+    /// when a result is created, so a result keeps the encoding in force at
+    /// its own execution.
+    pub(crate) tagged_floats: AtomicBool,
 }
 
 impl SessionState {
@@ -51,6 +57,7 @@ impl SessionState {
         let boxed = Box::new(SessionState {
             inner: session,
             embedder: Mutex::new(None),
+            tagged_floats: AtomicBool::new(false),
         });
         Box::into_raw(boxed).cast::<KgliteSession>()
     }
@@ -61,6 +68,10 @@ impl SessionState {
 
     /// Replace the session's embedder. Interior mutability (see the
     /// `embedder` field doc) — callers hold only `&SessionState`.
+    pub(crate) fn tagged_floats(&self) -> bool {
+        self.tagged_floats.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn set_embedder(&self, embedder: Arc<dyn Embedder>) {
         *self.embedder.lock().unwrap_or_else(PoisonError::into_inner) = Some(embedder);
     }
@@ -189,7 +200,8 @@ pub unsafe extern "C" fn kglite_session_execute_read(
             match execute_read(&snapshot, query_str, &opts) {
                 Ok(outcome) => {
                     unsafe {
-                        *out_result = ResultState::into_handle(outcome.result);
+                        *out_result =
+                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
                     }
                     if !out_error_msg.is_null() {
                         unsafe {
@@ -269,7 +281,8 @@ pub unsafe extern "C" fn kglite_session_execute_read_opts(
             match execute_read(&snapshot, query_str, &opts) {
                 Ok(outcome) => {
                     unsafe {
-                        *out_result = ResultState::into_handle(outcome.result);
+                        *out_result =
+                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
                     }
                     if !out_error_msg.is_null() {
                         unsafe {
@@ -400,7 +413,8 @@ unsafe fn execute_mut_impl(
             match exec_result {
                 Ok(outcome) => {
                     unsafe {
-                        *out_result = ResultState::into_handle(outcome.result);
+                        *out_result =
+                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
                     }
                     if !out_error_msg.is_null() {
                         unsafe {
@@ -482,7 +496,10 @@ pub unsafe extern "C" fn kglite_session_execute_read_batch(
             for (query, params) in &queries {
                 let opts = session_state.make_opts(params);
                 match execute_read(&snapshot, query, &opts) {
-                    Ok(outcome) => results.push(result_to_json_object(&outcome.result)),
+                    Ok(outcome) => results.push(result_to_json_object(
+                        &outcome.result,
+                        session_state.tagged_floats(),
+                    )),
                     Err(err) => {
                         unsafe {
                             *out_results_json = std::ptr::null();
@@ -551,7 +568,10 @@ pub unsafe extern "C" fn kglite_session_execute_mut_batch(
                     for (query, params) in &queries {
                         let opts = session_state.make_opts(params);
                         let outcome = execute_mut(working, query, &opts).map_err(Box::new)?;
-                        results.push(result_to_json_object(&outcome.result));
+                        results.push(result_to_json_object(
+                            &outcome.result,
+                            session_state.tagged_floats(),
+                        ));
                     }
                     Ok(results)
                 });
@@ -861,6 +881,38 @@ pub unsafe extern "C" fn kglite_session_backup(
                 }
             }
         },
+/// Choose how this session's JSON results spell a non-finite float.
+///
+/// JSON has no NaN or infinity. With `enabled` zero (the default for a new
+/// session) a non-finite float renders as `null`, as it always has. With
+/// `enabled` non-zero it renders as the tagged object
+/// `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
+/// — the same tag a query parameter accepts, so a value read back and bound
+/// again is unchanged. The setting governs
+/// [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
+/// of results produced afterwards and the rows of the batch-execute results;
+/// a result already returned keeps the encoding it was created with. Finite
+/// floats, including `-0.0`, are unaffected.
+///
+/// A null `session` is a no-op.
+///
+/// # Safety
+///
+/// `session` must be null or a valid session pointer not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn kglite_session_set_tagged_floats(
+    session: *const KgliteSession,
+    enabled: u8,
+) {
+    crate::ffi::void_boundary(|| {
+        if session.is_null() {
+            return;
+        }
+        let state = unsafe { SessionState::from_handle(session) };
+        state.tagged_floats.store(enabled != 0, Ordering::Relaxed);
+    });
+}
+
     )
 }
 

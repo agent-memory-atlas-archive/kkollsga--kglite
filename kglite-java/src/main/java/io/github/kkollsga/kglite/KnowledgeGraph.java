@@ -75,7 +75,8 @@ import java.util.Optional;
  *           <em>parameter</em> comes back as a {@code Long}, so
  *           {@code row.get("id").equals(1)} is {@code false} where
  *           {@code equals(1L)} is {@code true}.</td></tr>
- *   <tr><td>float</td><td>{@link Double}</td><td></td></tr>
+ *   <tr><td>float</td><td>{@link Double}</td><td>{@code NaN}, the infinities
+ *           and {@code -0.0} are kept, in results and as parameters.</td></tr>
  *   <tr><td>boolean</td><td>{@link Boolean}</td><td></td></tr>
  *   <tr><td>string</td><td>{@link String}</td><td></td></tr>
  *   <tr><td>list</td><td>{@link List}</td><td>Elements mapped by this table,

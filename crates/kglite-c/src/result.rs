@@ -8,7 +8,7 @@
 
 use crate::strings::alloc_c_string;
 use kglite::api::cypher::CypherResult;
-use kglite::api::param::kglite_value_to_json;
+use kglite::api::param::{kglite_value_to_json, kglite_value_to_json_tagged};
 use kglite::api::Value;
 use std::ffi::c_char;
 
@@ -25,11 +25,20 @@ pub struct KgliteCypherResult {
 /// Private state backing a [`KgliteCypherResult`] handle.
 pub(crate) struct ResultState {
     pub(crate) inner: CypherResult,
+    /// Render non-finite floats as `$float` tags (see
+    /// `kglite_session_set_tagged_floats`) rather than `null`.
+    tagged_floats: bool,
 }
 
 impl ResultState {
-    pub(crate) fn into_handle(result: CypherResult) -> *mut KgliteCypherResult {
-        let boxed = Box::new(ResultState { inner: result });
+    pub(crate) fn into_handle(
+        result: CypherResult,
+        tagged_floats: bool,
+    ) -> *mut KgliteCypherResult {
+        let boxed = Box::new(ResultState {
+            inner: result,
+            tagged_floats,
+        });
         Box::into_raw(boxed).cast::<KgliteCypherResult>()
     }
 
@@ -49,13 +58,21 @@ impl ResultState {
 /// per row keyed by column name, each cell via [`kglite_value_to_json`].
 /// Shared by [`kglite_cypher_result_rows_json`] and the batch-execute
 /// path in `session.rs`.
-pub(crate) fn rows_to_json_array(result: &CypherResult) -> Vec<serde_json::Value> {
+pub(crate) fn rows_to_json_array(
+    result: &CypherResult,
+    tagged_floats: bool,
+) -> Vec<serde_json::Value> {
+    let render = if tagged_floats {
+        kglite_value_to_json_tagged
+    } else {
+        kglite_value_to_json
+    };
     let mut rows = Vec::with_capacity(result.rows.len());
     for row in &result.rows {
         let mut obj = serde_json::Map::with_capacity(result.columns.len());
         for (idx, col) in result.columns.iter().enumerate() {
             let cell = row.get(idx).unwrap_or(&Value::Null);
-            obj.insert(col.clone(), kglite_value_to_json(cell));
+            obj.insert(col.clone(), render(cell));
         }
         rows.push(serde_json::Value::Object(obj));
     }
@@ -64,10 +81,13 @@ pub(crate) fn rows_to_json_array(result: &CypherResult) -> Vec<serde_json::Value
 
 /// Build a `columns`/`rows`/`diagnostics` JSON object for a
 /// result — the per-query element of a batch-execute result array.
-pub(crate) fn result_to_json_object(result: &CypherResult) -> serde_json::Value {
+pub(crate) fn result_to_json_object(
+    result: &CypherResult,
+    tagged_floats: bool,
+) -> serde_json::Value {
     serde_json::json!({
         "columns": result.columns,
-        "rows": rows_to_json_array(result),
+        "rows": rows_to_json_array(result, tagged_floats),
         "diagnostics": diagnostics_to_json(result).unwrap_or(serde_json::Value::Null),
     })
 }
@@ -134,7 +154,10 @@ pub unsafe extern "C" fn kglite_cypher_result_columns_json(
 /// Cell values are **natural** JSON (`2`, `"x"`, `[..]`, `{..}`) via
 /// [`kglite_value_to_json`](kglite::api::param::kglite_value_to_json) —
 /// not serde's externally-tagged enum encoding — so a binding parses
-/// `{"n": 2}`, not `{"n": {"Int64": 2}}`.
+/// `{"n": 2}`, not `{"n": {"Int64": 2}}`. A NaN or infinite float has no
+/// JSON spelling and renders as `null` unless the producing session enabled
+/// [`kglite_session_set_tagged_floats`](crate::kglite_session_set_tagged_floats),
+/// which renders it as `{"$float": "NaN" | "inf" | "-inf"}`.
 ///
 /// For large result sets this materializes the entire JSON blob
 /// in memory. Future v2 will add pull-row-by-row accessors; for
@@ -157,7 +180,7 @@ pub unsafe extern "C" fn kglite_cypher_result_rows_json(
             return std::ptr::null();
         }
         let state = unsafe { ResultState::from_handle(result) };
-        let rows = rows_to_json_array(&state.inner);
+        let rows = rows_to_json_array(&state.inner, state.tagged_floats);
         match serde_json::to_string(&rows) {
             Ok(s) => alloc_c_string(&s),
             Err(_) => std::ptr::null(),
@@ -242,7 +265,7 @@ mod tests {
             diagnostics: None,
             lazy: None,
         };
-        ResultState::into_handle(r)
+        ResultState::into_handle(r, false)
     }
 
     #[test]

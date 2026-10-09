@@ -150,3 +150,62 @@ fn tolerant_converter_keeps_an_invalid_tag_as_a_map() {
     };
     assert_eq!(map.get("$date"), Some(&Value::String("2020-13-45".into())));
 }
+
+#[test]
+fn float_tag_binds_every_non_finite_value_and_keeps_negative_zero() {
+    let params =
+        params(r#"{"n":{"$float":"NaN"},"p":{"$float":"inf"},"m":{"$float":"-inf"},"z":-0.0}"#);
+    assert!(matches!(params["n"], Value::Float64(f) if f.is_nan()));
+    assert_eq!(params["p"], Value::Float64(f64::INFINITY));
+    assert_eq!(params["m"], Value::Float64(f64::NEG_INFINITY));
+    assert!(matches!(params["z"], Value::Float64(f) if f == 0.0 && f.is_sign_negative()));
+}
+
+#[test]
+fn invalid_float_tag_payload_is_refused_not_nulled() {
+    for source in [
+        r#"{"v":{"$float":"nan"}}"#,
+        r#"{"v":{"$float":1.5}}"#,
+        r#"{"v":[{"$float":null}]}"#,
+    ] {
+        let error = rejection(source);
+        assert_eq!(
+            error.kind(),
+            JsonQueryParameterErrorKind::InvalidTemporal,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn tagged_rendering_round_trips_non_finite_floats_everywhere() {
+    let nested = Value::List(vec![
+        Value::Float64(f64::NAN),
+        Value::Float64(f64::INFINITY),
+        Value::Float64(f64::NEG_INFINITY),
+        Value::Float64(-0.0),
+        Value::Float64(1.5),
+    ]);
+    let tagged = kglite_value_to_json_tagged(&nested);
+    assert_eq!(
+        tagged.to_string(),
+        r#"[{"$float":"NaN"},{"$float":"inf"},{"$float":"-inf"},-0.0,1.5]"#
+    );
+    let Value::List(back) = json_value_to_kglite_value(&tagged) else {
+        panic!("list expected");
+    };
+    assert!(matches!(back[0], Value::Float64(f) if f.is_nan()));
+    assert_eq!(back[1], Value::Float64(f64::INFINITY));
+    assert_eq!(back[2], Value::Float64(f64::NEG_INFINITY));
+    assert!(matches!(back[3], Value::Float64(f) if f.is_sign_negative()));
+    // The natural rendering keeps its legacy `null`.
+    assert_eq!(
+        kglite_value_to_json(&Value::Float64(f64::NAN)),
+        serde_json::Value::Null
+    );
+    let point = kglite_value_to_json_tagged(&Value::Point {
+        lat: f64::NAN,
+        lon: 1.0,
+    });
+    assert_eq!(point["latitude"], serde_json::json!({"$float": "NaN"}));
+}

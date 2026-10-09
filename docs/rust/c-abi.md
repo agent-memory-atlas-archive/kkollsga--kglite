@@ -160,6 +160,12 @@ ordinary map. A malformed payload is refused like an unrepresentable number.
 Every JSON input decodes the same tags: `kglite_create_edges_batch` edge
 properties and endpoint ids, recipe record parameters, `from_records` records
 and Cypher `parse_json()`. Those tolerant paths keep a tagged object whose
+JSON has no NaN or infinity, so a non-finite float parameter is the tagged
+object `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`. Any
+other payload is refused like an unrepresentable number. A bare JSON number
+never carries them, and a parameter is never turned into `null`. `-0.0` is an
+ordinary number and keeps its sign.
+
 payload is malformed as an ordinary map instead of refusing it.
 
 ## Result access
@@ -173,6 +179,18 @@ result, and free every independently returned string with
 Query warnings (an unknown label or relationship type, a row-cap truncation)
 arrive only in `kglite_cypher_result_diagnostics_json`'s `warnings` array. The
 library does not print them to the host process's stderr.
+Result rows spell a non-finite float as `null` by default, which is the
+rendering every earlier release produced. Call
+`kglite_session_set_tagged_floats(session, 1)` to render it as the same
+`{"$float": "NaN" | "inf" | "-inf"}` tag a parameter accepts, so a value read
+back and bound again is unchanged. The setting covers
+`kglite_cypher_result_rows_json` and the rows of both batch-execute results,
+for every result the session produces afterwards, and nests at any depth,
+including node and relationship properties and a point's coordinates. It
+adds one symbol and changes no existing one; the Java binding turns it on and
+decodes the tag to `Double`. A map whose only key is `$float` with one of those
+three payloads reads as the float.
+
 
 A `PROFILE` query's diagnostics also carry a `profile` array: one
 `{"clause", "rows_in", "rows_out", "elapsed_us"}` object per executed clause,

@@ -351,24 +351,10 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
         BoltValue::Null => Ok(Value::Null),
         BoltValue::Boolean(b) => Ok(Value::Boolean(*b)),
         BoltValue::Integer(n) => Ok(Value::Int64(*n)),
-        BoltValue::Float(f) => {
-            // Reject non-finite floats — NaN and ±Infinity have ill-
-            // defined comparison semantics in Cypher (NaN != NaN, etc.)
-            // and round-tripping them through a graph store typically
-            // signals a client-side bug. Pinning rejection here surfaces
-            // it early as a clear ClientError instead of letting odd
-            // values propagate into queries.
-            if !f.is_finite() {
-                return Err(BoltError::Protocol(format!(
-                    "non-finite Float parameter: {f} \
-                     (NaN and ±Infinity not supported — typically indicates \
-                     a client-side division-by-zero or sentinel-value bug; \
-                     send NULL instead if the absence of a value is what \
-                     you mean)"
-                )));
-            }
-            Ok(Value::Float64(*f))
-        }
+        // PackStream carries NaN and ±Infinity as ordinary float64 values and
+        // every result path returns them unchanged, so a parameter takes
+        // the same value a result would.
+        BoltValue::Float(f) => Ok(Value::Float64(*f)),
         BoltValue::String(s) => Ok(Value::String(s.clone())),
 
         // ---- Recursive containers ---------------------------------------
@@ -498,6 +484,16 @@ mod tests {
             end_id,
             rel_type: "R".into(),
             properties: kglite::datatypes::PropMap::new(),
+        }
+    }
+
+    #[test]
+    fn non_finite_float_parameters_bind_unchanged() {
+        for f in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0] {
+            let Ok(Value::Float64(bound)) = from_bolt(&BoltValue::Float(f)) else {
+                panic!("{f} must bind as a Float64 parameter");
+            };
+            assert_eq!(bound.to_bits(), f.to_bits());
         }
     }
 

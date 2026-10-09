@@ -91,8 +91,9 @@ final class Json {
     }
 
     /**
-     * Write a date or datetime as the engine's tagged parameter object, e.g.
-     * {@code {"$date":"2020-01-01"}}; the engine reads it back as a typed value.
+     * Write a date, datetime or non-finite double as the engine's tagged parameter
+     * object, e.g. {@code {"$date":"2020-01-01"}} or {@code {"$float":"NaN"}}; the
+     * engine reads it back as a typed value.
      */
     private static void writeTagged(StringBuilder out, String tag, String iso) {
         out.append('{');
@@ -125,11 +126,13 @@ final class Json {
             case BigDecimal b -> out.append(b.toPlainString());
             default -> {
                 double d = value.doubleValue();
-                if (Double.isNaN(d) || Double.isInfinite(d)) {
-                    throw new KgliteException(
-                            "cannot bind a non-finite number as a Cypher parameter: " + value);
+                if (Double.isNaN(d)) {
+                    writeTagged(out, "$float", "NaN");
+                } else if (Double.isInfinite(d)) {
+                    writeTagged(out, "$float", d > 0 ? "inf" : "-inf");
+                } else {
+                    out.append(d);
                 }
-                out.append(d);
             }
         }
     }
@@ -302,15 +305,54 @@ final class Json {
             Map<String, Object> row = new LinkedHashMap<>();
             for (String column : columns) {
                 if (cells.containsKey(column)) {
-                    row.put(column, cells.get(column));
+                    row.put(column, decodeFloats(cells.get(column)));
                 }
             }
             for (Map.Entry<?, ?> cell : cells.entrySet()) {
-                row.putIfAbsent(String.valueOf(cell.getKey()), cell.getValue());
+                row.putIfAbsent(String.valueOf(cell.getKey()), decodeFloats(cell.getValue()));
             }
             rows.add(Collections.unmodifiableMap(row));
         }
         return Collections.unmodifiableList(rows);
+    }
+
+    /**
+     * Turn the {@code {"$float": "NaN" | "inf" | "-inf"}} tags the session's
+     * tagged-float result mode emits back into {@link Double}, at any depth. A
+     * one-key map holding a different payload is left as a map.
+     */
+    private static Object decodeFloats(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            if (map.size() == 1 && map.get("$float") instanceof String text) {
+                switch (text) {
+                    case "NaN" -> {
+                        return Double.NaN;
+                    }
+                    case "inf" -> {
+                        return Double.POSITIVE_INFINITY;
+                    }
+                    case "-inf" -> {
+                        return Double.NEGATIVE_INFINITY;
+                    }
+                    default -> {
+                        return value;
+                    }
+                }
+            }
+            Map<Object, Object> decoded = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                decoded.put(entry.getKey(), decodeFloats(entry.getValue()));
+            }
+            return decoded;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> decoded = new ArrayList<>(list.size());
+            for (Object item : list) {
+                decoded.add(decodeFloats(item));
+            }
+            return decoded;
+        }
+        return value;
     }
 
     @SuppressWarnings("unchecked")

@@ -192,7 +192,7 @@ follows, and the mapping is asserted in both directions by
 |---|---|---|
 | `NULL` | `null` | the key is **present** with a `null` value |
 | integer | `Long` | always — an `Integer` **parameter** returns as `Long`, so `row.get("id").equals(1)` is `false` and `.equals(1L)` is `true` |
-| float | `Double` | |
+| float | `Double` | `NaN`, `Infinity`, `-Infinity` and `-0.0` are kept, in results and as parameters |
 | boolean | `Boolean` | |
 | string | `String` | |
 | list | `List` | elements mapped recursively |
@@ -211,7 +211,7 @@ binds as a Cypher date, and `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime`
 and `Instant` bind as a datetime (an offset is applied, so the stored value is
 UTC), so `WHERE r.since = $d` matches a stored `date()`. A bare `String` stays a
 string and never equals a date. Anything else (a POJO, another `java.time`
-type, `NaN`) is rejected before the call reaches the engine, with a message
+type) is rejected before the call reaches the engine, with a message
 naming the type. Always parameterise — concatenating a
 value into Cypher is an injection exactly as it is in SQL.
 
@@ -621,7 +621,7 @@ rather than a table here, so they cannot drift: `CypherSyntax`,
 raised by the wrapper before it reached the engine reports `WrapperError` /
 `-1`. A failed query never poisons the graph — the instance stays usable.
 
-Two shapes worth knowing:
+Four shapes worth knowing:
 
 - **`WriterLeaseHeldException`** (a `KgliteException` subclass, status 102) is
   the one failure you retry rather than fix. `holder()` names the pid holding
@@ -630,6 +630,13 @@ Two shapes worth knowing:
   sentence. `self()` is the case worth branching on — the lease is held by an
   un-closed `WriterLease` in *this* JVM, which is a bug to fix rather than a
   contention to wait out. `WriterLease.acquire(path, Duration)` retries for you.
+- **`OntologyViolationException`** (status 22) carries the refusal as fields,
+  so a caller never parses the message: `rule()` (`required_property`,
+  `property_type`, `closed_labels`, `domain` or `range`), `entity()` (`node` or
+  `relationship`), `entityType()`, `property()` (or `null`) and `report()` (the
+  per-rule breakdown of a refused declaration; empty for a refused write).
+- **`ReadOnlyGraphException`** (status 24, `ReadOnly`) is a write on a handle
+  opened with `openReadOnly`, the same identity the other bindings report.
 - **A missing native library** surfaces as `ExceptionInInitializerError`, not
   `KgliteException` — resolution happens in a static initializer. The *cause*
   is the `KgliteException` naming every location tried, so log the cause; a
