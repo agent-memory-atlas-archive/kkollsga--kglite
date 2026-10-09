@@ -76,6 +76,7 @@ impl Session {
                 CommitOutcome::DurabilityFailed { error } => {
                     return Err(KgError::DurabilityFailed { message: error });
                 }
+                CommitOutcome::OntologyViolated { error } => return Err(*error),
             }
         }
     }

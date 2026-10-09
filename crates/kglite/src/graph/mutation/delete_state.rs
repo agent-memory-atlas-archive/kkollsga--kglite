@@ -159,6 +159,7 @@ pub(super) fn remove_doomed_nodes<S: BuildHasher>(
         // path rewrites, and the slot may be handed straight back out to a node
         // with a different indexed value.
         crate::graph::index_freshness::write_hooks::note_node_removed(graph, node_idx);
+        graph.note_tx_node_removal(node_idx);
         GraphWrite::remove_node(&mut graph.graph, node_idx);
         if let Some(labels) = doomed_labels {
             graph.graph.backfill_node_before_labels(node_idx, labels);

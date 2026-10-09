@@ -198,11 +198,13 @@ class OntologyViolationError(ConstraintViolationError):
     Subclasses :class:`ConstraintViolationError`, so existing ``except`` clauses
     still catch it; ``.code`` is ``"OntologyViolation"``. The graph is
     unchanged. The message names the rule (``required_property``,
-    ``property_type``, ``closed_labels``, ``domain``, ``range`` or ``cardinality``), the label or
+    ``property_type``, ``closed_labels``, ``domain``, ``range``, ``cardinality``, ``required_relationship``,
+    ``min_cardinality``, ``inverse``, ``symmetric`` or ``transitive``), the label or
     relationship type, and the property where one applies.
 
     ``rule`` is the rule that fired (``"required_property"``,
-    ``"property_type"``, ``"closed_labels"``, ``"domain"``, ``"range"`` or ``"cardinality"``; for a
+    ``"property_type"``, ``"closed_labels"``, ``"domain"``, ``"range"``, ``"cardinality"``, ``"required_relationship"``,
+    ``"min_cardinality"``, ``"inverse"``, ``"symmetric"`` or ``"transitive"``; for a
     refused declaration, the first report entry's rule). ``entity`` is ``"node"``
     or ``"relationship"``, ``entity_type`` the node primary label or relationship
     type judged, and ``property`` the offending property for the property rules,
@@ -5806,7 +5808,12 @@ class KnowledgeGraph:
         (``advisory``/``warn``/``error``) or a per-check map
         (``{"required_properties": "error"}``, unlisted checks stay
         advisory) consumed by the blueprint gate, ``ontology_audit()`` and
-        the write gate;
+        the write gate. The write gate judges a statement's own rules at its
+        end and the rules that demand something be present (``required``,
+        the ``cardinality`` minimum, enforced inverses, ``symmetric``,
+        ``transitive`` closures) when the transaction ends: a node and its
+        required edge may arrive in different statements of one transaction,
+        while a lone statement or bulk call is its own transaction;
         ``exempt`` is a per-check map of source classes whose violations are
         counted in ``ontology_audit()``'s ``exempted`` column instead of
         against severity (a class matches when it is the edge source's

@@ -229,3 +229,43 @@ def test_cardinality_violation_carries_its_rule_in_the_prefix(tmp_path):
         ), err.message
     finally:
         _teardown_bolt_server(proc)
+
+
+def test_must_exist_rules_are_judged_when_the_explicit_transaction_commits(tmp_path):
+    graph = _setup(tmp_path)
+    doc = {
+        "classes": {"Worker": {}, "Company": {}},
+        "relationships": {
+            "WORKS_AT": {"domain": "Worker", "range": "Company", "required": True, "enforcement": "error"}
+        },
+    }
+    ont = _write_ontology(tmp_path / "o.json", doc)
+    proc, url = _spawn_bolt_server(graph, extra_args=["--ontology", ont, "--durability", "off"])
+    try:
+        with _driver(url) as driver, driver.session() as session:
+            session.run("CREATE (:Company {id: 70})").consume()
+            # The node and its required edge arrive in different statements.
+            tx = session.begin_transaction()
+            tx.run("CREATE (:Worker {id: 71})").consume()
+            tx.run("MATCH (p:Worker {id: 71}), (c:Company {id: 70}) CREATE (p)-[:WORKS_AT]->(c)").consume()
+            tx.commit()
+            # A node left bare is refused at COMMIT, and nothing of the
+            # transaction lands.
+            tx = session.begin_transaction()
+            tx.run("CREATE (:Worker {id: 72})").consume()
+            tx.run("CREATE (:Worker {id: 73})-[:WORKS_AT]->(:Company {id: 74})").consume()
+            with pytest.raises(neo4j.exceptions.Neo4jError) as info:
+                tx.commit()
+            assert info.value.code == "Neo.ClientError.Schema.ConstraintValidationFailed", info.value.code
+            assert info.value.message.startswith(
+                "[kglite.OntologyViolation rule=required_relationship "
+                'entity=relationship type="WORKS_AT" property=null] '
+            ), info.value.message
+            counts = session.run("MATCH (p:Worker) WHERE p.id >= 72 RETURN count(p) AS c").single()["c"]
+            assert counts == 0
+            # An auto-commit statement is its own transaction.
+            with pytest.raises(neo4j.exceptions.Neo4jError) as info:
+                session.run("CREATE (:Worker {id: 75})").consume()
+            assert "rule=required_relationship" in info.value.message
+    finally:
+        _teardown_bolt_server(proc)

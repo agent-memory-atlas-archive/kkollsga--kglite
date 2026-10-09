@@ -365,11 +365,49 @@ impl Session {
     /// last-writer-wins — which silently discards any write that landed
     /// between this tx's begin and commit.
     pub fn commit(&self, tx: Transaction, check_occ: bool) -> CommitOutcome {
+        self.commit_reporting(tx, check_occ).0
+    }
+
+    /// [`Self::commit`], also returning the `warn`-level ontology findings of
+    /// the transaction's end-of-transaction verdict. The lines are empty for
+    /// every outcome but a commit that published.
+    ///
+    /// The verdict is the first thing a commit decides: a transaction whose
+    /// stored end state breaks an `error`-level "must exist" rule is refused
+    /// with [`CommitOutcome::OntologyViolated`], whatever the version says,
+    /// and its working copy is dropped.
+    pub fn commit_reporting(
+        &self,
+        tx: Transaction,
+        check_occ: bool,
+    ) -> (CommitOutcome, Vec<String>) {
         let (working_opt, base_version) = tx.take_working();
         let Some(mut working) = working_opt else {
-            return CommitOutcome::NoWritesNoOp;
+            return (CommitOutcome::NoWritesNoOp, Vec::new());
         };
+        let warnings = match working.judge_transaction_end() {
+            Ok(warnings) => warnings,
+            Err(error) => {
+                return (
+                    CommitOutcome::OntologyViolated {
+                        error: Box::new(error),
+                    },
+                    Vec::new(),
+                )
+            }
+        };
+        (
+            self.publish_working(working, base_version, check_occ),
+            warnings,
+        )
+    }
 
+    fn publish_working(
+        &self,
+        mut working: DirGraph,
+        base_version: u64,
+        check_occ: bool,
+    ) -> CommitOutcome {
         // Before the lock: the rebuild is O(live rows) and needs no view of the
         // published graph. Rows are renumbered silently, so the captured WAL
         // ops below are unaffected.
@@ -496,7 +534,7 @@ impl Transaction {
             // Move an unusually unique snapshot directly; normal Session/KG
             // transactions retain an owner Arc and therefore use the
             // backend-specific transaction fork.
-            let working = match Arc::try_unwrap(snap) {
+            let mut working = match Arc::try_unwrap(snap) {
                 Ok(working) => working,
                 Err(shared) => match shared.try_fork_transaction() {
                     Ok(working) => working,
@@ -507,6 +545,8 @@ impl Transaction {
                     }
                 },
             };
+            // Its "must exist" verdict is the commit's, not each statement's.
+            working.ontology_tx_deferred = true;
             self.working = Some(working);
         }
         Ok(self
@@ -556,6 +596,13 @@ pub enum CommitOutcome {
     /// re-running the unit of work will hit the same wall until the underlying
     /// problem is cleared.
     DurabilityFailed { error: String },
+    /// The transaction's stored end state breaks an `error`-level ontology
+    /// rule that can only be judged when a transaction ends (a required
+    /// relationship, a minimum degree, an inverse, a symmetric partner or a
+    /// stored transitive closure). Nothing was published: the graph is
+    /// unchanged and the working copy is dropped (lost). The error is the
+    /// typed `OntologyViolation`.
+    OntologyViolated { error: Box<KgError> },
 }
 
 #[cfg(test)]

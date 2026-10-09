@@ -36,10 +36,12 @@ def g() -> KnowledgeGraph:
 def test_define_get_clear_roundtrip(g):
     warnings = g.define_ontology(SCHOOL)
     # Teacher is concrete with no live nodes -> one warning; the warn-level
-    # ENROLLED_IN contract is violated by the stored edges -> one more.
-    assert len(warnings) == 2, warnings
+    # ENROLLED_IN contract (a required edge, and a minimum degree of one) is
+    # violated by both students -> one more line per rule.
+    assert len(warnings) == 3, warnings
     assert sum("Teacher" in w for w in warnings) == 1
-    assert sum("ENROLLED_IN.required" in w for w in warnings) == 1
+    assert sum("ENROLLED_IN.required_relationship" in w for w in warnings) == 1
+    assert sum("ENROLLED_IN.min_cardinality" in w for w in warnings) == 1
     doc = g.ontology()
     assert doc["classes"]["Person"]["abstract"] is True
     assert doc["classes"]["Student"]["is_a"] == "Person"

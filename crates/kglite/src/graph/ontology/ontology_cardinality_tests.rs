@@ -1,7 +1,7 @@
 //! The maximum side of declared cardinality at write time: a source holding
 //! more outgoing relationships of a type than the declared `max` refuses the
-//! statement or bulk call (`error`) or reports it (`warn`); the minimum stays
-//! audit-only. Each shape runs against memory, mapped and disk storage.
+//! statement or bulk call (`error`) or reports it (`warn`); the minimum is a
+//! must-exist rule judged at transaction end. Each shape runs against memory, mapped and disk storage.
 
 use super::ontology_gate_tests::{count, declare, frame, in_every_mode, run, run_outcome};
 use crate::datatypes::{DataFrame, Value};
@@ -75,7 +75,8 @@ fn the_gate_follows_the_declared_maximum_and_severity() {
     assert!(!graph.ontology_rel_gate);
     declare(&mut graph, &knows(r#"{"max": 2}"#, "warn"));
     assert!(graph.ontology_rel_gate);
-    // A minimum alone is audit-only: it enrols no write rule.
+    // A minimum alone enrols no statement-level rule: it is judged when a
+    // transaction ends (`ontology_tx_gate`).
     declare(
         &mut graph,
         r#"{"relationships": {"KNOWS": {"domain": "Person", "cardinality": {"min": 1},
@@ -335,6 +336,14 @@ fn declaring_an_error_maximum_over_violating_data_is_refused() {
     }
     declared_over(r#"{"max": 2}"#, "error").unwrap();
     declared_over(r#"{"max": 1}"#, "warn").unwrap();
-    // The minimum never refuses a declaration: nobody holds three.
-    declared_over(r#"{"min": 3}"#, "error").unwrap();
+    // The minimum refuses a declaration too: nobody holds three.
+    match declared_over(r#"{"min": 3}"#, "error") {
+        Err(DefineOntologyError::Refused(refused)) => {
+            assert_eq!(refused.entries.len(), 1, "{refused:?}");
+            assert_eq!(refused.entries[0].rule, OntologyRule::MinCardinality);
+            assert_eq!(refused.entries[0].count, 3);
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    declared_over(r#"{"min": 3}"#, "warn").unwrap();
 }

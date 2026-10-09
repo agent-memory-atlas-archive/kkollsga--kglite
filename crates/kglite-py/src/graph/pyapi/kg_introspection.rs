@@ -307,7 +307,8 @@ impl KnowledgeGraph {
         self.check_durable_owner()?;
         let graph = get_graph_mut(&mut self.inner);
         let (nodes_purged, edges_removed) =
-            kglite_core::api::mutation::purge_provisional_nodes(graph);
+            kglite_core::api::mutation::purge_provisional_nodes(graph)
+                .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))?;
         if nodes_purged > 0 {
             self.cursor.selection = CowSelection::new();
         }

@@ -113,7 +113,7 @@ pub struct KgliteErrorShape {
     /// Present on `WriterLeaseHeld`.
     pub holder: Option<LeaseHolderInfo>,
     /// Present on `OntologyViolation`: the rule that fired (`required_property`,
-    /// `property_type`, `closed_labels`, `domain`, `range`, `cardinality`). For a refused
+    /// `property_type`, `closed_labels`, `domain`, `range`, `cardinality`, `required_relationship`, `min_cardinality`, `inverse`, `symmetric`, `transitive`). For a refused
     /// declaration, the first report entry's.
     pub rule: Option<String>,
     /// Present on `OntologyViolation`.

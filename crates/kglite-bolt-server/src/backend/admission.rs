@@ -49,7 +49,14 @@ impl KgliteBackend {
         session_id: &str,
         tx_id: &str,
     ) -> Result<(), BoltError> {
-        match self.session.commit(tx, /* check_occ = */ true) {
+        let (outcome, ontology_warnings) =
+            self.session.commit_reporting(tx, /* check_occ = */ true);
+        // A COMMIT's SUCCESS has no place for them, so the operator reads
+        // the `warn`-level end-of-transaction findings in the log.
+        for warning in &ontology_warnings {
+            tracing::warn!(session_id = %session_id, tx = %tx_id, "{warning}");
+        }
+        match outcome {
             kglite::api::session::CommitOutcome::NoWritesNoOp => {
                 tracing::debug!(
                     session_id = %session_id,
@@ -84,6 +91,18 @@ impl KgliteBackend {
                     "commit was NOT applied — the write-ahead log rejected it and the \
                      server does not acknowledge writes it cannot log: {error}"
                 )));
+            }
+            // A rule that demands something be present failed on the
+            // transaction's end state. Nothing was published; the typed
+            // violation reaches the client with its structured prefix, as a
+            // statement-level refusal does.
+            kglite::api::session::CommitOutcome::OntologyViolated { error } => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    tx = %tx_id,
+                    "commit refused: the transaction breaks a declared ontology rule"
+                );
+                return Err(crate::error_map::kg_to_bolt(*error));
             }
             kglite::api::session::CommitOutcome::ConflictDetected {
                 current_version,

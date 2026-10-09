@@ -738,3 +738,297 @@ def test_load_ntriples_at_warn_loads_and_says_it_skipped_judgement(tmp_path):
     with pytest.warns(UserWarning, match="not judged"):
         stats = g.load_ntriples(str(path))
     assert any("without per-row validation" in w for w in stats["warnings"])
+
+
+# ── "Must exist" rules ───────────────────────────────────────────────────────
+#
+# A rule that demands something be present (a required relationship, a minimum
+# degree, an inverse, a symmetric partner, a stored closure) is judged on the
+# end state of a transaction. A lone statement or bulk call is its own
+# transaction; inside ``begin()`` the verdict is the commit's. Every writer
+# that can add or remove a node or a relationship is in ``MUST_ENFORCED`` (an
+# entry that leaves a rule unmet and must be refused, the graph unchanged) or
+# ``NO_MUST_RULE`` (it changes no topology).
+
+MUST_ONTOLOGY = {
+    "classes": {"Person": {}, "Company": {}},
+    "relationships": {
+        "WORKS_AT": {"domain": "Person", "range": "Company", "required": True, "enforcement": "error"},
+        "KNOWS": {"symmetric": True, "enforcement": "error"},
+    },
+}
+
+# Writers that change no topology: nodes keep their relationships and their
+# partners.
+NO_MUST_RULE = {
+    **dict.fromkeys(
+        """add_properties update calculate count unique_values collect_children
+        set_table_property""".split(),
+        "writes properties only",
+    ),
+    **{
+        name: "changes no topology"
+        for name in NO_NODE_RULE
+        if name not in {"create_connections", "create_relationships", "purge_provisional", "clear"}
+    },
+    "clear": "removes every node, so none is left short of a relationship",
+}
+
+
+def make_must_graph(storage, tmp_path, ontology=MUST_ONTOLOGY):
+    opts = {} if storage == "memory" else {"storage": storage}
+    if storage == "disk":
+        opts["path"] = str(tmp_path / "disk")
+    g = kglite.KnowledgeGraph(**opts)
+    g.cypher("CREATE (:Company {id: 10}), (:Person {id: 0}), (:Person {id: 1}), (:Person {id: 2}), (:Org {id: 5})")
+    g.cypher("MATCH (c:Company {id: 10}), (p:Person) CREATE (p)-[:WORKS_AT]->(c)")
+    g.cypher("MATCH (a:Person {id: 0}), (b:Person {id: 1}) CREATE (a)-[:KNOWS]->(b), (b)-[:KNOWS]->(a)")
+    g.define_ontology(ontology)
+    return g
+
+
+def must_snapshot(g):
+    return (
+        g.cypher("MATCH (n) RETURN count(n) AS c").to_list(),
+        g.cypher("MATCH (a)-[r]->(b) RETURN a.id AS a, type(r) AS t, b.id AS b ORDER BY a, t, b").to_list(),
+    )
+
+
+def _must_create(g, tmp):
+    expect_refused(lambda: g.cypher("CREATE (:Person {id: 9})"), "required_relationship")
+
+
+def _must_unwind(g, tmp):
+    expect_refused(
+        lambda: g.cypher("UNWIND [8, 9] AS i CREATE (:Person {id: i})"),
+        "required_relationship",
+    )
+
+
+def _must_foreach(g, tmp):
+    expect_refused(lambda: g.cypher("FOREACH (i IN [7] | CREATE (:Person {id: i}))"), "required_relationship")
+
+
+def _must_merge(g, tmp):
+    expect_refused(lambda: g.cypher("MERGE (:Person {id: 9})"), "required_relationship")
+
+
+def _must_delete_edge(g, tmp):
+    expect_refused(
+        lambda: g.cypher("MATCH (:Person {id: 2})-[r:WORKS_AT]->() DELETE r"),
+        "required_relationship",
+    )
+
+
+def _must_detach_delete(g, tmp):
+    expect_refused(lambda: g.cypher("MATCH (c:Company {id: 10}) DETACH DELETE c"), "required_relationship")
+
+
+def _must_one_way(g, tmp):
+    expect_refused(
+        lambda: g.cypher("MATCH (a:Person {id: 0}), (b:Person {id: 2}) CREATE (a)-[:KNOWS]->(b)"),
+        "symmetric",
+    )
+
+
+def _must_delete_half(g, tmp):
+    expect_refused(
+        lambda: g.cypher("MATCH (:Person {id: 0})-[r:KNOWS]->(:Person {id: 1}) DELETE r"),
+        "symmetric",
+    )
+
+
+def _must_transaction(g, tmp):
+    """The statement is accepted; the commit is the verdict."""
+    before = must_snapshot(g)
+    tx = g.begin()
+    tx.cypher("CREATE (:Person {id: 9})")
+    expect_refused(tx.commit, "required_relationship")
+    assert must_snapshot(g) == before
+
+
+def _must_transaction_with_block(g, tmp):
+    def run():
+        with g.begin() as tx:
+            tx.cypher("CREATE (:Person {id: 9})")
+
+    expect_refused(run, "required_relationship")
+
+
+def _must_session(g, tmp):
+    session = g.session()
+    before = session.node_count()
+    expect_refused(lambda: session.execute("CREATE (:Person {id: 9})"), "required_relationship")
+    assert session.node_count() == before
+
+
+def _must_add_nodes(g, tmp):
+    expect_refused(lambda: g.add_nodes(people({"id": [9]}), "Person", "id"), "required_relationship")
+
+
+def _must_add_nodes_bulk(g, tmp):
+    expect_refused(
+        lambda: g.add_nodes_bulk(
+            [
+                {
+                    "node_type": "Person",
+                    "unique_id_field": "id",
+                    "node_title_field": "id",
+                    "data": people({"id": [9]}),
+                }
+            ]
+        ),
+        "required_relationship",
+    )
+
+
+def _must_extend(g, tmp):
+    other = kglite.KnowledgeGraph()
+    other.cypher("CREATE (:Person {id: 20})")
+    expect_refused(lambda: g.extend(other), "required_relationship")
+
+
+def _must_one_way_frame(method):
+    def call(g):
+        getattr(g, method)(pd.DataFrame({"s": [0], "t": [2]}), "KNOWS", "Person", "s", "Person", "t")
+
+    return _entry(call, "symmetric")
+
+
+def _must_one_way_bulk(method):
+    def call(g):
+        getattr(g, method)(
+            [
+                {
+                    "source_type": "Person",
+                    "target_type": "Person",
+                    "connection_name": "KNOWS",
+                    "data": pd.DataFrame({"source_id": [0], "target_id": [2]}),
+                }
+            ]
+        )
+
+    return _entry(call, "symmetric")
+
+
+def _must_create_connections(method):
+    def call(g):
+        getattr(g.select("Person").traverse("WORKS_AT"), method)("KNOWS")
+
+    return _entry(call, "symmetric")
+
+
+def _must_purge(g, tmp):
+    """A purge that strands a person whose only relationship led to a stub."""
+    g.cypher("CREATE (:Person {id: 30})-[:WORKS_AT]->(:Company {id: 99})")
+    g.cypher("MATCH (c:Company {id: 99}) SET c._provisional = true")
+    before = must_snapshot(g)
+    expect_refused(g.purge_provisional, "required_relationship")
+    assert must_snapshot(g) == before
+
+
+def _must_load_ntriples(g, tmp):
+    path = tmp / "t.nt"
+    path.write_text("<http://e/a> <http://e/p> <http://e/b> .\n", encoding="utf-8")
+    with pytest.raises(Exception, match="load_ntriples cannot run"):
+        g.load_ntriples(str(path))
+
+
+MUST_ENFORCED = {
+    "cypher": [
+        _must_create,
+        _must_unwind,
+        _must_foreach,
+        _must_merge,
+        _must_delete_edge,
+        _must_detach_delete,
+        _must_one_way,
+        _must_delete_half,
+        _must_transaction,
+        _must_transaction_with_block,
+        _must_session,
+    ],
+    "add_nodes": [_must_add_nodes],
+    "add_nodes_bulk": [_must_add_nodes_bulk],
+    "extend": [_must_extend],
+    "purge_provisional": [_must_purge],
+    "load_ntriples": [_must_load_ntriples],
+    **{
+        name: [_must_one_way_frame(name)]
+        for name in ["add_connections", "add_relationships", "replace_connections", "replace_relationships"]
+    },
+    **{
+        name: [_must_one_way_bulk(name)]
+        for name in [
+            "add_connections_bulk",
+            "add_relationships_bulk",
+            "add_connections_from_source",
+            "add_relationships_from_source",
+        ]
+    },
+    **{name: [_must_create_connections(name)] for name in ["create_connections", "create_relationships"]},
+}
+
+MUST_ENTRIES = [
+    pytest.param(name, entry, id=f"{name}:{entry.__name__.lstrip('_')}")
+    for name, entries in MUST_ENFORCED.items()
+    for entry in entries
+]
+
+
+def test_every_writer_is_classified_for_must_exist_rules():
+    """Fails when a node-classified writer has no must-exist classification."""
+    writers = set(ENFORCED) | set(NO_NODE_RULE)
+    unclassified = writers - set(MUST_ENFORCED) - set(NO_MUST_RULE)
+    assert not unclassified, (
+        "classify these writers for must-exist rules in tests/test_ontology_write_coverage.py "
+        f"(MUST_ENFORCED if they can add or remove a node or relationship, else NO_MUST_RULE): {sorted(unclassified)}"
+    )
+    assert not set(MUST_ENFORCED) & set(NO_MUST_RULE), sorted(set(MUST_ENFORCED) & set(NO_MUST_RULE))
+    stale = (set(MUST_ENFORCED) | set(NO_MUST_RULE)) - writers
+    assert not stale, f"classified but not a node-classified writer: {sorted(stale)}"
+
+
+@pytest.mark.filterwarnings("ignore:.*chained graph view")
+@pytest.mark.parametrize("storage", STORAGES)
+@pytest.mark.parametrize("name,entry", MUST_ENTRIES)
+def test_every_topology_writer_refuses_an_unmet_must_exist_rule(storage, name, entry, tmp_path):
+    if name in {"extend", "load_ntriples"} and storage != "memory":
+        pytest.skip(f"{name} is in-memory only")
+    g = make_must_graph(storage, tmp_path)
+    if name != "purge_provisional":
+        before = must_snapshot(g)
+    entry(g, tmp_path)
+    if name != "purge_provisional":
+        assert must_snapshot(g) == before, "a refused write left the graph changed"
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_a_node_and_its_required_edge_commit_across_statements(storage, tmp_path):
+    g = make_must_graph(storage, tmp_path)
+    with g.begin() as tx:
+        tx.cypher("CREATE (:Person {id: 9})")
+        tx.cypher("MATCH (p:Person {id: 9}), (c:Company {id: 10}) CREATE (p)-[:WORKS_AT]->(c)")
+        tx.cypher("MATCH (p:Person {id: 9}), (q:Person {id: 0}) CREATE (p)-[:KNOWS]->(q)")
+        tx.cypher("MATCH (p:Person {id: 9}), (q:Person {id: 0}) CREATE (q)-[:KNOWS]->(p)")
+    assert g.cypher("MATCH (p:Person) RETURN count(p) AS c").to_list() == [{"c": 4}]
+    g.cypher("CREATE (:Person {id: 11})-[:WORKS_AT]->(:Company {id: 12})")
+    assert g.cypher("MATCH (p:Person) RETURN count(p) AS c").to_list() == [{"c": 5}]
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_warn_level_must_exist_rules_commit_with_a_warning(storage, tmp_path):
+    warn = {
+        "classes": MUST_ONTOLOGY["classes"],
+        "relationships": {"WORKS_AT": {**MUST_ONTOLOGY["relationships"]["WORKS_AT"], "enforcement": "warn"}},
+    }
+    g = make_must_graph(storage, tmp_path, warn)
+    result = g.cypher("CREATE (:Person {id: 9})")
+    assert any("ontology warning (required_relationship)" in w for w in result.diagnostics["warnings"])
+    tx = g.begin()
+    tx.cypher("CREATE (:Person {id: 10})")
+    with pytest.warns(UserWarning, match="ontology warning"):
+        tx.commit()
+    with pytest.warns(UserWarning, match="ontology warning"):
+        g.add_nodes(people({"id": [11]}), "Person", "id")
+    assert g.cypher("MATCH (p:Person) RETURN count(p) AS c").to_list() == [{"c": 6}]

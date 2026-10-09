@@ -4,14 +4,19 @@
 //! This reuses the audit (`audit_counts_by_property`, which runs the same
 //! per-entity predicates the write gates use) and the closed-label
 //! predicate, then filters by severity — there is no third implementation of
-//! any rule. Only the rules a write gate enforces can refuse a declaration
-//! (required/typed properties, closed labels, domain, range, and the
-//! *maximum* side of cardinality); the remaining audit-only checks (the
-//! cardinality minimum, inverse, …) are reported as warnings.
+//! any rule. Every rule a write gate enforces can refuse a declaration:
+//! required/typed properties, closed labels, domain, range, both sides of
+//! cardinality, and the transaction-end "must exist" rules (required
+//! relationship, inverse, symmetric, stored transitive closure). The
+//! must-exist rules are counted by the same judge a commit uses
+//! ([`must_exist::stored_violations`]) rather than by the audit, so a
+//! declaration is refused on exactly what a commit would refuse. No rule is
+//! audit-only at `error`; a rule declared at `warn` is reported as a warning.
 
 use std::collections::BTreeMap;
 
 use super::cardinality_gate::stored_max_violations;
+use super::must_exist;
 use super::predicates::label_allowed;
 use super::violation::{
     DefineOntologyError, OntologyDeclarationRefused, OntologyReportEntry, OntologyRule,
@@ -28,6 +33,17 @@ fn write_rule(check: &str) -> Option<OntologyRule> {
         "domain" => Some(OntologyRule::Domain),
         "range" => Some(OntologyRule::Range),
         "cardinality" => Some(OntologyRule::Cardinality),
+        _ => None,
+    }
+}
+
+fn must_rule(rule: &str) -> Option<OntologyRule> {
+    match rule {
+        "required_relationship" => Some(OntologyRule::RequiredRelationship),
+        "min_cardinality" => Some(OntologyRule::MinCardinality),
+        "inverse" => Some(OntologyRule::Inverse),
+        "symmetric" => Some(OntologyRule::Symmetric),
+        "transitive" => Some(OntologyRule::Transitive),
         _ => None,
     }
 }
@@ -67,6 +83,11 @@ pub(crate) fn verify_declaration(graph: &DirGraph) -> Result<Vec<String>, Define
             let Some((entity_type, check)) = line.rule.rsplit_once('.') else {
                 continue;
             };
+            // The must-exist rules are counted by their own judge below, so a
+            // declaration is refused on exactly what a commit would refuse.
+            if matches!(check, "required" | "inverse" | "symmetric" | "transitive") {
+                continue;
+            }
             let tail = if line.exempted > 0 {
                 format!(" (+{} exempted)", line.exempted)
             } else {
@@ -93,14 +114,17 @@ pub(crate) fn verify_declaration(graph: &DirGraph) -> Result<Vec<String>, Define
                 warnings.push(format!("ontology: {summary}"));
                 continue;
             }
-            // The audit's cardinality line also counts nodes below `min`,
-            // which no write gate enforces: only the stored maximum
-            // violators can refuse a declaration.
+            // The audit's cardinality line also counts nodes below `min`; the
+            // minimum is a must-exist rule counted below, so this line carries
+            // the stored maximum violators alone.
             let count = if check == "cardinality" {
                 stored_max_violations(graph, entity_type) as usize
             } else {
                 line.violations
             };
+            if check == "cardinality" && count == 0 {
+                continue;
+            }
             match (line.severity, write_rule(check)) {
                 (Enforcement::Error, Some(rule)) if count > 0 => {
                     refused.push(OntologyReportEntry {
@@ -118,6 +142,23 @@ pub(crate) fn verify_declaration(graph: &DirGraph) -> Result<Vec<String>, Define
                 }
                 _ => warnings.push(format!("ontology: {summary}")),
             }
+        }
+    }
+
+    for (rule, entity_type, severity, count) in must_exist::stored_violations(graph) {
+        let summary = format!("edge {entity_type}.{rule}: {count} violation(s)");
+        match (severity, must_rule(rule)) {
+            ("error", Some(rule)) => {
+                refused.push(OntologyReportEntry {
+                    rule,
+                    entity: EntityKind::Relationship,
+                    entity_type,
+                    property: None,
+                    count: count as u64,
+                });
+                lines.push(summary);
+            }
+            _ => warnings.push(format!("ontology: {summary}")),
         }
     }
 

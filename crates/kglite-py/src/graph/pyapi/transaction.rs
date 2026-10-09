@@ -312,6 +312,13 @@ impl Transaction {
             return Ok(());
         };
 
+        // The rules that demand something be present are judged on the
+        // transaction's stored end state, not statement by statement. A
+        // refusal drops the working copy: nothing is published.
+        let ontology_warnings = working
+            .judge_transaction_end()
+            .map_err(crate::error_py::kg_to_pyerr)?;
+
         // Optimistic concurrency control: the owner graph must not have moved
         // since begin(). (The OCC check stays here because the commit target
         // is the owner KnowledgeGraph's Arc, not a core Session's.)
@@ -348,7 +355,8 @@ impl Transaction {
             // buffered during the transaction arrives on `kg.inner` intact and
             // this single flush emits them together, which is exactly the
             // atomicity the caller asked for.
-            kg.commit_wal()
+            kg.commit_wal()?;
+            super::super::warn_all(py, &ontology_warnings)
         })?;
         Ok(())
     }

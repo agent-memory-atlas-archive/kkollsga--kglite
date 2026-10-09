@@ -38,6 +38,11 @@ fn commit_status(outcome: CommitOutcome, out_error_msg: *mut *const c_char) -> K
             &error,
             KgliteStatusCode::from_kg_error_code(kglite::api::KgErrorCode::DurabilityFailed),
         ),
+        CommitOutcome::OntologyViolated { error } => emit(
+            out_error_msg,
+            &error.to_string(),
+            KgliteStatusCode::from_kg_error(&error),
+        ),
         other => emit(
             out_error_msg,
             &format!("the ontology change was not committed ({other:?})"),

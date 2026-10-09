@@ -291,6 +291,11 @@ pub unsafe extern "C" fn kglite_tx_commit(
                     );
                     KgliteStatusCode::DurabilityFailed
                 }
+                CommitOutcome::OntologyViolated { error } => {
+                    let code = KgliteStatusCode::from_kg_error(&error);
+                    report(out_error_msg, &error.to_string());
+                    code
+                }
                 other => {
                     report(
                         out_error_msg,

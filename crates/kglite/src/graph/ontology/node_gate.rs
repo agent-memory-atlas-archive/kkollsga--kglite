@@ -191,6 +191,10 @@ pub(crate) struct Tally {
     refusal: Option<OntologyViolation>,
     /// Keyed `(is_relationship, rule, type, property)`.
     warned: BTreeMap<(bool, &'static str, String, Option<String>), usize>,
+    /// Every flagged entity at any severity, when asked for (declaration
+    /// verification counts what stored data breaks); keyed `(rule, type,
+    /// severity)`.
+    observed: Option<BTreeMap<(&'static str, String, &'static str), usize>>,
 }
 
 impl Tally {
@@ -205,6 +209,15 @@ impl Tally {
         violation: OntologyViolation,
         count: usize,
     ) {
+        if let Some(observed) = self.observed.as_mut() {
+            *observed
+                .entry((
+                    violation.rule.as_str(),
+                    violation.entity_type.clone(),
+                    severity.as_str(),
+                ))
+                .or_default() += count;
+        }
         match severity {
             Enforcement::Error => {
                 self.refusal.get_or_insert(violation);
@@ -224,6 +237,25 @@ impl Tally {
         }
     }
 
+    /// A tally that also counts every flagged entity, whatever its severity.
+    pub(crate) fn counting() -> Self {
+        Self {
+            observed: Some(BTreeMap::new()),
+            ..Self::default()
+        }
+    }
+
+    /// The counts a [`Self::counting`] tally gathered.
+    pub(crate) fn observed(&self) -> Vec<(&'static str, String, &'static str, usize)> {
+        self.observed
+            .iter()
+            .flatten()
+            .map(|((rule, entity_type, severity), count)| {
+                (*rule, entity_type.clone(), *severity, *count)
+            })
+            .collect()
+    }
+
     pub(crate) fn is_refused(&self) -> bool {
         self.refusal.is_some()
     }
@@ -237,23 +269,77 @@ impl Tally {
         self.warned
             .iter()
             .map(|((is_relationship, rule, entity_type, property), count)| {
-                let target = match property {
-                    Some(p) => format!("'{entity_type}' property '{p}'"),
-                    None => format!("'{entity_type}'"),
-                };
-                format!(
-                    "ontology warning ({rule}): {count} {} on {target} break(s) the \
-                     declaration (enforcement: warn)",
-                    match (*is_relationship, *count == 1) {
-                        (false, true) => "node",
-                        (false, false) => "nodes",
-                        (true, true) => "relationship",
-                        (true, false) => "relationships",
+                let what = match (*rule, property) {
+                    // The cardinality rules count the nodes that hold the
+                    // relationships, not the relationships.
+                    ("cardinality", _) => format!(
+                        "{} above the declared maximum of '{entity_type}' relationships",
+                        counted(*count, "source node", "source nodes")
+                    ),
+                    ("min_cardinality", _) => format!(
+                        "{} below the declared minimum of '{entity_type}' relationships",
+                        counted(*count, "node", "nodes")
+                    ),
+                    ("required_relationship", _) => format!(
+                        "{} without the required outgoing '{entity_type}' relationship",
+                        counted(*count, "node", "nodes")
+                    ),
+                    ("inverse", _) => format!(
+                        "{} without their declared inverse",
+                        counted(
+                            *count,
+                            &format!("'{entity_type}' relationship"),
+                            &format!("'{entity_type}' relationships")
+                        )
+                    ),
+                    ("symmetric", _) => format!(
+                        "{} without their reverse",
+                        counted(
+                            *count,
+                            &format!("'{entity_type}' relationship"),
+                            &format!("'{entity_type}' relationships")
+                        )
+                    ),
+                    ("transitive", _) => format!(
+                        "{} without the direct relationship the stored closure requires",
+                        counted(
+                            *count,
+                            &format!("'{entity_type}' chain"),
+                            &format!("'{entity_type}' chains")
+                        )
+                    ),
+                    (_, property) => {
+                        let target = match property {
+                            Some(p) => format!("'{entity_type}' property '{p}'"),
+                            None => format!("'{entity_type}'"),
+                        };
+                        format!(
+                            "{} on {target} break(s) the declaration",
+                            counted(
+                                *count,
+                                if *is_relationship {
+                                    "relationship"
+                                } else {
+                                    "node"
+                                },
+                                if *is_relationship {
+                                    "relationships"
+                                } else {
+                                    "nodes"
+                                }
+                            )
+                        )
                     }
-                )
+                };
+                format!("ontology warning ({rule}): {what} (enforcement: warn)")
             })
             .collect()
     }
+}
+
+/// `count` with its noun, in the right number.
+fn counted(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
 impl DirGraph {
@@ -273,7 +359,7 @@ impl DirGraph {
 /// Whether a stored node carries the auto-vivification marker. Such a stub is
 /// deferred exactly as NOT NULL defers it: it holds only its id until the real
 /// row arrives, and that promoting write is judged in full.
-fn is_provisional_stub(view: &crate::graph::storage::NodeView<'_>) -> bool {
+pub(crate) fn is_provisional_stub(view: &crate::graph::storage::NodeView<'_>) -> bool {
     matches!(
         view.get(InternedKey::from_str(PROVISIONAL_KEY)).as_deref(),
         Some(Value::Boolean(true))

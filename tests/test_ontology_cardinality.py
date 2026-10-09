@@ -1,6 +1,7 @@
 """Maximum cardinality at write time: a source of the declared domain holding
 more outgoing relationships of the type than `max` is refused (`error`) or
-reported (`warn`) with rule `cardinality`; the minimum stays audit-only."""
+reported (`warn`) with rule `cardinality`; the minimum is a must-exist rule judged
+when a transaction ends (see test_ontology_must_exist.py)."""
 
 import pandas as pd
 import pytest
@@ -89,6 +90,11 @@ def test_declaring_an_error_maximum_over_violating_data_is_refused():
         g.define_ontology(declaration("error", {"max": 1}))
     assert info.value.report[0]["rule"] == "cardinality"
     assert info.value.report[0]["count"] == 1
-    # The minimum alone never refuses a declaration or a write.
-    g.define_ontology(declaration("error", {"min": 5}))
+    # The minimum refuses a declaration too, under its own rule; at `warn` it
+    # is accepted.
+    with pytest.raises(kglite.OntologyViolationError) as info:
+        g.define_ontology(declaration("error", {"min": 5}))
+    assert info.value.report[0]["rule"] == "min_cardinality"
+    assert info.value.report[0]["count"] == 3
+    g.define_ontology(declaration("warn", {"min": 5}))
     befriend(g, 2, 3)

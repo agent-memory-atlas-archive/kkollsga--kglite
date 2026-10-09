@@ -256,6 +256,7 @@ impl BatchProcessor {
                 properties: PropertyStorage::Columnar(ColumnarRow::new(row_id)),
             };
             let node_idx = GraphWrite::add_node(&mut graph.graph, node_data);
+            graph.note_tx_node_created(node_idx);
             if let Some(recording) = graph.graph.recording_mut() {
                 if recording.is_wal_owner() {
                     recording.note_wal_node_identity(node_idx, type_key, creation.id.clone(), true);
@@ -938,6 +939,7 @@ impl ConnectionBatchProcessor {
                 edge_data,
             );
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+            graph.note_tx_edge_added(new_id);
             bucket.push(Candidate::Read(image));
             stats.connections_created += 1;
         }
@@ -1018,6 +1020,7 @@ impl ConnectionBatchProcessor {
                     edge_data,
                 );
                 crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+                graph.note_tx_edge_added(new_id);
                 // Within-chunk dedup: later iterations with the same key
                 // resolve to this edge via Update/Preserve/Sum. Skipped for
                 // the initial-load path, whose lookup stays empty.
@@ -1175,6 +1178,7 @@ fn merge_into_edge(
             edge_data,
         );
         crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+        graph.note_tx_edge_added(new_id);
         return (true, Some(new_id));
     }
     let mut updated = false;

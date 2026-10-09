@@ -535,6 +535,7 @@ fn can_skip_rollback_checkpoint(
         [Clause::Create(create)] => {
             graph.graph.supports_checkpoint_free_mutation()
                 && !graph.ontology_node_gate
+                && !graph.ontology_tx_judges_here()
                 && matches!(
                     create.patterns.as_slice(),
                     [pattern] if matches!(pattern.elements.as_slice(), [CreateElement::Node(_)])
@@ -545,6 +546,7 @@ fn can_skip_rollback_checkpoint(
                 return false;
             };
             graph.graph.supports_checkpoint_free_delete()
+                && !graph.ontology_tx_judges_here()
                 && delete
                     .expressions
                     .iter()

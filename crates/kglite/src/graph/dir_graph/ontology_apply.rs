@@ -66,6 +66,11 @@ impl DirGraph {
             crate::graph::ontology::node_gate::node_gate_enabled(&self.ontology);
         self.ontology_rel_gate =
             crate::graph::ontology::edge_gate::rel_gate_enabled(&self.ontology);
+        self.ontology_tx_gate =
+            crate::graph::ontology::must_exist::must_gate_enabled(&self.ontology);
+        if !self.ontology_tx_gate {
+            self.ontology_tx.clear();
+        }
         self.ontology_closures.clear();
         if self.ontology.is_empty() {
             return;

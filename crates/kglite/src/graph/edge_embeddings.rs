@@ -465,6 +465,7 @@ pub(crate) fn remove_edge_with_embeddings(
     if !is_live {
         return None;
     }
+    graph.note_tx_edge_removal(edge);
     prune_edge_embeddings(graph, edge);
     crate::graph::text_indexes::edge_text::prune_edge_text_docs(graph, edge);
     GraphWrite::remove_edge(&mut graph.graph, edge)

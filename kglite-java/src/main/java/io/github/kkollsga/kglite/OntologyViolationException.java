@@ -69,7 +69,8 @@ public final class OntologyViolationException extends KgliteException {
 
     /**
      * The refusing rule: {@code required_property}, {@code property_type},
-     * {@code closed_labels}, {@code domain}, {@code range} or {@code cardinality}.
+     * {@code closed_labels}, {@code domain}, {@code range}, {@code cardinality}, {@code required_relationship},
+     * {@code min_cardinality}, {@code inverse}, {@code symmetric} or {@code transitive}.
      *
      * @return the rule, or {@code null} if the engine supplied no detail
      */

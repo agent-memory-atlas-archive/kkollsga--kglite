@@ -311,6 +311,11 @@ pub(crate) fn execute_mutable_with_csv(
     // dropped here.
     graph.ontology_touched.clear();
     graph.ontology_touched_edges.clear();
+    if !graph.ontology_tx_deferred {
+        // A statement outside a transaction is its own: drop what an earlier
+        // one left behind.
+        graph.ontology_tx.clear();
+    }
     let mut ontology_tally = Tally::default();
 
     // `LOAD CSV` drives the rest of the pipeline over bounded row batches
@@ -376,6 +381,12 @@ pub(crate) fn execute_mutable_with_csv(
         graph.judge_touched_writes(&mut ontology_tally)?;
         out
     };
+    // Outside a transaction the statement is the whole unit, so the "must
+    // exist" rules are judged here, inside the statement checkpoint; a
+    // transaction working copy leaves them to its commit.
+    if graph.ontology_tx_judges_here() {
+        graph.judge_transaction_end_into(&mut ontology_tally)?;
+    }
 
     let mut result = finalize_mutation(
         graph,
@@ -1122,6 +1133,7 @@ fn create_pattern_edges(
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
             graph.note_ontology_edge_touch(edge_index);
+            graph.note_tx_edge_added(edge_index);
 
             if let Some(ref var) = edge_pat.variable {
                 new_row.edge_bindings.insert(

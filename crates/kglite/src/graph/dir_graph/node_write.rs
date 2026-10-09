@@ -131,6 +131,7 @@ impl DirGraph {
         // `PropertyStorage`); on disk it re-stamps the slot, which is where
         // disk reads resolve the row from.
         GraphWrite::update_row_id(&mut self.graph, idx, row_id);
+        self.note_tx_node_created(idx);
         idx
     }
 

@@ -416,6 +416,22 @@ pub struct DirGraph {
     /// (`DirGraph::judge_touched_edges`). Empty between statements.
     #[serde(skip)]
     pub(crate) ontology_touched_edges: Vec<petgraph::graph::EdgeIndex>,
+    /// Whether any "must exist" rule (required relationship, minimum degree,
+    /// inverse, symmetric, transitive) is enforced — the twin of
+    /// `ontology_rel_gate` for rules judged when a transaction ends. Derived
+    /// and reset the same way.
+    #[serde(skip)]
+    pub(crate) ontology_tx_gate: bool,
+    /// The topology written since the last end-of-transaction verdict, filled
+    /// only while `ontology_tx_gate` is set. See
+    /// [`crate::graph::ontology::must_exist`].
+    #[serde(skip)]
+    pub(crate) ontology_tx: crate::graph::ontology::must_exist::TxLog,
+    /// A transaction working copy: its must-exist verdict is the commit's, not
+    /// each statement's. Set by `Transaction::working_mut`, cleared when the
+    /// commit judges.
+    #[serde(skip)]
+    pub(crate) ontology_tx_deferred: bool,
     /// The operator supplied the ontology (the Bolt server's `--ontology`):
     /// `define_ontology`, `clear_ontology` and the `db.ontology.*` procedures
     /// refuse. The operator's runtime posture, so never persisted — a
@@ -964,6 +980,9 @@ impl DirGraph {
             ontology_touched: Vec::new(),
             ontology_rel_gate: false,
             ontology_touched_edges: Vec::new(),
+            ontology_tx_gate: false,
+            ontology_tx: Default::default(),
+            ontology_tx_deferred: false,
             ontology_locked: false,
             suppress_ontology_stamp: false,
             graph_instructions: HashMap::new(),

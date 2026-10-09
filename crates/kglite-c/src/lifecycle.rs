@@ -145,6 +145,7 @@ pub(crate) fn durable_transaction<T, E>(
         CommitOutcome::DurabilityFailed { error } => {
             Err(commit_error(KgError::DurabilityFailed { message: error }))
         }
+        CommitOutcome::OntologyViolated { error } => Err(commit_error(*error)),
         other => Err(commit_error(KgError::Internal {
             message: format!("the transaction was not committed ({other:?})"),
             location: "kglite-c::lifecycle::durable_transaction",

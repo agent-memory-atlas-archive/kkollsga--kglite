@@ -85,7 +85,7 @@ pub(crate) fn record(error: &KgError) {
 /// `{"code":"OntologyViolation","rule","entity","entity_type","property",
 /// "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
 /// `required_property` / `property_type` / `closed_labels` / `domain` /
-/// `range` / `cardinality`, `entity` is `node` / `relationship`, `property` may be null, and
+/// `range` / `cardinality` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`, `entity` is `node` / `relationship`, `property` may be null, and
 /// `report` is empty for a refused write and the per-rule breakdown for a
 /// refused declaration. Read it right after the failing call: every
 /// status-returning export on the same thread clears it on entry.

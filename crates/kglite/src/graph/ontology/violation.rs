@@ -18,6 +18,11 @@ pub enum OntologyRule {
     Domain,
     Range,
     Cardinality,
+    RequiredRelationship,
+    MinCardinality,
+    Inverse,
+    Symmetric,
+    Transitive,
 }
 
 impl OntologyRule {
@@ -29,6 +34,11 @@ impl OntologyRule {
             OntologyRule::Domain => "domain",
             OntologyRule::Range => "range",
             OntologyRule::Cardinality => "cardinality",
+            OntologyRule::RequiredRelationship => "required_relationship",
+            OntologyRule::MinCardinality => "min_cardinality",
+            OntologyRule::Inverse => "inverse",
+            OntologyRule::Symmetric => "symmetric",
+            OntologyRule::Transitive => "transitive",
         }
     }
 }

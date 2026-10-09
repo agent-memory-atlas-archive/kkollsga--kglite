@@ -47,15 +47,32 @@ before upgrading.
 
 ### Added
 
+- **"Must exist" ontology rules are enforced when the transaction ends.** A
+  relationship declared `required`, with a `cardinality.min`, an enforced
+  inverse (`inverse_enforced`), `symmetric` or a stored `transitive` closure,
+  at `warn` or `error`, is judged on the stored end state of the transaction
+  rather than per statement, so a node and its required edge may arrive in
+  different statements. `error` refuses the commit and rolls the whole
+  transaction back with `OntologyViolation` rules `required_relationship`,
+  `min_cardinality`, `inverse`, `symmetric` and `transitive`; `warn` commits and
+  reports. Deleting counts. Every interface reaches it: `Transaction.commit`,
+  `kglite_tx_commit`, the Node and Java transaction commits and a Bolt
+  `COMMIT`. A statement or bulk call outside a transaction is its own
+  transaction. Declaring an `error` rule over data that already breaks it is
+  refused, now including `cardinality.min`. Cost is the touched nodes and edges
+  times their degree, zero when no such rule is enforced.
+  `kglite.api::mutation` loaders are the transactional wrappers; the engine API
+  gains `CommitOutcome::OntologyViolated`, `Session::commit_reporting` and
+  `DirGraph::judge_transaction_end`, and `purge_provisional_nodes` now returns
+  a `Result`.
 - **A declared maximum cardinality binds writes.** A relationship declaring
   `domain` and `cardinality.max` at `warn` or `error` is judged on every
   write: a source of the domain holding more outgoing edges of the type than
   `max` is refused (`error`, rolled back) or reported (`warn`) with rule
   `cardinality` on every interface. Cypher judges each touched source at
   statement end; bulk loaders count the frame's effect before writing. Declaring
-  an `error` maximum over data already above it is refused. `cardinality.min`
-  stays audit-only. Cost is the degree of each touched source, zero when no
-  maximum is enforced.
+  an `error` maximum over data already above it is refused. Cost is the
+  degree of each touched source, zero when no maximum is enforced.
 - **Node: opt-in backpressure when the job queue is full.**
   `OpenOptions.onQueueFull: 'reject' | 'wait'` (default `'reject'`, as before).
   With `'wait'` a call that finds its 4096-job queue full waits for a slot, in
@@ -313,6 +330,10 @@ before upgrading.
 
 ### Fixed
 
+- **The `cardinality` warning counted sources as relationships.** A `warn`-level
+  maximum reported "N relationships" where N is the number of source nodes over
+  the maximum; the line now reads "N source nodes above the declared maximum of
+  'T' relationships".
 - **`backup()` reaps the stale temps of a killed backup and refuses link aliases of the live graph.**
   A backup killed mid-write left `<dest>.tmp.<pid>.<n>` behind; the next backup
   to that destination now removes temps whose writer is gone (never a live

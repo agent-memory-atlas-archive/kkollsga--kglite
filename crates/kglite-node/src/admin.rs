@@ -114,6 +114,7 @@ fn commit_change<T>(
                     message: error,
                 }))
             }
+            CommitOutcome::OntologyViolated { error } => return Err(JsErr::from_kg(&error)),
             _ => return Err(JsErr::internal("commit returned an unrecognised outcome")),
         }
     }

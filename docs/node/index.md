@@ -326,7 +326,7 @@ A refused write rejects with `OntologyViolation`. The error carries:
 
 | Field | Meaning |
 |---|---|
-| `rule` | The rule that fired: `required_property`, `property_type`, `closed_labels`, `domain`, `range` or `cardinality`. |
+| `rule` | The rule that fired: `required_property`, `property_type`, `closed_labels`, `domain`, `range`, `cardinality`, `required_relationship`, `min_cardinality`, `inverse`, `symmetric`, `transitive`. |
 | `entity` | `'node'` or `'relationship'`. |
 | `entityType` | The label or relationship type. |
 | `property` | The offending property, or `null` for a rule without one. |

@@ -271,18 +271,17 @@ pub mod api {
             ConnectionOperationReport, NodeOperationReport, OperationReport, OperationReports,
         };
         pub use crate::graph::mutation::add_properties::{add_properties, PropertySpec};
-        pub use crate::graph::mutation::extend::{extend_graph, ExtendReport};
+        pub use crate::graph::mutation::checked::{
+            add_connections, add_connections_with_identical_rows, add_edges_from_specs, add_nodes,
+            create_connections, extend_graph, purge_provisional_nodes, replace_connections,
+        };
+        pub use crate::graph::mutation::extend::ExtendReport;
         // `AddPropertiesReport` is deliberately not re-exported: it was not part
         // of the public surface before this module was split out, and the API
         // baseline pins that surface.
-        pub use crate::graph::mutation::edge_specs::{
-            add_edges_from_specs, EdgeSpec, EdgeSpecReport,
-        };
+        pub use crate::graph::mutation::edge_specs::{EdgeSpec, EdgeSpecReport};
         pub use crate::graph::mutation::identical_rows::IdenticalRows;
-        pub use crate::graph::mutation::maintain::{
-            add_connections, add_connections_with_identical_rows, add_nodes, check_connections,
-            create_connections, purge_provisional_nodes, replace_connections,
-        };
+        pub use crate::graph::mutation::maintain::check_connections;
         pub use crate::graph::mutation::property_updates::{
             update_node_properties, update_node_property_set,
         };

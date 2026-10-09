@@ -293,7 +293,6 @@ g.cypher("CREATE (:Person {id: 2})")                # OntologyViolationError
 - A node is judged on its **primary** label only. It answers to its own class and to every declared ancestor, each at that class's severity. Secondary labels never enroll a node and `closed_labels` never reads them. Materialized (managed) labels are engine-written and are not judged.
 - `cardinality.max` counts a source's **outgoing** edges of the type, parallel edges individually, exactly as `cardinality_violation` does. It needs a `domain` and judges sources of the domain or a declared descendant.
 - A Cypher statement is judged on each touched source's stored end state. A bulk loader counts the frame's effect on each source before writing: a repeated pair under `add_connections` adds nothing, and `replace_connections` drops the source's stored edges first.
-- `cardinality.min` is a "must exist" rule and stays audit-only: it is never refused at write time, and a declaration at `error` is not refused for it.
 - Cost is the degree of each touched source. A graph with no enforced maximum pays nothing.
 - `domain` and `range` naming an abstract class widen to its declared descendants.
 - Types are permissive, exactly as the audit counts them: `float` admits integers, an unknown type name passes, and `list` checks the outer container only. For strict typing use `CREATE CONSTRAINT ... IS ::`.
@@ -301,6 +300,44 @@ g.cypher("CREATE (:Person {id: 2})")                # OntologyViolationError
 - A Cypher statement is judged once its clauses have run, so a later `SET` repairs an earlier `CREATE` in the same statement.
 - Bulk loaders (`add_nodes`, `add_connections`, `update`, `store_as`, `add_properties`, `extend`, `attach_rows` and the relationship-named twins) judge the whole frame before writing anything. A refused frame leaves the graph unchanged.
 - `attach_rows` is atomic. A refused edge step leaves none of its row nodes behind.
+
+### Rules judged when the transaction ends
+
+A rule that demands something be **present** is satisfiable across statements: a node created in one statement may receive its relationship in the next. These rules are judged on the stored end state of the whole transaction, so the table above is statement-end and the table below is transaction-end.
+
+| Rule | Declared as | Refuses a transaction that ends with |
+|---|---|---|
+| `required_relationship` | relationship `required: True` with a `domain` | A node of the domain holding no outgoing edge of the type. |
+| `min_cardinality` | relationship `cardinality.min` (above 0) with a `domain` | A node of the domain holding fewer outgoing edges of the type than `min`. |
+| `inverse` | `inverse_name` with `inverse_enforced: True` | An edge `a -[T]-> b` with no `b -[INV]-> a`. |
+| `symmetric` | `symmetric: True` | An edge `a -[T]-> b` with no `b -[T]-> a`. |
+| `transitive` | `transitive: True` (a stored closure) | A chain `a -[T]-> b -[T]-> c` with no `a -[T]-> c`. |
+
+```python
+g.define_ontology({
+    "classes": {"Person": {}, "Company": {}},
+    "relationships": {"WORKS_AT": {"domain": "Person", "range": "Company",
+                                    "required": True, "enforcement": "error"}},
+})
+with g.begin() as tx:
+    tx.cypher("CREATE (:Person {id: 1})")                 # accepted for now
+    tx.cypher("MATCH (p:Person {id: 1}), (c:Company {id: 7}) CREATE (p)-[:WORKS_AT]->(c)")
+# committed: the end state holds the edge
+
+with g.begin() as tx:
+    tx.cypher("CREATE (:Person {id: 2})")
+# OntologyViolationError (rule "required_relationship") at commit: nothing of the transaction landed
+```
+
+- The verdict belongs to the unit of work that owns it. An explicit transaction is judged at commit (`Transaction.commit`, `with g.begin()`, a Bolt `COMMIT`, `kglite_tx_commit`, the Node and Java transaction commits). A Cypher statement or bulk loader call outside a transaction, including an auto-commit statement, is its own transaction and is judged at its end.
+- `error` refuses the commit and rolls the whole transaction back. `warn` commits and reports each violation: Python raises a `UserWarning` from `commit()`, and Bolt writes a server log line.
+- Deleting counts. Deleting the only required edge, or the edge that answers an enforced inverse or symmetric one, is refused. Deleting the node lifts the requirement with it.
+- `required` and `cardinality.min` count a node's outgoing edges exactly as `missing_required_edge` and `cardinality_violation` do. The rule does not judge a provisional stub (a node vivified by `add_connections` and never loaded), which holds only its id.
+- The inverse rule runs one way, as the audit does: `a -[T]-> b` needs `b -[INV]-> a`, and the answering edge may exist alone.
+- `transitive` is the stored-closure check; a loop back to the first or middle node is not a chain.
+- Only what the transaction wrote is judged: created nodes, added edges and removed edges, with the far end of each edge (and its 2-hop neighbours for `transitive`). Cost is that set times the degree around it. A graph with no enforced must-exist rule pays nothing.
+- A bulk loader inside `begin()` is judged at the commit with everything else. Outside one, a call that adds a domain node with no required edge, such as `add_nodes` of a class whose rule is `required`, is refused, so load such nodes and their edges in one transaction.
+- `load_ntriples` is refused while one of these rules is declared at `error`, for the reason it is refused for the others.
 
 ### A synthesised title does not satisfy a required `name`
 
@@ -316,7 +353,7 @@ N-Triples are loaded without per-row judgement. The loader is refused while any 
 
 Declaring checks stored data first, at each rule's severity:
 
-- A rule at `error` that stored data already breaks (for `cardinality`, a source above `max`) **refuses the whole declaration**. The previous ontology stays and nothing is changed.
+- A rule at `error` that stored data already breaks (for `cardinality`, a source above `max` or below `min`; for the must-exist rules, the nodes and edges the end-of-transaction judge would refuse) **refuses the whole declaration**. The previous ontology stays and nothing is changed.
 - A rule at `warn` installs, and the findings come back as warnings.
 - A rule at `advisory` costs no scan.
 - `.kgl` load and write-ahead-log replay restore an accepted declaration without re-checking it.

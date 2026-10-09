@@ -82,11 +82,14 @@
 pub(crate) mod cardinality_gate;
 pub(crate) mod declare_check;
 pub(crate) mod edge_gate;
+pub(crate) mod must_exist;
 pub(crate) mod node_gate;
 #[cfg(test)]
 mod ontology_cardinality_tests;
 #[cfg(test)]
 mod ontology_gate_tests;
+#[cfg(test)]
+mod ontology_must_exist_tests;
 #[cfg(test)]
 mod ontology_procedure_tests;
 #[cfg(test)]

@@ -1400,8 +1400,10 @@ fn ingest_phase1(context: Phase1Ingest<'_>) -> Result<(), String> {
 /// Under `warn`-level rules alone the load proceeds and the returned warning
 /// says per-row judgement was skipped.
 fn admit_under_enforced_ontology(graph: &DirGraph) -> Result<Option<String>, String> {
-    use crate::graph::ontology::{edge_gate, node_gate};
-    if node_gate::node_rule_refuses(&graph.ontology) || edge_gate::rel_rule_refuses(&graph.ontology)
+    use crate::graph::ontology::{edge_gate, must_exist, node_gate};
+    if node_gate::node_rule_refuses(&graph.ontology)
+        || edge_gate::rel_rule_refuses(&graph.ontology)
+        || must_exist::must_rule_refuses(&graph.ontology)
     {
         return Err(
             "load_ntriples cannot run while the declared ontology enforces rules at error: \
@@ -1411,12 +1413,14 @@ fn admit_under_enforced_ontology(graph: &DirGraph) -> Result<Option<String>, Str
         );
     }
     Ok(
-        (graph.ontology_node_gate || graph.ontology_rel_gate).then(|| {
-            "ontology warning: load_ntriples bulk-writes without per-row validation, so the \
+        (graph.ontology_node_gate || graph.ontology_rel_gate || graph.ontology_tx_gate).then(
+            || {
+                "ontology warning: load_ntriples bulk-writes without per-row validation, so the \
          declared warn-level ontology rules were not judged on the loaded entities; declare \
          the ontology again to verify the stored data."
-                .to_string()
-        }),
+                    .to_string()
+            },
+        ),
     )
 }
 

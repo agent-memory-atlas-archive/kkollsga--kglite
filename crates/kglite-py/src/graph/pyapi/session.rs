@@ -384,6 +384,7 @@ impl Session {
                 CommitOutcome::DurabilityFailed { error } => {
                     Err(KgError::DurabilityFailed { message: error })
                 }
+                CommitOutcome::OntologyViolated { error } => Err(*error),
                 other => Err(KgError::Internal {
                     message: format!("Unexpected Session commit outcome: {other:?}"),
                     location: "Session::run_write",

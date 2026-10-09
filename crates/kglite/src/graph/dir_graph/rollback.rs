@@ -212,6 +212,12 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // the per-touched-type rebuild in `StatementCheckpoint::rollback`; do not
     // park this field without it.
     std::mem::swap(&mut a.unique_indices, &mut b.unique_indices);
+    // Grows with the writes of a whole transaction, so cloning it into the
+    // shell per statement would be quadratic over a long one. Left unreversed
+    // on rollback by design: the end-of-transaction judge reads stored state
+    // and skips what no longer exists, so a failed statement's leftover entry
+    // judges an entity that must satisfy the rule anyway.
+    std::mem::swap(&mut a.ontology_tx, &mut b.ontology_tx);
 }
 
 /// Reverse one bucket append: drop the *last* copy of `idx`, which is the one
