@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -17,7 +16,7 @@ use crate::format::{render, CellCap, Mode};
 /// Per-query knobs shared by the REPL and one-shot commands.
 #[derive(Debug, Default)]
 pub struct QueryOptions {
-    pub cancel: Option<&'static AtomicBool>,
+    pub cancel: Option<kglite::api::session::CancelToken>,
     pub write_scope: Option<HashSet<String>>,
     pub git_sha: Option<String>,
     pub modified_by: Option<String>,
@@ -65,7 +64,7 @@ pub fn execute(
 ) -> Result<ExecuteOutcome> {
     let mut opts = ExecuteOptions::new(params).with_csv_import(CsvImportPolicy::LocalFilesystem);
     opts.set_timeout_ms(options.timeout_ms);
-    opts.cancel = options.cancel;
+    opts.cancel = options.cancel.clone();
     opts.write_scope = options.write_scope.as_ref();
     opts.git_sha = options.git_sha.as_deref();
     opts.modified_by = options.modified_by.as_deref();

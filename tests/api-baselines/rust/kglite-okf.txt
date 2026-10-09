@@ -3038,8 +3038,20 @@ impl core::clone::Clone for kglite::api::session::BackupReport
 pub fn kglite::api::session::BackupReport::clone(&self) -> kglite::api::session::BackupReport
 impl core::fmt::Debug for kglite::api::session::BackupReport
 pub fn kglite::api::session::BackupReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::session::CancelToken(_)
+impl kglite::api::session::CancelToken
+pub fn kglite::api::session::CancelToken::cancel(&self)
+pub fn kglite::api::session::CancelToken::from_static(flag: &'static core::sync::atomic::AtomicBool) -> Self
+pub fn kglite::api::session::CancelToken::is_cancelled(&self) -> bool
+pub fn kglite::api::session::CancelToken::new() -> Self
+impl core::clone::Clone for kglite::api::session::CancelToken
+pub fn kglite::api::session::CancelToken::clone(&self) -> kglite::api::session::CancelToken
+impl core::default::Default for kglite::api::session::CancelToken
+pub fn kglite::api::session::CancelToken::default() -> Self
+impl core::fmt::Debug for kglite::api::session::CancelToken
+pub fn kglite::api::session::CancelToken::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct kglite::api::session::ExecuteOptions<'a>
-pub kglite::api::session::ExecuteOptions::cancel: core::option::Option<&'static core::sync::atomic::AtomicBool>
+pub kglite::api::session::ExecuteOptions::cancel: core::option::Option<kglite::api::session::CancelToken>
 pub kglite::api::session::ExecuteOptions::csv_import: kglite::api::session::CsvImportPolicy
 pub kglite::api::session::ExecuteOptions::deadline: core::option::Option<std::time::Instant>
 pub kglite::api::session::ExecuteOptions::deadline_origin: core::option::Option<std::time::Instant>

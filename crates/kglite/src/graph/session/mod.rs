@@ -52,6 +52,7 @@
 
 pub use self::auto_commit::CheckpointOutcome;
 pub use self::backup::{backup_snapshot, BackupOptions, BackupReport};
+pub use self::cancel::CancelToken;
 pub use self::execute::{execute_mut, execute_read, ExecuteOptions, ExecuteOutcome};
 pub(crate) use self::noderefs::{
     property_value_needs_snapshot, snapshot_dataframe_properties, snapshot_property_values,
@@ -73,6 +74,7 @@ mod auto_commit_tests;
 pub(crate) mod backup;
 #[cfg(test)]
 mod backup_tests;
+mod cancel;
 #[cfg(test)]
 mod checkpoint_order_tests;
 #[cfg(test)]

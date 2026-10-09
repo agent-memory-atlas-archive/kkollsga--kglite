@@ -88,7 +88,7 @@ fn a_cancel_raised_mid_expression_aborts_a_one_row_create() {
     assert_eq!(count(&meter, "MATCH (t:T) RETURN count(t)"), 1);
 
     let mut graph = DirGraph::new();
-    opts.cancel = Some(&CANCEL);
+    opts.cancel = Some(crate::api::session::CancelToken::from_static(&CANCEL));
     let raise_after = full / 10;
     let raiser = std::thread::spawn(move || {
         std::thread::sleep(raise_after);

@@ -31,10 +31,10 @@
 
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
-use std::sync::atomic::AtomicBool;
 
 use crate::error::KgError;
 use crate::error_py::kg_to_pyerr;
+use kglite_core::api::session::CancelToken;
 
 /// GIL-release + cancellation + error-mapping helper on [`Python`].
 ///
@@ -51,7 +51,7 @@ pub(crate) trait EnterKg {
     /// "never cancelled".
     fn enter_kg<T, E, F>(self, f: F) -> PyResult<T>
     where
-        F: Ungil + Send + FnOnce(Option<&'static AtomicBool>) -> Result<T, E>,
+        F: Ungil + Send + FnOnce(Option<CancelToken>) -> Result<T, E>,
         T: Ungil + Send,
         E: Ungil + Send + Into<KgError>;
 }
@@ -60,7 +60,7 @@ impl EnterKg for Python<'_> {
     #[inline]
     fn enter_kg<T, E, F>(self, f: F) -> PyResult<T>
     where
-        F: Ungil + Send + FnOnce(Option<&'static AtomicBool>) -> Result<T, E>,
+        F: Ungil + Send + FnOnce(Option<CancelToken>) -> Result<T, E>,
         T: Ungil + Send,
         E: Ungil + Send + Into<KgError>,
     {
@@ -81,6 +81,7 @@ impl EnterKg for Python<'_> {
 /// finishes. On other platforms every operation is a no-op.
 #[cfg(unix)]
 mod sigint {
+    use kglite_core::api::session::CancelToken;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
@@ -89,8 +90,8 @@ mod sigint {
     static QUERY_CANCEL: AtomicBool = AtomicBool::new(false);
 
     /// `Some(&QUERY_CANCEL)` — handed to `ExecuteOptions::cancel`.
-    pub(super) fn cancel_flag() -> Option<&'static AtomicBool> {
-        Some(&QUERY_CANCEL)
+    pub(super) fn cancel_flag() -> Option<CancelToken> {
+        Some(CancelToken::from_static(&QUERY_CANCEL))
     }
 
     /// Async-signal-safe: a single relaxed atomic store. No allocation,
@@ -160,9 +161,9 @@ mod sigint {
 
 #[cfg(not(unix))]
 mod sigint {
-    use std::sync::atomic::AtomicBool;
+    use kglite_core::api::session::CancelToken;
 
-    pub(super) fn cancel_flag() -> Option<&'static AtomicBool> {
+    pub(super) fn cancel_flag() -> Option<CancelToken> {
         None
     }
 

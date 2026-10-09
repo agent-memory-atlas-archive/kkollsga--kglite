@@ -50,10 +50,9 @@
 //! from the variable-length matcher reddened the var-length interrupt shape —
 //! which is how that bug was found.
 
-use kglite::api::session::{execute_mut, execute_read, ExecuteOptions};
+use kglite::api::session::{execute_mut, execute_read, CancelToken, ExecuteOptions};
 use kglite::api::{DirGraph, KgError, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -223,18 +222,16 @@ fn assert_deadline_is_observed(graph: &DirGraph, query: &str) {
 /// corpus, and the sample is chosen by *carrier* — one shape per distinct
 /// interrupt object on the read path — not by plan shape.
 ///
-/// `ExecuteOptions::cancel` takes a `&'static AtomicBool` because its only
-/// production setter is a signal handler, which cannot capture state; each call
-/// here leaks one, and the corpus flips three.
+/// Each call drives its own `CancelToken`, cancelled from a second thread.
 fn assert_interrupt_is_observed(graph: &DirGraph, query: &str) {
-    let flag: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let token = CancelToken::new();
     let params = no_params();
     let mut opts = ExecuteOptions::eager(&params);
-    opts.cancel = Some(flag);
+    opts.cancel = Some(token.clone());
 
     let raiser = std::thread::spawn(move || {
         std::thread::sleep(DEADLINE);
-        flag.store(true, Ordering::Relaxed);
+        token.cancel();
     });
 
     let started = Instant::now();
@@ -512,6 +509,73 @@ fn algorithm_call_observes_an_interrupt() {
     assert_interrupt_is_observed(&graph, ALGORITHM_CALL);
 }
 
+// ── Per-query tokens ──────────────────────────────────────────────────────
+
+/// Cancelling one query's token must not touch a concurrent query: B has no
+/// token of A's and finishes on its own 600 ms deadline, which reports a
+/// timeout, never a cancellation.
+#[test]
+fn a_token_cancels_only_its_own_query() {
+    let graph = fixture();
+    let graph: &DirGraph = &graph;
+    let params = no_params();
+    let token_a = CancelToken::new();
+    let token_b = CancelToken::new();
+    let mut opts_a = ExecuteOptions::eager(&params);
+    opts_a.cancel = Some(token_a.clone());
+    let mut opts_b = ExecuteOptions::eager(&params);
+    opts_b.cancel = Some(token_b.clone());
+    opts_b.deadline = Some(Instant::now() + Duration::from_millis(600));
+
+    let (a, b) = std::thread::scope(|s| {
+        let ha = s.spawn(|| {
+            execute_read(graph, VAR_LENGTH_PATH, &opts_a)
+                .err()
+                .map(Box::new)
+        });
+        let hb = s.spawn(|| {
+            execute_read(graph, VAR_LENGTH_PATH, &opts_b)
+                .err()
+                .map(Box::new)
+        });
+        std::thread::sleep(DEADLINE);
+        token_a.cancel();
+        (ha.join().unwrap(), hb.join().unwrap())
+    });
+    assert!(matches!(a.as_deref(), Some(KgError::Cancelled)), "A: {a:?}");
+    assert!(!token_b.is_cancelled());
+    assert!(
+        matches!(b.as_deref(), Some(KgError::CypherTimeout { .. })),
+        "B must be stopped by its own deadline, not A's token: {b:?}"
+    );
+}
+
+/// A token cancelled before the call fails it before any work.
+#[test]
+fn a_token_cancelled_before_the_call_fails_fast() {
+    let graph = fixture();
+    let params = no_params();
+    let token = CancelToken::new();
+    token.cancel();
+    let mut opts = ExecuteOptions::eager(&params);
+    opts.cancel = Some(token);
+    let started = Instant::now();
+    let outcome = execute_read(&graph, MULTI_HOP_JOIN, &opts);
+    assert!(matches!(outcome, Err(KgError::Cancelled)));
+    assert!(started.elapsed() < DEADLINE, "took {:?}", started.elapsed());
+}
+
+/// A live, never-cancelled token changes nothing about the result.
+#[test]
+fn an_uncancelled_token_leaves_the_query_alone() {
+    let graph = fixture();
+    let params = no_params();
+    let mut opts = ExecuteOptions::eager(&params);
+    opts.cancel = Some(CancelToken::new());
+    let r = execute_read(&graph, "MATCH (n:K) RETURN count(n) AS c", &opts).expect("must run");
+    assert_eq!(r.result.rows.len(), 1);
+}
+
 // ── Budget vs deadline ────────────────────────────────────────────────────
 
 /// The multi-hop join is the shape the downstream OOM report was about, and
@@ -602,15 +666,15 @@ fn a_mutation_observes_its_deadline_and_rolls_back() {
 /// carrier reporting the other's wording passes neither of these two tests.
 #[test]
 fn a_mutation_observes_its_cancel_flag_and_rolls_back() {
-    let flag: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let token = CancelToken::new();
     let mut graph = DirGraph::new();
     let params = no_params();
     let mut opts = ExecuteOptions::eager(&params);
-    opts.cancel = Some(flag);
+    opts.cancel = Some(token.clone());
 
     let raiser = std::thread::spawn(move || {
         std::thread::sleep(DEADLINE);
-        flag.store(true, Ordering::Relaxed);
+        token.cancel();
     });
 
     let started = Instant::now();

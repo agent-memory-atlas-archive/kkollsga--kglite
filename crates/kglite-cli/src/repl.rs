@@ -382,7 +382,7 @@ impl Shell {
         let timing = self.timing;
         let start = Instant::now();
         let options = QueryOptions {
-            cancel: Some(&CANCEL),
+            cancel: Some(kglite::api::session::CancelToken::from_static(&CANCEL)),
             ..QueryOptions::default()
         };
         match exec::execute(&mut self.graph, query, &params, &options) {

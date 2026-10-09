@@ -12,10 +12,10 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::CancelToken;
 use crate::datatypes::Value;
 use crate::error::KgError;
 use crate::graph::dir_graph::rollback::StatementCheckpoint;
@@ -131,18 +131,14 @@ pub struct ExecuteOptions<'a> {
     /// back (`42` → `'Q42'`). `None`/empty = no transform (the common
     /// case; zero hot-path cost). See `cypher::value_codec`.
     pub value_codecs: Option<&'a [ValueCodec]>,
-    /// Cooperative-cancellation flag. The executor and pattern matcher poll it
-    /// at the same checkpoints they poll `deadline` (one relaxed atomic load
-    /// per ~4K comparisons); once set, the run aborts with
-    /// [`KgError::Cancelled`]. `None` = never cancelled, zero hot-path cost.
-    /// Each binding flips it from its own signal model — the Python wheel
-    /// points it at a `static AtomicBool` a scoped SIGINT handler sets, so
-    /// Ctrl-C interrupts long queries; servers pass `None` and use their own
-    /// deadline/teardown.
-    ///
-    /// `&'static` rather than an owned `Arc` because the only setter is a
-    /// process-global signal handler, which cannot capture state.
-    pub cancel: Option<&'static AtomicBool>,
+    /// Cooperative-cancellation handle. The executor and pattern matcher poll
+    /// it at the same checkpoints they poll `deadline` (one relaxed atomic
+    /// load per ~4K comparisons); once [`CancelToken::cancel`] is called from
+    /// any thread, the run aborts with [`KgError::Cancelled`]. `None` = never
+    /// cancelled, zero hot-path cost. A token already cancelled before the
+    /// call fails it before any work. Keep a clone alive until the call
+    /// returns (see [`CancelToken`]).
+    pub cancel: Option<CancelToken>,
     /// Optional role-scoped write whitelist (integrity, not secrecy — e.g. a
     /// coding role may write `Plan`/`Task` but not `Algorithm`). `None` =
     /// unrestricted (the default; zero hot-path cost); an empty set denies
@@ -253,8 +249,7 @@ impl<'a> ExecuteOptions<'a> {
 
 #[inline]
 fn is_cancelled(opts: &ExecuteOptions<'_>) -> bool {
-    opts.cancel
-        .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    opts.cancel.as_ref().is_some_and(CancelToken::is_cancelled)
 }
 
 /// Whether [`ExecuteOptions::deadline`] has passed.
@@ -433,7 +428,7 @@ fn read_statement(
         .with_row_limit(opts.row_limit)
         .with_streaming(opts.streaming)
         .with_parallel(opts.parallel)
-        .with_cancel(opts.cancel)
+        .with_cancel(opts.cancel.as_ref().map(CancelToken::flag))
         .with_csv_import(opts.csv_import.clone())
         .execute(&parsed)
         .map_err(|message| exec_err(opts, started, message))?;
@@ -678,7 +673,7 @@ fn mut_statement(
     let mut result = if is_mutation {
         let interrupt = crate::graph::algorithms::Interrupt {
             deadline: opts.deadline,
-            cancel: opts.cancel,
+            cancel: opts.cancel.as_ref().map(CancelToken::flag),
         };
         // Foreign model callbacks are available only to mutable CALL
         // dispatch. The read executor and its parallel paths never receive
@@ -753,7 +748,7 @@ fn mut_statement(
             .with_row_limit(opts.row_limit)
             .with_streaming(opts.streaming)
             .with_parallel(opts.parallel)
-            .with_cancel(opts.cancel)
+            .with_cancel(opts.cancel.as_ref().map(CancelToken::flag))
             .execute(&parsed)
             .map_err(|message| exec_err(opts, started, message))?
     };
@@ -1418,6 +1413,7 @@ mod version_soundness_tests {
 
     #[test]
     fn checkpoint_free_mutations_cancel_before_their_first_write() {
+        use std::sync::atomic::AtomicBool;
         static CANCEL: AtomicBool = AtomicBool::new(false);
 
         let mut g = DirGraph::new();
@@ -1427,7 +1423,7 @@ mod version_soundness_tests {
 
         CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut cancelled_opts = ExecuteOptions::eager(&params);
-        cancelled_opts.cancel = Some(&CANCEL);
+        cancelled_opts.cancel = Some(CancelToken::from_static(&CANCEL));
         assert!(matches!(
             execute_mut(&mut g, "MATCH (n:Item) DELETE n", &cancelled_opts),
             Err(KgError::Cancelled)

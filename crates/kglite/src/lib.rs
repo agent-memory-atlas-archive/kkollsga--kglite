@@ -965,6 +965,8 @@ pub mod api {
         /// `LOAD CSV` filesystem capability. Every binding decides what its
         /// callers get; see `ExecuteOptions::csv_import`.
         pub use crate::graph::languages::cypher::executor::load_csv::CsvImportPolicy;
+        /// Per-query cancel handle for `ExecuteOptions::cancel`.
+        pub use crate::graph::session::CancelToken;
         /// `Session::checkpoint_if_changed`'s result.
         pub use crate::graph::session::CheckpointOutcome;
         /// `Session::backup`'s options and result, and `backup_snapshot` for a holder
