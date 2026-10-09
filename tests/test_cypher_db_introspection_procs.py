@@ -268,6 +268,8 @@ def test_show_procedures_default_columns(small_graph):
         "db.cdc.disable",
         "db.temporal.declare",
         "db.temporal.undeclare",
+        "db.ontology.declare",
+        "db.ontology.clear",
         *(
             f"db.{namespace}.{op}"
             for namespace in ("node_text_index", "relationship_text_index", "text_index")
