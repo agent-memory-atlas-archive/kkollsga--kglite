@@ -193,6 +193,10 @@ and wrapped in its tag matches the stored value. A bare string stays a string.
 An object with any other key, or with a tag key beside other keys, is an
 ordinary map. A malformed payload is refused like an unrepresentable number.
 
+A point parameter is `{"$point": {"lat": 60.1, "lon": 5.2}}`; each coordinate
+is a number or a `$float` tag. `{"$map": {...}}` binds the map `{...}` itself,
+the escape for a map whose only key is a tag name.
+
 JSON has no NaN or infinity, so a non-finite float parameter is the tagged
 object `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`. Any
 other payload is refused like an unrepresentable number. A bare JSON number
@@ -212,17 +216,29 @@ portable decoding in the host language. Copy/parse data before freeing the
 result, and free every independently returned string with
 `kglite_free_string`.
 
-Result rows spell a non-finite float as `null` by default, which is the
-rendering every earlier release produced. Call
-`kglite_session_set_tagged_floats(session, 1)` to render it as the same
-`{"$float": "NaN" | "inf" | "-inf"}` tag a parameter accepts, so a value read
-back and bound again is unchanged. The setting covers
-`kglite_cypher_result_rows_json` and the rows of both batch-execute results,
-for every result the session produces afterwards, and nests at any depth,
-including node and relationship properties and a point's coordinates. It
-adds one symbol and changes no existing one; the Java binding turns it on and
-decodes the tag to `Double`. A map whose only key is `$float` with one of those
-three payloads reads as the float.
+Result rows use natural JSON by default, as every earlier release did. A date
+and a datetime are strings, a duration is `{"months", "days", "seconds"}`, a
+point is `{"latitude", "longitude"}`, and a non-finite float is `null`. Call
+`kglite_session_set_result_encoding(session, 1)` (`KGLITE_RESULT_ENCODING_TAGGED`)
+to render those values as the tags a parameter accepts, so a cell read back and
+bound again is unchanged.
+
+- `{"$date": "2020-01-02"}`
+- `{"$datetime": "2020-01-02T03:04:05.250"}`, with no zone
+- `{"$duration": {"months": 0, "days": 1, "seconds": 0}}`
+- `{"$point": {"lat": 60.1, "lon": 5.2}}`
+- `{"$float": "NaN" | "inf" | "-inf"}`
+- `{"$map": {...}}`, which wraps a map whose only key is itself a tag name, so
+  it is not read as that tag
+
+The setting covers `kglite_cypher_result_rows_json` and the rows of both batch
+results, for every result the session produces afterwards. It nests at any
+depth, including node and relationship properties and a point's coordinates.
+Strings, integers, ids, finite floats and booleans are the same in both
+encodings. Value 0 is `KGLITE_RESULT_ENCODING_NATURAL`; any other value except
+1 is `INVALID_ARGUMENT`. The Java binding turns the tagged encoding on and
+decodes the tags to `LocalDate`, `LocalDateTime`, `KgliteDuration`, `Point` and
+`Double`.
 
 Query warnings (an unknown label or relationship type, a row-cap truncation)
 arrive only in `kglite_cypher_result_diagnostics_json`'s `warnings` array. The

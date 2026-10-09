@@ -207,5 +207,114 @@ fn tagged_rendering_round_trips_non_finite_floats_everywhere() {
         lat: f64::NAN,
         lon: 1.0,
     });
-    assert_eq!(point["latitude"], serde_json::json!({"$float": "NaN"}));
+    assert_eq!(
+        point,
+        serde_json::json!({"$point": {"lat": {"$float": "NaN"}, "lon": 1.0}})
+    );
+}
+
+fn typed_values() -> Vec<Value> {
+    use crate::datatypes::PropMap;
+    let date = chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap();
+    let map = |k: &str, v: Value| Value::Map(PropMap::from_pairs(vec![(k.to_string(), v)]));
+    vec![
+        Value::DateTime(date),
+        Value::Timestamp(date.and_hms_milli_opt(3, 4, 5, 250).unwrap()),
+        Value::Duration {
+            months: -1,
+            days: 2,
+            seconds: -3,
+        },
+        Value::Point {
+            lat: 60.5,
+            lon: -5.25,
+        },
+        Value::Float64(f64::INFINITY),
+        Value::Float64(f64::NEG_INFINITY),
+        // A map that spells a tag is escaped and comes back a map.
+        map("$date", Value::String("2020-01-02".into())),
+        map("$float", Value::String("NaN".into())),
+        map("$map", Value::Int64(1)),
+        map("$point", Value::Null),
+        Value::List(vec![
+            Value::DateTime(date),
+            map("at", Value::DateTime(date)),
+            Value::List(vec![Value::Float64(f64::INFINITY), Value::Null]),
+        ]),
+    ]
+}
+
+#[test]
+fn tagged_rendering_round_trips_every_typed_value_as_a_parameter() {
+    for value in typed_values() {
+        let tagged = kglite_value_to_json_tagged(&value);
+        // The tolerant converter.
+        assert_eq!(json_value_to_kglite_value(&tagged), value, "{tagged}");
+        // The checked query-parameter path, from text.
+        let source = serde_json::json!({ "v": tagged }).to_string();
+        let params = json_text_to_query_value_map(&source).unwrap();
+        assert_eq!(params["v"], value, "{source}");
+    }
+}
+
+#[test]
+fn natural_rendering_does_not_round_trip_typed_values() {
+    // Proves the round-trip test can fail: the untagged rendering loses the type.
+    let date = Value::DateTime(chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap());
+    let natural = kglite_value_to_json(&date);
+    assert_eq!(natural, serde_json::json!("2020-01-02"));
+    assert_ne!(json_value_to_kglite_value(&natural), date);
+}
+
+#[test]
+fn tagged_non_finite_point_coordinate_round_trips() {
+    let point = Value::Point {
+        lat: f64::NAN,
+        lon: f64::NEG_INFINITY,
+    };
+    let Value::Point { lat, lon } =
+        json_value_to_kglite_value(&kglite_value_to_json_tagged(&point))
+    else {
+        panic!("point expected");
+    };
+    assert!(lat.is_nan());
+    assert_eq!(lon, f64::NEG_INFINITY);
+}
+
+#[test]
+fn tagged_node_properties_carry_their_types() {
+    use crate::datatypes::values::NodeValue;
+    use crate::datatypes::PropMap;
+    let date = chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap();
+    let node = Value::Node(Box::new(NodeValue {
+        id: 7,
+        labels: vec!["T".into()],
+        properties: PropMap::from_pairs(vec![("d".to_string(), Value::DateTime(date))]),
+    }));
+    let tagged = kglite_value_to_json_tagged(&node);
+    assert_eq!(
+        tagged["properties"]["d"],
+        serde_json::json!({"$date": "2020-01-02"})
+    );
+    assert_eq!(
+        kglite_value_to_json(&node)["properties"]["d"],
+        serde_json::json!("2020-01-02")
+    );
+}
+
+#[test]
+fn invalid_point_payloads_are_refused() {
+    for source in [
+        r#"{"v":{"$point":{"lat":1}}}"#,
+        r#"{"v":{"$point":{"lat":1,"lon":2,"alt":3}}}"#,
+        r#"{"v":{"$point":{"lat":"1","lon":2}}}"#,
+        r#"{"v":{"$point":[1,2]}}"#,
+    ] {
+        let error = rejection(source);
+        assert_eq!(
+            error.kind(),
+            JsonQueryParameterErrorKind::InvalidTemporal,
+            "{source}"
+        );
+    }
 }

@@ -146,6 +146,37 @@ typedef uint32_t KgliteStatusCode;
 #endif // __STDC_VERSION__ >= 202311L
 
 /**
+ * How a session's JSON results spell values JSON has no type for.
+ * Pass one of these to [`kglite_session_set_result_encoding`].
+ */
+enum KgliteResultEncoding
+#if __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  /**
+   * Natural JSON, the default: a date is a string, a point is
+   * `{"latitude", "longitude"}`, and NaN or an infinity is `null`.
+   */
+  KGLITE_RESULT_ENCODING_NATURAL = 0,
+  /**
+   * Typed values as one-key tagged objects, the same tags a query
+   * parameter accepts: `{"$date": "2020-01-01"}`,
+   * `{"$datetime": "2020-01-02T03:04:05.250"}`,
+   * `{"$duration": {"months": 0, "days": 1, "seconds": 0}}`,
+   * `{"$point": {"lat": 60.1, "lon": 5.2}}` and
+   * `{"$float": "NaN" | "inf" | "-inf"}`. A map whose only key is a tag name
+   * is wrapped as `{"$map": {...}}` so it is not read as that tag.
+   */
+  KGLITE_RESULT_ENCODING_TAGGED = 1,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum KgliteResultEncoding KgliteResultEncoding;
+#else
+typedef uint32_t KgliteResultEncoding;
+#endif // __STDC_VERSION__ >= 202311L
+
+/**
  * The ABI version that this build of `kglite-c` exposes. Derived at
  * compile time from the crate's package version (`CARGO_PKG_VERSION_*`),
  * so it tracks the engine version automatically.
@@ -1580,10 +1611,11 @@ KgliteStatusCode kglite_open_or_create_graph_in_mode(const char *path,
  * Cell values are **natural** JSON (`2`, `"x"`, `[..]`, `{..}`) via
  * [`kglite_value_to_json`](kglite::api::param::kglite_value_to_json) —
  * not serde's externally-tagged enum encoding — so a binding parses
- * `{"n": 2}`, not `{"n": {"Int64": 2}}`. A NaN or infinite float has no
- * JSON spelling and renders as `null` unless the producing session enabled
- * [`kglite_session_set_tagged_floats`](crate::kglite_session_set_tagged_floats),
- * which renders it as `{"$float": "NaN" | "inf" | "-inf"}`.
+ * `{"n": 2}`, not `{"n": {"Int64": 2}}`. A date is a string, a NaN or infinite
+ * float is `null`, and a point is `{"latitude", "longitude"}` unless the
+ * producing session chose
+ * [`kglite_session_set_result_encoding`](crate::kglite_session_set_result_encoding)
+ * `Tagged`, which renders them as the one-key tags a query parameter accepts.
  *
  * For large result sets this materializes the entire JSON blob
  * in memory. Future v2 will add pull-row-by-row accessors; for
@@ -2090,26 +2122,32 @@ KgliteStatusCode kglite_session_backup(const struct KgliteSession *session,
                                        const char **out_error_msg);
 
 /**
- * Choose how this session's JSON results spell a non-finite float.
+ * Choose how this session's JSON results spell typed values.
  *
- * JSON has no NaN or infinity. With `enabled` zero (the default for a new
- * session) a non-finite float renders as `null`, as it always has. With
- * `enabled` non-zero it renders as the tagged object
- * `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
- * — the same tag a query parameter accepts, so a value read back and bound
- * again is unchanged. The setting governs
+ * With [`KgliteResultEncoding::Natural`] (the default for a new session)
+ * results are the JSON every earlier release produced. With
+ * [`KgliteResultEncoding::Tagged`] a date, datetime, duration, point and every
+ * non-finite float render as the tagged objects documented on that enum, at
+ * any depth, including node and relationship properties. They are the tags a
+ * query parameter accepts, so a result cell read back and bound again is
+ * unchanged. The setting governs
  * [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
- * of results produced afterwards and the rows of the batch-execute results;
- * a result already returned keeps the encoding it was created with. Finite
- * floats, including `-0.0`, are unaffected.
+ * of results produced afterwards and the rows of the batch-execute results; a
+ * result already returned keeps the encoding it was created with. Ids,
+ * strings, integers, finite floats (including `-0.0`) and booleans are
+ * unaffected.
  *
- * A null `session` is a no-op.
+ * Returns `KGLITE_STATUS_CODE_INVALID_ARGUMENT` for a value that is not a
+ * `KgliteResultEncoding`, and `KGLITE_STATUS_CODE_NULL_POINTER` for a null
+ * `session`.
  *
  * # Safety
  *
- * `session` must be null or a valid session pointer not yet freed.
+ * `session` must be a valid session pointer not yet freed.
  */
- void kglite_session_set_tagged_floats(const struct KgliteSession *session, uint8_t enabled);
+
+KgliteStatusCode kglite_session_set_result_encoding(const struct KgliteSession *session,
+                                                    uint32_t encoding);
 
 /**
  * Free a session handle. Idempotent on null (no-op).

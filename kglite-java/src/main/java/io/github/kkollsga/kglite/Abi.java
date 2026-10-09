@@ -67,6 +67,9 @@ final class Abi {
     // as a Java long. (darwin-aarch64, linux-{aarch64,x86_64}, windows-x86_64.)
     private static final ValueLayout.OfLong USIZE = I64;
 
+    /** {@code KgliteResultEncoding::Tagged}. */
+    private static final int RESULT_ENCODING_TAGGED = 1;
+
     /** {@code struct KgliteAbiVersion { uint32_t major, minor, patch; }}. */
     private static final StructLayout ABI_VERSION_LAYOUT = MemoryLayout.structLayout(
             I32.withName("major"), I32.withName("minor"), I32.withName("patch"));
@@ -100,8 +103,8 @@ final class Abi {
             bind("kglite_graph_free", FunctionDescriptor.ofVoid(PTR));
     private static final MethodHandle SESSION_NEW =
             bind("kglite_session_new", FunctionDescriptor.of(I32, PTR, PTR));
-    private static final MethodHandle SESSION_SET_TAGGED_FLOATS =
-            bind("kglite_session_set_tagged_floats", FunctionDescriptor.ofVoid(PTR, U8));
+    private static final MethodHandle SESSION_SET_RESULT_ENCODING =
+            bind("kglite_session_set_result_encoding", FunctionDescriptor.of(I32, PTR, I32));
     private static final MethodHandle SESSION_EXECUTE_READ = bind(
             "kglite_session_execute_read", FunctionDescriptor.of(I32, PTR, PTR, PTR, PTR, PTR));
     private static final MethodHandle SESSION_EXECUTE_MUT = bind(
@@ -328,9 +331,16 @@ final class Abi {
                 throw new KgliteException(rc, statusName(rc), statusName(rc) + ": kglite_session_new");
             }
             MemorySegment session = outSession.get(PTR, 0);
-            // NaN and the infinities come back as {"$float": ...} tags that
-            // Json decodes to Double, instead of the default JSON null.
-            SESSION_SET_TAGGED_FLOATS.invokeExact(session, (byte) 1);
+            // Typed values (dates, durations, points, NaN and the infinities)
+            // come back as the one-key tags a parameter accepts, which Json
+            // decodes to LocalDate, LocalDateTime, KgliteDuration, Point and
+            // Double, instead of the default strings, maps and JSON null.
+            int encoded = (int) SESSION_SET_RESULT_ENCODING.invokeExact(session, RESULT_ENCODING_TAGGED);
+            if (encoded != STATUS_OK) {
+                SESSION_FREE.invokeExact(session);
+                throw new KgliteException(
+                        encoded, statusName(encoded), statusName(encoded) + ": kglite_session_set_result_encoding");
+            }
             return session;
         } catch (Throwable t) {
             throw rethrow(t);

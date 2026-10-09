@@ -41,6 +41,8 @@ parse_deps = false
 # Don't add any prefix; the Rust types are already `Kglite*`.
 prefix = ""
 item_types = ["enums", "structs", "opaque", "typedefs", "functions"]
+# Referenced by doc only (the setter takes a plain `uint32_t`), so named here.
+include = ["KgliteResultEncoding"]
 
 [enum]
 # Names are like `KGLITE_OK`, `KGLITE_ERR_CYPHER_SYNTAX`. The

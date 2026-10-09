@@ -85,14 +85,14 @@ import java.util.Optional;
  *           {@code String}.</td></tr>
  *   <tr><td>node, relationship, path</td><td>{@link Map}</td>
  *       <td>A structured {@code Map} — see below.</td></tr>
- *   <tr><td>date</td><td>{@link String}</td><td>ISO {@code "2020-01-01"};
- *           bind it back as a {@link java.time.LocalDate} to match it.</td></tr>
- *   <tr><td>datetime</td><td>{@link String}</td>
- *       <td>ISO {@code "2020-01-01T08:00:00"}, normalised to UTC, with no
- *           zone suffix.</td></tr>
- *   <tr><td>duration</td><td>{@link Map}</td><td>{@code months},
- *           {@code days}, {@code seconds}.</td></tr>
- *   <tr><td>point</td><td>{@link Map}</td><td>{@code latitude},
+ *   <tr><td>date</td><td>{@link java.time.LocalDate}</td>
+ *       <td>Bind it back as a parameter to match it.</td></tr>
+ *   <tr><td>datetime</td><td>{@link java.time.LocalDateTime}</td>
+ *       <td>Normalised to UTC; it carries no zone.</td></tr>
+ *   <tr><td>duration</td><td>{@link KgliteDuration}</td><td>{@code months},
+ *           {@code days}, {@code seconds}: a month is not a fixed number of
+ *           seconds, so {@link java.time.Duration} cannot hold it.</td></tr>
+ *   <tr><td>point</td><td>{@link Point}</td><td>{@code latitude},
  *           {@code longitude}.</td></tr>
  * </table>
  *

@@ -25,19 +25,19 @@ pub struct KgliteCypherResult {
 /// Private state backing a [`KgliteCypherResult`] handle.
 pub(crate) struct ResultState {
     pub(crate) inner: CypherResult,
-    /// Render non-finite floats as `$float` tags (see
-    /// `kglite_session_set_tagged_floats`) rather than `null`.
-    tagged_floats: bool,
+    /// Render typed values as tags (see `kglite_session_set_result_encoding`)
+    /// rather than natural JSON.
+    tagged_results: bool,
 }
 
 impl ResultState {
     pub(crate) fn into_handle(
         result: CypherResult,
-        tagged_floats: bool,
+        tagged_results: bool,
     ) -> *mut KgliteCypherResult {
         let boxed = Box::new(ResultState {
             inner: result,
-            tagged_floats,
+            tagged_results,
         });
         Box::into_raw(boxed).cast::<KgliteCypherResult>()
     }
@@ -60,9 +60,9 @@ impl ResultState {
 /// path in `session.rs`.
 pub(crate) fn rows_to_json_array(
     result: &CypherResult,
-    tagged_floats: bool,
+    tagged_results: bool,
 ) -> Vec<serde_json::Value> {
-    let render = if tagged_floats {
+    let render = if tagged_results {
         kglite_value_to_json_tagged
     } else {
         kglite_value_to_json
@@ -83,11 +83,11 @@ pub(crate) fn rows_to_json_array(
 /// result — the per-query element of a batch-execute result array.
 pub(crate) fn result_to_json_object(
     result: &CypherResult,
-    tagged_floats: bool,
+    tagged_results: bool,
 ) -> serde_json::Value {
     serde_json::json!({
         "columns": result.columns,
-        "rows": rows_to_json_array(result, tagged_floats),
+        "rows": rows_to_json_array(result, tagged_results),
         "diagnostics": diagnostics_to_json(result).unwrap_or(serde_json::Value::Null),
     })
 }
@@ -154,10 +154,11 @@ pub unsafe extern "C" fn kglite_cypher_result_columns_json(
 /// Cell values are **natural** JSON (`2`, `"x"`, `[..]`, `{..}`) via
 /// [`kglite_value_to_json`](kglite::api::param::kglite_value_to_json) —
 /// not serde's externally-tagged enum encoding — so a binding parses
-/// `{"n": 2}`, not `{"n": {"Int64": 2}}`. A NaN or infinite float has no
-/// JSON spelling and renders as `null` unless the producing session enabled
-/// [`kglite_session_set_tagged_floats`](crate::kglite_session_set_tagged_floats),
-/// which renders it as `{"$float": "NaN" | "inf" | "-inf"}`.
+/// `{"n": 2}`, not `{"n": {"Int64": 2}}`. A date is a string, a NaN or infinite
+/// float is `null`, and a point is `{"latitude", "longitude"}` unless the
+/// producing session chose
+/// [`kglite_session_set_result_encoding`](crate::kglite_session_set_result_encoding)
+/// `Tagged`, which renders them as the one-key tags a query parameter accepts.
 ///
 /// For large result sets this materializes the entire JSON blob
 /// in memory. Future v2 will add pull-row-by-row accessors; for
@@ -180,7 +181,7 @@ pub unsafe extern "C" fn kglite_cypher_result_rows_json(
             return std::ptr::null();
         }
         let state = unsafe { ResultState::from_handle(result) };
-        let rows = rows_to_json_array(&state.inner, state.tagged_floats);
+        let rows = rows_to_json_array(&state.inner, state.tagged_results);
         match serde_json::to_string(&rows) {
             Ok(s) => alloc_c_string(&s),
             Err(_) => std::ptr::null(),

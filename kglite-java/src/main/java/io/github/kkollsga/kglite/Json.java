@@ -73,6 +73,24 @@ final class Json {
             case float[] floats -> writePrimitiveArray(out, floats.length, i -> writeNumber(out, floats[i]));
             case double[] doubles ->
                     writePrimitiveArray(out, doubles.length, i -> writeNumber(out, doubles[i]));
+            case Point p -> {
+                out.append("{\"$point\":{\"lat\":");
+                writeNumber(out, p.latitude());
+                out.append(",\"lon\":");
+                writeNumber(out, p.longitude());
+                out.append("}}");
+            }
+            case KgliteDuration d -> writeDuration(out, d.months(), d.days(), d.seconds());
+            case java.time.Period p -> writeDuration(
+                    out, Math.toIntExact(p.toTotalMonths()), p.getDays(), 0L);
+            case java.time.Duration d -> {
+                if (d.getNano() != 0) {
+                    throw new KgliteException(
+                            "a java.time.Duration with a sub-second part cannot be bound: "
+                                    + "the engine stores whole seconds");
+                }
+                writeDuration(out, 0, 0, d.getSeconds());
+            }
             case LocalDate d -> writeTagged(out, "$date", DateTimeFormatter.ISO_LOCAL_DATE.format(d));
             case LocalDateTime d ->
                     writeTagged(out, "$datetime", DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(d));
@@ -86,7 +104,7 @@ final class Json {
                     "cannot bind a " + value.getClass().getName() + " as a Cypher parameter;"
                             + " use null, String, Boolean, a Number, Map, Iterable, Object[],"
                             + " float[], double[], LocalDate, LocalDateTime, OffsetDateTime,"
-                            + " ZonedDateTime or Instant");
+                            + " ZonedDateTime, Instant, Point, KgliteDuration, Period or Duration");
         }
     }
 
@@ -101,6 +119,12 @@ final class Json {
         out.append(':');
         writeString(out, iso);
         out.append('}');
+    }
+
+    private static void writeDuration(StringBuilder out, int months, int days, long seconds) {
+        out.append("{\"$duration\":{\"months\":").append(months);
+        out.append(",\"days\":").append(days);
+        out.append(",\"seconds\":").append(seconds).append("}}");
     }
 
     /** Write a JSON array of {@code length} elements, each emitted by {@code element}. */
@@ -305,11 +329,11 @@ final class Json {
             Map<String, Object> row = new LinkedHashMap<>();
             for (String column : columns) {
                 if (cells.containsKey(column)) {
-                    row.put(column, decodeFloats(cells.get(column)));
+                    row.put(column, decodeTagged(cells.get(column)));
                 }
             }
             for (Map.Entry<?, ?> cell : cells.entrySet()) {
-                row.putIfAbsent(String.valueOf(cell.getKey()), decodeFloats(cell.getValue()));
+                row.putIfAbsent(String.valueOf(cell.getKey()), decodeTagged(cell.getValue()));
             }
             rows.add(Collections.unmodifiableMap(row));
         }
@@ -317,42 +341,96 @@ final class Json {
     }
 
     /**
-     * Turn the {@code {"$float": "NaN" | "inf" | "-inf"}} tags the session's
-     * tagged-float result mode emits back into {@link Double}, at any depth. A
-     * one-key map holding a different payload is left as a map.
+     * Turn the one-key tagged objects the session's tagged result mode emits
+     * back into the Java value they stand for, at any depth: {@code $float} to
+     * {@link Double}, {@code $date} to {@link LocalDate}, {@code $datetime} to
+     * {@link LocalDateTime}, {@code $duration} to {@link KgliteDuration},
+     * {@code $point} to {@link Point}, and {@code $map} to the plain map it
+     * escapes. A one-key map whose payload does not fit its tag is left as a
+     * map.
      */
-    private static Object decodeFloats(Object value) {
+    private static Object decodeTagged(Object value) {
         if (value instanceof Map<?, ?> map) {
-            if (map.size() == 1 && map.get("$float") instanceof String text) {
-                switch (text) {
-                    case "NaN" -> {
-                        return Double.NaN;
-                    }
-                    case "inf" -> {
-                        return Double.POSITIVE_INFINITY;
-                    }
-                    case "-inf" -> {
-                        return Double.NEGATIVE_INFINITY;
-                    }
-                    default -> {
-                        return value;
+            if (map.size() == 1) {
+                Map.Entry<?, ?> only = map.entrySet().iterator().next();
+                if (only.getKey() instanceof String tag && tag.startsWith("$")) {
+                    Object decoded = decodeTag(tag, only.getValue());
+                    if (decoded != null) {
+                        return decoded;
                     }
                 }
             }
-            Map<Object, Object> decoded = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                decoded.put(entry.getKey(), decodeFloats(entry.getValue()));
-            }
-            return decoded;
+            return decodeEntries(map);
         }
         if (value instanceof List<?> list) {
             List<Object> decoded = new ArrayList<>(list.size());
             for (Object item : list) {
-                decoded.add(decodeFloats(item));
+                decoded.add(decodeTagged(item));
             }
             return decoded;
         }
         return value;
+    }
+
+    private static Map<Object, Object> decodeEntries(Map<?, ?> map) {
+        Map<Object, Object> decoded = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            decoded.put(entry.getKey(), decodeTagged(entry.getValue()));
+        }
+        return decoded;
+    }
+
+    /** The value a tag stands for, or {@code null} when the payload does not fit. */
+    private static Object decodeTag(String tag, Object payload) {
+        try {
+            switch (tag) {
+                case "$float" -> {
+                    return switch (payload instanceof String text ? text : "") {
+                        case "NaN" -> Double.NaN;
+                        case "inf" -> Double.POSITIVE_INFINITY;
+                        case "-inf" -> Double.NEGATIVE_INFINITY;
+                        default -> null;
+                    };
+                }
+                case "$date" -> {
+                    return payload instanceof String text ? LocalDate.parse(text) : null;
+                }
+                case "$datetime" -> {
+                    return payload instanceof String text ? LocalDateTime.parse(text) : null;
+                }
+                case "$duration" -> {
+                    if (payload instanceof Map<?, ?> fields) {
+                        return new KgliteDuration(
+                                Math.toIntExact(whole(fields.get("months"))),
+                                Math.toIntExact(whole(fields.get("days"))),
+                                whole(fields.get("seconds")));
+                    }
+                    return null;
+                }
+                case "$point" -> {
+                    if (payload instanceof Map<?, ?> fields) {
+                        Object latitude = decodeTagged(fields.get("lat"));
+                        Object longitude = decodeTagged(fields.get("lon"));
+                        if (latitude instanceof Number lat && longitude instanceof Number lon) {
+                            return new Point(lat.doubleValue(), lon.doubleValue());
+                        }
+                    }
+                    return null;
+                }
+                case "$map" -> {
+                    return payload instanceof Map<?, ?> inner ? decodeEntries(inner) : null;
+                }
+                default -> {
+                    return null;
+                }
+            }
+        } catch (java.time.DateTimeException | ArithmeticException | ClassCastException e) {
+            return null;
+        }
+    }
+
+    private static long whole(Object value) {
+        return value instanceof Long n ? n : 0L;
     }
 
     @SuppressWarnings("unchecked")

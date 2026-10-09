@@ -45,11 +45,11 @@ pub(crate) struct SessionState {
     /// through the handle would alias those `&` reads (UB). The lock
     /// is held only for the clone/store — never across a query.
     pub(crate) embedder: Mutex<Option<Arc<dyn Embedder>>>,
-    /// Whether JSON results render non-finite floats as `{"$float": …}` tags
-    /// instead of `null`; set by [`kglite_session_set_tagged_floats`]. Read
+    /// Whether JSON results render typed values as tagged objects instead of
+    /// their natural JSON; set by [`kglite_session_set_result_encoding`]. Read
     /// when a result is created, so a result keeps the encoding in force at
     /// its own execution.
-    pub(crate) tagged_floats: AtomicBool,
+    pub(crate) tagged_results: AtomicBool,
     /// Path, read-only flag and writer lease of a session opened through
     /// [`kglite_open_session`](crate::kglite_open_session); inert for a
     /// session wrapped around a graph handle. Declared last so the session
@@ -66,7 +66,7 @@ impl SessionState {
         SessionState {
             inner: session,
             embedder: Mutex::new(None),
-            tagged_floats: AtomicBool::new(false),
+            tagged_results: AtomicBool::new(false),
             life,
         }
     }
@@ -81,8 +81,8 @@ impl SessionState {
 
     /// Replace the session's embedder. Interior mutability (see the
     /// `embedder` field doc) — callers hold only `&SessionState`.
-    pub(crate) fn tagged_floats(&self) -> bool {
-        self.tagged_floats.load(Ordering::Relaxed)
+    pub(crate) fn tagged_results(&self) -> bool {
+        self.tagged_results.load(Ordering::Relaxed)
     }
 
     pub(crate) fn set_embedder(&self, embedder: Arc<dyn Embedder>) {
@@ -213,8 +213,10 @@ pub unsafe extern "C" fn kglite_session_execute_read(
             match execute_read(&snapshot, query_str, &opts) {
                 Ok(outcome) => {
                     unsafe {
-                        *out_result =
-                            ResultState::into_handle(outcome.result, session_state.tagged_floats());
+                        *out_result = ResultState::into_handle(
+                            outcome.result,
+                            session_state.tagged_results(),
+                        );
                     }
                     if !out_error_msg.is_null() {
                         unsafe {
@@ -352,7 +354,7 @@ fn finish_query(
         Ok(outcome) => {
             unsafe {
                 *out_result =
-                    ResultState::into_handle(outcome.result, session_state.tagged_floats());
+                    ResultState::into_handle(outcome.result, session_state.tagged_results());
             }
             KgliteStatusCode::Ok
         }
@@ -711,7 +713,7 @@ pub unsafe extern "C" fn kglite_session_execute_read_batch(
                 match execute_read(&snapshot, query, &opts) {
                     Ok(outcome) => results.push(result_to_json_object(
                         &outcome.result,
-                        session_state.tagged_floats(),
+                        session_state.tagged_results(),
                     )),
                     Err(err) => {
                         unsafe {
@@ -785,7 +787,7 @@ pub unsafe extern "C" fn kglite_session_execute_mut_batch(
                     let outcome = execute_mut(working, query, &opts).map_err(Box::new)?;
                     results.push(result_to_json_object(
                         &outcome.result,
-                        session_state.tagged_floats(),
+                        session_state.tagged_results(),
                     ));
                 }
                 Ok(results)
@@ -1116,36 +1118,68 @@ pub unsafe extern "C" fn kglite_session_backup(
     )
 }
 
-/// Choose how this session's JSON results spell a non-finite float.
+/// How a session's JSON results spell values JSON has no type for.
+/// Pass one of these to [`kglite_session_set_result_encoding`].
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KgliteResultEncoding {
+    /// Natural JSON, the default: a date is a string, a point is
+    /// `{"latitude", "longitude"}`, and NaN or an infinity is `null`.
+    Natural = 0,
+    /// Typed values as one-key tagged objects, the same tags a query
+    /// parameter accepts: `{"$date": "2020-01-01"}`,
+    /// `{"$datetime": "2020-01-02T03:04:05.250"}`,
+    /// `{"$duration": {"months": 0, "days": 1, "seconds": 0}}`,
+    /// `{"$point": {"lat": 60.1, "lon": 5.2}}` and
+    /// `{"$float": "NaN" | "inf" | "-inf"}`. A map whose only key is a tag name
+    /// is wrapped as `{"$map": {...}}` so it is not read as that tag.
+    Tagged = 1,
+}
+
+/// Choose how this session's JSON results spell typed values.
 ///
-/// JSON has no NaN or infinity. With `enabled` zero (the default for a new
-/// session) a non-finite float renders as `null`, as it always has. With
-/// `enabled` non-zero it renders as the tagged object
-/// `{"$float": "NaN"}`, `{"$float": "inf"}` or `{"$float": "-inf"}`
-/// — the same tag a query parameter accepts, so a value read back and bound
-/// again is unchanged. The setting governs
+/// With [`KgliteResultEncoding::Natural`] (the default for a new session)
+/// results are the JSON every earlier release produced. With
+/// [`KgliteResultEncoding::Tagged`] a date, datetime, duration, point and every
+/// non-finite float render as the tagged objects documented on that enum, at
+/// any depth, including node and relationship properties. They are the tags a
+/// query parameter accepts, so a result cell read back and bound again is
+/// unchanged. The setting governs
 /// [`kglite_cypher_result_rows_json`](crate::kglite_cypher_result_rows_json)
-/// of results produced afterwards and the rows of the batch-execute results;
-/// a result already returned keeps the encoding it was created with. Finite
-/// floats, including `-0.0`, are unaffected.
+/// of results produced afterwards and the rows of the batch-execute results; a
+/// result already returned keeps the encoding it was created with. Ids,
+/// strings, integers, finite floats (including `-0.0`) and booleans are
+/// unaffected.
 ///
-/// A null `session` is a no-op.
+/// Returns `KGLITE_STATUS_CODE_INVALID_ARGUMENT` for a value that is not a
+/// `KgliteResultEncoding`, and `KGLITE_STATUS_CODE_NULL_POINTER` for a null
+/// `session`.
 ///
 /// # Safety
 ///
-/// `session` must be null or a valid session pointer not yet freed.
+/// `session` must be a valid session pointer not yet freed.
 #[no_mangle]
-pub unsafe extern "C" fn kglite_session_set_tagged_floats(
+pub unsafe extern "C" fn kglite_session_set_result_encoding(
     session: *const KgliteSession,
-    enabled: u8,
-) {
-    crate::ffi::void_boundary(|| {
-        if session.is_null() {
-            return;
-        }
-        let state = unsafe { SessionState::from_handle(session) };
-        state.tagged_floats.store(enabled != 0, Ordering::Relaxed);
-    });
+    encoding: u32,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        std::ptr::null_mut(),
+        || {},
+        || {
+            if session.is_null() {
+                return KgliteStatusCode::NullPointer;
+            }
+            let tagged = match encoding {
+                0 => false,
+                1 => true,
+                _ => return KgliteStatusCode::InvalidArgument,
+            };
+            let state = unsafe { SessionState::from_handle(session) };
+            state.tagged_results.store(tagged, Ordering::Relaxed);
+            KgliteStatusCode::Ok
+        },
+    )
 }
 
 /// Free a session handle. Idempotent on null (no-op).

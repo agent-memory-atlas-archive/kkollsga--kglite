@@ -35,6 +35,15 @@ before upgrading.
 
 ### Added
 
+- **C ABI: tagged result encoding for every typed value.**
+  `kglite_session_set_result_encoding(session, KGLITE_RESULT_ENCODING_TAGGED)`
+  renders dates, datetimes, durations, points and non-finite floats as the tags
+  a parameter accepts (`$date`, `$datetime`, `$duration`, `$point`, `$float`),
+  so a result cell bound again is unchanged. A parameter now also takes
+  `{"$point": {"lat", "lon"}}` and the `{"$map": {...}}` escape. The default
+  stays natural JSON. The Java binding turns it on: date, datetime, duration
+  and point cells arrive as `LocalDate`, `LocalDateTime`, `KgliteDuration` and
+  `Point` instead of a string or a map.
 - **C ABI: durable open.** `kglite_open_session(path, options_json, ...)`
   takes the writer lease, opens or creates the graph, replays the write-ahead
   log and returns a session whose commits are logged at `full` (default),
@@ -176,6 +185,12 @@ before upgrading.
     for disk-mode graphs, and for the served graph itself. One backup runs at
     a time.
 
+- **Bolt server: RESET or a dropped connection cancels the running query.** The
+  statement stops at the engine's next cancellation check and its RUN fails
+  with `Neo.ClientError.Transaction.Terminated`. A cancelled auto-commit write
+  publishes nothing and frees the writer slot. An orderly GOODBYE does not
+  interrupt.
+
 ### Changed
 
 - **Performance: enforced writes cost work; everything else is unchanged.** With no ontology
@@ -200,7 +215,7 @@ before upgrading.
   is the route.
 - **NaN and the infinities now follow one rule on every interface.** A Bolt
   parameter binds them instead of being refused. In the C ABI a parameter takes
-  `{"$float": "NaN" | "inf" | "-inf"}` and `kglite_session_set_tagged_floats`
+  `{"$float": "NaN" | "inf" | "-inf"}` and `kglite_session_set_result_encoding`
   renders results in the same form (the default stays `null`); Java turns it on
   and returns `Double`. Cypher `parse_json` decodes the tag.
 - **Writer-lease contention is one error on every interface.** Python raised

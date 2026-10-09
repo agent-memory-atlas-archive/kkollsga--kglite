@@ -8,7 +8,7 @@ use kglite_c::{
     kglite_cypher_result_free, kglite_cypher_result_rows_json, kglite_free_string,
     kglite_graph_new, kglite_session_execute_mut, kglite_session_execute_read,
     kglite_session_execute_read_batch, kglite_session_free, kglite_session_new,
-    kglite_session_set_tagged_floats, KgliteCypherResult, KgliteSession, KgliteStatusCode,
+    kglite_session_set_result_encoding, KgliteCypherResult, KgliteSession, KgliteStatusCode,
 };
 use std::ffi::{c_char, CStr, CString};
 
@@ -85,7 +85,7 @@ fn tagged_parameters_bind_the_value_and_results_default_to_null() {
 #[test]
 fn opted_in_results_render_the_tag_and_round_trip_as_parameters() {
     let session = session();
-    unsafe { kglite_session_set_tagged_floats(session, 1) };
+    unsafe { kglite_session_set_result_encoding(session, 1) };
     for (payload, _) in TAGGED {
         let rows = echo(session, &format!(r#"{{"x":{{"$float":"{payload}"}}}}"#));
         assert_eq!(rows, format!(r#"[{{"x":{{"$float":"{payload}"}}}}]"#));
@@ -111,7 +111,7 @@ fn opted_in_results_render_the_tag_and_round_trip_as_parameters() {
 #[test]
 fn opted_in_batch_results_use_the_tag() {
     let session = session();
-    unsafe { kglite_session_set_tagged_floats(session, 1) };
+    unsafe { kglite_session_set_result_encoding(session, 1) };
     let queries =
         CString::new(r#"[{"query":"RETURN $x AS x","params":{"x":{"$float":"inf"}}}]"#).unwrap();
     let mut out: *const c_char = std::ptr::null();
@@ -140,7 +140,7 @@ fn stored_non_finite_property_renders_per_the_session_choice() {
     assert_eq!(rc, KgliteStatusCode::Ok, "{msg}");
     let (_, plain) = run(session, "MATCH (n:N) RETURN n.v AS v", "{}", false);
     assert_eq!(plain, r#"[{"v":null}]"#);
-    unsafe { kglite_session_set_tagged_floats(session, 1) };
+    unsafe { kglite_session_set_result_encoding(session, 1) };
     let (_, tagged) = run(session, "MATCH (n:N) RETURN n.v AS v, n AS n", "{}", false);
     assert!(tagged.contains(r#""v":{"$float":"NaN"}"#), "{tagged}");
     assert_eq!(

@@ -205,10 +205,23 @@ class KnowledgeGraphTest {
                     "RETURN date('2020-01-01') AS d, datetime('2020-01-01T10:00:00+02:00') AS t,"
                             + " duration({days: 2}) AS dur,"
                             + " point(1.5, 2.5) AS pt").get(0);
-            assertEquals("2020-01-01", scalars.get("d"));
-            assertEquals("2020-01-01T08:00:00", scalars.get("t"), "normalised to UTC, no suffix");
-            assertEquals(Map.of("months", 0L, "days", 2L, "seconds", 0L), scalars.get("dur"));
-            assertEquals(Map.of("latitude", 1.5, "longitude", 2.5), scalars.get("pt"));
+            assertEquals(java.time.LocalDate.of(2020, 1, 1), scalars.get("d"));
+            assertEquals(java.time.LocalDateTime.of(2020, 1, 1, 8, 0), scalars.get("t"),
+                    "normalised to UTC");
+            assertEquals(new KgliteDuration(0, 2, 0L), scalars.get("dur"));
+            assertEquals(new Point(1.5, 2.5), scalars.get("pt"));
+
+            // Every typed cell, read back and bound again, is the value it came from.
+            for (String column : List.of("d", "t", "dur", "pt")) {
+                assertEquals(scalars.get(column),
+                        graph.query("RETURN $v AS v", Map.of("v", scalars.get(column))).get(0).get("v"),
+                        column + " round-trips as a parameter");
+            }
+            Map<String, Object> nested = graph.query(
+                    "RETURN [date('2020-01-01'), {at: date('2021-03-04')}] AS xs").get(0);
+            assertEquals(List.of(java.time.LocalDate.of(2020, 1, 1),
+                            Map.of("at", java.time.LocalDate.of(2021, 3, 4))),
+                    nested.get("xs"), "tags decode at any depth");
         }
     }
 
@@ -229,11 +242,11 @@ class KnowledgeGraphTest {
                 assertEquals(1L, graph.query(count, params).get(0).get("c"), t.toString());
             }
 
-            // The string a date cell comes back as, rebound as a LocalDate, matches.
+            // A date cell comes back as a LocalDate; bound again it matches.
             Object vf = graph.query("MATCH ()-[r:R]->() RETURN r.vf AS vf").get(0).get("vf");
-            assertEquals("2020-01-01", vf);
+            assertEquals(java.time.LocalDate.of(2020, 1, 1), vf);
             assertEquals(1L, graph.query("MATCH ()-[r:R]->() WHERE r.vf = $v RETURN count(*) AS c",
-                    Map.of("v", java.time.LocalDate.parse((String) vf))).get(0).get("c"));
+                    Map.of("v", vf)).get(0).get("c"));
         }
     }
 

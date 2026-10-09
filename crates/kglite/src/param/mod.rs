@@ -48,8 +48,9 @@ pub enum JsonQueryParameterErrorKind {
     IntegerOutOfRange,
     /// A decimal or exponent token is outside the finite `f64` range.
     NonFiniteFloat,
-    /// A `{"$date": …}`, `{"$datetime": …}`, `{"$duration": …}` or
-    /// `{"$float": …}` object whose payload is not a valid value of that type.
+    /// A `{"$date": …}`, `{"$datetime": …}`, `{"$duration": …}`,
+    /// `{"$point": …}` or `{"$float": …}` object whose payload is not a valid
+    /// value of that type.
     InvalidTemporal,
 }
 
@@ -82,7 +83,7 @@ impl std::fmt::Display for JsonQueryParameterError {
                 "number is outside the finite 64-bit float range"
             }
             JsonQueryParameterErrorKind::InvalidTemporal => {
-                "is a tagged date, datetime, duration or float with an invalid payload"
+                "is a tagged date, datetime, duration, point or float with an invalid payload"
             }
         };
         write!(formatter, "Query parameter {} {reason}", self.path)
@@ -269,9 +270,12 @@ fn convert_query_value(v: &serde_json::Value) -> Result<Value, QueryConversionEr
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Value::List),
-        serde_json::Value::Object(map) => match tagged::decode(map) {
-            Some(decoded) => decoded.ok_or(QueryConversionError::InvalidTemporal),
-            None => convert_query_map(map),
+        serde_json::Value::Object(map) => match tagged::escaped_map(map) {
+            Some(payload) => convert_query_map(payload),
+            None => match tagged::decode(map) {
+                Some(decoded) => decoded.ok_or(QueryConversionError::InvalidTemporal),
+                None => convert_query_map(map),
+            },
         },
     }
 }
@@ -299,9 +303,11 @@ fn convert_query_map(
 /// - non-integer JSON number → `Value::Float64`
 /// - JSON string → `Value::String`
 /// - JSON array → `Value::List` (recursing element-wise)
-/// - `{"$date": …}`, `{"$datetime": …}`, `{"$duration": …}`, `{"$float": …}` →
-///   the typed value, decoded exactly as the checked query path decodes it; a tagged object
-///   whose payload is invalid stays an ordinary map
+/// - `{"$date": …}`, `{"$datetime": …}`, `{"$duration": …}`, `{"$point": …}`,
+///   `{"$float": …}` → the typed value, decoded exactly as the checked query
+///   path decodes it; a tagged object whose payload is invalid stays an
+///   ordinary map. `{"$map": {…}}` → the map `{…}` itself, the escape for a map
+///   whose only key is a tag name
 /// - any other JSON object → `Value::Map` (recursing value-wise)
 ///
 /// This converter is intentionally tolerant for declared ingestion and
@@ -340,13 +346,21 @@ pub fn json_value_to_kglite_value(v: &serde_json::Value) -> Value {
         serde_json::Value::Array(items) => {
             Value::List(items.iter().map(json_value_to_kglite_value).collect())
         }
-        serde_json::Value::Object(map) => tagged::decode(map).flatten().unwrap_or_else(|| {
-            Value::Map(
-                map.iter()
-                    .map(|(k, v)| (k.clone(), json_value_to_kglite_value(v)))
-                    .collect(),
-            )
-        }),
+        serde_json::Value::Object(map) => {
+            let entries = |map: &serde_json::Map<String, serde_json::Value>| {
+                Value::Map(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), json_value_to_kglite_value(v)))
+                        .collect(),
+                )
+            };
+            if let Some(payload) = tagged::escaped_map(map) {
+                return entries(payload);
+            }
+            tagged::decode(map)
+                .flatten()
+                .unwrap_or_else(|| entries(map))
+        }
     }
 }
 
@@ -381,25 +395,52 @@ pub fn json_value_to_kglite_value(v: &serde_json::Value) -> Value {
 /// `--mode json`, MCP recipe and okf consumers. A new `Value` variant must
 /// choose its JSON shape at compile time instead.
 pub fn kglite_value_to_json(v: &Value) -> serde_json::Value {
-    value_to_json(v, FloatMode::Null)
+    value_to_json(v, Encoding::Natural)
 }
 
-/// [`kglite_value_to_json`] with every non-finite float — top level, nested,
-/// in node/relationship properties and in a point's coordinates — rendered as
-/// the `{"$float": "NaN" | "inf" | "-inf"}` tag the parameter
-/// decoder accepts, so a result cell wrapped back in its tag round-trips.
+/// [`kglite_value_to_json`] with every typed value that JSON has no spelling
+/// for rendered as the one-key tagged object the parameter decoder accepts, so
+/// a result cell read back and bound again is unchanged. The tags, at any
+/// depth (nested lists and maps, node and relationship properties):
+///
+/// | value | JSON |
+/// |-------|------|
+/// | date | `{"$date": "2020-01-01"}` |
+/// | timestamp | `{"$datetime": "2020-01-02T03:04:05.250"}` (no zone) |
+/// | duration | `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` |
+/// | point | `{"$point": {"lat": 60.1, "lon": 5.2}}` |
+/// | NaN, infinities | `{"$float": "NaN"}`, `"inf"`, `"-inf"` |
+/// | a map whose only key is one of these tags | `{"$map": { ... }}` |
+///
+/// The same tag set the CSV/RDF export writes for list and map cells.
 /// Everything else is identical to the natural rendering.
 pub fn kglite_value_to_json_tagged(v: &Value) -> serde_json::Value {
-    value_to_json(v, FloatMode::Tagged)
+    value_to_json(v, Encoding::Tagged)
 }
 
+/// Every tag key, for escaping a user map that would otherwise read as a tag.
+const TAG_KEYS: [&str; 6] = [
+    "$date",
+    "$datetime",
+    "$duration",
+    "$point",
+    "$float",
+    "$map",
+];
+
 #[derive(Clone, Copy)]
-enum FloatMode {
-    Null,
+enum Encoding {
+    Natural,
     Tagged,
 }
 
-fn value_to_json(v: &Value, mode: FloatMode) -> serde_json::Value {
+fn tag(name: &str, payload: serde_json::Value) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    object.insert(name.to_string(), payload);
+    serde_json::Value::Object(object)
+}
+
+fn value_to_json(v: &Value, mode: Encoding) -> serde_json::Value {
     use serde_json::Value as J;
     let recurse = |x: &Value| value_to_json(x, mode);
     match v {
@@ -409,7 +450,18 @@ fn value_to_json(v: &Value, mode: FloatMode) -> serde_json::Value {
         Value::Float64(f) => json_number(*f, mode),
         Value::String(s) => J::String(s.clone()),
         Value::List(items) => J::Array(items.iter().map(recurse).collect()),
-        Value::Map(m) => J::Object(m.iter().map(|(k, v)| (k.to_string(), recurse(v))).collect()),
+        Value::Map(m) => {
+            let object: serde_json::Map<String, J> =
+                m.iter().map(|(k, v)| (k.to_string(), recurse(v))).collect();
+            let escaped = matches!(mode, Encoding::Tagged)
+                && object.len() == 1
+                && object.keys().all(|k| TAG_KEYS.contains(&k.as_str()));
+            if escaped {
+                tag("$map", J::Object(object))
+            } else {
+                J::Object(object)
+            }
+        }
         // Ids are opaque integers on every wire (Bolt encodes them as the
         // Node struct's `identity`), so they render as numbers, not strings.
         Value::UniqueId(u) => J::Number((*u).into()),
@@ -419,8 +471,24 @@ fn value_to_json(v: &Value, mode: FloatMode) -> serde_json::Value {
         Value::NodeRef(idx) => J::Number((*idx).into()),
         // ISO-8601, the only date spelling JSON consumers parse without a
         // convention agreement. Fractional seconds retain the Timestamp value's precision.
-        Value::DateTime(d) => J::String(d.format("%Y-%m-%d").to_string()),
-        Value::Timestamp(dt) => J::String(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string()),
+        Value::DateTime(d) => {
+            let text = J::String(d.format("%Y-%m-%d").to_string());
+            match mode {
+                Encoding::Natural => text,
+                Encoding::Tagged => tag("$date", text),
+            }
+        }
+        Value::Timestamp(dt) => {
+            let text = J::String(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string());
+            match mode {
+                Encoding::Natural => text,
+                Encoding::Tagged => tag("$datetime", text),
+            }
+        }
+        Value::Point { lat, lon } if matches!(mode, Encoding::Tagged) => tag(
+            "$point",
+            serde_json::json!({"lat": json_number(*lat, mode), "lon": json_number(*lon, mode)}),
+        ),
         Value::Point { lat, lon } => J::Object(
             [
                 ("latitude".to_string(), json_number(*lat, mode)),
@@ -433,15 +501,21 @@ fn value_to_json(v: &Value, mode: FloatMode) -> serde_json::Value {
             months,
             days,
             seconds,
-        } => J::Object(
-            [
-                ("months".to_string(), J::Number((*months).into())),
-                ("days".to_string(), J::Number((*days).into())),
-                ("seconds".to_string(), J::Number((*seconds).into())),
-            ]
-            .into_iter()
-            .collect(),
-        ),
+        } => {
+            let fields = J::Object(
+                [
+                    ("months".to_string(), J::Number((*months).into())),
+                    ("days".to_string(), J::Number((*days).into())),
+                    ("seconds".to_string(), J::Number((*seconds).into())),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            match mode {
+                Encoding::Natural => fields,
+                Encoding::Tagged => tag("$duration", fields),
+            }
+        }
         Value::Node(node) => node_to_json(node, mode),
         Value::Relationship(rel) => rel_to_json(rel, mode),
         Value::Path(path) => J::Object(
@@ -518,15 +592,15 @@ fn kglite_nested_value_to_csv_text(v: &Value) -> String {
 }
 
 /// A finite `f64` as a JSON number. A non-finite one has no JSON spelling:
-/// `null` under [`FloatMode::Null`], the `$float` tag under
-/// [`FloatMode::Tagged`].
-fn json_number(f: f64, mode: FloatMode) -> serde_json::Value {
+/// `null` under [`Encoding::Natural`], the `$float` tag under
+/// [`Encoding::Tagged`].
+fn json_number(f: f64, mode: Encoding) -> serde_json::Value {
     if let Some(n) = serde_json::Number::from_f64(f) {
         return serde_json::Value::Number(n);
     }
     match mode {
-        FloatMode::Null => serde_json::Value::Null,
-        FloatMode::Tagged => {
+        Encoding::Natural => serde_json::Value::Null,
+        Encoding::Tagged => {
             let text = if f.is_nan() {
                 "NaN"
             } else if f > 0.0 {
@@ -539,7 +613,7 @@ fn json_number(f: f64, mode: FloatMode) -> serde_json::Value {
     }
 }
 
-fn properties_to_json(props: &crate::datatypes::PropMap, mode: FloatMode) -> serde_json::Value {
+fn properties_to_json(props: &crate::datatypes::PropMap, mode: Encoding) -> serde_json::Value {
     serde_json::Value::Object(
         props
             .iter()
@@ -548,7 +622,7 @@ fn properties_to_json(props: &crate::datatypes::PropMap, mode: FloatMode) -> ser
     )
 }
 
-fn node_to_json(node: &crate::datatypes::values::NodeValue, mode: FloatMode) -> serde_json::Value {
+fn node_to_json(node: &crate::datatypes::values::NodeValue, mode: Encoding) -> serde_json::Value {
     use serde_json::Value as J;
     J::Object(
         [
@@ -567,7 +641,7 @@ fn node_to_json(node: &crate::datatypes::values::NodeValue, mode: FloatMode) -> 
     )
 }
 
-fn rel_to_json(rel: &crate::datatypes::values::RelValue, mode: FloatMode) -> serde_json::Value {
+fn rel_to_json(rel: &crate::datatypes::values::RelValue, mode: Encoding) -> serde_json::Value {
     use serde_json::Value as J;
     J::Object(
         [

@@ -1,7 +1,7 @@
 //! Tagged JSON objects for query parameter types JSON has no spelling for.
 //!
-//! An object with exactly one key, `$date`, `$datetime`, `$duration` or `$float`, is a
-//! typed value rather than a map. The payloads are the shapes
+//! An object with exactly one key, `$date`, `$datetime`, `$duration`, `$point` or
+//! `$float`, is a typed value rather than a map. The payloads are the shapes
 //! [`super::kglite_value_to_json`] renders those types as, so a result cell
 //! wrapped in its tag reads back as the value it came from:
 //!
@@ -14,6 +14,11 @@
 //!   `Value::Float64` of that non-finite value. JSON has no spelling for
 //!   these; the tag is the one lossless spelling, for parameters and (opt-in)
 //!   results alike. Any other payload is invalid.
+//!
+//! - `{"$point": {"lat": 60.1, "lon": 5.2}}` → `Value::Point`; each coordinate
+//!   is a number or a `$float` tag, and no other field is allowed
+//! - `{"$map": {…}}` → the plain map `{…}`: the escape for a map whose only key
+//!   is itself a tag name, which would otherwise read as that tag
 //!
 //! Any other object, including one holding a tag key beside other keys, stays
 //! an ordinary map.
@@ -38,6 +43,7 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
                 .map(Value::Timestamp)
         }),
         "$duration" => decode_duration(payload),
+        "$point" => decode_point(payload),
         "$float" => match payload.as_str() {
             Some("NaN") => Some(Value::Float64(f64::NAN)),
             Some("inf") => Some(Value::Float64(f64::INFINITY)),
@@ -45,6 +51,38 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
             _ => None,
         },
         _ => return None,
+    })
+}
+
+/// The payload of a `{"$map": {…}}` escape, `None` for any other object.
+pub(super) fn escaped_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    if map.len() != 1 {
+        return None;
+    }
+    map.get("$map")?.as_object()
+}
+
+fn decode_point(payload: &serde_json::Value) -> Option<Value> {
+    let fields = payload.as_object()?;
+    if fields.len() != 2 {
+        return None;
+    }
+    let coordinate = |name: &str| -> Option<f64> {
+        let value = fields.get(name)?;
+        match value {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::Object(tag) if tag.len() == 1 => match decode(tag)?? {
+                Value::Float64(f) => Some(f),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    Some(Value::Point {
+        lat: coordinate("lat")?,
+        lon: coordinate("lon")?,
     })
 }
 
