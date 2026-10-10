@@ -161,6 +161,8 @@ class DurableSessionTest {
             graph.cypher("CREATE (:Person {id: 1, title: 'Ada'})");
         }
         String before = treeDigest(dir);
+        // Cross a second boundary so the lease record's timestamps provably differ.
+        Thread.sleep(1100);
         try (KnowledgeGraph holder = KnowledgeGraph.open(path, OpenOptions.defaults());
                 KnowledgeGraph reader = KnowledgeGraph.open(path, OpenOptions.defaults().readOnly(true))) {
             // Opened beside a live writer: no lease was needed.
@@ -229,10 +231,18 @@ class DurableSessionTest {
         }
     }
 
+    /**
+     * Digest of every graph file. The {@code .lock-owner} record is excluded: each
+     * writer lease rewrites it with second-resolution {@code since=} and
+     * {@code released=} stamps by design, so its bytes differ whenever two opens
+     * fall in different seconds. The {@code .lock} file (empty) stays covered.
+     */
     private static String treeDigest(Path dir) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         try (Stream<Path> files = Files.walk(dir)) {
-            for (Path file : files.filter(Files::isRegularFile).sorted().toList()) {
+            for (Path file : files.filter(Files::isRegularFile)
+                    .filter(f -> !f.getFileName().toString().endsWith(".lock-owner"))
+                    .sorted().toList()) {
                 digest.update(dir.relativize(file).toString().getBytes());
                 digest.update(Files.readAllBytes(file));
             }
