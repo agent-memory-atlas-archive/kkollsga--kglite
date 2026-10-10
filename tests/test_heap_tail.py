@@ -58,7 +58,7 @@ def _tail_writes(g):
 
 
 @pytest.mark.parametrize("hold", [False, True])
-def test_a_tail_only_float_key_keeps_its_float_record(tmp_path, hold):
+def test_a_tail_only_float_key_records_mixed_when_an_integer_follows(tmp_path, hold):
     g = _graph()
     view = g.freeze() if hold else None
     _tail_writes(g)
@@ -71,22 +71,23 @@ def test_a_tail_only_float_key_keeps_its_float_record(tmp_path, hold):
     gc.collect()
     g.cypher("CREATE (:Item {id: 999999})")
     assert kglite._backend_is_forked(g) is False
-    assert (live, loaded, _w_type(g)) == (["Float64"], ["Float64"], ["Float64"])
+    assert (live, loaded, _w_type(g)) == (["mixed"], ["mixed"], ["mixed"])
 
 
 @pytest.mark.parametrize("hold", [False, True])
-def test_add_nodes_into_a_tail_keeps_the_float_record(hold):
+def test_add_nodes_into_a_tail_records_mixed_when_an_integer_follows(hold):
     g = _graph()
     view = g.freeze() if hold else None
     g.add_nodes(pd.DataFrame({"id": [ROWS], "title": ["a"], "w": [1.5]}), "Item", "id", "title")
-    with pytest.warns(UserWarning, match="stays the recorded type"):
+    # A float then an integer widens the column to mixed, held view or not.
+    with pytest.warns(UserWarning, match="recorded type is now 'mixed'"):
         g.add_nodes(pd.DataFrame({"id": [ROWS + 1], "title": ["b"], "w": [2]}), "Item", "id", "title")
     assert kglite._backend_is_forked(g) is hold
-    assert _w_type(g) == ["Float64"]
+    assert _w_type(g) == ["mixed"]
     del view
     gc.collect()
     g.cypher("CREATE (:Item {id: 999999})")
-    assert _w_type(g) == ["Float64"]
+    assert _w_type(g) == ["mixed"]
 
 
 def test_add_nodes_under_freeze_reads_back_and_folds():
@@ -130,7 +131,7 @@ def test_tail_rows_survive_a_crash(tmp_path, level):
         expected = f.read()
     reopened = kglite.open(path, durable=level)
     assert repr(_reads(reopened)) == expected
-    assert _w_type(reopened) == ["Float64"]
+    assert _w_type(reopened) == ["mixed"]
 
 
 def test_tail_rows_then_a_spill_and_a_fold_read_as_the_control():
