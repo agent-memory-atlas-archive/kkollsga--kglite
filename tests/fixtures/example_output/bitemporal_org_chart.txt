@@ -25,4 +25,4 @@ named form, known on 2024-06-15: [{'employee': 'Ada', 'team': 'Data'}, {'employe
 one hop tested: [{'employee': 'Ada', 'team': 'Data', 'department': 'Product'}, {'employee': 'Ada', 'team': 'Machine Learning', 'department': 'Engineering'}, {'employee': 'Ben', 'team': 'Platform', 'department': 'Engineering'}]
 outside the team's department period: []
 overlapping assignments: []
-echo: {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'hidden': {'(:Assignment)': 2}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 24}
+echo: {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2024-07-01', 'targets': ['(:Assignment)'], 'hidden': {'(:Assignment)': 2}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None, 'slice': False, 'session_version': 20}

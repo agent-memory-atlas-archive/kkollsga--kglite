@@ -668,7 +668,7 @@ The recording test is ordinary `WHERE` text and does not appear there:
 graph.cypher(AS_KNOWN, params={"tt": "2024-06-15"}, valid_at="2024-07-01").diagnostics["temporal"]
 # {'axis': 'VALID_TIME', 'source': 'explicit', 'instant': '2024-07-01', 'targets': ['(:Assignment)'],
 #  'hidden': {'(:Assignment)': 2}, 'endpoint_invalid': 0, 'route': 'guarded', 'retrieval': None,
-#  'slice': False, 'session_version': 24}
+#  'slice': False, 'session_version': 20}
 ```
 
 The other bindings follow the same rule:
