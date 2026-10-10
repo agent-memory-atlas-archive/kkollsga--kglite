@@ -270,7 +270,9 @@ def test_committed_overrides_name_only_cells_in_the_committed_baselines() -> Non
     overrides = compare_bench._load_overrides(ROOT / "scripts" / "perf_threshold_overrides.json")
     names = {
         b["name"]
-        for b in json.loads((ROOT / "tests/benchmarks/baselines/current.linux.json").read_text())["benchmarks"]
+        for b in json.loads((ROOT / "tests/benchmarks/baselines/current.linux.json").read_text(encoding="utf-8"))[
+            "benchmarks"
+        ]
     }
     assert set(overrides) <= names
     assert len(overrides) == 3
