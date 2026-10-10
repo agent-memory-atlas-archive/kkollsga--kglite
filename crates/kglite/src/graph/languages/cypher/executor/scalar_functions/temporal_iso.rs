@@ -96,7 +96,7 @@ pub(super) fn day_of_quarter(date: NaiveDate) -> i64 {
         .map_or(1, |first| (date - first).num_days() + 1)
 }
 
-/// Parse a calendar date in any ISO 8601 spelling the openCypher TCK uses.
+/// Parse a calendar date in any ISO 8601 spelling openCypher uses.
 /// `None` when the text is none of them (the caller falls back to the looser
 /// `YYYY-M-D` reader).
 pub(super) fn parse_date_text(text: &str) -> Option<NaiveDate> {
@@ -217,7 +217,7 @@ pub(super) fn parse_local_datetime_text(text: &str) -> Option<NaiveDateTime> {
     }
 }
 
-/// Render a clock the way the openCypher TCK prints a local time: seconds are
+/// Render a clock the way openCypher prints a local time: seconds are
 /// omitted when zero (and no fraction), the fraction is printed in groups of
 /// three digits (milli-, micro-, nanoseconds).
 pub(crate) fn format_local_time(t: NaiveTime) -> String {
