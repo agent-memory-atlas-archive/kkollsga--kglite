@@ -992,3 +992,79 @@ fn an_ntriples_build_records_its_endpoint_types() {
         assert_eq!(targets, ["Target"], "mode={mode:?}");
     }
 }
+
+const LABELLED_FIXTURE: &str = "\
+<http://www.wikidata.org/entity/Q5> <http://www.w3.org/2000/01/rdf-schema#label> \"Human\"@en .\n\
+<http://www.wikidata.org/entity/Q1> <http://www.wikidata.org/prop/direct/P31> <http://www.wikidata.org/entity/Q5> .\n\
+<http://www.wikidata.org/entity/Q1> <http://www.wikidata.org/prop/direct/P2> <http://www.wikidata.org/entity/Q2> .\n\
+<http://www.wikidata.org/entity/Q2> <http://www.wikidata.org/prop/direct/P31> <http://www.wikidata.org/entity/Q5> .\n";
+
+/// The ops a durable load logs describe the final graph: Q-code types are
+/// renamed to their labels after the nodes were created, and a reopen that
+/// replays the log must find every edge's endpoints under the renamed type.
+#[test]
+fn a_logged_ntriples_load_replays_to_the_same_graph() {
+    use crate::graph::session::Session;
+    use crate::graph::wal::DurabilityLevel;
+    use std::io::Write as _;
+    let mut fixture = tempfile::NamedTempFile::new().unwrap();
+    fixture.write_all(LABELLED_FIXTURE.as_bytes()).unwrap();
+    for round in 0..12 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.kgl").to_string_lossy().into_owned();
+        let session =
+            Session::attach_log(Arc::new(DirGraph::new()), &path, DurabilityLevel::Full).unwrap();
+        session
+            .write_logged(|g| load_ntriples(g, fixture.path().to_str().unwrap(), &test_config()))
+            .unwrap_or_else(|e| panic!("round {round}: load failed: {e:?}"));
+        let live = session.snapshot();
+        let (nodes, edges) = (live.graph.node_count(), live.graph.edge_count());
+        assert_eq!((nodes, edges), (3, 3), "round {round}");
+        assert!(live.type_indices.contains_key("Human"), "round {round}");
+        drop(session);
+
+        let recovered =
+            Session::attach_log(Arc::new(DirGraph::new()), &path, DurabilityLevel::Full)
+                .unwrap_or_else(|e| panic!("round {round}: replay refused: {e}"));
+        let graph = recovered.snapshot();
+        assert_eq!(
+            (graph.graph.node_count(), graph.graph.edge_count()),
+            (nodes, edges),
+            "round {round}"
+        );
+        assert!(graph.type_indices.contains_key("Human"), "round {round}");
+        assert!(!graph.type_indices.contains_key("Q5"), "round {round}");
+    }
+}
+
+/// Change events from a load name the final (label-resolved) types, never the
+/// raw Q-code the nodes were created under.
+#[test]
+fn an_ntriples_load_publishes_change_events_under_the_final_types() {
+    use crate::graph::cdc::{self, CdcChange, CdcEnrichment};
+    use std::io::Write as _;
+    let mut fixture = tempfile::NamedTempFile::new().unwrap();
+    fixture.write_all(LABELLED_FIXTURE.as_bytes()).unwrap();
+    let mut graph = DirGraph::new();
+    cdc::enable(&mut graph, None, CdcEnrichment::Off).unwrap();
+    load_ntriples(&mut graph, fixture.path().to_str().unwrap(), &test_config()).unwrap();
+    cdc::drain_at_commit(&mut graph);
+    let events = cdc::read(&graph, 0, None, &[]).unwrap();
+    let (mut nodes, mut edges) = (0, 0);
+    for event in &events {
+        match &event.change {
+            CdcChange::Node { node_type, .. } => {
+                nodes += 1;
+                assert_ne!(node_type, "Q5", "{event:?}");
+            }
+            CdcChange::Edge {
+                src_type, tgt_type, ..
+            } => {
+                edges += 1;
+                assert_ne!(src_type, "Q5", "{event:?}");
+                assert_ne!(tgt_type, "Q5", "{event:?}");
+            }
+        }
+    }
+    assert!(nodes >= 3 && edges >= 3, "nodes={nodes} edges={edges}");
+}

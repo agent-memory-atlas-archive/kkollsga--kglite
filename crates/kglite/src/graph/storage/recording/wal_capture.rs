@@ -33,6 +33,43 @@ fn holds(graph: &impl GraphRead, idx: NodeIndex, key: &NodeKey) -> bool {
 }
 
 impl<G: GraphRead> RecordingGraph<G> {
+    /// Re-key the node types named by the buffered ops after a bulk type
+    /// rename that bypassed the capture layer (`rename_map` maps old
+    /// interned-key values to new ones).
+    ///
+    /// Ops that carry only an index resolve against the final graph and need
+    /// nothing; the ops that captured a logical `(type, id)` identity at touch
+    /// time would otherwise name endpoints under a type that no longer exists
+    /// and fail to replay.
+    pub(crate) fn retype_captured_ops(&mut self, rename_map: &HashMap<u64, u64>) {
+        let retype = |key: &mut InternedKey| {
+            if let Some(&new) = rename_map.get(&key.as_u64()) {
+                *key = InternedKey::from_u64(new);
+            }
+        };
+        for op in &mut self.ops {
+            match op {
+                RawOp::RemoveNode { node_type, .. } | RawOp::WalNode { node_type, .. } => {
+                    retype(node_type)
+                }
+                RawOp::RemoveEdge {
+                    src_type, tgt_type, ..
+                }
+                | RawOp::WalGroup {
+                    src_type, tgt_type, ..
+                } => {
+                    retype(src_type);
+                    retype(tgt_type);
+                }
+                RawOp::WalRelationshipEmbeddingBase(touch) => {
+                    retype(&mut touch.src_type);
+                    retype(&mut touch.tgt_type);
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(crate) fn note_wal_node_identity(
         &mut self,
         idx: NodeIndex,

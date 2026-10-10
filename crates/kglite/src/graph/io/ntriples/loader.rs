@@ -158,9 +158,10 @@ fn emit(sink: Option<&dyn ProgressSink>, event: ProgressEvent<'_>) -> Result<(),
 /// as impossible: it stopped being test-only when `durable=True` shipped, and
 /// an `unreachable!()` there panicked `load_ntriples` on a durable graph.
 ///
-/// The rename deliberately reaches the wrapped backend directly, so it is not
-/// captured as a logical mutation: the nodes' final types are what the load's
-/// own captured writes already resolve to at flush.
+/// The rename reaches the wrapped backend directly, so it is not captured as a
+/// mutation of its own. Index-keyed ops resolve to the final types at flush;
+/// ops that captured a `(type, id)` identity before the rename are re-keyed
+/// by `retype_captured_ops`.
 fn apply_type_renames(
     backend: &mut crate::graph::schema::GraphBackend,
     rename_map: &HashMap<u64, u64>,
@@ -187,7 +188,12 @@ fn apply_type_renames(
             crate::graph::storage::backend::unique_heap_backend(g),
             rename_map,
         ),
-        GraphBackend::Recording(rg) => apply_type_renames(rg.inner_mut(), rename_map),
+        GraphBackend::Recording(rg) => {
+            // The rename bypasses the capture layer; ops that already named a
+            // node's old type are re-keyed so the log describes the final graph.
+            rg.retype_captured_ops(rename_map);
+            apply_type_renames(rg.inner_mut(), rename_map);
+        }
         // Renaming every node's type would copy-on-write the whole overlay, so
         // flatten first and rename in place — the same total work, without
         // leaving a fully-diverged overlay behind.

@@ -131,6 +131,8 @@ before upgrading.
 
 ### Fixed
 
+- **A durable `load_ntriples` logs a replayable load.** With `auto_type`, the loader renames Q-code types to their labels after creating the nodes, and the log kept edge endpoints under the old type. Reopening then failed about half the time with `WAL v4 group P31 has missing endpoints`. The captured operations now name the final types.
+
 - **A window function reads variables its `RETURN` does not project.** `UNWIND [3, 1, 2] AS x RETURN x * 10 AS y, row_number() OVER (ORDER BY x)` numbered the rows in input order, because the projection dropped `x` before the window read it. Windows now see the scope the items see.
 
 - **A `.kgl` column with an unknown type tag is refused.** The loader decoded its bytes as a mixed column, reading garbage as values. It now fails with `InvalidData` naming the column and the tag.
