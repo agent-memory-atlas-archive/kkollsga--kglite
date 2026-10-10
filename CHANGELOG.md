@@ -144,6 +144,10 @@ before upgrading.
 
 ### Fixed
 
+- **The automatic checkpoint no longer leaves the write-ahead log above its bound after a burst of writes.**
+  - Before: the size policy was consulted once per commit, and the background checkpoint ran once. Frames committed while a checkpoint was being written survived its trim; when the burst ended there, no later commit asked the policy again, and the log stayed above `auto_checkpoint_wal_mib` until the next write. Seen in the Node binding, the C ABI and the Bolt server.
+  - Now: the checkpoint keeps folding while the policy still asks for one, so the log settles under its bound after a burst ends.
+
 - **`load_ntriples()` on a durable graph (`kglite.open(path, durable=...)`) is
   now written to the write-ahead log.**
   - Before: the load was never logged. After a crash or hard exit without
