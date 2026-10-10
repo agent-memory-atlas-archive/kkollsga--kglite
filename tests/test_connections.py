@@ -602,7 +602,10 @@ class TestSharedRelationshipTypeOwnership:
         rows = g.cypher(
             f"FOR VALID_TIME ALL MATCH (:{source_type})-[r:HAS_HOLDER]->(:Company) RETURN r.vf AS vf, r.vt AS vt"
         ).to_list()
-        return sorted(((r["vf"], r["vt"]) for r in rows), key=lambda p: (p[0], p[1] or ""))
+        # A reload onto a declared type stores its text bounds as dates while rows
+        # loaded before the declaration keep their text; compare in ISO form.
+        iso = lambda v: v.isoformat() if hasattr(v, "isoformat") else v  # noqa: E731
+        return sorted(((iso(r["vf"]), iso(r["vt"])) for r in rows), key=lambda p: (p[0], p[1] or ""))
 
     FIELD = [("2001-01-01", "2004-12-31"), ("2005-01-01", None)]
     CONTRACT = [("2001-01-01", "2003-12-31"), ("2004-01-01", "2006-12-31"), ("2007-01-01", None)]
