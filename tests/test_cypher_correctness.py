@@ -700,7 +700,7 @@ class TestLocalTemporal:
     def test_time_parse_hh_mm(self):
         g = rg.KnowledgeGraph()
         v = g.cypher("RETURN time('10:30') AS v")[0]["v"]
-        assert v == "10:30:00"
+        assert v == "10:30"
 
     def test_localdatetime_bad_input_raises(self):
         g = rg.KnowledgeGraph()

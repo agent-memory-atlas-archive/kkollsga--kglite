@@ -30,6 +30,11 @@ before upgrading.
   - The Rust `save_graph` and the C ABI save entries (`kglite_save_graph`, `kglite_save_graph_durable`, `kglite_session_save`) run the same check. The C entries return `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` with the holder in `kglite_last_error_details_json`. `save_graph_with` does not, because it also serves the close of a handle opened without a lease.
   - Migration: take the lease for the whole read-modify-save interval with `kglite.open(path)`, or stop the other writer.
 
+- **`localtime(str)` and `time(str)` return the canonical clock text.**
+  - Before: `time('10:30')` returned `'10:30:00'`.
+  - Now: `'10:30'`. Seconds appear only when not zero, and a fraction prints in groups of three digits (`'21:40:32.142'`, `'12:31:14.000000003'`). The no-argument forms keep `HH:MM:SS`.
+  - Migration: compare against, or parse, the canonical text. `time('10:30:00')` is also `'10:30'`.
+
 ### Added
 
 - **The shipped Java natives include RDF support.** The release natives and the CI `kglite-java` job build `kglite-c` with `--features rdf`, so `exportRdf` and `loadRdf` work from the published JAR instead of throwing "built without RDF support". The native grows by the RDF code paths.
@@ -52,6 +57,12 @@ before upgrading.
   - `row_number()`, `rank()` and `dense_rank()` reject arguments they used to ignore.
 
 - **`--version` on `kglite-mcp-server` and `kglite-bolt-server`.** Prints the kglite version and exits; the pip `kglite-mcp-server` entry point shares the flag.
+
+- **Temporal constructors read the ISO week, ordinal and quarter forms.**
+  - `date()`, `localdatetime()` and `datetime()` take `{year, week, dayOfWeek}`, `{year, ordinalDay}` and `{year, quarter, dayOfQuarter}`, and copy components from an existing value: `date({date: d, day: 28})`, `localdatetime({date: d, time: t, second: 42})`, `localdatetime({datetime: dt, day: 28})`. They were an unknown-key error.
+  - `date(str)` and `localdatetime(str)` read ISO week dates (`'2015-W30-2'`, `'2015W30'`) and ordinal dates (`'2015-202'`), and the basic `YYYYMM` form.
+  - `localtime(x)` and `time(x)` take a map (`localtime({hour: 12, millisecond: 645})`), a datetime, and the clock spellings `HH`, `HHMM`, `HHMMSS[.f]`. They raised "must be a string" or "cannot parse".
+  - An out-of-range week, ordinal day, quarter or day of quarter raises.
 
 ### Changed
 

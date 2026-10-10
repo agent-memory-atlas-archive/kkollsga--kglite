@@ -19,6 +19,8 @@ mod shared;
 mod spatial;
 mod string;
 mod temporal;
+mod temporal_iso;
+mod temporal_map;
 mod timeseries;
 mod utility;
 pub(super) mod validity;
@@ -56,7 +58,7 @@ impl<'a> CypherExecutor<'a> {
         row: &ResultRow,
         kind: LocalTemporalKind,
     ) -> Result<Value, String> {
-        use chrono::{NaiveTime, Timelike};
+        use chrono::NaiveTime;
         if args.is_empty() {
             let now = chrono::Local::now();
             return match kind {
@@ -72,44 +74,55 @@ impl<'a> CypherExecutor<'a> {
         let s = match val {
             Value::String(s) => s,
             Value::Null => return Ok(Value::Null),
-            _ => return Err("local temporal argument must be a string".into()),
+            Value::Map(map) => {
+                let target = match kind {
+                    LocalTemporalKind::DateTime => temporal_map::MapTarget::LocalDateTime,
+                    LocalTemporalKind::Time => temporal_map::MapTarget::LocalTime,
+                };
+                return temporal_map::temporal_from_map(target, &map);
+            }
+            Value::Timestamp(t) => {
+                return Ok(match kind {
+                    LocalTemporalKind::DateTime => Value::Timestamp(t),
+                    LocalTemporalKind::Time => {
+                        Value::String(temporal_iso::format_local_time(t.time()))
+                    }
+                });
+            }
+            Value::DateTime(d) if matches!(kind, LocalTemporalKind::DateTime) => {
+                return Ok(Value::Timestamp(d.and_time(NaiveTime::MIN)));
+            }
+            _ => {
+                return Err(match kind {
+                    LocalTemporalKind::DateTime => {
+                        "localdatetime() argument must be a string, a map or a temporal value"
+                    }
+                    LocalTemporalKind::Time => {
+                        "localtime() argument must be a string, a map or a temporal value"
+                    }
+                }
+                .into())
+            }
         };
         match kind {
             LocalTemporalKind::DateTime => {
-                // Accept full ISO datetime, or a bare date (midnight).
-                // Returns a Value::Timestamp, including fractional seconds.
-                // `local` rather than `utc`: this function names the *local*
-                // reading, so an offset-bearing input keeps its wall clock and
-                // only loses the zone label — the opposite of `datetime()`,
-                // which normalises. Either way the time is never dropped.
-                shared::parse_iso_datetime(&s)
-                    .map(|parsed| Value::Timestamp(parsed.local))
+                // The ISO calendar/clock spellings first; then the zoned
+                // forms, read as `local` rather than `utc`: this function
+                // names the *local* reading, so an offset-bearing input keeps
+                // its wall clock and only loses the zone label — the opposite
+                // of `datetime()`, which normalises. The time is never dropped.
+                temporal_iso::parse_local_datetime_text(&s)
+                    .map(Value::Timestamp)
+                    .or_else(|| shared::parse_iso_datetime(&s).map(|parsed| Value::Timestamp(parsed.local)))
                     .ok_or_else(|| {
                         format!("localdatetime(): cannot parse '{s}' as an ISO-8601 datetime")
                     })
             }
-            LocalTemporalKind::Time => {
-                // Accept HH:MM:SS or HH:MM.
-                if let Ok(t) = NaiveTime::parse_from_str(&s, "%H:%M:%S") {
-                    Ok(Value::String(format!(
-                        "{:02}:{:02}:{:02}",
-                        t.hour(),
-                        t.minute(),
-                        t.second()
-                    )))
-                } else if let Ok(t) = NaiveTime::parse_from_str(&s, "%H:%M") {
-                    Ok(Value::String(format!(
-                        "{:02}:{:02}:{:02}",
-                        t.hour(),
-                        t.minute(),
-                        t.second()
-                    )))
-                } else {
-                    Err(format!(
-                        "time()/localtime(): cannot parse '{s}' as HH:MM:SS or HH:MM"
-                    ))
-                }
-            }
+            LocalTemporalKind::Time => temporal_iso::parse_time_text(&s)
+                .map(|t| Value::String(temporal_iso::format_local_time(t)))
+                .ok_or_else(|| {
+                    format!("time()/localtime(): cannot parse '{s}' as HH, HH:MM, HH:MM:SS or HH:MM:SS.fff")
+                }),
         }
     }
 
