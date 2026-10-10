@@ -16,6 +16,8 @@ PROCESSES = 12
 SCRIPT = """
 import sys
 
+import kglite
+
 mode, path = sys.argv[1], sys.argv[2]
 if mode == "memory":
     g = kglite.KnowledgeGraph()
@@ -41,6 +43,7 @@ def _run(mode, tmp_path, n):
         [sys.executable, "-I", "-c", SCRIPT, mode, str(tmp_path / f"g{n}")],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     return out.stdout
