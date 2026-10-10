@@ -13,13 +13,13 @@
 //!
 //! ## Ctrl-C / interruptible queries
 //!
-//! While the closure runs (GIL released), a scoped SIGINT handler is
-//! installed that flips a process-global `AtomicBool`. The engine polls
+//! While the closure runs (GIL released), a SIGINT handler is armed that
+//! flips a process-global `AtomicBool`. The engine polls
 //! that flag at the same checkpoints it polls the query deadline (see
 //! `ExecuteOptions::cancel`), so a long `MATCH`/scan aborts promptly with
-//! `KgError::Cancelled`, which maps to Python's `KeyboardInterrupt`. The
-//! previous SIGINT disposition (normally Python's own handler) is
-//! restored when the call returns.
+//! `KgError::Cancelled`, which maps to Python's `KeyboardInterrupt`. Outside a
+//! call the handler forwards SIGINT to the disposition it replaced (normally
+//! Python's own handler).
 //!
 //! **Scope:** this targets the interactive single-query case
 //! (notebook / REPL on the main thread). The flag and handler are
@@ -42,7 +42,7 @@ use kglite_core::api::session::CancelToken;
 /// duration, Ctrl-C is observable, and a returned [`KgError`] becomes
 /// the most specific `kglite.*` Python exception.
 pub(crate) trait EnterKg {
-    /// Release the GIL, install the scoped SIGINT handler, run `f`
+    /// Release the GIL, arm the SIGINT handler, run `f`
     /// (handing it the cooperative-cancel flag to thread into
     /// `ExecuteOptions::cancel`), then map `Err(e)` through
     /// [`kg_to_pyerr`]. The closure receives `None` for the cancel flag
@@ -64,97 +64,126 @@ impl EnterKg for Python<'_> {
         T: Ungil + Send,
         E: Ungil + Send + Into<KgError>,
     {
-        let _guard = sigint::install();
+        let _guard = sigint::arm();
         let cancel = sigint::cancel_flag();
-        // GIL released for the whole engine call; the SIGINT handler (set
-        // by `_guard`) can flip `cancel` from signal context.
+        // GIL released for the whole engine call; the SIGINT handler
+        // (armed by `_guard`) can flip `cancel` from signal context.
         let r = self.detach(move || f(cancel));
-        // `_guard` restores the prior SIGINT handler on drop (after the
-        // GIL is reacquired here).
+        // `_guard` disarms on drop, after the GIL is reacquired here.
         r.map_err(|e| kg_to_pyerr(e.into()))
     }
 }
 
-/// Scoped SIGINT (Ctrl-C) handling. On Unix, installs a handler for the
-/// duration of an `enter_kg` call that flips a process-global flag the
-/// engine polls; restores the previous handler when the last active call
-/// finishes. On other platforms every operation is a no-op.
+/// Scoped SIGINT (Ctrl-C) handling. On Unix, an `enter_kg` call arms a
+/// process-wide handler that flips a flag the engine polls; outside any call
+/// the handler forwards the signal to the disposition it replaced (normally
+/// Python's own), so Ctrl-C behaves exactly as if it were not installed.
+/// On other platforms every operation is a no-op.
+///
+/// One `sigaction` per call, not two: the handler stays installed after the
+/// call returns. Each call re-arms it with a single `sigaction`, whose
+/// returned old disposition shows whether someone else (`signal.signal`) has
+/// taken SIGINT since the last call; that disposition becomes the new
+/// forward target.
 #[cfg(unix)]
 mod sigint {
     use kglite_core::api::session::CancelToken;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
     /// Process-global cancel flag. The engine polls it via
     /// `ExecuteOptions::cancel`; the signal handler sets it.
     static QUERY_CANCEL: AtomicBool = AtomicBool::new(false);
+
+    /// Number of `enter_kg` calls currently running. While non-zero the
+    /// handler cancels; at zero it forwards.
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
     /// `Some(&QUERY_CANCEL)` — handed to `ExecuteOptions::cancel`.
     pub(super) fn cancel_flag() -> Option<CancelToken> {
         Some(CancelToken::from_static(&QUERY_CANCEL))
     }
 
-    /// Async-signal-safe: a single relaxed atomic store. No allocation,
-    /// no lock, no reentrancy hazard.
-    extern "C" fn handle_sigint(_sig: libc::c_int) {
-        QUERY_CANCEL.store(true, Ordering::SeqCst);
+    /// The SIGINT disposition our handler replaced. Leaked on change (once
+    /// per foreign install, not per call) so the signal handler reads one
+    /// pointer, never a torn pair.
+    struct Forward {
+        action: libc::sigaction,
     }
 
-    struct State {
-        /// Number of `enter_kg` calls currently holding the handler.
-        depth: usize,
-        /// SIGINT disposition to restore when `depth` returns to 0
-        /// (normally Python's own handler).
-        prev: libc::sigaction,
-    }
+    static FORWARD: AtomicPtr<Forward> = AtomicPtr::new(std::ptr::null_mut());
 
-    static STATE: Mutex<Option<State>> = Mutex::new(None);
+    /// Async-signal-safe: atomics, plus a call into the previous handler.
+    extern "C" fn handle_sigint(
+        sig: libc::c_int,
+        info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
+        if ACTIVE.load(Ordering::SeqCst) > 0 {
+            QUERY_CANCEL.store(true, Ordering::SeqCst);
+            return;
+        }
+        let fwd = FORWARD.load(Ordering::SeqCst);
+        if fwd.is_null() {
+            return;
+        }
+        // SAFETY: `fwd` is a leaked, never-freed `Forward`.
+        let prev = unsafe { &(*fwd).action };
+        let h = prev.sa_sigaction;
+        if h == libc::SIG_IGN {
+            return;
+        }
+        if h == libc::SIG_DFL {
+            // SAFETY: restoring the default disposition and re-raising are
+            // async-signal-safe; the process terminates as it would have.
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+            return;
+        }
+        if prev.sa_flags & libc::SA_SIGINFO != 0 {
+            // SAFETY: the previous owner registered this as a 3-argument handler.
+            let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                unsafe { std::mem::transmute(h) };
+            f(sig, info, ctx);
+        } else {
+            // SAFETY: registered without SA_SIGINFO, so a 1-argument handler.
+            let f: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(h) };
+            f(sig);
+        }
+    }
 
     pub(super) struct Guard;
 
-    /// Install the handler (refcounted across concurrent/nested calls)
-    /// and clear any stale cancel flag from a prior run. Returns a guard
-    /// that restores the previous handler on drop.
-    pub(super) fn install() -> Guard {
-        let mut g = STATE.lock().unwrap_or_else(|e| e.into_inner());
-        match g.as_mut() {
-            Some(state) => state.depth += 1,
-            None => {
-                // First active call: clear stale cancel, save the current
-                // SIGINT handler, install ours.
-                QUERY_CANCEL.store(false, Ordering::SeqCst);
-                // SAFETY: zeroed sigaction is a valid empty mask + flags;
-                // we then set the handler field. `sigaction` is the POSIX
-                // install call.
-                let mut new: libc::sigaction = unsafe { std::mem::zeroed() };
-                // Cast through an explicit fn-pointer type first (avoids the
-                // `fn_to_numeric_cast` lint on a direct function-item cast).
-                let handler = handle_sigint as extern "C" fn(libc::c_int);
-                new.sa_sigaction = handler as libc::sighandler_t;
-                let mut prev: libc::sigaction = unsafe { std::mem::zeroed() };
-                unsafe {
-                    libc::sigaction(libc::SIGINT, &new, &mut prev);
-                }
-                *g = Some(State { depth: 1, prev });
-            }
+    /// Arm the handler for one call (refcounted across concurrent/nested
+    /// calls) and clear any stale cancel flag when the first call enters.
+    /// Returns a guard that disarms on drop.
+    pub(super) fn arm() -> Guard {
+        if ACTIVE.fetch_add(1, Ordering::SeqCst) == 0 {
+            QUERY_CANCEL.store(false, Ordering::SeqCst);
+        }
+        // SAFETY: zeroed sigaction is a valid empty mask; the handler field
+        // is set below. `sigaction` is the POSIX install call.
+        let mut new: libc::sigaction = unsafe { std::mem::zeroed() };
+        let handler =
+            handle_sigint as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void);
+        new.sa_sigaction = handler as libc::sighandler_t;
+        new.sa_flags = libc::SA_SIGINFO;
+        let mut prev: libc::sigaction = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigaction(libc::SIGINT, &new, &mut prev);
+        }
+        let ours = handler as libc::sighandler_t;
+        if prev.sa_sigaction != ours {
+            let boxed = Box::into_raw(Box::new(Forward { action: prev }));
+            FORWARD.store(boxed, Ordering::SeqCst);
         }
         Guard
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            let mut g = STATE.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(state) = g.as_mut() {
-                state.depth -= 1;
-                if state.depth == 0 {
-                    // SAFETY: `prev` was captured from a prior successful
-                    // `sigaction` call and is a valid disposition.
-                    unsafe {
-                        libc::sigaction(libc::SIGINT, &state.prev, std::ptr::null_mut());
-                    }
-                    *g = None;
-                }
-            }
+            ACTIVE.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -169,7 +198,7 @@ mod sigint {
 
     pub(super) struct Guard;
 
-    pub(super) fn install() -> Guard {
+    pub(super) fn arm() -> Guard {
         Guard
     }
 }
