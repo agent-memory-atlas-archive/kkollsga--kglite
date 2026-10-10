@@ -330,8 +330,8 @@ pub fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 /// `compare_values` returns `None` for two unrelated reasons and every caller
 /// used to read both as `false`:
 ///
-/// * **No ordering rule relates these two types** (`1 < 'a'`, `[1] < 2`, a list
-///   against a list). openCypher makes that `null`, so `NOT (a < b)` is `null`
+/// * **No ordering rule relates these two types** (`1 < 'a'`, `[1] < 2`; two lists
+///   order through `list_ordering`). openCypher makes that `null`, so `NOT (a < b)` is `null`
 ///   too and keeps no row. Collapsing it to `false` made `NOT` manufacture
 ///   `true` and `AND` absorb to `false`.
 /// * **A NaN operand.** The pair *has* an ordering rule — both sides are
@@ -352,11 +352,35 @@ pub fn ordering_matches(
     b: &Value,
     keep: impl Fn(std::cmp::Ordering) -> bool,
 ) -> Option<bool> {
+    if let (Value::List(a), Value::List(b)) = (a, b) {
+        return list_ordering(a, b).map(keep);
+    }
     match compare_values(a, b) {
         Some(ordering) => Some(keep(ordering)),
         None if is_numeric(a) && is_numeric(b) => Some(false),
         None => None,
     }
+}
+
+/// Lexicographic order of two lists under Cypher's three-valued logic.
+///
+/// The first element pair that differs decides (`[1, 2] < [3, null]` is true
+/// without reading the `null`); a pair that cannot be ordered — a `null` on
+/// either side, unrelated types, a NaN — leaves the whole comparison unknown;
+/// when every shared position is equal the longer list is greater, so
+/// `[1, null] >= [1]` is true.
+fn list_ordering(a: &[Value], b: &[Value]) -> Option<std::cmp::Ordering> {
+    for (x, y) in a.iter().zip(b) {
+        let ordering = match (x, y) {
+            (Value::Null, _) | (_, Value::Null) => return None,
+            (Value::List(x), Value::List(y)) => list_ordering(x, y)?,
+            _ => compare_values(x, y)?,
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return Some(ordering);
+        }
+    }
+    Some(a.len().cmp(&b.len()))
 }
 
 /// Whether `compare_values` has an ordering rule for this value against every

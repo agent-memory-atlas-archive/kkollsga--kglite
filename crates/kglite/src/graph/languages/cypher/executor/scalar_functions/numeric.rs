@@ -15,6 +15,21 @@ impl<'a> CypherExecutor<'a> {
                 let val = self.evaluate_expression(super::first_arg(name, args)?, row)?;
                 Ok(to_integer(&val))
             }
+            "toboolean" => {
+                let val = self.evaluate_expression(super::first_arg(name, args)?, row)?;
+                match &val {
+                    Value::Null | Value::Boolean(_) => Ok(val),
+                    Value::String(s) if s.eq_ignore_ascii_case("true") => Ok(Value::Boolean(true)),
+                    Value::String(s) if s.eq_ignore_ascii_case("false") => {
+                        Ok(Value::Boolean(false))
+                    }
+                    Value::String(_) => Ok(Value::Null),
+                    other => Err(format!(
+                        "toBoolean() expects a boolean or a string, got {}",
+                        other.type_name()
+                    )),
+                }
+            }
             "tofloat" => {
                 let val = self.evaluate_expression(super::first_arg(name, args)?, row)?;
                 Ok(to_float(&val))

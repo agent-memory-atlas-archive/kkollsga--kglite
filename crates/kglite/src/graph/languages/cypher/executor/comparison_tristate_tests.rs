@@ -46,11 +46,12 @@ fn incomparable_pairs() -> Vec<(Value, Value)> {
             Value::DateTime(NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()),
             Value::String("not-a-date".into()),
         ),
-        // Composite ordering: Neo4j answers `null` for list-vs-list and
-        // map-vs-map `<` too, and `compare_values` has no arm for them.
+        // Lists order element-wise, so only a list pair whose first
+        // differing element has no rule (or a null) is unknown; maps have no
+        // ordering at all.
         (
             Value::List(vec![Value::Int64(1)]),
-            Value::List(vec![Value::Int64(2)]),
+            Value::List(vec![Value::String("a".into())]),
         ),
         (map_value("a", 1), map_value("a", 2)),
     ]
@@ -72,6 +73,32 @@ fn an_ordering_comparison_without_a_rule_is_null_in_both_directions() {
             );
         }
     }
+}
+
+#[test]
+fn a_list_pair_blocked_by_a_null_is_unknown_unless_an_earlier_element_decides() {
+    let list = |items: &[Option<i64>]| {
+        Value::List(
+            items
+                .iter()
+                .map(|n| n.map_or(Value::Null, Value::Int64))
+                .collect(),
+        )
+    };
+    let blocked = (list(&[Some(1), None]), list(&[Some(1), Some(2)]));
+    for op in ORDERING_OPS {
+        assert_eq!(eval(&blocked.0, &op, &blocked.1), None, "{op:?}");
+        assert_eq!(eval(&blocked.1, &op, &blocked.0), None, "{op:?}");
+    }
+    let decided = (list(&[Some(1), None]), list(&[Some(2), Some(2)]));
+    assert_eq!(
+        eval(&decided.0, &ComparisonOp::LessThan, &decided.1),
+        Some(true)
+    );
+    assert_eq!(
+        eval(&decided.0, &ComparisonOp::GreaterThanEq, &decided.1),
+        Some(false)
+    );
 }
 
 #[test]

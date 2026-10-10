@@ -561,6 +561,13 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         signature: "head(list :: LIST) :: ANY?",
     },
     FunctionSpec {
+        name: "tail",
+        aliases: &[],
+        category: "collection",
+        description: "All elements of a list except the first",
+        signature: "tail(list :: LIST) :: LIST?",
+    },
+    FunctionSpec {
         name: "last",
         aliases: &[],
         category: "collection",

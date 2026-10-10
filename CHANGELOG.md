@@ -32,6 +32,13 @@ before upgrading.
 
 ### Added
 
+- **openCypher scalar gaps closed.** All of these were a syntax error, an unknown function or `null` before.
+  - Hexadecimal and octal integer literals: `0x1F`, `0o17`, and `-0x8000000000000000` for the smallest integer. A literal past the 64-bit range is a syntax error.
+  - The `^` operator: a float power, left-associative, tighter than `*` and looser than unary minus (`-3 ^ 2` is `9.0`).
+  - `tail(list)` and `toBoolean(x)` (booleans and the strings `'true'`/`'false'` in any case; other strings and `null` give `null`).
+  - List ordering: `[1, 2] < [1, 3]` compares element-wise, and a longer list is greater when the shared elements are equal. A pair that cannot be ordered gives `null`.
+  - `toInteger('1.7')` is `1`; it was `null`. Integer text still parses exactly.
+
 - **`--version` on `kglite-mcp-server` and `kglite-bolt-server`.** Prints the kglite version and exits; the pip `kglite-mcp-server` entry point shares the flag.
 
 ### Changed

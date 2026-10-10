@@ -16,20 +16,30 @@ pub fn value_to_f64(val: &Value) -> Option<f64> {
     }
 }
 
+/// Truncate a float toward zero; null for NaN, infinities and values outside `i64`.
+fn float_to_integer(f: f64) -> Value {
+    const I64_EXCLUSIVE_UPPER: f64 = 9_223_372_036_854_775_808.0;
+    if f.is_finite() && f >= i64::MIN as f64 && f < I64_EXCLUSIVE_UPPER {
+        Value::Int64(f.trunc() as i64)
+    } else {
+        Value::Null
+    }
+}
+
 /// Convert a Value to integer representation.
 pub fn to_integer(val: &Value) -> Value {
     match val {
         Value::Int64(_) => val.clone(),
-        Value::Float64(f) => {
-            const I64_EXCLUSIVE_UPPER: f64 = 9_223_372_036_854_775_808.0;
-            if f.is_finite() && *f >= i64::MIN as f64 && *f < I64_EXCLUSIVE_UPPER {
-                Value::Int64(f.trunc() as i64)
-            } else {
-                Value::Null
-            }
-        }
+        Value::Float64(f) => float_to_integer(*f),
         Value::UniqueId(u) => Value::Int64(*u as i64),
-        Value::String(s) => s.parse::<i64>().map(Value::Int64).unwrap_or(Value::Null),
+        // A decimal string converts through float and truncates, so
+        // `toInteger('1.7')` is 1 like `toInteger(1.7)`; plain integer text
+        // takes the exact path so values past 2^53 keep every digit.
+        Value::String(s) => s
+            .parse::<i64>()
+            .map(Value::Int64)
+            .or_else(|_| s.parse::<f64>().map(float_to_integer))
+            .unwrap_or(Value::Null),
         Value::Boolean(b) => Value::Int64(if *b { 1 } else { 0 }),
         _ => Value::Null,
     }

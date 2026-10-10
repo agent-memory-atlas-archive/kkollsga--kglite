@@ -35,6 +35,8 @@
 //! - [`star_projection`] — `*` written beside other projection items:
 //!   which names it stands for, and which explicit item wins a collision
 //! - [`strings`] — string functions and procedure list arguments
+//! - [`tck_cheap_gaps`] — radix literals, `^`, `tail`, `toBoolean`, decimal-string
+//!   `toInteger`, list ordering
 //! - [`temporal_procedures`] — `db.temporal.*` declarations: arguments,
 //!   yielded rows, the abutment advisory, rollback
 //! - [`valid_time_guard`] — the valid-time guard in the matcher: one matcher
@@ -87,6 +89,7 @@ mod semantics;
 mod shortest_path;
 mod star_projection;
 mod strings;
+mod tck_cheap_gaps;
 mod temporal_procedures;
 mod text_bm25;
 mod valid_time_guard;

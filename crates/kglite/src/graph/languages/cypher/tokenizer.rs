@@ -89,6 +89,7 @@ pub enum CypherToken {
     Plus,       // +
     Slash,      // /
     Percent,    // %
+    Caret,      // ^
     Ampersand,  // &
     Pipe,       // |
     DoublePipe, // ||
@@ -189,6 +190,7 @@ fn single_char_token(ch: char) -> Option<CypherToken> {
         '+' => CypherToken::Plus,
         '/' => CypherToken::Slash,
         '%' => CypherToken::Percent,
+        '^' => CypherToken::Caret,
         '&' => CypherToken::Ampersand,
         '-' => CypherToken::Dash,
         _ => return None,
@@ -379,6 +381,53 @@ pub fn tokenize_cypher_with_positions(input: &str) -> Result<TokenizedCypher, St
                     return Err(format!("Unterminated string literal: {}{}", quote, s));
                 }
                 tokens.push((CypherToken::StringLit(s), start));
+            }
+
+            // Radix integer literals: `0x1F` (hex) and `0o17` (octal). The
+            // magnitude is read unsigned so `-0x8000000000000000` and
+            // `-0o1000000000000000000000` (both -2^63) fold into `i64::MIN`
+            // the same way the decimal spelling does.
+            '0' if i + 2 < len
+                && matches!(chars[i + 1], 'x' | 'X' | 'o' | 'O')
+                && chars[i + 2].is_digit(if matches!(chars[i + 1], 'x' | 'X') {
+                    16
+                } else {
+                    8
+                }) =>
+            {
+                let start = i;
+                let radix = if matches!(chars[i + 1], 'x' | 'X') {
+                    16
+                } else {
+                    8
+                };
+                i += 2;
+                let digits_start = i;
+                while i < len && chars[i].is_digit(radix) {
+                    i += 1;
+                }
+                let digits: String = chars[digits_start..i].iter().collect();
+                let literal: String = chars[start..i].iter().collect();
+                // `0x1G`: a letter or digit glued to the literal is not a
+                // separate token.
+                if i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    return Err(format!("Invalid number literal: {}{}", literal, chars[i]));
+                }
+                let magnitude = u64::from_str_radix(&digits, radix)
+                    .map_err(|_| format!("Integer overflow in literal: {}", literal))?;
+                match i64::try_from(magnitude) {
+                    Ok(n) => tokens.push((CypherToken::IntLit(n), start)),
+                    Err(_)
+                        if magnitude == 1 << 63
+                            && tokens
+                                .last()
+                                .is_some_and(|(t, _)| matches!(t, CypherToken::Dash)) =>
+                    {
+                        let (_, dash_pos) = tokens.pop().unwrap();
+                        tokens.push((CypherToken::IntLit(i64::MIN), dash_pos));
+                    }
+                    Err(_) => return Err(format!("Integer overflow in literal: {}", literal)),
+                }
             }
 
             c if c.is_ascii_digit() => {
@@ -804,6 +853,7 @@ fn token_symbol(token: &CypherToken) -> Option<&'static str> {
         CypherToken::Plus => "+",
         CypherToken::Slash => "/",
         CypherToken::Percent => "%",
+        CypherToken::Caret => "^",
         CypherToken::Ampersand => "&",
         CypherToken::Pipe => "|",
         CypherToken::DoublePipe => "||",

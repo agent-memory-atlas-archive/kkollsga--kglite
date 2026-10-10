@@ -586,8 +586,10 @@ graph.cypher("""
 | `toUpper(expr)` | Convert to uppercase |
 | `toLower(expr)` | Convert to lowercase |
 | `toString(expr)` | Convert to string; `toString(null)` is `null` |
-| `toInteger(expr)` | Convert to integer; a string must spell an integer (see below) |
+| `toInteger(expr)` | Convert to integer; a number truncates toward zero, a decimal string parses then truncates (`toInteger('1.7')` is `1`), unparseable text is `null` |
 | `toFloat(expr)` | Convert to float |
+| `toBoolean(expr)` | `true`/`false` pass through; the strings `'true'`/`'false'` (any case) convert; any other string and `null` give `null`; other types raise |
+| `tail(list)` | The list without its first element; `tail(null)` is `null` |
 | `size(expr)` | Element count of a list, or **character** count of a string (not UTF-8 bytes) |
 | `type(r)` | Relationship type |
 | `id(n)` | The node's `id` **field** — the source data's own key, same value as `n.id`. Not an internal/engine identifier as in other Cypher implementations (see below) |
@@ -645,13 +647,10 @@ graph.cypher("""
 | `ts_delta(n.ch, 'from', 'to')` | Value change between two time points |
 | `ts_series(n.ch [, 'start'] [, 'end'])` | Extract series as `[{time, value}, ...]` |
 
-> **Divergence: `toInteger` on a string does not truncate.** A string argument
-> must spell an *integer*. `toInteger('3')` is `3`, while `toInteger('3.7')` is
-> `null` (Neo4j parses the float and truncates to `3`). So are `toInteger('abc')`
-> and `toInteger(' 3 ')`: surrounding whitespace is not trimmed. A *numeric*
-> argument does truncate as expected (`toInteger(3.7)` → `3`), so the portable
-> spelling for a decimal string is `toInteger(toFloat(s))`. `toFloat('3.7')` is
-> `3.7`, unaffected.
+`toInteger` of a string takes the exact integer path first, so
+`toInteger('9223372036854775807')` keeps every digit, then falls back to a float
+parse that truncates. Surrounding whitespace is not trimmed, and `'NaN'`, `'inf'`
+and out-of-range values are `null`.
 
 ### Hybrid retrieval (RAG) over a knowledge graph
 
@@ -2057,7 +2056,7 @@ Before 0.19.3 every month counted as 30 days, so
 | `log(x)` / `ln(x)` | Natural logarithm (x must be > 0) |
 | `log10(x)` | Base-10 logarithm (x must be > 0) |
 | `exp(x)` | e^x |
-| `pow(x, y)` / `power(x, y)` | x^y |
+| `pow(x, y)` / `power(x, y)` | x^y; the `^` operator is the same function (see Arithmetic) |
 | `pi()` | π constant |
 | `rand()` / `random()` | Random float [0, 1) |
 | `randomUUID()` | Random RFC 4122 v4 UUID string |
@@ -2191,6 +2190,15 @@ graph.cypher("MATCH (n:Person) RETURN n.first || ' ' || n.last AS fullname")
 # || auto-converts non-strings; null propagates
 graph.cypher("RETURN 'block-' || 35 AS label")  # → "block-35"
 ```
+
+**Power.** `x ^ y` is `pow(x, y)`: always a float, `null` if either side is
+`null`, left-associative (`2 ^ 3 ^ 2` is `64.0`), tighter than `*` and looser
+than unary minus (`-3 ^ 2` is `9.0`).
+
+**Integer literals.** Decimal, hexadecimal (`0x1F`) and octal (`0o17`) forms are
+accepted, with a leading `-` (`-0x8000000000000000` is the smallest integer). A
+literal outside the signed 64-bit range, or with a digit outside its base, is a
+syntax error.
 
 **Integer arithmetic is checked.** `+ - * / %` and unary `-` on two integers
 raise `CypherExecutionError` when the result leaves the signed 64-bit range.
@@ -5388,9 +5396,9 @@ mean:
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Arithmetic (`+`, `-`, `*`, `/`) | Covered | Numeric arithmetic plus list/list and element/list composition |
+| Arithmetic (`+`, `-`, `*`, `/`, `%`, `^`) | Covered | Numeric arithmetic plus list/list and element/list composition; `^` is a float power. Hex (`0x1F`) and octal (`0o17`) integer literals |
 | String concat (`\|\|`) | Extension | Auto-converts non-strings |
-| Comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`) | Partial | Scalar comparisons, null propagation and cross-type ordering follow openCypher: `<`/`<=`/`>`/`>=` are `null` between values no ordering rule relates, `=` is `false` and `<>` is `true`. Three deliberate divergences: a date equals midnight on that date, a date or datetime compares with a string by parsing it (both under Sort order), and lists and maps have no ordering rule of their own, so `[1] < [2]` is `null` rather than element-wise |
+| Comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`) | Partial | Scalar comparisons, null propagation and cross-type ordering follow openCypher: `<`/`<=`/`>`/`>=` are `null` between values no ordering rule relates, `=` is `false` and `<>` is `true`. Three deliberate divergences: a date equals midnight on that date, a date or datetime compares with a string by parsing it (both under Sort order), and maps have no ordering rule of their own. Lists order element-wise: the first differing pair decides, a longer list is greater when every shared element is equal (`[1, 0] >= [1]`), and a pair that cannot be ordered (a `null`, unrelated types) makes the result `null` unless an earlier pair already decided |
 | Boolean (`AND`, `OR`, `XOR`, `NOT`) | Covered | Predicate and expression positions preserve three-valued results |
 | `IS NULL` / `IS NOT NULL` | Covered | Also works as expressions in RETURN/WITH |
 | `IN [list]` | Covered | Null operands and null-containing no-match lists preserve unknown; an **empty** list is `false` for every operand, `null` included |
@@ -5416,7 +5424,8 @@ mean:
 | `collect` | Covered | |
 | `std` | Extension | Standard deviation helper |
 | `toUpper`, `toLower`, `toString` | Covered | |
-| `toInteger`, `toFloat` | Intentional divergence | `toFloat` is openCypher; `toInteger` of a *string* requires an integer spelling and yields null for `'3.7'`, where Neo4j truncates (see Built-in Functions). Numeric arguments truncate as in Neo4j |
+| `toInteger`, `toFloat`, `toBoolean` | Covered | `toInteger('3.7')` is `3`; `toBoolean` accepts booleans and the strings `'true'`/`'false'` in any case |
+| `tail(list)` | Covered | |
 | `size`, `length` | Covered | Strings (in characters, not bytes), lists, and paths |
 | `type(r)` | Covered | Returns relationship type |
 | `id(entity)` | Covered | KGLite logical node identity and stable relationship identity |

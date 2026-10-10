@@ -84,6 +84,16 @@ impl<'a> CypherExecutor<'a> {
                     .and_then(|items| items.first().cloned())
                     .unwrap_or(Value::Null))
             }
+            "tail" => {
+                if args.len() != 1 {
+                    return Err("tail() requires 1 argument".into());
+                }
+                let val = self.evaluate_expression(super::first_arg(name, args)?, row)?;
+                Ok(match list_operand(&val, "tail()")? {
+                    None => Value::Null,
+                    Some(items) => Value::List(items.iter().skip(1).cloned().collect()),
+                })
+            }
             "last" => {
                 if args.len() != 1 {
                     return Err("last() requires 1 argument".into());

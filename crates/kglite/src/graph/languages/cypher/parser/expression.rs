@@ -293,32 +293,50 @@ impl CypherParser {
     }
 
     fn parse_multiplicative_chain(&mut self) -> Result<Expression, String> {
-        let mut left = self.parse_unary_expression()?;
+        let mut left = self.parse_power_expression()?;
 
         loop {
             match self.peek() {
                 Some(CypherToken::Star) => {
                     self.advance();
                     self.deepen()?;
-                    let right = self.parse_unary_expression()?;
+                    let right = self.parse_power_expression()?;
                     left = Expression::Multiply(Box::new(left), Box::new(right));
                 }
                 Some(CypherToken::Slash) => {
                     self.advance();
                     self.deepen()?;
-                    let right = self.parse_unary_expression()?;
+                    let right = self.parse_power_expression()?;
                     left = Expression::Divide(Box::new(left), Box::new(right));
                 }
                 Some(CypherToken::Percent) => {
                     self.advance();
                     self.deepen()?;
-                    let right = self.parse_unary_expression()?;
+                    let right = self.parse_power_expression()?;
                     left = Expression::Modulo(Box::new(left), Box::new(right));
                 }
                 _ => break,
             }
         }
 
+        Ok(left)
+    }
+
+    /// `^` binds looser than unary minus (`-3 ^ 2` is `(-3) ^ 2` = 9.0), tighter
+    /// than `*`, and associates left (`2 ^ 3 ^ 2` is `(2 ^ 3) ^ 2` = 64.0).
+    /// Lowered to `pow()`, which already answers a float and null on a null side.
+    fn parse_power_expression(&mut self) -> Result<Expression, String> {
+        let mut left = self.parse_unary_expression()?;
+        while self.check(&CypherToken::Caret) {
+            self.advance();
+            self.deepen()?;
+            let right = self.parse_unary_expression()?;
+            left = Expression::FunctionCall {
+                name: "pow".to_string(),
+                args: vec![left, right],
+                distinct: false,
+            };
+        }
         Ok(left)
     }
 

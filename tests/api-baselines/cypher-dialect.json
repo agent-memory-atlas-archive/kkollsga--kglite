@@ -224,7 +224,7 @@
         "load_csv.field_terminator",
         "load_csv.empty_field_is_null"
       ],
-      "note": "LOAD CSV [WITH HEADERS] FROM <source> AS row [FIELDTERMINATOR <sep>] reads local files: file:// URLs and plain filesystem paths. WITH HEADERS binds each row as a map keyed by the header row, without it as a zero-indexed list; fields stay strings (CSV carries no types) and an empty field is null. The clause must lead the query, and the executor drives row-local clauses over 1000-row batches so peak memory does not scale with file size; ordinary CALL procedures are row-local. A downstream clause that reasons over the whole result (aggregate, ORDER BY, SKIP/OFFSET/LIMIT, DISTINCT, set operation, cluster(), or CALL subquery) cannot be batched, so those queries read the file into one capped pass and fail with an explanation past 1000000 rows rather than exhausting memory. http(s):// is rejected by name \u2014 the engine ships no HTTP client. Reading local files is a capability the caller grants: on for in-process use, off for remote Bolt clients unless the server was started with --allow-csv-import <DIR>. The CALL { ... } IN TRANSACTIONS batching modifier (and the older USING PERIODIC COMMIT) is not supported: batching is automatic, so there is no commit interval to declare."
+      "note": "LOAD CSV [WITH HEADERS] FROM <source> AS row [FIELDTERMINATOR <sep>] reads local files: file:// URLs and plain filesystem paths. WITH HEADERS binds each row as a map keyed by the header row, without it as a zero-indexed list; fields stay strings (CSV carries no types) and an empty field is null. The clause must lead the query, and the executor drives row-local clauses over 1000-row batches so peak memory does not scale with file size; ordinary CALL procedures are row-local. A downstream clause that reasons over the whole result (aggregate, ORDER BY, SKIP/OFFSET/LIMIT, DISTINCT, set operation, cluster(), or CALL subquery) cannot be batched, so those queries read the file into one capped pass and fail with an explanation past 1000000 rows rather than exhausting memory. http(s):// is rejected by name — the engine ships no HTTP client. Reading local files is a capability the caller grants: on for in-process use, off for remote Bolt clients unless the server was started with --allow-csv-import <DIR>. The CALL { ... } IN TRANSACTIONS batching modifier (and the older USING PERIODIC COMMIT) is not supported: batching is automatic, so there is no commit interval to declare."
     },
     {
       "id": "ddl.index",
@@ -404,11 +404,56 @@
     {
       "id": "function.to_integer",
       "syntax": "toInteger(value)",
-      "status": "intentional_divergence",
+      "status": "covered",
       "case_ids": [
-        "function.to_integer_string_is_exact"
+        "function.to_integer_string_truncates"
       ],
-      "note": "A numeric argument truncates toward zero as in Neo4j. A string argument must spell an integer: toInteger('3.7') is null where Neo4j parses the float and truncates to 3, and surrounding whitespace is not trimmed. toInteger(toFloat(s)) is the portable spelling for a decimal string; toFloat() itself is unaffected."
+      "note": "A numeric argument truncates toward zero. A string argument parses as an integer first and otherwise as a float that truncates, so toInteger('3.7') is 3 as in Neo4j; surrounding whitespace is not trimmed and non-numeric text is null."
+    },
+    {
+      "id": "literal.radix_integers",
+      "syntax": "0x1F / 0o17",
+      "status": "covered",
+      "case_ids": [
+        "literal.radix_integers"
+      ],
+      "note": "Hexadecimal and octal integer literals, with a leading minus down to the smallest 64-bit integer; an out-of-range literal is a syntax error."
+    },
+    {
+      "id": "operator.power",
+      "syntax": "x ^ y",
+      "status": "covered",
+      "case_ids": [
+        "operator.power"
+      ],
+      "note": "Float result, left-associative, tighter than multiplication and looser than unary minus."
+    },
+    {
+      "id": "function.tail",
+      "syntax": "tail(list)",
+      "status": "covered",
+      "case_ids": [
+        "function.tail"
+      ],
+      "note": "The list without its first element."
+    },
+    {
+      "id": "function.to_boolean",
+      "syntax": "toBoolean(value)",
+      "status": "covered",
+      "case_ids": [
+        "function.to_boolean"
+      ],
+      "note": "Booleans and the strings true/false in any case; other strings and null give null; other types raise."
+    },
+    {
+      "id": "operator.list_ordering",
+      "syntax": "[1, 2] < [1, 3]",
+      "status": "covered",
+      "case_ids": [
+        "operator.list_ordering"
+      ],
+      "note": "Element-wise ordering under three-valued logic; a longer list is greater when the shared elements are equal."
     },
     {
       "id": "function.split",

@@ -563,11 +563,19 @@
       "query": "MATCH p = allShortestPaths((a:Route {id: 1})-[:STEP*..5]->(d:Route {id: 4})) RETURN [n IN nodes(p) | n.id] AS ids, length(p) AS length ORDER BY ids",
       "expected": [
         {
-          "ids": [1, 2, 4],
+          "ids": [
+            1,
+            2,
+            4
+          ],
           "length": 2
         },
         {
-          "ids": [1, 3, 4],
+          "ids": [
+            1,
+            3,
+            4
+          ],
           "length": 2
         }
       ]
@@ -1278,14 +1286,15 @@
       ]
     },
     {
-      "id": "function.to_integer_string_is_exact",
+      "id": "function.to_integer_string_truncates",
       "category": "null",
-      "requirement": "toInteger() of a string requires an integer spelling: a decimal string, a non-numeric string and a padded string are all null, while a numeric argument truncates toward zero.",
-      "query": "RETURN toInteger('3') AS exact, toInteger('3.7') AS decimal_string, toInteger('abc') AS text, toInteger(' 3 ') AS padded, toInteger(3.7) AS numeric, toFloat('3.7') AS as_float",
+      "requirement": "toInteger() of a string parses an integer spelling exactly and a decimal spelling through a float that truncates toward zero; non-numeric and padded text is null.",
+      "query": "RETURN toInteger('3') AS exact, toInteger('3.7') AS decimal_string, toInteger('-3.7') AS negative, toInteger('abc') AS text, toInteger(' 3 ') AS padded, toInteger(3.7) AS numeric, toFloat('3.7') AS as_float",
       "expected": [
         {
           "exact": 3,
-          "decimal_string": null,
+          "decimal_string": 3,
+          "negative": -3,
           "text": null,
           "padded": null,
           "numeric": 3,
@@ -1363,6 +1372,80 @@
         {
           "insensitive": true,
           "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "literal.radix_integers",
+      "category": "expression",
+      "requirement": "Hexadecimal (0x) and octal (0o) integer literals denote integers, and a leading minus reaches the smallest 64-bit integer.",
+      "query": "RETURN 0x1F AS hex, 0o17 AS octal, -0x8000000000000000 AS smallest, 0x7FFFFFFFFFFFFFFF AS largest",
+      "expected": [
+        {
+          "hex": 31,
+          "octal": 15,
+          "smallest": -9223372036854775808,
+          "largest": 9223372036854775807
+        }
+      ]
+    },
+    {
+      "id": "operator.power",
+      "category": "expression",
+      "requirement": "The ^ operator returns a float, associates to the left, binds tighter than * and looser than unary minus.",
+      "query": "RETURN 2 ^ 3 AS cube, 2 ^ 3 ^ 2 AS left_assoc, -3 ^ 2 AS negative_base, 4 ^ 3 * 2 AS tighter_than_times",
+      "expected": [
+        {
+          "cube": 8.0,
+          "left_assoc": 64.0,
+          "negative_base": 9.0,
+          "tighter_than_times": 128.0
+        }
+      ]
+    },
+    {
+      "id": "function.tail",
+      "category": "list",
+      "requirement": "tail() returns a list without its first element and null for null.",
+      "query": "RETURN tail([1, 2, 3]) AS rest, tail([1]) AS single, tail([]) AS empty, tail(null) AS missing",
+      "expected": [
+        {
+          "rest": [
+            2,
+            3
+          ],
+          "single": [],
+          "empty": [],
+          "missing": null
+        }
+      ]
+    },
+    {
+      "id": "function.to_boolean",
+      "category": "null",
+      "requirement": "toBoolean() passes booleans through, converts the strings true and false in any case, and returns null for other strings and null.",
+      "query": "RETURN toBoolean(true) AS passed, toBoolean('TrUe') AS mixed_case, toBoolean('false') AS lower_false, toBoolean('yes') AS other_text, toBoolean(null) AS missing",
+      "expected": [
+        {
+          "passed": true,
+          "mixed_case": true,
+          "lower_false": false,
+          "other_text": null,
+          "missing": null
+        }
+      ]
+    },
+    {
+      "id": "operator.list_ordering",
+      "category": "null",
+      "requirement": "Lists order element-wise; a longer list is greater when the shared elements are equal; an element pair that cannot be ordered makes the result null unless an earlier pair decided.",
+      "query": "RETURN [1, 2] < [1, 3] AS smaller, [1, 0] >= [1] AS longer, [1, 2] >= [3, null] AS decided_early, [1, 2] >= [1, null] AS undecided",
+      "expected": [
+        {
+          "smaller": true,
+          "longer": true,
+          "decided_early": false,
+          "undecided": null
         }
       ]
     }
