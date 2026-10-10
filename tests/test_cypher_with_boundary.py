@@ -72,16 +72,21 @@ def test_hoisted_where_answers_the_same_rows(boundary_graph) -> None:
         assert rows == [{"t": "a"}, {"t": "b"}]
 
 
-def test_the_with_scope_error_is_preserved(boundary_graph) -> None:
-    """`WITH a WHERE b.x` is a Cypher scope error and must stay one.
+def test_a_with_where_may_read_a_variable_the_projection_hides(boundary_graph) -> None:
+    """`WITH a WHERE b.x` filters on `b`, a MATCH variable the WITH drops.
 
-    The hoist would make it evaluable — `b` is bound by the MATCH — so H5's
-    second half exists purely to keep this refusal. Both profiles refuse.
+    A non-aggregating WITH keeps one row per input row, so its own WHERE reads
+    the incoming scope too. The hoist declines the shape (H5), so both
+    profiles must agree on the answer, and `b` stays out of scope afterwards.
     """
     query = "MATCH (a:P)-[:K]->(b:P) WITH a WHERE b.city = 'X' RETURN a.title AS t"
+    for rows in both_profiles(boundary_graph, query):
+        assert rows == [{"t": "a"}]
     for kwargs in ({}, {"disable_optimizer": True}):
         with pytest.raises(kglite.SchemaError, match="Undefined variable 'b'"):
-            boundary_graph.cypher(query, **kwargs).to_list()
+            boundary_graph.cypher(
+                "MATCH (a:P)-[:K]->(b:P) WITH a WHERE b.city = 'X' RETURN b.title AS t", **kwargs
+            ).to_list()
 
 
 def test_the_having_spelling_is_the_same_field_and_the_same_bail(boundary_graph) -> None:

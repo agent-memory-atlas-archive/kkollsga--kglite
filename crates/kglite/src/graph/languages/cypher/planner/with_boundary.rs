@@ -60,8 +60,9 @@ use std::collections::{HashMap, HashSet};
 ///   RETURN/WITH).
 /// - **H3** `DISTINCT`. **H4** a stamped `group_limit_hint`.
 /// - **H5/H6** `p` reads a variable not bound at the MATCH (including an
-///   alias the WITH introduces), or one the WITH's projection hides —
-///   the latter is a Cypher scope error and must stay one.
+///   alias the WITH introduces), or one the WITH's projection hides. A
+///   hidden variable is a legal read in a non-aggregating WITH's own
+///   `WHERE`; the hoist simply does not attempt it.
 /// - **H8** a mutating construct in `p`; the predicate grammar has none.
 ///
 /// A predicate carrying an `EXISTS { }` whose pattern binds a fresh
@@ -168,8 +169,9 @@ fn hoistable(clauses: &[Clause], i: usize) -> bool {
     }
 
     // H5 second half — the predicate must read only variables the WITH keeps
-    // in scope. `MATCH (a)-->(b) WITH a WHERE b.x > 1` is a Cypher scope
-    // error and must stay one; hoisting would silently make it answer.
+    // in scope. `MATCH (a)-->(b) WITH a WHERE b.x > 1` is a legal read of a
+    // hidden variable (the executor answers it in place); the hoist leaves it
+    // there rather than widen what it rewrites.
     // A `WITH *` projects every binding, so nothing is hidden.
     if w.items
         .iter()
@@ -251,8 +253,10 @@ fn predicate_has_aggregate(pred: &Predicate) -> bool {
 ///   duplicating the call into RETURN and ORDER BY cannot disagree.
 ///   **F3** (window functions) falls out of the same allow-list.
 /// - **F4** a downstream reference to a pre-WITH variable the projection does
-///   not carry. That is a Cypher scope error (`WITH p.id AS i … ORDER BY
-///   p.age` raises `Undefined variable 'p'`) and must stay one.
+///   not carry. In the WITH's own `ORDER BY` (`WITH p.id AS i … ORDER BY
+///   p.age`) that read is legal, but the substitution cannot express it, so
+///   the fold bails and the executor answers it; anywhere later it is an
+///   `Undefined variable` error.
 /// - **F5** anything downstream but the terminal `RETURN [ORDER BY] [SKIP]
 ///   [LIMIT]` tail — a write clause, `CALL`, `CALL { }`, `MERGE`, `FOREACH`,
 ///   another `MATCH` or a second `WITH`. `collect_clause_variables` is
@@ -445,7 +449,8 @@ fn alias_substitutions(
     }
 
     // F4 — a downstream reference to a pre-WITH variable the projection drops
-    // is a scope error, and stays one.
+    // is a scope error, or (in the WITH's own ORDER BY) a read the
+    // substitution cannot express. Either way the WITH stays as written.
     let mut downstream: HashSet<String> = HashSet::new();
     for clause in &query.clauses[i + 1..] {
         collect_clause_variables(clause, &mut downstream);

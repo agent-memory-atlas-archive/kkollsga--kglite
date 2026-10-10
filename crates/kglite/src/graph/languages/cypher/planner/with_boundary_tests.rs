@@ -156,7 +156,7 @@ fn the_hoist_declines_every_bail_shape() {
         ),
         (
             "MATCH (a:P)-[:K]->(b:P) WITH a WHERE b.city = 'X' RETURN a.title AS t",
-            "H5 — the predicate reads a variable the WITH hides (a scope error)",
+            "H5 — the predicate reads a variable the WITH hides",
         ),
     ] {
         assert!(
