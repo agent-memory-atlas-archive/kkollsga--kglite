@@ -10,14 +10,26 @@ use crate::status::KgliteStatusCode;
 use crate::strings::alloc_c_string;
 use kglite::api::blueprint::{build as blueprint_build, load_blueprint_file};
 use kglite::api::introspection::{compute_schema, schema_overview_to_json};
-use kglite::api::io::{load_file, load_kgl_bytes, save_graph, save_graph_with, write_kgl_to};
+use kglite::api::io::{
+    load_file, load_kgl_bytes, refuse_foreign_writer, save_graph, save_graph_with, write_kgl_to,
+};
 #[cfg(feature = "rdf")]
 use kglite::api::io::{load_rdf as core_load_rdf, RdfConfig};
 use kglite::api::storage::{live_storage_mode, new_dir_graph_in_mode, StorageMode};
-use kglite::api::{graphgen, DirGraph, GraphGenConfig};
+use kglite::api::{graphgen, DirGraph, GraphGenConfig, KgError};
 use std::ffi::{c_char, CStr};
 use std::path::Path;
 use std::sync::Arc;
+
+/// The refusal for a save to `path` while another process holds its writer
+/// lease: `WriterLeaseHeld` with the holder recorded for
+/// `kglite_last_error_details_json`. `None` when nobody foreign holds it, or the
+/// probe cannot run.
+pub(crate) fn foreign_lease_refusal(path: &str) -> Option<(KgliteStatusCode, String)> {
+    let refusal = refuse_foreign_writer(Path::new(path)).err()?;
+    let error = KgError::from(refusal);
+    Some((KgliteStatusCode::from_kg_error(&error), error.to_string()))
+}
 
 /// Opaque handle for a knowledge graph. The C-side caller only
 /// ever sees `KgliteGraph*`; allocation, deallocation, and field
@@ -612,6 +624,9 @@ fn classify_rdf_error(msg: &str) -> KgliteStatusCode {
 /// - `KGLITE_STATUS_CODE_NULL_POINTER` — `graph` or `path` is null
 /// - `KGLITE_STATUS_CODE_INVALID_UTF8` — `path` isn't valid UTF-8
 /// - `KGLITE_STATUS_CODE_FILE_IO` — write failed
+/// - `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` — another process holds the
+///   writer lease on `path`; nothing is written, and the holder is in
+///   [`kglite_last_error_details_json`](crate::kglite_last_error_details_json)
 ///
 /// # Safety
 ///
@@ -635,6 +650,9 @@ pub unsafe extern "C" fn kglite_save_graph(
                 Ok(s) => s,
                 Err(_) => return KgliteStatusCode::InvalidUtf8,
             };
+            if let Some(refusal) = foreign_lease_refusal(path_str) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             // `save_graph` takes `&mut Arc`, hence the transient mutable borrow.
             let state = unsafe { GraphState::from_handle_mut(graph) };
             match save_graph(&mut state.inner, path_str) {
@@ -888,6 +906,9 @@ pub unsafe extern "C" fn kglite_blueprint_build(
 /// the bytes may not survive an OS/power crash. Use it only for bulk or
 /// throwaway saves where you'll re-save or can rebuild.
 ///
+/// Another process holding the writer lease on `path` refuses the save with
+/// `KGLITE_STATUS_CODE_WRITER_LEASE_HELD`, as in [`kglite_save_graph`].
+///
 /// # Safety
 ///
 /// `graph` must be a valid handle; `path` a null-terminated UTF-8 path;
@@ -910,6 +931,9 @@ pub unsafe extern "C" fn kglite_save_graph_durable(
                 Ok(s) => s,
                 Err(_) => return KgliteStatusCode::InvalidUtf8,
             };
+            if let Some(refusal) = foreign_lease_refusal(path_str) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let state = unsafe { GraphState::from_handle_mut(graph) };
             // Route through the shared mode-aware dispatch so disk-backed graphs and
             // columnar consolidation are handled identically to `kglite_save_graph`;

@@ -27,7 +27,7 @@ before upgrading.
 - **`save()` refuses a path another process holds open for writing.**
   - Before: `kglite.load(path)` followed by `save(path)` renamed the loader's bytes over a graph a `kglite.open(path)` holder was writing, and the holder's unsaved work was lost.
   - Now: the save raises `WriterLeaseHeldError` naming the holder's pid and writes nothing. A lease held by this process is not foreign. `open(path, lock=False)` opts out of the check.
-  - The Rust `save_graph` and the C ABI save entries do not run the check. `kglite::api::io::refuse_foreign_writer` is the probe a Rust caller can run first.
+  - The Rust `save_graph` and the C ABI save entries (`kglite_save_graph`, `kglite_save_graph_durable`, `kglite_session_save`) run the same check. The C entries return `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` with the holder in `kglite_last_error_details_json`. `save_graph_with` does not, because it also serves the close of a handle opened without a lease.
   - Migration: take the lease for the whole read-modify-save interval with `kglite.open(path)`, or stop the other writer.
 
 ### Added
@@ -133,7 +133,7 @@ before upgrading.
 
 ### Fixed
 
-- **A durable `load_ntriples` logs a replayable load.** With `auto_type`, the loader renames Q-code types to their labels after creating the nodes, and the log kept edge endpoints under the old type. Reopening then failed about half the time with `WAL v4 group P31 has missing endpoints`. The captured operations now name the final types.
+- **A durable `load_ntriples` logs a replayable load.** With `auto_type`, the loader renames Q-code types to their labels after creating the nodes, and the log kept edge endpoints under the old type. Reopening then failed about half the time with `WAL v4 group P31 has missing endpoints`. The captured operations now name the final types. Two loads running at once in one process also no longer share spill files, which left Q-code types unresolved.
 
 - **A window function reads variables its `RETURN` does not project.** `UNWIND [3, 1, 2] AS x RETURN x * 10 AS y, row_number() OVER (ORDER BY x)` numbered the rows in input order, because the projection dropped `x` before the window read it. Windows now see the scope the items see.
 

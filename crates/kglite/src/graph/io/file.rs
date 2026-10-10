@@ -1075,7 +1075,15 @@ pub fn save_inmemory_with(graph: &mut Arc<DirGraph>, path: &str, fsync: bool) ->
 /// save-dispatch — the wheel (`KnowledgeGraph::save`), the MCP server,
 /// and the C ABI (`kglite_save_graph`) all route through it so dispatch
 /// + durability behaviour can't drift between bindings.
+///
+/// An explicit save to `path`: it is refused (`SaveError::Io`, naming the
+/// holder) when another process holds the graph's writer lease, before the
+/// write-ahead guard runs. A lease this process holds is not foreign.
+/// [`save_graph_with`] does not run the probe — it also serves the close of a
+/// handle that opted out of the lease.
 pub fn save_graph(graph: &mut Arc<DirGraph>, path: &str) -> Result<(), SaveError> {
+    super::open::refuse_foreign_writer(Path::new(path))
+        .map_err(|refusal| SaveError::Io(refusal.error.to_string()))?;
     save_graph_with(graph, path, true)
 }
 

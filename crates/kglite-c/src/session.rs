@@ -1051,6 +1051,9 @@ pub unsafe extern "C" fn kglite_create_edges_batch(
 /// - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` or `path` is null
 /// - `KGLITE_STATUS_CODE_INVALID_UTF8` — `path` isn't valid UTF-8
 /// - `KGLITE_STATUS_CODE_FILE_IO` — the write failed
+/// - `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` — another process holds the
+///   writer lease on `path`; nothing is written, and the holder is in
+///   [`kglite_last_error_details_json`](crate::kglite_last_error_details_json)
 ///
 /// # Safety
 ///
@@ -1075,6 +1078,9 @@ pub unsafe extern "C" fn kglite_session_save(
                 Ok(s) => s,
                 Err(_) => return KgliteStatusCode::InvalidUtf8,
             };
+            if let Some(refusal) = crate::graph::foreign_lease_refusal(path_str) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let session_state = unsafe { SessionState::from_handle(session) };
             // `Session::save` reaches the session's own Arc under its lock —
             // the only no-copy route, since saving a `snapshot()` would find a

@@ -77,7 +77,8 @@ pub(crate) fn record(error: &KgError) {
 /// as an owned JSON object, or null when that call had none (or succeeded).
 ///
 /// Two codes carry detail. `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` (from
-/// [`kglite_open_session`](crate::kglite_open_session)) returns
+/// [`kglite_open_session`](crate::kglite_open_session), or a save refused by
+/// another process's lease) returns
 /// `{"code":"WriterLeaseHeld","pid","since","label","self","message"}`, where
 /// `pid`, `since` and `label` are null when the holder's record could not be
 /// read or published none, and `self` is true when the holder is the calling

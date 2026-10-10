@@ -1266,6 +1266,32 @@ mod tests {
         refuse_foreign_writer(&graph).expect("a released lease is free");
     }
 
+    /// `save_graph` is an explicit save: a foreign holder refuses it before
+    /// anything is written, while `save_graph_with` (which also serves a
+    /// lease-free handle's close) does not probe.
+    #[test]
+    fn save_graph_refuses_a_foreign_holder_and_save_graph_with_does_not() {
+        use crate::graph::io::file::{save_graph, save_graph_with};
+        let tmp = tempfile::tempdir().unwrap();
+        let graph_path = tmp.path().join("held.kgl");
+        let path = graph_path.to_string_lossy().into_owned();
+        let lease = GraphWriterLease::acquire(&graph_path, Duration::ZERO).unwrap();
+        std::fs::write(
+            writer_owner_path(&graph_path),
+            "pid=1\nsince=2026-01-01T00:00:00Z\n",
+        )
+        .unwrap();
+
+        let mut graph = std::sync::Arc::new(crate::graph::dir_graph::DirGraph::new());
+        let error = save_graph(&mut graph, &path).expect_err("a foreign holder refuses");
+        assert!(error.to_string().contains("pid 1"), "{error}");
+        assert!(!graph_path.exists(), "a refused save writes nothing");
+
+        save_graph_with(&mut graph, &path, true).expect("the unprobed dispatch still saves");
+        assert!(graph_path.exists());
+        drop(lease);
+    }
+
     /// The property whose platform split broke this: the owner record must be
     /// readable *by someone other than the holder, while the lock is held*.
     ///

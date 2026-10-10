@@ -138,4 +138,23 @@ class WriterLeaseTest {
                 () -> WriterLease.acquire(dir.resolve("x.kgl"), Duration.ofMillis(-1)));
         assertEquals(-1, error.statusCode());
     }
+
+    @Test
+    @DisplayName("a save over a path another process holds is refused with the lease status")
+    void saveIsRefusedWhileAnotherProcessHoldsTheLease(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("held.kgl");
+        try (WriterLease held = WriterLease.acquire(path);
+                KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {
+            assertNotNull(held);
+            // The same lock, recorded as held by another process.
+            java.nio.file.Files.writeString(
+                    dir.resolve("held.kgl.lock-owner"), "pid=1\nsince=2026-01-01T00:00:00Z\n");
+
+            WriterLeaseHeldException refused = assertThrows(
+                    WriterLeaseHeldException.class, () -> graph.save(path));
+            assertEquals(102, refused.statusCode());
+            assertEquals(Long.valueOf(1), refused.pid());
+            assertTrue(!java.nio.file.Files.exists(path), "a refused save writes nothing");
+        }
+    }
 }

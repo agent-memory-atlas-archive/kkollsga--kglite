@@ -546,7 +546,8 @@ KgliteStatusCode kglite_cursor_next_batch(struct KgliteCursor *cursor,
  * as an owned JSON object, or null when that call had none (or succeeded).
  *
  * Two codes carry detail. `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` (from
- * [`kglite_open_session`](crate::kglite_open_session)) returns
+ * [`kglite_open_session`](crate::kglite_open_session), or a save refused by
+ * another process's lease) returns
  * `{"code":"WriterLeaseHeld","pid","since","label","self","message"}`, where
  * `pid`, `since` and `label` are null when the holder's record could not be
  * read or published none, and `self` is true when the holder is the calling
@@ -1220,6 +1221,9 @@ KgliteStatusCode kglite_load_rdf_with_options(const char *path,
  * - `KGLITE_STATUS_CODE_NULL_POINTER` — `graph` or `path` is null
  * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `path` isn't valid UTF-8
  * - `KGLITE_STATUS_CODE_FILE_IO` — write failed
+ * - `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` — another process holds the
+ *   writer lease on `path`; nothing is written, and the holder is in
+ *   [`kglite_last_error_details_json`](crate::kglite_last_error_details_json)
  *
  * # Safety
  *
@@ -1316,6 +1320,9 @@ KgliteStatusCode kglite_blueprint_build(const char *blueprint_path,
  * atomic rename (never a torn file) but the fsync barrier is skipped, so
  * the bytes may not survive an OS/power crash. Use it only for bulk or
  * throwaway saves where you'll re-save or can rebuild.
+ *
+ * Another process holding the writer lease on `path` refuses the save with
+ * `KGLITE_STATUS_CODE_WRITER_LEASE_HELD`, as in [`kglite_save_graph`].
  *
  * # Safety
  *
@@ -2294,6 +2301,9 @@ KgliteStatusCode kglite_create_edges_batch(struct KgliteSession *session,
  * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session` or `path` is null
  * - `KGLITE_STATUS_CODE_INVALID_UTF8` — `path` isn't valid UTF-8
  * - `KGLITE_STATUS_CODE_FILE_IO` — the write failed
+ * - `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` — another process holds the
+ *   writer lease on `path`; nothing is written, and the holder is in
+ *   [`kglite_last_error_details_json`](crate::kglite_last_error_details_json)
  *
  * # Safety
  *
