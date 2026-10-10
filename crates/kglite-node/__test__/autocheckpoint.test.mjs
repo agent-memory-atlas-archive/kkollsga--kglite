@@ -34,11 +34,11 @@ test('writing past autoCheckpointWalMib trims the log in the background and a re
   const path = join(scratch(t), 'g.kgl');
   const g = await kglite.open(path, { durability: 'normal', autoCheckpointWalMib: 1 });
   await writeMany(g, 60);
-  // The policy checkpoints once the log reaches max(threshold, checkpoint size),
-  // and the checkpoint grows with every fold, so a log that settles under that
-  // floor plus one frame is within policy. A fixed 2 MiB bound failed on a slow
-  // runner whose last checkpoint had already outgrown it.
-  const settled = () => existsSync(path) && walSize(path) < Math.max(MIB, statSync(path).size) + PAD.length * 2;
+  // The policy checkpoints while the log is at least max(threshold, checkpoint
+  // size), and keeps folding until it is below that, including the tail that
+  // commits wrote during a checkpoint. All writes are acknowledged, so the
+  // settled log is strictly under the floor; no further commit is needed.
+  const settled = () => existsSync(path) && walSize(path) < Math.max(MIB, statSync(path).size);
   await until(settled);
   assert.ok(settled(), 'the log stays bounded');
   // The checkpoint ran on its own: nothing called checkpoint() or close().

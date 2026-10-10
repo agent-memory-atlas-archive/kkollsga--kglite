@@ -96,18 +96,23 @@ impl Session {
     }
 
     /// [`Self::checkpoint_online`] when [`Self::needs_checkpoint`] holds and no
-    /// other checkpoint is running; `Ok(None)` otherwise. A failure backs the
-    /// policy off by one threshold of log growth.
+    /// other checkpoint is running; `Ok(None)` otherwise. Commits that land
+    /// while a checkpoint is written stay in the log, so the policy is asked
+    /// again after each fold: a caller that asks only after commits would
+    /// otherwise strand a tail above the bound when the burst ended mid-write.
+    /// Returns the last report. A failure backs the policy off by one
+    /// threshold of log growth and ends the drain.
     pub fn maybe_checkpoint_online(&self) -> Result<Option<OnlineCheckpointReport>, String> {
-        if !self.needs_checkpoint() {
-            return Ok(None);
+        let mut last = None;
+        while self.needs_checkpoint() {
+            let Ok(gate) = self.checkpoint_gate.try_lock() else {
+                break;
+            };
+            let report = self.checkpoint_online_gated();
+            drop(gate);
+            last = Some(report?);
         }
-        let Ok(gate) = self.checkpoint_gate.try_lock() else {
-            return Ok(None);
-        };
-        let report = self.checkpoint_online_gated();
-        drop(gate);
-        report.map(Some)
+        Ok(last)
     }
 
     /// Fold the log into the live checkpoint without holding the session locks

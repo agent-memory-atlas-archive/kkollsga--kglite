@@ -276,6 +276,34 @@ fn the_policy_fires_at_the_threshold_and_not_before() {
 }
 
 #[test]
+fn commits_during_a_policy_checkpoint_do_not_strand_the_log_above_the_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("g.kgl");
+    let session = Arc::new(open(&path, DurabilityLevel::Full));
+    let q = |i: i32| format!("CREATE (:N {{id: {i}, pad: '{}'}})", "x".repeat(400));
+    commit(&session, &q(0));
+    let one_frame = std::fs::metadata(wal_path(&path)).unwrap().len() - 5;
+    session.set_auto_checkpoint_wal_bytes(Some(one_frame * 3));
+    commit(&session, &q(1));
+    commit(&session, &q(2));
+    assert!(session.needs_checkpoint());
+    // The committer finishes a burst while the checkpoint is being written, so
+    // no later commit exists to ask the policy again.
+    let during = Arc::clone(&session);
+    hooks::set(Stage::AfterSnapshot, move || {
+        for i in 3..8 {
+            commit(&during, &q(i));
+        }
+    });
+    session.maybe_checkpoint_online().unwrap().expect("ran");
+    assert!(
+        !session.needs_checkpoint(),
+        "the tail committed during the checkpoint is still over the bound"
+    );
+    assert_eq!(frames(&path), 0);
+}
+
+#[test]
 fn a_disabled_policy_never_asks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("g.kgl");
