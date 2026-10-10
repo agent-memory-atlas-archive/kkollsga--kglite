@@ -582,6 +582,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         use std::collections::HashSet;
 
+        self.check_durable_owner()?;
         if let Some(ref cb) = progress {
             if !cb.bind(py).is_callable() {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -621,9 +622,11 @@ impl KnowledgeGraph {
             progress: progress_sink,
         };
 
-        // Not logged: this load never reached the write-ahead log, so on a
-        // durable graph it is lost at a crash (known defect, fixed by moving
-        // this call to `logged_write`).
+        // A handle derived from a durable graph must not write the shared
+        // file; refuse before the load, as every other write does.
+        self.check_durable_owner()?;
+        // Unlogged on purpose: a durable graph checkpoints after the load
+        // (below) instead of logging it.
         // Release the GIL during the multi-minute load so Python
         // heartbeat threads (download/build progress monitors) can run.
         // Cancellation: when the progress sink notices a pending SIGINT
@@ -643,6 +646,16 @@ impl KnowledgeGraph {
                     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e)
                 }
             })?;
+
+        // A durable graph checkpoints instead of logging the load: a
+        // dump-sized load would put millions of ops in the log, and `save()`
+        // writes the checkpoint and truncates it. Other graphs only need the
+        // capture buffer drained for CDC.
+        if self.lifecycle.durable.is_some() {
+            self.save(py, None, true)?;
+        } else {
+            self.flush_pending_ops()?;
+        }
 
         Python::attach(|py| {
             for message in &stats.warnings {

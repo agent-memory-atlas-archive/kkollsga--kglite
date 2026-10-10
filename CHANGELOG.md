@@ -55,6 +55,17 @@ before upgrading.
 
 ### Changed
 
+- **C ABI and Java: multi-threaded throughput no longer collapses as threads
+  are added.**
+  - Before: the C library's memory-statistics counters were three process-wide
+    atomics updated on every allocation. Concurrent callers fought over them,
+    so 64 Java reader threads served 2,040 req/s at about 9 cores.
+  - Now: each thread counts in its own slot. The same probe serves 48,400 req/s
+    (23.7×); a 7.8%-write mix goes from 2,140 to 22,900 req/s (10.7×).
+  - `kglite_memory_stats` keeps its signature. Its peak is now folded every
+    1,024 allocations per thread, on allocations of 1 MiB or more and at every
+    call, so a brief spike between folds can be missed.
+
 - **`has_index()` and `list_indexes()` report a disk graph's persistent indexes.** Before, both answered as though no index existed after `create_index` returned `persistent: True`. Each `list_indexes()` entry now carries `persistent`. `index_stats()` still returns `None` for a persistent index.
 
 - **Fluent traversal results come back in a fixed order.** `traverse()` and the accessors over a selection (`titles()`, `collect()`, `to_df()` and the rest) list each parent's children in node creation order and the parents in creation order. The order used to follow a per-process hash seed: two fresh processes over one graph listed the same nodes differently. A `sort_by` or a `max_nodes` limit applies on top as before.
@@ -132,6 +143,27 @@ before upgrading.
 - `Session::next_lsn()` and `Session::last_lsn()` report the log position.
 
 ### Fixed
+
+- **`load_ntriples()` on a durable graph (`kglite.open(path, durable=...)`) is
+  now written to the write-ahead log.**
+  - Before: the load was never logged. After a crash or hard exit without
+    `save()`, the reopened graph held none of the loaded entities or edges.
+  - Now: the load ends in a checkpoint, as `save()` does, so it survives a
+    crash and the log stays small after a dump-sized load. A handle derived
+    from a durable graph refuses `load_ntriples()` as it does other writes.
+
+- **MCP server: every tool's `outputSchema` declares `"type": "object"` at its
+  root, so the server starts in clients that validate strictly.**
+  - Before: `cypher_query`, manifest Cypher tools and the recipe tools sent a
+    root `anyOf` with no `type`. The Claude desktop app refused the whole
+    `tools/list` (`outputSchema.type: expected "object"`), so no kglite MCP
+    server started there. The Claude Code CLI and Codex accepted it.
+  - Now: kglite's own route schemas carry the root type, and mcp-methods
+    0.4.13 adds it to the response-budget union it wraps around each schema.
+- **MCP server: `cypher_query` and the recipe tools now announce an unloaded
+  lazy skill**, as typed tools already did (mcp-methods 0.4.13). The notice is
+  a separate text block after the JSON mirror, so the mirror still parses on
+  its own.
 
 - **A durable `load_ntriples` logs a replayable load.** With `auto_type`, the loader renames Q-code types to their labels after creating the nodes, and the log kept edge endpoints under the old type. Reopening then failed about half the time with `WAL v4 group P31 has missing endpoints`. The captured operations now name the final types. Two loads running at once in one process also no longer share spill files, which left Q-code types unresolved.
 
@@ -14950,7 +14982,7 @@ unaffected.
   negating a comparison against a missing or NULL property no longer admits
   that relationship.
 
-### Performance
+### Changed
 
 - **Node text filters run before relationship expansion.** Positive
   `STARTS WITH`, `CONTAINS`, and `ENDS WITH` predicates, including string
@@ -14977,7 +15009,7 @@ unaffected.
 
 ## [0.13.1] - 2026-07-13
 
-### Performance
+### Changed
 
 - **Property-grouped Cypher counts avoid materializing one row per edge.**
   Direct property keys are resolved once per endpoint and merged by value
@@ -15027,7 +15059,7 @@ unaffected.
 - **Public Python, MCP, Bolt, CLI, C ABI, package metadata, and license surfaces
   are checked as release contracts.**
 
-### Performance
+### Changed
 
 - **Common in-memory operations avoid unnecessary graph copies and GIL
   stalls.** Point lookup, cache rebuilding, bulk mutation, traversal, and MCP
@@ -15828,7 +15860,7 @@ unaffected.
 
 ## [0.11.9] — 2026-06-21 — Timestamp + allShortestPaths + FOREACH; NDV planner selectivity
 
-### Performance
+### Changed
 
 - **Faster `to_list()` / `to_dicts()` materialization.** The row→dict loop now
   interns each column-name key once and reuses it across all rows, instead of
@@ -16061,7 +16093,7 @@ neo4j source tree.
     errors by default (typo guard) and is created fresh **only when
     `--storage` is given** (opt-in build-and-serve).
 
-### Performance
+### Changed
 
 - **Cypher plan cache.** A param-less, codec-free query re-run against an
   unchanged graph now reuses its fully-optimized plan, skipping parse +
@@ -16317,7 +16349,7 @@ painpoints verified resolved). This closes the remaining items.
   changed text instead of everything. Older v1 `.kgle` files still import (they
   carry no provenance — `mode='changed'` treats every node as new).
 
-### Performance
+### Changed
 
 - **HNSW index build is ~5–6× faster (concurrent).** Build was single-threaded
   (~43s on a 46k×1024 store — the new engine's one rough edge). Inserts now run
@@ -16528,7 +16560,7 @@ Concurrency / durability / embeddings, at a glance:
   `where` predicate-scope (added 0.10.25) was already working — it was the key
   name, not the feature, that tripped callers up.
 
-### Performance
+### Changed
 
 - **Cosine vector search ~1.25× faster (≈21% on a 50k×128 top-10 scan).** Each
   `EmbeddingStore` now caches a per-vector L2 norm alongside the vectors, so
@@ -16791,7 +16823,7 @@ Concurrency / durability / embeddings, at a glance:
 
 ## [0.10.24] — 2026-06-16 — smaller .kgl files, faster CREATE
 
-### Performance
+### Changed
 
 - **Bulk Cypher `CREATE` is ~30% faster — now beats the 0.10.15 baseline.**
   Two per-node redundancies in the node-create path were removed:
@@ -16974,7 +17006,7 @@ Concurrency / durability / embeddings, at a glance:
   (node, level), finest (0) → coarsest. Omitting `level` returns the flat best
   partition as before. Useful for GraphRAG-style tiered community summaries.
 
-### Performance
+### Changed
 
 - **Bounded-memory graph algorithms on mapped/disk.** Community detection
   (`louvain` / `leiden` / `label_propagation`) and `k_core` previously
@@ -17004,7 +17036,7 @@ Concurrency / durability / embeddings, at a glance:
 
 ## [0.10.18] — 2026-06-14 — cyclic pattern-match optimisation (matcher + planner)
 
-### Performance
+### Changed
 
 - **Cycle-closing pattern segments no longer expand-then-filter.** When a node
   variable reappears later in the same pattern (a cycle, e.g.
@@ -17041,7 +17073,7 @@ Concurrency / durability / embeddings, at a glance:
 
 ## [0.10.17] — 2026-06-13 — durable WAL writes (`durable=True`), disk Cypher CREATE/MERGE, embedded-app perf
 
-### Performance
+### Changed
 
 - **Durable `SET`/property-update no longer scales with graph size.** On a
   `durable=True` graph loaded from a checkpoint (columnar storage), a Cypher
@@ -17214,7 +17246,7 @@ examples. Plus schema "did you mean?" warnings now readable on
   (timeseries.md). Plus a hybrid RAG-over-a-graph retrieval recipe (CYPHER.md)
   locked with tests.
 
-### Performance
+### Changed
 
 - **Disk-mode traversal no longer materialises an `EdgeData` per edge.**
   On `storage="disk"`, every edge crossed during pattern matching,
@@ -17257,7 +17289,7 @@ migration guide, and a batch of papercut/correctness fixes — including
 an MCP-server boot blocker on clean installs and several
 stale-docs purges.
 
-### Performance
+### Changed
 
 - **Whole-node materialization (`RETURN n`, `collect(n)`) skips the
   per-node schema walk on in-memory storage.** Materializing a node
@@ -17468,7 +17500,7 @@ that work is making existing behaviour discoverable.
 
 ## [0.10.12] — 2026-06-01 — fluent select/filter perf + count(DISTINCT) fusion
 
-### Performance
+### Changed
 
 - **Fluent `select(sort=…, limit=k)` is now a bounded top-K, not a full sort.**
   Previously it sorted the whole selection then truncated; now it partitions
@@ -17489,7 +17521,7 @@ that work is making existing behaviour discoverable.
 
 ## [0.10.11] — 2026-06-01 — count(node) no longer materializes per row
 
-### Performance
+### Changed
 
 - **`count(node)` no longer materializes the node per row.** `count(n)` (or
   `count(c)`, …) over a bound node/edge variable evaluated the variable each
@@ -20264,7 +20296,7 @@ shapes.
 - `KGLITE_BLUEPRINT_JUNCTION_CHUNK_SIZE` — junction-edge
   streaming chunk size (default 100K, unchanged from 0.9.43).
 
-### Performance
+### Changed
 
 Synthetic 500K-row Employee + 1000-row Company + WORKS_AT FK
 (13 MB employees.csv), 5 cold rounds, `min` (per CLAUDE.md
@@ -22393,7 +22425,7 @@ because fastembed-python doesn't carry that model in its catalog.
   load in tens of milliseconds. Existing sidecar-format graphs still
   load via the legacy path.
 
-### Performance
+### Changed
 
 - Legacy sidecar column loader (still used for pre-mega-file files)
   parallelised via rayon — read + zstd decode + `load_packed` now
@@ -23811,7 +23843,7 @@ might miss it under that subhead.
   `type` was stripped from the file. Round-tripped graphs now match
   in-memory ones.
 
-### Performance
+### Changed
 
 - `code_tree.build` is ~15% faster on polyglot codebases. Two changes:
   the orchestrator walks the source tree once and partitions files by
@@ -24876,7 +24908,7 @@ each addition; none are domain-specific.
 
 ## [0.8.17] — 2026-04-26
 
-### Performance
+### Changed
 
 - **Two-MATCH count fusion: top-K-by-degree filtered queries now run
   ~20× faster.** The shape
@@ -24938,7 +24970,7 @@ each addition; none are domain-specific.
   `top_writers.py` is now **49 s** — down from the original
   **510 s** before this session — **~10× total**.
 
-### Performance
+### Changed
 
 - **Phase 1 N-Triples loader is ~1.7× faster.** Steady-state on
   Wikidata's `latest-truthy.nt.bz2` went from ~2.4 M tri/s to
@@ -25056,7 +25088,7 @@ each addition; none are domain-specific.
   authoritative `conn_type_index_*` arrays.
   Surfaced by `bench/benchmark_full.py` against every disk row.
 
-### Performance
+### Changed
 
 - **Parallel multistream `.bz2` decoder for `load_ntriples` —
   closes the gap with `.zst`.** Wikidata / pbzip2 dumps are a
@@ -25214,7 +25246,7 @@ each addition; none are domain-specific.
 
 ## [0.8.15] — 2026-04-25
 
-### Performance
+### Changed
 
 - **Mapped-mode property index — `MATCH (n:Type {prop: val})` in O(log N).**
   `MappedGraph` now carries a lazy per-`(node_type, property)` and
@@ -25252,7 +25284,7 @@ each addition; none are domain-specific.
   `tests/test_cypher_count_subquery.py`. Cypher shapes like
   `WITH a, count{(a)-[:REL]->()} AS n` now work out of the box.
 
-### Performance
+### Changed
 
 - **Mapped-mode query acceleration — lazy per-connection-type index.**
   `MappedGraph` was a bare `StableDiGraph` wrapper with none of the
@@ -25633,7 +25665,7 @@ existing `.kgl` directory still loads byte-for-byte identically.
   typed-edge matches, `edge_weight()`, and `peer_count`-backed
   aggregates return correct results on sealed segments.
 
-### Performance
+### Changed
 
 - **Save/load regression on Wikidata-scale graphs undone.**
   0.8.11's initial segmented-CSR work regressed `save`/`load`
@@ -25693,7 +25725,7 @@ existing `.kgl` directory still loads byte-for-byte identically.
 
 ## [0.8.10] — 2026-04-20
 
-### Performance
+### Changed
 
 - **GROUP BY aggregation defers property materialization.** Queries of the
   shape `RETURN x.prop, count(*)` now hash by NodeIndex during the per-row
@@ -25919,7 +25951,7 @@ existing `.kgl` directory still loads byte-for-byte identically.
 
 ## [0.8.6] — 2026-04-19
 
-### Performance
+### Changed
 
 - **`describe(connections=['T'])` fast path on disk graphs.** Rewrote
   `write_connections_detail` to use the persisted `conn_type_index_*`
@@ -25976,7 +26008,7 @@ Internal: test coverage, SAFETY docs, storage module reorganization.
 
 ## [0.8.4] — 2026-04-19
 
-### Performance
+### Changed
 
 - **Correlated-equality pushdown in the Cypher planner.** `WHERE cur.prop =
   prior.other_prop` — where `prior` is a node bound by an earlier MATCH —
@@ -26001,7 +26033,7 @@ Internal: test coverage, SAFETY docs, storage module reorganization.
 
 ## [0.8.3] — 2026-04-19
 
-### Performance
+### Changed
 
 - **Spatial-join operator for `MATCH (s:A), (w:B) WHERE contains(s, w)`.**
   A new planner pass (`fuse_spatial_join`) rewrites this two-pattern
@@ -26149,7 +26181,7 @@ than the fixes and performance gains listed below.
   (`add_connections`, ntriples) still use the pending+rebuild path via
   `build_csr_from_pending`.
 
-### Performance
+### Changed
 
 - **Cypher query primitives faster across the board vs v0.7.17** (N=20
   trials, macOS dev box). Memory and mapped modes both win:
@@ -26653,7 +26685,7 @@ engine; dependency bumps + clippy 1.95 compatibility only.
 
 ## [0.6.7] - 2026-03-18
 
-### Performance
+### Changed
 
 - **31% faster `.kgl` load** — large files are now memory-mapped directly instead of buffered read; small columns (< 256 KB) skip temp file creation and load into heap.
 - **28% faster Cypher queries** — `PropertyStorage::get_value()` returns `Value` directly, avoiding `Cow` wrapping/unwrapping overhead on every property access.
@@ -26704,7 +26736,7 @@ engine; dependency bumps + clippy 1.95 compatibility only.
 - `graph_info()` reports `columnar_total_rows` and `columnar_live_rows` for diagnosing columnar fragmentation.
 - Boolean columns now correctly persist in mmap directory format (`from_type_str` now matches `"boolean"` in addition to `"bool"`).
 
-### Performance
+### Changed
 
 - 4-11x speedup for columnar/mmap operations: eliminated unnecessary full graph clone in `save_mmap()`, bulk memcpy in `materialize_to_heap()`, async flush, aligned pointer reads, direct push in `push_row()`, and skipped UTF-8 re-validation for string columns.
 
@@ -27233,7 +27265,7 @@ engine; dependency bumps + clippy 1.95 compatibility only.
 
 - Betweenness centrality now uses undirected BFS — previously only traversed outgoing edges, causing nodes bridging communities via incoming edges to get zero scores
 
-### Performance
+### Changed
 
 - `RETURN ... ORDER BY expr LIMIT k` fused into single-pass top-k heap — O(n log k) instead of O(n log n) sort + O(n) full projection. **5.4x speedup** on `distance()` ORDER BY LIMIT queries (1M pairs: 2627ms → 486ms)
 - `WHERE contains(a, b)` fast path (`ContainsFilterSpec`) — extracts contains() patterns and evaluates directly from spatial cache, bypassing expression evaluator chain
