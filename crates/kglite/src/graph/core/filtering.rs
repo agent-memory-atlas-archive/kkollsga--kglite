@@ -705,7 +705,17 @@ fn indexed_equality_candidates(
         .iter()
         .all(|node_type| graph.index_answers_point_lookup(node_type, property))
     {
-        return None;
+        return if property == "id" {
+            id_index_candidates(
+                graph,
+                nodes,
+                node_types,
+                input_is_one_full_type,
+                target_value,
+            )
+        } else {
+            None
+        };
     }
     let mut matching_nodes: Vec<NodeIndex> = Vec::new();
     for node_type in node_types {
@@ -717,6 +727,64 @@ fn indexed_equality_candidates(
     let indexed_set: HashSet<_> = matching_nodes.iter().copied().collect();
     let original_set: HashSet<_> = nodes.iter().copied().collect();
     Some(indexed_set.intersection(&original_set).copied().collect())
+}
+
+/// The nodes of `nodes` whose `id` equals `target`, taken from the per-type id
+/// indexes instead of a scan, or `None` when the scan must answer.
+///
+/// `id` is not a property index, so [`indexed_equality_candidates`] never
+/// covers it and `where({"id": x})` read every candidate's id. The id index
+/// normalizes numeric spellings and prefixes more loosely than `=` does, so
+/// every hit is re-checked with [`values_equal`] before it is returned; the
+/// target kinds admitted are integer and string, and `id_filter_tests` pins
+/// that the answer equals the scan's for each. The index is used only where it costs nothing to
+/// have — already built for every type present, or the input is one type's
+/// full membership, where building it is the same O(N) the scan would spend
+/// and is then reused by the next lookup.
+fn id_index_candidates(
+    graph: &DirGraph,
+    nodes: &[NodeIndex],
+    node_types: &HashSet<&str>,
+    input_is_one_full_type: bool,
+    target: &Value,
+) -> Option<Vec<NodeIndex>> {
+    if !matches!(
+        target,
+        Value::Int64(_) | Value::UniqueId(_) | Value::String(_)
+    ) {
+        return None;
+    }
+    if !input_is_one_full_type
+        && !node_types
+            .iter()
+            .all(|node_type| graph.id_indices.contains_key(node_type))
+    {
+        return None;
+    }
+    let mut hits: Vec<NodeIndex> = Vec::new();
+    for node_type in node_types {
+        if let Some(idx) = graph.lookup_by_id_readonly(node_type, target) {
+            hits.push(idx);
+        }
+        // The index holds one node per id. A type with repeated ids (a data
+        // error, reported at load) has fewer index entries than nodes and a
+        // scan finds every copy, so only a one-node-per-id type may be
+        // answered from the index.
+        let nodes_of_type = graph.type_indices.get(node_type).map(|v| v.len());
+        if graph.id_indices.editable_len(node_type) != nodes_of_type {
+            return None;
+        }
+    }
+    if !input_is_one_full_type {
+        hits.retain(|hit| nodes.contains(hit));
+    }
+    hits.retain(|&hit| {
+        graph
+            .node_view(hit)
+            .and_then(|n| n.get_field_ref("id").map(|v| values_equal(&v, target)))
+            .unwrap_or(false)
+    });
+    Some(hits)
 }
 
 fn filter_nodes_by_conditions(
@@ -2164,3 +2232,7 @@ mod tests {
 #[cfg(test)]
 #[path = "predicate_equality_tests.rs"]
 mod predicate_equality_tests;
+
+#[cfg(test)]
+#[path = "id_filter_tests.rs"]
+mod id_filter_tests;
