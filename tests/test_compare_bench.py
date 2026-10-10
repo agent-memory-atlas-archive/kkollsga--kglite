@@ -255,9 +255,7 @@ def test_override_naming_an_absent_cell_is_an_error(tmp_path: Path) -> None:
 def test_override_without_a_cause_is_an_error(tmp_path: Path) -> None:
     path = tmp_path / "overrides.json"
     path.write_text(json.dumps({"overrides": [{"cell": OVERRIDE_CELL, "threshold_pct": 30}]}), encoding="utf-8")
-    result = _compare(
-        tmp_path, [OVERRIDE_CELL], [OVERRIDE_CELL], extra_args=["--threshold-overrides", str(path)]
-    )
+    result = _compare(tmp_path, [OVERRIDE_CELL], [OVERRIDE_CELL], extra_args=["--threshold-overrides", str(path)])
     assert result.returncode == 2
     assert "cause" in result.stderr
 
@@ -270,7 +268,10 @@ def test_committed_overrides_name_only_cells_in_the_committed_baselines() -> Non
     finally:
         sys.path.pop(0)
     overrides = compare_bench._load_overrides(ROOT / "scripts" / "perf_threshold_overrides.json")
-    names = {b["name"] for b in json.loads((ROOT / "tests/benchmarks/baselines/current.linux.json").read_text())["benchmarks"]}
+    names = {
+        b["name"]
+        for b in json.loads((ROOT / "tests/benchmarks/baselines/current.linux.json").read_text())["benchmarks"]
+    }
     assert set(overrides) <= names
     assert len(overrides) == 3
     assert set(overrides.values()) == {30.0}
