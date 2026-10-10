@@ -39,6 +39,11 @@ before upgrading.
   - List ordering: `[1, 2] < [1, 3]` compares element-wise, and a longer list is greater when the shared elements are equal. A pair that cannot be ordered gives `null`.
   - `toInteger('1.7')` is `1`; it was `null`. Integer text still parses exactly.
 
+- **Aggregate window functions.** `count`, `sum`, `avg`, `min` and `max` accept `OVER ()` and `OVER (PARTITION BY ...)`, so `WITH d, max(lex) OVER () AS top RETURN d, lex / top` normalises a score without a join.
+  - Each row gets the aggregate of its partition; `NULL` skipping, `DISTINCT` and empty-partition results match the grouped aggregates.
+  - `ORDER BY` inside `OVER` is refused for these: there are no frames, so it would silently answer the partition total.
+  - `row_number()`, `rank()` and `dense_rank()` reject arguments they used to ignore.
+
 - **`--version` on `kglite-mcp-server` and `kglite-bolt-server`.** Prints the kglite version and exits; the pip `kglite-mcp-server` entry point shares the flag.
 
 ### Changed
@@ -119,6 +124,8 @@ before upgrading.
 - `Session::next_lsn()` and `Session::last_lsn()` report the log position.
 
 ### Fixed
+
+- **A window function reads variables its `RETURN` does not project.** `UNWIND [3, 1, 2] AS x RETURN x * 10 AS y, row_number() OVER (ORDER BY x)` numbered the rows in input order, because the projection dropped `x` before the window read it. Windows now see the scope the items see.
 
 - **A `.kgl` column with an unknown type tag is refused.** The loader decoded its bytes as a mixed column, reading garbage as values. It now fails with `InvalidData` naming the column and the tag.
 

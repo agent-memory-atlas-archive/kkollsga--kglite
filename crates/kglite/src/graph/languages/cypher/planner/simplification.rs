@@ -1134,6 +1134,31 @@ impl TextScoreCollector {
         projection.map_or(Ok(()), |expr| self.rewrite_expr(expr, params))
     }
 
+    /// A window function's argument, `PARTITION BY` keys and `ORDER BY` keys
+    /// are ordinary expressions and may hold parameters and `text_score` calls.
+    fn rewrite_window(
+        &mut self,
+        window: &mut Expression,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), String> {
+        let Expression::WindowFunction {
+            args,
+            partition_by,
+            order_by,
+            ..
+        } = window
+        else {
+            return Ok(());
+        };
+        for expr in args.iter_mut().chain(partition_by.iter_mut()) {
+            self.rewrite_expr(expr, params)?;
+        }
+        for item in order_by.iter_mut() {
+            self.rewrite_expr(&mut item.expression, params)?;
+        }
+        Ok(())
+    }
+
     fn rewrite_expr(
         &mut self,
         expr: &mut Expression,
@@ -1245,19 +1270,7 @@ impl TextScoreCollector {
                 self.rewrite_pred(filter, params)?;
                 Ok(())
             }
-            Expression::WindowFunction {
-                partition_by,
-                order_by,
-                ..
-            } => {
-                for expr in partition_by.iter_mut() {
-                    self.rewrite_expr(expr, params)?;
-                }
-                for item in order_by.iter_mut() {
-                    self.rewrite_expr(&mut item.expression, params)?;
-                }
-                Ok(())
-            }
+            window @ Expression::WindowFunction { .. } => self.rewrite_window(window, params),
             Expression::PredicateExpr(pred) => self.rewrite_pred(pred, params),
             Expression::ExprPropertyAccess { expr, .. } => self.rewrite_expr(expr, params),
             subquery @ (Expression::CountSubquery { .. }
@@ -2078,10 +2091,14 @@ pub(crate) fn collect_expression_refs(expr: &Expression, out: &mut HashSet<Strin
         Expression::PredicateExpr(p) => collect_predicate_refs(p, out),
         Expression::ExprPropertyAccess { expr, .. } => collect_expression_refs(expr, out),
         Expression::WindowFunction {
+            args,
             partition_by,
             order_by,
             ..
         } => {
+            for e in args {
+                collect_expression_refs(e, out);
+            }
             for e in partition_by {
                 collect_expression_refs(e, out);
             }

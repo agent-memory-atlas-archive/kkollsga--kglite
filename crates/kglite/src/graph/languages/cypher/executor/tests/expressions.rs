@@ -497,6 +497,8 @@ fn expression_only_window_function_has_an_exact_boundary_error() {
     let executor = CypherExecutor::with_params(&graph, &no_params, None);
     let expr = Expression::WindowFunction {
         name: "row_number".to_string(),
+        args: Vec::new(),
+        distinct: false,
         partition_by: Vec::new(),
         order_by: Vec::new(),
     };

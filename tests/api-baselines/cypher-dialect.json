@@ -561,7 +561,7 @@
       "kind": "expression",
       "canonical": "OVER",
       "legacy": null,
-      "note": "Window functions are a KGLite/GQL-style extension."
+      "note": "Window functions are a KGLite/GQL-style extension: row_number, rank and dense_rank with PARTITION BY and ORDER BY, and count, sum, avg, min and max with OVER () or PARTITION BY. ORDER BY frames are not supported."
     },
     {
       "id": "extension.set_operators",

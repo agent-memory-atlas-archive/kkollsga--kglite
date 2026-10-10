@@ -558,10 +558,14 @@ fn resolve_operand_expressions(
             resolve_expression(body, params)?;
         }
         Expression::WindowFunction {
+            args,
             partition_by,
             order_by,
             ..
         } => {
+            for inner in args.iter_mut() {
+                resolve_expression(inner, params)?;
+            }
             for inner in partition_by.iter_mut() {
                 resolve_expression(inner, params)?;
             }

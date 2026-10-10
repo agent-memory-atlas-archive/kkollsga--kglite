@@ -495,10 +495,12 @@ fn visit_expression(expression: &Expression, names: &mut impl AstSink) {
         }
         Expression::PredicateExpr(predicate) => visit_predicate(predicate, names),
         Expression::WindowFunction {
+            args,
             partition_by,
             order_by,
             ..
         } => {
+            visit_expressions(args, names);
             visit_expressions(partition_by, names);
             visit_order_items(order_by, names);
         }

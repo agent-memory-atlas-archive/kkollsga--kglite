@@ -37,6 +37,7 @@
 //! - [`strings`] — string functions and procedure list arguments
 //! - [`tck_cheap_gaps`] — radix literals, `^`, `tail`, `toBoolean`, decimal-string
 //!   `toInteger`, list ordering
+//! - [`window_aggregates`] — `count/sum/avg/min/max … OVER ([PARTITION BY …])`
 //! - [`temporal_procedures`] — `db.temporal.*` declarations: arguments,
 //!   yielded rows, the abutment advisory, rollback
 //! - [`valid_time_guard`] — the valid-time guard in the matcher: one matcher
@@ -95,6 +96,7 @@ mod text_bm25;
 mod valid_time_guard;
 mod vector_score;
 mod vectors;
+mod window_aggregates;
 mod with_scope;
 
 /// Test helper: whether a comparison is true, with NULL counting as false.

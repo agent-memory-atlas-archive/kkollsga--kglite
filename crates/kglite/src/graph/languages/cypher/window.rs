@@ -1,6 +1,8 @@
 // Window function execution for Cypher RETURN/WITH clauses.
 //
-// Handles row_number(), rank(), dense_rank() with OVER (PARTITION BY ... ORDER BY ...).
+// Handles row_number(), rank(), dense_rank() with OVER (PARTITION BY ... ORDER BY ...),
+// and count/sum/avg/min/max with OVER ([PARTITION BY ...]) — an aggregate computed
+// once per partition and repeated on each of its rows.
 // Window functions require the full result set to compute partitions and ranks,
 // so they cannot be fused into per-row top-k passes.
 
@@ -36,14 +38,20 @@ impl CypherExecutor<'_> {
             })
             .collect();
 
-        // Step 1: Project non-window items per row (with rayon for large sets)
+        // Step 1: Project non-window items per row (with rayon for large sets).
+        // The row's earlier bindings stay readable until the window pass is
+        // done: a window's argument, PARTITION BY and ORDER BY are evaluated
+        // against the same scope as the items, so `RETURN x AS y,
+        // max(x) OVER ()` must still see `x`. Step 3 narrows each row to the
+        // output columns.
         let project_row = |row: &mut ResultRow| -> Result<(), String> {
-            let mut projected = Bindings::with_capacity(clause.items.len());
+            let mut computed = Vec::with_capacity(non_window.len());
             for (key, expr) in &non_window {
-                let val = self.evaluate_expression(expr, row)?;
-                projected.insert(key.clone(), val);
+                computed.push((key, self.evaluate_expression(expr, row)?));
             }
-            row.projected = projected;
+            for (key, val) in computed {
+                row.projected.insert(key.clone(), val);
+            }
             Ok(())
         };
 
@@ -69,15 +77,15 @@ impl CypherExecutor<'_> {
         struct WindowSpec<'a> {
             partition_by: &'a [Expression],
             order_by: &'a [OrderItem],
-            functions: Vec<(&'a str, String)>, // (func_name, col_name)
+            functions: Vec<(&'a Expression, String)>, // (window expression, col_name)
         }
 
         let mut specs: Vec<WindowSpec<'_>> = Vec::new();
         for item in &clause.items {
             if let Expression::WindowFunction {
-                name,
                 partition_by,
                 order_by,
+                ..
             } = &item.expression
             {
                 let col_name = return_item_column_name(item);
@@ -90,12 +98,12 @@ impl CypherExecutor<'_> {
                     ) && std::ptr::eq(s.order_by as *const _, order_by as &[OrderItem] as *const _)
                 });
                 if let Some(idx) = found {
-                    specs[idx].functions.push((name, col_name));
+                    specs[idx].functions.push((&item.expression, col_name));
                 } else {
                     specs.push(WindowSpec {
                         partition_by,
                         order_by,
-                        functions: vec![(name, col_name)],
+                        functions: vec![(&item.expression, col_name)],
                     });
                 }
             }
@@ -108,6 +116,17 @@ impl CypherExecutor<'_> {
                 &spec.functions,
                 &mut result_set.rows,
             )?;
+        }
+
+        // Step 3: keep only the output columns.
+        for row in &mut result_set.rows {
+            let mut kept = Bindings::with_capacity(columns.len());
+            for col in &columns {
+                if let Some(value) = row.projected.remove(col) {
+                    kept.insert(col.clone(), value);
+                }
+            }
+            row.projected = kept;
         }
 
         // Handle DISTINCT
@@ -132,7 +151,7 @@ impl CypherExecutor<'_> {
         &self,
         partition_by: &[Expression],
         order_by: &[OrderItem],
-        functions: &[(&str, String)],
+        functions: &[(&Expression, String)],
         rows: &mut [ResultRow],
     ) -> Result<(), String> {
         let n = rows.len();
@@ -212,9 +231,37 @@ impl CypherExecutor<'_> {
         };
 
         // Apply each window function using the shared sorted partitions
-        for &(func_name, ref col_name) in functions {
+        for &(window, ref col_name) in functions {
+            let Expression::WindowFunction {
+                name: func_name,
+                args,
+                distinct,
+                ..
+            } = window
+            else {
+                continue;
+            };
+            // An aggregate evaluates through the same code a grouped RETURN
+            // uses, so null skipping, DISTINCT and numeric typing agree.
+            let aggregate = Expression::FunctionCall {
+                name: func_name.clone(),
+                args: args.clone(),
+                distinct: *distinct,
+            };
             for partition in &partitions {
-                match func_name {
+                match func_name.as_str() {
+                    "count" | "sum" | "avg" | "mean" | "average" | "min" | "max" => {
+                        let value = {
+                            let members: Vec<&ResultRow> =
+                                partition.iter().map(|&i| &rows[i]).collect();
+                            self.evaluate_aggregate_with_rows(&aggregate, &members)?
+                        };
+                        for &row_idx in partition {
+                            rows[row_idx]
+                                .projected
+                                .insert(col_name.clone(), value.clone());
+                        }
+                    }
                     "row_number" => {
                         for (rank, &row_idx) in partition.iter().enumerate() {
                             rows[row_idx]

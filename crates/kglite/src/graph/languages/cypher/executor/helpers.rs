@@ -222,10 +222,18 @@ pub(crate) fn expression_to_string(expr: &Expression) -> String {
         }
         Expression::WindowFunction {
             name,
+            args,
+            distinct,
             partition_by,
             order_by,
         } => {
-            let mut s = format!("{}() OVER (", name);
+            let rendered: Vec<String> = args.iter().map(expression_to_string).collect();
+            let mut s = format!(
+                "{}({}{}) OVER (",
+                name,
+                if *distinct { "DISTINCT " } else { "" },
+                rendered.join(", ")
+            );
             if !partition_by.is_empty() {
                 s.push_str("PARTITION BY ");
                 let parts: Vec<String> = partition_by.iter().map(expression_to_string).collect();

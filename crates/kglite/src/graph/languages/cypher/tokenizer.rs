@@ -138,6 +138,105 @@ pub fn tokenize_cypher(input: &str) -> Result<Vec<CypherToken>, String> {
         .collect())
 }
 
+/// Lex the numeric literal starting at `chars[i]`, push its token and return
+/// the index just past it. A `-` already on `tokens` folds into the smallest
+/// 64-bit integer, whose magnitude (2^63) fits no positive `i64`.
+fn lex_number(
+    chars: &[char],
+    mut i: usize,
+    tokens: &mut Vec<(CypherToken, usize)>,
+) -> Result<usize, String> {
+    let len = chars.len();
+    let start = i;
+    // Radix integers: `0x1F` (hex) and `0o17` (octal), read unsigned so
+    // `-0x8000000000000000` and `-0o1000000000000000000000` (both -2^63)
+    // reach `i64::MIN` the way the decimal spelling does.
+    let radix = match (chars[i], chars.get(i + 1)) {
+        ('0', Some('x' | 'X')) => 16,
+        ('0', Some('o' | 'O')) => 8,
+        _ => 0,
+    };
+    if radix != 0 && chars.get(i + 2).is_some_and(|c| c.is_digit(radix)) {
+        i += 2;
+        let digits_start = i;
+        while i < len && chars[i].is_digit(radix) {
+            i += 1;
+        }
+        let digits: String = chars[digits_start..i].iter().collect();
+        let literal: String = chars[start..i].iter().collect();
+        // `0x1G`: a letter or digit glued to the literal is not a separate token.
+        if i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+            return Err(format!("Invalid number literal: {}{}", literal, chars[i]));
+        }
+        let magnitude = u64::from_str_radix(&digits, radix)
+            .map_err(|_| format!("Integer overflow in literal: {}", literal))?;
+        match i64::try_from(magnitude) {
+            Ok(n) => tokens.push((CypherToken::IntLit(n), start)),
+            Err(_) if magnitude == 1 << 63 && fold_leading_dash(tokens, i64::MIN) => {}
+            Err(_) => return Err(format!("Integer overflow in literal: {}", literal)),
+        }
+        return Ok(i);
+    }
+    let mut has_dot = false;
+    while i < len && (chars[i].is_ascii_digit() || (chars[i] == '.' && !has_dot)) {
+        if chars[i] == '.' {
+            // Check for '..' (range operator) - don't consume
+            if i + 1 < len && chars[i + 1] == '.' {
+                break;
+            }
+            // Check if next char is a digit (decimal point) or not (property access after number)
+            if i + 1 >= len || !chars[i + 1].is_ascii_digit() {
+                break;
+            }
+            has_dot = true;
+        }
+        i += 1;
+    }
+    // Scientific notation: e.g. 1e6, 1.5e-3, 2E+10
+    if i < len && (chars[i] == 'e' || chars[i] == 'E') {
+        has_dot = true; // Force float parsing
+        i += 1;
+        if i < len && (chars[i] == '+' || chars[i] == '-') {
+            i += 1;
+        }
+        while i < len && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    let num_str: String = chars[start..i].iter().collect();
+    if has_dot {
+        let f: f64 = num_str
+            .parse()
+            .map_err(|_| format!("Invalid float: {}", num_str))?;
+        tokens.push((CypherToken::FloatLit(f), start));
+    } else {
+        match num_str.parse::<i64>() {
+            Ok(n) => tokens.push((CypherToken::IntLit(n), start)),
+            // i64::MIN is the only integer whose magnitude overflows
+            // i64::from_str (|i64::MIN| is 2^63), and a negative literal is a
+            // Dash token followed by the positive one, so the Dash is folded
+            // in here.
+            Err(_) if num_str == "9223372036854775808" && fold_leading_dash(tokens, i64::MIN) => {}
+            Err(_) => return Err(format!("Invalid integer: {}", num_str)),
+        }
+    }
+    Ok(i)
+}
+
+/// Replace a trailing `-` token with the integer literal `value`, at the
+/// dash's position; false (and no change) when the last token is not a dash.
+fn fold_leading_dash(tokens: &mut Vec<(CypherToken, usize)>, value: i64) -> bool {
+    match tokens.last() {
+        Some((CypherToken::Dash, pos)) => {
+            let pos = *pos;
+            tokens.pop();
+            tokens.push((CypherToken::IntLit(value), pos));
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Lex one parameter reference starting at the `$` in `chars[at]`.
 ///
 /// Accepts both spellings — `$name` and the Neo4j 5 parenthesised `$(name)` —
@@ -383,111 +482,8 @@ pub fn tokenize_cypher_with_positions(input: &str) -> Result<TokenizedCypher, St
                 tokens.push((CypherToken::StringLit(s), start));
             }
 
-            // Radix integer literals: `0x1F` (hex) and `0o17` (octal). The
-            // magnitude is read unsigned so `-0x8000000000000000` and
-            // `-0o1000000000000000000000` (both -2^63) fold into `i64::MIN`
-            // the same way the decimal spelling does.
-            '0' if i + 2 < len
-                && matches!(chars[i + 1], 'x' | 'X' | 'o' | 'O')
-                && chars[i + 2].is_digit(if matches!(chars[i + 1], 'x' | 'X') {
-                    16
-                } else {
-                    8
-                }) =>
-            {
-                let start = i;
-                let radix = if matches!(chars[i + 1], 'x' | 'X') {
-                    16
-                } else {
-                    8
-                };
-                i += 2;
-                let digits_start = i;
-                while i < len && chars[i].is_digit(radix) {
-                    i += 1;
-                }
-                let digits: String = chars[digits_start..i].iter().collect();
-                let literal: String = chars[start..i].iter().collect();
-                // `0x1G`: a letter or digit glued to the literal is not a
-                // separate token.
-                if i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    return Err(format!("Invalid number literal: {}{}", literal, chars[i]));
-                }
-                let magnitude = u64::from_str_radix(&digits, radix)
-                    .map_err(|_| format!("Integer overflow in literal: {}", literal))?;
-                match i64::try_from(magnitude) {
-                    Ok(n) => tokens.push((CypherToken::IntLit(n), start)),
-                    Err(_)
-                        if magnitude == 1 << 63
-                            && tokens
-                                .last()
-                                .is_some_and(|(t, _)| matches!(t, CypherToken::Dash)) =>
-                    {
-                        let (_, dash_pos) = tokens.pop().unwrap();
-                        tokens.push((CypherToken::IntLit(i64::MIN), dash_pos));
-                    }
-                    Err(_) => return Err(format!("Integer overflow in literal: {}", literal)),
-                }
-            }
-
             c if c.is_ascii_digit() => {
-                let start = i;
-                let mut has_dot = false;
-                while i < len && (chars[i].is_ascii_digit() || (chars[i] == '.' && !has_dot)) {
-                    if chars[i] == '.' {
-                        // Check for '..' (range operator) - don't consume
-                        if i + 1 < len && chars[i + 1] == '.' {
-                            break;
-                        }
-                        // Check if next char is a digit (decimal point) or not (property access after number)
-                        if i + 1 >= len || !chars[i + 1].is_ascii_digit() {
-                            break;
-                        }
-                        has_dot = true;
-                    }
-                    i += 1;
-                }
-                // Scientific notation: e.g. 1e6, 1.5e-3, 2E+10
-                if i < len && (chars[i] == 'e' || chars[i] == 'E') {
-                    has_dot = true; // Force float parsing
-                    i += 1;
-                    if i < len && (chars[i] == '+' || chars[i] == '-') {
-                        i += 1;
-                    }
-                    while i < len && chars[i].is_ascii_digit() {
-                        i += 1;
-                    }
-                }
-                let num_str: String = chars[start..i].iter().collect();
-                if has_dot {
-                    let f: f64 = num_str
-                        .parse()
-                        .map_err(|_| format!("Invalid float: {}", num_str))?;
-                    tokens.push((CypherToken::FloatLit(f), start));
-                } else {
-                    match num_str.parse::<i64>() {
-                        Ok(n) => tokens.push((CypherToken::IntLit(n), start)),
-                        Err(_) => {
-                            // i64::MIN is the only integer whose magnitude
-                            // overflows i64::from_str (i64::MAX is 2^63-1,
-                            // |i64::MIN| is 2^63). The unary-minus path is
-                            // parsed as a Dash token followed by the
-                            // positive literal — so `-9223372036854775808`
-                            // is unrepresentable through the normal
-                            // route, so the Dash is folded in here instead.
-                            if num_str == "9223372036854775808"
-                                && tokens
-                                    .last()
-                                    .is_some_and(|(t, _)| matches!(t, CypherToken::Dash))
-                            {
-                                let (_, dash_pos) = tokens.pop().unwrap();
-                                tokens.push((CypherToken::IntLit(i64::MIN), dash_pos));
-                            } else {
-                                return Err(format!("Invalid integer: {}", num_str));
-                            }
-                        }
-                    }
-                }
+                i = lex_number(&chars, i, &mut tokens)?;
             }
 
             '$' => {

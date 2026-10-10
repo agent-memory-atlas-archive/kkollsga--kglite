@@ -380,10 +380,14 @@ fn walk_expression(expr: &mut Expression, visit: &mut impl FnMut(&mut [Pattern])
             walk_expression(body, visit);
         }
         Expression::WindowFunction {
+            args,
             partition_by,
             order_by,
             ..
         } => {
+            for expr in args {
+                walk_expression(expr, visit);
+            }
             for expr in partition_by {
                 walk_expression(expr, visit);
             }

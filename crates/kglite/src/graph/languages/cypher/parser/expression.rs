@@ -778,14 +778,23 @@ impl CypherParser {
             ));
         }
 
-        // Check for window function: func() OVER (PARTITION BY ... ORDER BY ...)
+        // Window function: `row_number() OVER (ORDER BY ...)`, or an aggregate
+        // over its partition, `max(x) OVER ([PARTITION BY ...])`.
         if self.check(&CypherToken::Over) {
             let lower = name.to_lowercase();
-            if !matches!(lower.as_str(), "row_number" | "rank" | "dense_rank") {
+            let ranking = matches!(lower.as_str(), "row_number" | "rank" | "dense_rank");
+            let aggregate = matches!(
+                lower.as_str(),
+                "count" | "sum" | "avg" | "mean" | "average" | "min" | "max"
+            );
+            if !ranking && !aggregate {
                 return Err(format!(
-                    "OVER clause is only supported for window functions (row_number, rank, dense_rank), not '{}'",
+                    "OVER clause is only supported for window functions (row_number, rank, dense_rank) and the aggregates count, sum, avg, min and max, not '{}'",
                     name
                 ));
+            }
+            if ranking && (!args.is_empty() || distinct) {
+                return Err(format!("{}() takes no arguments", lower));
             }
             self.advance(); // consume OVER
             self.expect(&CypherToken::LParen)?;
@@ -804,22 +813,36 @@ impl CypherParser {
                 vec![]
             };
 
-            // ORDER BY (required for window functions)
-            if !self.check(&CypherToken::Order) {
-                return Err("Window function requires ORDER BY in OVER clause".into());
-            }
-            self.advance(); // consume ORDER
-            self.expect(&CypherToken::By)?;
-            let mut order_by = vec![self.parse_order_item()?];
-            while self.check(&CypherToken::Comma) {
-                self.advance();
+            // ORDER BY is what ranks rows, so the ranking functions require
+            // it. An aggregate here covers its whole partition: there is no
+            // frame, so a running total (`sum(x) OVER (ORDER BY ...)`) is
+            // refused rather than silently answered with the partition total.
+            let mut order_by = vec![];
+            if self.check(&CypherToken::Order) {
+                if aggregate {
+                    return Err(format!(
+                        "ORDER BY inside OVER is not supported for the aggregate {}(); \
+                         use OVER () or OVER (PARTITION BY ...)",
+                        lower
+                    ));
+                }
+                self.advance(); // consume ORDER
+                self.expect(&CypherToken::By)?;
                 order_by.push(self.parse_order_item()?);
+                while self.check(&CypherToken::Comma) {
+                    self.advance();
+                    order_by.push(self.parse_order_item()?);
+                }
+            } else if ranking {
+                return Err("Window function requires ORDER BY in OVER clause".into());
             }
 
             self.expect(&CypherToken::RParen)?;
 
             return Ok(Expression::WindowFunction {
                 name: lower,
+                args,
+                distinct,
                 partition_by,
                 order_by,
             });

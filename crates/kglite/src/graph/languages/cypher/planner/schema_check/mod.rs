@@ -896,24 +896,33 @@ fn validate_expression_scope(
             validate_expression_scope(body, &inner)
         }
         Expression::PredicateExpr(predicate) => validate_predicate_scope(predicate, scope),
-        Expression::WindowFunction {
-            partition_by,
-            order_by,
-            ..
-        } => {
-            for expression in partition_by {
-                validate_expression_scope(expression, scope)?;
-            }
-            for item in order_by {
-                validate_expression_scope(&item.expression, scope)?;
-            }
-            Ok(())
-        }
+        window @ Expression::WindowFunction { .. } => validate_window_scope(window, scope),
         subquery @ (Expression::CountSubquery { .. } | Expression::PatternComprehension { .. }) => {
             validate_pattern_subquery_scope(subquery, scope)
         }
         Expression::Literal(_) | Expression::Parameter(_) | Expression::Star => Ok(()),
     }
+}
+
+/// A window function's argument, `PARTITION BY` keys and `ORDER BY` keys all
+/// resolve in the scope of the clause that holds the call.
+fn validate_window_scope(window: &Expression, scope: &HashSet<String>) -> Result<(), SchemaError> {
+    let Expression::WindowFunction {
+        args,
+        partition_by,
+        order_by,
+        ..
+    } = window
+    else {
+        return Ok(());
+    };
+    for expression in args.iter().chain(partition_by) {
+        validate_expression_scope(expression, scope)?;
+    }
+    for item in order_by {
+        validate_expression_scope(&item.expression, scope)?;
+    }
+    Ok(())
 }
 
 /// A `COUNT { }` subquery or pattern comprehension: its pattern binds new

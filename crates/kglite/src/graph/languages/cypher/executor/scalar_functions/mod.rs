@@ -2,13 +2,14 @@
 //!
 //! `evaluate_scalar_function` is a thin dispatcher that delegates to the
 //! per-category submodules (`string`, `numeric`, `temporal`, `graph`,
-//! `spatial`, `collection`, `timeseries`, `utility`); shared free helpers
+//! `spatial`, `collection`, `conversion`, `timeseries`, `utility`); shared free helpers
 //! live in `shared`. Lives in a sibling `impl<'a> CypherExecutor<'a> {}` block.
 use super::helpers::*;
 use super::*;
 use crate::datatypes::values::Value;
 
 mod collection;
+mod conversion;
 mod edge_text;
 mod embedding_readout;
 mod function_registry;
@@ -193,6 +194,9 @@ impl<'a> CypherExecutor<'a> {
             return Ok(v);
         }
         if let Some(v) = self.eval_utility_fn(name, args, row)? {
+            return Ok(v);
+        }
+        if let Some(v) = self.eval_conversion_fn(name, args, row)? {
             return Ok(v);
         }
         Err(format!("Unknown function: {}", name))

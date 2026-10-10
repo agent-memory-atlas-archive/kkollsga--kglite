@@ -505,11 +505,17 @@ collapsing rows.
 | `row_number() OVER (...)` | Sequential number within partition |
 | `rank() OVER (...)` | Rank with gaps for ties |
 | `dense_rank() OVER (...)` | Rank without gaps for ties |
+| `count(x)` / `count(*)` / `sum(x)` / `avg(x)` / `min(x)` / `max(x)` `OVER (...)` | The aggregate over the row's partition, repeated on every row of it |
 
-The OVER clause is `OVER (PARTITION BY expr [, ...] ORDER BY expr [ASC|DESC] [, ...])`.
+The ranking functions take `OVER (PARTITION BY expr [, ...] ORDER BY expr [ASC|DESC] [, ...])`.
+The aggregates take `OVER ()` or `OVER (PARTITION BY expr [, ...])`.
 
 - `PARTITION BY` is optional. Without it, the whole result set is one partition.
-- `ORDER BY` is required.
+- `ORDER BY` is required for the ranking functions.
+- `ORDER BY` inside `OVER` is **refused** for the aggregates: there are no frames, so a running total would silently answer the partition total. Use `OVER ()` or `OVER (PARTITION BY ...)`.
+- An aggregate window evaluates like the grouped aggregate of the same name: `NULL` values are skipped, `DISTINCT` works (`count(DISTINCT x) OVER ()`), `sum` of nothing is `0`, `max`/`min`/`avg` of nothing are `NULL`.
+- `collect`, `stdev` and the other aggregates have no window form.
+- A window function is a whole `RETURN`/`WITH` item. To use one inside an expression, name it in a `WITH` first: `WITH d, lex, max(lex) OVER () AS top RETURN d, lex / top`.
 
 ```python
 # Global ranking
@@ -520,6 +526,13 @@ graph.cypher("""
     MATCH (n:Person)
     RETURN n.name, n.dept,
            rank() OVER (PARTITION BY n.dept ORDER BY n.score DESC) AS dept_rank
+""")
+
+# Scale a score by the best one, or compare to the department average
+graph.cypher("""
+    MATCH (n:Person)
+    WITH n, max(n.score) OVER () AS best, avg(n.score) OVER (PARTITION BY n.dept) AS dept_avg
+    RETURN n.name, n.score / best AS scaled, n.score - dept_avg AS vs_dept
 """)
 ```
 
@@ -5413,7 +5426,7 @@ mean:
 | Map projections (`n {.prop1, .prop2}`) | Covered | |
 | Map literals (`{key: expr}`) | Covered | |
 | Variable binding in pattern properties | Covered | `WITH val AS x MATCH ({prop: x})` |
-| Window functions (`OVER`) | Extension | `row_number()`, `rank()`, `dense_rank()` with `PARTITION BY`/`ORDER BY` |
+| Window functions (`OVER`) | Extension | `row_number()`, `rank()`, `dense_rank()` with `PARTITION BY`/`ORDER BY`; `count`, `sum`, `avg`, `min`, `max` with `OVER ()` / `PARTITION BY` (no `ORDER BY` frames) |
 
 ### Scalar & Aggregation Functions
 

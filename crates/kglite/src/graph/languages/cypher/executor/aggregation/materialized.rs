@@ -94,8 +94,12 @@ impl<'a> CypherExecutor<'a> {
             .map(GroupExprStrategy::for_expr)
             .collect();
 
-        let surrogate_groups =
-            self.build_surrogate_groups(clause, &result_set.rows, &strategies, &folded_group_exprs)?;
+        let surrogate_groups = self.build_surrogate_groups(
+            clause,
+            &result_set.rows,
+            &strategies,
+            &folded_group_exprs,
+        )?;
 
         // Resolve NodeProp surrogates to property values, deduplicating the
         // reads: for Q5-style queries (439K rows → ~50 groups) that is 439K
@@ -153,53 +157,55 @@ impl<'a> CypherExecutor<'a> {
         }
 
         let carried_vars = grouping_variables(&clause.items);
-        let mut result_rows: Vec<ResultRow> =
-            if self.may_fan_out_group_evaluation(result_set.rows.len(), groups.len(), &strategies) {
-                // Across groups, not within one: every group's aggregate
-                // evaluation reads only its own rows, so the groups are
-                // independent. `par_iter().enumerate()` is indexed and
-                // `collect` restores index order, so the emission order is the
-                // group order — unchanged. Whole-multiset aggregates
-                // (median/mode/percentile) keep their per-group state and their
-                // per-group tie-breaks; nothing about them is shared across
-                // groups, so they ride along.
-                #[cfg(test)]
-                parallel::PARALLEL_AGGREGATIONS
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut result_rows: Vec<ResultRow> = if self.may_fan_out_group_evaluation(
+            result_set.rows.len(),
+            groups.len(),
+            &strategies,
+        ) {
+            // Across groups, not within one: every group's aggregate
+            // evaluation reads only its own rows, so the groups are
+            // independent. `par_iter().enumerate()` is indexed and
+            // `collect` restores index order, so the emission order is the
+            // group order — unchanged. Whole-multiset aggregates
+            // (median/mode/percentile) keep their per-group state and their
+            // per-group tie-breaks; nothing about them is shared across
+            // groups, so they ride along.
+            #[cfg(test)]
+            parallel::PARALLEL_AGGREGATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                let interrupt = ParallelInterrupt::new(|| self.check_deadline().err());
-                parallel::install(|| {
-                    groups
-                        .par_iter()
-                        .enumerate()
-                        .map(|(group_idx, (group_key_values, row_indices))| {
-                            interrupt.check(group_idx)?;
-                            self.group_result_row(
-                                clause,
-                                &group_key_indices,
-                                &carried_vars,
-                                &result_set.rows,
-                                group_key_values,
-                                row_indices,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, String>>()
-                })?
-            } else {
-                let mut rows = Vec::with_capacity(groups.len());
-                for (group_idx, (group_key_values, row_indices)) in groups.iter().enumerate() {
-                    self.check_interrupt_periodic(group_idx)?;
-                    rows.push(self.group_result_row(
-                        clause,
-                        &group_key_indices,
-                        &carried_vars,
-                        &result_set.rows,
-                        group_key_values,
-                        row_indices,
-                    )?);
-                }
-                rows
-            };
+            let interrupt = ParallelInterrupt::new(|| self.check_deadline().err());
+            parallel::install(|| {
+                groups
+                    .par_iter()
+                    .enumerate()
+                    .map(|(group_idx, (group_key_values, row_indices))| {
+                        interrupt.check(group_idx)?;
+                        self.group_result_row(
+                            clause,
+                            &group_key_indices,
+                            &carried_vars,
+                            &result_set.rows,
+                            group_key_values,
+                            row_indices,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })?
+        } else {
+            let mut rows = Vec::with_capacity(groups.len());
+            for (group_idx, (group_key_values, row_indices)) in groups.iter().enumerate() {
+                self.check_interrupt_periodic(group_idx)?;
+                rows.push(self.group_result_row(
+                    clause,
+                    &group_key_indices,
+                    &carried_vars,
+                    &result_set.rows,
+                    group_key_values,
+                    row_indices,
+                )?);
+            }
+            rows
+        };
 
         if clause.distinct {
             let mut seen: FxHashSet<Vec<Value>> = FxHashSet::default();
@@ -463,7 +469,7 @@ impl<'a> CypherExecutor<'a> {
         self.evaluate_aggregate_with_rows(expr, &refs)
     }
 
-    pub(super) fn evaluate_aggregate_with_rows(
+    pub(in crate::graph::languages::cypher) fn evaluate_aggregate_with_rows(
         &self,
         expr: &Expression,
         rows: &[&ResultRow],
@@ -898,9 +904,7 @@ impl<'a> CypherExecutor<'a> {
                 map_expr,
             } => Expression::ListComprehension {
                 variable: variable.clone(),
-                list_expr: Box::new(
-                    self.bind_aggregate_child(list_expr, rows, synth, counter)?,
-                ),
+                list_expr: Box::new(self.bind_aggregate_child(list_expr, rows, synth, counter)?),
                 // filter/map reference the comprehension variable and run
                 // per element — they cannot be pre-evaluated here.
                 filter: filter.clone(),
@@ -1270,14 +1274,9 @@ impl<'a> CypherExecutor<'a> {
                 // deep-path counts like `… RETURN count(n5)`.
                 for (row_idx, row) in rows.iter().enumerate() {
                     self.check_interrupt_periodic(row_idx)?;
-                    if row.node_bindings.get(v).is_some()
-                        || row.edge_bindings.get(v).is_some()
-                    {
+                    if row.node_bindings.get(v).is_some() || row.edge_bindings.get(v).is_some() {
                         count += 1;
-                    } else if !matches!(
-                        self.evaluate_expression(&args[0], row)?,
-                        Value::Null
-                    ) {
+                    } else if !matches!(self.evaluate_expression(&args[0], row)?, Value::Null) {
                         // projected scalar (WITH … AS v) — value check
                         count += 1;
                     }

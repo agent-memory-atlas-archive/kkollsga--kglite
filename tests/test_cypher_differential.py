@@ -826,6 +826,33 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *CHAIN_COUNT_QUERIES,
+    # Aggregate window functions: the argument expression and PARTITION BY keys
+    # are walked by the planner passes (scope check, parameter binding,
+    # constant folding), so each shape rides through them with the optimizer
+    # on and off.
+    (
+        "window_aggregate_whole_result",
+        "small_graph",
+        "MATCH (p:Person) RETURN p.name AS name, max(p.age) OVER () AS oldest, "
+        "min(p.age) OVER () AS youngest, count(*) OVER () AS n ORDER BY name",
+        None,
+    ),
+    (
+        "window_aggregate_partitioned",
+        "small_graph",
+        "MATCH (p:Person) RETURN p.name AS name, p.city AS city, "
+        "avg(p.age) OVER (PARTITION BY p.city) AS city_avg, "
+        "sum(p.age) OVER (PARTITION BY p.city) AS city_sum, "
+        "count(DISTINCT p.city) OVER () AS cities ORDER BY name",
+        None,
+    ),
+    (
+        "window_aggregate_parameter_and_folded_argument",
+        "small_graph",
+        "MATCH (p:Person) WITH p WHERE p.age > $floor "
+        "RETURN p.name AS name, sum(p.age + $bump + (1 + 2)) OVER (PARTITION BY p.city) AS s ORDER BY name",
+        {"floor": 20, "bump": 10},
+    ),
     # Relationship-type and null-variable label predicates, and string
     # predicates over non-string operands, through WHERE pushdown and RETURN.
     (

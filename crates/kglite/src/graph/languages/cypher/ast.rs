@@ -766,9 +766,13 @@ pub enum Expression {
         expr: Box<Expression>,
         property: String,
     },
-    /// Window function: func() OVER (PARTITION BY ... ORDER BY ...)
+    /// Window function: `row_number() OVER (ORDER BY ...)` or an aggregate
+    /// (`max(x) OVER ([PARTITION BY ...])`). `args` and `distinct` are the
+    /// aggregate's own call; the ranking functions take none.
     WindowFunction {
         name: String,
+        args: Vec<Expression>,
+        distinct: bool,
         partition_by: Vec<Expression>,
         order_by: Vec<OrderItem>,
     },
