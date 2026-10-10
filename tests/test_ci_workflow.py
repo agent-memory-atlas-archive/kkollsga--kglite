@@ -941,6 +941,10 @@ def test_every_uploaded_artifact_reaches_a_publish_leg() -> None:
         assert not overlap, f"{sorted(overlap)} upload artifacts both publish legs collect: {overlap}"
         claimed |= producers
 
+    # The bolt-server binaries are not PyPI artifacts: `tag-release` collects
+    # them for the GitHub Release (see the server-bins tests below).
+    claimed |= _producers_for("server-bin-")
+
     stray = _artifact_producers(RELEASE) - claimed
     assert not stray, (
         f"job(s) {sorted(stray)} upload an artifact no publish leg's pattern collects — the "
@@ -1408,6 +1412,60 @@ def test_the_tag_is_gated_on_every_publish_leg() -> None:
         f"the tag/GitHub Release is created from {sorted(set(releasers))}; it belongs in "
         "`tag-release` alone, or the 0.15.3 shape (a tag gated on one leg) returns"
     )
+
+
+# --- prebuilt kglite-bolt-server binaries -----------------------------------
+# Best-effort GitHub Release assets. Every property below fails silently: the
+# run stays green and a platform's tarball (or its checksum) is just absent.
+
+SERVER_BIN_TARGETS = {"aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"}
+
+
+def test_server_bins_build_each_target_in_release_mode_with_per_leg_tolerance() -> None:
+    job = _release_job("server-bins")
+    legs = job["strategy"]["matrix"]["include"]
+    assert {leg["target"] for leg in legs} == SERVER_BIN_TARGETS
+    assert job["strategy"]["fail-fast"] is False, "one failed leg would cancel the others"
+    # Tolerance comes from each leg's own flag, not a blanket `true`.
+    assert job["continue-on-error"] == "${{ matrix.best_effort }}"
+    assert all(isinstance(leg["best_effort"], bool) for leg in legs)
+    # Linux legs build on 22.04 so the binary runs on glibc 2.36 (Raspberry Pi OS bookworm).
+    linux_runners = {leg["os"] for leg in legs if "linux" in leg["target"]}
+    assert linux_runners == {"ubuntu-22.04-arm", "ubuntu-22.04"}, linux_runners
+    _assert_runs(job, "cargo build --release --locked --target ${{ matrix.target }} -p kglite-bolt-server")
+    assert job["if"] == "needs.version-check.outputs.any_publish == 'true'"
+    upload = _steps_using(job, "actions/upload-artifact@")
+    assert len(upload) == 1
+    assert upload[0]["with"]["name"] == "server-bin-${{ matrix.target }}"
+    assert upload[0]["with"]["if-no-files-found"] == "error"
+
+
+def test_server_bins_ship_a_checksum_next_to_the_tarball() -> None:
+    job = _release_job("server-bins")
+    commands = _command_lines(job)
+    assert 'tar -C stage -czf "server-bins/$NAME.tar.gz" "$NAME"' in commands
+    assert any(c.endswith('> "$NAME.tar.gz.sha256")') and "sha256sum" in c for c in commands), commands
+    assert "stage/kglite-bolt-server-v*/kglite-bolt-server --help > /dev/null" in commands
+
+
+def test_server_bins_reach_the_github_release_without_gating_the_tag() -> None:
+    tag = _release_job("tag-release")
+    assert "server-bins" in tag["needs"]
+    assert "server-bins" not in _gated_successes(tag), "a best-effort leg must not gate the tag"
+    downloads = [
+        s for s in _steps_using(tag, "actions/download-artifact@") if s["with"].get("pattern") == "server-bin-*"
+    ]
+    assert len(downloads) == 1
+    assert downloads[0].get("continue-on-error") is True
+    assert downloads[0]["with"]["path"] == "server-bins"
+    releases = _steps_using(tag, "softprops/action-gh-release@")
+    assert len(releases) == 2
+    for release in releases:
+        assert release["with"]["files"].split() == ["dist/*.whl", "server-bins/*"], release["with"]
+    names_missing = [c for c in _command_lines(tag) if c.startswith('echo "::warning title=server binary missing::')]
+    assert len(names_missing) == 1, "tag-release no longer names a missing server binary"
+    loop = next(c for c in _command_lines(tag) if c.startswith("for target in "))
+    assert set(loop.removeprefix("for target in ").removesuffix("; do").split()) == SERVER_BIN_TARGETS
 
 
 # --- self-tests for the derivation helpers ----------------------------------

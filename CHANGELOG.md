@@ -32,6 +32,11 @@ before upgrading.
 
 ### Added
 
+- **Prebuilt `kglite-bolt-server` binaries on the GitHub Release.**
+  - Targets: `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`, each as `kglite-bolt-server-v<version>-<target>.tar.gz` with a `.sha256` file.
+  - The Linux binaries need glibc 2.35 or older (Raspberry Pi OS bookworm is 2.36).
+  - Best-effort: a failed build leg leaves its asset out and never holds back the PyPI or crates.io publish. `cargo install --locked kglite-bolt-server` remains the fallback.
+
 - **openCypher scalar gaps closed.** All of these were a syntax error, an unknown function or `null` before.
   - Hexadecimal and octal integer literals: `0x1F`, `0o17`, and `-0x8000000000000000` for the smallest integer. A literal past the 64-bit range is a syntax error.
   - The `^` operator: a float power, left-associative, tighter than `*` and looser than unary minus (`-3 ^ 2` is `9.0`).

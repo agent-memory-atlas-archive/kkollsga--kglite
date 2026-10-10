@@ -23,3 +23,14 @@
 # accepted risk, not covered risk.
 release.yml:wheels-linux-arm
 release.yml:cli-linux-arm
+
+# Prebuilt kglite-bolt-server binaries for the GitHub Release. A convenience
+# over `cargo install kglite-bolt-server`, so a broken leg must not hold back
+# PyPI or crates.io. Tolerance is per leg (`matrix.best_effort`).
+#
+# COMPENSATING CHECK: `tag-release` downloads the artifacts and emits a
+# `::warning` naming every expected target whose tarball is absent, so a
+# missing platform is on the run summary rather than silent. The tolerated
+# failure is still a silently absent asset until a release flow compares the
+# asset set against the previous release.
+release.yml:server-bins

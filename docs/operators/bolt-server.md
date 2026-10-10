@@ -41,8 +41,24 @@ mutations, OCC, and multi-database), see
 
 ## Install and start
 
+Each GitHub Release carries a prebuilt binary per target, with a checksum:
+
+| Target | Asset |
+|---|---|
+| Linux aarch64 (Raspberry Pi 5) | `kglite-bolt-server-v<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64 | `kglite-bolt-server-v<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS arm64 | `kglite-bolt-server-v<version>-aarch64-apple-darwin.tar.gz` |
+
 ```bash
-cargo install kglite-bolt-server
+sha256sum -c kglite-bolt-server-v<version>-<target>.tar.gz.sha256
+tar -xzf kglite-bolt-server-v<version>-<target>.tar.gz
+```
+
+The Linux binaries need glibc 2.35 or older. The builds are best-effort, so a
+release can lack one target; build from source instead:
+
+```bash
+cargo install --locked kglite-bolt-server
 kglite-bolt-server --graph /data/app.kgl
 ```
 

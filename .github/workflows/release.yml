@@ -716,6 +716,81 @@ jobs:
           # empty artifact leaves a gap only a human can fill.
           if-no-files-found: error
 
+  # ---- prebuilt kglite-bolt-server binaries (best-effort) -------------------
+  #
+  # A Raspberry Pi 5 user had to `cargo install --locked` the server. Each leg
+  # builds the release binary and ships `<name>.tar.gz` + `<name>.tar.gz.sha256`
+  # on the GitHub Release (attached by `tag-release`). The Linux legs build on
+  # 22.04 images so the binary needs glibc 2.35 or older (Raspberry Pi OS
+  # bookworm has 2.36). `kglite-mcp-server` is not built here: it adds ~100
+  # packages and a second multi-minute link per leg.
+  #
+  # Tolerance is per leg (`continue-on-error` reads `matrix.best_effort`), so
+  # one leg can be promoted to blocking by flipping its flag. `tag-release`
+  # needs this job but does not gate on it, and warns for every missing asset.
+  # Dry run: Actions -> Release -> Run workflow. `version-check` then decides
+  # `any_publish`; on a version that is already published every build job is
+  # skipped, so the only full dry run is a real release.
+
+  server-bins:
+    name: bolt-server binary - ${{ matrix.target }} (best-effort)
+    needs: [version-check]
+    if: needs.version-check.outputs.any_publish == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    # Entry + compensating check: .github/workflows/doctrine-allowlist.txt.
+    continue-on-error: ${{ matrix.best_effort }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            best_effort: true
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            best_effort: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            best_effort: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: ${{ env.RUST_STABLE }}
+          targets: ${{ matrix.target }}
+      - name: Force cargo PATH precedence (macOS rustup-init shim workaround)
+        # See wheels-native's copy of this step for the shim's failure mode.
+        if: runner.os == 'macOS'
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        shell: bash
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: ". -> target"
+          shared-key: "serverbin-${{ matrix.target }}"
+      - name: Build kglite-bolt-server
+        run: cargo build --release --locked --target ${{ matrix.target }} -p kglite-bolt-server
+      - name: Package the binary and its checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="kglite-bolt-server-v${{ needs.version-check.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "stage/$NAME" server-bins
+          cp "target/${{ matrix.target }}/release/kglite-bolt-server" LICENSE "stage/$NAME/"
+          tar -C stage -czf "server-bins/$NAME.tar.gz" "$NAME"
+          (cd server-bins && { sha256sum "$NAME.tar.gz" 2>/dev/null || shasum -a 256 "$NAME.tar.gz"; } > "$NAME.tar.gz.sha256")
+      - name: Smoke the packaged binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf server-bins/*.tar.gz -C stage
+          stage/kglite-bolt-server-v*/kglite-bolt-server --help > /dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: server-bin-${{ matrix.target }}
+          path: server-bins/*
+          if-no-files-found: error
+
   # ---- the three publish legs ----------------------------------------------
 
   publish-crates:
@@ -900,7 +975,7 @@ jobs:
     # ambiguous — it is both "nothing to publish here" and "a build failed, so
     # the publish never ran", and the second is precisely the 0.15.3 state.
     # Pairing each result with its publish *decision* separates them.
-    needs: [version-check, publish-crates, publish-pypi, publish-pypi-cli]
+    needs: [version-check, publish-crates, publish-pypi, publish-pypi-cli, server-bins]
     if: >-
       always() &&
       needs.version-check.outputs.any_publish == 'true' &&
@@ -923,6 +998,24 @@ jobs:
           pattern: wheels-*
           path: dist
           merge-multiple: true
+      - name: Download the prebuilt server binaries
+        # Best-effort: `server-bins` legs may fail without failing the job, so
+        # a leg's artifact can be absent. The next step names what is missing.
+        if: needs.version-check.outputs.any_publish == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: server-bin-*
+          path: server-bins
+          merge-multiple: true
+      - name: Name any missing server binary
+        shell: bash
+        run: |
+          for target in aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+            if ! ls server-bins/kglite-bolt-server-v*-"$target".tar.gz > /dev/null 2>&1; then
+              echo "::warning title=server binary missing::kglite-bolt-server for $target was not built; the release ships without it"
+            fi
+          done
       - name: Extract changelog for this version
         id: changelog
         run: |
@@ -940,7 +1033,9 @@ jobs:
         if: steps.changelog.outputs.has_notes == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
-          files: dist/*.whl
+          files: |
+            dist/*.whl
+            server-bins/*
           body_path: /tmp/release_notes.md
           tag_name: v${{ needs.version-check.outputs.version }}
         env:
@@ -949,7 +1044,9 @@ jobs:
         if: steps.changelog.outputs.has_notes != 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
-          files: dist/*.whl
+          files: |
+            dist/*.whl
+            server-bins/*
           generate_release_notes: true
           tag_name: v${{ needs.version-check.outputs.version }}
         env:
