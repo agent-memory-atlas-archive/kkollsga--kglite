@@ -21,6 +21,7 @@ mod string;
 mod temporal;
 mod temporal_iso;
 mod temporal_map;
+mod temporal_truncate;
 mod timeseries;
 mod utility;
 pub(super) mod validity;

@@ -38,7 +38,7 @@
 //! - [`tck_cheap_gaps`] — radix literals, `^`, `tail`, `toBoolean`, decimal-string
 //!   `toInteger`, list ordering
 //! - [`window_aggregates`] — `count/sum/avg/min/max … OVER ([PARTITION BY …])`
-//! - [`temporal_tck`] — openCypher temporal constructors, parsing and
+//! - [`temporal_functions`] — openCypher temporal constructors, parsing and
 //!   accessors that fit the zoneless value model
 //! - [`temporal_procedures`] — `db.temporal.*` declarations: arguments,
 //!   yielded rows, the abutment advisory, rollback
@@ -93,8 +93,8 @@ mod shortest_path;
 mod star_projection;
 mod strings;
 mod tck_cheap_gaps;
+mod temporal_functions;
 mod temporal_procedures;
-mod temporal_tck;
 mod text_bm25;
 mod valid_time_guard;
 mod vector_score;

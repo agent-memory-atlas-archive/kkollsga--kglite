@@ -1519,6 +1519,9 @@ covers declaring intervals and modelling history.
 | `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and remaining seconds are returned as a Duration |
 | `add_days(date, n)` / `add_months(date, n)` / `add_years(date, n)` | Checked calendar shift; returns NULL when the requested date is outside the representable range |
 | `date_truncate(date, unit)` | Start of `year`, `month`, `week`, or `day` |
+| `date.truncate(unit, t [, overrides])` | Round a date or datetime down to the start of `millennium`, `century`, `decade`, `year`, `weekYear`, `quarter`, `month`, `week` or `day`, then apply the override map as the constructor does: `date.truncate('month', d, {day: 5})`, `date.truncate('week', d, {dayOfWeek: 2})` |
+| `localdatetime.truncate(unit, t [, overrides])`, `datetime.truncate(...)` | The same for a datetime; the units also include `hour`, `minute`, `second`, `millisecond` and `microsecond`: `localdatetime.truncate('hour', t, {nanosecond: 2})`. `datetime.truncate` is zoneless like `datetime()` |
+| `localtime.truncate(unit, t [, overrides])`, `time.truncate(...)` | A time of day (text) or the time of a datetime, rounded down to `day` (midnight), `hour`, `minute`, `second`, `millisecond` or `microsecond` |
 | `date + duration({days: N})` | Add a duration to a date |
 | `duration * integer` / `integer * duration` | Scale all duration components with checked arithmetic |
 | `date_diff(d1, d2)` | Days between two dates (legacy; same as `d2 - d1` returning Int64 directly) |

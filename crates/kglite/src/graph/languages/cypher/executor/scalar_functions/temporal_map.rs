@@ -76,7 +76,7 @@ impl MapTarget {
 
 /// A temporal value (or its text) read as the datetime it names: a date is
 /// midnight, a clock-only string is the epoch day.
-fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
+pub(super) fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
     match value {
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
         Value::Timestamp(t) => Some(*t),
@@ -87,14 +87,14 @@ fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
     }
 }
 
-fn base_time(value: &Value) -> Option<NaiveTime> {
+pub(super) fn base_time(value: &Value) -> Option<NaiveTime> {
     match value {
         Value::String(s) => parse_time_text(s).or_else(|| base_datetime(value).map(|t| t.time())),
         _ => base_datetime(value).map(|t| t.time()),
     }
 }
 
-fn base_date(value: &Value) -> Option<NaiveDate> {
+pub(super) fn base_date(value: &Value) -> Option<NaiveDate> {
     match value {
         Value::String(s) => parse_date_text(s).or_else(|| base_datetime(value).map(|t| t.date())),
         _ => base_datetime(value).map(|t| t.date()),

@@ -15,7 +15,7 @@ fn digits(s: &str) -> Option<u32> {
 }
 
 /// The Monday that starts ISO week 1 of `year` (the week holding January 4th).
-fn iso_week_one_monday(year: i32) -> Option<NaiveDate> {
+pub(super) fn iso_week_one_monday(year: i32) -> Option<NaiveDate> {
     let jan4 = NaiveDate::from_ymd_opt(year, 1, 4)?;
     jan4.checked_sub_signed(chrono::TimeDelta::days(
         jan4.weekday().num_days_from_monday() as i64,

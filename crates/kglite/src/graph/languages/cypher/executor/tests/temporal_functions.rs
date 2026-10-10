@@ -3,7 +3,7 @@
 //! carried as text, and a months/days/seconds duration. Constructor key forms,
 //! ISO 8601 string spellings and canonical rendering are shared executor
 //! semantics, so the differential corpus cannot see them; each expectation is
-//! the value the openCypher TCK gives.
+//! the value the openCypher specification gives.
 
 use super::*;
 
@@ -181,4 +181,88 @@ fn temporal_map_refusals_stay_errors() {
         assert!(run(query).is_err(), "{query}");
     }
     assert_eq!(cell("RETURN localtime({hour: null})"), Value::Null);
+}
+
+#[test]
+fn truncate_rounds_down_then_applies_overrides() {
+    let ldt = "localdatetime({year: 1984, month: 10, day: 11, hour: 12, minute: 31, second: 14, nanosecond: 645876123})";
+    for (query, expected) in [
+        (
+            "date.truncate('millennium', date({year: 2017, month: 10, day: 11}), {day: 2})"
+                .to_string(),
+            date(2000, 1, 2),
+        ),
+        (
+            format!("date.truncate('century', {ldt}, {{}})"),
+            date(1900, 1, 1),
+        ),
+        (format!("date.truncate('decade', {ldt})"), date(1980, 1, 1)),
+        (
+            "date.truncate('weekYear', date({year: 1984, month: 2, day: 1}), {day: 5})".to_string(),
+            date(1984, 1, 5),
+        ),
+        (
+            "date.truncate('weekYear', localdatetime({year: 1984, month: 1, day: 1}), {})"
+                .to_string(),
+            date(1983, 1, 3),
+        ),
+        (
+            format!("date.truncate('quarter', {ldt}, {{day: 2}})"),
+            date(1984, 10, 2),
+        ),
+        (
+            format!("date.truncate('week', {ldt}, {{dayOfWeek: 2}})"),
+            date(1984, 10, 9),
+        ),
+        (
+            format!("date.truncate('week', {ldt}, {{}})"),
+            date(1984, 10, 8),
+        ),
+        (format!("date.truncate('day', {ldt})"), date(1984, 10, 11)),
+        (
+            "localdatetime.truncate('month', date({year: 1984, month: 10, day: 11}), {day: 2})"
+                .to_string(),
+            local_datetime(1984, 10, 2, 0, 0, 0, 0),
+        ),
+        (
+            format!("localdatetime.truncate('hour', {ldt}, {{nanosecond: 2}})"),
+            local_datetime(1984, 10, 11, 12, 0, 0, 2),
+        ),
+        (
+            format!("localdatetime.truncate('millisecond', {ldt})"),
+            local_datetime(1984, 10, 11, 12, 31, 14, 645_000_000),
+        ),
+        (
+            format!("localdatetime.truncate('microsecond', {ldt})"),
+            local_datetime(1984, 10, 11, 12, 31, 14, 645_876_000),
+        ),
+        (
+            format!("datetime.truncate('day', {ldt}, {{hour: 3}})"),
+            local_datetime(1984, 10, 11, 3, 0, 0, 0),
+        ),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
+    for (query, expected) in [
+        ("localtime.truncate('hour', localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123}), {nanosecond: 2})", "12:00:00.000000002"),
+        ("localtime.truncate('day', localdatetime({year: 1984, month: 10, day: 11, hour: 12}), {})", "00:00"),
+        ("localtime.truncate('minute', localtime('12:31:14.645'))", "12:31"),
+        ("time.truncate('second', localtime('12:31:14.645'))", "12:31:14"),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), text(expected), "{query}");
+    }
+}
+
+#[test]
+fn truncate_refuses_a_unit_the_type_cannot_hold() {
+    for query in [
+        "RETURN date.truncate('hour', date('1984-10-11'))",
+        "RETURN localtime.truncate('year', localtime('12:31'))",
+        "RETURN date.truncate('fortnight', date('1984-10-11'))",
+        "RETURN date.truncate(5, date('1984-10-11'))",
+        "RETURN date.truncate('day', 5)",
+    ] {
+        assert!(run(query).is_err(), "{query}");
+    }
+    assert_eq!(cell("RETURN date.truncate('day', null)"), Value::Null);
 }

@@ -69,6 +69,8 @@ before upgrading.
   - `localtime(x)` and `time(x)` take a map (`localtime({hour: 12, millisecond: 645})`), a datetime, and the clock spellings `HH`, `HHMM`, `HHMMSS[.f]`. They raised "must be a string" or "cannot parse".
   - An out-of-range week, ordinal day, quarter or day of quarter raises.
 
+- **Truncation functions for temporal values.** `date.truncate`, `localdatetime.truncate`, `datetime.truncate`, `localtime.truncate` and `time.truncate` take a unit (`millennium` through `microsecond`), a date, datetime or time, and an optional override map: `date.truncate('week', d, {dayOfWeek: 2})`. They were an unknown-function error; `date_truncate` is unchanged.
+
 ### Changed
 
 - **C ABI and Java: multi-threaded throughput no longer collapses as threads

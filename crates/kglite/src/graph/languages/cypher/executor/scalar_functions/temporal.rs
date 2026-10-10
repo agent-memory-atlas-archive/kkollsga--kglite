@@ -42,57 +42,7 @@ impl<'a> CypherExecutor<'a> {
             // DateTime + Duration discards the seconds component for
             // now because Value::DateTime is still NaiveDate (Cluster
             // 1, deferred).
-            "duration" => {
-                if args.len() != 1 {
-                    return Err("duration() requires 1 map argument: duration({days: N})".into());
-                }
-                if let Expression::MapLiteral(entries) = &args[0] {
-                    let mut months: i64 = 0;
-                    let mut days: i64 = 0;
-                    let mut seconds: i64 = 0;
-                    for (key, expr) in entries {
-                        let v = self.evaluate_expression(expr, row)?;
-                        let n = match v {
-                            Value::Int64(n) => n,
-                            Value::Float64(f)
-                                if f.is_finite()
-                                    && f.fract() == 0.0
-                                    && f >= i64::MIN as f64
-                                    && f < -(i64::MIN as f64) =>
-                            {
-                                f as i64
-                            }
-                            Value::Null => 0,
-                            other => return Err(duration_component_error(key, &other)),
-                        };
-                        match key.as_str() {
-                            "years" => checked_component_add(&mut months, n, 12, "years")?,
-                            "months" => checked_component_add(&mut months, n, 1, "months")?,
-                            "weeks" => checked_component_add(&mut days, n, 7, "weeks")?,
-                            "days" => checked_component_add(&mut days, n, 1, "days")?,
-                            "hours" => checked_component_add(&mut seconds, n, 3600, "hours")?,
-                            "minutes" => checked_component_add(&mut seconds, n, 60, "minutes")?,
-                            "seconds" => checked_component_add(&mut seconds, n, 1, "seconds")?,
-                            other => {
-                                return Err(format!(
-                                    "duration(): unknown key '{other}' (expected years/months/weeks/days/hours/minutes/seconds)"
-                                ));
-                            }
-                        }
-                    }
-                    Ok(Value::Duration {
-                        months: i32::try_from(months).map_err(|_| {
-                            "duration() calendar months exceed the supported i32 range"
-                        })?,
-                        days: i32::try_from(days).map_err(|_| {
-                            "duration() calendar days exceed the supported i32 range"
-                        })?,
-                        seconds,
-                    })
-                } else {
-                    Err("duration() requires a map literal: duration({days: N})".into())
-                }
-            }
+            "duration" => self.eval_duration(args, row),
             "duration.between" => {
                 if args.len() != 2 {
                     return Err("duration.between() requires 2 datetime arguments".into());
@@ -218,6 +168,11 @@ impl<'a> CypherExecutor<'a> {
                 };
                 Ok(truncated.map(Value::DateTime).unwrap_or(Value::Null))
             }
+            "date.truncate"
+            | "datetime.truncate"
+            | "localdatetime.truncate"
+            | "localtime.truncate"
+            | "time.truncate" => self.eval_truncate(name, args, row),
             "localdatetime" => self.eval_local_temporal(args, row, LocalTemporalKind::DateTime),
             "localtime" => self.eval_local_temporal(args, row, LocalTemporalKind::Time),
             "time" => self.eval_time(args, row),
@@ -243,6 +198,59 @@ fn checked_component_add(
 }
 
 impl CypherExecutor<'_> {
+    /// `duration({...})`: calendar units (months/years) and clock units
+    /// (days/hours/minutes/seconds) are kept apart, so
+    /// `duration({months: 1, days: 5}).months` is 1, not 35.
+    fn eval_duration(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err("duration() requires 1 map argument: duration({days: N})".into());
+        }
+        if let Expression::MapLiteral(entries) = &args[0] {
+            let mut months: i64 = 0;
+            let mut days: i64 = 0;
+            let mut seconds: i64 = 0;
+            for (key, expr) in entries {
+                let v = self.evaluate_expression(expr, row)?;
+                let n = match v {
+                    Value::Int64(n) => n,
+                    Value::Float64(f)
+                        if f.is_finite()
+                            && f.fract() == 0.0
+                            && f >= i64::MIN as f64
+                            && f < -(i64::MIN as f64) =>
+                    {
+                        f as i64
+                    }
+                    Value::Null => 0,
+                    other => return Err(duration_component_error(key, &other)),
+                };
+                match key.as_str() {
+                    "years" => checked_component_add(&mut months, n, 12, "years")?,
+                    "months" => checked_component_add(&mut months, n, 1, "months")?,
+                    "weeks" => checked_component_add(&mut days, n, 7, "weeks")?,
+                    "days" => checked_component_add(&mut days, n, 1, "days")?,
+                    "hours" => checked_component_add(&mut seconds, n, 3600, "hours")?,
+                    "minutes" => checked_component_add(&mut seconds, n, 60, "minutes")?,
+                    "seconds" => checked_component_add(&mut seconds, n, 1, "seconds")?,
+                    other => {
+                        return Err(format!(
+                            "duration(): unknown key '{other}' (expected years/months/weeks/days/hours/minutes/seconds)"
+                        ));
+                    }
+                }
+            }
+            Ok(Value::Duration {
+                months: i32::try_from(months)
+                    .map_err(|_| "duration() calendar months exceed the supported i32 range")?,
+                days: i32::try_from(days)
+                    .map_err(|_| "duration() calendar days exceed the supported i32 range")?,
+                seconds,
+            })
+        } else {
+            Err("duration() requires a map literal: duration({days: N})".into())
+        }
+    }
+
     /// `date()` (today), `date(string | map | date)`.
     fn eval_date(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         // Today in UTC: a valid-time instant is naive UTC, and
