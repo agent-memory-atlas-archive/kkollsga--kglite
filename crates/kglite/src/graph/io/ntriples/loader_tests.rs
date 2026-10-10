@@ -1009,7 +1009,11 @@ fn a_logged_ntriples_load_replays_to_the_same_graph() {
     use std::io::Write as _;
     let mut fixture = tempfile::NamedTempFile::new().unwrap();
     fixture.write_all(LABELLED_FIXTURE.as_bytes()).unwrap();
-    for round in 0..12 {
+    for round in 0..std::env::var("NT_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12)
+    {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("g.kgl").to_string_lossy().into_owned();
         let session =
@@ -1067,4 +1071,29 @@ fn an_ntriples_load_publishes_change_events_under_the_final_types() {
         }
     }
     assert!(nodes >= 3 && edges >= 3, "nodes={nodes} edges={edges}");
+}
+
+/// Loads running at once in one process do not share spill files: each graph
+/// gets its own directory, so every load resolves its own label journal.
+#[test]
+fn concurrent_loads_in_one_process_resolve_their_own_labels() {
+    use std::io::Write as _;
+    let mut fixture = tempfile::NamedTempFile::new().unwrap();
+    fixture.write_all(LABELLED_FIXTURE.as_bytes()).unwrap();
+    let path = fixture.path().to_str().unwrap().to_string();
+    std::thread::scope(|scope| {
+        for worker in 0..8 {
+            let path = &path;
+            scope.spawn(move || {
+                for round in 0..40 {
+                    let mut graph = DirGraph::new();
+                    load_ntriples(&mut graph, path, &test_config()).unwrap();
+                    assert!(
+                        graph.type_indices.contains_key("Human"),
+                        "worker {worker} round {round}: labels were not resolved"
+                    );
+                }
+            });
+        }
+    });
 }

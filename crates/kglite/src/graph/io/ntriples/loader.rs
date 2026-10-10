@@ -854,9 +854,7 @@ fn resolve_type_labels(
 
     // Flush + close the label journal before reading it back.
     let label_journal_path = if let Some(writer) = label_writer.take() {
-        let spill_dir = graph.spill_dir.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("kglite_build_{}", std::process::id()))
-        });
+        let spill_dir = load_spill_dir(graph);
         let path = spill_dir.join("labels.bin");
         let journal_size = writer
             .finish()
@@ -989,7 +987,29 @@ struct LoadSpills {
     qnum_to_idx: Option<MmapOrVec<u32>>,
 }
 
+/// The directory this load's spill files live in. Minted once per graph, and
+/// unique per load within a process: a name keyed on the pid alone made two
+/// loads running in one process (threads, or the test suite) overwrite each
+/// other's `labels.bin` and `edges.bin`. The `kglite_build_` prefix is what
+/// the stale-directory sweep recognises.
+fn load_spill_dir(graph: &DirGraph) -> std::path::PathBuf {
+    graph
+        .spill_dir
+        .clone()
+        .expect("initialize_spills assigns the spill directory first")
+}
+
 fn initialize_spills(graph: &mut DirGraph, config: &NTriplesConfig) -> Result<LoadSpills, String> {
+    if graph.spill_dir.is_none() {
+        static LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("kglite_build_{}_{sequence}", std::process::id()));
+        if let Ok(mut dirs) = graph.temp_dirs.lock() {
+            dirs.push(dir.clone());
+        }
+        graph.spill_dir = Some(dir);
+    }
     let use_streaming_build = graph.graph.is_disk() || graph.graph.is_mapped();
     let use_compact = use_streaming_build;
 
@@ -997,9 +1017,7 @@ fn initialize_spills(graph: &mut DirGraph, config: &NTriplesConfig) -> Result<Lo
     // replay in Phase 1b.
     let prop_log: Option<crate::graph::storage::memory::property_log::PropertyLogWriter> =
         if use_streaming_build {
-            let spill_dir = graph.spill_dir.clone().unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("kglite_build_{}", std::process::id()))
-            });
+            let spill_dir = load_spill_dir(graph);
             // Clean up stale spill dirs from previous killed builds.
             //
             // Safe for concurrent runs: only delete directories whose
@@ -1060,9 +1078,7 @@ fn initialize_spills(graph: &mut DirGraph, config: &NTriplesConfig) -> Result<Lo
     let edge_buffer = if use_compact {
         if use_streaming_build {
             // File-backed edge buffer: avoids holding ~14 GB in RAM during Phase 1b
-            let spill_dir = graph.spill_dir.clone().unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("kglite_build_{}", std::process::id()))
-            });
+            let spill_dir = load_spill_dir(graph);
             std::fs::create_dir_all(&spill_dir)
                 .map_err(|e| format!("Failed to create spill dir: {}", e))?;
             let edge_path = spill_dir.join("edges.bin");
@@ -1084,9 +1100,7 @@ fn initialize_spills(graph: &mut DirGraph, config: &NTriplesConfig) -> Result<Lo
     // growth during Phase 1; the post-Phase-1 rename pass reads it once and
     // keeps only the ~88K labels that appear as type names.
     let label_writer: Option<super::label_spill::LabelSpillWriter> = if config.auto_type {
-        let spill_dir = graph.spill_dir.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("kglite_build_{}", std::process::id()))
-        });
+        let spill_dir = load_spill_dir(graph);
         std::fs::create_dir_all(&spill_dir)
             .map_err(|e| format!("Failed to create label spill directory: {e}"))?;
         Some(
@@ -1104,9 +1118,7 @@ fn initialize_spills(graph: &mut DirGraph, config: &NTriplesConfig) -> Result<Lo
     // This lets us skip id_indices entirely, saving ~11 GB at full Wikidata scale.
     // Pre-allocate for 150M Q-numbers (~600 MB mmap, lazily paged).
     let qnum_to_idx: Option<MmapOrVec<u32>> = if graph.graph.is_disk() {
-        let spill_dir = graph.spill_dir.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("kglite_build_{}", std::process::id()))
-        });
+        let spill_dir = load_spill_dir(graph);
         std::fs::create_dir_all(&spill_dir)
             .map_err(|e| format!("Failed to create id spill directory: {e}"))?;
         Some(
