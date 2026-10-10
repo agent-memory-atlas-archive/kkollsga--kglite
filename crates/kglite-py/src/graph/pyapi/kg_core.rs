@@ -790,12 +790,10 @@ impl KnowledgeGraph {
             };
             let previous_stamp = self.inner.checkpoint_lsn;
             if let Some(state) = self.lifecycle.durable.as_mut() {
-                durable::checkpoint_prologue(
-                    &mut state.wal,
-                    state.next_lsn,
-                    lifecycle_graph_mut(&mut self.inner),
-                )
-                .map_err(io_error)?;
+                let graph = lifecycle_graph_mut(&mut self.inner);
+                graph.bump_version();
+                durable::checkpoint_prologue(&mut state.wal, state.next_lsn, graph)
+                    .map_err(io_error)?;
             }
             if let Err(error) =
                 io::save_graph_with(&mut self.inner, &target.to_string_lossy(), fsync)

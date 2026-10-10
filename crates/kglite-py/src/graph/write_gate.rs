@@ -28,8 +28,13 @@ use std::sync::Arc;
 /// method cannot express. Lifecycle only: every content or metadata mutation
 /// goes through the methods below, and the scan test allows this name in
 /// `kg_core.rs` alone.
+///
+/// Does not bump the version, unlike the other accessors here: a `save()` that
+/// fails, or restores the stamp it replaced, changed no data and must not
+/// invalidate an open transaction. The checkpoint prologue, which the durable
+/// path counts as advancing the data version, bumps it explicitly.
 pub(crate) fn lifecycle_graph_mut(inner: &mut Arc<DirGraph>) -> &mut DirGraph {
-    raw_graph_mut(inner)
+    Arc::make_mut(inner)
 }
 
 impl KnowledgeGraph {
