@@ -10,6 +10,7 @@ pub mod embedder;
 pub mod languages;
 pub mod pyapi;
 pub(crate) mod valid_time;
+pub(crate) mod write_gate;
 
 pub use pyapi::transaction::Transaction;
 
@@ -454,171 +455,6 @@ impl KnowledgeGraph {
     /// `set_embedder_native` has been called.
     pub fn embedder(&self) -> Option<&Arc<dyn embedder::Embedder>> {
         self.embedder.as_ref()
-    }
-
-    /// Post-mutation bookkeeping for a Cypher write: make it durable, then
-    /// run the pyapi-specific auto-vacuum and stats housekeeping.
-    ///
-    /// **The order is a correctness requirement, not a preference.** Captured
-    /// WAL ops are keyed by `NodeIndex` and resolved against current graph
-    /// state, while a vacuum rebuilds the graph with contiguous indices — ops
-    /// resolved after a remap describe the wrong nodes, or none at all. The
-    /// flush therefore has to come first, which is exactly the trap that made
-    /// this worth naming instead of leaving inline in `cypher`.
-    pub(crate) fn after_mutation(
-        &mut self,
-        stats: Option<&kglite_core::api::cypher::MutationStats>,
-    ) -> PyResult<()> {
-        self.commit_wal()?;
-        let graph = crate::graph::get_graph_mut(&mut self.inner);
-        if let Some(stats) = stats {
-            if stats.nodes_deleted > 0 || stats.relationships_deleted > 0 {
-                // Follow the compaction, do not throw the selection away. A
-                // reset `CurrentSelection` reads as "no filter applied", so the
-                // same held handle answered `ids()` with `[]` and `len()` with
-                // the whole graph — a selection that silently emptied and
-                // silently widened at the same time, from a delete the caller
-                // never asked to touch it. `remap_indices` is a no-op when the
-                // mapping describes no rebuild, which is what the disk backend
-                // returns: it used to pay the reset while reclaiming nothing.
-                if let Some(remap) = graph.check_auto_vacuum() {
-                    self.cursor.selection.remap_indices(&remap);
-                }
-            }
-            self.cursor.last_mutation_stats = Some(stats.clone());
-        }
-        Ok(())
-    }
-
-    /// [`flush_wal`](Self::flush_wal) mapped into `PyResult` — the form every
-    /// `#[pymethods]` mutation site uses.
-    ///
-    /// **Every method that commits a change to graph content must call this
-    /// before returning to Python.** There is no choke point that can do it
-    /// automatically: `get_graph_mut` has no access to the durability state
-    /// (which lives on the binding, not the `DirGraph`), and it runs *before*
-    /// the mutation rather than after. A mutator that forgets leaves its ops
-    /// buffered, where they are invisible to the log and are discarded by the
-    /// next `save()` — i.e. it silently is not crash-safe.
-    ///
-    /// Not every `&mut self` method needs it. Ops exist for nodes, edges,
-    /// labels, the declarations captured at their own choke points — identity-
-    /// field spellings, parent types, the ontology, the schema stamp, spatial
-    /// configs, validity-interval declarations, user indexes and constraints —
-    /// and the bulk payloads:
-    /// timeseries channels and embedding stores with their vector-index
-    /// declaration. What is left checkpoint-only is derived state a load
-    /// rebuilds anyway (text indexes, cached norms), for which calling this is
-    /// a no-op.
-    #[inline]
-    pub(crate) fn commit_wal(&mut self) -> PyResult<()> {
-        // Mutation entries reject missing capture ownership before changing data.
-        // Keep the commit guard as well: no caller may drain a source stream
-        // or append a source WAL for an independently mutated derived handle.
-        self.check_durable_owner()?;
-        self.flush_wal()
-            .map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))?;
-        self.auto_checkpoint_if_needed();
-        Ok(())
-    }
-
-    /// The tail every `store_as=` writer (`calculate`, `count`,
-    /// `unique_values`, `collect_children`) shares once its write has landed:
-    /// log it, then raise its advisories as `UserWarning`s. Logged first, so a
-    /// warning promoted to an error cannot leave a write the log never saw.
-    pub(crate) fn store_as_landed(&mut self, warnings: &[String]) -> PyResult<()> {
-        self.commit_wal()?;
-        Python::attach(|py| warn_all(py, warnings))
-    }
-
-    /// Drain the capture buffer at this commit boundary: publish its changes
-    /// to the change stream, and — for a durable graph — resolve them to
-    /// logical ops and append a durably-`fsync`'d WAL frame. No-op for a graph
-    /// that is neither durable nor capturing, and when no ops are pending. The
-    /// `fsync` inside makes a committed mutation on a durable graph crash-safe
-    /// before control returns to the caller.
-    ///
-    /// **Two owners want this drain, and either alone is reason to run it.**
-    /// The write-ahead log is the older one; change data capture is the other,
-    /// and a CDC-enabled *non-durable* in-memory graph is the modal CDC
-    /// deployment, so gating the drain on durability would have left the
-    /// stream permanently empty for it. The publish itself lives in
-    /// `api::cdc::drain_at_commit` — the wheel only says *where* its commits
-    /// are, which is the one thing core cannot know.
-    pub(crate) fn flush_wal(&mut self) -> std::io::Result<()> {
-        let durable = self.lifecycle.durable.is_some();
-        if !durable && !self.inner.cdc_enabled() {
-            return Ok(());
-        }
-        // Refuse *before* the drain, not after: draining publishes this
-        // commit to the change stream and empties the capture buffer, and on a
-        // graph whose log has already diverged neither can be undone — the
-        // events would describe changes no checkpoint will ever hold. Leaving
-        // the buffer intact costs nothing (this handle can no longer save, so
-        // it is on its way to being dropped) and keeps the refusal total.
-        if self
-            .lifecycle
-            .durable
-            .as_ref()
-            .is_some_and(|ds| ds.diverged)
-        {
-            return Err(wal_diverged_io_error());
-        }
-        let dir = get_graph_mut(&mut self.inner);
-        // Publishes this commit's CDC events and hands the raw ops back;
-        // yields nothing for a graph carrying no capture layer (durable
-        // state without a recording backend shouldn't happen, but reads
-        // here as nothing to flush).
-        let raw = kglite_core::api::cdc::drain_at_commit(dir);
-        if raw.is_empty() || !durable {
-            return Ok(());
-        }
-        let ds = self
-            .lifecycle
-            .durable
-            .as_mut()
-            .expect("durable checked Some above; not cleared in between");
-        let lsn = ds.next_lsn;
-        let appended = if ds.fail_append {
-            Err(std::io::Error::other(
-                "injected write-ahead log append failure (kglite._fail_wal_append)",
-            ))
-        } else {
-            // The whole `DirGraph`, not its backend: secondary labels and the
-            // relationship embedding stores both live above the backend, and a
-            // frame resolved without them logs vector state as absent — see
-            // `resolve_ops`.
-            ds.wal.append_resolved(lsn, &raw, dir)
-        };
-        match appended {
-            Ok(()) => {
-                // Only a frame that reached the log consumes its LSN — the same
-                // rule `Session::log_working_commit` follows. Consuming it up
-                // front would leave a hole the checkpoint stamp counts as a
-                // committed frame, so `checkpoint_lsn = next_lsn - 1` would
-                // claim to have folded in a commit that never existed and the
-                // replay gate would silently skip the *next* real one.
-                ds.next_lsn = lsn + 1;
-                Ok(())
-            }
-            Err(e) => {
-                // The mutation is already applied to `self.inner` and its ops
-                // are drained, so this handle now holds state the log does not
-                // describe and cannot be made to describe. Latch, so the write
-                // the caller was told had FAILED can never be committed by a
-                // later save() (which would neither know about it nor be able
-                // to separate it from the writes that succeeded).
-                ds.diverged = true;
-                // Carry the latch into the *first* error too. This is the one
-                // the caller actually sees at ENOSPC, and a bare "No space left
-                // on device" says nothing about the graph now being unsaveable
-                // — which is the part that decides what they do next.
-                Err(std::io::Error::new(
-                    e.kind(),
-                    format!("write-ahead log append failed: {e}. {WAL_DIVERGED_MSG}"),
-                ))
-            }
-        }
     }
 
     /// Refuse an operation that would write through a handle *derived* from a
@@ -1149,18 +985,6 @@ pub(crate) fn parse_inline_timeseries(
     InlineTimeseriesConfig::from_components(time_col, time_components, channels, resolution, units)
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
 }
-
-/// Get a mutable `DirGraph` out of the `Arc`. `Arc::make_mut` hands back a
-/// mutable reference in place when this is the only reference.
-///
-/// If another reference exists (a retained `ResultView`, transaction snapshot,
-/// or cloned `KnowledgeGraph`), the clone mechanism depends on storage. An
-/// eligible memory graph forks into an overlay, with a deep-copy fallback when
-/// its slot state cannot be folded safely. A mapped graph shares its column
-/// stores while cloning other owned state. A disk graph remaps published mmap
-/// arrays and copies mutation overlays; heap-backed arrays still clone. See
-/// `kglite_core::api::make_dir_graph_mut` for the full contract.
-pub(crate) use kglite_core::api::make_dir_graph_mut as get_graph_mut;
 
 /// Resolve the `selection_only` argument shared by every export entry point
 /// into the selection the exporter should actually use.

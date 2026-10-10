@@ -10,7 +10,7 @@ use crate::datatypes::values::Value;
 use crate::datatypes::{py_in, py_out};
 use crate::graph::pyapi::kg_core::file_io_err;
 use crate::graph::{
-    compare_inner, extract_cypher_param, extract_detail_param, extract_fluent_param, get_graph_mut,
+    compare_inner, extract_cypher_param, extract_detail_param, extract_fluent_param,
     parse_method_param, KnowledgeGraph,
 };
 use kglite_core::api::fluent::StatResult;
@@ -74,8 +74,7 @@ impl KnowledgeGraph {
     ///     graph.reindex()
     ///     ```
     fn reindex(&mut self) {
-        let graph = get_graph_mut(&mut self.inner);
-        graph.reindex();
+        self.unlogged_write(|graph| graph.reindex());
     }
 
     /// Materialize the in-memory graph as a disk-backed one.
@@ -173,9 +172,8 @@ impl KnowledgeGraph {
                 message.as_c_str(),
                 1,
             )?;
-            let graph = get_graph_mut(&mut self.inner);
-            return graph
-                .enable_disk_mode()
+            return self
+                .unlogged_write(|graph| graph.enable_disk_mode())
                 .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>);
         };
         // The path form publishes, so it takes the guard `save()` takes for a
@@ -183,14 +181,15 @@ impl KnowledgeGraph {
         // already refused above): such a handle holds a fork no log describes,
         // and publishing it is the same hazard as saving it.
         self.check_durable_owner()?;
-        let inner = &mut self.inner;
-        py.detach(move || io::materialize_disk_graph(inner, path))
-            .map_err(|error| match error {
-                io::SaveError::Refused(message) => {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
-                }
-                io::SaveError::Io(message) => file_io_err(std::io::Error::other(message)),
-            })?;
+        self.unlogged_write_lazy(|inner| {
+            py.detach(move || io::materialize_disk_graph(inner, path))
+        })
+        .map_err(|error| match error {
+            io::SaveError::Refused(message) => {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
+            }
+            io::SaveError::Io(message) => file_io_err(std::io::Error::other(message)),
+        })?;
         // Same "save as" rebinding `save(path)` does: the directory is now this
         // graph's home, so a later bare `save()` writes back to it.
         self.lifecycle.source_path = Some(std::path::PathBuf::from(path));
@@ -219,8 +218,7 @@ impl KnowledgeGraph {
         if self.inner.column_store_count() == 0 {
             return;
         }
-        let graph = get_graph_mut(&mut self.inner);
-        graph.rebuild_columns_to_heap();
+        self.unlogged_write(|graph| graph.rebuild_columns_to_heap());
     }
 
     /// Compact the graph by removing tombstones left by node/edge deletions.
@@ -256,28 +254,37 @@ impl KnowledgeGraph {
     ///         print(f"Reclaimed {result['tombstones_removed']} slots")
     ///     ```
     fn vacuum(&mut self) -> PyResult<Py<PyAny>> {
-        // Before the rebuild, not after: captured ops are keyed by
-        // `NodeIndex` and a vacuum remaps every index, so ops resolved
-        // afterwards would describe the wrong nodes.
-        self.commit_wal()?;
-        let graph = get_graph_mut(&mut self.inner);
+        let (
+            tombstones_before,
+            edge_tombstones_before,
+            info_after,
+            columnar_rebuilt,
+            nodes_remapped,
+        ) = self.renumbering_write(|graph, cursor| {
+            let info_before = graph.graph_info();
+            let tombstones_before = info_before.node_tombstones;
+            let edge_tombstones_before = info_before.edge_tombstones;
+            // Read the row count, not "is this graph columnar at all": every graph
+            // owns stores from its first node now, so that proxy would report
+            // `true` for a vacuum that reclaimed nothing.
+            let rows_before = info_before.columnar_total_rows;
+            let old_to_new = graph.vacuum();
+            let info_after = graph.graph_info();
+            let columnar_rebuilt = info_after.columnar_total_rows != rows_before;
+            let nodes_remapped = old_to_new.len();
 
-        let info_before = graph.graph_info();
-        let tombstones_before = info_before.node_tombstones;
-        let edge_tombstones_before = info_before.edge_tombstones;
-        // Read the row count, not "is this graph columnar at all": every graph
-        // owns stores from its first node now, so that proxy would report
-        // `true` for a vacuum that reclaimed nothing.
-        let rows_before = info_before.columnar_total_rows;
-        let old_to_new = graph.vacuum();
-        let info_after = graph.graph_info();
-        let columnar_rebuilt = info_after.columnar_total_rows != rows_before;
-        let nodes_remapped = old_to_new.len();
-
-        // The indices moved, but the *set of nodes the caller chose* did not,
-        // minus whatever was deleted. The documented reset was a limitation of
-        // not having the mapping to hand, never a contract.
-        self.cursor.selection.remap_indices(&old_to_new);
+            // The indices moved, but the *set of nodes the caller chose* did not,
+            // minus whatever was deleted. The documented reset was a limitation of
+            // not having the mapping to hand, never a contract.
+            cursor.selection.remap_indices(&old_to_new);
+            (
+                tombstones_before,
+                edge_tombstones_before,
+                info_after,
+                columnar_rebuilt,
+                nodes_remapped,
+            )
+        })?;
 
         Python::attach(|py| {
             let result = PyDict::new(py);
@@ -304,15 +311,15 @@ impl KnowledgeGraph {
     ///         - ``nodes_purged``: provisional stub nodes deleted
     ///         - ``edges_removed``: incident edges removed with them
     fn purge_provisional(&mut self) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-        let (nodes_purged, edges_removed) =
-            kglite_core::api::mutation::purge_provisional_nodes(graph)
-                .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))?;
-        if nodes_purged > 0 {
-            self.cursor.selection = CowSelection::new();
-        }
-        self.commit_wal()?;
+        let (nodes_purged, edges_removed) = self.logged_write_with_cursor(|graph, cursor| {
+            let (nodes_purged, edges_removed) =
+                kglite_core::api::mutation::purge_provisional_nodes(graph)
+                    .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))?;
+            if nodes_purged > 0 {
+                cursor.selection = CowSelection::new();
+            }
+            Ok((nodes_purged, edges_removed))
+        })?;
         Python::attach(|py| {
             let result = PyDict::new(py);
             result.set_item("nodes_purged", nodes_purged)?;
@@ -449,8 +456,7 @@ impl KnowledgeGraph {
                 ));
             }
         }
-        let graph = get_graph_mut(&mut self.inner);
-        graph.auto_vacuum_threshold = threshold;
+        self.unlogged_write(|graph| graph.auto_vacuum_threshold = threshold);
         Ok(())
     }
 
@@ -483,9 +489,10 @@ impl KnowledgeGraph {
         limit_bytes: Option<usize>,
         spill_dir: Option<String>,
     ) -> PyResult<()> {
-        let graph = get_graph_mut(&mut self.inner);
-        graph.memory_limit = limit_bytes;
-        graph.spill_dir = spill_dir.map(std::path::PathBuf::from);
+        self.unlogged_write(|graph| {
+            graph.memory_limit = limit_bytes;
+            graph.spill_dir = spill_dir.map(std::path::PathBuf::from);
+        });
         Ok(())
     }
 
@@ -514,8 +521,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (enabled=None))]
     fn read_only(&mut self, enabled: Option<bool>) -> bool {
         if let Some(v) = enabled {
-            let graph = get_graph_mut(&mut self.inner);
-            graph.read_only = v;
+            self.unlogged_write(|graph| graph.read_only = v);
         }
         self.inner.read_only
     }
@@ -541,7 +547,7 @@ impl KnowledgeGraph {
     /// graph.cypher("MATCH (p:Person) RETURN p.agee")  # raises SchemaError
     /// ```
     fn lock_schema(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
-        get_graph_mut(&mut slf.inner).schema_locked = true;
+        slf.unlogged_write(|g| g.schema_locked = true);
         slf
     }
 
@@ -552,7 +558,7 @@ impl KnowledgeGraph {
     /// Returns:
     ///     This same graph (not a copy), so the call can be chained.
     fn unlock_schema(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
-        get_graph_mut(&mut slf.inner).schema_locked = false;
+        slf.unlogged_write(|g| g.schema_locked = false);
         slf
     }
 
@@ -614,9 +620,10 @@ impl KnowledgeGraph {
         mut slf: PyRefMut<'_, Self>,
         version: u32,
     ) -> PyResult<PyRefMut<'_, Self>> {
-        slf.check_durable_owner()?;
-        get_graph_mut(&mut slf.inner).set_user_schema_version(version);
-        slf.commit_wal()?;
+        slf.logged_write(|g| {
+            g.set_user_schema_version(version);
+            Ok(())
+        })?;
         Ok(slf)
     }
 
@@ -792,13 +799,13 @@ impl KnowledgeGraph {
             let nodes =
                 kglite_core::api::fluent::format_unique_values_for_storage(&values, max_length);
 
-            slf.check_durable_owner()?;
-            let graph = get_graph_mut(&mut slf.inner);
-
-            let written =
+            // Logged first, so a warning promoted to an error cannot leave a
+            // write the log never saw.
+            let written = slf.logged_write(|graph| {
                 kglite_core::api::mutation::update_node_properties(graph, &nodes, target_property)
-                    .map_err(|m| crate::graph::store_as_refused(graph, m))?;
-            slf.store_as_landed(&written.warnings)?;
+                    .map_err(|m| crate::graph::store_as_refused(graph, m))
+            })?;
+            crate::graph::warn_all(py, &written.warnings)?;
 
             if !keep_selection.unwrap_or(false) {
                 slf.cursor.selection.clear();
@@ -1107,20 +1114,18 @@ impl KnowledgeGraph {
             )?;
         }
 
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-
-        let result = kglite_core::api::mutation::create_connections(
-            graph,
-            &self.cursor.selection,
-            connection_type,
-            conflict_handling,
-            copy_properties,
-            source_type,
-            target_type,
-        )
-        .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))?;
-        self.commit_wal()?;
+        let result = self.logged_write_with_cursor(|graph, cursor| {
+            kglite_core::api::mutation::create_connections(
+                graph,
+                &cursor.selection,
+                connection_type,
+                conflict_handling,
+                copy_properties,
+                source_type,
+                target_type,
+            )
+            .map_err(|message| super::kg_mutation::bulk_write_err(graph, message))
+        })?;
         crate::graph::warn_all(py, &result.warnings)?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
@@ -1174,11 +1179,10 @@ impl KnowledgeGraph {
             }
         }
 
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-        let result = core_add_properties(graph, &self.cursor.selection, spec_map)
-            .map_err(|e: String| super::kg_mutation::bulk_write_err(graph, e))?;
-        self.commit_wal()?;
+        let result = self.logged_write_with_cursor(|graph, cursor| {
+            core_add_properties(graph, &cursor.selection, spec_map)
+                .map_err(|e: String| super::kg_mutation::bulk_write_err(graph, e))
+        })?;
         Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(true));
@@ -1279,13 +1283,11 @@ impl KnowledgeGraph {
 
         let nodes = kglite_core::api::fluent::format_for_storage(&property_groups, max_length);
 
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-
-        let result =
+        let result = self.logged_write(|graph| {
             kglite_core::api::mutation::update_node_properties(graph, &nodes, store_as.unwrap())
-                .map_err(|m| crate::graph::store_as_refused(graph, m))?;
-        self.store_as_landed(&result.warnings)?;
+                .map_err(|m| crate::graph::store_as_refused(graph, m))
+        })?;
+        Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
@@ -1355,46 +1357,44 @@ impl KnowledgeGraph {
         aggregate_connections: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
         if let Some(target_property) = store_as {
-            self.check_durable_owner()?;
-            let graph = get_graph_mut(&mut self.inner);
+            let report = self.logged_write_with_cursor(|graph, cursor| {
+                // Pure-Rust evaluation + store — run off-GIL.
+                let selection = &cursor.selection;
+                let process_result = py.detach(|| {
+                    kglite_core::api::fluent::process_equation(
+                        &mut *graph,
+                        selection,
+                        expression,
+                        level_index,
+                        Some(target_property),
+                        aggregate_connections,
+                    )
+                });
 
-            // Pure-Rust evaluation + store — run off-GIL.
-            let selection = &self.cursor.selection;
-            let process_result = py.detach(|| {
-                kglite_core::api::fluent::process_equation(
-                    &mut *graph,
-                    selection,
-                    expression,
-                    level_index,
-                    Some(target_property),
-                    aggregate_connections,
-                )
-            });
-
-            match process_result {
-                Ok(kglite_core::api::fluent::EvaluationResult::Stored(report)) => {
-                    self.store_as_landed(&report.warnings)?;
-                    let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
-
-                    new_kg.add_report(OperationReport::CalculationOperation(report));
-
-                    Python::attach(|py| Ok(Py::new(py, new_kg)?.into_any()))
-                }
-                Ok(_) => Err(crate::graph::store_as_refused(
-                    graph,
-                    "Unexpected result type when storing calculation result".to_string(),
-                )),
-                // A constraint or ontology refusal parked on the graph keeps
-                // its typed class; the expression prefix would break the
-                // identity that recovers it.
-                Err(e) => Err(match graph.take_constraint_error(&e) {
-                    Some(typed) => crate::error_py::kg_to_pyerr(typed),
-                    None => crate::graph::store_as_refused(
+                match process_result {
+                    Ok(kglite_core::api::fluent::EvaluationResult::Stored(report)) => Ok(report),
+                    Ok(_) => Err(crate::graph::store_as_refused(
                         graph,
-                        format!("Error evaluating expression '{expression}': {e}"),
-                    ),
-                }),
-            }
+                        "Unexpected result type when storing calculation result".to_string(),
+                    )),
+                    // A constraint or ontology refusal parked on the graph keeps
+                    // its typed class; the expression prefix would break the
+                    // identity that recovers it.
+                    Err(e) => Err(match graph.take_constraint_error(&e) {
+                        Some(typed) => crate::error_py::kg_to_pyerr(typed),
+                        None => crate::graph::store_as_refused(
+                            graph,
+                            format!("Error evaluating expression '{expression}': {e}"),
+                        ),
+                    }),
+                }
+            })?;
+            Python::attach(|py| crate::graph::warn_all(py, &report.warnings))?;
+            let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
+
+            new_kg.add_report(OperationReport::CalculationOperation(report));
+
+            Python::attach(|py| Ok(Py::new(py, new_kg)?.into_any()))
         } else {
             // The temporary whole-graph clone + evaluation are pure Rust —
             // run off-GIL. (That `process_equation` demands `&mut DirGraph`
@@ -1516,18 +1516,17 @@ impl KnowledgeGraph {
         let use_grouping = group_by_parent.unwrap_or(has_multiple_levels);
 
         if let Some(target_property) = store_as {
-            self.check_durable_owner()?;
-            let graph = get_graph_mut(&mut self.inner);
-
-            let result = kglite_core::api::fluent::store_count_results(
-                graph,
-                &self.cursor.selection,
-                level_index,
-                use_grouping,
-                target_property,
-            )
-            .map_err(|m| crate::graph::store_as_refused(graph, m))?;
-            self.store_as_landed(&result.warnings)?;
+            let result = self.logged_write_with_cursor(|graph, cursor| {
+                kglite_core::api::fluent::store_count_results(
+                    graph,
+                    &cursor.selection,
+                    level_index,
+                    use_grouping,
+                    target_property,
+                )
+                .map_err(|m| crate::graph::store_as_refused(graph, m))
+            })?;
+            Python::attach(|py| crate::graph::warn_all(py, &result.warnings))?;
 
             let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 
@@ -1571,9 +1570,10 @@ impl KnowledgeGraph {
                 crate::error::KgError::Argument(format!("Parent type '{}' not found", parent_type)),
             ));
         }
-        self.check_durable_owner()?;
-        get_graph_mut(&mut self.inner).set_parent_type(&node_type, Some(&parent_type));
-        self.commit_wal()
+        self.logged_write(|g| {
+            g.set_parent_type(&node_type, Some(&parent_type));
+            Ok(())
+        })
     }
 
     /// Return an XML description of this graph for AI agents (progressive disclosure).

@@ -8,7 +8,7 @@
 
 use crate::datatypes::values::{FilterCondition, Value};
 use crate::datatypes::{py_in, py_out};
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::mutation::OperationReport;
 use kglite_core::api::GraphRead;
 use kglite_core::api::PlanStep;
@@ -47,42 +47,41 @@ impl KnowledgeGraph {
         let argument = |message: String| {
             crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
         };
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-        let is_node = graph.type_indices.contains_key(&type_name);
-        let is_relationship = graph.connection_type_metadata.contains_key(&type_name);
-        // A name that is both a node type and a relationship type is the node
-        // type, unless a source type says otherwise.
-        let target = match (is_node, is_relationship, source_type) {
-            (_, true, Some(source)) => TemporalTarget::Relationship {
-                rel_type: type_name,
-                source_type: Some(source),
-            },
-            (_, false, Some(_)) => {
-                return Err(argument(format!(
-                    "source_type applies to a relationship type, and '{type_name}' is not one"
-                )))
-            }
-            (true, _, None) => TemporalTarget::Node(type_name),
-            (false, true, None) => TemporalTarget::Relationship {
-                rel_type: type_name,
-                source_type: None,
-            },
-            (false, false, None) => {
-                return Err(argument(format!(
-                    "'{type_name}' is not a known node type or connection type"
-                )))
-            }
-        };
-        let report = temporal::declare_defaulted(
-            graph,
-            &target,
-            &valid_from,
-            &valid_to,
-            (convention, empty_when),
-        )
-        .map_err(argument)?;
-        self.commit_wal()?;
+        let report = self.logged_write(|graph| {
+            let is_node = graph.type_indices.contains_key(&type_name);
+            let is_relationship = graph.connection_type_metadata.contains_key(&type_name);
+            // A name that is both a node type and a relationship type is the node
+            // type, unless a source type says otherwise.
+            let target = match (is_node, is_relationship, source_type) {
+                (_, true, Some(source)) => TemporalTarget::Relationship {
+                    rel_type: type_name,
+                    source_type: Some(source),
+                },
+                (_, false, Some(_)) => {
+                    return Err(argument(format!(
+                        "source_type applies to a relationship type, and '{type_name}' is not one"
+                    )))
+                }
+                (true, _, None) => TemporalTarget::Node(type_name),
+                (false, true, None) => TemporalTarget::Relationship {
+                    rel_type: type_name,
+                    source_type: None,
+                },
+                (false, false, None) => {
+                    return Err(argument(format!(
+                        "'{type_name}' is not a known node type or connection type"
+                    )))
+                }
+            };
+            temporal::declare_defaulted(
+                graph,
+                &target,
+                &valid_from,
+                &valid_to,
+                (convention, empty_when),
+            )
+            .map_err(argument)
+        })?;
         crate::graph::warn_declaration(py, &report)
     }
 
@@ -112,8 +111,10 @@ impl KnowledgeGraph {
                 ValidTimeDefault::Date(day)
             }
         };
-        kglite_core::api::make_dir_graph_mut_preserving_lineage(&mut self.inner)
-            .set_valid_time_default(default, persist);
+        self.unlogged_write_lazy(|inner| {
+            kglite_core::api::make_dir_graph_mut_preserving_lineage(inner)
+                .set_valid_time_default(default, persist)
+        });
         Ok(())
     }
 
@@ -516,21 +517,19 @@ impl KnowledgeGraph {
             parsed_properties.push((property_name, property_value));
         }
 
-        let graph = get_graph_mut(&mut self.inner);
         // Every property is judged together against the valid-time
         // declarations before anything is written, so moving an interval by
-        // writing both bounds is one legal write; a refusal raises.
-        let written =
+        // writing both bounds is one legal write; a refusal raises. The write
+        // lands on `self.inner`; the handle returned below is deliberately
+        // detached, so `self` is what owns the durability state.
+        let written = self.logged_write(|graph| {
             kglite_core::api::mutation::update_node_property_set(graph, &nodes, &parsed_properties)
-                .map_err(|e| super::kg_mutation::bulk_write_err(graph, e))?;
+                .map_err(|e| super::kg_mutation::bulk_write_err(graph, e))
+        })?;
         let total_updated = written.nodes_updated;
         let errors = written.errors;
         let warnings = written.warnings;
         let diagnostics = written.diagnostics;
-
-        // The write landed on `self.inner`; the handle returned below is
-        // deliberately detached, so `self` is what owns the durability state.
-        self.commit_wal()?;
 
         let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
 

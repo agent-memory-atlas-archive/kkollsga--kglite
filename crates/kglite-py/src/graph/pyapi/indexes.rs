@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 
 #[pymethods]
 impl KnowledgeGraph {
@@ -12,24 +12,24 @@ impl KnowledgeGraph {
         node_type: &str,
         property: &str,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
         // The checked build Cypher `CREATE INDEX` shares: backend routing
         // (persistent mmap index on disk, where a heap HashMap would OOM on a
         // large type), the refusals, and whether queries will read the index.
-        let built = graph
-            .create_property_index_checked(node_type, property)
-            .map_err(|e| match e {
-                kglite_core::api::PropertyIndexError::Refused(message) => {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
-                }
-                kglite_core::api::PropertyIndexError::Build(message) => {
-                    PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
-                        "Failed to build persistent property index for {}.{}: {}",
-                        node_type, property, message
-                    ))
-                }
-            })?;
+        let built = self.logged_write(|graph| {
+            graph
+                .create_property_index_checked(node_type, property)
+                .map_err(|e| match e {
+                    kglite_core::api::PropertyIndexError::Refused(message) => {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
+                    }
+                    kglite_core::api::PropertyIndexError::Build(message) => {
+                        PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
+                            "Failed to build persistent property index for {}.{}: {}",
+                            node_type, property, message
+                        ))
+                    }
+                })
+        })?;
 
         let result_dict = PyDict::new(py);
         result_dict.set_item("node_type", node_type)?;
@@ -40,7 +40,6 @@ impl KnowledgeGraph {
         result_dict.set_item("serves_lookups", built.serves_lookups)?;
         result_dict.set_item("not_serving", built.not_serving)?;
         result_dict.set_item("node_type_known", built.node_type_known)?;
-        self.commit_wal()?;
 
         Ok(result_dict.into())
     }
@@ -54,12 +53,10 @@ impl KnowledgeGraph {
     /// Returns:
     ///     True if index existed and was removed, False otherwise
     fn drop_index(&mut self, node_type: &str, property: &str) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let removed = get_graph_mut(&mut self.inner)
-            .drop_index(node_type, property)
-            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| {
+            g.drop_index(node_type, property)
+                .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+        })
     }
 
     /// Build a cross-type global index on `property`. Unlike
@@ -88,18 +85,17 @@ impl KnowledgeGraph {
     ///     Dict with ``property``, ``unique_values`` (node count indexed),
     ///     and ``created``.
     fn create_global_index(&mut self, py: Python<'_>, property: &str) -> PyResult<Py<PyAny>> {
-        let graph = get_graph_mut(&mut self.inner);
-        let count = match &mut graph.graph {
+        let count = self.unlogged_write(|graph| match &mut graph.graph {
             kglite_core::api::storage::GraphBackend::Disk(dg) => {
                 dg.build_global_property_index(property).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                         "Failed to build global property index for '{}': {}",
                         property, e
                     ))
-                })?
+                })
             }
-            _ => 0,
-        };
+            _ => Ok(0),
+        })?;
         let result = PyDict::new(py);
         result.set_item("property", property)?;
         result.set_item("unique_values", count)?;
@@ -278,13 +274,12 @@ impl KnowledgeGraph {
         node_type: &str,
         property: &str,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-        graph
-            .reject_secondary_only_index_type(node_type)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        let unique_values = graph.declare_range_index(node_type, property);
-        self.commit_wal()?;
+        let unique_values = self.logged_write(|graph| {
+            graph
+                .reject_secondary_only_index_type(node_type)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            Ok(graph.declare_range_index(node_type, property))
+        })?;
 
         let result_dict = PyDict::new(py);
         result_dict.set_item("node_type", node_type)?;
@@ -304,10 +299,7 @@ impl KnowledgeGraph {
     /// Returns:
     ///     True if index existed and was removed, False otherwise.
     fn drop_range_index(&mut self, node_type: &str, property: &str) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let removed = get_graph_mut(&mut self.inner).drop_range_index(node_type, property);
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| Ok(g.drop_range_index(node_type, property)))
     }
 
     /// Rebuild the in-memory equality indexes. Range, composite and
@@ -318,15 +310,16 @@ impl KnowledgeGraph {
     /// Returns:
     ///     Number of indexes rebuilt
     fn rebuild_indexes(&mut self) -> PyResult<usize> {
-        let graph = get_graph_mut(&mut self.inner);
+        // Derived state a load rebuilds anyway, so not logged.
+        Ok(self.unlogged_write(|graph| {
+            let index_keys: Vec<_> = graph.property_indices.keys().cloned().collect();
 
-        let index_keys: Vec<_> = graph.property_indices.keys().cloned().collect();
+            for (node_type, property) in &index_keys {
+                graph.create_index(node_type, property);
+            }
 
-        for (node_type, property) in &index_keys {
-            graph.create_index(node_type, property);
-        }
-
-        Ok(index_keys.len())
+            index_keys.len()
+        }))
     }
 
     /// Create a composite index on multiple properties for efficient multi-field queries.
@@ -363,14 +356,13 @@ impl KnowledgeGraph {
         node_type: &str,
         properties: Vec<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let graph = get_graph_mut(&mut self.inner);
-        graph
-            .reject_secondary_only_index_type(node_type)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        let props_refs: Vec<&str> = properties.iter().map(|s| s.as_str()).collect();
-        let unique_values = graph.declare_composite_index(node_type, &props_refs);
-        self.commit_wal()?;
+        let unique_values = self.logged_write(|graph| {
+            graph
+                .reject_secondary_only_index_type(node_type)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            let props_refs: Vec<&str> = properties.iter().map(|s| s.as_str()).collect();
+            Ok(graph.declare_composite_index(node_type, &props_refs))
+        })?;
         let result_dict = PyDict::new(py);
         result_dict.set_item("node_type", node_type)?;
         result_dict.set_item("properties", properties)?;
@@ -388,10 +380,7 @@ impl KnowledgeGraph {
     /// Returns:
     ///     True if index existed and was dropped, False otherwise
     fn drop_composite_index(&mut self, node_type: &str, properties: Vec<String>) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let removed = get_graph_mut(&mut self.inner).drop_composite_index(node_type, &properties);
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| Ok(g.drop_composite_index(node_type, &properties)))
     }
 
     /// List all composite indexes in the graph.
@@ -462,16 +451,17 @@ impl KnowledgeGraph {
         property: &str,
         auto_refresh_limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
-        let graph = get_graph_mut(&mut self.inner);
         // Built off the GIL — tokenizing a corpus is pure CPU over graph memory.
-        let report = py
-            .detach(|| {
-                kglite_core::api::text_indexes::build_text_index(
-                    graph,
-                    node_type,
-                    property,
-                    auto_refresh_limit,
-                )
+        let report = self
+            .unlogged_write(|graph| {
+                py.detach(|| {
+                    kglite_core::api::text_indexes::build_text_index(
+                        graph,
+                        node_type,
+                        property,
+                        auto_refresh_limit,
+                    )
+                })
             })
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
@@ -485,11 +475,9 @@ impl KnowledgeGraph {
     /// Drop the BM25 text index for a property; True if one existed.
     #[pyo3(signature = (node_type, property))]
     fn drop_text_index(&mut self, node_type: &str, property: &str) -> bool {
-        kglite_core::api::text_indexes::drop_text_index(
-            get_graph_mut(&mut self.inner),
-            node_type,
-            property,
-        )
+        self.unlogged_write(|g| {
+            kglite_core::api::text_indexes::drop_text_index(g, node_type, property)
+        })
     }
 
     /// Whether a BM25 text index is built over a property.

@@ -6,7 +6,7 @@ use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::graph::{get_graph_mut, KnowledgeGraph, NodeKeyGuard, NodeKeyKind};
+use crate::graph::{KnowledgeGraph, NodeKeyGuard, NodeKeyKind};
 use kglite_core::api::embeddings::{EmbedError, EmbedHooks, EmbedMode};
 use kglite_core::api::io as file;
 use kglite_core::api::GraphRead;
@@ -35,17 +35,10 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let entries = marshal_embedding_batch(embeddings)?;
-        let g = get_graph_mut(&mut self.inner);
-        let report = kglite_core::api::embeddings::set_embeddings(
-            g,
-            node_type,
-            text_column,
-            metric,
-            entries,
-        )
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-
-        self.commit_wal()?;
+        let report = self.logged_write(|g| {
+            kglite_core::api::embeddings::set_embeddings(g, node_type, text_column, metric, entries)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })?;
 
         let result = PyDict::new(py);
         result.set_item("embeddings_stored", report.embeddings_stored)?;
@@ -66,17 +59,10 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let entries = marshal_embedding_batch(embeddings)?;
-        let g = get_graph_mut(&mut self.inner);
-        let report = kglite_core::api::embeddings::add_embeddings(
-            g,
-            node_type,
-            text_column,
-            metric,
-            entries,
-        )
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-
-        self.commit_wal()?;
+        let report = self.logged_write(|g| {
+            kglite_core::api::embeddings::add_embeddings(g, node_type, text_column, metric, entries)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })?;
 
         let result = PyDict::new(py);
         result.set_item("embeddings_stored", report.embeddings_stored)?;
@@ -241,11 +227,10 @@ impl KnowledgeGraph {
         };
         self.check_durable_owner()?;
         let keys = relationship_keys.unwrap_or_default();
-        let g = crate::graph::get_graph_mut(&mut self.inner);
-        let report = g
-            .copy_embeddings_with_relationships_from(&src_arc, &keys)
-            .map_err(crate::error_py::ArgumentError::new_err)?;
-        self.commit_wal()?;
+        let report = self.logged_write(|g| {
+            g.copy_embeddings_with_relationships_from(&src_arc, &keys)
+                .map_err(crate::error_py::ArgumentError::new_err)
+        })?;
         let d = PyDict::new(py);
         d.set_item("stores_copied", report.stores_copied)?;
         d.set_item("vectors_copied", report.vectors_copied)?;
@@ -331,14 +316,10 @@ impl KnowledgeGraph {
         node_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
-        self.check_durable_owner()?;
-        kglite_core::api::embeddings::remove_embeddings(
-            get_graph_mut(&mut self.inner),
-            node_type,
-            text_column,
-        )
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.commit_wal()
+        self.logged_write(|g| {
+            kglite_core::api::embeddings::remove_embeddings(g, node_type, text_column)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })
     }
 
     /// Export node and relationship embeddings to a standalone .kgle file.
@@ -399,10 +380,9 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         let keys = relationship_keys.unwrap_or_default();
-        let g = get_graph_mut(&mut self.inner);
-        let stats =
-            file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)?;
-        self.commit_wal()?;
+        let stats = self.logged_write(|g| {
+            file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)
+        })?;
 
         // Surface the silent-drop cases as a UserWarning: visible by default,
         // still suppressible via the standard `warnings` module.
@@ -696,20 +676,21 @@ impl KnowledgeGraph {
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
         };
-        let outcome = kglite_core::api::embeddings::embed_property(
-            &mut self.inner,
-            node_type,
-            text_column,
-            mode,
-            model.as_ref(),
-            &hooks,
-            metric,
-        );
-        if let Some(bar) = progress_bar.borrow().as_ref() {
-            let _ = bar.call_method0("close");
-        }
-        let outcome = outcome.map_err(|error| embed_error(error, node_type, text_column))?;
-        self.commit_wal()?;
+        let outcome = self.logged_write_lazy(|inner| {
+            let outcome = kglite_core::api::embeddings::embed_property(
+                inner,
+                node_type,
+                text_column,
+                mode,
+                model.as_ref(),
+                &hooks,
+                metric,
+            );
+            if let Some(bar) = progress_bar.borrow().as_ref() {
+                let _ = bar.call_method0("close");
+            }
+            outcome.map_err(|error| embed_error(error, node_type, text_column))
+        })?;
         let result = PyDict::new(py);
         result.set_item("embedded", outcome.embedded)?;
         result.set_item("skipped", outcome.skipped)?;
@@ -761,11 +742,9 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         auto_refresh_limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let g = get_graph_mut(&mut self.inner);
         // Build off the GIL — pure CPU over the contiguous vector buffer.
-        let report = py
-            .detach(|| {
+        let report = self.logged_write(|g| {
+            py.detach(|| {
                 kglite_core::api::embeddings::build_vector_index(
                     g,
                     node_type,
@@ -777,9 +756,8 @@ impl KnowledgeGraph {
                     auto_refresh_limit,
                 )
             })
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-
-        self.commit_wal()?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })?;
 
         let result = PyDict::new(py);
         result.set_item("indexed", report.indexed)?;
@@ -795,14 +773,13 @@ impl KnowledgeGraph {
         node_type: &str,
         text_column: &str,
     ) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let dropped = kglite_core::api::embeddings::drop_vector_index(
-            get_graph_mut(&mut self.inner),
-            node_type,
-            text_column,
-        );
-        self.commit_wal()?;
-        Ok(dropped)
+        self.logged_write(|g| {
+            Ok(kglite_core::api::embeddings::drop_vector_index(
+                g,
+                node_type,
+                text_column,
+            ))
+        })
     }
 
     /// Whether an HNSW index is currently built over a node embedding store.

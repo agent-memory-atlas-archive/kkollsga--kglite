@@ -3,7 +3,7 @@
 // PyO3 methods for timeseries operations on KnowledgeGraph.
 
 use crate::datatypes::py_in;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use chrono::NaiveDate;
 use kglite_core::api::timeseries::{NodeTimeseries, TimeseriesConfig};
 use pyo3::prelude::*;
@@ -31,19 +31,18 @@ impl KnowledgeGraph {
     ) -> PyResult<()> {
         kglite_core::api::timeseries::validate_resolution(&resolution)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.check_durable_owner()?;
-
-        let graph = get_graph_mut(&mut self.inner);
-        graph.set_timeseries_config(
-            &node_type,
-            TimeseriesConfig {
-                resolution,
-                channels: channels.unwrap_or_default(),
-                units: units.unwrap_or_default(),
-                bin_type,
-            },
-        );
-        self.commit_wal()
+        self.logged_write(|graph| {
+            graph.set_timeseries_config(
+                &node_type,
+                TimeseriesConfig {
+                    resolution,
+                    channels: channels.unwrap_or_default(),
+                    units: units.unwrap_or_default(),
+                    bin_type,
+                },
+            );
+            Ok(())
+        })
     }
 
     /// Get timeseries configuration for a node type, or all types.
@@ -87,21 +86,19 @@ impl KnowledgeGraph {
 
         kglite_core::api::timeseries::validate_keys_sorted(&date_keys)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.check_durable_owner()?;
+        self.logged_write(|graph| {
+            let id_val = py_in::py_value_to_value(node_id)?;
+            let node_idx = find_node_by_id(graph, &id_val)?;
 
-        let graph = get_graph_mut(&mut self.inner);
-        let id_val = py_in::py_value_to_value(node_id)?;
-        let node_idx = find_node_by_id(graph, &id_val)?;
-
-        graph.set_node_timeseries(
-            node_idx,
-            NodeTimeseries {
-                keys: date_keys,
-                channels: HashMap::new(),
-            },
-        );
-
-        self.commit_wal()
+            graph.set_node_timeseries(
+                node_idx,
+                NodeTimeseries {
+                    keys: date_keys,
+                    channels: HashMap::new(),
+                },
+            );
+            Ok(())
+        })
     }
 
     /// Add a timeseries channel to a node.
@@ -115,18 +112,15 @@ impl KnowledgeGraph {
         channel_name: String,
         values: Vec<f64>,
     ) -> PyResult<()> {
-        self.check_durable_owner()?;
-        {
-            let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
-            let graph = get_graph_mut(&mut self.inner);
+        self.logged_write(|graph| {
+            let _arena_guard = graph.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
             let id_val = py_in::py_value_to_value(node_id)?;
             let node_idx = find_node_by_id(graph, &id_val)?;
 
             graph
                 .add_timeseries_channel(node_idx, channel_name, values)
-                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        }
-        self.commit_wal()
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })
     }
 
     /// Bulk-load timeseries data from a DataFrame.
@@ -258,85 +252,21 @@ impl KnowledgeGraph {
             groups.entry(key).or_default().push(i);
         }
 
-        // Build ID index for this node type
-        let graph = get_graph_mut(&mut self.inner);
-        graph.build_id_index(&node_type);
-
-        let mut nodes_loaded = 0usize;
-        let mut total_records = 0usize;
-
-        for (fk_str, row_indices) in &groups {
-            // Look up node by FK value (try as string, int, or unique_id)
-            let node_idx = {
-                let id_str = crate::datatypes::values::Value::String(fk_str.clone());
-                if let Some(idx) = graph.lookup_by_id_normalized(&node_type, &id_str) {
-                    idx
-                } else if let Ok(n) = fk_str.parse::<i64>() {
-                    let id_int = crate::datatypes::values::Value::Int64(n);
-                    if let Some(idx) = graph.lookup_by_id_normalized(&node_type, &id_int) {
-                        idx
-                    } else {
-                        continue; // No matching node
-                    }
-                } else {
-                    continue; // No matching node
-                }
-            };
-
-            // Sort row indices by date key
-            let mut sorted_rows: Vec<usize> = row_indices.clone();
-            sorted_rows.sort_by(|&a, &b| date_keys[a].cmp(&date_keys[b]));
-
-            // Build NaiveDate keys
-            let keys: Vec<NaiveDate> = sorted_rows.iter().map(|&ri| date_keys[ri]).collect();
-
-            // Build channels
-            let mut channels_data: HashMap<String, Vec<f64>> = HashMap::new();
-            for (ch_name, col) in &value_cols {
-                let values: Vec<f64> = sorted_rows.iter().map(|&ri| col[ri]).collect();
-                channels_data.insert(ch_name.clone(), values);
-            }
-
-            graph.set_node_timeseries(
-                node_idx,
-                NodeTimeseries {
-                    keys,
-                    channels: channels_data,
+        // Build the ID index and attach the series
+        let (nodes_loaded, total_records) = self.logged_write(|graph| {
+            Ok(apply_timeseries_batch(
+                graph,
+                TimeseriesBatch {
+                    node_type: &node_type,
+                    groups: &groups,
+                    date_keys: &date_keys,
+                    value_cols: &value_cols,
+                    channel_map: &channel_map,
+                    units,
+                    resolution: resolved_resolution,
                 },
-            );
-
-            nodes_loaded += 1;
-            total_records += sorted_rows.len();
-        }
-
-        // Auto-configure / update TimeseriesConfig
-        let channel_names: Vec<String> = channel_map.iter().map(|(n, _)| n.clone()).collect();
-        let existing = graph.timeseries_configs.get(&node_type);
-        let mut merged_channels = existing.map(|c| c.channels.clone()).unwrap_or_default();
-        for ch in &channel_names {
-            if !merged_channels.contains(ch) {
-                merged_channels.push(ch.clone());
-            }
-        }
-        let mut merged_units = existing.map(|c| c.units.clone()).unwrap_or_default();
-        if let Some(u) = units {
-            for (k, v) in u {
-                merged_units.insert(k, v);
-            }
-        }
-        let bin_type = existing.and_then(|c| c.bin_type.clone());
-
-        graph.set_timeseries_config(
-            &node_type,
-            TimeseriesConfig {
-                resolution: resolved_resolution,
-                channels: merged_channels,
-                units: merged_units,
-                bin_type,
-            },
-        );
-
-        self.commit_wal()?;
+            ))
+        })?;
 
         // Return summary dict
         let result = PyDict::new(py);
@@ -526,4 +456,110 @@ fn find_node_by_id_readonly(graph: &DirGraph, id: &Value) -> PyResult<NodeIndex>
         "No node found with id {:?}",
         id
     )))
+}
+
+/// One `add_timeseries` call's converted data, owned by the Rust side.
+struct TimeseriesBatch<'a> {
+    node_type: &'a str,
+    groups: &'a HashMap<String, Vec<usize>>,
+    date_keys: &'a [NaiveDate],
+    value_cols: &'a [(String, Vec<f64>)],
+    channel_map: &'a [(String, String)],
+    units: Option<HashMap<String, String>>,
+    resolution: String,
+}
+
+/// Attach each FK group's series to its node, then merge the channels and
+/// units into the type's config. Returns `(nodes_loaded, total_records)`.
+fn apply_timeseries_batch(
+    graph: &mut kglite_core::api::DirGraph,
+    batch: TimeseriesBatch<'_>,
+) -> (usize, usize) {
+    let TimeseriesBatch {
+        node_type,
+        groups,
+        date_keys,
+        value_cols,
+        channel_map,
+        units,
+        resolution,
+    } = batch;
+
+    graph.build_id_index(node_type);
+
+    let mut nodes_loaded = 0usize;
+    let mut total_records = 0usize;
+
+    for (fk_str, row_indices) in groups {
+        // Look up node by FK value (try as string, int, or unique_id)
+        let node_idx = {
+            let id_str = crate::datatypes::values::Value::String(fk_str.clone());
+            if let Some(idx) = graph.lookup_by_id_normalized(node_type, &id_str) {
+                idx
+            } else if let Ok(n) = fk_str.parse::<i64>() {
+                let id_int = crate::datatypes::values::Value::Int64(n);
+                if let Some(idx) = graph.lookup_by_id_normalized(node_type, &id_int) {
+                    idx
+                } else {
+                    continue; // No matching node
+                }
+            } else {
+                continue; // No matching node
+            }
+        };
+
+        // Sort row indices by date key
+        let mut sorted_rows: Vec<usize> = row_indices.clone();
+        sorted_rows.sort_by(|&a, &b| date_keys[a].cmp(&date_keys[b]));
+
+        // Build NaiveDate keys
+        let keys: Vec<NaiveDate> = sorted_rows.iter().map(|&ri| date_keys[ri]).collect();
+
+        // Build channels
+        let mut channels_data: HashMap<String, Vec<f64>> = HashMap::new();
+        for (ch_name, col) in value_cols {
+            let values: Vec<f64> = sorted_rows.iter().map(|&ri| col[ri]).collect();
+            channels_data.insert(ch_name.clone(), values);
+        }
+
+        graph.set_node_timeseries(
+            node_idx,
+            NodeTimeseries {
+                keys,
+                channels: channels_data,
+            },
+        );
+
+        nodes_loaded += 1;
+        total_records += sorted_rows.len();
+    }
+
+    // Auto-configure / update TimeseriesConfig
+    let channel_names: Vec<String> = channel_map.iter().map(|(n, _)| n.clone()).collect();
+    let existing = graph.timeseries_configs.get(node_type);
+    let mut merged_channels = existing.map(|c| c.channels.clone()).unwrap_or_default();
+    for ch in &channel_names {
+        if !merged_channels.contains(ch) {
+            merged_channels.push(ch.clone());
+        }
+    }
+    let mut merged_units = existing.map(|c| c.units.clone()).unwrap_or_default();
+    if let Some(u) = units {
+        for (k, v) in u {
+            merged_units.insert(k, v);
+        }
+    }
+    let bin_type = existing.and_then(|c| c.bin_type.clone());
+
+    graph.set_timeseries_config(
+        node_type,
+        TimeseriesConfig {
+            resolution,
+            channels: merged_channels,
+            units: merged_units,
+            bin_type,
+        },
+    );
+
+    (nodes_loaded, total_records)
 }

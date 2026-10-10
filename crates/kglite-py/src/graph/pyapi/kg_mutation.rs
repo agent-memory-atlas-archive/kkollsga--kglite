@@ -9,9 +9,8 @@ use crate::datatypes::py_in;
 use crate::datatypes::values::{DataFrame, Value};
 use crate::graph::languages::cypher;
 use crate::graph::{
-    get_graph_mut, parse_inline_timeseries, parse_spatial_column_types,
-    parse_temporal_column_types, resolve_noderefs, EmbeddingColumnData, InlineTimeseriesConfig,
-    KnowledgeGraph, TimeSpec,
+    parse_inline_timeseries, parse_spatial_column_types, parse_temporal_column_types,
+    resolve_noderefs, EmbeddingColumnData, InlineTimeseriesConfig, KnowledgeGraph, TimeSpec,
 };
 use kglite_core::api::mutation::{IdenticalRows, NodeOperationReport, OperationReport};
 use kglite_core::api::DirGraph;
@@ -368,11 +367,9 @@ fn write_connections(
         names.extend(frame_names.iter().map(String::as_str));
         validate_interner_names(&inner_clone, names)?;
 
-        // Drop the Arc clone so Arc::make_mut in get_graph_mut doesn't
-        // need to deep-copy the entire graph (refcount goes back to 1).
+        // Drop the Arc clone so the write below doesn't need to deep-copy
+        // the entire graph (refcount goes back to 1).
         drop(inner_clone);
-
-        let graph = get_graph_mut(&mut kg.inner);
 
         // Everything past this point is pure Rust — run off-GIL.
         let batch = ConnectionBatch {
@@ -386,13 +383,15 @@ fn write_connections(
             conflict_handling,
             identical_rows,
         };
-        let result = detach_bulk_write(py, graph, |graph| {
-            graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
-                batch.apply(graph, replace, df_result)
-            })
+        let result = kg.logged_write_with_cursor(|graph, cursor| {
+            let result = detach_bulk_write(py, graph, |graph| {
+                graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
+                    batch.apply(graph, replace, df_result)
+                })
+            })?;
+            cursor.selection.clear();
+            Ok(result)
         })?;
-
-        kg.cursor.selection.clear();
         return finish_connection_write(kg, &result, &connection_type, on_invalid);
     }
 
@@ -428,51 +427,52 @@ fn write_connections(
     validate_interner_names(&kg.inner, names)?;
 
     refuse_convention_without_interval((convention, empty_when), temporal_cfg.as_ref())?;
-    let graph = get_graph_mut(&mut kg.inner);
-    let declaration = temporal_cfg
-        .map(|cfg| {
-            let target = kglite_core::api::temporal::TemporalTarget::Relationship {
-                rel_type: connection_type.clone(),
-                source_type: Some(source_type.clone()),
-            };
-            kglite_core::api::temporal::declare_from_column_types(
-                graph,
-                target,
-                &cfg.valid_from,
-                &cfg.valid_to,
-                (convention, empty_when),
-                &df_result,
-            )
-        })
-        .transpose()
-        .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
+    let (result, declared) = kg.logged_write_with_cursor(|graph, cursor| {
+        let declaration = temporal_cfg
+            .map(|cfg| {
+                let target = kglite_core::api::temporal::TemporalTarget::Relationship {
+                    rel_type: connection_type.clone(),
+                    source_type: Some(source_type.clone()),
+                };
+                kglite_core::api::temporal::declare_from_column_types(
+                    graph,
+                    target,
+                    &cfg.valid_from,
+                    &cfg.valid_to,
+                    (convention, empty_when),
+                    &df_result,
+                )
+            })
+            .transpose()
+            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
-    // The converted frame is pure Rust — apply the batch off-GIL.
-    let batch = ConnectionBatch {
-        connection_type: connection_type.clone(),
-        source_type,
-        source_id_field,
-        target_type,
-        target_id_field,
-        source_title_field,
-        target_title_field,
-        conflict_handling,
-        identical_rows,
-    };
-    let result = detach_bulk_write(py, graph, |graph| {
-        graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
-            batch.apply(graph, replace, df_result)
-        })
-    });
-    let (result, declared) = finish_declaration(py, graph, declaration, result)?;
+        // The converted frame is pure Rust — apply the batch off-GIL.
+        let batch = ConnectionBatch {
+            connection_type: connection_type.clone(),
+            source_type,
+            source_id_field,
+            target_type,
+            target_id_field,
+            source_title_field,
+            target_title_field,
+            conflict_handling,
+            identical_rows,
+        };
+        let result = detach_bulk_write(py, graph, |graph| {
+            graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
+                batch.apply(graph, replace, df_result)
+            })
+        });
+        let (result, declared) = finish_declaration(py, graph, declaration, result)?;
 
-    kg.cursor.selection.clear();
+        cursor.selection.clear();
 
-    // Disk mode: build CSR from pending edges so queries work immediately
-    let graph = get_graph_mut(&mut kg.inner);
-    graph
-        .ensure_disk_edges_built()
-        .map_err(pyo3::exceptions::PyOSError::new_err)?;
+        // Disk mode: build CSR from pending edges so queries work immediately
+        graph
+            .ensure_disk_edges_built()
+            .map_err(pyo3::exceptions::PyOSError::new_err)?;
+        Ok((result, declared))
+    })?;
 
     let report = finish_connection_write(kg, &result, &connection_type, on_invalid)?;
     declared.map(|()| report)
@@ -530,18 +530,15 @@ impl ConnectionBatch {
     }
 }
 
-/// Shared tail of both `write_connections` paths: make the edges durable, file
-/// the operation report, and marshal it for Python.
-///
-/// Shared by both paths so the WAL flush — the step most easily forgotten —
-/// lives in one place rather than two that must stay in sync.
+/// Shared tail of both `write_connections` paths: file the operation report
+/// and marshal it for Python. The edges are already durable — both paths write
+/// through `logged_write_with_cursor`.
 fn finish_connection_write(
     kg: &mut KnowledgeGraph,
     result: &kglite_core::api::mutation::ConnectionOperationReport,
     connection_type: &str,
     on_invalid: OnInvalid,
 ) -> PyResult<Py<PyAny>> {
-    kg.commit_wal()?;
     kg.add_report(OperationReport::ConnectionOperation(result.clone()));
     KnowledgeGraph::connection_report_to_py(result, connection_type, on_invalid)
 }
@@ -1357,81 +1354,87 @@ impl KnowledgeGraph {
         }
         validate_interner_names(&self.inner, names)?;
 
-        let graph = get_graph_mut(&mut self.inner);
         refuse_convention_without_interval(
             (convention, empty_when),
             converted.temporal_cfg.as_ref(),
         )?;
-        // Every refusal comes before the declaration: once declared, only
-        // `finish_declaration` may end the call. Everything after the write is
-        // infallible, or a raise would leave the rows in memory but out of the
-        // write-ahead log.
-        let timeseries = parsed
-            .ts_config
-            .map(|cfg| prepare_timeseries(py, data, &unique_id_field, cfg))
-            .transpose()?
-            .flatten();
-        // The load's empty-interval warning, widened to the labels it stamps
-        // when it stamps any; it then replaces the one `add_nodes` reports.
-        let mut labelled_warning = None;
-        let labels = labels
-            .as_ref()
-            .filter(|list| !list.is_empty())
-            .map(|list| {
-                // The labels land after the rows, so a declared validity
-                // interval on one judges the rows now, before any is written.
-                let stamped: Vec<&str> = list.iter().map(String::as_str).collect();
-                labelled_warning = kglite_core::api::temporal::check_labelled_load(
+        let (result, declared, labelled_warning) =
+            self.logged_write_with_cursor(|graph, cursor| {
+                // Every refusal comes before the declaration: once declared, only
+                // `finish_declaration` may end the call. Everything after the write is
+                // infallible, or a raise would leave the rows in memory but out of the
+                // write-ahead log.
+                let timeseries = parsed
+                    .ts_config
+                    .map(|cfg| prepare_timeseries(py, data, &unique_id_field, cfg))
+                    .transpose()?
+                    .flatten();
+                // The load's empty-interval warning, widened to the labels it stamps
+                // when it stamps any; it then replaces the one `add_nodes` reports.
+                let mut labelled_warning = None;
+                let labels = labels
+                    .as_ref()
+                    .filter(|list| !list.is_empty())
+                    .map(|list| {
+                        // The labels land after the rows, so a declared validity
+                        // interval on one judges the rows now, before any is written.
+                        let stamped: Vec<&str> = list.iter().map(String::as_str).collect();
+                        labelled_warning = kglite_core::api::temporal::check_labelled_load(
+                            graph,
+                            &converted.df,
+                            (&node_type, &unique_id_field),
+                            conflict_handling.as_deref(),
+                            &stamped,
+                        )
+                        .map_err(|e| {
+                            crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                        })?;
+                        prepare_batch_labels(graph, data, &unique_id_field, list)
+                    })
+                    .transpose()?;
+                let declaration = converted
+                    .temporal_cfg
+                    .map(|cfg| {
+                        kglite_core::api::temporal::declare_from_column_types(
+                            graph,
+                            kglite_core::api::temporal::TemporalTarget::Node(node_type.clone()),
+                            &cfg.valid_from,
+                            &cfg.valid_to,
+                            (convention, empty_when),
+                            &converted.df,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|e| {
+                        crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                    })?;
+                let result = apply_node_batch(
+                    py,
                     graph,
-                    &converted.df,
-                    (&node_type, &unique_id_field),
-                    conflict_handling.as_deref(),
-                    &stamped,
-                )
-                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
-                prepare_batch_labels(graph, data, &unique_id_field, list)
-            })
-            .transpose()?;
-        let declaration = converted
-            .temporal_cfg
-            .map(|cfg| {
-                kglite_core::api::temporal::declare_from_column_types(
-                    graph,
-                    kglite_core::api::temporal::TemporalTarget::Node(node_type.clone()),
-                    &cfg.valid_from,
-                    &cfg.valid_to,
-                    (convention, empty_when),
-                    &converted.df,
-                )
-            })
-            .transpose()
-            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
-        let result = apply_node_batch(
-            py,
-            graph,
-            NodeBatchInput {
-                df: converted.df,
-                node_type: node_type.clone(),
-                unique_id_field: unique_id_field.clone(),
-                node_title_field,
-                conflict_handling,
-            },
-            (git_sha, modified_by),
-        );
-        let (result, declared) = finish_declaration(py, graph, declaration, result)?;
-        if let Some(cfg) = converted.spatial_cfg {
-            graph.set_spatial_config(&node_type, cfg);
-        }
-        store_extracted_embeddings(graph, &node_type, &embedding_data);
-        if let Some(prepared) = timeseries {
-            apply_timeseries(py, graph, &node_type, prepared);
-        }
-        if let Some(prepared) = &labels {
-            apply_batch_labels(graph, &node_type, prepared);
-        }
+                    NodeBatchInput {
+                        df: converted.df,
+                        node_type: node_type.clone(),
+                        unique_id_field: unique_id_field.clone(),
+                        node_title_field,
+                        conflict_handling,
+                    },
+                    (git_sha, modified_by),
+                );
+                let (result, declared) = finish_declaration(py, graph, declaration, result)?;
+                if let Some(cfg) = converted.spatial_cfg {
+                    graph.set_spatial_config(&node_type, cfg);
+                }
+                store_extracted_embeddings(graph, &node_type, &embedding_data);
+                if let Some(prepared) = timeseries {
+                    apply_timeseries(py, graph, &node_type, prepared);
+                }
+                if let Some(prepared) = &labels {
+                    apply_batch_labels(graph, &node_type, prepared);
+                }
 
-        self.cursor.selection.clear();
-        self.commit_wal()?;
+                cursor.selection.clear();
+                Ok((result, declared, labelled_warning))
+            })?;
         self.add_report(OperationReport::NodeOperation(result.clone()));
         declared?;
         crate::graph::warn_all(py, &load_warnings(&result, labelled_warning))?;
@@ -1454,7 +1457,7 @@ impl KnowledgeGraph {
         // (self-extend) hits the `&mut self` borrow already held by this
         // call, so `try_borrow` fails — fall back to cloning self's own
         // Arc. Either way `source_arc` keeps the original DirGraph alive,
-        // so the `Arc::make_mut` inside `get_graph_mut` clones on the
+        // so the write below clones on the
         // self-extend path: we read the original and write a fresh copy.
         let source_arc = match other.try_borrow() {
             Ok(other_ref) => Arc::clone(&other_ref.inner),
@@ -1478,13 +1481,13 @@ impl KnowledgeGraph {
             );
         }
 
-        let graph = get_graph_mut(&mut self.inner);
-        let result =
-            kglite_core::api::mutation::extend_graph(graph, &source_arc, conflict_handling)
-                .map_err(|message| bulk_write_err(graph, message))?;
-
-        self.cursor.selection.clear();
-        self.commit_wal()?;
+        let result = self.logged_write_with_cursor(|graph, cursor| {
+            let result =
+                kglite_core::api::mutation::extend_graph(graph, &source_arc, conflict_handling)
+                    .map_err(|message| bulk_write_err(graph, message))?;
+            cursor.selection.clear();
+            Ok(result)
+        })?;
         crate::graph::warn_all(py, &result.warnings)?;
         build_extend_report_dict(py, &result)
     }
@@ -1521,17 +1524,19 @@ impl KnowledgeGraph {
                 target_type.as_str(),
             ],
         )?;
-        let graph = get_graph_mut(&mut self.inner);
-        detach_bulk_write(py, graph, |graph| {
-            kglite_core::api::mutation::check_connections(
-                graph,
-                df,
-                &connection_type,
-                &source_type,
-                &source_id_field,
-                &target_type,
-                &target_id_field,
-            )
+        // A dry run: it writes nothing, so nothing is logged.
+        self.unlogged_write(|graph| {
+            detach_bulk_write(py, graph, |graph| {
+                kglite_core::api::mutation::check_connections(
+                    graph,
+                    df,
+                    &connection_type,
+                    &source_type,
+                    &source_id_field,
+                    &target_type,
+                    &target_id_field,
+                )
+            })
         })
     }
 
@@ -1690,34 +1695,35 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         validate_interner_names(&self.inner, [label])?;
-        let g = get_graph_mut(&mut self.inner);
-        if !g.type_indices.contains_key(node_type) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Node type '{}' does not exist in the graph",
-                node_type
-            )));
-        }
-        g.build_id_index(node_type);
-        let key = g
-            .interner
-            .try_get_or_intern(label)
-            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::from(e)))?;
-        // Resolve ids first, then stamp through the bulk path — the
-        // add_node_label loop this replaces was O(n²) over the id list.
-        let mut missing = 0usize;
-        let mut indices = Vec::with_capacity(ids.len());
-        for item in ids.iter() {
-            let id_val = py_in::py_value_to_value(&item)?;
-            match g.lookup_by_id(node_type, &id_val) {
-                Some(idx) => indices.push(idx),
-                None => missing += 1,
+        let (labelled, skipped, warning) = self.logged_write(|g| {
+            if !g.type_indices.contains_key(node_type) {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Node type '{}' does not exist in the graph",
+                    node_type
+                )));
             }
-        }
-        let warning = kglite_core::api::temporal::check_label_stamp(g, &indices, label)
-            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
-        let (labelled, bulk_skipped) = g.add_node_labels_bulk(&indices, key);
-        let skipped = missing + bulk_skipped;
-        self.commit_wal()?;
+            g.build_id_index(node_type);
+            let key = g
+                .interner
+                .try_get_or_intern(label)
+                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::from(e)))?;
+            // Resolve ids first, then stamp through the bulk path — the
+            // add_node_label loop this replaces was O(n²) over the id list.
+            let mut missing = 0usize;
+            let mut indices = Vec::with_capacity(ids.len());
+            for item in ids.iter() {
+                let id_val = py_in::py_value_to_value(&item)?;
+                match g.lookup_by_id(node_type, &id_val) {
+                    Some(idx) => indices.push(idx),
+                    None => missing += 1,
+                }
+            }
+            let warning = kglite_core::api::temporal::check_label_stamp(g, &indices, label)
+                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
+            let (labelled, bulk_skipped) = g.add_node_labels_bulk(&indices, key);
+            let skipped = missing + bulk_skipped;
+            Ok((labelled, skipped, warning))
+        })?;
         crate::graph::warn_all(py, warning.as_slice())?;
         let result = PyDict::new(py);
         result.set_item("labelled", labelled)?;
@@ -1748,34 +1754,35 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         validate_interner_names(&self.inner, [label])?;
-        let g = get_graph_mut(&mut self.inner);
-        if !g.type_indices.contains_key(node_type) {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Node type '{}' does not exist in the graph",
-                node_type
-            )));
-        }
-        g.build_id_index(node_type);
-        let key = g
-            .interner
-            .try_get_or_intern(label)
-            .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::from(e)))?;
-        let mut removed = 0usize;
-        let mut skipped = 0usize;
-        for item in ids.iter() {
-            let id_val = py_in::py_value_to_value(&item)?;
-            match g.lookup_by_id(node_type, &id_val) {
-                Some(idx) => match g.remove_node_label(idx, key) {
-                    Ok(true) => removed += 1,
-                    Ok(false) => skipped += 1,
-                    Err(e) => {
-                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e));
-                    }
-                },
-                None => skipped += 1,
+        let (removed, skipped) = self.logged_write(|g| {
+            if !g.type_indices.contains_key(node_type) {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Node type '{}' does not exist in the graph",
+                    node_type
+                )));
             }
-        }
-        self.commit_wal()?;
+            g.build_id_index(node_type);
+            let key = g
+                .interner
+                .try_get_or_intern(label)
+                .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::from(e)))?;
+            let mut removed = 0usize;
+            let mut skipped = 0usize;
+            for item in ids.iter() {
+                let id_val = py_in::py_value_to_value(&item)?;
+                match g.lookup_by_id(node_type, &id_val) {
+                    Some(idx) => match g.remove_node_label(idx, key) {
+                        Ok(true) => removed += 1,
+                        Ok(false) => skipped += 1,
+                        Err(e) => {
+                            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(e));
+                        }
+                    },
+                    None => skipped += 1,
+                }
+            }
+            Ok((removed, skipped))
+        })?;
         let result = PyDict::new(py);
         result.set_item("removed", removed)?;
         result.set_item("skipped", skipped)?;
@@ -1820,71 +1827,75 @@ impl KnowledgeGraph {
         let result_dict = PyDict::new(py);
         let mut warnings: Vec<String> = Vec::new();
 
-        for item in nodes.iter() {
-            let spec = item.cast::<PyDict>()?;
+        self.logged_write_with_cursor(|graph, cursor| {
+            for item in nodes.iter() {
+                let spec = item.cast::<PyDict>()?;
 
-            let node_type: String = spec
-                .get_item("node_type")?
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'node_type' in node spec",
+                let node_type: String = spec
+                    .get_item("node_type")?
+                    .ok_or_else(|| {
+                        PyErr::new::<pyo3::exceptions::PyKeyError, _>(
+                            "Missing 'node_type' in node spec",
+                        )
+                    })?
+                    .extract()?;
+                let unique_id_field: String = spec
+                    .get_item("unique_id_field")?
+                    .ok_or_else(|| {
+                        PyErr::new::<pyo3::exceptions::PyKeyError, _>(
+                            "Missing 'unique_id_field' in node spec",
+                        )
+                    })?
+                    .extract()?;
+                let node_title_field: String = spec
+                    .get_item("node_title_field")?
+                    .ok_or_else(|| {
+                        PyErr::new::<pyo3::exceptions::PyKeyError, _>(
+                            "Missing 'node_title_field' in node spec",
+                        )
+                    })?
+                    .extract()?;
+                let data = spec.get_item("data")?.ok_or_else(|| {
+                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(
+                        "Missing 'data' in node spec".to_string(),
+                    ))
+                })?;
+
+                let df_cols = data.getattr("columns")?;
+                let all_columns: Vec<String> = df_cols.extract()?;
+
+                let df_result = py_in::pandas_to_dataframe(
+                    &data,
+                    std::slice::from_ref(&unique_id_field),
+                    &all_columns,
+                    None,
+                )?;
+
+                // Converted frame is pure Rust — apply off-GIL.
+                let report = detach_bulk_write(py, graph, |graph| {
+                    graph.with_write_provenance(
+                        git_sha.as_deref(),
+                        modified_by.as_deref(),
+                        |graph| {
+                            kglite_core::api::mutation::add_nodes(
+                                graph,
+                                df_result,
+                                node_type.clone(),
+                                unique_id_field,
+                                Some(node_title_field),
+                                None,
+                            )
+                        },
                     )
-                })?
-                .extract()?;
-            let unique_id_field: String = spec
-                .get_item("unique_id_field")?
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'unique_id_field' in node spec",
-                    )
-                })?
-                .extract()?;
-            let node_title_field: String = spec
-                .get_item("node_title_field")?
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                        "Missing 'node_title_field' in node spec",
-                    )
-                })?
-                .extract()?;
-            let data = spec.get_item("data")?.ok_or_else(|| {
-                crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(
-                    "Missing 'data' in node spec".to_string(),
-                ))
-            })?;
+                })?;
 
-            let df_cols = data.getattr("columns")?;
-            let all_columns: Vec<String> = df_cols.extract()?;
+                result_dict.set_item(&node_type, report.nodes_created + report.nodes_updated)?;
+                warnings.extend(report.warnings);
+            }
 
-            let df_result = py_in::pandas_to_dataframe(
-                &data,
-                std::slice::from_ref(&unique_id_field),
-                &all_columns,
-                None,
-            )?;
-
-            let graph = get_graph_mut(&mut self.inner);
-
-            // Converted frame is pure Rust — apply off-GIL.
-            let report = detach_bulk_write(py, graph, |graph| {
-                graph.with_write_provenance(git_sha.as_deref(), modified_by.as_deref(), |graph| {
-                    kglite_core::api::mutation::add_nodes(
-                        graph,
-                        df_result,
-                        node_type.clone(),
-                        unique_id_field,
-                        Some(node_title_field),
-                        None,
-                    )
-                })
-            })?;
-
-            result_dict.set_item(&node_type, report.nodes_created + report.nodes_updated)?;
-            warnings.extend(report.warnings);
-        }
-
-        self.cursor.selection.clear();
-        self.commit_wal()?;
+            cursor.selection.clear();
+            Ok(())
+        })?;
         crate::graph::warn_all(py, &warnings)?;
         Ok(result_dict.into())
     }
@@ -1951,6 +1962,7 @@ impl KnowledgeGraph {
         let names = collect_bulk_connection_names(connections, &loaded_types, filter_to_loaded)?;
         validate_interner_names(&self.inner, names.iter().map(String::as_str))?;
 
+        self.logged_write_with_cursor(|graph, cursor| {
         for item in connections.iter() {
             let spec = item.cast::<PyDict>()?;
 
@@ -2029,8 +2041,6 @@ impl KnowledgeGraph {
                 None,
             )?;
 
-            let graph = get_graph_mut(&mut self.inner);
-
             // Converted frame is pure Rust — apply off-GIL.
             let report = detach_bulk_write(py, graph, |graph| {
                 graph.with_write_provenance(git_sha, modified_by, |graph| {
@@ -2054,8 +2064,9 @@ impl KnowledgeGraph {
             warnings.extend(report.warnings);
         }
 
-        self.cursor.selection.clear();
-        self.commit_wal()?;
+        cursor.selection.clear();
+        Ok(())
+        })?;
         crate::graph::warn_all(py, &warnings)?;
         Ok(result_dict.into())
     }

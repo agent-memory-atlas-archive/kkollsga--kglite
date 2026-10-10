@@ -4,14 +4,14 @@
 //! and the SKILL.md dialect all live in core, because the CLI, the MCP server
 //! and any other binding need the identical behaviour. What this file owns is
 //! the marshalling — records to dicts, dicts to `PyErr`s — and the wheel's own
-//! write protocol (`check_durable_owner` → `get_graph_mut` → `commit_wal`),
-//! which no core call can perform on the binding's behalf.
+//! write protocol (`KnowledgeGraph::logged_write`), which no core call can
+//! perform on the binding's behalf.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::error_py::kg_to_pyerr;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::skills::{self, Delivery, SetOutcome, SkillRecord};
 
 /// Marshal one record. `body` is omitted entirely when the caller asked for a
@@ -69,9 +69,7 @@ impl KnowledgeGraph {
             references_tools: references_tools.unwrap_or_default(),
             delivery: Delivery::parse(delivery).map_err(kg_to_pyerr)?,
         };
-        self.check_durable_owner()?;
-        let outcome = skills::set(get_graph_mut(&mut self.inner), &record).map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
+        let outcome = self.logged_write(|g| skills::set(g, &record).map_err(kg_to_pyerr))?;
 
         // Read back rather than echo the argument: what a later `get_skill`
         // returns is what the caller should have been handed here.
@@ -84,20 +82,15 @@ impl KnowledgeGraph {
     /// Remove a skill; False means there was no skill by that name.
     #[pyo3(signature = (name))]
     fn delete_skill(&mut self, name: &str) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let removed = skills::delete(get_graph_mut(&mut self.inner), name).map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| skills::delete(g, name).map_err(kg_to_pyerr))
     }
 
     /// Import SKILL.md files — one file, or every `.md` in a directory.
     #[pyo3(signature = (path))]
     fn import_skills(&mut self, path: &str) -> PyResult<Vec<String>> {
-        self.check_durable_owner()?;
-        let names = skills::import_path(get_graph_mut(&mut self.inner), std::path::Path::new(path))
-            .map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
-        Ok(names)
+        self.logged_write(|g| {
+            skills::import_path(g, std::path::Path::new(path)).map_err(kg_to_pyerr)
+        })
     }
 
     /// Write every skill to a directory as `<name>.md`, creating it if needed.

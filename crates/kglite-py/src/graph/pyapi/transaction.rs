@@ -6,7 +6,6 @@ use crate::graph::languages::cypher;
 use crate::graph::KnowledgeGraph;
 use kglite_core::api::session::CsvImportPolicy;
 use kglite_core::api::session::Transaction as CoreTransaction;
-use kglite_core::api::CowSelection;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::{Bound, IntoPyObjectExt};
@@ -335,27 +334,14 @@ impl Transaction {
                     ),
                 ));
             }
-            kg.check_durable_owner()?;
-            let current_version = kg.inner.version;
-            if current_version != base_version {
-                return Err(crate::error_py::kg_to_pyerr(
-                    crate::error::KgError::TransactionConflict {
-                        base_version,
-                        current_version,
-                    },
-                ));
-            }
-            working.set_version(current_version + 1);
-            kg.inner = Arc::new(working);
-            kg.cursor.selection = CowSelection::new();
             // Durability: one WAL frame for the whole transaction, appended
-            // here and nowhere earlier. `Transaction::cypher` must not log —
-            // its writes are uncommitted and `rollback()` must leave no trace
-            // of them. `take_working` *moves* the working copy, so every op
-            // buffered during the transaction arrives on `kg.inner` intact and
-            // this single flush emits them together, which is exactly the
-            // atomicity the caller asked for.
-            kg.commit_wal()?;
+            // by the publish and nowhere earlier. `Transaction::cypher` must
+            // not log — its writes are uncommitted and `rollback()` must leave
+            // no trace of them. `take_working` *moves* the working copy, so
+            // every op buffered during the transaction arrives intact and the
+            // single flush emits them together, which is exactly the atomicity
+            // the caller asked for.
+            kg.logged_publish(working, base_version)?;
             super::super::warn_all(py, &ontology_warnings)
         })?;
         Ok(())

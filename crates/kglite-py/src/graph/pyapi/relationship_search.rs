@@ -11,7 +11,7 @@ use pyo3::IntoPyObjectExt;
 
 use super::relationship_vectors::tuple_row;
 use crate::datatypes::py_out;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::embeddings::{RelationshipSearchHit, RelationshipSearchOptions};
 
 /// `types=` as a list of names: a single string, a list of strings, or None.
@@ -148,14 +148,14 @@ impl KnowledgeGraph {
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
-        self.check_durable_owner()?;
-        kglite_core::api::embeddings::remove_relationship_embeddings(
-            get_graph_mut(&mut self.inner),
-            relationship_type,
-            text_column,
-        )
-        .map_err(PyValueError::new_err)?;
-        self.commit_wal()
+        self.logged_write(|g| {
+            kglite_core::api::embeddings::remove_relationship_embeddings(
+                g,
+                relationship_type,
+                text_column,
+            )
+            .map_err(PyValueError::new_err)
+        })
     }
 }
 

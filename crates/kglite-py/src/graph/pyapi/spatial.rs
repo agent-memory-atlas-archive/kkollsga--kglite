@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::SpatialConfig;
 use kglite_core::api::{CowSelection, DirGraph, PlanStep, SelectionOperation};
 
@@ -631,9 +631,10 @@ impl KnowledgeGraph {
             }
         }
 
-        self.check_durable_owner()?;
-        get_graph_mut(&mut self.inner).set_spatial_config(&node_type, config);
-        self.commit_wal()
+        self.logged_write(|g| {
+            g.set_spatial_config(&node_type, config);
+            Ok(())
+        })
     }
 
     /// Get spatial configuration for a node type, or all types.

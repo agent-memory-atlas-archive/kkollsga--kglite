@@ -20,7 +20,7 @@ use kglite_core::datatypes::PropMap;
 
 use crate::datatypes::on_invalid::OnInvalid;
 use crate::datatypes::{py_in, py_out};
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 
 fn table_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
     ExecuteOptions {
@@ -151,18 +151,19 @@ impl KnowledgeGraph {
         let query = format!(
             "MATCH (n:{node_type} {{id: $nid}}) SET n.{property} = $rows RETURN count(n) AS c"
         );
-        let graph = get_graph_mut(&mut self.inner);
-        let outcome = execute_mut(graph, &query, &table_opts(&params))
-            .map_err(crate::error_py::kg_to_pyerr)?;
-        if scalar_count(&outcome.result) == 0 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "set_table_property: no {node_type} node with id {node_id}"
-            )));
-        }
-        get_graph_mut(&mut self.inner)
-            .table_property_meta
-            .insert(table_meta_key(node_type, property), meta);
-        self.commit_wal()?;
+        self.logged_write(|graph| {
+            let outcome = execute_mut(graph, &query, &table_opts(&params))
+                .map_err(crate::error_py::kg_to_pyerr)?;
+            if scalar_count(&outcome.result) == 0 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "set_table_property: no {node_type} node with id {node_id}"
+                )));
+            }
+            graph
+                .table_property_meta
+                .insert(table_meta_key(node_type, property), meta);
+            Ok(())
+        })?;
         let _ = py;
         Ok(row_count)
     }

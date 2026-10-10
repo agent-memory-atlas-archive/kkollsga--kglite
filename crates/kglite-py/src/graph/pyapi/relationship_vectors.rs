@@ -10,7 +10,7 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 
 use super::vector::{open_progress_bar, resolve_progress_factory};
 use crate::datatypes::py_in;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::embeddings::{
     EmbedError, EmbedHooks, EmbedMode, RelationshipIngestReport, RelationshipVector,
 };
@@ -135,22 +135,21 @@ impl KnowledgeGraph {
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
         };
-        let g = get_graph_mut(&mut self.inner);
-        let outcome = kglite_core::api::embeddings::embed_relationship_texts(
-            g,
-            relationship_type,
-            text_column,
-            mode,
-            model.as_ref(),
-            &hooks,
-            metric,
-        );
-        if let Some(bar) = progress_bar.borrow().as_ref() {
-            let _ = bar.call_method0("close");
-        }
-        let outcome =
-            outcome.map_err(|error| embed_error(error, relationship_type, text_column))?;
-        self.commit_wal()?;
+        let outcome = self.logged_write(|g| {
+            let outcome = kglite_core::api::embeddings::embed_relationship_texts(
+                g,
+                relationship_type,
+                text_column,
+                mode,
+                model.as_ref(),
+                &hooks,
+                metric,
+            );
+            if let Some(bar) = progress_bar.borrow().as_ref() {
+                let _ = bar.call_method0("close");
+            }
+            outcome.map_err(|error| embed_error(error, relationship_type, text_column))
+        })?;
         let result = PyDict::new(py);
         result.set_item("embedded", outcome.embedded)?;
         result.set_item("skipped", outcome.skipped)?;
@@ -175,10 +174,8 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         auto_refresh_limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let g = get_graph_mut(&mut self.inner);
-        let report = py
-            .detach(|| {
+        let report = self.logged_write(|g| {
+            py.detach(|| {
                 kglite_core::api::embeddings::build_relationship_vector_index(
                     g,
                     relationship_type,
@@ -190,8 +187,8 @@ impl KnowledgeGraph {
                     auto_refresh_limit,
                 )
             })
-            .map_err(PyValueError::new_err)?;
-        self.commit_wal()?;
+            .map_err(PyValueError::new_err)
+        })?;
         let result = PyDict::new(py);
         result.set_item("indexed", report.indexed)?;
         result.set_item("metric", report.metric)?;
@@ -206,15 +203,14 @@ impl KnowledgeGraph {
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let dropped = kglite_core::api::embeddings::drop_relationship_vector_index(
-            get_graph_mut(&mut self.inner),
-            relationship_type,
-            text_column,
-        )
-        .map_err(PyValueError::new_err)?;
-        self.commit_wal()?;
-        Ok(dropped)
+        self.logged_write(|g| {
+            kglite_core::api::embeddings::drop_relationship_vector_index(
+                g,
+                relationship_type,
+                text_column,
+            )
+            .map_err(PyValueError::new_err)
+        })
     }
 
     /// Whether an HNSW index is currently built over a relationship embedding store.
@@ -278,17 +274,17 @@ impl KnowledgeGraph {
         self.check_durable_owner()?;
         let rows = marshal_relationship_rows(args.embeddings, args.method)?;
         let keys = args.relationship_keys.unwrap_or_default();
-        let g = get_graph_mut(&mut self.inner);
-        let report = write(
-            g,
-            args.relationship_type,
-            args.text_column,
-            rows,
-            &keys,
-            args.metric,
-        )
-        .map_err(PyValueError::new_err)?;
-        self.commit_wal()?;
+        let report = self.logged_write(|g| {
+            write(
+                g,
+                args.relationship_type,
+                args.text_column,
+                rows,
+                &keys,
+                args.metric,
+            )
+            .map_err(PyValueError::new_err)
+        })?;
         let result = PyDict::new(py);
         result.set_item("embeddings_stored", report.stored)?;
         result.set_item("dimension", report.dimension)?;

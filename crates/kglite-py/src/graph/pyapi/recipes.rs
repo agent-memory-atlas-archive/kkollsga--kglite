@@ -6,14 +6,14 @@
 //! boot merge and any other binding must reach the same verdict on the same
 //! record. What this file owns is the marshalling — records to dicts,
 //! `parameters` between a Python mapping and `serde_json` — and the wheel's
-//! write protocol (`check_durable_owner` → `get_graph_mut` → `commit_wal`).
+//! write protocol (`KnowledgeGraph::logged_write`).
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::datatypes::{py_in, py_out};
 use crate::error_py::kg_to_pyerr;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::KnowledgeGraph;
 use kglite_core::api::param::{json_value_to_kglite_value, kglite_value_to_json};
 use kglite_core::api::recipes::{self, RecipeRecord, SetOutcome};
 
@@ -111,9 +111,7 @@ impl KnowledgeGraph {
             recipe_description: group_description,
             tool: tool.map(str::to_string),
         };
-        self.check_durable_owner()?;
-        let outcome = recipes::set(get_graph_mut(&mut self.inner), &record).map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
+        let outcome = self.logged_write(|g| recipes::set(g, &record).map_err(kg_to_pyerr))?;
 
         // Read back rather than echo the argument, so what this returns is what
         // a later `get_recipe` will.
@@ -126,21 +124,15 @@ impl KnowledgeGraph {
     /// Remove one recipe query; False means there was nothing stored there.
     #[pyo3(signature = (recipe, name))]
     fn delete_recipe(&mut self, recipe: &str, name: &str) -> PyResult<bool> {
-        self.check_durable_owner()?;
-        let removed =
-            recipes::delete(get_graph_mut(&mut self.inner), recipe, name).map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| recipes::delete(g, recipe, name).map_err(kg_to_pyerr))
     }
 
     /// Import a JSON recipe catalogue, replacing same-keyed queries.
     #[pyo3(signature = (path))]
     fn import_recipes(&mut self, path: &str) -> PyResult<Vec<String>> {
-        self.check_durable_owner()?;
-        let written =
-            recipes::import_path(get_graph_mut(&mut self.inner), std::path::Path::new(path))
-                .map_err(kg_to_pyerr)?;
-        self.commit_wal()?;
+        let written = self.logged_write(|g| {
+            recipes::import_path(g, std::path::Path::new(path)).map_err(kg_to_pyerr)
+        })?;
         Ok(written
             .into_iter()
             .map(|(recipe, name)| format!("{recipe}/{name}"))

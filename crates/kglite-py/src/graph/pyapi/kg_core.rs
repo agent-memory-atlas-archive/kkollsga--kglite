@@ -7,7 +7,8 @@
 use crate::datatypes::{py_in, py_out};
 use crate::graph::languages::cypher;
 use crate::graph::pyapi::transaction::Transaction;
-use crate::graph::{get_graph_mut, KnowledgeGraph};
+use crate::graph::write_gate::lifecycle_graph_mut;
+use crate::graph::KnowledgeGraph;
 use crate::util::EnterKg;
 use kglite_core::api::introspection;
 use kglite_core::api::io;
@@ -247,13 +248,13 @@ impl KnowledgeGraph {
         // histogram so the Cypher planner's fast path for unanchored
         // aggregate queries works. Legacy disk graphs built before v0.7.13
         // won't have the histogram files — this call creates them.
-        {
-            let graph = get_graph_mut(&mut self.inner);
+        self.unlogged_write(|graph| {
             if let kglite_core::api::storage::GraphBackend::Disk(ref mut dg) = graph.graph {
                 py.detach(|| dg.rebuild_peer_count_histogram())
                     .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))?;
             }
-        }
+            Ok::<(), PyErr>(())
+        })?;
 
         let derived = introspection::derive_edge_counts_from_triples(&triples);
 
@@ -267,20 +268,21 @@ impl KnowledgeGraph {
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(std::sync::Arc::new(derived.counts));
 
-        let graph = get_graph_mut(&mut self.inner);
         // A union, not a fill-if-empty: a set an earlier version recorded
         // partially (a names-only type one load then gave a single source
         // type) must learn every source type its stored edges leave, or the
         // shared-relationship ownership rule lets another source type's load
         // duplicate the pairs it shares with them.
-        for (conn_type, (src_types, tgt_types)) in derived.endpoints {
-            let info = graph
-                .connection_type_metadata_mut()
-                .entry(conn_type)
-                .or_default();
-            info.source_types.extend(src_types);
-            info.target_types.extend(tgt_types);
-        }
+        self.unlogged_write(|graph| {
+            for (conn_type, (src_types, tgt_types)) in derived.endpoints {
+                let info = graph
+                    .connection_type_metadata_mut()
+                    .entry(conn_type)
+                    .or_default();
+                info.source_types.extend(src_types);
+                info.target_types.extend(tgt_types);
+            }
+        });
 
         self.inner.set_type_connectivity(triples);
         Ok(())
@@ -617,15 +619,19 @@ impl KnowledgeGraph {
             progress: progress_sink,
         };
 
-        let graph = get_graph_mut(&mut self.inner);
+        // Not logged: this load never reached the write-ahead log, so on a
+        // durable graph it is lost at a crash (known defect, fixed by moving
+        // this call to `logged_write`).
         // Release the GIL during the multi-minute load so Python
         // heartbeat threads (download/build progress monitors) can run.
         // Cancellation: when the progress sink notices a pending SIGINT
         // (Python::check_signals), the loader returns the literal
         // `<cancelled>` sentinel — translate that into the KeyboardInterrupt
         // the user actually expects, instead of a generic RuntimeError.
-        let stats = py
-            .detach(|| kglite_core::api::io::load_ntriples(graph, path, &config))
+        let stats = self
+            .unlogged_write(|graph| {
+                py.detach(|| kglite_core::api::io::load_ntriples(graph, path, &config))
+            })
             .map_err(|e| {
                 if e == "<cancelled>" {
                     PyErr::new::<pyo3::exceptions::PyKeyboardInterrupt, _>(
@@ -787,20 +793,23 @@ impl KnowledgeGraph {
                 durable::checkpoint_prologue(
                     &mut state.wal,
                     state.next_lsn,
-                    get_graph_mut(&mut self.inner),
+                    lifecycle_graph_mut(&mut self.inner),
                 )
                 .map_err(io_error)?;
             }
             if let Err(error) =
                 io::save_graph_with(&mut self.inner, &target.to_string_lossy(), fsync)
             {
-                Arc::make_mut(&mut self.inner).checkpoint_lsn = previous_stamp;
+                lifecycle_graph_mut(&mut self.inner).checkpoint_lsn = previous_stamp;
                 return Err(error);
             }
             if same_target {
                 if let Some(state) = self.lifecycle.durable.as_mut() {
-                    durable::checkpoint_epilogue(&mut state.wal, Arc::make_mut(&mut self.inner))
-                        .map_err(io_error)?;
+                    durable::checkpoint_epilogue(
+                        &mut state.wal,
+                        lifecycle_graph_mut(&mut self.inner),
+                    )
+                    .map_err(io_error)?;
                 }
             } else {
                 // The original WAL still describes its original checkpoint. Truncating
@@ -808,7 +817,7 @@ impl KnowledgeGraph {
                 // publication, so the handoff has no fallible work after the save.
                 if let Some(state) = self.lifecycle.durable.as_mut() {
                     state.wal = target_wal.expect("logging destination prepared above");
-                    kglite_core::api::cdc::drain_at_commit(Arc::make_mut(&mut self.inner));
+                    kglite_core::api::cdc::drain_at_commit(lifecycle_graph_mut(&mut self.inner));
                 }
                 self.lifecycle.writer_lease = target_lease;
                 self.lifecycle.source_path = Some(target);
@@ -845,7 +854,7 @@ impl KnowledgeGraph {
             this.check_durable_owner()?;
             // Apply-then-log: drain anything still buffered so the LSN read
             // below is never ahead of, or behind, the graph captured with it.
-            this.commit_wal()?;
+            this.flush_pending_ops()?;
             let lsn = this
                 .lifecycle
                 .durable
@@ -912,12 +921,12 @@ impl KnowledgeGraph {
         // Drain anything still buffered in the capture layer into a frame
         // before barriering, so `sync()` cannot report success over ops that
         // never reached the log.
-        self.commit_wal()?;
+        self.flush_pending_ops()?;
         let ds = self
             .lifecycle
             .durable
             .as_mut()
-            .expect("durable checked Some above; commit_wal does not clear it");
+            .expect("durable checked Some above; flush_pending_ops does not clear it");
         if ds.level == DurabilityLevel::Full {
             return Ok(());
         }
@@ -949,7 +958,7 @@ impl KnowledgeGraph {
         // Same prep as save(), through the same entry point so the two
         // `.kgl` producers cannot drift: stamp metadata + consolidate the
         // property columns.
-        io::prepare_kgl_write(&mut self.inner);
+        self.unlogged_write_lazy(io::prepare_kgl_write);
         let inner = self.inner.clone();
         let bytes = py
             .detach(move || -> std::io::Result<Vec<u8>> {
@@ -1063,9 +1072,7 @@ impl KnowledgeGraph {
         if !self.inner.graph.is_disk() {
             return Ok(0);
         }
-        let graph = get_graph_mut(&mut self.inner);
-        graph
-            .compact_disk()
+        self.unlogged_write(|graph| graph.compact_disk())
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
@@ -1380,9 +1387,10 @@ impl KnowledgeGraph {
         // Installing the schema installs the UNIQUE constraints it declares, so
         // it fails when existing data already violates one — nothing is changed
         // in that case, so the caller can fix the data and retry.
-        get_graph_mut(&mut slf.inner)
-            .set_schema(schema, mode)
-            .map_err(crate::error_py::kg_to_pyerr)?;
+        slf.unlogged_write(|g| {
+            g.set_schema(schema, mode)
+                .map_err(crate::error_py::kg_to_pyerr)
+        })?;
 
         Ok(slf)
     }
@@ -1400,18 +1408,16 @@ impl KnowledgeGraph {
             ontology_dict.as_any(),
         )?)
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.check_durable_owner()?;
-        let warnings = get_graph_mut(&mut self.inner)
-            .define_ontology(store)
-            .map_err(|e| match e {
+        let warnings = self.logged_write(|g| {
+            g.define_ontology(store).map_err(|e| match e {
                 kglite_core::api::DefineOntologyError::Refused(r) => {
                     crate::error_py::kg_to_pyerr(kglite_core::api::KgError::from(r))
                 }
                 kglite_core::api::DefineOntologyError::Invalid(m) => {
                     PyErr::new::<pyo3::exceptions::PyValueError, _>(m)
                 }
-            })?;
-        self.commit_wal()?;
+            })
+        })?;
         let out = pyo3::types::PyList::empty(py);
         for w in warnings {
             out.append(w)?;
@@ -1432,21 +1438,19 @@ impl KnowledgeGraph {
 
     /// Remove the declared semantic layer entirely.
     fn clear_ontology(&mut self) -> PyResult<()> {
-        self.check_durable_owner()?;
-        get_graph_mut(&mut self.inner)
-            .clear_ontology()
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.commit_wal()
+        self.logged_write(|g| {
+            g.clear_ontology()
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })
     }
 
     /// Materialize declared supertypes as real secondary labels.
     #[pyo3(signature = (adopt=false))]
     fn materialize_ontology(&mut self, py: Python<'_>, adopt: bool) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let report = get_graph_mut(&mut self.inner)
-            .materialize_ontology(adopt)
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.commit_wal()?;
+        let report = self.logged_write(|g| {
+            g.materialize_ontology(adopt)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })?;
         let out = pyo3::types::PyList::empty(py);
         for entry in report {
             let d = PyDict::new(py);
@@ -1461,10 +1465,7 @@ impl KnowledgeGraph {
 
     /// Withdraw every materialized label; returns how many were removed.
     fn dematerialize_ontology(&mut self) -> PyResult<usize> {
-        self.check_durable_owner()?;
-        let removed = get_graph_mut(&mut self.inner).dematerialize_ontology();
-        self.commit_wal()?;
-        Ok(removed)
+        self.logged_write(|g| Ok(g.dematerialize_ontology()))
     }
 
     /// Drift report per managed label (extra/missing vs the declared closure).
@@ -1607,7 +1608,7 @@ impl KnowledgeGraph {
         // The scan is `&mut` in core because it rebuilds each index to count
         // collisions — an audit, not a read — so it takes the same mutable
         // handle every writer does.
-        let violations = get_graph_mut(&mut self.inner).verify_unique_constraints();
+        let violations = self.unlogged_write(|g| g.verify_unique_constraints());
         let result = PyList::empty(py);
         for violation in violations {
             let entry = PyDict::new(py);
@@ -1645,7 +1646,7 @@ impl KnowledgeGraph {
     ///
     /// Returns this same graph (not a copy), so the call can be chained.
     fn clear_schema(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        get_graph_mut(&mut slf.inner).clear_schema();
+        slf.unlogged_write(|g| g.clear_schema());
         Ok(slf)
     }
 
@@ -1658,7 +1659,7 @@ impl KnowledgeGraph {
         text: &str,
         channel: Option<&str>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        get_graph_mut(&mut slf.inner).set_instructions(text, channel);
+        slf.unlogged_write(|g| g.set_instructions(text, channel));
         Ok(slf)
     }
 
@@ -1872,9 +1873,7 @@ impl KnowledgeGraph {
             let mut this = slf
                 .try_borrow_mut()
                 .map_err(|_| concurrent_access_pyerr())?;
-            this.check_durable_owner()?;
             let embedder_for_opts = this.embedder.clone();
-            let graph = get_graph_mut(&mut this.inner);
 
             let opts = kglite_core::api::session::ExecuteOptions {
                 params: &param_map,
@@ -1899,11 +1898,16 @@ impl KnowledgeGraph {
                 csv_import: CsvImportPolicy::LocalFilesystem,
             };
 
-            let outcome = execute_mut_with_embedder(py, graph, query, &opts)?;
+            // Announce before the commit, so a warning promoted to an error
+            // skips it, as it always has.
+            let outcome = this.logged_write(|graph| {
+                let outcome = execute_mut_with_embedder(py, graph, query, &opts)?;
+                // A CSV string and a DataFrame cannot carry diagnostics, so
+                // this is their only channel.
+                crate::warning_policy::announce(py, outcome.result.diagnostics.as_ref())?;
+                Ok(outcome)
+            })?;
             let result = outcome.result;
-            // Announce before the output shape is chosen — a CSV string and a
-            // DataFrame cannot carry diagnostics, so this is their only channel.
-            crate::warning_policy::announce(py, result.diagnostics.as_ref())?;
             let output_csv = outcome.output_format == cypher::OutputFormat::Csv;
 
             if outcome.explain {
@@ -1911,7 +1915,7 @@ impl KnowledgeGraph {
                 return Py::new(py, view).map(|v| v.into_any());
             }
 
-            this.after_mutation(result.stats.as_ref())?;
+            this.after_logged_cypher(result.stats.as_ref());
 
             return if output_csv {
                 result.to_csv().into_py_any(py)
