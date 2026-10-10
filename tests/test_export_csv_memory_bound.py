@@ -7,6 +7,18 @@ written is ~95 MB; a writer that held a type's text (the old one built one
 ``String`` per type) would add at least that much, while the batch-bounded
 writer adds a few MB. Only Darwin asserts the ceiling (the child's RSS on other
 platforms includes allocator behaviour this test has not been calibrated on).
+
+The meter is resident size, and a resident-size baseline taken while part of
+the graph is swapped out or compressed reads the pages the export then faults
+back in as export growth (100+ MB against ~3 MB when idle, seen under 4.8 GB of
+swap). So the child reads every column the export reads (a scan, not an
+export: a warm-up export would leave the allocator holding the very memory a
+materialising writer needs, and hide it) before it reports ready, and the
+baseline is the highest resident size over a settle window rather than one
+sample. Footprint (``phys_footprint``) is no substitute: it charges compressed
+pages at their compressed size, and a whole-type ``String`` of CSV text
+compresses ~3x, which kept a deliberately materialising writer under the
+ceiling.
 """
 
 import os
@@ -37,6 +49,9 @@ CHILD = textwrap.dedent(
     })
     g.add_nodes(df, "Person", "id", "name")
     del df
+    # Fault in every column the export reads (id, title, salary) before the
+    # parent takes its baseline.
+    g.cypher("MATCH (p:Person) RETURN sum(p.id) AS i, sum(size(p.title)) AS t, sum(p.salary) AS s").to_list()
     print("READY", flush=True)
     time.sleep(1.5)
     summary = g.export_csv(sys.argv[1])
@@ -58,8 +73,11 @@ def test_export_footprint_is_bounded_by_the_batch(tmp_path):
     proc = psutil.Process(child.pid)
     try:
         assert child.stdout.readline().strip() == "READY"
-        time.sleep(0.5)
-        baseline = proc.memory_info().rss
+        baseline = 0
+        settle_until = time.time() + 1.0
+        while time.time() < settle_until:
+            baseline = max(baseline, proc.memory_info().rss)
+            time.sleep(0.02)
         peak = baseline
         done = None
         deadline = time.time() + 100

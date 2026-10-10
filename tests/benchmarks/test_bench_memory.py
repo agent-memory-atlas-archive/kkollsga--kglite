@@ -386,7 +386,20 @@ _KHOP_PEAK_PROBE = textwrap.dedent(
     del src, dst, repeated
     gc.collect()
     kglite.trim_memory()
-    time.sleep(0.4)
+
+    def settled_footprint():
+        # The purge is asynchronous and its pace follows machine load: a fixed
+        # sleep leaves a baseline that is still falling under contention, which
+        # shrinks the delta below the measurable floor. Wait for ten
+        # consecutive readings (50 ms apart) within half a megabyte.
+        recent = []
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            recent = (recent + [footprint_mb()])[-10:]
+            if len(recent) == 10 and max(recent) - min(recent) < 0.5:
+                break
+            time.sleep(0.05)
+        return recent[-1]
 
     samples = []
     stop = threading.Event()
@@ -396,7 +409,7 @@ _KHOP_PEAK_PROBE = textwrap.dedent(
             samples.append(footprint_mb())
             time.sleep(0.001)
 
-    baseline = footprint_mb()
+    baseline = settled_footprint()
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
     rows = graph.cypher(query, params={"ids": ids}).to_list()
@@ -412,6 +425,11 @@ _KHOP_PEAK_PROBE = textwrap.dedent(
 #: maximum would understate the peak, in the reassuring direction.
 _MIN_PROBE_SAMPLES = 20
 
+#: A single probe reading is accepted when it sits between these fractions of
+#: the measurable floor and the absolute ceiling; otherwise it is retaken.
+_CLEAR_LOW = 1.2
+_CLEAR_HIGH = 0.6
+
 requires_footprint = pytest.mark.skipif(
     sys.platform != "darwin" and not sys.platform.startswith("linux"),
     reason="the peak probe reads ri_phys_footprint (macOS) or /proc/self/statm (Linux)",
@@ -426,6 +444,19 @@ def _khop_peak_delta_mb(seed_count: int, spelling: str) -> tuple[float, int]:
     the first size absorb the second, understating the growth -- a failure in
     the reassuring direction.
     """
+    readings = [_khop_probe_once(seed_count, spelling)]
+    # A reading near a threshold may be the machine, not the engine: under
+    # memory pressure or CPU contention one run can land either side of the
+    # peak (a baseline still falling, a watcher thread starved of the GIL).
+    # Take two more and report the median; a regression moves all three.
+    if not (_CLEAR_LOW * MIN_MEASURABLE_PEAK_MB <= readings[0][0] <= _CLEAR_HIGH * MAX_PEAK_DELTA_MB):
+        readings += [_khop_probe_once(seed_count, spelling) for _ in range(2)]
+        readings.sort()
+    return readings[len(readings) // 2]
+
+
+def _khop_probe_once(seed_count: int, spelling: str) -> tuple[float, int]:
+    """One fresh-process probe: (peak delta in MB, reached-node count)."""
     proc = subprocess.run(
         [sys.executable, "-c", _KHOP_PEAK_PROBE, str(seed_count), spelling],
         capture_output=True,
