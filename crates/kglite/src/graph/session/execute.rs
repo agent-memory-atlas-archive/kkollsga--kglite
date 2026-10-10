@@ -888,29 +888,43 @@ pub(super) struct PreparedQuery {
     pub(super) warnings: Arc<[String]>,
 }
 
-fn plan_scope(
+/// The key this call may look up and later store a plan under, or `None` when
+/// it is uncacheable or is a parameterised statement's first sighting (see
+/// [`cypher::plan_cache::first_sighting`]).
+fn plan_key(
     graph: &DirGraph,
+    query: &str,
     opts: &ExecuteOptions<'_>,
     suppress_default: bool,
-) -> cypher::plan_cache::PlanScope {
-    cypher::plan_cache::PlanScope {
+) -> Option<cypher::plan_cache::PlanKey> {
+    let mut scope = cypher::plan_cache::PlanScope {
         graph_id: graph.graph_id(),
         version: graph.version(),
         schema_locked: graph.schema_locked,
         lazy: opts.lazy_eligible,
         suppress_default,
         valid_time_default: graph.valid_time_default.cache_code(),
+        params: 0,
+    };
+    if !opts.params.is_empty() {
+        if cypher::plan_cache::first_sighting(scope, query, opts.params)? {
+            return None;
+        }
+        scope.params = cypher::plan_cache::param_fingerprint(opts.params)?;
     }
+    Some(scope.key_with(cypher::plan_cache::hash_query(query)))
 }
 
 /// The plan-cache hit path: a hit skips everything below the lookup in
 /// [`prepare`] — parse, validate, the schema pass, optimize. Entries are
 /// stored post lazy-marking for this `lazy_eligible`, so a hit is a pure `Arc`
-/// clone. The caller gates on the `cacheable` predicate.
+/// clone. The caller passes the call's cache key, which exists only for a
+/// cacheable call.
 ///
 /// A hit also skips parameter-presence validation. That is sound because an
-/// entry only exists after the full parsed AST was checked against the same
-/// empty parameter map. A statement that references any parameter errors above
+/// entry only exists after the full parsed AST was checked against bound
+/// parameters with the same names and values (the key carries their
+/// fingerprint). A statement that references an unbound parameter errors above
 /// the insert, so a repeated unbound statement misses and raises again. Pinned
 /// by `session::param_presence_tests`.
 ///
@@ -920,16 +934,14 @@ fn plan_scope(
 /// — they are a pure function of `(query, graph schema)` and the key pins the
 /// graph state. Stderr repeats them per call, as it did when every call parsed.
 fn cached_plan(
-    graph: &DirGraph,
-    query: &str,
+    key: &cypher::plan_cache::PlanKey,
     opts: &ExecuteOptions<'_>,
-    suppress_default: bool,
 ) -> Option<PreparedQuery> {
-    let cached = cypher::plan_cache::get(plan_scope(graph, opts, suppress_default), query)?;
+    let cached = cypher::plan_cache::get_by_key(key)?;
     cypher::emit_query_warnings(&cached.warnings);
     Some(PreparedQuery {
         plan: cached.plan,
-        params: HashMap::new(),
+        params: opts.params.clone(),
         encode_plan: Vec::new(),
         warnings: cached.warnings,
     })
@@ -962,23 +974,25 @@ pub(super) fn prepare(
     // caller closes it with `classify_pending` once it knows `is_mutation`.
     #[cfg(test)]
     cypher::plan_cache::instrumentation::begin_prepare();
-    // Plan cache: a param-less, codec-free, no-disabled-passes query against an
-    // unchanged graph reuses its fully-optimized plan, skipping parse + validate
-    // + optimize. Keyed on (graph_id, version, lazy_eligible) so any mutation
-    // invalidates it and it never leaks across graphs (see
+    // Plan cache: a codec-free, no-disabled-passes query against an unchanged
+    // graph, with the same bound parameter values, reuses its fully-optimized
+    // plan, skipping parse + validate + optimize. Keyed on (graph_id, version,
+    // lazy_eligible, parameter fingerprint) so any mutation invalidates it and
+    // it never leaks across graphs (see
     // `cypher::plan_cache`). [`cached_plan`] carries the hit-path soundness
     // argument.
-    let cacheable = opts.params.is_empty()
-        && opts.disabled_passes.is_none_or(|s| s.is_empty())
-        && opts.value_codecs.is_none_or(|c| c.is_empty());
-    if cacheable {
-        if let Some(prepared) = cached_plan(graph, query, opts, suppress_default) {
+    let key = (opts.disabled_passes.is_none_or(|s| s.is_empty())
+        && opts.value_codecs.is_none_or(|c| c.is_empty()))
+    .then(|| plan_key(graph, query, opts, suppress_default))
+    .flatten();
+    if let Some(key) = &key {
+        if let Some(prepared) = cached_plan(key, opts) {
             return Ok(prepared);
         }
     }
 
     with_query_stack(query, || {
-        prepare_uncached(graph, query, opts, suppress_default, cacheable)
+        prepare_uncached(graph, query, opts, suppress_default, key)
     })
 }
 
@@ -1017,7 +1031,7 @@ fn prepare_uncached(
     query: &str,
     opts: &ExecuteOptions<'_>,
     suppress_default: bool,
-    cacheable: bool,
+    key: Option<cypher::plan_cache::PlanKey>,
 ) -> Result<PreparedQuery, KgError> {
     let mut parsed = cypher::parse_cypher(query)?;
     parsed.suppress_default = suppress_default;
@@ -1128,8 +1142,8 @@ fn prepare_uncached(
     }
 
     let plan = Arc::new(parsed);
-    // Cache the ready-to-execute plan. Only when `params` stayed empty — a
-    // `text_score()` rewrite injects embedding params, making the plan
+    // Cache the ready-to-execute plan. Only when `params` is still the caller's
+    // own — a `text_score()` rewrite injects embedding params, making the plan
     // call-specific, so those are never cached (and thus never hit above).
     //
     // And only for **reads**. A mutation's key carries the graph version, and
@@ -1169,18 +1183,13 @@ fn prepare_uncached(
     // become an error, so its plan stays cached and its warning rides the
     // entry. What stays excluded reads an all-null column or asks a question
     // no row can answer, which no hot loop should contain.
-    if cacheable
-        && params.is_empty()
-        && !strict_absent
-        && !strict_type
-        && !cypher::is_mutation_query(&plan)
-    {
-        cypher::plan_cache::insert(
-            plan_scope(graph, opts, suppress_default),
-            query,
-            plan.clone(),
-            Arc::clone(&warnings),
-        );
+    if let Some(key) = key.filter(|_| {
+        matches!(params, Cow::Borrowed(_))
+            && !strict_absent
+            && !strict_type
+            && !cypher::is_mutation_query(&plan)
+    }) {
+        cypher::plan_cache::insert_by_key(key, plan.clone(), Arc::clone(&warnings));
     }
 
     Ok(PreparedQuery {

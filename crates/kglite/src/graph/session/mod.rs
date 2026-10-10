@@ -113,6 +113,8 @@ pub(crate) mod open_path;
 #[cfg(test)]
 mod open_path_tests;
 #[cfg(test)]
+mod param_plan_cache_tests;
+#[cfg(test)]
 mod param_presence_tests;
 #[cfg(test)]
 mod plan_cache_cost_tests;

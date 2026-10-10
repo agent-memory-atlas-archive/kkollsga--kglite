@@ -217,6 +217,7 @@ fn the_default_plan_and_the_plain_plan_of_one_text_do_not_collide() {
                 lazy: false,
                 suppress_default: suppress,
                 valid_time_default: graph.valid_time_default.cache_code(),
+                params: 0,
             },
             LIST,
         )

@@ -625,7 +625,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare_uncached:fn prepare_uncached( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, suppress_default: bool, cacheable: bool, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
+      "identity": "crates/kglite/src/graph/session/execute.rs::fn:prepare_uncached:fn prepare_uncached( graph: &DirGraph, query: &str, opts: &ExecuteOptions<'_>, suppress_default: bool, key: Option<cypher::plan_cache::PlanKey>, ) -> Result<PreparedQuery, KgError>::clippy::result_large_err",
       "classification": "api-shape"
     },
     {

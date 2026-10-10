@@ -63,12 +63,16 @@
 //! nothing to promote, so locking a graph mid-session cannot be outrun by a
 //! plan primed while it was open. See `session::strict_reads_tests`.
 //!
-//! Only **param-less, codec-free, no-disabled-passes, non-`text_score`**
-//! queries are cached (see `session::execute::prepare`): with those excluded,
-//! the optimized plan is a pure function of `(query, graph state)`, and
-//! parameter binding happens later at execute time. text_score queries inject
-//! per-call embedding params, so they're never inserted (the insert is gated
-//! on the post-prepare param map staying empty) and therefore never hit.
+//! Only **codec-free, no-disabled-passes, non-`text_score`** queries are cached
+//! (see `session::execute::prepare`): with those excluded, the optimized plan
+//! is a pure function of `(query, bound parameters, graph state)`. The planner
+//! reads parameter values and bakes them into the plan, so the key carries
+//! [`param_fingerprint`] and a parameterised statement hits only for the exact
+//! values it was planned with; it is looked up and inserted from its second
+//! sighting ([`first_sighting`]) and lives in a cache of its own, so churn in
+//! parameter values never evicts a parameter-free plan. text_score queries inject per-call embedding params, so
+//! they're never inserted (the insert is gated on the post-prepare param map
+//! being the caller's own) and therefore never hit.
 
 use super::CypherQuery;
 use std::collections::{HashMap, VecDeque};
@@ -81,7 +85,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 pub(crate) const CACHE_CAPACITY: usize = 512;
 
 /// `(graph_id, version, schema_locked, lazy_eligible, suppress_default,
-/// valid_time_default, query_hash)`. `valid_time_default` is the graph's
+/// valid_time_default, query_hash, params)`. `params` is [`param_fingerprint`]
+/// of the call's bound parameters, `0` for none. `valid_time_default` is the graph's
 /// default-instant setting (`ValidTimeDefault::cache_code`): the same text
 /// lowers to a different plan under each. `suppress_default` separates the plan of a text prepared
 /// with the default valid-time context from the plain plan the session
@@ -91,7 +96,7 @@ pub(crate) const CACHE_CAPACITY: usize = 512;
 /// `lazy_eligible=true`, the bolt/mcp servers `false`, so each gets its own
 /// variant. `schema_locked` partitions the two validation dispositions. See the
 /// module docs for the complete key contract.
-type PlanKey = (u64, u64, bool, bool, bool, i64, u64);
+pub(crate) type PlanKey = (u64, u64, bool, bool, bool, i64, u64, u64);
 
 /// Everything but the query text that selects a plan-cache entry. Field
 /// meanings are in [`PlanKey`].
@@ -103,10 +108,12 @@ pub struct PlanScope {
     pub lazy: bool,
     pub suppress_default: bool,
     pub valid_time_default: i64,
+    pub params: u64,
 }
 
 impl PlanScope {
-    fn key(self, query: &str) -> PlanKey {
+    /// The key of `query` (as its [`hash_query`]) under this scope.
+    pub(crate) fn key_with(self, query_hash: u64) -> PlanKey {
         (
             self.graph_id,
             self.version,
@@ -114,7 +121,8 @@ impl PlanScope {
             self.lazy,
             self.suppress_default,
             self.valid_time_default,
-            hash_query(query),
+            query_hash,
+            self.params,
         )
     }
 }
@@ -129,6 +137,7 @@ pub struct CachedPlan {
 }
 
 struct PlanCache {
+    capacity: usize,
     /// Plans are stored behind `Arc` so a cache hit is a refcount bump, not a
     /// deep AST clone — execute borrows the plan read-only, so sharing is safe.
     map: HashMap<PlanKey, CachedPlan>,
@@ -137,35 +146,216 @@ struct PlanCache {
 }
 
 impl PlanCache {
-    fn new() -> Self {
+    fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::with_capacity(CACHE_CAPACITY),
-            order: VecDeque::with_capacity(CACHE_CAPACITY),
+            capacity,
+            map: HashMap::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
         }
     }
 }
 
+/// Maximum cached plans for parameterised statements, which live in a cache of
+/// their own: one entry per distinct set of values, so an application cycling
+/// through more values than this evicts only its own entries and never a
+/// parameter-free plan.
+pub(crate) const PARAM_CACHE_CAPACITY: usize = 256;
+
 static CACHE: OnceLock<RwLock<PlanCache>> = OnceLock::new();
+static PARAM_CACHE: OnceLock<RwLock<PlanCache>> = OnceLock::new();
 
 fn cache() -> &'static RwLock<PlanCache> {
-    CACHE.get_or_init(|| RwLock::new(PlanCache::new()))
+    CACHE.get_or_init(|| RwLock::new(PlanCache::new(CACHE_CAPACITY)))
 }
 
-fn hash_query(query: &str) -> u64 {
+fn param_cache() -> &'static RwLock<PlanCache> {
+    PARAM_CACHE.get_or_init(|| RwLock::new(PlanCache::new(PARAM_CACHE_CAPACITY)))
+}
+
+/// The cache a key belongs to: the key's last field is the parameter
+/// fingerprint, `0` for none.
+fn cache_for(key: &PlanKey) -> &'static RwLock<PlanCache> {
+    if key.7 == 0 {
+        cache()
+    } else {
+        param_cache()
+    }
+}
+
+pub(crate) fn hash_query(query: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     query.hash(&mut hasher);
     hasher.finish()
 }
 
+/// Identity of a call's bound parameters for the cache key: `Some(0)` for none,
+/// `Some(non-zero)` for a set built only from scalar and list values, `None`
+/// for anything else (maps, graph entities, points), which is never cached.
+///
+/// The planner reads parameter *values* (index pushdown, anchors, `LIMIT $n`,
+/// constant folding) and bakes them into the plan, so a plan is valid only for
+/// the exact values it was built from — the fingerprint is part of the key, and
+/// two calls share a plan only when every name and value agrees. Floats hash
+/// by raw bits, so `0.0` and `-0.0` stay apart.
+pub fn param_fingerprint(params: &HashMap<String, crate::datatypes::Value>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if params.is_empty() {
+        return Some(0);
+    }
+    fn feed(value: &crate::datatypes::Value, h: &mut impl Hasher) -> bool {
+        use crate::datatypes::Value as V;
+        match value {
+            V::Null => 0u8.hash(h),
+            V::Boolean(b) => (1u8, b).hash(h),
+            V::UniqueId(n) => (2u8, n).hash(h),
+            V::Int64(n) => (3u8, n).hash(h),
+            V::Float64(f) => (4u8, f.to_bits()).hash(h),
+            V::String(t) => (5u8, t).hash(h),
+            V::DateTime(d) => (6u8, d).hash(h),
+            V::Duration {
+                months,
+                days,
+                seconds,
+            } => (7u8, months, days, seconds).hash(h),
+            V::List(items) => {
+                (8u8, items.len()).hash(h);
+                return items.iter().all(|item| feed(item, h));
+            }
+            _ => return false,
+        }
+        true
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    params.len().hash(&mut hasher);
+    if params.len() == 1 {
+        let (name, value) = params.iter().next()?;
+        name.hash(&mut hasher);
+        if !feed(value, &mut hasher) {
+            return None;
+        }
+    } else {
+        let mut names: Vec<&String> = params.keys().collect();
+        names.sort_unstable();
+        for name in names {
+            name.hash(&mut hasher);
+            if !feed(&params[name], &mut hasher) {
+                return None;
+            }
+        }
+    }
+    Some(hasher.finish() | 1)
+}
+
+#[inline]
+fn mix(h: u64, x: u64) -> u64 {
+    (h ^ x).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29)
+}
+
+fn mix_bytes(mut h: u64, bytes: &[u8]) -> u64 {
+    let (chunks, rest) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        h = mix(h, u64::from_le_bytes(*chunk));
+    }
+    let mut tail = [0u8; 8];
+    tail[..rest.len()].copy_from_slice(rest);
+    mix(mix(h, u64::from_le_bytes(tail)), bytes.len() as u64)
+}
+
+/// A cheap, non-cryptographic hash of one parameter value, with the same
+/// supported set as [`param_fingerprint`]; `None` for an unsupported value.
+fn cheap_value(h: u64, value: &crate::datatypes::Value) -> Option<u64> {
+    use crate::datatypes::Value as V;
+    Some(match value {
+        V::Null => mix(h, 1),
+        V::Boolean(b) => mix(mix(h, 2), *b as u64),
+        V::UniqueId(n) => mix(mix(h, 3), u64::from(*n)),
+        V::Int64(n) => mix(mix(h, 4), *n as u64),
+        V::Float64(f) => mix(mix(h, 5), f.to_bits()),
+        V::String(t) => mix_bytes(mix(h, 6), t.as_bytes()),
+        V::List(items) => {
+            let mut acc = mix(mix(h, 7), items.len() as u64);
+            for item in items {
+                acc = cheap_value(acc, item)?;
+            }
+            acc
+        }
+        V::DateTime(_) | V::Duration { .. } => {
+            mix_bytes(mix(h, 8), format!("{value:?}").as_bytes())
+        }
+        _ => return None,
+    })
+}
+
+const SIGHTINGS: usize = 4096;
+
+thread_local! {
+    /// Per-thread, so recording a sighting writes no cache line another thread
+    /// reads: a shared table measured 10% slower at four threads on a workload
+    /// that never repeats a value.
+    static SEEN: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// For a call that bound parameters: `Some(true)` the first time this thread prepares this exact
+/// `(scope, query, parameter values)` (and records it),
+/// `Some(false)` on any later time, `None` when the parameters cannot be part
+/// of a key at all.
+///
+/// A parameterised statement is looked up and cached only from its second
+/// sighting: an application using a different id each call would otherwise
+/// take the cache's write lock on every call and push the parameter-free plans
+/// out, for entries nothing ever reads again — and it skips even the lookup,
+/// which cannot hit before the first insertion. The table is direct-mapped,
+/// per thread, and keyed by a cheap hash of the parts; the strong hashes of the
+/// real key are computed only for a repeat. A repeat is therefore a repeat on
+/// the same thread. A collision therefore only delays
+/// or hastens one lookup or insertion and never serves a wrong plan, because a
+/// hit is decided by the full key.
+pub(crate) fn first_sighting(
+    scope: PlanScope,
+    query: &str,
+    params: &HashMap<String, crate::datatypes::Value>,
+) -> Option<bool> {
+    let mut id = mix(scope.graph_id, scope.version);
+    id = mix_bytes(id, query.as_bytes());
+    id = mix(
+        id,
+        (scope.valid_time_default as u64)
+            ^ ((scope.schema_locked as u64) << 1)
+            ^ ((scope.lazy as u64) << 2)
+            ^ ((scope.suppress_default as u64) << 3),
+    );
+    // Commutative over the map, so no sort and no allocation.
+    let mut bound = 0u64;
+    for (name, value) in params {
+        bound = bound.wrapping_add(cheap_value(mix_bytes(0, name.as_bytes()), value)?);
+    }
+    let id = mix(id, bound) | 1;
+    Some(SEEN.with_borrow_mut(|table| {
+        if table.is_empty() {
+            table.resize(SIGHTINGS, 0);
+        }
+        let slot = &mut table[(id >> 20) as usize % SIGHTINGS];
+        let first = *slot != id;
+        *slot = id;
+        first
+    }))
+}
+
 /// Look up a cached, ready-to-execute plan for `query` against the graph
 /// identified by `(graph_id, version, schema_locked)` at the given
 /// `lazy_eligible` mode.
 /// Returns an `Arc` clone on hit (no AST copy), `None` on miss.
+#[cfg(test)]
 pub fn get(scope: PlanScope, query: &str) -> Option<CachedPlan> {
-    let key = scope.key(query);
-    let guard = cache().read().expect("plan_cache RwLock poisoned");
-    let hit = guard.map.get(&key).cloned();
+    get_by_key(&scope.key_with(hash_query(query)))
+}
+
+/// [`get`] for a caller that already built the key, so a miss followed by an
+/// insert hashes the query text once.
+pub(crate) fn get_by_key(key: &PlanKey) -> Option<CachedPlan> {
+    let guard = cache_for(key).read().expect("plan_cache RwLock poisoned");
+    let hit = guard.map.get(key).cloned();
     #[cfg(test)]
     instrumentation::record_lookup(hit.is_some());
     hit
@@ -174,13 +364,18 @@ pub fn get(scope: PlanScope, query: &str) -> Option<CachedPlan> {
 /// Cache `plan` (the optimized AST, already lazy-marked for `lazy`) plus the
 /// schema `warnings` computed for it, for `query` against `(graph_id,
 /// version)`. FIFO-evicts the oldest entry at capacity.
+#[cfg(test)]
 pub fn insert(scope: PlanScope, query: &str, plan: Arc<CypherQuery>, warnings: Arc<[String]>) {
-    let key = scope.key(query);
-    let mut guard = cache().write().expect("plan_cache RwLock poisoned");
+    insert_by_key(scope.key_with(hash_query(query)), plan, warnings);
+}
+
+/// [`insert`] for a caller that already built the key.
+pub(crate) fn insert_by_key(key: PlanKey, plan: Arc<CypherQuery>, warnings: Arc<[String]>) {
+    let mut guard = cache_for(&key).write().expect("plan_cache RwLock poisoned");
     if guard.map.contains_key(&key) {
         return; // benign race: another thread inserted the same key.
     }
-    if guard.map.len() >= CACHE_CAPACITY {
+    if guard.map.len() >= guard.capacity {
         if let Some(oldest) = guard.order.pop_front() {
             guard.map.remove(&oldest);
             #[cfg(test)]
@@ -345,9 +540,11 @@ pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub fn clear_for_tests() {
-    let mut guard = cache().write().expect("plan_cache RwLock poisoned");
-    guard.map.clear();
-    guard.order.clear();
+    for cache in [cache(), param_cache()] {
+        let mut guard = cache.write().expect("plan_cache RwLock poisoned");
+        guard.map.clear();
+        guard.order.clear();
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +579,7 @@ mod tests {
             lazy,
             suppress_default,
             valid_time_default: 0,
+            params: 0,
         }
     }
 
