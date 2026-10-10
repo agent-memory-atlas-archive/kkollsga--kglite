@@ -601,15 +601,10 @@ impl<'a> CypherExecutor<'a> {
             if let Value::Map(map) = val {
                 return Ok(map.get(property).cloned().unwrap_or(Value::Null));
             }
-            // DateTime property accessors: .year, .month, .day
-            if let Value::DateTime(date) = val {
-                use chrono::Datelike;
-                return Ok(match property {
-                    "year" => Value::Int64(date.year() as i64),
-                    "month" => Value::Int64(date.month() as i64),
-                    "day" => Value::Int64(date.day() as i64),
-                    _ => Value::Null,
-                });
+            if let Some(component) =
+                scalar_functions::temporal_accessors::temporal_property(val, property)
+            {
+                return Ok(component);
             }
             // Map-shaped string projection: `collect({k: v, ...})` items
             // round-trip through `Value::String("{...}")` because `Value`
@@ -632,26 +627,6 @@ impl<'a> CypherExecutor<'a> {
                 if !matches!(extracted, Value::Null) {
                     return Ok(extracted);
                 }
-            }
-            // Duration-shaped projection: `WITH duration({...}) AS d
-            // RETURN d.months` — pulls the scalar component (0.9.0
-            // Cluster 2). Composite accessors (years/hours/minutes)
-            // mirror the ExprPropertyAccess arm.
-            if let Value::Duration {
-                months,
-                days,
-                seconds,
-            } = val
-            {
-                return Ok(match property {
-                    "months" => Value::Int64(*months as i64),
-                    "days" => Value::Int64(*days as i64),
-                    "seconds" => Value::Int64(*seconds),
-                    "years" => Value::Int64((*months / 12) as i64),
-                    "minutes" => Value::Int64(*seconds / 60),
-                    "hours" => Value::Int64(*seconds / 3600),
-                    _ => Value::Null,
-                });
             }
             return Ok(val.clone());
         }

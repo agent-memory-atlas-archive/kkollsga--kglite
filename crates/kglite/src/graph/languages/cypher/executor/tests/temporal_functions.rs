@@ -307,6 +307,7 @@ fn duration_components_spill_fractions_and_parse_text() {
     for query in [
         "RETURN duration({months: 0.75})",
         "RETURN duration({seconds: 1, milliseconds: 1})",
+        "RETURN duration({days: 14, nanoseconds: 1})",
         "RETURN duration('P1.5S')",
         "RETURN duration('14D')",
         "RETURN duration('P1D1Y')",
@@ -355,4 +356,44 @@ fn duration_in_units_counts_whole_units() {
         Value::Null
     );
     assert!(run("RETURN duration.inDays(1, date('2015-06-24'))").is_err());
+}
+
+#[test]
+fn component_accessors() {
+    let ints = |query: &str| -> Vec<i64> {
+        match cell(query) {
+            Value::List(items) => items
+                .into_iter()
+                .map(|v| match v {
+                    Value::Int64(n) => n,
+                    other => panic!("{query}: {other:?}"),
+                })
+                .collect(),
+            other => panic!("{query}: {other:?}"),
+        }
+    };
+    assert_eq!(
+        ints("WITH date({year: 1984, month: 10, day: 11}) AS d RETURN [d.year, d.quarter, d.month, d.week, d.weekYear, d.day, d.ordinalDay, d.weekDay, d.dayOfQuarter]"),
+        [1984, 4, 10, 41, 1984, 11, 285, 4, 11]
+    );
+    assert_eq!(
+        ints("WITH date({year: 1984, month: 1, day: 1}) AS d RETURN [d.year, d.weekYear, d.week, d.weekDay]"),
+        [1984, 1983, 52, 7]
+    );
+    assert_eq!(
+        ints("WITH localdatetime({year: 1984, month: 11, day: 11, hour: 12, minute: 31, second: 14, nanosecond: 645876123}) AS d RETURN [d.quarter, d.week, d.dayOfQuarter, d.hour, d.minute, d.second, d.millisecond, d.microsecond, d.nanosecond]"),
+        [4, 45, 42, 12, 31, 14, 645, 645876, 645876123]
+    );
+    assert_eq!(
+        ints("WITH duration({years: 1, months: 4, days: 10, hours: 1, minutes: 1, seconds: 1}) AS d RETURN [d.years, d.quarters, d.months, d.weeks, d.days, d.hours, d.minutes, d.seconds, d.quartersOfYear, d.monthsOfQuarter, d.monthsOfYear, d.daysOfWeek, d.minutesOfHour, d.secondsOfMinute]"),
+        [1, 5, 16, 1, 10, 1, 61, 3661, 1, 1, 4, 3, 1, 1]
+    );
+    assert_eq!(
+        cell("WITH date('2015-07-21') AS d RETURN d.nothing"),
+        Value::Null
+    );
+    assert_eq!(
+        cell("RETURN localdatetime('2015-07-21T21:40:32').nothing"),
+        Value::Null
+    );
 }

@@ -19,6 +19,7 @@ mod shared;
 mod spatial;
 mod string;
 mod temporal;
+pub(in crate::graph::languages::cypher::executor) mod temporal_accessors;
 mod temporal_duration;
 mod temporal_iso;
 mod temporal_map;

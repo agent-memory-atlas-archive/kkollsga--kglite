@@ -22,6 +22,9 @@ struct Components {
     months_fraction: f64,
     days_fraction: f64,
     seconds_fraction: f64,
+    /// Integer milli-, micro- and nanoseconds, exact so that one nanosecond
+    /// is never rounded away.
+    nanos: i128,
 }
 
 fn checked_scaled_add(
@@ -82,9 +85,17 @@ impl Components {
                 checked_scaled_add(&mut self.seconds, whole, 1, key)?;
                 self.seconds_fraction += fraction;
             }
-            "milliseconds" => self.seconds_fraction += n / 1e3,
-            "microseconds" => self.seconds_fraction += n / 1e6,
-            "nanoseconds" => self.seconds_fraction += n / 1e9,
+            "milliseconds" | "microseconds" | "nanoseconds" => {
+                let scale: i128 = match key {
+                    "milliseconds" => 1_000_000,
+                    "microseconds" => 1_000,
+                    _ => 1,
+                };
+                match exact {
+                    Some(v) => self.nanos += v as i128 * scale,
+                    None => self.seconds_fraction += n * scale as f64 / 1e9,
+                }
+            }
             other => {
                 return Err(format!(
                     "duration(): unknown key '{other}' (expected years/months/weeks/days/hours/minutes/seconds/milliseconds/microseconds/nanoseconds)"
@@ -101,6 +112,19 @@ impl Components {
         let whole_days = self.days_fraction.trunc();
         checked_scaled_add(&mut self.days, whole_days as i64, 1, "days")?;
         self.seconds_fraction += (self.days_fraction - whole_days) * 86_400.0;
+        let whole_nanos = self.nanos.div_euclid(1_000_000_000);
+        let loose_nanos = self.nanos.rem_euclid(1_000_000_000);
+        if loose_nanos != 0 {
+            return Err(format!(
+                "duration(): the components include {loose_nanos} nanoseconds past a whole second; sub-second durations are not supported"
+            ));
+        }
+        checked_scaled_add(
+            &mut self.seconds,
+            i64::try_from(whole_nanos).map_err(|_| "duration() seconds component overflow")?,
+            1,
+            "seconds",
+        )?;
         let rounded = self.seconds_fraction.round();
         if (self.seconds_fraction - rounded).abs() > 1e-6 {
             return Err(format!(

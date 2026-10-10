@@ -375,36 +375,10 @@ impl<'a> CypherExecutor<'a> {
         let value = self.evaluate_expression(expression, row)?;
         match &value {
             Value::String(string) => Ok(Self::string_property(string, property)),
-            Value::DateTime(date) => {
-                use chrono::Datelike;
-                Ok(match property {
-                    "year" => Value::Int64(date.year() as i64),
-                    "month" => Value::Int64(date.month() as i64),
-                    "day" => Value::Int64(date.day() as i64),
-                    "hour" | "minute" | "second" => Value::Int64(0),
-                    "dayOfWeek" => Value::Int64(date.weekday().num_days_from_monday() as i64 + 1),
-                    "dayOfYear" => Value::Int64(date.ordinal() as i64),
-                    "epochSeconds" => Value::Int64(
-                        date.and_hms_opt(0, 0, 0)
-                            .map(|datetime| datetime.and_utc().timestamp())
-                            .unwrap_or(0),
-                    ),
-                    _ => Value::Null,
-                })
-            }
-            Value::Duration {
-                months,
-                days,
-                seconds,
-            } => Ok(match property {
-                "months" => Value::Int64(*months as i64),
-                "days" => Value::Int64(*days as i64),
-                "seconds" => Value::Int64(*seconds),
-                "years" => Value::Int64((*months / 12) as i64),
-                "minutes" => Value::Int64(*seconds / 60),
-                "hours" => Value::Int64(*seconds / 3600),
-                _ => Value::Null,
-            }),
+            Value::DateTime(_) | Value::Timestamp(_) | Value::Duration { .. } => Ok(
+                scalar_functions::temporal_accessors::temporal_property(&value, property)
+                    .unwrap_or(Value::Null),
+            ),
             Value::Point { .. } => Ok(point_field(&value, property)),
             Value::NodeRef(index) => {
                 let node_index = petgraph::graph::NodeIndex::new(*index as usize);

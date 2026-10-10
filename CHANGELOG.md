@@ -82,6 +82,8 @@ before upgrading.
   - `duration.inMonths`, `duration.inDays` and `duration.inSeconds` give the whole months, days or seconds between two dates or datetimes.
   - A total that is not a whole number of seconds still raises.
 
+- **Component accessors for dates, datetimes and durations.** `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay` and `d.dayOfQuarter` work on dates and datetimes, `t.hour` to `t.nanosecond` and `t.epochMillis` on datetimes, and `dur.quarters`, `dur.weeks`, `dur.monthsOfYear` and the other `...Of...` accessors on durations. `d.year` on a datetime returned the datetime itself; an accessor a datetime does not have is now `null`.
+
 ### Changed
 
 - **C ABI and Java: multi-threaded throughput no longer collapses as threads
