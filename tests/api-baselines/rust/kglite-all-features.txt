@@ -965,6 +965,8 @@ pub kglite::api::cypher::Expression::Star
 pub kglite::api::cypher::Expression::Subtract(alloc::boxed::Box<kglite::api::cypher::Expression>, alloc::boxed::Box<kglite::api::cypher::Expression>)
 pub kglite::api::cypher::Expression::Variable(alloc::string::String)
 pub kglite::api::cypher::Expression::WindowFunction
+pub kglite::api::cypher::Expression::WindowFunction::args: alloc::vec::Vec<kglite::api::cypher::Expression>
+pub kglite::api::cypher::Expression::WindowFunction::distinct: bool
 pub kglite::api::cypher::Expression::WindowFunction::name: alloc::string::String
 pub kglite::api::cypher::Expression::WindowFunction::order_by: alloc::vec::Vec<kglite::graph::languages::cypher::ast::OrderItem>
 pub kglite::api::cypher::Expression::WindowFunction::partition_by: alloc::vec::Vec<kglite::api::cypher::Expression>

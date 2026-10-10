@@ -106,6 +106,7 @@ before upgrading.
 
 ### Rust API
 
+- `Expression::WindowFunction` gains `args` and `distinct` fields for aggregate windows. Code that constructs the variant or matches it without `..` must add them.
 - `kglite::api::io::refuse_foreign_writer(path)` probes a graph path's writer lease without taking it, and returns the structured `LeaseRefusal` when another process holds it.
 - `DirGraph::list_persistent_indexes()` lists the persistent disk-backed equality indexes as `(node_type, property)`.
 - `Session::auto_commit_is_grouped(query, opts)` reports whether
