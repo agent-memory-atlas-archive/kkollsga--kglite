@@ -122,3 +122,26 @@ def test_concurrent_calls_share_the_handler_and_release_it(restore_sigint):
         t.join()
     _deliver()
     assert hits == ["user"]
+
+
+def test_disposition_change_after_the_first_query_is_followed():
+    """Python handlers all share one C trampoline, so only an OS-level change
+    (here SIG_IGN -> a Python handler) shows whether the forward target is
+    re-read on each arming. A fresh process makes SIG_IGN the first target."""
+    import subprocess
+
+    script = (
+        "import os, signal, time, kglite\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "g = kglite.KnowledgeGraph()\n"
+        "g.cypher('RETURN 1')\n"
+        "hits = []\n"
+        "signal.signal(signal.SIGINT, lambda *_: hits.append('b'))\n"
+        "g.cypher('RETURN 1')\n"
+        "os.kill(os.getpid(), signal.SIGINT)\n"
+        "time.sleep(0.05)\n"
+        "print(hits)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "['b']"
