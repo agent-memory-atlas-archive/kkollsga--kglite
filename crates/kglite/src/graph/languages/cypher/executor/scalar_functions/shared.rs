@@ -30,6 +30,13 @@ pub(super) fn string_scalar_length(s: String) -> i64 {
 pub(super) fn to_string_or_null(value: Value) -> Value {
     match value {
         Value::Null => Value::Null,
+        Value::Duration {
+            months,
+            days,
+            seconds,
+        } => Value::String(super::temporal_duration::format_duration_iso(
+            months, days, seconds,
+        )),
         other => Value::String(format_value_compact(&other)),
     }
 }

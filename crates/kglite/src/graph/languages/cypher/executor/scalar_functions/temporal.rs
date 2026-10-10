@@ -4,8 +4,10 @@
 //! one of this category's functions so the dispatcher tries the next.
 use super::super::*;
 use super::shared::*;
+use super::temporal_duration;
 use super::temporal_iso::parse_date_text;
 use super::temporal_map::{temporal_from_map, MapTarget};
+use super::temporal_truncate;
 use crate::datatypes::values::Value;
 use crate::graph::core::value_operations::checked_shift_months;
 
@@ -168,11 +170,7 @@ impl<'a> CypherExecutor<'a> {
                 };
                 Ok(truncated.map(Value::DateTime).unwrap_or(Value::Null))
             }
-            "date.truncate"
-            | "datetime.truncate"
-            | "localdatetime.truncate"
-            | "localtime.truncate"
-            | "time.truncate" => self.eval_truncate(name, args, row),
+            n if temporal_truncate::is_namespaced(n) => self.eval_namespaced_temporal(n, args, row),
             "localdatetime" => self.eval_local_temporal(args, row, LocalTemporalKind::DateTime),
             "localtime" => self.eval_local_temporal(args, row, LocalTemporalKind::Time),
             "time" => self.eval_time(args, row),
@@ -182,72 +180,25 @@ impl<'a> CypherExecutor<'a> {
     }
 }
 
-fn checked_component_add(
-    total: &mut i64,
-    value: i64,
-    scale: i64,
-    component: &str,
-) -> Result<(), String> {
-    let scaled = value
-        .checked_mul(scale)
-        .ok_or_else(|| format!("duration() {component} component overflow"))?;
-    *total = total
-        .checked_add(scaled)
-        .ok_or_else(|| format!("duration() {component} component overflow"))?;
-    Ok(())
-}
-
 impl CypherExecutor<'_> {
     /// `duration({...})`: calendar units (months/years) and clock units
     /// (days/hours/minutes/seconds) are kept apart, so
     /// `duration({months: 1, days: 5}).months` is 1, not 35.
     fn eval_duration(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         if args.len() != 1 {
-            return Err("duration() requires 1 map argument: duration({days: N})".into());
+            return Err(
+                "duration() requires 1 argument: duration({days: N}) or duration('P1D')".into(),
+            );
         }
-        if let Expression::MapLiteral(entries) = &args[0] {
-            let mut months: i64 = 0;
-            let mut days: i64 = 0;
-            let mut seconds: i64 = 0;
-            for (key, expr) in entries {
-                let v = self.evaluate_expression(expr, row)?;
-                let n = match v {
-                    Value::Int64(n) => n,
-                    Value::Float64(f)
-                        if f.is_finite()
-                            && f.fract() == 0.0
-                            && f >= i64::MIN as f64
-                            && f < -(i64::MIN as f64) =>
-                    {
-                        f as i64
-                    }
-                    Value::Null => 0,
-                    other => return Err(duration_component_error(key, &other)),
-                };
-                match key.as_str() {
-                    "years" => checked_component_add(&mut months, n, 12, "years")?,
-                    "months" => checked_component_add(&mut months, n, 1, "months")?,
-                    "weeks" => checked_component_add(&mut days, n, 7, "weeks")?,
-                    "days" => checked_component_add(&mut days, n, 1, "days")?,
-                    "hours" => checked_component_add(&mut seconds, n, 3600, "hours")?,
-                    "minutes" => checked_component_add(&mut seconds, n, 60, "minutes")?,
-                    "seconds" => checked_component_add(&mut seconds, n, 1, "seconds")?,
-                    other => {
-                        return Err(format!(
-                            "duration(): unknown key '{other}' (expected years/months/weeks/days/hours/minutes/seconds)"
-                        ));
-                    }
-                }
-            }
-            Ok(Value::Duration {
-                months: i32::try_from(months)
-                    .map_err(|_| "duration() calendar months exceed the supported i32 range")?,
-                days: i32::try_from(days)
-                    .map_err(|_| "duration() calendar days exceed the supported i32 range")?,
-                seconds,
-            })
-        } else {
-            Err("duration() requires a map literal: duration({days: N})".into())
+        match self.evaluate_expression(&args[0], row)? {
+            Value::Map(map) => temporal_duration::duration_from_map(&map),
+            Value::String(text) => temporal_duration::duration_from_text(&text),
+            duration @ Value::Duration { .. } => Ok(duration),
+            Value::Null => Ok(Value::Null),
+            other => Err(format!(
+                "duration() requires a map or an ISO-8601 string, got {}",
+                other.type_name()
+            )),
         }
     }
 
@@ -333,21 +284,4 @@ impl CypherExecutor<'_> {
             )),
         }
     }
-}
-
-/// A `duration()` map value that is not a whole count of its unit — named with
-/// the key and what it got, since a fractional number *is* a number.
-fn duration_component_error(key: &str, got: &Value) -> String {
-    // The sub-second note explains a finite fraction only; inf/NaN are not one.
-    let note = match got {
-        Value::Float64(f) if key == "seconds" && f.is_finite() => {
-            " (sub-second durations are not supported)"
-        }
-        _ => "",
-    };
-    let got = match got {
-        Value::Float64(f) => f.to_string(),
-        other => other.type_name().to_string(),
-    };
-    format!("duration(): '{key}' must be a whole number of {key}, got {got}{note}")
 }

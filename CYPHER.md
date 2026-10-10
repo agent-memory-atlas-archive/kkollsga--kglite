@@ -1517,6 +1517,7 @@ covers declaring intervals and modelling history.
 | `n.d.dayOfWeek`, `n.d.dayOfYear`, `n.d.epochSeconds` | Other temporal field accessors |
 | `duration({days: N, months: M, ...})` | Build a Duration value (see [Duration semantics](#duration-semantics) below) |
 | `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and remaining seconds are returned as a Duration |
+| `duration.inMonths(d1, d2)`, `duration.inDays(d1, d2)`, `duration.inSeconds(d1, d2)` | The whole months, days or seconds from `d1` to `d2` (dates or datetimes), as a duration holding only that unit; negative when `d2` is earlier |
 | `add_days(date, n)` / `add_months(date, n)` / `add_years(date, n)` | Checked calendar shift; returns NULL when the requested date is outside the representable range |
 | `date_truncate(date, unit)` | Start of `year`, `month`, `week`, or `day` |
 | `date.truncate(unit, t [, overrides])` | Round a date or datetime down to the start of `millennium`, `century`, `decade`, `year`, `weekYear`, `quarter`, `month`, `week` or `day`, then apply the override map as the constructor does: `date.truncate('month', d, {day: 5})`, `date.truncate('week', d, {dayOfWeek: 2})` |
@@ -1995,9 +1996,14 @@ A `Duration` value carries three independent components:
 | `days`    | `weeks` + `days` from constructor   | clock days         |
 | `seconds` | `hours` + `minutes` + `seconds`     | clock seconds      |
 
-Each constructor value is a whole number of its unit: `duration({seconds: 90.0})`
-is accepted, and `duration({seconds: 1.5})` is refused. There is no sub-second
-precision.
+A constructor value may be fractional: a fraction of a month spills into days
+(30.436875 days to the month) and a fraction of a day into seconds, so
+`duration({months: 5, days: 1.5})` is `P5M1DT12H`. `milliseconds`,
+`microseconds` and `nanoseconds` are accepted too. A total that is not a whole
+number of seconds is refused (`duration({seconds: 1.5})`): a duration has no
+sub-second precision. `duration('P14DT16H12M')` reads ISO 8601 text, with
+fractions on any unit, and `toString(d)` writes it back (`PT0S` for zero,
+each component carrying its own sign: `PT-22H`).
 
 **Components stay separate by design.** Calendar arithmetic
 (`+ duration({months: 1})`) is fundamentally different from clock arithmetic

@@ -266,3 +266,93 @@ fn truncate_refuses_a_unit_the_type_cannot_hold() {
     }
     assert_eq!(cell("RETURN date.truncate('day', null)"), Value::Null);
 }
+
+fn duration(months: i32, days: i32, seconds: i64) -> Value {
+    Value::Duration {
+        months,
+        days,
+        seconds,
+    }
+}
+
+#[test]
+fn duration_components_spill_fractions_and_parse_text() {
+    for (query, expected) in [
+        (
+            "duration({days: 14, hours: 16, minutes: 12})",
+            duration(0, 14, 58_320),
+        ),
+        ("duration({months: 5, days: 1.5})", duration(5, 1, 43_200)),
+        ("duration({weeks: 2.5})", duration(0, 17, 43_200)),
+        ("duration({minutes: 1.5, seconds: 1})", duration(0, 0, 91)),
+        (
+            "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70})",
+            duration(149, 14, 58_390),
+        ),
+        (
+            "duration({seconds: 70, milliseconds: 1000})",
+            duration(0, 0, 71),
+        ),
+        ("duration('P14DT16H12M')", duration(0, 14, 58_320)),
+        ("duration('P5M1.5D')", duration(5, 1, 43_200)),
+        ("duration('PT0.75M')", duration(0, 0, 45)),
+        ("duration('P2.5W')", duration(0, 17, 43_200)),
+        (
+            "duration('P2012-02-02T14:37:21')",
+            duration(2012 * 12 + 2, 2, 52_641),
+        ),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
+    for query in [
+        "RETURN duration({months: 0.75})",
+        "RETURN duration({seconds: 1, milliseconds: 1})",
+        "RETURN duration('P1.5S')",
+        "RETURN duration('14D')",
+        "RETURN duration('P1D1Y')",
+    ] {
+        assert!(run(query).is_err(), "{query}");
+    }
+    assert_eq!(cell("RETURN duration(null)"), Value::Null);
+}
+
+#[test]
+fn duration_to_string_is_iso_8601() {
+    for (query, expected) in [
+        (
+            "duration({days: 14, hours: 16, minutes: 12})",
+            "P14DT16H12M",
+        ),
+        (
+            "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70})",
+            "P12Y5M14DT16H13M10S",
+        ),
+        ("duration({seconds: -79200})", "PT-22H"),
+        ("duration({})", "PT0S"),
+    ] {
+        assert_eq!(
+            cell(&format!("RETURN toString({query})")),
+            text(expected),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn duration_in_units_counts_whole_units() {
+    for (query, expected) in [
+        ("duration.inMonths(date('1984-10-11'), date('2015-06-24'))", duration(368, 0, 0)),
+        ("duration.inMonths(date('2015-06-24'), date('1984-10-11'))", duration(-368, 0, 0)),
+        ("duration.inMonths(localdatetime('2015-07-21T21:40:32.142'), localdatetime('2016-07-21T21:45:22.142'))", duration(12, 0, 0)),
+        ("duration.inDays(date('1984-10-11'), date('2015-06-24'))", duration(0, 11_213, 0)),
+        ("duration.inSeconds(localdatetime('2018-01-01T12:00'), localdatetime('2018-01-02T10:00'))", duration(0, 0, 79_200)),
+        ("duration.inSeconds(localdatetime('2018-01-02T10:00'), localdatetime('2018-01-01T12:00'))", duration(0, 0, -79_200)),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
+    assert_eq!(
+        cell("RETURN duration.inDays(null, date('2015-06-24'))"),
+        Value::Null
+    );
+    assert!(run("RETURN duration.inDays(1, date('2015-06-24'))").is_err());
+}

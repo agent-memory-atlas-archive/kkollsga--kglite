@@ -19,6 +19,7 @@ mod shared;
 mod spatial;
 mod string;
 mod temporal;
+mod temporal_duration;
 mod temporal_iso;
 mod temporal_map;
 mod temporal_truncate;

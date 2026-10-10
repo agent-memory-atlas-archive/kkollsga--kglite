@@ -40,6 +40,11 @@ before upgrading.
   - An earlier version refuses a version-11 log with the "unsupported WAL format version" error rather than dropping part of it. This build writes version 11 as soon as it appends to a log, so an older binary cannot open a graph this build used until a checkpoint (`save()`) truncates the log.
   - Migration: upgrade `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries that open the same durable graphs, or checkpoint before switching back.
 
+- **`toString(duration)` returns ISO 8601 text.**
+  - Before: `toString(duration({months: 1, days: -2}))` returned `duration(M=1, D=-2, S=0)`.
+  - Now: `P1M-2D`. The zero duration is `PT0S`, and each component carries its own sign (`PT-22H`).
+  - Migration: parse the ISO text, or read the `months`, `days` and `seconds` accessors.
+
 ### Added
 
 - **The shipped Java natives include RDF support.** The release natives and the CI `kglite-java` job build `kglite-c` with `--features rdf`, so `exportRdf` and `loadRdf` work from the published JAR instead of throwing "built without RDF support". The native grows by the RDF code paths.
@@ -70,6 +75,12 @@ before upgrading.
   - An out-of-range week, ordinal day, quarter or day of quarter raises.
 
 - **Truncation functions for temporal values.** `date.truncate`, `localdatetime.truncate`, `datetime.truncate`, `localtime.truncate` and `time.truncate` take a unit (`millennium` through `microsecond`), a date, datetime or time, and an optional override map: `date.truncate('week', d, {dayOfWeek: 2})`. They were an unknown-function error; `date_truncate` is unchanged.
+
+- **Durations take fractions, ISO text and the `in*` counters.**
+  - `duration({days: 1.5, weeks: 2.5, minutes: 1.5})` spills each fraction into the next smaller unit, and `milliseconds`, `microseconds` and `nanoseconds` are accepted when the total is whole seconds. A fractional component was an error.
+  - `duration('P14DT16H12M')` reads ISO 8601 text, including fractions (`'P2.5W'`) and the `P2012-02-02T14:37:21` form.
+  - `duration.inMonths`, `duration.inDays` and `duration.inSeconds` give the whole months, days or seconds between two dates or datetimes.
+  - A total that is not a whole number of seconds still raises.
 
 ### Changed
 

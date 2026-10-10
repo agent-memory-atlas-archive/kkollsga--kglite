@@ -655,9 +655,9 @@ fn test_match_map_negative_literal_no_false_positives() {
     assert_eq!(result.rows.len(), 0);
 }
 
-/// A `duration()` component is a whole count of its unit: a fractional one is
-/// refused naming the key and the value, and a non-number names what it got
-/// (a fractional number used to be told it "expects a number").
+/// A `duration()` component is a number: fractions of a larger unit spill into
+/// the next smaller one, a total that lands between two seconds is refused,
+/// and a non-number names what it got.
 #[test]
 fn duration_names_a_fractional_or_non_numeric_component() {
     let graph = DirGraph::new();
@@ -668,16 +668,17 @@ fn duration_names_a_fractional_or_non_numeric_component() {
     };
     assert_eq!(
         run("RETURN duration({seconds: 1.5}) AS d").unwrap_err(),
-        "duration(): 'seconds' must be a whole number of seconds, got 1.5 \
-         (sub-second durations are not supported)"
+        "duration(): the components include a fraction of 0.5 seconds; sub-second durations are not supported"
     );
     assert_eq!(
-        run("RETURN duration({hours: 0.25}) AS d").unwrap_err(),
-        "duration(): 'hours' must be a whole number of hours, got 0.25"
+        run("RETURN duration({hours: 0.25}).seconds AS s")
+            .unwrap()
+            .rows[0][0],
+        Value::Int64(900)
     );
     assert_eq!(
         run("RETURN duration({days: '3'}) AS d").unwrap_err(),
-        "duration(): 'days' must be a whole number of days, got String"
+        "duration(): 'days' must be a number of days, got String"
     );
     let whole = run("RETURN duration({seconds: 90.0}).seconds AS s").unwrap();
     assert_eq!(whole.rows[0][0], Value::Int64(90));

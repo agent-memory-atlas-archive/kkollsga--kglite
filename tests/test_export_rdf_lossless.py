@@ -251,7 +251,7 @@ def test_mixed_sign_durations_stay_durations(tmp_path):
     # (the old kg:json spelling) would print differently.
     query = "MATCH (r:Role) RETURN r.span AS span, toString(r.span) AS text"
     assert back.cypher(query).to_list() == g.cypher(query).to_list()
-    assert back.cypher(query).to_list()[0]["text"].startswith("duration(")
+    assert back.cypher(query).to_list()[0]["text"].startswith("P")
 
 
 def test_duplicate_id_versions_stay_two_nodes_without_a_prior_lookup(tmp_path):

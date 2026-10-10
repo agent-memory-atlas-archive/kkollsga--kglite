@@ -91,7 +91,31 @@ fn truncate_to(unit: &str, value: NaiveDateTime) -> Result<NaiveDateTime, String
     Ok(out)
 }
 
+/// Whether `name` is one of the `<type>.truncate` or `duration.in*` functions.
+pub(super) fn is_namespaced(name: &str) -> bool {
+    name.ends_with(".truncate")
+        || matches!(
+            name,
+            "duration.inmonths" | "duration.indays" | "duration.inseconds"
+        )
+}
+
 impl CypherExecutor<'_> {
+    /// The `<type>.<verb>` temporal functions: `.truncate` and the
+    /// `duration.in*` counters.
+    pub(super) fn eval_namespaced_temporal(
+        &self,
+        name: &str,
+        args: &[Expression],
+        row: &ResultRow,
+    ) -> Result<Value, String> {
+        if name.starts_with("duration.") {
+            self.eval_duration_in(name, args, row)
+        } else {
+            self.eval_truncate(name, args, row)
+        }
+    }
+
     /// `<type>.truncate(unit, temporal [, overrides])`; `name` is the
     /// lowercased dispatcher name.
     pub(super) fn eval_truncate(

@@ -412,6 +412,27 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         signature: "time.truncate(unit :: STRING, temporal :: DATE | DATETIME | STRING, overrides :: MAP?) :: STRING?",
     },
     FunctionSpec {
+        name: "duration.inMonths",
+        aliases: &[],
+        category: "temporal",
+        description: "The whole months from one date/datetime to another, as a duration",
+        signature: "duration.inMonths(start :: DATE | DATETIME, end :: DATE | DATETIME) :: DURATION?",
+    },
+    FunctionSpec {
+        name: "duration.inDays",
+        aliases: &[],
+        category: "temporal",
+        description: "The whole days from one date/datetime to another, as a duration",
+        signature: "duration.inDays(start :: DATE | DATETIME, end :: DATE | DATETIME) :: DURATION?",
+    },
+    FunctionSpec {
+        name: "duration.inSeconds",
+        aliases: &[],
+        category: "temporal",
+        description: "The whole seconds from one date/datetime to another, as a duration",
+        signature: "duration.inSeconds(start :: DATE | DATETIME, end :: DATE | DATETIME) :: DURATION?",
+    },
+    FunctionSpec {
         name: "add_days",
         aliases: &[],
         category: "temporal",
