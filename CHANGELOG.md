@@ -30,15 +30,15 @@ before upgrading.
   - The Rust `save_graph` and the C ABI save entries (`kglite_save_graph`, `kglite_save_graph_durable`, `kglite_session_save`) run the same check. The C entries return `KGLITE_STATUS_CODE_WRITER_LEASE_HELD` with the holder in `kglite_last_error_details_json`. `save_graph_with` does not, because it also serves the close of a handle opened without a lease.
   - Migration: take the lease for the whole read-modify-save interval with `kglite.open(path)`, or stop the other writer.
 
-- **`localtime(str)` and `time(str)` return the canonical clock text.**
-  - Before: `time('10:30')` returned `'10:30:00'`.
-  - Now: `'10:30'`. Seconds appear only when not zero, and a fraction prints in groups of three digits (`'21:40:32.142'`, `'12:31:14.000000003'`). The no-argument forms keep `HH:MM:SS`.
-  - Migration: compare against, or parse, the canonical text. `time('10:30:00')` is also `'10:30'`.
-
 - **The write-ahead log format is version 11.**
   - Logs written by earlier versions still replay.
   - An earlier version refuses a version-11 log with the "unsupported WAL format version" error rather than dropping part of it. This build writes version 11 as soon as it appends to a log, so an older binary cannot open a graph this build used until a checkpoint (`save()`) truncates the log.
   - Migration: upgrade `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries that open the same durable graphs, or checkpoint before switching back.
+
+- **`localtime(str)` and `time(str)` return the canonical clock text.**
+  - Before: `time('10:30')` returned `'10:30:00'`.
+  - Now: `'10:30'`. Seconds appear only when not zero, and a fraction prints in groups of three digits (`'21:40:32.142'`, `'12:31:14.000000003'`). The no-argument forms keep `HH:MM:SS`.
+  - Migration: compare against, or parse, the canonical text. `time('10:30:00')` is also `'10:30'`.
 
 - **`toString(duration)` returns ISO 8601 text.**
   - Before: `toString(duration({months: 1, days: -2}))` returned `duration(M=1, D=-2, S=0)`.
@@ -48,6 +48,22 @@ before upgrading.
 ### Added
 
 - **The shipped Java natives include RDF support.** The release natives and the CI `kglite-java` job build `kglite-c` with `--features rdf`, so `exportRdf` and `loadRdf` work from the published JAR instead of throwing "built without RDF support". The native grows by the RDF code paths.
+
+- **Durations take fractions, ISO text and the `in*` counters.**
+  - `duration({days: 1.5, weeks: 2.5, minutes: 1.5})` spills each fraction into the next smaller unit, and `milliseconds`, `microseconds` and `nanoseconds` are accepted when the total is whole seconds. A fractional component was an error.
+  - `duration('P14DT16H12M')` reads ISO 8601 text, including fractions (`'P2.5W'`) and the `P2012-02-02T14:37:21` form.
+  - `duration.inMonths`, `duration.inDays` and `duration.inSeconds` give the whole months, days or seconds between two dates or datetimes.
+  - A total that is not a whole number of seconds still raises.
+
+- **Component accessors for dates, datetimes and durations.** `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay` and `d.dayOfQuarter` work on dates and datetimes, `t.hour` to `t.nanosecond` and `t.epochMillis` on datetimes, and `dur.quarters`, `dur.weeks`, `dur.monthsOfYear` and the other `...Of...` accessors on durations. `d.year` on a datetime returned the datetime itself; an accessor a datetime does not have is now `null`.
+
+- **Truncation functions for temporal values.** `date.truncate`, `localdatetime.truncate`, `datetime.truncate`, `localtime.truncate` and `time.truncate` take a unit (`millennium` through `microsecond`), a date, datetime or time, and an optional override map: `date.truncate('week', d, {dayOfWeek: 2})`. They were an unknown-function error; `date_truncate` is unchanged.
+
+- **Temporal constructors read the ISO week, ordinal and quarter forms.**
+  - `date()`, `localdatetime()` and `datetime()` take `{year, week, dayOfWeek}`, `{year, ordinalDay}` and `{year, quarter, dayOfQuarter}`, and copy components from an existing value: `date({date: d, day: 28})`, `localdatetime({date: d, time: t, second: 42})`, `localdatetime({datetime: dt, day: 28})`. They were an unknown-key error.
+  - `date(str)` and `localdatetime(str)` read ISO week dates (`'2015-W30-2'`, `'2015W30'`) and ordinal dates (`'2015-202'`), and the basic `YYYYMM` form.
+  - `localtime(x)` and `time(x)` take a map (`localtime({hour: 12, millisecond: 645})`), a datetime, and the clock spellings `HH`, `HHMM`, `HHMMSS[.f]`. They raised "must be a string" or "cannot parse".
+  - An out-of-range week, ordinal day, quarter or day of quarter raises.
 
 - **Prebuilt `kglite-bolt-server` binaries on the GitHub Release.**
   - Targets: `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`, each as `kglite-bolt-server-v<version>-<target>.tar.gz` with a `.sha256` file.
@@ -67,22 +83,6 @@ before upgrading.
   - `row_number()`, `rank()` and `dense_rank()` reject arguments they used to ignore.
 
 - **`--version` on `kglite-mcp-server` and `kglite-bolt-server`.** Prints the kglite version and exits; the pip `kglite-mcp-server` entry point shares the flag.
-
-- **Temporal constructors read the ISO week, ordinal and quarter forms.**
-  - `date()`, `localdatetime()` and `datetime()` take `{year, week, dayOfWeek}`, `{year, ordinalDay}` and `{year, quarter, dayOfQuarter}`, and copy components from an existing value: `date({date: d, day: 28})`, `localdatetime({date: d, time: t, second: 42})`, `localdatetime({datetime: dt, day: 28})`. They were an unknown-key error.
-  - `date(str)` and `localdatetime(str)` read ISO week dates (`'2015-W30-2'`, `'2015W30'`) and ordinal dates (`'2015-202'`), and the basic `YYYYMM` form.
-  - `localtime(x)` and `time(x)` take a map (`localtime({hour: 12, millisecond: 645})`), a datetime, and the clock spellings `HH`, `HHMM`, `HHMMSS[.f]`. They raised "must be a string" or "cannot parse".
-  - An out-of-range week, ordinal day, quarter or day of quarter raises.
-
-- **Truncation functions for temporal values.** `date.truncate`, `localdatetime.truncate`, `datetime.truncate`, `localtime.truncate` and `time.truncate` take a unit (`millennium` through `microsecond`), a date, datetime or time, and an optional override map: `date.truncate('week', d, {dayOfWeek: 2})`. They were an unknown-function error; `date_truncate` is unchanged.
-
-- **Durations take fractions, ISO text and the `in*` counters.**
-  - `duration({days: 1.5, weeks: 2.5, minutes: 1.5})` spills each fraction into the next smaller unit, and `milliseconds`, `microseconds` and `nanoseconds` are accepted when the total is whole seconds. A fractional component was an error.
-  - `duration('P14DT16H12M')` reads ISO 8601 text, including fractions (`'P2.5W'`) and the `P2012-02-02T14:37:21` form.
-  - `duration.inMonths`, `duration.inDays` and `duration.inSeconds` give the whole months, days or seconds between two dates or datetimes.
-  - A total that is not a whole number of seconds still raises.
-
-- **Component accessors for dates, datetimes and durations.** `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay` and `d.dayOfQuarter` work on dates and datetimes, `t.hour` to `t.nanosecond` and `t.epochMillis` on datetimes, and `dur.quarters`, `dur.weeks`, `dur.monthsOfYear` and the other `...Of...` accessors on durations. `d.year` on a datetime returned the datetime itself; an accessor a datetime does not have is now `null`.
 
 ### Changed
 
