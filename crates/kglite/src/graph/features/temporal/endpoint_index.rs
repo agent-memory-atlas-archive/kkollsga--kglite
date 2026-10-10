@@ -981,6 +981,10 @@ pub(crate) fn declared_timeless_at(
 pub(crate) struct Resolution {
     pub(crate) resolved: ResolvedFilter,
     pub(crate) counts: FilteredCounts,
+    /// `counts.hidden` keyed by the echo's target names, built once with the
+    /// resolution so a statement's echo copies it instead of formatting a
+    /// name per target.
+    pub(crate) hidden_named: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -1008,9 +1012,30 @@ pub(crate) fn resolve_shared(
     {
         return hit;
     }
+    let counts = filtered_counts(graph, template, t);
+    let hidden_named = counts
+        .hidden
+        .iter()
+        .map(|(target, count)| {
+            let name = match target {
+                TemporalTarget::Node(label) => {
+                    crate::graph::core::graph_filter::node_target_name(label)
+                }
+                TemporalTarget::Relationship {
+                    rel_type,
+                    source_type,
+                } => crate::graph::core::graph_filter::relationship_target_name(
+                    rel_type,
+                    source_type.as_deref(),
+                ),
+            };
+            (name, *count)
+        })
+        .collect();
     let resolution = Arc::new(Resolution {
         resolved: resolve(graph, template, ValidTimeSelector::AsOf(t)),
-        counts: filtered_counts(graph, template, t),
+        counts,
+        hidden_named,
     });
     let mut write = write_cache(graph);
     let cache = write.get_or_insert_with(IndexCache::default).at(version);

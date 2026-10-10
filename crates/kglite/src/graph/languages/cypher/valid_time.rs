@@ -33,11 +33,10 @@ use super::result::{ResultRow, TemporalDiagnostics};
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
-    node_target_name, relationship_target_name, today_utc, EdgeGuard, ElementFilter, GuardTemplate,
-    MergedGuard, TemplateScope, ValidTimeSelector,
+    today_utc, EdgeGuard, ElementFilter, GuardTemplate, MergedGuard, TemplateScope,
+    ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
-use crate::graph::features::temporal::declarations::TemporalTarget;
 use crate::graph::features::temporal::{self, eval, ValidTimeDefault};
 use crate::graph::schema::DirGraph;
 
@@ -567,21 +566,7 @@ pub(crate) fn temporal_echo(
         (BTreeMap::new(), Some(0), "plain")
     } else {
         let resolution = temporal::endpoint_index::resolve_shared(graph, &merged.template, instant);
-        let hidden = resolution
-            .counts
-            .hidden
-            .iter()
-            .map(|(target, count)| {
-                let name = match target {
-                    TemporalTarget::Node(label) => node_target_name(label),
-                    TemporalTarget::Relationship {
-                        rel_type,
-                        source_type,
-                    } => relationship_target_name(rel_type, source_type.as_deref()),
-                };
-                (name, *count)
-            })
-            .collect();
+        let hidden = resolution.hidden_named.clone();
         (hidden, resolution.counts.endpoint_invalid, route)
     };
     Some(TemporalDiagnostics {

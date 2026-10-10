@@ -95,6 +95,24 @@ fn a_hop_echoes_the_relationship_target_and_a_datetime_its_time() {
 }
 
 #[test]
+fn hidden_counts_name_node_and_relationship_targets_and_repeat_from_the_cache() {
+    let graph = wells();
+    let query = "FOR VALID_TIME AS OF date('2003-06-30') \
+                 MATCH (w:Well)-[:IN]->(f:Project) RETURN w.id";
+    let first = echo(&graph, query).expect("a context echoes");
+    assert_eq!(
+        first.hidden,
+        [
+            ("(:Well)".to_string(), 1),
+            ("[:IN from :Well]".to_string(), 1),
+        ]
+        .into()
+    );
+    // The second statement is served the cached resolution: same echo.
+    assert_eq!(echo(&graph, query).as_ref(), Some(&first));
+}
+
+#[test]
 fn a_timeless_instant_echoes_the_plain_route() {
     let graph = wells();
     // Both wells and both memberships are valid in 2006: the filter removes
