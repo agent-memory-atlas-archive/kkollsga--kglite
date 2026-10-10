@@ -86,7 +86,7 @@
       "case_ids": [
         "with.aggregation"
       ],
-      "note": "Projection, aggregation, wildcard preservation, and strict post-projection scope validation."
+      "note": "Projection, aggregation, wildcard preservation, and post-projection scope validation. A non-aggregating, non-DISTINCT WITH keeps one row per input row, so its WHERE and trailing ORDER BY / SKIP / LIMIT may read variables the projection dropped; after a DISTINCT or aggregating WITH only the projected columns are readable. No dropped variable is visible to any later clause."
     },
     {
       "id": "clause.order",
@@ -480,6 +480,12 @@
       "syntax": "labels(n) / SET n:Label",
       "status": "intentional_divergence",
       "note": "KGLite stores one immutable primary type plus additive secondary labels; labels(n) returns primary type first."
+    },
+    {
+      "id": "validation.lenient_evaluation",
+      "syntax": "compile-time type and variable-kind checks",
+      "status": "intentional_divergence",
+      "note": "openCypher rejects some queries at compile time on static type or variable-kind grounds; KGLite parses and evaluates them instead, and NULL propagation supplies the result. Boolean operators over non-boolean operands return the three-valued result (123 AND true is true, NOT 5 is false) rather than an error. A variable used as both a node and a relationship in one query is not a kind-conflict error: the pattern is matched with whatever each position binds. Conversion functions coerce or return null for an argument of the wrong type (toInteger of a list is null, toString of a list renders it), property access on a value that is not a map is null, and UNION arms whose columns carry different value types are combined without a type check. Errors that need the value, such as size() of an integer or range() with a non-integer bound, are still raised, but at run time and not before execution. Rationale: a graph built from loosely typed sources would otherwise fail a whole query on one stray value, and NULL propagation already gives every operator a defined result. Scope errors are not part of this divergence: an undefined variable, a variable read past a DISTINCT or aggregating projection, and a variable dropped by a WITH are still refused before execution."
     },
     {
       "id": "transaction.model",

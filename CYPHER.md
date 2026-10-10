@@ -5504,6 +5504,7 @@ compatible subset.
 |---------|--------|-------|-----------|
 | Labels per node | One primary type + secondary labels | Multiple equal labels | Primary type drives indexing (`type_indices`); secondary labels are additive (0.10.5+) |
 | `labels(n)` return type | `List[String]` (primary first) | `List[String]` | Matches Neo4j since 0.10.5 |
+| Compile-time type and variable-kind checks | Not performed: the query parses and evaluates | Rejected at compile time (boolean operators on non-booleans, one variable as node and relationship, invalid conversion arguments, ...) | Lenient evaluation: a loosely typed graph should not fail a whole query on one stray value, and NULL propagation gives every operator a defined result. Scope errors (undefined variable, variable read past a `DISTINCT` or aggregating projection) are still refused before execution. Recorded as `validation.lenient_evaluation` |
 | `SET n:Label` | Supported (adds a secondary label) | Supported | Primary type is immutable; changing it requires node migration/recreation |
 | Storage | In-memory, mmap-backed, or disk CSR | Disk-based | One Cypher engine spans all three embedded storage modes |
 | Transactions | Snapshot isolation + OCC through `Session` / `Transaction`; durability depends on access mode | Server/embedded transaction management | Native session coordination is binding-independent; direct graph writes are in-place |
