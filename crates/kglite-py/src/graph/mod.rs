@@ -11,6 +11,7 @@ pub mod languages;
 pub mod pyapi;
 pub(crate) mod valid_time;
 pub(crate) mod write_gate;
+pub use write_gate::KnowledgeGraph;
 
 pub use pyapi::transaction::Transaction;
 
@@ -175,45 +176,6 @@ impl CursorState {
             temporal_context: TemporalContext::default(),
         }
     }
-}
-
-/// Main knowledge graph type exposed to Python via PyO3.
-///
-/// Wraps a `DirGraph` behind an `Arc` for cheap cloning (read-heavy workloads).
-/// All read methods take `&self`; mutations use `Arc::make_mut` for copy-on-write.
-/// Supports Cypher queries, property filtering, traversals, graph algorithms,
-/// and code entity exploration methods (`find`, `source`, `context`, `toc`).
-#[pyclass(module = "kglite", skip_from_py_object)]
-pub struct KnowledgeGraph {
-    pub(crate) inner: Arc<DirGraph>,
-    /// Per-caller fluent cursor state — see [`CursorState`].
-    pub(crate) cursor: CursorState,
-    /// Registered embedding model (not serialized — re-set after load).
-    /// Backend-agnostic via [`embedder::Embedder`] trait: Python
-    /// embedders flow through [`embedder::py_adapter::PyEmbedderAdapter`];
-    /// Rust-native embedders (e.g. fastembed-rs) implement the trait
-    /// directly. Held as a trait object rather than `Option<Py<PyAny>>`
-    /// so downstream Rust binaries (kglite-mcp-server) don't inherit a
-    /// libpython dep transitively.
-    pub(crate) embedder: Option<Arc<dyn embedder::Embedder>>,
-    /// Default per-query timeout in milliseconds. Applied to cypher() when
-    /// timeout_ms is not explicitly passed. None uses the Python 180s default.
-    pub(crate) default_timeout_ms: Option<u64>,
-    /// Default per-query work budget — intermediate rows, retained collection
-    /// items and scan work, not a result-row cap. Applied to cypher() when
-    /// max_work_units is not explicitly passed; a query that exceeds it errors
-    /// rather than truncating. None = no explicit budget (default), leaving
-    /// the engine's own backstop in charge.
-    pub(crate) default_max_work_units: Option<usize>,
-    /// Default cap on the result rows a query **retains**. Applied to cypher()
-    /// when `row_limit` is not explicitly passed. The opposite number to
-    /// `default_max_work_units`: that one fails a query that does too much
-    /// work, this one truncates a result that is too big and says so.
-    /// None = retain everything (default).
-    pub(crate) default_row_limit: Option<usize>,
-    /// Graph lifecycle / identity — save target + durability session. See
-    /// [`GraphLifecycle`].
-    pub(crate) lifecycle: GraphLifecycle,
 }
 
 /// Graph **lifecycle / identity** state — the save target plus the durability
@@ -413,15 +375,12 @@ impl KnowledgeGraph {
     /// builders (e.g. codingest) — that need to wrap it into a
     /// `KnowledgeGraph` alongside their own state.
     pub fn from_arc(inner: Arc<DirGraph>) -> Self {
-        KnowledgeGraph {
+        KnowledgeGraph::from_parts(
             inner,
-            cursor: CursorState::new(),
-            embedder: None,
-            default_timeout_ms: None,
-            default_max_work_units: None,
-            default_row_limit: None,
-            lifecycle: crate::graph::GraphLifecycle::detached(),
-        }
+            CursorState::new(),
+            None,
+            crate::graph::GraphLifecycle::detached(),
+        )
     }
 
     /// Derive a new handle that shares this graph's storage, lifecycle, and
@@ -437,7 +396,7 @@ impl KnowledgeGraph {
         F: FnOnce(&Arc<DirGraph>, &mut CursorState) -> PyResult<()>,
     {
         let mut new_kg = self.clone();
-        f(&self.inner, &mut new_kg.cursor)?;
+        f(self.graph(), &mut new_kg.cursor)?;
         Ok(new_kg)
     }
 
@@ -505,30 +464,32 @@ impl KnowledgeGraph {
 
 impl Clone for KnowledgeGraph {
     fn clone(&self) -> Self {
-        KnowledgeGraph {
-            inner: Arc::clone(&self.inner),
-            cursor: self.cursor.clone(), // selection/reports Arc-backed — O(1)
-            embedder: self.embedder.as_ref().map(Arc::clone),
-            default_timeout_ms: self.default_timeout_ms,
-            default_max_work_units: self.default_max_work_units,
-            default_row_limit: self.default_row_limit,
-            // A true Clone preserves the save identity (source_path) but never
-            // the durable session (the WAL File handle isn't shareable) nor the
-            // writer lease — write ownership stays with the graph that opened
-            // the path, so a clone can never release it early on drop.
-            // ...and the derived handle is *marked* as coming from a durable
-            // graph, so the writes it cannot log are refused rather than
-            // silently dropped. See `orphaned_from_durable`.
-            lifecycle: GraphLifecycle {
-                ownership_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-                source_path: self.lifecycle.source_path.clone(),
-                durable: None,
-                orphaned_from_durable: self.lifecycle.in_durable_lineage(),
-                orphaned_from_cdc: self.lifecycle.orphaned_from_cdc || self.inner.cdc_enabled(),
-                writer_lease: None,
-                lease_opt_out: self.lifecycle.lease_opt_out,
-            },
-        }
+        // A true Clone preserves the save identity (source_path) but never
+        // the durable session (the WAL File handle isn't shareable) nor the
+        // writer lease — write ownership stays with the graph that opened
+        // the path, so a clone can never release it early on drop.
+        // ...and the derived handle is *marked* as coming from a durable
+        // graph, so the writes it cannot log are refused rather than
+        // silently dropped. See `orphaned_from_durable`.
+        let lifecycle = GraphLifecycle {
+            ownership_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            source_path: self.lifecycle.source_path.clone(),
+            durable: None,
+            orphaned_from_durable: self.lifecycle.in_durable_lineage(),
+            orphaned_from_cdc: self.lifecycle.orphaned_from_cdc || self.graph().cdc_enabled(),
+            writer_lease: None,
+            lease_opt_out: self.lifecycle.lease_opt_out,
+        };
+        let mut cloned = KnowledgeGraph::from_parts(
+            Arc::clone(self.graph()),
+            self.cursor.clone(), // selection/reports Arc-backed — O(1)
+            self.embedder.as_ref().map(Arc::clone),
+            lifecycle,
+        );
+        cloned.default_timeout_ms = self.default_timeout_ms;
+        cloned.default_max_work_units = self.default_max_work_units;
+        cloned.default_row_limit = self.default_row_limit;
+        cloned
     }
 }
 
@@ -674,7 +635,7 @@ impl KnowledgeGraph {
         let mut new_kg = self.clone();
         let estimated = level_nodes(&new_kg);
         filter
-            .retain_level(&self.inner, &mut new_kg.cursor.selection)
+            .retain_level(self.graph(), &mut new_kg.cursor.selection)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         let actual = level_nodes(&new_kg);
         new_kg.cursor.selection.add_plan_step(
@@ -709,7 +670,7 @@ impl KnowledgeGraph {
             return (Arc::clone(model), true);
         }
         let info = kglite_core::api::embeddings::embedding_info(
-            &self.inner,
+            self.graph(),
             entity,
             type_name,
             text_column,
@@ -731,7 +692,7 @@ impl KnowledgeGraph {
         Option<NodeIndex>,
         Vec<(NodeIndex, kglite_core::api::NodeInfo)>,
     ) {
-        kglite_core::api::code_entities::resolve_code_entity(&self.inner, name, node_type)
+        kglite_core::api::code_entities::resolve_code_entity(self.graph(), name, node_type)
     }
 
     /// Build a source-location dict for a single name.
@@ -741,7 +702,7 @@ impl KnowledgeGraph {
         name: &str,
         node_type: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let (resolved, matches) = self.resolve_code_entity(name, node_type);
 
         let target_idx = match resolved {
@@ -755,7 +716,7 @@ impl KnowledgeGraph {
                     dict.set_item("ambiguous", true)?;
                     let match_list = PyList::empty(py);
                     for (_, info) in &matches {
-                        let d = py_out::nodeinfo_to_pydict(py, &self.inner.graph, info)?;
+                        let d = py_out::nodeinfo_to_pydict(py, &self.graph().graph, info)?;
                         match_list.append(d)?;
                     }
                     dict.set_item("matches", match_list)?;
@@ -764,7 +725,7 @@ impl KnowledgeGraph {
             }
         };
 
-        let node = self.inner.node_view(target_idx).ok_or_else(|| {
+        let node = self.graph().node_view(target_idx).ok_or_else(|| {
             crate::error_py::kg_to_pyerr(crate::error::KgError::Internal {
                 message: "resolved code entity disappeared before projection".to_string(),
                 location: "graph/mod.rs::source_one",
@@ -772,7 +733,7 @@ impl KnowledgeGraph {
         })?;
 
         let dict = PyDict::new(py);
-        dict.set_item("type", node.get_node_type_ref(&self.inner.interner))?;
+        dict.set_item("type", node.get_node_type_ref(&self.graph().interner))?;
         dict.set_item("name", py_out::value_to_py(py, &node.title())?)?;
         dict.set_item("qualified_name", py_out::value_to_py(py, &node.id())?)?;
 
@@ -803,7 +764,7 @@ impl KnowledgeGraph {
     /// shape in Rust types, returned as a [`SourceLookup`] so callers can
     /// format ambiguous / not-found cases without unpacking a PyDict.
     pub fn source_location(&self, name: &str, node_type: Option<&str>) -> SourceLookup {
-        kglite_core::api::code_entities::source_location(&self.inner, name, node_type)
+        kglite_core::api::code_entities::source_location(self.graph(), name, node_type)
     }
 }
 
@@ -1335,10 +1296,10 @@ impl KnowledgeGraph {
             options.base = base.to_string();
         }
         kglite_core::api::io::to_rdf(
-            &self.inner,
+            self.graph(),
             path,
             selection,
-            &self.inner.parent_types,
+            &self.graph().parent_types,
             &options,
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)

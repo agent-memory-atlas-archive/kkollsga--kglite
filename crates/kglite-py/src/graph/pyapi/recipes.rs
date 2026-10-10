@@ -53,7 +53,7 @@ fn record_to_dict<'py>(py: Python<'py>, record: &RecipeRecord) -> PyResult<Bound
 /// `recipes::catalogue_from_graph`, which takes the first record in name order
 /// — so what is inherited here is the description the catalogue would serve.
 fn inherited_group_description(graph: &KnowledgeGraph, recipe: &str) -> Option<String> {
-    recipes::list(&graph.inner)
+    recipes::list(graph.graph())
         .into_iter()
         .find(|stored| stored.recipe == recipe)
         .map(|stored| stored.recipe_description)
@@ -64,7 +64,7 @@ impl KnowledgeGraph {
     /// List every recipe query this graph carries, sorted by recipe then name.
     fn list_recipes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let result_list = PyList::empty(py);
-        for record in recipes::list(&self.inner) {
+        for record in recipes::list(self.graph()) {
             result_list.append(record_to_dict(py, &record)?)?;
         }
         Ok(result_list.into())
@@ -73,7 +73,7 @@ impl KnowledgeGraph {
     /// Read one recipe query by its recipe and name.
     #[pyo3(signature = (recipe, name))]
     fn get_recipe(&self, py: Python<'_>, recipe: &str, name: &str) -> PyResult<Py<PyAny>> {
-        let record = recipes::get(&self.inner, recipe, name).map_err(kg_to_pyerr)?;
+        let record = recipes::get(self.graph(), recipe, name).map_err(kg_to_pyerr)?;
         Ok(record_to_dict(py, &record)?.into())
     }
 
@@ -115,7 +115,7 @@ impl KnowledgeGraph {
 
         // Read back rather than echo the argument, so what this returns is what
         // a later `get_recipe` will.
-        let stored = recipes::get(&self.inner, recipe, name).map_err(kg_to_pyerr)?;
+        let stored = recipes::get(self.graph(), recipe, name).map_err(kg_to_pyerr)?;
         let dict = record_to_dict(py, &stored)?;
         dict.set_item("created", matches!(outcome, SetOutcome::Created))?;
         Ok(dict.into())
@@ -142,6 +142,6 @@ impl KnowledgeGraph {
     /// Write every recipe query to `path` as one JSON catalogue document.
     #[pyo3(signature = (path))]
     fn export_recipes(&self, path: &str) -> PyResult<()> {
-        recipes::export_path(&self.inner, std::path::Path::new(path)).map_err(kg_to_pyerr)
+        recipes::export_path(self.graph(), std::path::Path::new(path)).map_err(kg_to_pyerr)
     }
 }

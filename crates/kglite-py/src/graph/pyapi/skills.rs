@@ -38,7 +38,7 @@ impl KnowledgeGraph {
     /// List the skills this graph carries, sorted by name, without their bodies.
     fn list_skills(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let result_list = PyList::empty(py);
-        for record in skills::list(&self.inner) {
+        for record in skills::list(self.graph()) {
             result_list.append(record_to_dict(py, &record, false)?)?;
         }
         Ok(result_list.into())
@@ -47,7 +47,7 @@ impl KnowledgeGraph {
     /// Read one skill by name, body included.
     #[pyo3(signature = (name))]
     fn get_skill(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
-        let record = skills::get(&self.inner, name).map_err(kg_to_pyerr)?;
+        let record = skills::get(self.graph(), name).map_err(kg_to_pyerr)?;
         Ok(record_to_dict(py, &record, true)?.into())
     }
 
@@ -73,7 +73,7 @@ impl KnowledgeGraph {
 
         // Read back rather than echo the argument: what a later `get_skill`
         // returns is what the caller should have been handed here.
-        let stored = skills::get(&self.inner, name).map_err(kg_to_pyerr)?;
+        let stored = skills::get(self.graph(), name).map_err(kg_to_pyerr)?;
         let dict = record_to_dict(py, &stored, true)?;
         dict.set_item("created", matches!(outcome, SetOutcome::Created))?;
         Ok(dict.into())
@@ -96,6 +96,6 @@ impl KnowledgeGraph {
     /// Write every skill to a directory as `<name>.md`, creating it if needed.
     #[pyo3(signature = (path))]
     fn export_skills(&self, path: &str) -> PyResult<Vec<String>> {
-        skills::export_dir(&self.inner, std::path::Path::new(path)).map_err(kg_to_pyerr)
+        skills::export_dir(self.graph(), std::path::Path::new(path)).map_err(kg_to_pyerr)
     }
 }

@@ -125,7 +125,8 @@ impl KnowledgeGraph {
     /// `auto_checkpoint_wal_mib` (and is at least as large as the file it
     /// extends), after folding any finished one into the log. Never waits.
     pub(super) fn auto_checkpoint_if_needed(&mut self) {
-        let Some(ds) = self.lifecycle.durable.as_mut() else {
+        let (graph, lifecycle) = self.lifecycle_parts();
+        let Some(ds) = lifecycle.durable.as_mut() else {
             return;
         };
         if let Some(text) = ds.settle_checkpoint(false) {
@@ -138,7 +139,7 @@ impl KnowledgeGraph {
         if ds.inflight.is_some() || ds.diverged || size < limit || size < ds.retry_after_wal_bytes {
             return;
         }
-        let Some(source) = self.lifecycle.source_path.clone() else {
+        let Some(source) = lifecycle.source_path.clone() else {
             return;
         };
         let floor = *ds
@@ -156,7 +157,7 @@ impl KnowledgeGraph {
                 return;
             }
         };
-        let snapshot = Arc::clone(&self.inner);
+        let snapshot = Arc::clone(graph);
         let spawned = std::thread::Builder::new()
             .name("kglite-checkpoint".to_string())
             .spawn(move || {

@@ -50,7 +50,7 @@ impl KnowledgeGraph {
         let options = RelationshipSearchOptions::new(top_k)
             .with_exact(exact)
             .with_metric(metric);
-        let inner = self.inner.clone();
+        let inner = self.graph().clone();
         let hits = py
             .detach(|| {
                 kglite_core::api::embeddings::search_relationship_embeddings(
@@ -116,7 +116,7 @@ impl KnowledgeGraph {
         let address = tuple_row(address, Vec::new(), "relationship_embedding", "address")?;
         let keys = relationship_keys.unwrap_or_default();
         let vector = kglite_core::api::embeddings::relationship_embedding(
-            &self.inner,
+            self.graph(),
             relationship_type,
             text_column,
             &address,
@@ -136,7 +136,7 @@ impl KnowledgeGraph {
         text_column: &str,
     ) -> Option<usize> {
         kglite_core::api::embeddings::relationship_embedding_dim(
-            &self.inner,
+            self.graph(),
             relationship_type,
             text_column,
         )

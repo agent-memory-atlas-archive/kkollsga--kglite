@@ -107,11 +107,11 @@ impl KnowledgeGraph {
         direction: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let edge_dir = parse_direction(direction)?;
-        let source_lookup =
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, source_type.to_string())
-                .map_err(|e: String| {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+        let source_lookup = kglite_core::api::storage::TypeLookup::new(
+            &self.graph().graph,
+            source_type.to_string(),
+        )
+        .map_err(|e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = source_lookup
@@ -126,9 +126,10 @@ impl KnowledgeGraph {
         let target_lookup = if target_type == source_type {
             source_lookup
         } else {
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, target_type.to_string()).map_err(
-                |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)),
-            )?
+            kglite_core::api::storage::TypeLookup::new(&self.graph().graph, target_type.to_string())
+                .map_err(|e: String| {
+                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                })?
         };
 
         let target_value = py_in::py_value_to_value(target_id)?;
@@ -150,7 +151,7 @@ impl KnowledgeGraph {
 
         if let Some(prop) = weight_property {
             let result = kglite_core::api::algorithms::shortest_path_weighted(
-                &self.inner,
+                self.graph(),
                 source_idx,
                 target_idx,
                 &prop,
@@ -162,7 +163,7 @@ impl KnowledgeGraph {
                     let path_list = PyList::empty(py);
                     for &node_idx in &wp.path {
                         if let Some(info) =
-                            kglite_core::api::algorithms::get_node_info(&self.inner, node_idx)
+                            kglite_core::api::algorithms::get_node_info(self.graph(), node_idx)
                         {
                             let node_dict = PyDict::new(py);
                             node_dict.set_item("type", &info.node_type)?;
@@ -173,7 +174,7 @@ impl KnowledgeGraph {
                     }
                     dict.set_item("path", path_list)?;
                     let connections =
-                        kglite_core::api::algorithms::get_path_connections(&self.inner, &wp.path);
+                        kglite_core::api::algorithms::get_path_connections(self.graph(), &wp.path);
                     let conn_list = PyList::empty(py);
                     for conn in connections {
                         match conn {
@@ -190,8 +191,12 @@ impl KnowledgeGraph {
             });
         }
 
-        let result =
-            kglite_core::api::algorithms::shortest_path(&self.inner, source_idx, target_idx, &opts);
+        let result = kglite_core::api::algorithms::shortest_path(
+            self.graph(),
+            source_idx,
+            target_idx,
+            &opts,
+        );
 
         match result {
             Some(path_result) => {
@@ -200,7 +205,7 @@ impl KnowledgeGraph {
                 let path_list = PyList::empty(py);
                 for &node_idx in &path_result.path {
                     if let Some(info) =
-                        kglite_core::api::algorithms::get_node_info(&self.inner, node_idx)
+                        kglite_core::api::algorithms::get_node_info(self.graph(), node_idx)
                     {
                         let node_dict = PyDict::new(py);
                         node_dict.set_item("type", &info.node_type)?;
@@ -212,7 +217,7 @@ impl KnowledgeGraph {
                 result_dict.set_item("path", path_list)?;
 
                 let connections = kglite_core::api::algorithms::get_path_connections(
-                    &self.inner,
+                    self.graph(),
                     &path_result.path,
                 );
                 let conn_list = PyList::empty(py);
@@ -267,7 +272,7 @@ impl KnowledgeGraph {
         let edge_dir = parse_direction(direction)?;
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(source_type, &source_value)
             .ok_or_else(|| -> PyErr {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -278,7 +283,7 @@ impl KnowledgeGraph {
 
         let target_value = py_in::py_value_to_value(target_id)?;
         let target_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(target_type, &target_value)
             .ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -300,7 +305,7 @@ impl KnowledgeGraph {
         if let Some(prop) = weight_property {
             return Ok(
                 match kglite_core::api::algorithms::shortest_path_cost_weighted(
-                    &self.inner,
+                    self.graph(),
                     source_idx,
                     target_idx,
                     &prop,
@@ -314,7 +319,7 @@ impl KnowledgeGraph {
 
         Ok(
             match kglite_core::api::algorithms::shortest_path_cost_with(
-                &self.inner,
+                self.graph(),
                 source_idx,
                 target_idx,
                 &opts,
@@ -356,7 +361,7 @@ impl KnowledgeGraph {
         for (src_py, tgt_py) in &pairs {
             let src_val = py_in::py_value_to_value(src_py)?;
             let src_idx = self
-                .inner
+                .graph()
                 .lookup_by_id_normalized(node_type, &src_val)
                 .ok_or_else(|| -> PyErr {
                     crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -367,7 +372,7 @@ impl KnowledgeGraph {
 
             let tgt_val = py_in::py_value_to_value(tgt_py)?;
             let tgt_idx = self
-                .inner
+                .graph()
                 .lookup_by_id_normalized(node_type, &tgt_val)
                 .ok_or_else(|| {
                     crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -380,7 +385,7 @@ impl KnowledgeGraph {
         }
 
         let results = kglite_core::api::algorithms::shortest_path_cost_batch_with(
-            &self.inner,
+            self.graph(),
             &index_pairs,
             &path_options(
                 connection_types.as_deref(),
@@ -475,11 +480,11 @@ impl KnowledgeGraph {
             ));
         }
         let edge_dir = parse_direction(direction)?;
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
 
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(source_type, &source_value)
             .ok_or_else(|| -> PyErr {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -491,7 +496,7 @@ impl KnowledgeGraph {
         // A `target_type` that names nothing would silently answer `{}`, which
         // reads as "nothing is reachable" rather than "you typed the type wrong".
         if let Some(wanted) = target_type {
-            if !self.inner.type_indices.contains_key(wanted) {
+            if !self.graph().type_indices.contains_key(wanted) {
                 return Err(crate::error_py::kg_to_pyerr(
                     crate::error::KgError::Argument(format!(
                         "Unknown target_type '{}'. It is an ID NAMESPACE and result filter, \
@@ -503,7 +508,7 @@ impl KnowledgeGraph {
         }
 
         let costs = kglite_core::api::algorithms::shortest_path_costs_from(
-            &self.inner,
+            self.graph(),
             source_idx,
             &path_options(
                 connection_types.as_deref(),
@@ -523,7 +528,7 @@ impl KnowledgeGraph {
                 for id_obj in &ids {
                     let target_value = py_in::py_value_to_value(id_obj)?;
                     let target_idx = self
-                        .inner
+                        .graph()
                         .lookup_by_id_normalized(namespace, &target_value)
                         .ok_or_else(|| -> PyErr {
                             crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -539,11 +544,11 @@ impl KnowledgeGraph {
             }
             None => {
                 for (node_idx, hops) in costs {
-                    let Some(node) = self.inner.node_view(node_idx) else {
+                    let Some(node) = self.graph().node_view(node_idx) else {
                         continue;
                     };
                     if let Some(wanted) = target_type {
-                        if node.node_type_str(&self.inner.interner) != wanted {
+                        if node.node_type_str(&self.graph().interner) != wanted {
                             continue;
                         }
                     }
@@ -596,10 +601,10 @@ impl KnowledgeGraph {
         direction: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let edge_dir = parse_direction(direction)?;
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(source_type, &source_value)
             .ok_or_else(|| -> PyErr {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -610,7 +615,7 @@ impl KnowledgeGraph {
 
         let target_value = py_in::py_value_to_value(target_id)?;
         let target_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(target_type, &target_value)
             .ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -620,7 +625,7 @@ impl KnowledgeGraph {
             })?;
 
         match kglite_core::api::algorithms::shortest_path(
-            &self.inner,
+            self.graph(),
             source_idx,
             target_idx,
             &path_options(
@@ -635,7 +640,7 @@ impl KnowledgeGraph {
                     .path
                     .iter()
                     .filter_map(|&idx| {
-                        self.inner
+                        self.graph()
                             .node_view(idx)
                             .and_then(|node| node.get_field_ref("id"))
                             .map(|id| py_out::value_to_py(py, &id).unwrap_or_else(|_| py.None()))
@@ -681,7 +686,7 @@ impl KnowledgeGraph {
         let edge_dir = parse_direction(direction)?;
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(source_type, &source_value)
             .ok_or_else(|| -> PyErr {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -692,7 +697,7 @@ impl KnowledgeGraph {
 
         let target_value = py_in::py_value_to_value(target_id)?;
         let target_idx = self
-            .inner
+            .graph()
             .lookup_by_id_normalized(target_type, &target_value)
             .ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(format!(
@@ -702,7 +707,7 @@ impl KnowledgeGraph {
             })?;
 
         match kglite_core::api::algorithms::shortest_path(
-            &self.inner,
+            self.graph(),
             source_idx,
             target_idx,
             &path_options(
@@ -755,11 +760,11 @@ impl KnowledgeGraph {
         let edge_dir = parse_direction(direction)?;
         let max_hops = max_hops.unwrap_or(5);
 
-        let source_lookup =
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, source_type.to_string())
-                .map_err(|e: String| {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+        let source_lookup = kglite_core::api::storage::TypeLookup::new(
+            &self.graph().graph,
+            source_type.to_string(),
+        )
+        .map_err(|e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = source_lookup
@@ -774,9 +779,10 @@ impl KnowledgeGraph {
         let target_lookup = if target_type == source_type {
             source_lookup
         } else {
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, target_type.to_string()).map_err(
-                |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)),
-            )?
+            kglite_core::api::storage::TypeLookup::new(&self.graph().graph, target_type.to_string())
+                .map_err(|e: String| {
+                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                })?
         };
 
         let target_value = py_in::py_value_to_value(target_id)?;
@@ -801,7 +807,7 @@ impl KnowledgeGraph {
             all_paths_opts = all_paths_opts.with_via_types(vt);
         }
         let paths = kglite_core::api::algorithms::all_paths(
-            &self.inner,
+            self.graph(),
             source_idx,
             target_idx,
             &all_paths_opts,
@@ -814,7 +820,7 @@ impl KnowledgeGraph {
             let path_list = PyList::empty(py);
             for &node_idx in &path {
                 if let Some(info) =
-                    kglite_core::api::algorithms::get_node_info(&self.inner, node_idx)
+                    kglite_core::api::algorithms::get_node_info(self.graph(), node_idx)
                 {
                     let node_dict = PyDict::new(py);
                     node_dict.set_item("type", &info.node_type)?;
@@ -826,7 +832,7 @@ impl KnowledgeGraph {
             path_dict.set_item("path", path_list)?;
 
             let connections =
-                kglite_core::api::algorithms::get_path_connections(&self.inner, &path);
+                kglite_core::api::algorithms::get_path_connections(self.graph(), &path);
             let conn_list = PyList::empty(py);
             for conn in connections {
                 match conn {
@@ -861,17 +867,17 @@ impl KnowledgeGraph {
         weak: Option<bool>,
         titles_only: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let weak = weak.unwrap_or(true);
 
         let components = if weak {
             kglite_core::api::algorithms::weakly_connected_components(
-                &self.inner,
+                self.graph(),
                 kglite_core::api::algorithms::Interrupt::default(),
             )
             .map_err(|e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?
         } else {
-            kglite_core::api::algorithms::connected_components(&self.inner)
+            kglite_core::api::algorithms::connected_components(self.graph())
         };
 
         if titles_only.unwrap_or(false) {
@@ -880,7 +886,7 @@ impl KnowledgeGraph {
             for component in components {
                 let comp_list = PyList::empty(py);
                 for &node_idx in &component {
-                    if let Some(node) = self.inner.node_view(node_idx) {
+                    if let Some(node) = self.graph().node_view(node_idx) {
                         let node_title = node.title();
                         let title_str = match &*node_title {
                             Value::String(s) => s.as_str(),
@@ -902,9 +908,9 @@ impl KnowledgeGraph {
             for component in components {
                 let comp_list = PyList::empty(py);
                 for &node_idx in &component {
-                    if let Some(node) = self.inner.node_view(node_idx) {
+                    if let Some(node) = self.graph().node_view(node_idx) {
                         let node_dict = PyDict::new(py);
-                        node_dict.set_item(key_type, node.node_type_str(&self.inner.interner))?;
+                        node_dict.set_item(key_type, node.node_type_str(&self.graph().interner))?;
                         let node_title = node.title();
                         let title_str = match &*node_title {
                             Value::String(s) => s.as_str(),
@@ -945,11 +951,11 @@ impl KnowledgeGraph {
         timeout_ms: Option<u64>,
     ) -> PyResult<bool> {
         let edge_dir = parse_direction(direction)?;
-        let source_lookup =
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, source_type.to_string())
-                .map_err(|e: String| {
-                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
-                })?;
+        let source_lookup = kglite_core::api::storage::TypeLookup::new(
+            &self.graph().graph,
+            source_type.to_string(),
+        )
+        .map_err(|e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
 
         let source_value = py_in::py_value_to_value(source_id)?;
         let source_idx = source_lookup
@@ -964,9 +970,10 @@ impl KnowledgeGraph {
         let target_lookup = if target_type == source_type {
             source_lookup
         } else {
-            kglite_core::api::storage::TypeLookup::new(&self.inner.graph, target_type.to_string()).map_err(
-                |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)),
-            )?
+            kglite_core::api::storage::TypeLookup::new(&self.graph().graph, target_type.to_string())
+                .map_err(|e: String| {
+                    crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
+                })?
         };
 
         let target_value = py_in::py_value_to_value(target_id)?;
@@ -978,7 +985,7 @@ impl KnowledgeGraph {
         })?;
 
         Ok(kglite_core::api::algorithms::are_connected_with(
-            &self.inner,
+            self.graph(),
             source_idx,
             target_idx,
             &path_options(
@@ -1017,14 +1024,14 @@ impl KnowledgeGraph {
 
         let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             None,
             "degrees()",
         )
         .map_err(argument)?;
         let degrees = kglite_core::api::fluent::get_node_degrees(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             Some(&valid_time),
         )
@@ -1078,7 +1085,7 @@ impl KnowledgeGraph {
             timeout_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
         );
 
-        let inner = Arc::clone(&self.inner);
+        let inner = Arc::clone(self.graph());
         let results = py
             .detach(move || {
                 let mut opts = kglite_core::api::algorithms::CentralityOptions::default()
@@ -1097,10 +1104,10 @@ impl KnowledgeGraph {
             })?;
 
         if to_df.unwrap_or(false) {
-            centrality_results_to_dataframe(py, &self.inner, results, top_k)
+            centrality_results_to_dataframe(py, self.graph(), results, top_k)
         } else {
             let view = crate::graph::pyapi::result_view::ResultView::from_centrality(
-                &self.inner,
+                self.graph(),
                 results,
                 top_k,
             );
@@ -1151,7 +1158,7 @@ impl KnowledgeGraph {
             timeout_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
         );
 
-        let inner = Arc::clone(&self.inner);
+        let inner = Arc::clone(self.graph());
         let results = py
             .detach(move || {
                 let mut opts = kglite_core::api::algorithms::PagerankOptions::default()
@@ -1169,10 +1176,10 @@ impl KnowledgeGraph {
             })?;
 
         if to_df.unwrap_or(false) {
-            centrality_results_to_dataframe(py, &self.inner, results, top_k)
+            centrality_results_to_dataframe(py, self.graph(), results, top_k)
         } else {
             let view = crate::graph::pyapi::result_view::ResultView::from_centrality(
-                &self.inner,
+                self.graph(),
                 results,
                 top_k,
             );
@@ -1214,7 +1221,7 @@ impl KnowledgeGraph {
             timeout_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
         );
 
-        let inner = Arc::clone(&self.inner);
+        let inner = Arc::clone(self.graph());
         let results = py
             .detach(move || {
                 let mut opts = kglite_core::api::algorithms::DegreeCentralityOptions::default()
@@ -1230,10 +1237,10 @@ impl KnowledgeGraph {
             })?;
 
         if to_df.unwrap_or(false) {
-            centrality_results_to_dataframe(py, &self.inner, results, top_k)
+            centrality_results_to_dataframe(py, self.graph(), results, top_k)
         } else {
             let view = crate::graph::pyapi::result_view::ResultView::from_centrality(
-                &self.inner,
+                self.graph(),
                 results,
                 top_k,
             );
@@ -1282,7 +1289,7 @@ impl KnowledgeGraph {
             timeout_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms)),
         );
 
-        let inner = Arc::clone(&self.inner);
+        let inner = Arc::clone(self.graph());
         let results = py
             .detach(move || {
                 let mut opts = kglite_core::api::algorithms::CentralityOptions::default()
@@ -1301,10 +1308,10 @@ impl KnowledgeGraph {
             })?;
 
         if to_df.unwrap_or(false) {
-            centrality_results_to_dataframe(py, &self.inner, results, top_k)
+            centrality_results_to_dataframe(py, self.graph(), results, top_k)
         } else {
             let view = crate::graph::pyapi::result_view::ResultView::from_centrality(
-                &self.inner,
+                self.graph(),
                 results,
                 top_k,
             );
@@ -1343,11 +1350,11 @@ impl KnowledgeGraph {
         if let Some(ct) = connection_types.as_deref() {
             opts = opts.with_connection_types(ct);
         }
-        let result = kglite_core::api::algorithms::louvain_communities(&self.inner, &opts)
+        let result = kglite_core::api::algorithms::louvain_communities(self.graph(), &opts)
             .map_err(|e: String| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
             })?;
-        community_results_to_py(py, &self.inner, result)
+        community_results_to_py(py, self.graph(), result)
     }
 
     /// Detect communities using label propagation.
@@ -1378,10 +1385,10 @@ impl KnowledgeGraph {
         if let Some(ct) = connection_types.as_deref() {
             opts = opts.with_connection_types(ct);
         }
-        let result = kglite_core::api::algorithms::label_propagation(&self.inner, &opts).map_err(
+        let result = kglite_core::api::algorithms::label_propagation(self.graph(), &opts).map_err(
             |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)),
         )?;
-        community_results_to_py(py, &self.inner, result)
+        community_results_to_py(py, self.graph(), result)
     }
 
     /// Expand the current selection by N hops.
@@ -1405,7 +1412,7 @@ impl KnowledgeGraph {
     fn expand(&self, hops: Option<usize>) -> PyResult<Self> {
         let hops = hops.unwrap_or(1);
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             None,
             "expand()",
@@ -1461,14 +1468,14 @@ impl KnowledgeGraph {
     fn to_subgraph(&self) -> PyResult<Self> {
         let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             None,
             "to_subgraph()",
         )
         .map_err(argument)?;
         let extracted = kglite_core::api::fluent::extract_subgraph(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             Some(&valid_time),
         )
@@ -1512,13 +1519,13 @@ impl KnowledgeGraph {
     fn save_subset(&self, py: Python<'_>, path: &str) -> PyResult<()> {
         let argument = |e: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             None,
             "save_subset()",
         )
         .map_err(argument)?;
-        let inner = self.inner.clone();
+        let inner = self.graph().clone();
         let selection = self.cursor.selection.clone();
         let path_owned = path.to_string();
         let filter = valid_time.clone();
@@ -1551,7 +1558,7 @@ impl KnowledgeGraph {
     ///         - 'connection_types': Dict of connection type -> count
     fn subgraph_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let stats =
-            kglite_core::api::fluent::get_subgraph_stats(&self.inner, &self.cursor.selection)
+            kglite_core::api::fluent::get_subgraph_stats(self.graph(), &self.cursor.selection)
                 .map_err(|e: String| {
                     crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e))
                 })?;

@@ -221,7 +221,7 @@ impl KnowledgeGraph {
         text_column: &str,
     ) -> bool {
         kglite_core::api::embeddings::has_relationship_vector_index(
-            &self.inner,
+            self.graph(),
             relationship_type,
             text_column,
         )
@@ -235,7 +235,7 @@ impl KnowledgeGraph {
         text_column: &str,
     ) -> PyResult<usize> {
         kglite_core::api::embeddings::refresh_relationship_vector_index(
-            &self.inner,
+            self.graph(),
             relationship_type,
             text_column,
         )

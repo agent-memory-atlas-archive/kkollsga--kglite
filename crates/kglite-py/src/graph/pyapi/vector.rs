@@ -86,7 +86,7 @@ impl KnowledgeGraph {
         returning: Option<Vec<String>>,
         exact: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let top_k = top_k.unwrap_or(10);
         let exact = exact.unwrap_or(false);
         let embedding_property = kglite_core::api::embeddings::store_name(text_column);
@@ -106,7 +106,7 @@ impl KnowledgeGraph {
                 })
             })
             .transpose()?;
-        let inner = self.inner.clone();
+        let inner = self.graph().clone();
         let selection = self.cursor.selection.clone();
         let results = py
             .detach(|| {
@@ -130,7 +130,12 @@ impl KnowledgeGraph {
         if to_df.unwrap_or(false) {
             let records: Vec<Py<PyAny>> = results
                 .iter()
-                .filter_map(|r| self.inner.graph.node_view(r.node_idx).map(|node| (r, node)))
+                .filter_map(|r| {
+                    self.graph()
+                        .graph
+                        .node_view(r.node_idx)
+                        .map(|node| (r, node))
+                })
                 .map(|(r, node)| -> PyResult<Py<PyAny>> {
                     let dict = PyDict::new(py);
                     dict.set_item("id", py_out::value_to_py(py, &node.id())?)?;
@@ -138,12 +143,12 @@ impl KnowledgeGraph {
                         dict.set_item("title", py_out::value_to_py(py, &node.title())?)?;
                     }
                     if want("type") {
-                        dict.set_item("type", node.node_type_str(&self.inner.interner))?;
+                        dict.set_item("type", node.node_type_str(&self.graph().interner))?;
                     }
                     dict.set_item("score", r.score)?;
                     // properties_cloned reads PropertyStorage::Columnar (the
                     // durable shape); property_iter yields nothing for it.
-                    for (k, v) in node.properties_cloned(&self.inner.interner) {
+                    for (k, v) in node.properties_cloned(&self.graph().interner) {
                         if want(&k) {
                             dict.set_item(k, py_out::value_to_py(py, &v)?)?;
                         }
@@ -157,17 +162,17 @@ impl KnowledgeGraph {
 
         let py_list = PyList::empty(py);
         for r in &results {
-            if let Some(node) = self.inner.graph.node_view(r.node_idx) {
+            if let Some(node) = self.graph().graph.node_view(r.node_idx) {
                 let dict = PyDict::new(py);
                 dict.set_item("id", py_out::value_to_py(py, &node.id())?)?;
                 if want("title") {
                     dict.set_item("title", py_out::value_to_py(py, &node.title())?)?;
                 }
                 if want("type") {
-                    dict.set_item("type", node.node_type_str(&self.inner.interner))?;
+                    dict.set_item("type", node.node_type_str(&self.graph().interner))?;
                 }
                 dict.set_item("score", r.score)?;
-                for (k, v) in node.properties_cloned(&self.inner.interner) {
+                for (k, v) in node.properties_cloned(&self.graph().interner) {
                     if want(&k) {
                         dict.set_item(k, py_out::value_to_py(py, &v)?)?;
                     }
@@ -182,7 +187,7 @@ impl KnowledgeGraph {
     /// The vector dimension of a node type's embedding store for a text column, or None when there is no such store.
     pub(super) fn node_embedding_dim(&self, node_type: &str, text_column: &str) -> Option<usize> {
         let key = kglite_core::api::embeddings::store_key(node_type, text_column);
-        self.inner.embeddings.get(&key).map(|s| s.dimension)
+        self.graph().embeddings.get(&key).map(|s| s.dimension)
     }
 
     /// Provenance for one node or relationship embedding store, or None.
@@ -197,7 +202,7 @@ impl KnowledgeGraph {
         use kglite_core::api::embeddings::{embedding_info, EmbeddingEntity};
         let entity =
             EmbeddingEntity::parse(entity).map_err(crate::error_py::ArgumentError::new_err)?;
-        let Some(info) = embedding_info(&self.inner, entity, node_type, text_column) else {
+        let Some(info) = embedding_info(self.graph(), entity, node_type, text_column) else {
             return Ok(py.None());
         };
         let d = PyDict::new(py);
@@ -222,8 +227,8 @@ impl KnowledgeGraph {
         // Mirror extend()'s safe shape: clone the source Arc first (so a
         // self-copy doesn't double-borrow), then mutate self.
         let src_arc = match other.try_borrow() {
-            Ok(o) => Arc::clone(&o.inner),
-            Err(_) => Arc::clone(&self.inner),
+            Ok(o) => Arc::clone(o.graph()),
+            Err(_) => Arc::clone(self.graph()),
         };
         self.check_durable_owner()?;
         let keys = relationship_keys.unwrap_or_default();
@@ -245,7 +250,7 @@ impl KnowledgeGraph {
     fn list_embeddings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use kglite_core::api::embeddings::{list_embeddings, list_relationship_embeddings};
         let py_list = PyList::empty(py);
-        for info in list_embeddings(&self.inner) {
+        for info in list_embeddings(self.graph()) {
             let dict = PyDict::new(py);
             dict.set_item("entity", "node")?;
             dict.set_item("node_type", info.node_type)?;
@@ -256,7 +261,7 @@ impl KnowledgeGraph {
             dict.set_item("metric", info.metric)?;
             py_list.append(dict)?;
         }
-        for info in list_relationship_embeddings(&self.inner) {
+        for info in list_relationship_embeddings(self.graph()) {
             let dict = PyDict::new(py);
             dict.set_item("entity", "relationship")?;
             dict.set_item("relationship_type", info.relationship_type)?;
@@ -279,7 +284,7 @@ impl KnowledgeGraph {
         relationship_type: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         use kglite_core::api::embeddings::{embedding_diagnostics, EmbeddingEntity};
-        let rows = embedding_diagnostics(&self.inner, node_type, relationship_type)
+        let rows = embedding_diagnostics(self.graph(), node_type, relationship_type)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         let py_list = PyList::empty(py);
         for row in rows {
@@ -353,7 +358,7 @@ impl KnowledgeGraph {
             }
         };
 
-        let inner = self.inner.clone();
+        let inner = self.graph().clone();
         let path_owned = path.to_string();
         let keys = relationship_keys.unwrap_or_default();
         let stats = py
@@ -455,12 +460,12 @@ impl KnowledgeGraph {
         node_type_or_text_column: &str,
         text_column: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let result = PyDict::new(py);
 
         if let Some(col) = text_column {
             let rows = kglite_core::api::embeddings::node_embeddings(
-                &self.inner,
+                self.graph(),
                 node_type_or_text_column,
                 col,
             )
@@ -483,22 +488,22 @@ impl KnowledgeGraph {
         let nodes: Vec<NodeIndex> = match level {
             Some(level) => level.get_all_nodes(),
             None if selection.never_selected() => {
-                GraphRead::node_indices(&self.inner.graph).collect()
+                GraphRead::node_indices(&self.graph().graph).collect()
             }
             None => Vec::new(),
         };
 
         for node_idx in &nodes {
-            let node = match self.inner.graph.node_view(*node_idx) {
+            let node = match self.graph().graph.node_view(*node_idx) {
                 Some(n) => n,
                 None => continue,
             };
 
             let key = kglite_core::api::embeddings::store_key(
-                node.node_type_str(&self.inner.interner),
+                node.node_type_str(&self.graph().interner),
                 col,
             );
-            let store = match self.inner.embeddings.get(&key) {
+            let store = match self.graph().embeddings.get(&key) {
                 Some(s) => s,
                 None => continue,
             };
@@ -526,7 +531,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         let id = py_in::py_value_to_value(node_id)?;
         let vector =
-            kglite_core::api::embeddings::node_embedding(&self.inner, node_type, text_column, &id)
+            kglite_core::api::embeddings::node_embedding(self.graph(), node_type, text_column, &id)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         match vector {
             Some(vector) => PyList::new(py, vector)?.into_py_any(py),
@@ -545,7 +550,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         let keys = relationship_keys.unwrap_or_default();
         let rows = kglite_core::api::embeddings::relationship_embeddings(
-            &self.inner,
+            self.graph(),
             relationship_type,
             text_column,
             &keys,
@@ -637,7 +642,7 @@ impl KnowledgeGraph {
         // A type with no nodes stays the `{'embedded': 0}` no-op it has always
         // been; a type the graph has never *seen* is a mistake and gets
         // `set_embeddings`' complaint, before the model is loaded.
-        if !self.inner.type_indices.contains_key(node_type) {
+        if !self.graph().type_indices.contains_key(node_type) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Node type '{}' does not exist in the graph",
                 node_type
@@ -790,7 +795,7 @@ impl KnowledgeGraph {
         text_column: &str,
     ) -> PyResult<bool> {
         Ok(kglite_core::api::embeddings::has_vector_index(
-            &self.inner,
+            self.graph(),
             node_type,
             text_column,
         ))
@@ -803,7 +808,7 @@ impl KnowledgeGraph {
         node_type: &str,
         text_column: &str,
     ) -> PyResult<usize> {
-        kglite_core::api::embeddings::refresh_vector_index(&self.inner, node_type, text_column)
+        kglite_core::api::embeddings::refresh_vector_index(self.graph(), node_type, text_column)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 }

@@ -13,7 +13,7 @@
 //! capture buffer into the write-ahead log. They are the only thing a change of
 //! engine has to replace.
 
-use super::{wal_diverged_io_error, CursorState, KnowledgeGraph, WAL_DIVERGED_MSG};
+use super::{embedder, wal_diverged_io_error, CursorState, GraphLifecycle, WAL_DIVERGED_MSG};
 // `Arc::make_mut` hands back a mutable reference in place when this is the only
 // reference; with another (a retained `ResultView`, transaction snapshot or
 // cloned `KnowledgeGraph`) the clone mechanism depends on storage. See
@@ -37,7 +37,91 @@ pub(crate) fn lifecycle_graph_mut(inner: &mut Arc<DirGraph>) -> &mut DirGraph {
     Arc::make_mut(inner)
 }
 
+/// Main knowledge graph type exposed to Python via PyO3.
+///
+/// Wraps a `DirGraph` behind an `Arc` for cheap cloning (read-heavy workloads).
+/// All read methods take `&self`; mutations use `Arc::make_mut` for copy-on-write.
+/// Supports Cypher queries, property filtering, traversals, graph algorithms,
+/// and code entity exploration methods (`find`, `source`, `context`, `toc`).
+#[pyclass(module = "kglite", skip_from_py_object)]
+pub struct KnowledgeGraph {
+    /// The published graph. Private to this module: reads go through
+    /// [`graph`](Self::graph), writes through the choke points below, and the
+    /// `Arc` is never cloned into a long-lived field, so a single-owner commit
+    /// can still fork-free mutate it in place.
+    inner: Arc<DirGraph>,
+    /// Per-caller fluent cursor state — see [`CursorState`].
+    pub(crate) cursor: CursorState,
+    /// Registered embedding model (not serialized — re-set after load).
+    /// Backend-agnostic via [`embedder::Embedder`] trait: Python
+    /// embedders flow through [`embedder::py_adapter::PyEmbedderAdapter`];
+    /// Rust-native embedders (e.g. fastembed-rs) implement the trait
+    /// directly. Held as a trait object rather than `Option<Py<PyAny>>`
+    /// so downstream Rust binaries (kglite-mcp-server) don't inherit a
+    /// libpython dep transitively.
+    pub(crate) embedder: Option<Arc<dyn embedder::Embedder>>,
+    /// Default per-query timeout in milliseconds. Applied to cypher() when
+    /// timeout_ms is not explicitly passed. None uses the Python 180s default.
+    pub(crate) default_timeout_ms: Option<u64>,
+    /// Default per-query work budget — intermediate rows, retained collection
+    /// items and scan work, not a result-row cap. Applied to cypher() when
+    /// max_work_units is not explicitly passed; a query that exceeds it errors
+    /// rather than truncating. None = no explicit budget (default), leaving
+    /// the engine's own backstop in charge.
+    pub(crate) default_max_work_units: Option<usize>,
+    /// Default cap on the result rows a query **retains**. Applied to cypher()
+    /// when `row_limit` is not explicitly passed. The opposite number to
+    /// `default_max_work_units`: that one fails a query that does too much
+    /// work, this one truncates a result that is too big and says so.
+    /// None = retain everything (default).
+    pub(crate) default_row_limit: Option<usize>,
+    /// Graph lifecycle / identity — save target + durability session. See
+    /// [`GraphLifecycle`].
+    pub(crate) lifecycle: GraphLifecycle,
+}
+
 impl KnowledgeGraph {
+    /// Assemble a handle from its parts; the one constructor, so `inner` can
+    /// stay private to this module.
+    pub(crate) fn from_parts(
+        graph: Arc<DirGraph>,
+        cursor: CursorState,
+        embedder: Option<Arc<dyn embedder::Embedder>>,
+        lifecycle: GraphLifecycle,
+    ) -> Self {
+        KnowledgeGraph {
+            inner: graph,
+            cursor,
+            embedder,
+            default_timeout_ms: None,
+            default_max_work_units: None,
+            default_row_limit: None,
+            lifecycle,
+        }
+    }
+
+    /// The current graph, borrowed for the duration of one call. Returns a
+    /// reference rather than a clone so nothing outlives the call and keeps
+    /// the `Arc` shared; a method that must hold the graph past a GIL release
+    /// takes `Arc::clone(self.graph())` locally.
+    #[inline]
+    pub(crate) fn graph(&self) -> &Arc<DirGraph> {
+        &self.inner
+    }
+
+    /// Replace the published graph wholesale (ownership hand-off, orphaning);
+    /// not a content mutation, so it neither logs nor bumps the version.
+    pub(crate) fn replace_graph(&mut self, graph: Arc<DirGraph>) {
+        self.inner = graph;
+    }
+
+    /// Split borrow for the lifecycle code that opens the log or checkpoints
+    /// while holding the graph and the lifecycle state together. The scan test
+    /// allows its callers in `lib.rs` and `kg_core.rs` only.
+    pub(crate) fn lifecycle_parts(&mut self) -> (&mut Arc<DirGraph>, &mut GraphLifecycle) {
+        (&mut self.inner, &mut self.lifecycle)
+    }
+
     /// A mutation the write-ahead log describes: refuse a derived handle,
     /// mutate through `f`, then make the captured ops durable before returning.
     ///

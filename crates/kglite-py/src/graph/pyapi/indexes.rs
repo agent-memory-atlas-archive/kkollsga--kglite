@@ -130,15 +130,15 @@ impl KnowledgeGraph {
         limit: usize,
     ) -> PyResult<Py<PyAny>> {
         use kglite_core::api::GraphRead;
-        let backend = &self.inner.graph;
+        let backend = &self.graph().graph;
         // Direct GraphRead traversal — hold the disk arena guard while
         // borrowed node weights live (arena protocol; no-op in memory/mapped).
-        let _arena_guard = self.inner.begin_read_pass();
+        let _arena_guard = self.graph().begin_read_pass();
 
         // Index-or-scan lives in the core so every binding resolves the same
         // candidate set the matcher does, and so a declining disk bundle
         // cannot turn a search into a silent empty list.
-        let hits = self.inner.search_by_property(text, property, limit);
+        let hits = self.graph().search_by_property(text, property, limit);
 
         let result_list = pyo3::types::PyList::empty(py);
         for idx in hits {
@@ -147,7 +147,7 @@ impl KnowledgeGraph {
             };
             let dict = PyDict::new(py);
             dict.set_item("id", idx.index())?;
-            dict.set_item("type", node.node_type_str(&self.inner.interner))?;
+            dict.set_item("type", node.node_type_str(&self.graph().interner))?;
             let title = node.title();
             match title.as_ref() {
                 crate::datatypes::values::Value::String(s) => dict.set_item("title", s.as_str())?,
@@ -181,7 +181,7 @@ impl KnowledgeGraph {
         // indexes are listed rather than silently absent. It is a *listing* —
         // `has_index` stays on the built stores (see
         // `DirGraph::list_indexes_with_state`).
-        let indexes = self.inner.list_indexes_with_state();
+        let indexes = self.graph().list_indexes_with_state();
 
         let result_list = pyo3::types::PyList::empty(py);
         for (node_type, property, state) in indexes {
@@ -191,7 +191,7 @@ impl KnowledgeGraph {
             // separate question, and one an index on a type-string name
             // (`label`, `type`, `node_type`) answers no to; a deferred one answers no because it has not
             // been built yet.
-            let serves = self.inner.index_serves_lookups(&node_type, &property);
+            let serves = self.graph().index_serves_lookups(&node_type, &property);
             idx_dict.set_item("node_type", node_type)?;
             idx_dict.set_item("property", property)?;
             idx_dict.set_item("state", state.as_str())?;
@@ -199,9 +199,9 @@ impl KnowledgeGraph {
             idx_dict.set_item("persistent", false)?;
             result_list.append(idx_dict)?;
         }
-        for (node_type, property) in self.inner.list_persistent_indexes() {
+        for (node_type, property) in self.graph().list_persistent_indexes() {
             let idx_dict = PyDict::new(py);
-            let serves = self.inner.index_serves_lookups(&node_type, &property);
+            let serves = self.graph().index_serves_lookups(&node_type, &property);
             idx_dict.set_item("node_type", node_type)?;
             idx_dict.set_item("property", property)?;
             idx_dict.set_item("state", "ONLINE")?;
@@ -215,7 +215,7 @@ impl KnowledgeGraph {
 
     /// Check if an equality index exists, in-memory or persistent disk-backed.
     fn has_index(&self, node_type: &str, property: &str) -> bool {
-        self.inner.has_any_index(node_type, property)
+        self.graph().has_any_index(node_type, property)
     }
 
     /// Get statistics about an index.
@@ -235,7 +235,7 @@ impl KnowledgeGraph {
     ///     print(f"Total entries: {stats['total_entries']}")
     ///     ```
     fn index_stats(&self, py: Python<'_>, node_type: &str, property: &str) -> PyResult<Py<PyAny>> {
-        match self.inner.get_index_stats(node_type, property) {
+        match self.graph().get_index_stats(node_type, property) {
             Some(stats) => {
                 let result_dict = PyDict::new(py);
                 result_dict.set_item("node_type", node_type)?;
@@ -388,7 +388,7 @@ impl KnowledgeGraph {
     /// Returns:
     ///     A list of dicts with 'node_type', 'properties' and 'state' keys
     fn list_composite_indexes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let indexes = self.inner.list_composite_indexes_with_state();
+        let indexes = self.graph().list_composite_indexes_with_state();
 
         let result_list = pyo3::types::PyList::empty(py);
         for (node_type, properties, state) in indexes {
@@ -411,7 +411,7 @@ impl KnowledgeGraph {
     /// Returns:
     ///     True if index exists, False otherwise
     fn has_composite_index(&self, node_type: &str, properties: Vec<String>) -> bool {
-        self.inner.has_composite_index(node_type, &properties)
+        self.graph().has_composite_index(node_type, &properties)
     }
 
     /// Get statistics about a composite index.
@@ -428,7 +428,10 @@ impl KnowledgeGraph {
         node_type: &str,
         properties: Vec<String>,
     ) -> PyResult<Py<PyAny>> {
-        match self.inner.get_composite_index_stats(node_type, &properties) {
+        match self
+            .graph()
+            .get_composite_index_stats(node_type, &properties)
+        {
             Some(stats) => {
                 let result_dict = PyDict::new(py);
                 result_dict.set_item("node_type", node_type)?;
@@ -483,6 +486,6 @@ impl KnowledgeGraph {
     /// Whether a BM25 text index is built over a property.
     #[pyo3(signature = (node_type, property))]
     fn has_text_index(&self, node_type: &str, property: &str) -> bool {
-        kglite_core::api::text_indexes::has_text_index(&self.inner, node_type, property)
+        kglite_core::api::text_indexes::has_text_index(self.graph(), node_type, property)
     }
 }

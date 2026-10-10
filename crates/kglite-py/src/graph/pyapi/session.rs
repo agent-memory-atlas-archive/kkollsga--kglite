@@ -596,14 +596,15 @@ impl Session {
     fn cursor(&self, py: Python<'_>) -> crate::graph::KnowledgeGraph {
         let mut kg = crate::graph::KnowledgeGraph::from_arc(self.read_snapshot(py));
         kg.apply_query_defaults(self.defaults);
-        kg.lifecycle.orphaned_from_cdc = kg.inner.cdc_enabled();
-        if kg.inner.owns_wal_capture() {
+        kg.lifecycle.orphaned_from_cdc = kg.graph().cdc_enabled();
+        if kg.graph().owns_wal_capture() {
             if self
                 .source_authority
                 .as_ref()
                 .is_some_and(|source| source.ended())
             {
-                kg.inner = Arc::new(kg.inner.detached_persistence_snapshot());
+                let detached = kg.graph().detached_persistence_snapshot();
+                kg.replace_graph(Arc::new(detached));
             } else {
                 kg.lifecycle.orphaned_from_durable = true;
             }

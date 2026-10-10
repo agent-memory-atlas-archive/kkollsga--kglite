@@ -71,15 +71,7 @@ pub fn from_blueprint_rust(
                 let (report, output_path) =
                     blueprint::from_blueprint(&mut graph, parsed, &bp_dir, inputs)?;
 
-                let kg = KnowledgeGraph {
-                    inner: Arc::new(graph),
-                    cursor: crate::graph::CursorState::new(),
-                    embedder: None,
-                    default_timeout_ms: None,
-                    default_max_work_units: None,
-                    default_row_limit: None,
-                    lifecycle: crate::graph::GraphLifecycle::detached(),
-                };
+                let kg = KnowledgeGraph::from_arc(Arc::new(graph));
                 Ok((kg, report, output_path))
             },
         )
@@ -243,15 +235,7 @@ pub fn from_records_rust(
             let report = blueprint::from_records(&mut graph, &spec)?;
 
             Ok((
-                KnowledgeGraph {
-                    inner: Arc::new(graph),
-                    cursor: crate::graph::CursorState::new(),
-                    embedder: None,
-                    default_timeout_ms: None,
-                    default_max_work_units: None,
-                    default_row_limit: None,
-                    lifecycle: crate::graph::GraphLifecycle::detached(),
-                },
+                KnowledgeGraph::from_arc(Arc::new(graph)),
                 report.diagnostics,
             ))
         })

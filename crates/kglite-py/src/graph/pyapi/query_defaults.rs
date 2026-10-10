@@ -46,26 +46,18 @@ impl KnowledgeGraph {
         embedder: Option<Arc<dyn Embedder>>,
         lifecycle: GraphLifecycle,
     ) -> Self {
-        let mut derived = KnowledgeGraph {
-            inner,
-            cursor,
-            embedder,
-            default_timeout_ms: None,
-            default_max_work_units: None,
-            default_row_limit: None,
-            lifecycle,
-        };
+        let mut derived = KnowledgeGraph::from_parts(inner, cursor, embedder, lifecycle);
         derived.apply_query_defaults(self.query_defaults());
         derived
     }
 
     /// A handle onto the same graph for an operation that has already landed
-    /// on `self.inner`: the reports and temporal context follow, the selection
+    /// on `self.graph()`: the reports and temporal context follow, the selection
     /// only when the caller asked to keep it, and the lifecycle is detached so
     /// `self` stays the owner of the durability state.
     pub(crate) fn detached_view(&self, keep_selection: bool) -> Self {
         self.derive_handle(
-            self.inner.clone(),
+            self.graph().clone(),
             CursorState {
                 selection: if keep_selection {
                     self.cursor.selection.clone()

@@ -46,28 +46,27 @@ impl KnowledgeGraph {
 
         match fmt {
             "graphml" => {
-                let content = kglite_core::api::io::to_graphml(&self.inner, selection)
+                let content = kglite_core::api::io::to_graphml(self.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "gexf" => {
-                let content = kglite_core::api::io::to_gexf(&self.inner, selection)
+                let content = kglite_core::api::io::to_gexf(self.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "d3" | "json" => {
-                let content = kglite_core::api::io::to_d3_json(&self.inner, selection)
+                let content = kglite_core::api::io::to_d3_json(self.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "csv" => {
                 let (nodes_path, edges_path) = paired_csv_paths(Path::new(path))?;
-                let (nodes_csv, edges_csv) =
-                    kglite_core::api::io::to_csv(&self.inner, selection)
-                        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+                let (nodes_csv, edges_csv) = kglite_core::api::io::to_csv(self.graph(), selection)
+                    .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
                 std::fs::write(&nodes_path, nodes_csv)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
@@ -79,7 +78,7 @@ impl KnowledgeGraph {
                 self.write_rdf(path, fmt, None, false, selection)?;
             }
             "sqlite" => {
-                let content = kglite_core::api::io::to_sqlite_dump(&self.inner, selection)
+                let content = kglite_core::api::io::to_sqlite_dump(self.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
@@ -138,10 +137,10 @@ impl KnowledgeGraph {
             crate::graph::resolve_export_selection(self, selection_only);
 
         let summary = kglite_core::api::io::to_csv_dir(
-            &self.inner,
+            self.graph(),
             path,
             selection,
-            &self.inner.parent_types,
+            &self.graph().parent_types,
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
@@ -180,7 +179,7 @@ impl KnowledgeGraph {
     /// provenance keys (``updated_at``/``git_sha``) are omitted so diffs aren't
     /// swamped by per-write metadata churn.
     fn to_text(&self) -> String {
-        kglite_core::api::io::to_text(&self.inner)
+        kglite_core::api::io::to_text(self.graph())
     }
 
     /// Export to a string instead of a file.
@@ -220,13 +219,13 @@ impl KnowledgeGraph {
         let format = format.unwrap_or("json");
 
         match format {
-            "graphml" => kglite_core::api::io::to_graphml(&self.inner, selection)
+            "graphml" => kglite_core::api::io::to_graphml(self.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "gexf" => kglite_core::api::io::to_gexf(&self.inner, selection)
+            "gexf" => kglite_core::api::io::to_gexf(self.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "d3" | "json" => kglite_core::api::io::to_d3_json(&self.inner, selection)
+            "d3" | "json" => kglite_core::api::io::to_d3_json(self.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "sqlite" => kglite_core::api::io::to_sqlite_dump(&self.inner, selection)
+            "sqlite" => kglite_core::api::io::to_sqlite_dump(self.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
             "csv" => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "export_string() cannot produce 'csv': the CSV export writes two \

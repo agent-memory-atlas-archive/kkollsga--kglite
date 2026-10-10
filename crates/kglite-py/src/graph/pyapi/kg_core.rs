@@ -149,7 +149,7 @@ pub(crate) fn concurrent_access_pyerr() -> PyErr {
 /// read-only `Transaction` refuse under, and one a caller routes on by class.
 fn refuse_mutation_on_a_read_only_graph(slf: &Bound<'_, KnowledgeGraph>) -> PyResult<()> {
     let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
-    if this.inner.read_only {
+    if this.graph().read_only {
         return Err(crate::error_py::kg_to_pyerr(
             crate::error::KgError::read_only(
                 "Graph is in read-only mode — CREATE, SET, DELETE, REMOVE, \
@@ -200,7 +200,7 @@ fn set_fields(d: &Bound<'_, PyDict>, fields: &[(&str, ProgressValue)]) -> PyResu
 }
 
 fn require_same_immutable_view(left: &KnowledgeGraph, right: &KnowledgeGraph) -> PyResult<()> {
-    if Arc::ptr_eq(&left.inner, &right.inner) {
+    if Arc::ptr_eq(left.graph(), right.graph()) {
         Ok(())
     } else {
         Err(pyo3::exceptions::PyValueError::new_err(
@@ -240,7 +240,7 @@ impl KnowledgeGraph {
         // Wikidata-scale graphs must not wedge every other Python thread.
 
         let triples = {
-            let inner = &self.inner;
+            let inner = self.graph();
             py.detach(|| introspection::compute_type_connectivity(inner))
         };
 
@@ -262,7 +262,7 @@ impl KnowledgeGraph {
         // half-written), so a panic in some other holder must not turn every
         // later rebuild into one.
         *self
-            .inner
+            .graph()
             .edge_type_counts_cache
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -284,7 +284,7 @@ impl KnowledgeGraph {
             }
         });
 
-        self.inner.set_type_connectivity(triples);
+        self.graph().set_type_connectivity(triples);
         Ok(())
     }
 
@@ -296,7 +296,10 @@ impl KnowledgeGraph {
     #[getter]
     fn shape(&self) -> (usize, usize) {
         use kglite_core::api::GraphRead;
-        (self.inner.graph.node_count(), self.inner.graph.edge_count())
+        (
+            self.graph().graph.node_count(),
+            self.graph().graph.edge_count(),
+        )
     }
 
     /// Human-readable summary used by ``print(graph)`` and the REPL.
@@ -306,14 +309,14 @@ impl KnowledgeGraph {
         use kglite_core::api::GraphRead;
         format!(
             "KnowledgeGraph({} nodes, {} edges)",
-            fmt_with_commas(self.inner.graph.node_count()),
-            fmt_with_commas(self.inner.graph.edge_count()),
+            fmt_with_commas(self.graph().graph.node_count()),
+            fmt_with_commas(self.graph().graph.edge_count()),
         )
     }
 
     /// Return a full schema overview of the graph.
     fn schema(&self) -> PyResult<Py<PyAny>> {
-        let overview = introspection::compute_schema(&self.inner);
+        let overview = introspection::compute_schema(self.graph());
         Python::attach(|py| {
             let result = PyDict::new(py);
 
@@ -351,7 +354,7 @@ impl KnowledgeGraph {
 
     /// Every relationship type with its count and endpoint node types.
     pub(super) fn relationship_types(&self) -> PyResult<Py<PyAny>> {
-        let stats = introspection::compute_connection_type_stats(&self.inner);
+        let stats = introspection::compute_connection_type_stats(self.graph());
         Python::attach(|py| {
             let result_list = PyList::empty(py);
             for ct in &stats {
@@ -373,7 +376,7 @@ impl KnowledgeGraph {
         // Wikidata-scale types sample (and are then flagged `approx`), so a
         // sampled `unique` is never mistaken for an exact count.
         let count = self
-            .inner
+            .graph()
             .type_indices
             .get(node_type)
             .map(|v| v.len())
@@ -387,7 +390,7 @@ impl KnowledgeGraph {
         // key: `KeyError` is reserved for a missing result column or dict key
         // (docs/python/error-handling.md), which a type name is not.
         let stats =
-            introspection::compute_property_stats(&self.inner, node_type, max_values, sample)
+            introspection::compute_property_stats(self.graph(), node_type, max_values, sample)
                 .map_err(|message| {
                     crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
                 })?;
@@ -404,7 +407,7 @@ impl KnowledgeGraph {
                 if let Some(ref vals) = prop.values {
                     let py_vals = PyList::empty(py);
                     for v in vals {
-                        py_vals.append(py_out::graph_value_to_py(py, &self.inner.graph, v)?)?;
+                        py_vals.append(py_out::graph_value_to_py(py, &self.graph().graph, v)?)?;
                     }
                     prop_dict.set_item("values", py_vals)?;
                 }
@@ -416,10 +419,9 @@ impl KnowledgeGraph {
 
     /// Return connection topology for a node type (outgoing and incoming).
     fn neighbors_schema(&self, node_type: &str) -> PyResult<Py<PyAny>> {
-        let ns =
-            introspection::compute_neighbors_schema(&self.inner, node_type).map_err(|message| {
-                crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
-            })?;
+        let ns = introspection::compute_neighbors_schema(self.graph(), node_type).map_err(
+            |message| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message)),
+        )?;
         Python::attach(|py| {
             let result = PyDict::new(py);
 
@@ -490,14 +492,14 @@ impl KnowledgeGraph {
         };
 
         if let Some(nt) = node_type {
-            let type_indices = self.inner.type_indices.get(&nt).ok_or_else(|| {
+            let type_indices = self.graph().type_indices.get(&nt).ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(
                     (format!("Node type '{}' not found", nt)).to_string(),
                 ))
             })?;
             let indices: Vec<_> = type_indices.iter().take(count).collect();
             let view = crate::graph::pyapi::result_view::ResultView::from_nodes_with_graph(
-                &self.inner,
+                self.graph(),
                 &indices,
             );
             return Python::attach(|py| Py::new(py, view).map(|v| v.into_any()));
@@ -524,7 +526,7 @@ impl KnowledgeGraph {
         let all_indices = level.get_all_nodes();
         let indices: Vec<_> = all_indices.into_iter().take(count).collect();
         let view = crate::graph::pyapi::result_view::ResultView::from_nodes_with_graph(
-            &self.inner,
+            self.graph(),
             &indices,
         );
         Python::attach(|py| Py::new(py, view).map(|v| v.into_any()))
@@ -535,7 +537,7 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             let result_list = PyList::empty(py);
 
-            for (node_type, property) in self.inner.property_indices.keys() {
+            for (node_type, property) in self.graph().property_indices.keys() {
                 let d = PyDict::new(py);
                 d.set_item("node_type", node_type.as_str())?;
                 d.set_item("property", property.as_str())?;
@@ -543,7 +545,7 @@ impl KnowledgeGraph {
                 result_list.append(d)?;
             }
 
-            for (node_type, properties) in self.inner.composite_indices.keys() {
+            for (node_type, properties) in self.graph().composite_indices.keys() {
                 let d = PyDict::new(py);
                 d.set_item("node_type", node_type.as_str())?;
                 d.set_item("properties", properties)?;
@@ -788,37 +790,33 @@ impl KnowledgeGraph {
             } else {
                 durable::prepare_save_as_target(&target, level)?
             };
-            let previous_stamp = self.inner.checkpoint_lsn;
-            if let Some(state) = self.lifecycle.durable.as_mut() {
-                let graph = lifecycle_graph_mut(&mut self.inner);
+            let (graph_arc, lifecycle) = self.lifecycle_parts();
+            let previous_stamp = graph_arc.checkpoint_lsn;
+            if let Some(state) = lifecycle.durable.as_mut() {
+                let graph = lifecycle_graph_mut(graph_arc);
                 graph.bump_version();
                 durable::checkpoint_prologue(&mut state.wal, state.next_lsn, graph)
                     .map_err(io_error)?;
             }
-            if let Err(error) =
-                io::save_graph_with(&mut self.inner, &target.to_string_lossy(), fsync)
-            {
-                lifecycle_graph_mut(&mut self.inner).checkpoint_lsn = previous_stamp;
+            if let Err(error) = io::save_graph_with(graph_arc, &target.to_string_lossy(), fsync) {
+                lifecycle_graph_mut(graph_arc).checkpoint_lsn = previous_stamp;
                 return Err(error);
             }
             if same_target {
-                if let Some(state) = self.lifecycle.durable.as_mut() {
-                    durable::checkpoint_epilogue(
-                        &mut state.wal,
-                        lifecycle_graph_mut(&mut self.inner),
-                    )
-                    .map_err(io_error)?;
+                if let Some(state) = lifecycle.durable.as_mut() {
+                    durable::checkpoint_epilogue(&mut state.wal, lifecycle_graph_mut(graph_arc))
+                        .map_err(io_error)?;
                 }
             } else {
                 // The original WAL still describes its original checkpoint. Truncating
                 // it here would destroy source recovery. The new WAL was emptied before
                 // publication, so the handoff has no fallible work after the save.
-                if let Some(state) = self.lifecycle.durable.as_mut() {
+                if let Some(state) = lifecycle.durable.as_mut() {
                     state.wal = target_wal.expect("logging destination prepared above");
-                    kglite_core::api::cdc::drain_at_commit(lifecycle_graph_mut(&mut self.inner));
+                    kglite_core::api::cdc::drain_at_commit(lifecycle_graph_mut(graph_arc));
                 }
-                self.lifecycle.writer_lease = target_lease;
-                self.lifecycle.source_path = Some(target);
+                lifecycle.writer_lease = target_lease;
+                lifecycle.source_path = Some(target);
             }
             Ok(())
         });
@@ -859,7 +857,7 @@ impl KnowledgeGraph {
                 .as_ref()
                 .map(|state| state.next_lsn.saturating_sub(1));
             (
-                Arc::clone(&this.inner),
+                Arc::clone(this.graph()),
                 lsn,
                 this.lifecycle.source_path.clone(),
             )
@@ -947,7 +945,7 @@ impl KnowledgeGraph {
     // which mutates the graph in place (it stays columnar afterwards).
     #[allow(clippy::wrong_self_convention)]
     fn to_bytes(&mut self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
-        if self.inner.graph.is_disk() {
+        if self.graph().graph.is_disk() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "to_bytes() is not supported for disk-mode graphs (a disk graph is a \
                  directory, not a single byte stream). Use save('dir/') instead.",
@@ -957,7 +955,7 @@ impl KnowledgeGraph {
         // `.kgl` producers cannot drift: stamp metadata + consolidate the
         // property columns.
         self.unlogged_write_lazy(io::prepare_kgl_write);
-        let inner = self.inner.clone();
+        let inner = self.graph().clone();
         let bytes = py
             .detach(move || -> std::io::Result<Vec<u8>> {
                 let mut buf: Vec<u8> = Vec::new();
@@ -991,7 +989,7 @@ impl KnowledgeGraph {
     ) -> PyResult<crate::graph::pyapi::frozen::FrozenGraph> {
         crate::graph::pyapi::frozen::FrozenGraph::as_of(
             py,
-            std::sync::Arc::clone(&self.inner),
+            std::sync::Arc::clone(self.graph()),
             self.embedder.clone(),
             self.query_defaults(),
             valid_at,
@@ -1015,7 +1013,7 @@ impl KnowledgeGraph {
     /// The current embedder binding is captured with the Session.
     fn session(&self) -> crate::graph::pyapi::session::Session {
         crate::graph::pyapi::session::Session::with_defaults(
-            std::sync::Arc::clone(&self.inner),
+            std::sync::Arc::clone(self.graph()),
             self.embedder.clone(),
             self.query_defaults(),
             self.lifecycle.durable_authority(),
@@ -1067,7 +1065,7 @@ impl KnowledgeGraph {
     /// **Edges only.** Dead columnar rows are dropped by `save()`; node slots
     /// freed by a delete are reclaimed by neither.
     fn compact(&mut self) -> PyResult<usize> {
-        if !self.inner.graph.is_disk() {
+        if !self.graph().graph.is_disk() {
             return Ok(0);
         }
         self.unlogged_write(|graph| graph.compact_disk())
@@ -1376,7 +1374,7 @@ impl KnowledgeGraph {
         // Only replace can withdraw a declaration from a type this call never
         // named, so only replace has enforcement loss to warn about.
         let mode = if replace {
-            warn_about_constraints_dropped_by_replace(py, &slf.inner, &schema)?;
+            warn_about_constraints_dropped_by_replace(py, slf.graph(), &schema)?;
             SchemaInstall::Replace
         } else {
             SchemaInstall::Merge
@@ -1425,10 +1423,10 @@ impl KnowledgeGraph {
 
     /// The declared semantic layer as a dict, or None when none is declared.
     fn ontology(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        if self.inner.ontology.is_empty() {
+        if self.graph().ontology.is_empty() {
             return Ok(py.None());
         }
-        let json = kglite_core::api::ontology_to_json(&self.inner.ontology)
+        let json = kglite_core::api::ontology_to_json(&self.graph().ontology)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         let value = kglite_core::api::param::json_value_to_kglite_value(&json);
         py_out::value_to_py(py, &value)
@@ -1469,7 +1467,7 @@ impl KnowledgeGraph {
     /// Drift report per managed label (extra/missing vs the declared closure).
     fn ontology_diff(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let out = pyo3::types::PyList::empty(py);
-        for (label, state, extra, missing) in self.inner.ontology_label_diff() {
+        for (label, state, extra, missing) in self.graph().ontology_label_diff() {
             let d = PyDict::new(py);
             d.set_item("label", label)?;
             d.set_item("state", state.as_str())?;
@@ -1494,14 +1492,14 @@ impl KnowledgeGraph {
     ///         - Additional fields depending on error type
     #[pyo3(signature = (strict=None))]
     fn validate_schema(&self, py: Python<'_>, strict: Option<bool>) -> PyResult<Py<PyAny>> {
-        let schema = self.inner.get_schema().ok_or_else(|| {
+        let schema = self.graph().get_schema().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 "No schema defined. Call define_schema() first.",
             )
         })?;
 
         let errors = kglite_core::api::mutation::validate_graph(
-            &self.inner,
+            self.graph(),
             schema,
             strict.unwrap_or(false),
         );
@@ -1615,7 +1613,7 @@ impl KnowledgeGraph {
             entry.set_item("properties", violation.properties.clone())?;
             let sample = PyList::empty(py);
             for value in violation.sample_values() {
-                sample.append(py_out::graph_value_to_py(py, &self.inner.graph, value)?)?;
+                sample.append(py_out::graph_value_to_py(py, &self.graph().graph, value)?)?;
             }
             entry.set_item("sample", sample)?;
             let duplicate_tuples = violation.duplicate_tuple_count();
@@ -1637,7 +1635,7 @@ impl KnowledgeGraph {
 
     /// Check if a schema has been defined for this graph
     fn has_schema(&self) -> bool {
-        self.inner.get_schema().is_some()
+        self.graph().get_schema().is_some()
     }
 
     /// Clear the schema definition from the graph.
@@ -1663,7 +1661,7 @@ impl KnowledgeGraph {
 
     /// Get the current schema definition as a dictionary
     fn schema_definition(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let schema = match self.inner.get_schema() {
+        let schema = match self.graph().get_schema() {
             Some(s) => s,
             None => return Ok(py.None()),
         };
@@ -1784,7 +1782,7 @@ impl KnowledgeGraph {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Pattern syntax error: {}", e))
         })?;
 
-        let executor = kglite_core::api::fluent::PatternExecutor::new(&self.inner, max_matches);
+        let executor = kglite_core::api::fluent::PatternExecutor::new(self.graph(), max_matches);
         let matches = executor.execute(&parsed).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                 "Pattern execution error: {}",
@@ -1792,7 +1790,7 @@ impl KnowledgeGraph {
             ))
         })?;
 
-        py_out::pattern_matches_to_pylist(py, &matches, &self.inner)
+        py_out::pattern_matches_to_pylist(py, &matches, self.graph())
     }
 
     /// Run Cypher reads and writes; write_scope limits mutations such as DETACH DELETE by stored type; return a ResultView or a DataFrame when to_df=True.
@@ -1930,7 +1928,7 @@ impl KnowledgeGraph {
         // py.detach with the GIL free.
         let inner = {
             let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
-            this.inner.clone()
+            this.graph().clone()
         };
         let embedder_for_opts: Option<std::sync::Arc<dyn crate::graph::embedder::Embedder>> = {
             let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
@@ -2065,7 +2063,7 @@ impl KnowledgeGraph {
             // owns its snapshot Arc + base version. The CoW/OCC state machine
             // lives in core.
             Ok::<_, PyErr>((
-                kglite_core::api::session::Session::from_arc(Arc::clone(&kg.inner)).begin(),
+                kglite_core::api::session::Session::from_arc(Arc::clone(kg.graph())).begin(),
                 kg.query_defaults(),
                 kg.lifecycle.epoch(),
                 kg.embedder.clone(),
@@ -2107,7 +2105,7 @@ impl KnowledgeGraph {
             // mutation must raise, not panic.
             let kg = slf.try_borrow(py).map_err(|_| concurrent_access_pyerr())?;
             Ok::<_, PyErr>((
-                kglite_core::api::session::Session::from_arc(Arc::clone(&kg.inner)).begin_read(),
+                kglite_core::api::session::Session::from_arc(Arc::clone(kg.graph())).begin_read(),
                 kg.query_defaults(),
                 kg.lifecycle.epoch(),
                 kg.embedder.clone(),

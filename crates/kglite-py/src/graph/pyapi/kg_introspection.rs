@@ -45,7 +45,7 @@ impl KnowledgeGraph {
         // `&mut` / `Arc::make_mut` deep-copying the whole graph when another
         // handle (fluent clone, frozen view, session) shares the Arc. The
         // scans are pure Rust; release the GIL for their duration.
-        let inner = &self.inner;
+        let inner = self.graph();
         py.detach(|| match node_types {
             Some(types) => {
                 for node_type in types {
@@ -128,7 +128,7 @@ impl KnowledgeGraph {
         // Already converted: the second call cannot "convert" anything, and the
         // core message ("Already in disk mode") arrived through the save
         // dispatch as a *file I/O* error, which it is not.
-        if kglite_core::api::storage::live_storage_mode(&self.inner)
+        if kglite_core::api::storage::live_storage_mode(self.graph())
             == kglite_core::api::storage::StorageMode::Disk
         {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -215,7 +215,7 @@ impl KnowledgeGraph {
         // column stores at all (one assembled through the direct `add_node`
         // route) has no mmap-backed column to bring home, and rebuilding
         // would be a shape change rather than an unspill.
-        if self.inner.column_store_count() == 0 {
+        if self.graph().column_store_count() == 0 {
             return;
         }
         self.unlogged_write(|graph| graph.rebuild_columns_to_heap());
@@ -375,7 +375,7 @@ impl KnowledgeGraph {
     ///         graph.vacuum()
     ///     ```
     fn graph_info(&self) -> PyResult<Py<PyAny>> {
-        let info = self.inner.graph_info();
+        let info = self.graph().graph_info();
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("node_count", info.node_count)?;
@@ -388,12 +388,15 @@ impl KnowledgeGraph {
             dict.set_item("type_count", info.type_count)?;
             dict.set_item("property_index_count", info.property_index_count)?;
             dict.set_item("composite_index_count", info.composite_index_count)?;
-            dict.set_item("format_version", self.inner.save_metadata.format_version)?;
-            dict.set_item("library_version", &self.inner.save_metadata.library_version)?;
-            dict.set_item("user_schema_version", self.inner.user_schema_version)?;
+            dict.set_item("format_version", self.graph().save_metadata.format_version)?;
+            dict.set_item(
+                "library_version",
+                &self.graph().save_metadata.library_version,
+            )?;
+            dict.set_item("user_schema_version", self.graph().user_schema_version)?;
             dict.set_item(
                 "storage_mode",
-                kglite_core::api::storage::live_storage_mode(&self.inner).as_str(),
+                kglite_core::api::storage::live_storage_mode(self.graph()).as_str(),
             )?;
             dict.set_item("columnar_heap_bytes", info.columnar_heap_bytes)?;
             dict.set_item("columnar_is_mapped", info.columnar_is_mapped)?;
@@ -402,21 +405,21 @@ impl KnowledgeGraph {
                 "edge_property_overlay_rows",
                 info.edge_property_overlay_rows,
             )?;
-            dict.set_item("memory_limit", self.inner.memory_limit)?;
+            dict.set_item("memory_limit", self.graph().memory_limit)?;
             dict.set_item("columnar_total_rows", info.columnar_total_rows)?;
             dict.set_item("columnar_live_rows", info.columnar_live_rows)?;
-            dict.set_item("auto_vacuum_threshold", self.inner.auto_vacuum_threshold)?;
-            dict.set_item("auto_vacuums_run", self.inner.auto_vacuums_run)?;
+            dict.set_item("auto_vacuum_threshold", self.graph().auto_vacuum_threshold)?;
+            dict.set_item("auto_vacuums_run", self.graph().auto_vacuums_run)?;
             let default_dict = PyDict::new(py);
-            default_dict.set_item("effective", self.inner.valid_time_default.to_string())?;
-            default_dict.set_item("stored", self.inner.stored_valid_time_default.to_string())?;
+            default_dict.set_item("effective", self.graph().valid_time_default.to_string())?;
+            default_dict.set_item("stored", self.graph().stored_valid_time_default.to_string())?;
             dict.set_item("valid_time_default", default_dict)?;
-            if let Some(build) = &self.inner.build_info {
+            if let Some(build) = &self.graph().build_info {
                 dict.set_item("build", build_info_dict(py, build)?)?;
             }
-            if !self.inner.advisories.is_empty() {
+            if !self.graph().advisories.is_empty() {
                 let list = pyo3::types::PyList::empty(py);
-                for a in &self.inner.advisories {
+                for a in &self.graph().advisories {
                     let entry = PyDict::new(py);
                     entry.set_item("code", &a.code)?;
                     entry.set_item("writer", &a.writer)?;
@@ -523,7 +526,7 @@ impl KnowledgeGraph {
         if let Some(v) = enabled {
             self.unlogged_write(|graph| graph.read_only = v);
         }
-        self.inner.read_only
+        self.graph().read_only
     }
 
     /// Lock the schema: future Cypher mutations (CREATE, SET, MERGE) must
@@ -565,25 +568,25 @@ impl KnowledgeGraph {
     /// Whether the schema is currently locked.
     #[getter]
     fn schema_locked(&self) -> bool {
-        self.inner.schema_locked
+        self.graph().schema_locked
     }
 
     /// The directory this graph was built from, or None.
     #[getter]
     fn source_root(&self) -> Option<&str> {
-        self.inner.source_root.as_deref()
+        self.graph().source_root.as_deref()
     }
 
     /// What okf.fingerprint() said about source_root at build time, or None.
     #[getter]
     fn source_fingerprint(&self) -> Option<u64> {
-        self.inner.source_fingerprint
+        self.graph().source_fingerprint
     }
 
     /// The dialect okf.build() read source_root with, or None.
     #[getter]
     fn source_dialect(&self) -> Option<&str> {
-        self.inner.source_dialect.as_deref()
+        self.graph().source_dialect.as_deref()
     }
 
     /// Your own data-model revision, persisted with the graph.
@@ -597,7 +600,7 @@ impl KnowledgeGraph {
     /// on-disk layout version and belongs to the engine.
     #[getter]
     fn schema_version(&self) -> u32 {
-        self.inner.user_schema_version
+        self.graph().user_schema_version
     }
 
     /// Stamp your data-model revision on the graph. Persisted on the next
@@ -631,7 +634,7 @@ impl KnowledgeGraph {
     fn node_type_counts(&self) -> PyResult<Py<PyAny>> {
         Python::attach(|py| {
             let dict = PyDict::new(py);
-            for (node_type, indices) in self.inner.type_indices.iter() {
+            for (node_type, indices) in self.graph().type_indices.iter() {
                 // A listing, so it hides what `node_types()` hides.
                 if kglite_core::api::is_system_label(node_type) {
                     continue;
@@ -654,14 +657,14 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         let argument = |e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e));
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             None,
             "relationships()",
         )
         .map_err(argument)?;
         let connections = kglite_core::api::fluent::get_connections(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             None,
             indices.as_deref(),
@@ -672,7 +675,7 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             py_out::level_connections_to_pydict(
                 py,
-                &self.inner.graph,
+                &self.graph().graph,
                 &connections,
                 parent_info,
                 flatten_single_parent,
@@ -689,7 +692,7 @@ impl KnowledgeGraph {
         flatten_single_parent: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
         let values = kglite_core::api::fluent::get_property_values(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             None,
             &["title"],
@@ -699,7 +702,7 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             py_out::level_single_values_to_pydict(
                 py,
-                &self.inner.graph,
+                &self.graph().graph,
                 &values,
                 flatten_single_parent,
             )
@@ -758,7 +761,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         let property_refs: Vec<&str> = properties.iter().map(|s| s.as_str()).collect();
         let values = kglite_core::api::fluent::get_property_values(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             None,
             &property_refs,
@@ -766,7 +769,7 @@ impl KnowledgeGraph {
             limit,
         );
         Python::attach(|py| {
-            py_out::level_values_to_pydict(py, &self.inner.graph, &values, flatten_single_parent)
+            py_out::level_values_to_pydict(py, &self.graph().graph, &values, flatten_single_parent)
         })
     }
 
@@ -787,7 +790,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         let py = slf.py();
         let values = kglite_core::api::fluent::get_unique_values(
-            &slf.inner,
+            slf.graph(),
             &slf.cursor.selection,
             &property,
             level_index,
@@ -817,7 +820,7 @@ impl KnowledgeGraph {
             // whose every later write was unlogged.
             Ok(slf.into_pyobject(py)?.into_any().unbind())
         } else {
-            py_out::level_unique_values_to_pydict(py, &slf.inner.graph, &values)
+            py_out::level_unique_values_to_pydict(py, &slf.graph().graph, &values)
         }
     }
 
@@ -920,7 +923,7 @@ impl KnowledgeGraph {
             None => None,
         };
         let temporal_filter = kglite_core::api::fluent::FluentFilter::for_traverse(
-            &self.inner,
+            self.graph(),
             &self.cursor.temporal_context,
             at,
             during,
@@ -932,7 +935,7 @@ impl KnowledgeGraph {
 
         // All inputs are pure Rust by now — run the traversal off-GIL.
         {
-            let inner = &self.inner;
+            let inner = self.graph();
             let selection = &mut new_kg.cursor.selection;
             py.detach(|| {
                 kglite_core::api::fluent::make_traversal(
@@ -1039,7 +1042,7 @@ impl KnowledgeGraph {
 
         let valid_time = match resolved_target.as_deref() {
             Some(target) => kglite_core::api::fluent::FluentFilter::for_label(
-                &self.inner,
+                self.graph(),
                 &self.cursor.temporal_context,
                 target,
                 "compare()",
@@ -1048,7 +1051,7 @@ impl KnowledgeGraph {
             None => kglite_core::api::fluent::FluentFilter::default(),
         };
         compare_inner(
-            &self.inner,
+            self.graph(),
             &mut new_kg.cursor.selection,
             resolved_target.as_deref(),
             &config,
@@ -1093,7 +1096,7 @@ impl KnowledgeGraph {
         // mutation lands on that clone, so a caller who does not capture the
         // return value (`g.select(...).create_relationships(...)` without
         // assigning back) silently loses it.
-        if Arc::strong_count(&self.inner) > 1 {
+        if Arc::strong_count(self.graph()) > 1 {
             let warning_module = py.import("warnings")?;
             warning_module.call_method1(
                 "warn",
@@ -1105,7 +1108,7 @@ impl KnowledgeGraph {
                          or use the equivalent `add_relationships(data=cypher_result, ...)` form. \
                          The original graph variable will NOT see these edges.",
                         connection_type,
-                        Arc::strong_count(&self.inner),
+                        Arc::strong_count(self.graph()),
                         connection_type,
                     ),
                     py.import("builtins")?.getattr("UserWarning")?,
@@ -1223,7 +1226,7 @@ impl KnowledgeGraph {
             };
 
             kglite_core::api::fluent::filter_nodes(
-                &self.inner,
+                self.graph(),
                 &mut filtered_kg.cursor.selection,
                 conditions,
                 sort_fields,
@@ -1236,7 +1239,7 @@ impl KnowledgeGraph {
             let sort_fields = py_in::parse_sort_fields(spec, None)?;
 
             kglite_core::api::fluent::sort_nodes(
-                &self.inner,
+                self.graph(),
                 &mut filtered_kg.cursor.selection,
                 sort_fields,
             )
@@ -1246,7 +1249,7 @@ impl KnowledgeGraph {
 
             if let Some(max) = limit {
                 kglite_core::api::fluent::limit_nodes_per_group(
-                    &self.inner,
+                    self.graph(),
                     &mut filtered_kg.cursor.selection,
                     max,
                 )
@@ -1256,7 +1259,7 @@ impl KnowledgeGraph {
             }
         } else if let Some(max) = limit {
             kglite_core::api::fluent::limit_nodes_per_group(
-                &self.inner,
+                self.graph(),
                 &mut filtered_kg.cursor.selection,
                 max,
             )
@@ -1267,7 +1270,7 @@ impl KnowledgeGraph {
 
         // Pure-Rust scan over the selection (titles included) — run off-GIL.
         let property_groups = {
-            let inner = &filtered_kg.inner;
+            let inner = filtered_kg.graph();
             let selection = &filtered_kg.cursor.selection;
             py.detach(|| {
                 kglite_core::api::fluent::get_children_properties(inner, selection, property_name)
@@ -1306,7 +1309,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         if let Some(group_prop) = group_by {
             let groups = kglite_core::api::fluent::calculate_grouped_property_stats(
-                &self.inner,
+                self.graph(),
                 &self.cursor.selection,
                 property,
                 group_prop,
@@ -1341,7 +1344,7 @@ impl KnowledgeGraph {
         let pairs =
             kglite_core::api::fluent::get_parent_child_pairs(&self.cursor.selection, level_index);
         let stats =
-            kglite_core::api::fluent::calculate_property_stats(&self.inner, &pairs, property);
+            kglite_core::api::fluent::calculate_property_stats(self.graph(), &pairs, property);
         py_out::convert_stats_for_python(stats)
     }
 
@@ -1400,7 +1403,7 @@ impl KnowledgeGraph {
             // run off-GIL. (That `process_equation` demands `&mut DirGraph`
             // even when nothing is stored — forcing this deep clone — is a
             // pre-existing core-signature wart.)
-            let inner = &self.inner;
+            let inner = self.graph();
             let selection = &self.cursor.selection;
             let process_result = py.detach(|| {
                 kglite_core::api::fluent::process_equation(
@@ -1470,7 +1473,7 @@ impl KnowledgeGraph {
         keep_selection: Option<bool>,
         group_by: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.inner.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         if let Some(property) = group_by {
             let nodes = kglite_core::api::fluent::collect_selected_nodes(
                 &self.cursor.selection,
@@ -1478,10 +1481,10 @@ impl KnowledgeGraph {
             );
             let mut groups: HashMap<String, usize> = HashMap::new();
             for idx in nodes {
-                if let Some(node) = self.inner.node_view(idx) {
+                if let Some(node) = self.graph().node_view(idx) {
                     let resolved = self
-                        .inner
-                        .resolve_alias(node.node_type_str(&self.inner.interner), property);
+                        .graph()
+                        .resolve_alias(node.node_type_str(&self.graph().interner), property);
                     let key = match node.get_field_ref(resolved).as_deref() {
                         Some(Value::String(s)) => s.clone(),
                         Some(Value::Int64(i)) => i.to_string(),
@@ -1535,7 +1538,7 @@ impl KnowledgeGraph {
             Python::attach(|py| Ok(Py::new(py, new_kg)?.into_any()))
         } else if use_grouping {
             let counts = kglite_core::api::fluent::count_nodes_by_parent(
-                &self.inner,
+                self.graph(),
                 &self.cursor.selection,
                 level_index,
             );
@@ -1549,7 +1552,7 @@ impl KnowledgeGraph {
 
     /// Return a text summary of the graph schema (node types, connections).
     fn schema_text(&self) -> PyResult<String> {
-        let schema_string = introspection::debugging::get_schema_string(&self.inner);
+        let schema_string = introspection::debugging::get_schema_string(self.graph());
         Ok(schema_string)
     }
 
@@ -1560,12 +1563,12 @@ impl KnowledgeGraph {
     /// Their capabilities (timeseries, spatial, etc.) bubble up to the parent.
     #[pyo3(signature = (node_type, parent_type))]
     fn set_parent_type(&mut self, node_type: String, parent_type: String) -> PyResult<()> {
-        if !self.inner.type_indices.contains_key(&node_type) {
+        if !self.graph().type_indices.contains_key(&node_type) {
             return Err(crate::error_py::kg_to_pyerr(
                 crate::error::KgError::Argument(format!("Node type '{}' not found", node_type)),
             ));
         }
-        if !self.inner.type_indices.contains_key(&parent_type) {
+        if !self.graph().type_indices.contains_key(&parent_type) {
             return Err(crate::error_py::kg_to_pyerr(
                 crate::error::KgError::Argument(format!("Parent type '{}' not found", parent_type)),
             ));
@@ -1619,7 +1622,7 @@ impl KnowledgeGraph {
         let cypher_detail = extract_cypher_param(cypher)?;
         let fluent_detail = extract_fluent_param(fluent)?;
         introspection::compute_description(
-            &self.inner,
+            self.graph(),
             &introspection::DescribeRequest {
                 types: types.as_deref(),
                 connections: &conn_detail,
@@ -1682,7 +1685,7 @@ impl KnowledgeGraph {
             ..Default::default()
         };
         Ok(kglite_core::api::explore_markdown(
-            &self.inner,
+            self.graph(),
             query,
             &opts,
             &roots,
@@ -1699,7 +1702,7 @@ impl KnowledgeGraph {
     ///
     /// Each row is a 4-tuple: `(src_type, edge_type, tgt_type, count)`.
     fn label_pair_counts(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let triples = self.inner.get_or_compute_type_connectivity();
+        let triples = self.graph().get_or_compute_type_connectivity();
         let out: Vec<(String, String, String, u64)> = triples
             .into_iter()
             .map(|t| (t.src, t.conn, t.tgt, t.count as u64))
@@ -1748,7 +1751,7 @@ impl KnowledgeGraph {
     /// Return a text summary of the current selection state.
     fn selection(&self) -> PyResult<String> {
         Ok(introspection::debugging::get_selection_string(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
         ))
     }
@@ -1760,7 +1763,7 @@ impl KnowledgeGraph {
     /// source graph.
     fn copy(&self) -> PyResult<Self> {
         let copy = self
-            .inner
+            .graph()
             .try_independent_copy()
             .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))?;
         Ok(self.derive_handle(

@@ -33,15 +33,15 @@ impl GraphLifecycle {
 
 impl KnowledgeGraph {
     pub(crate) fn detached_view_lifecycle(&self) -> GraphLifecycle {
-        GraphLifecycle::detached_from(&self.lifecycle, self.inner.cdc_enabled())
+        GraphLifecycle::detached_from(&self.lifecycle, self.graph().cdc_enabled())
     }
 
     /// Preparation is allocation-only. The old graph, its WAL and writer lease
     /// remain intact until the replacement is ready; the CDC epoch remains unchanged.
     pub(crate) fn end_persistence_ownership(&mut self, py: Python<'_>) {
-        let detached = self.inner.detached_persistence_snapshot();
-        py.detach(|| self.inner.end_persistence_authority());
-        self.inner = Arc::new(detached);
+        let detached = self.graph().detached_persistence_snapshot();
+        py.detach(|| self.graph().end_persistence_authority());
+        self.replace_graph(Arc::new(detached));
         self.lifecycle
             .ownership_epoch
             .fetch_add(1, Ordering::AcqRel);

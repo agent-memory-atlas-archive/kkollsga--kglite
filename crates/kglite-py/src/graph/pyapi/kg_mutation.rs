@@ -347,7 +347,7 @@ fn write_connections(
         refuse_convention_without_interval((convention, empty_when), None)?;
         // Execute read-only against a cloned Arc, so no mutable borrow is held
         // while the query runs.
-        let inner_clone = kg.inner.clone();
+        let inner_clone = kg.graph().clone();
         let df_result = build_connection_df_from_query(&inner_clone, &query_str, extra_properties)?;
 
         refuse_unusable_rows_if_asked(
@@ -424,7 +424,7 @@ fn write_connections(
     ];
     let frame_names = df_result.get_column_names();
     names.extend(frame_names.iter().map(String::as_str));
-    validate_interner_names(&kg.inner, names)?;
+    validate_interner_names(kg.graph(), names)?;
 
     refuse_convention_without_interval((convention, empty_when), temporal_cfg.as_ref())?;
     let (result, declared) = kg.logged_write_with_cursor(|graph, cursor| {
@@ -1243,7 +1243,7 @@ impl KnowledgeGraph {
         // A disk graph lives in `path`: that directory is its origin exactly as
         // it is for `kglite.load(path)`, so a bare `save()` writes back there
         // instead of refusing for want of a path.
-        if graph.inner.graph.is_disk() {
+        if graph.graph().graph.is_disk() {
             graph.lifecycle.source_path = path.map(std::path::PathBuf::from);
         }
         Ok(graph)
@@ -1276,15 +1276,7 @@ impl KnowledgeGraph {
             None => DirGraph::new(),
         };
 
-        Ok(KnowledgeGraph {
-            inner: Arc::new(graph),
-            cursor: crate::graph::CursorState::new(),
-            embedder: None,
-            default_timeout_ms: None,
-            default_max_work_units: None,
-            default_row_limit: None,
-            lifecycle: crate::graph::GraphLifecycle::detached(),
-        })
+        Ok(KnowledgeGraph::from_arc(Arc::new(graph)))
     }
 }
 
@@ -1323,7 +1315,7 @@ impl KnowledgeGraph {
         // source) must never write a `runtime`-layer type (agent-owned). Skip
         // it as a no-op + report, so disjoint ownership is enforced, not
         // trusted. Undeclared / `managed` types proceed normally.
-        if managed_reload && self.inner.layer_for(&node_type) == Some("runtime") {
+        if managed_reload && self.graph().layer_for(&node_type) == Some("runtime") {
             return skipped_runtime_layer_report(py, &node_type);
         }
         let parsed = parse_inline_config(
@@ -1352,7 +1344,7 @@ impl KnowledgeGraph {
         if let Some(label_list) = labels.as_ref() {
             names.extend(label_list.iter().map(String::as_str));
         }
-        validate_interner_names(&self.inner, names)?;
+        validate_interner_names(self.graph(), names)?;
 
         refuse_convention_without_interval(
             (convention, empty_when),
@@ -1460,8 +1452,8 @@ impl KnowledgeGraph {
         // so the write below clones on the
         // self-extend path: we read the original and write a fresh copy.
         let source_arc = match other.try_borrow() {
-            Ok(other_ref) => Arc::clone(&other_ref.inner),
-            Err(_) => Arc::clone(&self.inner),
+            Ok(other_ref) => Arc::clone(other_ref.graph()),
+            Err(_) => Arc::clone(self.graph()),
         };
 
         // Surface the embedding-store limitation before mutating.
@@ -1517,7 +1509,7 @@ impl KnowledgeGraph {
             OnInvalid::Warn,
         )?;
         validate_interner_names(
-            &self.inner,
+            self.graph(),
             [
                 connection_type.as_str(),
                 source_type.as_str(),
@@ -1666,7 +1658,7 @@ impl KnowledgeGraph {
     ///     ```
     #[getter]
     fn node_types(&self) -> Vec<String> {
-        self.inner.get_node_types()
+        self.graph().get_node_types()
     }
 
     /// Add a secondary label to a batch of nodes by id.
@@ -1694,7 +1686,7 @@ impl KnowledgeGraph {
         label: &str,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
-        validate_interner_names(&self.inner, [label])?;
+        validate_interner_names(self.graph(), [label])?;
         let (labelled, skipped, warning) = self.logged_write(|g| {
             if !g.type_indices.contains_key(node_type) {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -1753,7 +1745,7 @@ impl KnowledgeGraph {
         label: &str,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
-        validate_interner_names(&self.inner, [label])?;
+        validate_interner_names(self.graph(), [label])?;
         let (removed, skipped) = self.logged_write(|g| {
             if !g.type_indices.contains_key(node_type) {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -1955,12 +1947,12 @@ impl KnowledgeGraph {
         let result_dict = PyDict::new(py);
         let mut warnings: Vec<String> = Vec::new();
         let loaded_types: std::collections::HashSet<String> = if filter_to_loaded {
-            self.inner.all_node_types().into_iter().collect()
+            self.graph().all_node_types().into_iter().collect()
         } else {
             std::collections::HashSet::new()
         };
         let names = collect_bulk_connection_names(connections, &loaded_types, filter_to_loaded)?;
-        validate_interner_names(&self.inner, names.iter().map(String::as_str))?;
+        validate_interner_names(self.graph(), names.iter().map(String::as_str))?;
 
         self.logged_write_with_cursor(|graph, cursor| {
         for item in connections.iter() {

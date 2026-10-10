@@ -184,7 +184,7 @@ impl KnowledgeGraph {
         let query = format!(
             "MATCH (n:{node_type} {{id: $nid}}) RETURN n.{property} AS rows, count(n) AS c"
         );
-        let outcome = execute_read(&self.inner, &query, &table_opts(&params))
+        let outcome = execute_read(self.graph(), &query, &table_opts(&params))
             .map_err(crate::error_py::kg_to_pyerr)?;
         let row = outcome.result.rows.first().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -211,7 +211,7 @@ fn build_frame(
     property: &str,
 ) -> PyResult<Py<PyAny>> {
     let meta = kg
-        .inner
+        .graph()
         .table_property_meta
         .get(&table_meta_key(node_type, property));
     let columns = meta

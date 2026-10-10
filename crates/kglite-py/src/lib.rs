@@ -121,7 +121,7 @@ impl crate::graph::KnowledgeGraph {
     /// binaries can plug it into the planner / executor surface in
     /// [`api::cypher`].
     pub fn dir(&self) -> &std::sync::Arc<kglite_core::api::DirGraph> {
-        &self.inner
+        self.graph()
     }
 }
 
@@ -683,7 +683,7 @@ fn open(
         Some(ob) => durable_level_from_arg(ob)?,
         // Default is the strongest level the mode supports; disk keeps no log
         // at any level, so it resolves to `off` instead of raising.
-        None if kg.inner.graph.is_disk() => DurabilityLevel::Off,
+        None if kg.graph().graph.is_disk() => DurabilityLevel::Off,
         None => DurabilityLevel::Full,
     };
     // Called at every level, `off` included — recovery on open is a decision
@@ -753,7 +753,7 @@ fn setup_durable(
     use kglite_core::api::durable as wal;
     use kglite_core::api::GraphRead;
 
-    if level.logs() && kg.inner.graph.is_disk() {
+    if level.logs() && kg.graph().graph.is_disk() {
         // `ValueError`, not a typed `kglite.*Error`: `error_py`'s taxonomy
         // reserves the typed hierarchy for *engine* failures and keeps
         // argument-shape rejections — rejected at the Python boundary before
@@ -772,18 +772,21 @@ fn setup_durable(
         )));
     }
 
-    let opened = wal::open_log(&mut kg.inner, std::path::Path::new(path), level).map_err(|e| {
-        let message = e.to_string();
-        match e {
-            wal::DurableOpenError::Io(_) => PyErr::new::<pyo3::exceptions::PyIOError, _>(message),
-            wal::DurableOpenError::Replay(_) => {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(message)
+    let opened =
+        wal::open_log(kg.lifecycle_parts().0, std::path::Path::new(path), level).map_err(|e| {
+            let message = e.to_string();
+            match e {
+                wal::DurableOpenError::Io(_) => {
+                    PyErr::new::<pyo3::exceptions::PyIOError, _>(message)
+                }
+                wal::DurableOpenError::Replay(_) => {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(message)
+                }
+                wal::DurableOpenError::Refused(_) => {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
+                }
             }
-            wal::DurableOpenError::Refused(_) => {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
-            }
-        }
-    })?;
+        })?;
 
     if let Some((walh, next_lsn)) = opened {
         kg.lifecycle.durable = Some(crate::graph::DurableState {
@@ -829,7 +832,7 @@ fn cypher_pass_names() -> Vec<String> {
 /// `_run_cli` is: it exists for this repository's own regression tests.
 #[pyfunction]
 fn _backend_is_forked(graph: &KnowledgeGraph) -> bool {
-    graph.inner.graph.is_forked()
+    graph.graph().graph.is_forked()
 }
 
 /// Make the next write-ahead-log append on `graph` fail, as a disk that has

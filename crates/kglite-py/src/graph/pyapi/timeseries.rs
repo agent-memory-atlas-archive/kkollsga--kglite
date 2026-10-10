@@ -48,7 +48,7 @@ impl KnowledgeGraph {
     /// Get timeseries configuration for a node type, or all types.
     #[pyo3(signature = (node_type=None))]
     fn timeseries_config(&self, py: Python<'_>, node_type: Option<String>) -> PyResult<Py<PyAny>> {
-        let graph = &self.inner;
+        let graph = self.graph();
         if let Some(nt) = node_type {
             match graph.timeseries_configs.get(&nt) {
                 Some(config) => ts_config_to_py(py, config),
@@ -152,7 +152,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
         // Resolve resolution: parameter > existing config > auto-detect
-        let graph_ref = &self.inner;
+        let graph_ref = self.graph();
         let resolved_resolution = if let Some(r) = resolution {
             kglite_core::api::timeseries::validate_resolution(&r)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
@@ -293,7 +293,7 @@ impl KnowledgeGraph {
         start: Option<String>,
         end: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        let graph = &self.inner;
+        let graph = self.graph();
         let id_val = py_in::py_value_to_value(node_id)?;
         let node_idx = find_node_by_id_readonly(graph, &id_val)?;
 
@@ -355,7 +355,7 @@ impl KnowledgeGraph {
     /// Get the time index for a node as ISO date strings, or None.
     #[pyo3(signature = (node_id,))]
     fn time_index(&self, py: Python<'_>, node_id: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        let graph = &self.inner;
+        let graph = self.graph();
         let id_val = py_in::py_value_to_value(node_id)?;
         let node_idx = find_node_by_id_readonly(graph, &id_val)?;
 

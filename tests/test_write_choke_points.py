@@ -27,12 +27,18 @@ FORBIDDEN = re.compile(
 INNER_BORROW = re.compile(r"&mut\s+\w+\.inner\b")
 LIFECYCLE_ACCESSOR = re.compile(r"\blifecycle_graph_mut\b")
 
-# Lifecycle sites that borrow the Arc by design: opening the log
-# (`lib.rs`) and the `save()` checkpoint, which swaps stamps and the log while
-# holding disjoint lifecycle borrows. Keyed by path relative to src/.
-INNER_BORROW_ALLOWED = {
-    "lib.rs": 1,
-    "graph/pyapi/kg_core.rs": 5,
+# `inner` is private to write_gate.rs, so the compiler already refuses any other
+# module naming it on a `KnowledgeGraph`; the scan keeps the spelling out of the
+# tree for the handles it cannot type. The lifecycle sites that need the graph
+# and the lifecycle state together (opening the log, the `save()` checkpoint,
+# the background checkpoint) take them through `lifecycle_parts()` instead.
+INNER_BORROW_ALLOWED: dict[str, int] = {}
+LIFECYCLE_PARTS = re.compile(r"\blifecycle_parts\b")
+LIFECYCLE_PARTS_ALLOWED = {
+    "lib.rs",
+    "graph/bg_checkpoint.rs",
+    "graph/pyapi/kg_core.rs",
+    "graph/write_gate.rs",
 }
 LIFECYCLE_ACCESSOR_ALLOWED = {"graph/pyapi/kg_core.rs", "graph/write_gate.rs"}
 
@@ -52,6 +58,8 @@ def violations(rel: str, text: str) -> list[str]:
             found.append(f"{rel}: {borrows} `&mut <handle>.inner` borrows")
     if rel not in LIFECYCLE_ACCESSOR_ALLOWED and LIFECYCLE_ACCESSOR.search(code):
         found.append(f"{rel}: lifecycle_graph_mut outside save()")
+    if rel not in LIFECYCLE_PARTS_ALLOWED and LIFECYCLE_PARTS.search(code):
+        found.append(f"{rel}: lifecycle_parts outside the lifecycle sites")
     return found
 
 
@@ -80,6 +88,7 @@ def test_the_gate_exists_and_owns_the_drain():
         "Arc::make_mut(&mut self.inner).x = 1;",
         "self.commit_wal()?;",
         "foo(&mut self.inner);",
+        "let (g, l) = self.lifecycle_parts();",
     ],
 )
 def test_the_scan_goes_red_on_a_bypass(snippet):

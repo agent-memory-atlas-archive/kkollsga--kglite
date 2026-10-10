@@ -117,7 +117,7 @@ impl KnowledgeGraph {
         let add_node = nxg.getattr("add_node")?;
         let add_edge = nxg.getattr("add_edge")?;
 
-        let graph = &self.inner;
+        let graph = self.graph();
         let interner = &graph.interner;
         // Direct GraphRead traversal — hold the disk arena guard while
         // borrowed node/edge weights live (arena protocol; no-op in

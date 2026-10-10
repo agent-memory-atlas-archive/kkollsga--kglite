@@ -258,7 +258,7 @@ pub fn rebuild_if_changed(
         ) as std::sync::Arc<dyn kglite_core::api::Embedder>),
         None => graph.embedder().map(std::sync::Arc::clone),
     };
-    let inner = graph.inner.clone();
+    let inner = graph.graph().clone();
     let rebuilt = py
         .detach(|| crate::okf::rebuild_if_changed(&inner, &opts, model.as_deref()))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
@@ -305,7 +305,7 @@ pub fn export(
         edge_tables: edge_tables.unwrap_or_default(),
         ..crate::okf::ExportOptions::default()
     };
-    let inner = graph.inner.clone();
+    let inner = graph.graph().clone();
     py.detach(|| crate::okf::export(&inner, &path, &opts))
         .map(ExportReport::new)
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)

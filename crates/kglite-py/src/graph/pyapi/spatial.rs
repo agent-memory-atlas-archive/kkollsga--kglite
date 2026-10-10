@@ -140,11 +140,11 @@ impl KnowledgeGraph {
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(&self.inner, &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(&self.inner, &self.cursor.selection);
+            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::within_bounds(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             lat_field,
             lon_field,
@@ -213,11 +213,11 @@ impl KnowledgeGraph {
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(&self.inner, &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(&self.inner, &self.cursor.selection);
+            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::near_point(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             lat_field,
             lon_field,
@@ -281,11 +281,11 @@ impl KnowledgeGraph {
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(&self.inner, &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(&self.inner, &self.cursor.selection);
+            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::near_point_m(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             lat_field,
             lon_field,
@@ -344,10 +344,10 @@ impl KnowledgeGraph {
         geometry_field: Option<&str>,
     ) -> PyResult<Self> {
         let geometry_field =
-            resolve_geometry_field(&self.inner, &self.cursor.selection, geometry_field);
+            resolve_geometry_field(self.graph(), &self.cursor.selection, geometry_field);
 
         let matching_nodes = kglite_core::api::fluent::contains_point(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             geometry_field,
             lat,
@@ -406,10 +406,10 @@ impl KnowledgeGraph {
     ) -> PyResult<Self> {
         let wkt_string = extract_wkt(query_wkt)?;
         let geometry_field =
-            resolve_geometry_field(&self.inner, &self.cursor.selection, geometry_field);
+            resolve_geometry_field(self.graph(), &self.cursor.selection, geometry_field);
 
         let matching_nodes = kglite_core::api::fluent::intersects_geometry(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             geometry_field,
             &wkt_string,
@@ -464,11 +464,11 @@ impl KnowledgeGraph {
         as_shapely: bool,
     ) -> PyResult<Py<PyAny>> {
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(&self.inner, &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(&self.inner, &self.cursor.selection);
+            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
 
         match kglite_core::api::fluent::get_bounds(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             lat_field,
             lon_field,
@@ -519,11 +519,11 @@ impl KnowledgeGraph {
         as_shapely: bool,
     ) -> PyResult<Py<PyAny>> {
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(&self.inner, &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(&self.inner, &self.cursor.selection);
+            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
 
         match kglite_core::api::fluent::calculate_centroid(
-            &self.inner,
+            self.graph(),
             &self.cursor.selection,
             lat_field,
             lon_field,
@@ -646,7 +646,7 @@ impl KnowledgeGraph {
     ///     dict with spatial config for the requested type(s), or None if not configured.
     #[pyo3(signature = (node_type=None))]
     fn spatial(&self, py: Python<'_>, node_type: Option<String>) -> PyResult<Py<PyAny>> {
-        let graph = &self.inner;
+        let graph = self.graph();
 
         if let Some(nt) = node_type {
             match graph.spatial_configs.get(&nt) {
