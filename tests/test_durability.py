@@ -3079,11 +3079,15 @@ def _count(g):
     return g.cypher("MATCH (n:T) RETURN count(n) AS c")[0]["c"]
 
 
-def _commit_until(g, done, *, start=0, limit=400):
+def _commit_until(g, done, *, start=0, seconds=60):
     """Commit small writes until `done()`: the log trim of a background
-    checkpoint runs on the first commit after its write finishes."""
+    checkpoint runs on the first commit after its write finishes. Bounded by
+    time, not commits: frames committed during a slow checkpoint can keep the
+    log over the threshold and need a second checkpoint, which a loaded host
+    may take seconds to write."""
     i = start
-    while not done() and i < start + limit:
+    deadline = time.monotonic() + seconds
+    while not done() and time.monotonic() < deadline:
         g.cypher("CREATE (:T {id: $i})", params={"i": i})
         i += 1
         time.sleep(0.01)
@@ -3174,7 +3178,7 @@ def test_background_checkpoint_failure_is_a_warning_not_silence(tmp_path):
         with pytest.warns(UserWarning, match="automatic checkpoint"):
             for i in range(60):
                 g.cypher("CREATE (:T {id: $i, pad: $pad})", params={"i": i, "pad": _PAD})
-            _commit_until(g, lambda: False, start=100, limit=100)
+            _commit_until(g, lambda: False, start=100, seconds=2)
         assert _count(g) >= 60, "the commits themselves were never refused"
     finally:
         del g
