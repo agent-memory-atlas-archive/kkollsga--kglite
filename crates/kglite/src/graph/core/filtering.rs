@@ -908,32 +908,48 @@ fn filter_nodes_by_conditions(
 
     let regex_cache = precompile_regex_patterns(conditions);
 
-    let estimated_cache_size = nodes.len() * conditions.len();
-    let mut field_cache: HashMap<(NodeIndex, &str), Option<Value>> =
-        HashMap::with_capacity(estimated_cache_size);
+    scan_by_conditions(graph, nodes, conditions, &regex_cache)
+}
+
+/// Keep the nodes whose every field satisfies its condition, reading each
+/// field once per node: nothing is read twice, so there is nothing to cache,
+/// and alias resolution depends on the node's type alone, so it is redone only
+/// when the type changes.
+fn scan_by_conditions(
+    graph: &DirGraph,
+    nodes: Vec<NodeIndex>,
+    conditions: &HashMap<String, FilterCondition>,
+    regex_cache: &HashMap<String, regex::Regex>,
+) -> Vec<NodeIndex> {
+    let keys: Vec<(&str, &FilterCondition)> = conditions
+        .iter()
+        .map(|(key, condition)| (key.as_str(), condition))
+        .collect();
+    let mut resolved_for: Option<&str> = None;
+    let mut resolved: Vec<&str> = Vec::with_capacity(keys.len());
 
     nodes
         .into_iter()
         .filter(|&idx| {
-            if let Some(node) = graph.node_view(idx) {
-                conditions.iter().all(|(key, condition)| {
-                    let value = field_cache.entry((idx, key.as_str())).or_insert_with(|| {
-                        let resolved =
-                            graph.resolve_alias(node.node_type_str(&graph.interner), key);
-                        node.get_field_ref(resolved).map(Cow::into_owned)
-                    });
-
-                    match value {
-                        Some(v) => matches_condition_cached(v, condition, &regex_cache),
-                        None => {
-                            // Missing field is treated as null
-                            matches_missing_field(condition)
-                        }
-                    }
-                })
-            } else {
-                false
+            let Some(node) = graph.node_view(idx) else {
+                return false;
+            };
+            let node_type = node.node_type_str(&graph.interner);
+            if resolved_for != Some(node_type) {
+                resolved.clear();
+                resolved.extend(
+                    keys.iter()
+                        .map(|(key, _)| graph.resolve_alias(node_type, key)),
+                );
+                resolved_for = Some(node_type);
             }
+            keys.iter().zip(&resolved).all(|((_, condition), field)| {
+                match node.get_field_ref(field) {
+                    Some(v) => matches_condition_cached(&v, condition, regex_cache),
+                    // Missing field is treated as null
+                    None => matches_missing_field(condition),
+                }
+            })
         })
         .collect()
 }

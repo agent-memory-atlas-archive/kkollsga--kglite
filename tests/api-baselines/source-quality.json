@@ -78,13 +78,6 @@
       "nesting": 9
     },
     {
-      "path": "crates/kglite/src/graph/core/filtering.rs",
-      "qualified_name": "crate::filter_nodes_by_conditions",
-      "lines": 218,
-      "branches": 25,
-      "nesting": 6
-    },
-    {
       "path": "crates/kglite/src/graph/features/equations.rs",
       "qualified_name": "crate::Evaluator::evaluate_single",
       "lines": 83,
