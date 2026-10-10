@@ -84,10 +84,10 @@ jobs:
         with:
           shared-key: java-native-${{ matrix.platform }}
       - name: Build the C ABI library
-        # Default features on purpose: this is the same build the ABI contract
-        # test validates against kglite.h, so what ships is what the contract
-        # describes.
-        run: cargo build -p kglite-c --release
+        # `rdf` on purpose: the shipped natives must carry `exportRdf` and
+        # `loadRdf`. kglite.h is generated with `fastembed,rdf`, so the
+        # contract test still sees every symbol this build exports.
+        run: cargo build -p kglite-c --release --features rdf
       # Load the native this leg just built, on its own OS and architecture.
       # The assemble job's test suite runs on Linux x86_64 only, so without
       # this the darwin, Windows and linux-aarch64 natives ship having never

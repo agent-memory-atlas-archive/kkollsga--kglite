@@ -1331,7 +1331,7 @@ jobs:
         # keeps the engine's debug-only assertions live. NativeLibrary's
         # workspace tier resolves target/debug/libkglite_c.so for both the JVM
         # suite and the parity harness, so nothing needs -Dkglite.native.path.
-        run: cargo build -p kglite-c
+        run: cargo build -p kglite-c --features rdf
 
       - name: Build the Python extension for the cross-binding parity leg
         # Lean feature set: the parity test uses only the core engine
@@ -1348,6 +1348,11 @@ jobs:
         # discriminant gate — and compiles the test classes the parity pytest
         # shells out to. No -PrequireAllNatives: this job resolves the native
         # through the workspace build, not the bundled resources.
+        # KGLITE_JAVA_REQUIRE_RDF=1 turns a native built without `rdf` into a
+        # failure instead of a skipped RDF test, because the shipped natives
+        # carry RDF.
+        env:
+          KGLITE_JAVA_REQUIRE_RDF: '1'
         run: gradle -p kglite-java build
 
       - name: Run the cross-binding embedding parity suite

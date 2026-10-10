@@ -32,6 +32,8 @@ before upgrading.
 
 ### Added
 
+- **The shipped Java natives include RDF support.** The release natives and the CI `kglite-java` job build `kglite-c` with `--features rdf`, so `exportRdf` and `loadRdf` work from the published JAR instead of throwing "built without RDF support". The native grows by the RDF code paths.
+
 - **Prebuilt `kglite-bolt-server` binaries on the GitHub Release.**
   - Targets: `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`, each as `kglite-bolt-server-v<version>-<target>.tar.gz` with a `.sha256` file.
   - The Linux binaries need glibc 2.35 or older (Raspberry Pi OS bookworm is 2.36).

@@ -762,8 +762,11 @@ def test_kglite_java_leg_is_a_blocking_gate() -> None:
 
     # The native library both bindings load, then the JVM suite (which includes
     # AbiContractTest and compiles the parity harness classes).
-    _assert_runs(job, "cargo build -p kglite-c")
-    _assert_runs(job, "gradle -p kglite-java build")
+    _assert_runs(job, "cargo build -p kglite-c --features rdf")
+    jvm_step = _step_running(job, "gradle -p kglite-java build")
+    assert jvm_step.get("env", {}).get("KGLITE_JAVA_REQUIRE_RDF") == "1", (
+        "the JVM suite does not require RDF — a native built without `rdf` would skip its RDF tests"
+    )
 
     # The cross-binding parity pytest, run as a required leg (KGLITE_JAVA_PARITY
     # turns a missing toolchain into a failure, not a silent skip).
@@ -2024,7 +2027,7 @@ def test_java_every_native_is_loaded_on_its_own_runner_before_upload() -> None:
     assert "if" not in smoke, f"the smoke is skipped on some legs: {smoke.get('if')!r}"
     assert "continue-on-error" not in smoke
 
-    cargo = _step_running(build, "cargo build -p kglite-c --release")
+    cargo = _step_running(build, "cargo build -p kglite-c --release --features rdf")
     compile_java = _step_running(build, "gradle -p kglite-java compileJava")
     assert "if" not in compile_java
     uploads = _steps_using(build, "actions/upload-artifact@")
