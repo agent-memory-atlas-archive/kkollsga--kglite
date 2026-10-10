@@ -1929,7 +1929,7 @@ fn collect_property_matcher_refs(m: &PropertyMatcher, out: &mut HashSet<String>)
     }
 }
 
-pub(super) fn collect_predicate_refs(pred: &Predicate, out: &mut HashSet<String>) {
+pub(crate) fn collect_predicate_refs(pred: &Predicate, out: &mut HashSet<String>) {
     match pred {
         Predicate::Comparison { left, right, .. } => {
             collect_expression_refs(left, out);

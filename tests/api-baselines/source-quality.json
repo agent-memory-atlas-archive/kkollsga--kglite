@@ -220,8 +220,8 @@
     {
       "path": "crates/kglite/src/graph/languages/cypher/planner/schema_check/mod.rs",
       "qualified_name": "crate::validate_scope_with_globals",
-      "lines": 104,
-      "branches": 54,
+      "lines": 97,
+      "branches": 52,
       "nesting": 4
     },
     {

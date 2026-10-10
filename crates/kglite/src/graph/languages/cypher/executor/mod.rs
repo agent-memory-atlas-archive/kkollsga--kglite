@@ -1122,6 +1122,7 @@ pub(crate) use procedure_registry::{
 pub(crate) mod guarded_ops;
 pub(crate) mod procedure_router;
 mod projected_targets;
+mod projection_scope;
 pub mod refresh_stats;
 pub mod regex_cache;
 mod rel_constraint_ddl;

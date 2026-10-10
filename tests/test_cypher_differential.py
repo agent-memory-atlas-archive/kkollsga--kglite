@@ -874,6 +874,27 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "RETURN a.name AS a, b:Person AS has, NOT b:Person AS lacks ORDER BY a",
         None,
     ),
+    # A row-preserving WITH's ORDER BY / SKIP / LIMIT / WHERE read variables the
+    # projection dropped; passes that fold, hoist or reorder WITH must keep
+    # that scope. The ORDER BY keys are total so both paths agree on order.
+    (
+        "with_order_by_reads_dropped_variable",
+        "small_graph",
+        "MATCH (a:Person) WITH a.name AS n ORDER BY a.age, a.name RETURN n",
+        None,
+    ),
+    (
+        "with_order_by_dropped_variable_skip_limit",
+        "small_graph",
+        "MATCH (a:Person) WITH a.name AS n ORDER BY a.age DESC, a.name SKIP 1 LIMIT 2 RETURN n",
+        None,
+    ),
+    (
+        "with_where_reads_dropped_variable",
+        "small_graph",
+        "MATCH (a:Person) WITH a.name AS n WHERE a.age > 25 RETURN n ORDER BY n",
+        None,
+    ),
     (
         "string_predicates_on_non_strings",
         "small_graph",

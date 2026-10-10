@@ -85,6 +85,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 
 mod path_variables;
+mod projection_scope;
 mod type_mismatch;
 mod warnings;
 
@@ -353,11 +354,16 @@ fn scope_after_return(
 /// Validate a WITH's own expressions, then produce the scope it projects
 /// forward: only the aliases and bare variables it names, unless it carries
 /// `*` (which preserves the incoming scope wholesale).
+///
+/// The second element is the scope the WITH's own `WHERE` and its trailing
+/// `ORDER BY` / `SKIP` / `LIMIT` read. For a row-preserving projection it also
+/// holds the incoming scope (see [`projection_scope`]); for a `DISTINCT`,
+/// aggregating or window projection it equals the projected scope.
 fn scope_after_with(
     with_clause: &WithClause,
     scope: HashSet<String>,
     globals: &HashSet<String>,
-) -> Result<HashSet<String>, SchemaError> {
+) -> Result<(HashSet<String>, HashSet<String>), SchemaError> {
     for item in &with_clause.items {
         validate_expression_scope(&item.expression, &scope)?;
     }
@@ -365,6 +371,8 @@ fn scope_after_with(
         .items
         .iter()
         .any(|item| matches!(item.expression, Expression::Star));
+    let incoming = projection_scope::is_row_preserving(&with_clause.items, with_clause.distinct)
+        .then(|| scope.clone());
     let mut projected = if preserves_all { scope } else { HashSet::new() };
     for item in &with_clause.items {
         if let Some(alias) = &item.alias {
@@ -374,10 +382,12 @@ fn scope_after_with(
         }
     }
     projected.extend(globals.iter().cloned());
+    let mut trailing = projected.clone();
+    trailing.extend(incoming.into_iter().flatten());
     if let Some(where_clause) = &with_clause.where_clause {
-        validate_predicate_scope(&where_clause.predicate, &projected)?;
+        validate_predicate_scope(&where_clause.predicate, &trailing)?;
     }
-    Ok(projected)
+    Ok((projected, trailing))
 }
 
 /// Every property expression written by a CREATE / MERGE pattern must resolve
@@ -435,16 +445,9 @@ fn validate_scope_with_globals(
 ) -> Result<(), SchemaError> {
     let mut scope = initial.clone();
     let mut path_variables = path_variables::PathVariables::default();
-    // Set by an aggregating RETURN, consumed by the ORDER BY that follows it.
-    // Rides through a trailing SKIP/LIMIT; any other clause clears it.
-    let mut aggregate_order_scope: Option<AggregateOrderScope> = None;
+    let mut tail = projection_scope::ProjectionTail::default();
     for clause in &query.clauses {
-        if !matches!(
-            clause,
-            Clause::OrderBy(_) | Clause::Skip(_) | Clause::Limit(_)
-        ) {
-            aggregate_order_scope = None;
-        }
+        tail.enter_clause(clause);
         match clause {
             Clause::Match(m) | Clause::OptionalMatch(m) => {
                 path_variables.enter_match(m, &scope, globals)?;
@@ -459,24 +462,24 @@ fn validate_scope_with_globals(
                 }
             }
             Clause::Where(where_clause) | Clause::Filter(where_clause) => {
-                validate_predicate_scope(&where_clause.predicate, &scope)?
+                validate_predicate_scope(&where_clause.predicate, tail.visible(&scope))?
             }
             Clause::Return(return_clause) => {
                 scope = scope_after_return(return_clause, scope)?;
-                aggregate_order_scope = AggregateOrderScope::for_projection(&return_clause.items);
+                tail.after_return(return_clause);
             }
             Clause::With(with_clause) => {
                 reject_global_redeclarations_in_with(with_clause, globals)?;
-                scope = scope_after_with(with_clause, scope, globals)?;
+                let (projected, trailing) = scope_after_with(with_clause, scope, globals)?;
+                scope = projected;
+                tail.after_with(&with_clause.items, trailing);
                 path_variables.project_with(with_clause);
             }
             Clause::OrderBy(order) => {
                 for item in &order.items {
-                    validate_expression_scope(&item.expression, &scope)?;
+                    validate_expression_scope(&item.expression, tail.visible(&scope))?;
                 }
-                if let Some(restriction) = &aggregate_order_scope {
-                    restriction.validate(order)?;
-                }
+                tail.validate_order(order)?;
             }
             Clause::Skip(skip) => validate_expression_scope(&skip.count, &scope)?,
             Clause::Limit(limit) => validate_expression_scope(&limit.count, &scope)?,
@@ -1791,6 +1794,45 @@ mod tests {
         let err = validate_schema(&q, &g).unwrap_err();
         assert_eq!(err.kind, SchemaErrorKind::UnknownProperty);
         assert!(err.message.contains("age"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn with_order_by_and_where_read_dropped_variables_only_when_rows_are_preserved() {
+        let g = graph_with_schema();
+        let accepted = [
+            "MATCH (a:Person) WITH a.name AS n ORDER BY a.age RETURN n",
+            "MATCH (a:Person) WITH a.name AS n ORDER BY a.age SKIP 1 LIMIT 1 RETURN n",
+            "MATCH (a:Person) WITH a.name AS n WHERE a.age > 1 RETURN n",
+            "MATCH (a:Person) WITH a.name AS n ORDER BY a.age LIMIT 3 WHERE a.age > 1 RETURN n",
+        ];
+        for source in accepted {
+            let q = parse_cypher(source).unwrap();
+            assert!(validate_schema(&q, &g).is_ok(), "{source}");
+        }
+        let refused = [
+            "MATCH (a:Person) WITH DISTINCT a.name AS n ORDER BY a.age RETURN n",
+            "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY a.age RETURN n",
+            "MATCH (a:Person) WITH DISTINCT a.name AS n WHERE a.age > 1 RETURN n",
+            "MATCH (a:Person) RETURN DISTINCT a.name AS n ORDER BY a.age",
+            // An aggregate sort key needs an aggregating projection.
+            "MATCH (a:Person) WITH a.name AS n ORDER BY count(a) RETURN n",
+            "MATCH (a:Person) RETURN a.name AS n ORDER BY max(a.age)",
+            // The retained scope ends with the clause group.
+            "MATCH (a:Person) WITH a.name AS n ORDER BY a.age RETURN a.age",
+            "MATCH (a:Person) WITH a.name AS n WHERE a.age > 1 RETURN a",
+        ];
+        for source in refused {
+            let q = parse_cypher(source).unwrap();
+            let err = validate_schema(&q, &g).unwrap_err();
+            assert!(
+                err.message.contains("Undefined variable")
+                    || err.message.contains("ORDER BY cannot use the aggregate"),
+                "{source}: {err:?}"
+            );
+        }
+        let projected =
+            parse_cypher("MATCH (a:Person) RETURN DISTINCT a.name ORDER BY a.name").unwrap();
+        assert!(validate_schema(&projected, &g).is_ok());
     }
 
     #[test]

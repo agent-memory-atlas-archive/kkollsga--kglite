@@ -183,6 +183,22 @@ impl<'a> CypherExecutor<'a> {
         clause: &WithClause,
         result_set: ResultSet,
     ) -> Result<ResultSet, String> {
+        self.execute_with_retaining(clause, result_set, &[])
+    }
+
+    /// `execute_with`, plus the dropped variables (`dropped`) that the WITH's
+    /// own `WHERE` and its trailing `ORDER BY` / `SKIP` / `LIMIT` still read.
+    /// The planner/schema check admit those reads only for a row-preserving
+    /// projection, so the projection is 1:1 and each saved binding goes back
+    /// onto the row it came from. The caller strips them once that group of
+    /// clauses ends (`projection_scope::strip_retained`), so they never reach
+    /// a later clause.
+    pub(super) fn execute_with_retaining(
+        &self,
+        clause: &WithClause,
+        result_set: ResultSet,
+        dropped: &[String],
+    ) -> Result<ResultSet, String> {
         // WITH is essentially RETURN that continues the pipeline
         let return_clause = ReturnClause {
             items: clause.items.clone(),
@@ -191,11 +207,14 @@ impl<'a> CypherExecutor<'a> {
             lazy_eligible: false,
             group_limit_hint: clause.group_limit_hint,
         };
-        let mut projected = self.execute_return(&return_clause, result_set)?;
+        let saved = super::projection_scope::save_bindings(&result_set, dropped);
+        let mut projected = self.execute_return_retaining(&return_clause, result_set, dropped)?;
         restrict_bindings_to_projection(&clause.items, &mut projected);
+        super::projection_scope::restore_bindings(&mut projected, saved);
 
-        // The WHERE sees exactly the scope the projection produced, which is
-        // why it runs after the restriction rather than before it.
+        // The WHERE sees exactly the scope the projection produced (plus the
+        // dropped names above), which is why it runs after the restriction
+        // rather than before it.
         if let Some(ref where_clause) = clause.where_clause {
             projected = self.execute_where(where_clause, projected)?;
         }
@@ -471,7 +490,7 @@ impl<'a> CypherExecutor<'a> {
 
 /// A bare `*`, as opposed to an aliased one (`RETURN * AS x`, which the
 /// grammar accepts and which names a single ordinary column).
-fn is_wildcard_item(item: &ReturnItem) -> bool {
+pub(super) fn is_wildcard_item(item: &ReturnItem) -> bool {
     matches!(item.expression, Expression::Star) && item.alias.is_none()
 }
 

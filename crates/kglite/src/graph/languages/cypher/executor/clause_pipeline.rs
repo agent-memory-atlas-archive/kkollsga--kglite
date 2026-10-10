@@ -167,10 +167,11 @@ impl CypherExecutor<'_> {
         result_set: ResultSet,
         source: &ResultRow,
         names: &[String],
+        dropped: &[String],
     ) -> Result<ResultSet, String> {
         let mut projection = clause.clone();
         projection.where_clause = None;
-        let mut result = self.execute_with(&projection, result_set)?;
+        let mut result = self.execute_with_retaining(&projection, result_set, dropped)?;
         restore_scoped_imports(&mut result, source, names);
         if let Some(where_clause) = &clause.where_clause {
             result = self.execute_where(where_clause, result)?;
@@ -435,7 +436,11 @@ impl CypherExecutor<'_> {
         if let Clause::Match(m) = clause {
             self.execute_match(m, result_set, inline_where)
         } else if let (Clause::With(w), Some((source, names))) = (clause, preserved) {
-            self.execute_with_preserving(w, result_set, source, names)
+            let dropped = super::projection_scope::dropped_reads(&query.clauses, index);
+            let mut result =
+                self.execute_with_preserving(w, result_set, source, names, &dropped)?;
+            super::projection_scope::strip_retained(&query.clauses, index, &mut result);
+            Ok(result)
         } else if let Clause::CallSubquery { import, body } = clause {
             let declared = declared_scope_before(query, index, initial_declared, preserved);
             self.execute_call_subquery(import, body, result_set, &declared)
@@ -504,7 +509,7 @@ impl CypherExecutor<'_> {
                 self.execute_return_retaining(r, result_set, &retain)
             }
         } else {
-            self.execute_single_clause(clause, result_set)
+            self.execute_scoped_read_clause(&query.clauses, index, clause, result_set)
         }
     }
 }

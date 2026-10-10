@@ -175,6 +175,10 @@ before upgrading.
 
 ### Fixed
 
+- **A `WITH`'s `ORDER BY` and `WHERE` can read variables the projection dropped again.**
+  - Before: `MATCH (a) WITH a.name AS n ORDER BY a.age RETURN n` (and `WITH ... WHERE a.age > 1`) raised `Undefined variable 'a'` since 0.13.0.
+  - Now: after a non-aggregating, non-`DISTINCT` `WITH`, its own `WHERE` and the `ORDER BY` / `SKIP` / `LIMIT` behind it read the dropped variables; no later clause does. After `WITH DISTINCT`, an aggregating `WITH` or `RETURN DISTINCT`, only projected columns are readable and a dropped variable is still refused. An aggregate in the `ORDER BY` of a projection that does not aggregate (`WITH n.x AS x ORDER BY count(n)`) is refused with its own message.
+
 - **Text indexes on a durable graph survive a crash.**
   - Before: `build_text_index`, `drop_text_index` and `db.relationship_text_index.build` / `drop` were not written to the write-ahead log. After a crash without `save()`, an index built since the last checkpoint was gone, and one dropped since then came back.
   - Now: node and relationship text-index builds and drops are logged, and replay rebuilds the index from the recovered rows with its refresh limit. This changes the log format (see Breaking changes). `kglite_session_build_text_index` on a durable C session is logged too; it returned `DurabilityFailed` before.

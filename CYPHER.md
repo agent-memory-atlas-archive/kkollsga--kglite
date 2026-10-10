@@ -390,8 +390,21 @@ Ordering by anything else is rejected rather than silently ignored:
 ```
 
 A `RETURN` **without** aggregates keeps every binding on its rows, so ordering
-by a non-projected expression is unrestricted there. `WITH` narrows scope to
-what it projects, so a sort key after `WITH` must be one of its columns.
+by a non-projected expression is unrestricted there. A non-aggregating,
+non-`DISTINCT` `WITH` likewise keeps one row per input row, so its `ORDER BY`
+(and its `WHERE`) may read a variable the projection dropped:
+
+```python
+"MATCH (a:A) WITH a.name AS n ORDER BY a.age RETURN n"            # OK
+"MATCH (a:A) WITH a.name AS n WHERE a.age > 1 RETURN n"           # OK
+"MATCH (a:A) WITH DISTINCT a.name AS n ORDER BY a.age RETURN n"   # ERROR
+"MATCH (a:A) WITH a.name AS n, count(*) AS c ORDER BY a.age ..."  # ERROR
+```
+
+After `DISTINCT` or an aggregating `WITH`, and after `RETURN DISTINCT`, rows
+merge and a dropped variable has no value per row, so only the projected
+columns are readable. The dropped variable is visible only to that clause
+group: a later clause (`RETURN a.age`) still raises `Undefined variable`.
 
 ## Sort order
 
@@ -5400,7 +5413,7 @@ mean:
 | `FILTER` | Covered | Standalone row filter; equivalent to `WITH * WHERE predicate` without changing the projected columns |
 | `RETURN` | Covered | Aliases, `DISTINCT`, expressions, and map projections |
 | `FINISH` | Covered | Terminal clause that preserves completed side effects and returns no rows |
-| `WITH` | Covered | Projection, grouping, standalone `WITH *`, and strict post-projection scope |
+| `WITH` | Covered | Projection, grouping, standalone `WITH *`, and post-projection scope: its own `WHERE` and `ORDER BY` also read variables a non-aggregating, non-`DISTINCT` projection dropped; no later clause does |
 | `ORDER BY` | Covered | Multi-column, `ASC`/`DESC`, fused top-k optimization |
 | `SKIP` / `OFFSET` / `LIMIT` | Covered | `OFFSET` is a `SKIP` synonym |
 | `UNWIND` | Covered | List expansion, works with `collect()` round-trips |

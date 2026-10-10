@@ -606,7 +606,7 @@ fn run_clause_pipeline(
                     let retain = super::order_by_scope_after(clauses, i);
                     executor.execute_return_retaining(r, result_set, &retain)?
                 } else {
-                    executor.execute_single_clause(clause, result_set)?
+                    executor.execute_scoped_read_clause(clauses, i, clause, result_set)?
                 };
                 ctx.absorb_runtime(&executor);
             }

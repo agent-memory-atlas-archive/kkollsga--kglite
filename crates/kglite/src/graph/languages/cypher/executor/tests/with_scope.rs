@@ -330,3 +330,76 @@ fn set_and_merge_after_a_with_act_on_the_rebound_node() {
         vec![vec![Value::Int64(4)]],
     );
 }
+
+// ========================================================================
+// A row-preserving WITH's ORDER BY / SKIP / LIMIT / WHERE read dropped names
+// ========================================================================
+//
+// Pre-fix the scope check refused every query here with `Undefined variable`;
+// the executor (reached without the check) sorted on a null key and returned
+// input order.
+
+/// `N` nodes with a `rank` that disagrees with insertion order.
+fn ranked_graph() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_write(
+        &mut graph,
+        "CREATE (:N {id:'x', rank:3}) CREATE (:N {id:'y', rank:1}) CREATE (:N {id:'z', rank:2})",
+    );
+    graph
+}
+
+fn ids(texts: &[&str]) -> Vec<Vec<Value>> {
+    texts.iter().map(|t| vec![s(t)]).collect()
+}
+
+#[test]
+fn with_order_by_sorts_on_a_dropped_node_variable() {
+    let graph = ranked_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:N) WITH a.id AS n ORDER BY a.rank RETURN n",
+        ids(&["y", "z", "x"]),
+    );
+    assert_rows(
+        &graph,
+        "MATCH (a:N) WITH a.id AS n ORDER BY a.rank DESC SKIP 1 LIMIT 1 RETURN n",
+        ids(&["z"]),
+    );
+}
+
+#[test]
+fn with_where_filters_on_a_dropped_node_variable() {
+    let graph = ranked_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:N) WITH a.id AS n WHERE a.rank > 1 ORDER BY a.rank RETURN n",
+        ids(&["z", "x"]),
+    );
+}
+
+#[test]
+fn with_order_by_sorts_on_a_dropped_value_variable() {
+    let graph = ranked_graph();
+    assert_rows(
+        &graph,
+        "UNWIND [3, 1, 2] AS v WITH v * 10 AS n ORDER BY v RETURN n",
+        vec![
+            vec![Value::Int64(10)],
+            vec![Value::Int64(20)],
+            vec![Value::Int64(30)],
+        ],
+    );
+}
+
+#[test]
+fn a_dropped_variable_read_by_with_order_by_does_not_reach_later_clauses() {
+    let graph = ranked_graph();
+    // The later MATCH binds `a` afresh instead of reusing the sorted-on node.
+    assert_rows(
+        &graph,
+        "MATCH (a:N {id:'x'}) WITH a.id AS n ORDER BY a.rank \
+         MATCH (a:N {id:'y'}) RETURN n, a.id",
+        vec![vec![s("x"), s("y")]],
+    );
+}
