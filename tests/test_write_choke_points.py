@@ -63,12 +63,12 @@ def test_the_wheel_writes_only_through_the_choke_points():
     bad: list[str] = []
     for path in _sources():
         rel = path.relative_to(SRC).as_posix()
-        bad += violations(rel, path.read_text())
+        bad += violations(rel, path.read_text(encoding="utf-8"))
     assert not bad, "mutation outside graph/write_gate.rs:\n" + "\n".join(bad)
 
 
 def test_the_gate_exists_and_owns_the_drain():
-    code = _code(GATE.read_text())
+    code = _code(GATE.read_text(encoding="utf-8"))
     for name in ("fn logged_write", "fn unlogged_write", "fn commit_wal", "fn flush_wal"):
         assert name in code
 

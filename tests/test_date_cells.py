@@ -99,8 +99,15 @@ def test_blueprint_keeps_epoch_milliseconds(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("19650701", dt.date(1965, 7, 1)), ("1965-07-01", dt.date(1965, 7, 1)), ("19651301", None)],
+    [("19650701", dt.date(1965, 7, 1)), ("1965-07-01", dt.date(1965, 7, 1))],
 )
-def test_cypher_date_reads_the_basic_format(text: str, expected: dt.date | None) -> None:
+def test_cypher_date_reads_the_basic_format(text: str, expected: dt.date) -> None:
     graph = kglite.KnowledgeGraph()
     assert graph.cypher("RETURN date($t) AS d", params={"t": text}).to_list() == [{"d": expected}]
+
+
+def test_cypher_date_refuses_a_basic_format_that_is_no_date() -> None:
+    # Month 13: an unparsable date string raises rather than reading as NULL.
+    graph = kglite.KnowledgeGraph()
+    with pytest.raises(kglite.CypherExecutionError, match="cannot parse '19651301'"):
+        graph.cypher("RETURN date($t) AS d", params={"t": "19651301"})

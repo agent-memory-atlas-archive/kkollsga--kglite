@@ -90,10 +90,12 @@ INCOMPARABLE_PAIRS = (
     ("[1]", "2"),
     ("{a: 1}", "1"),
     ("date('2024-03-15')", "'not-a-date'"),
-    # Composite ordering: Neo4j answers null for list/list and map/map too.
-    ("[1]", "[2]"),
+    # Map/map ordering is null as well; list/list is element-wise, below.
     ("{a: 1}", "{a: 2}"),
 )
+
+# Equality across (or within) these stays two-valued, though lists do order.
+EQUALITY_PAIRS = (*INCOMPARABLE_PAIRS, ("[1]", "[2]"))
 
 
 @pytest.mark.parametrize(("left", "right"), INCOMPARABLE_PAIRS)
@@ -103,7 +105,24 @@ def test_cross_type_ordering_is_null_in_both_directions(graph, left, right, op):
     assert graph.cypher(f"RETURN {right} {op} {left} AS value").to_list() == [{"value": None}]
 
 
-@pytest.mark.parametrize(("left", "right"), INCOMPARABLE_PAIRS)
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("[1] < [2]", True),
+        ("[1] >= [2]", False),
+        ("[1, 2] < [1, 3]", True),
+        ("[1] < [1, 0]", True),
+        ("[2] > [1, 9]", True),
+        ("[1] <= [1]", True),
+        ("[1] < ['a']", None),
+        ("[1, null] < [1, 2]", None),
+    ],
+)
+def test_list_ordering_is_element_wise(graph, expression, expected):
+    assert graph.cypher(f"RETURN {expression} AS value").to_list() == [{"value": expected}]
+
+
+@pytest.mark.parametrize(("left", "right"), EQUALITY_PAIRS)
 def test_cross_type_equality_stays_two_valued(graph, left, right):
     assert graph.cypher(f"RETURN {left} = {right} AS value").to_list() == [{"value": False}]
     assert graph.cypher(f"RETURN {left} <> {right} AS value").to_list() == [{"value": True}]
