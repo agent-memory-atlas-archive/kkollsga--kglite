@@ -129,6 +129,8 @@ mod stored_property_admission_tests;
 mod strict_reads_tests;
 #[cfg(test)]
 mod temporal_echo_tests;
+#[cfg(test)]
+mod text_index_wal_tests;
 pub(crate) mod transaction;
 #[cfg(test)]
 mod write_publish_tests;

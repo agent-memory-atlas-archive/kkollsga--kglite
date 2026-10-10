@@ -20,9 +20,9 @@
 //!   both journal `UndoEntry::EdgeTextIndexReplaced`, moving (not cloning) the
 //!   prior store into the journal.
 //!
-//! Memory and mapped only; disk refuses with the node lane's reason. Not
-//! WAL-recorded, like the node text index: on a durable graph an index built
-//! after the last checkpoint is absent after reopen until rebuilt.
+//! Memory and mapped only; disk refuses with the node lane's reason.
+//! WAL-recorded like the node text index (`MutationOp::SetTextIndex`): replay
+//! rebuilds it from the recovered rows.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -246,6 +246,28 @@ pub(crate) fn build_edge_text_index(
     property: &str,
     auto_refresh_limit: Option<usize>,
 ) -> Result<TextIndexReport, String> {
+    let report = build_edge_text_index_structure(graph, rel_type, property, auto_refresh_limit)?;
+    // The resolved ceiling, for the reason `build_text_index` gives.
+    let limit =
+        edge_text_index_store(graph, rel_type, property).map(TextIndexStore::auto_refresh_limit);
+    graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
+        entity: crate::graph::wal::TextIndexEntity::Relationship,
+        type_name: rel_type.to_string(),
+        property: property.to_string(),
+        auto_refresh_limit: limit,
+        present: true,
+    });
+    Ok(report)
+}
+
+/// The build half of [`build_edge_text_index`], without the log — the WAL
+/// replay entry, for the reason `build_text_index_structure` gives.
+pub(crate) fn build_edge_text_index_structure(
+    graph: &mut DirGraph,
+    rel_type: &str,
+    property: &str,
+    auto_refresh_limit: Option<usize>,
+) -> Result<TextIndexReport, String> {
     if GraphRead::is_disk(&graph.graph) {
         return Err(format!(
             "db.relationship_text_index.build({{type: '{rel_type}', text_column: '{property}'}}) is not \
@@ -308,6 +330,25 @@ pub(crate) fn refresh_edge_text_index(
 /// Drop the relationship text index over `(rel_type, property)`. Returns
 /// whether one existed.
 pub(crate) fn drop_edge_text_index(graph: &mut DirGraph, rel_type: &str, property: &str) -> bool {
+    let removed = drop_edge_text_index_structure(graph, rel_type, property);
+    if removed {
+        graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
+            entity: crate::graph::wal::TextIndexEntity::Relationship,
+            type_name: rel_type.to_string(),
+            property: property.to_string(),
+            auto_refresh_limit: None,
+            present: false,
+        });
+    }
+    removed
+}
+
+/// The drop half of [`drop_edge_text_index`], without the log.
+pub(crate) fn drop_edge_text_index_structure(
+    graph: &mut DirGraph,
+    rel_type: &str,
+    property: &str,
+) -> bool {
     let key = index_key(rel_type, property);
     if !graph.edge_text_indexes.contains_key(&key) {
         return false;

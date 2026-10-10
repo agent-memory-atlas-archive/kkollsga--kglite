@@ -196,7 +196,7 @@ fn empty_reader_is_error() {
 #[test]
 fn variant_tags_are_stable_on_disk_format() {
     let id = || Value::Int64(1);
-    let cases: [(u8, MutationOp); 23] = [
+    let cases: [(u8, MutationOp); 24] = [
         (
             0,
             MutationOp::UpsertNode {
@@ -423,6 +423,16 @@ fn variant_tags_are_stable_on_disk_format() {
                 declaration_json: r#"{"kind":"node","name":"A","config":null}"#.into(),
             },
         ),
+        (
+            23,
+            MutationOp::SetTextIndex {
+                entity: TextIndexEntity::Relationship,
+                type_name: "C".into(),
+                property: "txt".into(),
+                auto_refresh_limit: Some(500),
+                present: true,
+            },
+        ),
     ];
     for (tag, op) in cases {
         let mut buf = Vec::new();
@@ -478,7 +488,7 @@ fn immediately_pre_index_headers_remain_readable() {
 /// and all: tag 22 only extends the enum, so a v9 log is a strict subset.
 #[test]
 fn format_before_temporal_declarations_remains_readable() {
-    assert_eq!(WAL_FORMAT_VERSION, 10);
+    assert_eq!(WAL_FORMAT_VERSION, 11);
     let frames = vec![
         frame(1),
         WalFrame {
@@ -498,6 +508,41 @@ fn format_before_temporal_declarations_remains_readable() {
     let bytes = write_wal_version(&frames, 9);
     assert_eq!(bytes[4], 9);
     assert_eq!(read_frames_all(bytes).unwrap(), frames);
+}
+
+/// A v10 log (written before text indexes were logged) reads exactly under
+/// the v11 schema, and a v11 log with a text-index op round-trips with its
+/// header intact.
+#[test]
+fn v10_logs_remain_readable_and_text_index_ops_round_trip() {
+    let frames = vec![
+        frame(1),
+        WalFrame {
+            lsn: 2,
+            ops: vec![
+                MutationOp::SetTextIndex {
+                    entity: TextIndexEntity::Node,
+                    type_name: "Doc".into(),
+                    property: "body".into(),
+                    auto_refresh_limit: None,
+                    present: false,
+                },
+                MutationOp::SetTemporalDeclaration {
+                    declaration_json: r#"{"kind":"node","name":"A","config":null}"#.into(),
+                },
+            ],
+        },
+    ];
+    // The op set is a strict superset; a v10 header over frames without tag 23
+    // is exactly what a v10 build wrote.
+    let v10_frames = vec![frame(1)];
+    let v10 = write_wal_version(&v10_frames, 10);
+    assert_eq!(v10[4], 10);
+    assert_eq!(read_frames_all(v10).unwrap(), v10_frames);
+
+    let v11 = write_wal(&frames);
+    assert_eq!(v11[4], 11, "a new log advertises v11");
+    assert_eq!(read_frames_all(v11).unwrap(), frames);
 }
 
 /// A temporal declaration survives the codec byte for byte, JSON included.

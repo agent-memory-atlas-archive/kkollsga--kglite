@@ -1236,9 +1236,9 @@ undone when the statement fails.
   `vacuum()`.
 - It is available in memory and mapped storage only: a disk-backed graph
   refuses to build one.
-- Like the node text index, it is not recorded in the write-ahead log. On a
-  durable graph, an index built after the last checkpoint is absent after
-  reopen until rebuilt.
+- Like the node text index, it is recorded in the write-ahead log. On a
+  durable graph, a build or drop since the last checkpoint is replayed on
+  reopen.
 
 Hybrid ranking works over relationships unchanged:
 

@@ -447,9 +447,9 @@ try (KnowledgeGraph graph = KnowledgeGraph.open(path, options)) {
   (a disk-mode graph has no log and runs at `OFF`, reported as `degradedFrom`),
   any storage conversion, and `graph.openWarnings()` the advisories (a
   quarantined log, a saved torn tail) an operator should read.
-- Schema, text-index and embedding ingest bypass the log and are refused with
-  `DurabilityFailed` unless the durability is `OFF`; checkpoint first or open
-  with `OFF` to use them.
+- Text-index builds are logged. Schema and embedding ingest bypass the log and
+  are refused with `DurabilityFailed` unless the durability is `OFF`;
+  checkpoint first or open with `OFF` to use them.
 
 ## Limits and cancellation
 

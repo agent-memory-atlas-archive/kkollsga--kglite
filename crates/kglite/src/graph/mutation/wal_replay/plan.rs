@@ -231,6 +231,7 @@ impl ReplayPlan {
             | MutationOp::SetVectorIndex { .. }
             | MutationOp::SetEdgeVectorIndex { .. }
             | MutationOp::SetTemporalDeclaration { .. }
+            | MutationOp::SetTextIndex { .. }
             | MutationOp::SetEdgeEmbeddingStore { .. }
             | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
             | MutationOp::PatchEdgeGroupEmbeddings { .. } => {}

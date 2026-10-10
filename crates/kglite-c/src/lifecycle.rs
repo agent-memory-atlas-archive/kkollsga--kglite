@@ -456,8 +456,8 @@ fn open_writer(
 ///
 /// Mutations through [`kglite_session_execute_mut`] and the `_opts`/`_ex`
 /// variants, `kglite_session_execute_mut_batch`, `kglite_create_edges_batch`
-/// and ontology declaration are logged. Schema, text-index and embedding
-/// ingest calls bypass the log and are refused with
+/// and ontology declaration are logged, as is `kglite_session_build_text_index`.
+/// Schema and embedding ingest calls bypass the log and are refused with
 /// `KGLITE_STATUS_CODE_DURABILITY_FAILED` on a session whose durability is not
 /// `"off"`; checkpoint, or open with `"durability":"off"`, to use them.
 ///

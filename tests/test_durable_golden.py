@@ -22,7 +22,7 @@ import pytest
 import kglite
 from tests.fixtures.build_durable_golden_fixtures import EXPECTED, FIXTURE_DIR, SCENARIOS, compare, observe
 
-WAL_HEADER = b"KWAL\x0a"  # magic + WAL_FORMAT_VERSION 10
+WAL_HEADER = b"KWAL\x0a"  # magic + format 10: the fixtures predate WAL format 11 and must keep replaying
 KGL_HEADER = b"RGF\x07\x02"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NAMES = sorted(SCENARIOS)

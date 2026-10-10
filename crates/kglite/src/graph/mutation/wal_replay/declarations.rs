@@ -32,7 +32,7 @@ use crate::graph::features::temporal::TemporalTarget;
 use crate::graph::features::timeseries::NodeTimeseries;
 use crate::graph::property_types::DeclaredType;
 use crate::graph::schema::DirGraph;
-use crate::graph::wal::{EmbeddingWrite, MutationOp, PropertyIndexKind};
+use crate::graph::wal::{EmbeddingWrite, MutationOp, PropertyIndexKind, TextIndexEntity};
 
 /// One embedding store's payload, folded across frames into the state it ends
 /// in.
@@ -117,6 +117,7 @@ enum DeclKey {
     TimeseriesConfig(String),
     VectorIndex(String, String),
     EdgeVectorIndex(String, String),
+    TextIndex(TextIndexEntity, String, String),
     Temporal(TemporalTarget),
     /// A temporal record that does not parse keeps a slot of its own, so the
     /// op is still accounted a declaration; install skips it.
@@ -259,6 +260,12 @@ impl Declarations {
                 text_column,
                 ..
             } => DeclKey::EdgeVectorIndex(conn_type.clone(), text_column.clone()),
+            MutationOp::SetTextIndex {
+                entity,
+                type_name,
+                property,
+                ..
+            } => DeclKey::TextIndex(*entity, type_name.clone(), property.clone()),
             MutationOp::SetTypeParent { node_type, .. } => DeclKey::Parent(node_type.clone()),
             MutationOp::SetOntology { .. } => DeclKey::Ontology,
             MutationOp::SetSchemaVersion { .. } => DeclKey::SchemaVersion,
@@ -588,7 +595,68 @@ impl Declarations {
                 *present,
             )?;
         }
+        // Last of all: a text index is derived from the finished rows
+        // (relationships included) and nothing else reads it.
+        for op in &self.ops {
+            let MutationOp::SetTextIndex {
+                entity,
+                type_name,
+                property,
+                auto_refresh_limit,
+                present,
+            } = op
+            else {
+                continue;
+            };
+            install_text_index(
+                graph,
+                *entity,
+                type_name,
+                property,
+                *auto_refresh_limit,
+                *present,
+            );
+        }
         Ok(())
+    }
+}
+
+/// Rebuild — or withdraw — one text index through the structure-only builders,
+/// which log nothing into the buffer being recovered.
+///
+/// A build the recovered rows no longer support (the type or every document
+/// was deleted by a later frame) is skipped, not refused: the index is a
+/// rebuildable cache, and the writer's own sequence can legitimately leave a
+/// declaration with nothing to index.
+fn install_text_index(
+    graph: &mut DirGraph,
+    entity: TextIndexEntity,
+    type_name: &str,
+    property: &str,
+    auto_refresh_limit: Option<usize>,
+    present: bool,
+) {
+    use crate::graph::text_indexes as nodes;
+    use crate::graph::text_indexes::edge_text as edges;
+    match (entity, present) {
+        (TextIndexEntity::Node, true) => {
+            let _ =
+                nodes::build_text_index_structure(graph, type_name, property, auto_refresh_limit);
+        }
+        (TextIndexEntity::Node, false) => {
+            nodes::drop_text_index_structure(graph, type_name, property);
+        }
+        (TextIndexEntity::Relationship, true) => {
+            let _ = edges::build_edge_text_index_structure(
+                graph,
+                type_name,
+                property,
+                auto_refresh_limit,
+            );
+        }
+        (TextIndexEntity::Relationship, false) => {
+            edges::drop_edge_text_index_structure(graph, type_name, property);
+        }
     }
 }
 

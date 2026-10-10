@@ -501,6 +501,7 @@ fn mutation_op_has_legacy_reference(op: &MutationOp) -> bool {
         | MutationOp::SetVectorIndex { .. }
         | MutationOp::SetEdgeVectorIndex { .. }
         | MutationOp::SetTemporalDeclaration { .. }
+        | MutationOp::SetTextIndex { .. }
         | MutationOp::SetEdgeEmbeddingStore { .. }
         | MutationOp::ReplaceEdgeGroupEmbeddings { .. }
         | MutationOp::PatchEdgeGroupEmbeddings { .. } => false,

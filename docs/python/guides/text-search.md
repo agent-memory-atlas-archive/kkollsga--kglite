@@ -340,14 +340,13 @@ The section is a rebuildable cache, not a format break:
 - Older files load unchanged.
 - A section a build cannot read is skipped rather than refused. Rebuild it in that case.
 
-A text index is **not** recorded in the write-ahead log, on nodes or on relationships. On a durable graph (`kglite.open(path, durable=...)`), building one is not a logged write. The index reaches disk only with the next checkpoint (`save()`).
+A text index is recorded in the write-ahead log, on nodes and on relationships. On a durable graph (`kglite.open(path, durable=...)`), a build or drop is a logged write.
 
-After a crash, the reopened graph recovers every logged write, but a text index built since the last checkpoint is gone. To recover:
+After a crash, the reopened graph replays the log and rebuilds the index from the recovered rows. A drop made since the last checkpoint is replayed too.
 
-1. Check with `has_text_index()` (nodes) or `CALL db.relationship_text_index.list()` (relationships).
-2. Rebuild.
+The log records the declaration (type, property, refresh limit), not the postings. Replay re-tokenizes the recovered rows, so recovery of a large indexed corpus costs one build.
 
-A vector index is logged, so it survives the same crash.
+A vector index is logged the same way.
 
 ## Relationship text indexes
 

@@ -388,10 +388,10 @@ public final class KnowledgeGraph implements AutoCloseable {
      *       {@link OpenOptions#createIfMissing(boolean)}.</li>
      * </ul>
      *
-     * <p>Schema, text-index and embedding ingest calls bypass the log and are
-     * refused with {@code DurabilityFailed} on a session whose durability is
-     * not {@link Durability#OFF}; checkpoint, or open with {@code OFF}, to use
-     * them. {@link OpenOptions#readOnly(boolean)} opens without a lease and
+     * <p>Text-index builds are logged. Schema and embedding ingest calls bypass
+     * the log and are refused with {@code DurabilityFailed} on a session whose
+     * durability is not {@link Durability#OFF}; checkpoint, or open with
+     * {@code OFF}, to use them. {@link OpenOptions#readOnly(boolean)} opens without a lease and
      * writes nothing.
      *
      * @param path    the graph path (a {@code .kgl} file or a disk-graph directory)

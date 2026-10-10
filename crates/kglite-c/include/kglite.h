@@ -1464,8 +1464,8 @@ KgliteStatusCode kglite_compute_schema_json(struct KgliteGraph *graph,
  *
  * Mutations through [`kglite_session_execute_mut`] and the `_opts`/`_ex`
  * variants, `kglite_session_execute_mut_batch`, `kglite_create_edges_batch`
- * and ontology declaration are logged. Schema, text-index and embedding
- * ingest calls bypass the log and are refused with
+ * and ontology declaration are logged, as is `kglite_session_build_text_index`.
+ * Schema and embedding ingest calls bypass the log and are refused with
  * `KGLITE_STATUS_CODE_DURABILITY_FAILED` on a session whose durability is not
  * `"off"`; checkpoint, or open with `"durability":"off"`, to use them.
  *
@@ -2514,6 +2514,8 @@ KgliteStatusCode kglite_session_set_result_encoding(const struct KgliteSession *
  * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `node_type`, `property`, or
  *   `out_report_json` is null.
  * - `KGLITE_STATUS_CODE_INVALID_UTF8` — a string argument is not valid UTF-8.
+ * - `KGLITE_STATUS_CODE_DURABILITY_FAILED` — a durable session could not log
+ *   the build.
  * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the node type is unknown, the graph is
  *   disk-backed (the index is heap-resident, so disk mode refuses), or the
  *   type has nodes and none of them carries a string for `property`; the

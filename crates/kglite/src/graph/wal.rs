@@ -157,7 +157,14 @@ const WAL_HEADER_LEN: u64 = (WAL_MAGIC.len() + 1) as u64;
 /// Tags 0–21 are unchanged, so every older WAL stays a strict subset read
 /// exactly; the header moves so a v9 reader refuses a v10 log instead of
 /// treating tag 22 as a torn tail.
-pub const WAL_FORMAT_VERSION: u8 = 10;
+///
+/// **v10 → v11** appends [`MutationOp::SetTextIndex`] as tag 23: the node and
+/// relationship BM25 text-index build and drop. Tags 0–22 are unchanged, so
+/// every older WAL stays a strict subset read exactly. The header moves so a
+/// v10 reader refuses a v11 log instead of treating tag 23 as a torn tail and
+/// silently dropping a committed index declaration; until the next checkpoint
+/// truncates the log, an older binary cannot open a log this build wrote.
+pub const WAL_FORMAT_VERSION: u8 = 11;
 
 /// Oldest WAL format this build can replay. Frames from any version in
 /// `MIN_READABLE_WAL_FORMAT_VERSION..=WAL_FORMAT_VERSION` decode with the
@@ -471,6 +478,32 @@ pub enum MutationOp {
     /// `null` config withdrawing it — so a field added later is a JSON
     /// default, never a new tag.
     SetTemporalDeclaration { declaration_json: String },
+    /// Build (`present`) or drop one BM25 text index over `(type_name,
+    /// property)` of a node type or a relationship type.
+    ///
+    /// Only the *declaration* travels, with the resolved `auto_refresh_limit`.
+    /// The postings are derived data that replay rebuilds from the recovered
+    /// rows through the same builder, exactly as a vector index is rebuilt
+    /// from its vectors.
+    SetTextIndex {
+        entity: TextIndexEntity,
+        type_name: String,
+        property: String,
+        auto_refresh_limit: Option<usize>,
+        present: bool,
+    },
+}
+
+/// Which kind of entity a [`MutationOp::SetTextIndex`] indexes.
+///
+/// **Variant order is on-disk format**, for the same reason [`MutationOp`]'s
+/// is: postcard tags by declaration index. Append only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TextIndexEntity {
+    /// A node type's property.
+    Node,
+    /// A relationship type's property.
+    Relationship,
 }
 
 /// How a [`MutationOp::SetEmbeddings`] relates to the vectors the log already

@@ -523,7 +523,39 @@ fn log_bypassing_writers_are_refused_on_a_durable_session() {
         write(first.session, "CREATE (:T {id: 1})"),
         KgliteStatusCode::Ok
     );
-    let (node_type, property) = (cstr("T"), cstr("id"));
+    let schema = cstr(r#"{"nodes":{"T":{"types":{"id":"integer"}}}}"#);
+    let mut error: *const c_char = std::ptr::null();
+    assert_eq!(
+        unsafe {
+            kglite_define_schema(first.session, schema.as_ptr(), std::ptr::null(), &mut error)
+        },
+        KgliteStatusCode::DurabilityFailed
+    );
+    take(error);
+    // Refusal is a pre-check: the log still accepts commits.
+    assert_eq!(
+        write(first.session, "CREATE (:T {id: 2})"),
+        KgliteStatusCode::Ok
+    );
+    free(first.session);
+}
+
+#[test]
+fn a_text_index_build_on_a_durable_session_is_logged_and_replays() {
+    let dir = TestDir::new("text-index");
+    let first = open_ok(&dir.graph(), create("full"));
+    assert_eq!(
+        write(
+            first.session,
+            "CREATE (:T {id: 1, body: 'quick brown fox'})"
+        ),
+        KgliteStatusCode::Ok
+    );
+    assert_eq!(
+        write(first.session, "CREATE (:T {id: 2, body: 'lazy dog'})"),
+        KgliteStatusCode::Ok
+    );
+    let (node_type, property) = (cstr("T"), cstr("body"));
     let (mut report, mut error): (*const c_char, *const c_char) =
         (std::ptr::null(), std::ptr::null());
     assert_eq!(
@@ -536,15 +568,20 @@ fn log_bypassing_writers_are_refused_on_a_durable_session() {
                 &mut error,
             )
         },
-        KgliteStatusCode::DurabilityFailed
+        KgliteStatusCode::Ok,
+        "{:?}",
+        take(error)
     );
-    take(error);
-    // Refusal is a pre-check: the log still accepts commits.
-    assert_eq!(
-        write(first.session, "CREATE (:T {id: 2})"),
-        KgliteStatusCode::Ok
+    take(report);
+    free(first.session); // no checkpoint: only the log carries the index
+
+    let second = open_ok(&dir.graph(), serde_json::json!({}));
+    let hits = rows(
+        second.session,
+        "MATCH (n:T) WHERE text_bm25(n, 'body', 'fox') > 0 RETURN n.id AS id",
     );
-    free(first.session);
+    assert_eq!(hits.as_array().unwrap().len(), 1, "{hits}");
+    free(second.session);
 }
 
 fn execute_ex(

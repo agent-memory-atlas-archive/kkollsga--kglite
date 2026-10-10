@@ -455,18 +455,17 @@ impl KnowledgeGraph {
         auto_refresh_limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
         // Built off the GIL — tokenizing a corpus is pure CPU over graph memory.
-        let report = self
-            .unlogged_write(|graph| {
-                py.detach(|| {
-                    kglite_core::api::text_indexes::build_text_index(
-                        graph,
-                        node_type,
-                        property,
-                        auto_refresh_limit,
-                    )
-                })
+        let report = self.logged_write(|graph| {
+            py.detach(|| {
+                kglite_core::api::text_indexes::build_text_index(
+                    graph,
+                    node_type,
+                    property,
+                    auto_refresh_limit,
+                )
             })
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+        })?;
 
         let result = PyDict::new(py);
         result.set_item("indexed", report.indexed)?;
@@ -477,9 +476,11 @@ impl KnowledgeGraph {
 
     /// Drop the BM25 text index for a property; True if one existed.
     #[pyo3(signature = (node_type, property))]
-    fn drop_text_index(&mut self, node_type: &str, property: &str) -> bool {
-        self.unlogged_write(|g| {
-            kglite_core::api::text_indexes::drop_text_index(g, node_type, property)
+    fn drop_text_index(&mut self, node_type: &str, property: &str) -> PyResult<bool> {
+        self.logged_write(|g| {
+            Ok(kglite_core::api::text_indexes::drop_text_index(
+                g, node_type, property,
+            ))
         })
     }
 

@@ -673,6 +673,30 @@ pub fn build_text_index(
     property: &str,
     auto_refresh_limit: Option<usize>,
 ) -> Result<TextIndexReport, String> {
+    let report = build_text_index_structure(graph, node_type, property, auto_refresh_limit)?;
+    // The *resolved* ceiling, not the caller's `None`: replay reproduces the
+    // index this build produced, whichever default the recovering build has.
+    let limit =
+        text_index_store(graph, node_type, property).map(TextIndexStore::auto_refresh_limit);
+    graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
+        entity: crate::graph::wal::TextIndexEntity::Node,
+        type_name: node_type.to_string(),
+        property: property.to_string(),
+        auto_refresh_limit: limit,
+        present: true,
+    });
+    Ok(report)
+}
+
+/// The build half of [`build_text_index`], without the log. WAL replay
+/// rebuilds through this: it already holds the declaration, and noting here
+/// would append to the buffer it is recovering from.
+pub(crate) fn build_text_index_structure(
+    graph: &mut DirGraph,
+    node_type: &str,
+    property: &str,
+    auto_refresh_limit: Option<usize>,
+) -> Result<TextIndexReport, String> {
     if GraphRead::is_disk(&graph.graph) {
         return Err(format!(
             "build_text_index('{node_type}', '{property}') is not supported on a disk-backed \
@@ -803,6 +827,26 @@ pub fn refresh_text_index(graph: &DirGraph, node_type: &str, property: &str) -> 
 /// Drop the text index for `(node_type, property)`. Returns whether one
 /// existed.
 pub fn drop_text_index(graph: &mut DirGraph, node_type: &str, property: &str) -> bool {
+    let removed = drop_text_index_structure(graph, node_type, property);
+    if removed {
+        graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
+            entity: crate::graph::wal::TextIndexEntity::Node,
+            type_name: node_type.to_string(),
+            property: property.to_string(),
+            auto_refresh_limit: None,
+            present: false,
+        });
+    }
+    removed
+}
+
+/// The drop half of [`drop_text_index`], without the log — the replay
+/// counterpart, for the reason [`build_text_index_structure`] gives.
+pub(crate) fn drop_text_index_structure(
+    graph: &mut DirGraph,
+    node_type: &str,
+    property: &str,
+) -> bool {
     let key = index_key(node_type, property);
     let prior = graph.text_indexes.remove(&key);
     let removed = prior.is_some();

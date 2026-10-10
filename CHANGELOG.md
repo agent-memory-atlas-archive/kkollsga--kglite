@@ -35,6 +35,11 @@ before upgrading.
   - Now: `'10:30'`. Seconds appear only when not zero, and a fraction prints in groups of three digits (`'21:40:32.142'`, `'12:31:14.000000003'`). The no-argument forms keep `HH:MM:SS`.
   - Migration: compare against, or parse, the canonical text. `time('10:30:00')` is also `'10:30'`.
 
+- **The write-ahead log format is version 11.**
+  - Logs written by earlier versions still replay.
+  - An earlier version refuses a version-11 log with the "unsupported WAL format version" error rather than dropping part of it. This build writes version 11 as soon as it appends to a log, so an older binary cannot open a graph this build used until a checkpoint (`save()`) truncates the log.
+  - Migration: upgrade `kglite-mcp-server`, `kglite-bolt-server` and `kglite` CLI binaries that open the same durable graphs, or checkpoint before switching back.
+
 ### Added
 
 - **The shipped Java natives include RDF support.** The release natives and the CI `kglite-java` job build `kglite-c` with `--features rdf`, so `exportRdf` and `loadRdf` work from the published JAR instead of throwing "built without RDF support". The native grows by the RDF code paths.
@@ -154,6 +159,10 @@ before upgrading.
 - `Session::next_lsn()` and `Session::last_lsn()` report the log position.
 
 ### Fixed
+
+- **Text indexes on a durable graph survive a crash.**
+  - Before: `build_text_index`, `drop_text_index` and `db.relationship_text_index.build` / `drop` were not written to the write-ahead log. After a crash without `save()`, an index built since the last checkpoint was gone, and one dropped since then came back.
+  - Now: node and relationship text-index builds and drops are logged, and replay rebuilds the index from the recovered rows with its refresh limit. This changes the log format (see Breaking changes). `kglite_session_build_text_index` on a durable C session is logged too; it returned `DurabilityFailed` before.
 
 - **The automatic checkpoint no longer leaves the write-ahead log above its bound after a burst of writes.**
   - Before: the size policy was consulted once per commit, and the background checkpoint ran once. Frames committed while a checkpoint was being written survived its trim; when the burst ended there, no later commit asked the policy again, and the log stayed above `auto_checkpoint_wal_mib` until the next write. Seen in the Node binding, the C ABI and the Bolt server.

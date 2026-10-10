@@ -6,8 +6,9 @@
 //! and there will not be one: ranking is a Cypher function, so a consumer that
 //! can call `kglite_session_query` can already search.
 //!
-//! **Receiver.** The build validates before it installs anything and writes a
-//! single map entry, so it runs under
+//! **Receiver.** On a durable session the build is a logged transaction (the
+//! index declaration reaches the write-ahead log). Otherwise it
+//! validates before it installs anything and writes a single map entry, so it runs under
 //! [`Session::write`](kglite::api::session::Session::write) — the same session
 //! lock `execute_mut` takes — rather than paying `transact()`'s deep copy of
 //! the whole graph for a call that has written nothing when it fails. Same
@@ -50,6 +51,8 @@ use std::ffi::c_char;
 /// - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `node_type`, `property`, or
 ///   `out_report_json` is null.
 /// - `KGLITE_STATUS_CODE_INVALID_UTF8` — a string argument is not valid UTF-8.
+/// - `KGLITE_STATUS_CODE_DURABILITY_FAILED` — a durable session could not log
+///   the build.
 /// - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — the node type is unknown, the graph is
 ///   disk-backed (the index is heap-resident, so disk mode refuses), or the
 ///   type has nodes and none of them carries a string for `property`; the
@@ -90,11 +93,37 @@ pub unsafe extern "C" fn kglite_session_build_text_index(
             };
 
             let session_state = unsafe { SessionState::from_handle(session) };
-            if let Err(refusal) = session_state.guard_direct_write() {
-                return crate::lifecycle::refuse(out_error_msg, refusal);
-            }
-            let mut working = session_state.inner.write();
-            match build_text_index(&mut working, node_type, property, None) {
+            // A durable session logs the build as a frame; a plain one takes
+            // the in-place receiver.
+            let result = if session_state.inner.durability().is_some() {
+                if let Err(refusal) = session_state.guard_write() {
+                    return crate::lifecycle::refuse(out_error_msg, refusal);
+                }
+                crate::lifecycle::durable_transaction(
+                    session_state,
+                    |graph| {
+                        build_text_index(graph, node_type, property, None)
+                            .map_err(|message| (KgliteStatusCode::InvalidArgument, message))
+                    },
+                    |error| {
+                        let code = match error {
+                            kglite::api::KgError::DurabilityFailed { .. } => {
+                                KgliteStatusCode::DurabilityFailed
+                            }
+                            _ => KgliteStatusCode::InvalidArgument,
+                        };
+                        (code, error.to_string())
+                    },
+                )
+            } else {
+                if let Err(refusal) = session_state.guard_direct_write() {
+                    return crate::lifecycle::refuse(out_error_msg, refusal);
+                }
+                let mut working = session_state.inner.write();
+                build_text_index(&mut working, node_type, property, None)
+                    .map_err(|message| (KgliteStatusCode::InvalidArgument, message))
+            };
+            match result {
                 Ok(report) => {
                     let json = serde_json::json!({
                         "indexed": report.indexed,
@@ -107,7 +136,7 @@ pub unsafe extern "C" fn kglite_session_build_text_index(
                     }
                     KgliteStatusCode::Ok
                 }
-                Err(msg) => {
+                Err((code, msg)) => {
                     unsafe {
                         *out_report_json = std::ptr::null();
                     }
@@ -116,7 +145,7 @@ pub unsafe extern "C" fn kglite_session_build_text_index(
                             *out_error_msg = alloc_c_string(&msg);
                         }
                     }
-                    KgliteStatusCode::InvalidArgument
+                    code
                 }
             }
         },
