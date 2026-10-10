@@ -80,11 +80,12 @@ impl EnterKg for Python<'_> {
 /// Python's own), so Ctrl-C behaves exactly as if it were not installed.
 /// On other platforms every operation is a no-op.
 ///
-/// One `sigaction` per call, not two: the handler stays installed after the
-/// call returns. Each call re-arms it with a single `sigaction`, whose
-/// returned old disposition shows whether someone else (`signal.signal`) has
-/// taken SIGINT since the last call; that disposition becomes the new
-/// forward target.
+/// One `sigaction` per burst of calls, not two: the handler stays installed
+/// after the last call returns. The call that finds no other running arms it
+/// again with a single `sigaction`, whose returned old disposition shows
+/// whether someone else (`signal.signal`) has taken SIGINT since; that
+/// disposition becomes the new forward target. Calls that overlap a running
+/// one reuse its arming.
 #[cfg(unix)]
 mod sigint {
     use kglite_core::api::session::CancelToken;
@@ -161,7 +162,13 @@ mod sigint {
     pub(super) fn arm() -> Guard {
         if ACTIVE.fetch_add(1, Ordering::SeqCst) == 0 {
             QUERY_CANCEL.store(false, Ordering::SeqCst);
+            install_handler();
         }
+        Guard
+    }
+
+    /// One `sigaction`: install ours and learn what it replaced.
+    fn install_handler() {
         // SAFETY: zeroed sigaction is a valid empty mask; the handler field
         // is set below. `sigaction` is the POSIX install call.
         let mut new: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -173,12 +180,10 @@ mod sigint {
         unsafe {
             libc::sigaction(libc::SIGINT, &new, &mut prev);
         }
-        let ours = handler as libc::sighandler_t;
-        if prev.sa_sigaction != ours {
+        if prev.sa_sigaction != handler as libc::sighandler_t {
             let boxed = Box::into_raw(Box::new(Forward { action: prev }));
             FORWARD.store(boxed, Ordering::SeqCst);
         }
-        Guard
     }
 
     impl Drop for Guard {
