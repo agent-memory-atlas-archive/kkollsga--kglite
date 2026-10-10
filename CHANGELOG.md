@@ -139,7 +139,7 @@ before upgrading.
 
 - **A `.kgl` column with an unknown type tag is refused.** The loader decoded its bytes as a mixed column, reading garbage as values. It now fails with `InvalidData` naming the column and the tag.
 
-- **A declared bound loaded as text is stored as a date.** `add_nodes` and `add_relationships` coerce a declared `valid_from`/`valid_to` column of ISO strings to dates (datetimes when a cell has a time part). Before, a reload without `column_types` wrote `String` cells beside the stored dates and re-recorded the property as `String`. A cell that does not parse is still refused. A Cypher `SET` or `CREATE` of an ISO string onto a bound still stores the string.
+- **A declared bound loaded as text is stored as a date.** `add_nodes` and `add_relationships` coerce a declared `valid_from`/`valid_to` column of ISO strings to dates (datetimes when a cell has a time part). Before, a reload without `column_types` wrote `String` cells beside the stored dates and re-recorded the property as `String`. A cell that does not parse is still refused. Cypher writes follow the same rule: `CREATE`, `MERGE`, `SET` and `SET +=` of an ISO string onto a declared bound store a date (a datetime when the text has a time part), on nodes and relationships. Text that does not parse is refused by the bound check, as before.
 
 - **A `half_open` interval from a timestamp after a date `to`'s midnight is refused as inverted.** `[2011-01-01T12:00, 2011-01-01)` was counted as an empty row with a warning that the bounds are equal. Answers do not change, and the `closed` convention is unaffected.
 

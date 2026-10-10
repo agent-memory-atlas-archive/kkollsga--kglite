@@ -1080,6 +1080,15 @@ fn create_pattern_edges(
                 }
             }
             crate::graph::session::snapshot_property_values(&graph.graph, edge_props.values_mut());
+            let source_type = graph
+                .graph
+                .node_type_of(actual_source)
+                .and_then(|key| graph.interner.try_resolve(key));
+            crate::graph::features::temporal::coerce_new_edge_bounds(
+                graph,
+                (&edge_pat.connection_type, source_type),
+                &mut edge_props,
+            );
             edge_props.retain(|_, value| !matches!(value, Value::Null));
             // Freshness provenance: stamp `updated_at` if this edge type
             // opted in (before metadata/EdgeData pick up the props).
@@ -1207,6 +1216,11 @@ fn create_node(
 ) -> Result<petgraph::graph::NodeIndex, String> {
     let mut properties = evaluate_properties(graph, &node_pat.properties, row, ctx)?;
     let label = node_pat.label.clone().unwrap_or_else(|| "Node".to_string());
+    crate::graph::features::temporal::coerce_new_node_bounds(
+        graph,
+        (&label, node_pat.extra_labels.iter().map(String::as_str)),
+        &mut properties,
+    );
 
     // Identity fields, under whichever spelling this node type declares — see
     // [`IdentityAliases`] and [`create_identity`].

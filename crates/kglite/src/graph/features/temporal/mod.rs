@@ -7,6 +7,8 @@
 //! element and the property, not a pass.
 
 mod coerce_bounds;
+#[cfg(test)]
+mod coerce_cypher_tests;
 pub(crate) mod declarations;
 #[cfg(test)]
 mod declarations_tests;
@@ -36,7 +38,10 @@ mod write_check;
 #[cfg(test)]
 mod write_check_tests;
 
-pub(crate) use coerce_bounds::{coerce_edge_bounds, coerce_node_bounds};
+pub(crate) use coerce_bounds::{
+    coerce_edge_bound, coerce_edge_bounds, coerce_new_edge_bounds, coerce_new_node_bounds,
+    coerce_node_bound, coerce_node_bounds,
+};
 pub(crate) use declarations::declared;
 pub(crate) use declarations::merge_start_key;
 pub use declarations::{

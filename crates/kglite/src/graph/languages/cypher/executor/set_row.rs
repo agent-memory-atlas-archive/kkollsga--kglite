@@ -195,6 +195,7 @@ pub(super) fn apply_node_property_set<'a>(
     } = write;
 
     crate::graph::session::snapshot_property_values(&graph.graph, std::iter::once(&mut value));
+    value = crate::graph::features::temporal::coerce_node_bound(graph, node_idx, property, value);
     // Judged at statement end against the stored state, so a later write in
     // the same statement can still repair this one.
     graph.note_ontology_touch(node_idx);

@@ -55,6 +55,25 @@ pub(super) fn set_edge_property(
         executor.evaluate_expression(expression, row)?
     };
     crate::graph::session::snapshot_property_values(&graph.graph, std::iter::once(&mut value));
+    if matches!(value, Value::String(_)) {
+        let source_type = graph
+            .graph
+            .edge_endpoints(edge_index)
+            .and_then(|(source, _)| graph.graph.node_type_of(source))
+            .and_then(|key| graph.interner.try_resolve(key));
+        let rel_type = graph
+            .graph
+            .edge_weight(edge_index)
+            .and_then(|e| graph.interner.try_resolve(e.connection_type));
+        if let Some(rel_type) = rel_type {
+            value = crate::graph::features::temporal::coerce_edge_bound(
+                graph,
+                (rel_type, source_type),
+                property,
+                value,
+            );
+        }
+    }
 
     // Declared relationship constraints, gated before `edge_weight_mut` rather
     // than around the write inside it: that call publishes an edge-update
