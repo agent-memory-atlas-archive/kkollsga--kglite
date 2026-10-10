@@ -395,7 +395,9 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
     benchmark_runs = [
         args
         for args in _pytest_invocations(perf)
-        if "test_bench_edge_embeddings.py" not in args and "test_bench_bolt_gate.py" not in args
+        if "test_bench_edge_embeddings.py" not in args
+        and "test_bench_bolt_gate.py" not in args
+        and "test_bench_write_path_guards.py" not in args
     ]
     assert len(benchmark_runs) == 3, f"perf-regression runs {len(benchmark_runs)} core captures, expected 3"
     for args in benchmark_runs:
@@ -478,6 +480,33 @@ def test_perf_gate_runs_the_relationship_embedding_ratio_guards() -> None:
     assert (step.get("env") or {}).get("PYTHONPATH") == ""
     edge_runs = [args for args in _pytest_invocations(perf) if "test_bench_edge_embeddings.py" in args]
     assert len(edge_runs) == 1, f"expected exactly one relationship-embedding run, found {len(edge_runs)}"
+
+
+WRITE_RATIO_COMMAND = '"$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_write_path_guards.py -m benchmark -s'
+
+
+def test_perf_gate_runs_the_write_path_ratio_guards() -> None:
+    """The write-path guards must run, blocking, on the candidate wheel.
+
+    They compare against same-process controls because the 0.13.2 reference
+    predates the wins they guard. A step that is absent, tolerated, or run from
+    inside the checkout gates nothing.
+    """
+    perf = _ci_job("perf-regression")
+    assert "continue-on-error" not in perf
+    _assert_runs(
+        perf,
+        "cp tests/benchmarks/test_bench_write_path_guards.py "
+        '"$RUNNER_TEMP/kglite-write-harness/test_bench_write_path_guards.py"',
+    )
+    step = _step_running(perf, WRITE_RATIO_COMMAND)
+    assert "continue-on-error" not in step
+    assert "if" not in step, f"the write-path step runs conditionally: {step.get('if')!r}"
+    assert step.get("working-directory") == "${{ runner.temp }}/kglite-write-harness"
+    assert (step.get("env") or {}).get("PYTHONPATH") == ""
+    runs = [args for args in _pytest_invocations(perf) if "test_bench_write_path_guards.py" in args]
+    assert len(runs) == 1, f"expected exactly one write-path run, found {len(runs)}"
+    assert _markers(runs[0]) == ["benchmark"]
 
 
 BOLT_RATIO_COMMAND = '"$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_bolt_gate.py -m benchmark -s'

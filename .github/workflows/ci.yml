@@ -754,6 +754,8 @@ jobs:
           cp tests/benchmarks/test_bench_core.py "$HARNESS_DIR/test_bench_core.py"
           mkdir -p "$RUNNER_TEMP/kglite-edge-harness"
           cp tests/benchmarks/test_bench_edge_embeddings.py "$RUNNER_TEMP/kglite-edge-harness/test_bench_edge_embeddings.py"
+          mkdir -p "$RUNNER_TEMP/kglite-write-harness"
+          cp tests/benchmarks/test_bench_write_path_guards.py "$RUNNER_TEMP/kglite-write-harness/test_bench_write_path_guards.py"
 
       - name: Benchmark published 0.13.2 wheel
         working-directory: ${{ runner.temp }}/kglite-core-harness
@@ -878,6 +880,19 @@ jobs:
           PYTHONPATH: ""
         run: |
           "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_edge_embeddings.py -m benchmark
+
+      - name: Write-path ratio guards
+        # The write-path wins (fork-overlay adjacency, lazy property NDV) have
+        # no reference-wheel cell: 0.13.2 is slow by construction, so a guard
+        # against it is vacuous. Each cell asserts a ratio against a control
+        # measured in the same process. Run from outside the checkout so the
+        # repo's `kglite/` package cannot shadow the installed candidate wheel.
+        working-directory: ${{ runner.temp }}/kglite-write-harness
+        env:
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest test_bench_write_path_guards.py -m benchmark -s
 
       - name: Build the Bolt server for its ratio guards
         # The server binary is not part of the wheel. Built on the runner host:

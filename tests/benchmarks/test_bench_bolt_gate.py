@@ -29,6 +29,11 @@ What each guard catches:
   against the same query over maps the server builds itself. A second cell
   sends twice the payload and must fail the same guard, so the cell proves it
   separates a 2x slower decoder from noise on every run.
+* **Durable-full reader latency** -- point reads on one connection while
+  another commits at ``--durability full``. A reader may wait for the
+  write-ahead-log fsync only if the commit holds the graph lock across it, so
+  the reader's p95 must stay under ``MAX_READER_P95_VS_FSYNC`` of the writer's
+  median commit (which is the fsync).
 * **Reader scaling** -- point lookups from four processes must outrun one
   process; a server-wide lock serialises them to 1.0x.
 
@@ -95,6 +100,9 @@ PARAM_ROWS = 20_000
 #: ceiling sits between the measured ratio and the doubled-payload ratio on
 #: its platform, about 25% clear of both, so it catches a decoder twice as slow.
 MAX_PARAMS_VS_SERVER_BUILT = 6.0 if sys.platform.startswith("linux") else 11.0
+#: Reader p95 during a concurrent ``full`` writer may be this fraction of the
+#: writer's median commit latency.
+MAX_READER_P95_VS_FSYNC = 0.25
 #: Four reader processes must reach this multiple of one reader's throughput.
 MIN_READER_SCALING = 1.25
 
@@ -130,11 +138,11 @@ def _free_port() -> int:
 
 
 class _Server:
-    def __init__(self, graph: Path, env: dict[str, str] | None = None):
+    def __init__(self, graph: Path, env: dict[str, str] | None = None, args: list[str] | None = None):
         binary = _server_binary()
         self.port = _free_port()
         self.proc = subprocess.Popen(
-            [str(binary), "--graph", str(graph), "--bind", "127.0.0.1", "--port", str(self.port)],
+            [str(binary), "--graph", str(graph), "--bind", "127.0.0.1", "--port", str(self.port), *(args or [])],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             env={**os.environ, **(env or {})},
@@ -523,3 +531,76 @@ def test_bolt_readers_scale_across_connections(server, embedded):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-m", "benchmark", "-s", "-v"]))
+
+
+# --- write path --------------------------------------------------------------
+
+
+def _percentile(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+
+@pytest.fixture
+def writable_graph(graph_path: Path, tmp_path: Path) -> Path:
+    """A private copy: the server logs and checkpoints beside the file."""
+    path = tmp_path / "write.kgl"
+    shutil.copy(graph_path, path)
+    return path
+
+
+def test_bolt_readers_do_not_wait_for_a_full_durability_commit(writable_graph):
+    srv = _Server(writable_graph, args=["--durability", "full"])
+    stop = threading.Event()
+    commits: list[float] = []
+
+    def write():
+        with _login(srv) as conn:
+            i = 0
+            while not stop.is_set():
+                started = time.perf_counter()
+                _run_pull(conn, "CREATE (:Logged {x: $x})", {"x": i})
+                commits.append(time.perf_counter() - started)
+                i += 1
+
+    try:
+        with _login(srv) as reader:
+            for i in range(200):
+                _run_pull(reader, "MATCH (n:Person {pid: $i}) RETURN n.age AS a", {"i": i})
+            writer = threading.Thread(target=write)
+            writer.start()
+            time.sleep(0.3)
+            waits = []
+            end = time.perf_counter() + 3.0
+            i = 0
+            while time.perf_counter() < end:
+                started = time.perf_counter()
+                _run_pull(reader, "MATCH (n:Person {pid: $i}) RETURN n.age AS a", {"i": i % 10_000})
+                waits.append(time.perf_counter() - started)
+                i += 1
+            stop.set()
+            writer.join()
+    finally:
+        stop.set()
+        srv.close()
+    fsync = statistics_median(commits)
+    p95 = _percentile(waits, 0.95)
+    _report(
+        "full-reader-latency",
+        commit_median_ms=fsync * 1e3,
+        commits=len(commits),
+        reader_p95_ms=p95 * 1e3,
+        reader_max_ms=max(waits) * 1e3,
+        reads=len(waits),
+        ratio=p95 / fsync,
+    )
+    if fsync < 0.0008:  # storage that syncs in under a millisecond cannot show a reader waiting on it
+        pytest.skip(f"premise: a full-durability commit must cost an fsync, took {fsync * 1e3:.3f} ms")
+    assert p95 <= fsync * MAX_READER_P95_VS_FSYNC, (
+        f"reader p95 {p95 * 1e3:.2f} ms during full-durability commits of {fsync * 1e3:.2f} ms "
+        f"({p95 / fsync:.2f}x); limit {MAX_READER_P95_VS_FSYNC}x (fsync under the graph lock?)"
+    )
+
+
+def statistics_median(values: list[float]) -> float:
+    return sorted(values)[len(values) // 2]
