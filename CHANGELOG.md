@@ -86,6 +86,20 @@ before upgrading.
 
 ### Changed
 
+- **Parameterised statements are plan-cached per set of values.**
+  - Before: a call with bound parameters was re-planned every time, so the usual way to call KGLite never reached the plan cache.
+  - Now: the plan is stored from a statement's second call on the same thread and reused while the values, the query text and the graph are unchanged. The planner bakes parameter values into the plan, so different values never share one.
+  - Measured through Python `cypher()`, minimum of 9 x 20,000 calls, two runs: an id lookup with a repeated parameter 2,930 ns to 1,860 ns; a two-hop query 4,200 ns to 2,350 ns; a lookup with two parameters 5,000 ns to 2,200 ns. Four threads on eight repeating values: 214,000 to 249,000 queries/s.
+  - A call whose values never repeat is unchanged (2,700 ns to 2,650 ns). A loop that cycles through more distinct values than the 256-entry parameter cache holds pays one cache insert per call: 2,990 ns to 3,100 ns.
+  - Parameter-free plans live in their own cache and are never evicted by parameter churn. Map, node, relationship, path and point parameters are not cached.
+
+- **Fluent `where()` on `id` and on unindexed properties is faster.**
+  - `where({"id": x})` reads the id index instead of every candidate's id. Over 2,000 nodes it takes 98 us down to 30 us (minimum of 5 x 2,000 calls, two runs); the same filter after `traverse()` takes 100 us down to 31 us.
+  - A type with repeated ids still scans, so every copy is found.
+  - `where()` on a property without an index no longer builds a per-node field cache it never read: `where({"age": 5})` over 2,000 nodes takes 104 us down to 64 us.
+
+- **A Python `cypher()` call arms the Ctrl-C handler with one system call instead of two.** `RETURN 1` takes 1,105 ns down to 1,020 ns (minimum of 9 x 20,000 calls, two runs). The handler stays installed between calls and passes SIGINT to the handler it replaced, so Ctrl-C outside a query behaves as before and a handler installed with `signal.signal` is still the one that runs.
+
 - **C ABI and Java: multi-threaded throughput no longer collapses as threads
   are added.**
   - Before: the C library's memory-statistics counters were three process-wide
