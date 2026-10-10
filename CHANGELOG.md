@@ -175,6 +175,11 @@ before upgrading.
 
 ### Fixed
 
+- **`WHERE m.key = row.key` over a map-valued `UNWIND` row no longer scans the type once per row.**
+  - Before: `UNWIND $rows AS row MATCH (m:M) WHERE m.key = row.key` took time quadratic in the row count. Release, memory mode, 8,000 rows over 8,000 nodes: 8,400 ms (best of 3).
+  - Now: the predicate is pushed into the pattern like `{key: row.key}` and `WITH row.key AS k`, which both took 4-6 ms. The same query takes 4.2 ms (best of 3, controls unchanged).
+  - `MATCH (m:M {y: d.year})` over a projected date returned no rows; it now evaluates the component as the `WHERE` form does.
+
 - **A `WITH`'s `ORDER BY` and `WHERE` can read variables the projection dropped again.**
   - Before: `MATCH (a) WITH a.name AS n ORDER BY a.age RETURN n` (and `WITH ... WHERE a.age > 1`) raised `Undefined variable 'a'` since 0.13.0.
   - Now: after a non-aggregating, non-`DISTINCT` `WITH`, its own `WHERE` and the `ORDER BY` / `SKIP` / `LIMIT` behind it read the dropped variables; no later clause does. After `WITH DISTINCT`, an aggregating `WITH` or `RETURN DISTINCT`, only projected columns are readable and a dropped variable is still refused. An aggregate in the `ORDER BY` of a projection that does not aggregate (`WITH n.x AS x ORDER BY count(n)`) is refused with its own message.

@@ -930,6 +930,29 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "UNWIND $ks AS k MATCH (n:J {key: k}) RETURN n.n AS n ORDER BY n",
         {"ks": [f"K{i}" for i in range(150)] + [None]},
     ),
+    # `WHERE m.key = row.key` over a map-valued UNWIND row is pushed as the
+    # same correlated reference `{key: row.key}` parses to, so it reaches the
+    # query-local index; the answers must stay those of the per-row WHERE.
+    (
+        "where_map_row_key_int_probe_float_key",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE n.key = r.k RETURN n.n AS n ORDER BY n",
+        {"rows": [{"k": i} for i in range(150)] + [{"k": None}, {"x": 1}]},
+    ),
+    (
+        "where_map_row_key_text_probe_date_key",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:D) WHERE r.k = n.key RETURN n.n AS n ORDER BY n",
+        {"rows": [{"k": f"2000-{1 + i // 28:02d}-{1 + i % 28:02d}"} for i in range(150)] + [{"k": None}]},
+    ),
+    # A projected scalar that is not a map (a date's component) is evaluated,
+    # not read as a missing key.
+    (
+        "where_scalar_component_probe",
+        "cross_type_key_graph",
+        "UNWIND $ds AS d MATCH (n:F) WHERE n.n = d.day RETURN d, n.n AS n ORDER BY d, n",
+        {"ds": [__import__("datetime").date(2000, 1, 1 + i) for i in range(20)]},
+    ),
     # Each fusion the planner admits under a FOR VALID_TIME AS OF context,
     # with the prefix and without it on the same declared fixture.
     (

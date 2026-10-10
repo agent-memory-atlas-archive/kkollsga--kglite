@@ -466,6 +466,20 @@ fn extract_from_predicate(
                 }
                 return Some(pred.clone());
             }
+            // `cur.prop = row.key` over a prior WITH/UNWIND scalar (a map-valued
+            // UNWIND row): the same `EqualsNodeProp` reference as a prior node,
+            // resolved per row from the map, so the probe can use an index
+            // instead of re-scanning the type for every row.
+            if let Some((var, prop, ref_var, ref_prop)) =
+                try_extract_correlated_nodeprop(left, right, match_vars, prior_scalar_vars)
+                    .filter(|(_, _, ref_var, _)| !match_vars.iter().any(|(v, _)| v == ref_var))
+            {
+                if reserve_exclusive(reservations, &var, &prop) {
+                    out.node_props.push((var, prop, ref_var, ref_prop));
+                    return None;
+                }
+                return Some(pred.clone());
+            }
             if let Some((var, prop, ref_name)) =
                 try_extract_scalar_var(left, right, match_vars, prior_scalar_vars)
             {

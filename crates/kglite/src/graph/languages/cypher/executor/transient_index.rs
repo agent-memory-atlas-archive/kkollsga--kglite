@@ -194,6 +194,10 @@ impl TransientEqIndex {
         {
             return None;
         }
+        if matches!(&self.resolution, ProbeResolution::NodeProp { var, .. } if reference_needs_evaluation(row, var))
+        {
+            return None;
+        }
         match self.probe_value(row, graph) {
             Some(probe) => self.lookup(&probe),
             None => Some(&[]),
@@ -266,6 +270,19 @@ pub(super) fn node_prop_reference(
         Value::Map(members) => members.get(prop).cloned(),
         _ => None,
     }
+}
+
+/// `var.prop` cannot be read by [`node_prop_reference`]: `var` is a projected
+/// scalar that is neither a node, a map nor null (`WITH date(..) AS d ... d.year`),
+/// so only the expression evaluator knows what the access means.
+pub(super) fn reference_needs_evaluation(row: &ResultRow, var: &str) -> bool {
+    !row.node_bindings.contains_key(var)
+        && row.projected.get(var).is_some_and(|value| {
+            !matches!(
+                value,
+                Value::NodeRef(_) | Value::Node(_) | Value::Map(_) | Value::Null
+            )
+        })
 }
 
 fn extract_single_node_pattern(pattern: &Pattern) -> Option<&NodePattern> {

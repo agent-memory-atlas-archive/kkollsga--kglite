@@ -219,6 +219,18 @@ impl<'a> CypherExecutor<'a> {
                                 *matcher = PropertyMatcher::In(MembershipSet::default());
                             }
                         }
+                        PropertyMatcher::EqualsNodeProp { var, prop }
+                            if transient_index::reference_needs_evaluation(row, var) =>
+                        {
+                            let access = Expression::PropertyAccess {
+                                variable: var.clone(),
+                                property: prop.clone(),
+                            };
+                            *matcher = match self.evaluate_expression(&access, row)? {
+                                Value::Null => PropertyMatcher::In(MembershipSet::default()),
+                                value => PropertyMatcher::Equals(value),
+                            };
+                        }
                         PropertyMatcher::EqualsNodeProp { var, prop } => {
                             let val =
                                 transient_index::node_prop_reference(self.graph, row, var, prop);
