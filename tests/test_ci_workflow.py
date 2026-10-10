@@ -411,7 +411,8 @@ def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
     # all runner effects, so it is printed and must never decide the job.
     gate = (
         'python scripts/compare_bench.py .bench-reference-0.13.2.json "$1" '
-        "--metric min --threshold 20 --require-exact-set"
+        "--metric min --threshold 20 --require-exact-set "
+        "--threshold-overrides scripts/perf_threshold_overrides.json"
     )
     record = (
         'python scripts/compare_bench.py tests/benchmarks/baselines/current.linux.json "$1" '

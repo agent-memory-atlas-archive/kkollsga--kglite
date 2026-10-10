@@ -1,0 +1,20 @@
+{
+  "comment": "Per-cell regression thresholds for the CI leg-1 gate (candidate vs the same-job kglite 0.13.2 wheel). Each entry names one exact cell; a name absent from both captures fails the check, so a renamed cell cannot keep a loosened gate. Every other cell keeps --threshold.",
+  "overrides": [
+    {
+      "cell": "test_bench_two_edge_relationship_text_filter[CONTAINS-Edge_12345-2]",
+      "threshold_pct": 30,
+      "cause": "Steady +11..17% on CI runners: +6.6% from the source-major edge layout of 859d874d (2x one-hop win) plus ~4% instruction growth across 0.18-0.19 (p25b read-path offset study)."
+    },
+    {
+      "cell": "test_bench_two_edge_relationship_text_filter[ENDS WITH-_1-2]",
+      "threshold_pct": 30,
+      "cause": "Same offset as the CONTAINS cell: source-major edge layout of 859d874d plus ~4% instruction growth across 0.18-0.19."
+    },
+    {
+      "cell": "test_bench_traversal",
+      "threshold_pct": 30,
+      "cause": "About +80 ns per call of fluent OperationReport/Diagnostic bookkeeping on a ~0.45 us cell (p25b read-path offset study)."
+    }
+  ]
+}

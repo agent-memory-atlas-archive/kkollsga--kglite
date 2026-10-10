@@ -800,6 +800,11 @@ jobs:
         # benchmarked in this same job, on this runner, minutes earlier. That
         # cancels most of the runner's speed, not all of it.
         #
+        # Three cells carry a documented steady offset against 0.13.2 and have
+        # a 30% cell threshold in scripts/perf_threshold_overrides.json (each
+        # entry states its cause; a name matching no cell fails the step).
+        # Every other cell keeps 20%.
+        #
         # The relationship text-filter cells sit closest to the threshold.
         # Building 0.19.3 on the runner host, in manylinux2014 on RUST_STABLE
         # and on a second toolchain gave the same offset as the published wheel
@@ -833,7 +838,8 @@ jobs:
           gate() {
             python scripts/compare_bench.py \
               .bench-reference-0.13.2.json "$1" \
-              --metric min --threshold 20 --require-exact-set
+              --metric min --threshold 20 --require-exact-set \
+              --threshold-overrides scripts/perf_threshold_overrides.json
           }
           record() {
             echo "Non-gating: $1 against the committed Linux record (current.linux.json)."

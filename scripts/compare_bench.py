@@ -10,6 +10,7 @@ Usage:
         [--metric min|mean|median] \\
         [--threshold PERCENT] \\
         [--require-exact-set] \\
+        [--threshold-overrides PATH] \\
         [--quiet] \\
         [--record-history PATH]
 
@@ -30,6 +31,13 @@ release is visible the release *before* it crosses.
 `--record-history PATH` appends one summary row per run to a CSV recurrence
 record (verdict, worst cell, watch band). It is a local developer aid wired
 into `make bench-check`; CI does not pass it.
+
+`--threshold-overrides PATH` loads per-cell thresholds from a JSON file of
+`{"overrides": [{"cell", "threshold_pct", "cause"}]}` entries (see
+`scripts/perf_threshold_overrides.json`). Each entry names one exact cell and
+must carry a cause; an entry naming a cell absent from both captures fails the
+run (exit 2), so a renamed cell cannot silently keep a loosened gate. Cells
+without an entry keep `--threshold`.
 
 A benchmark newly present in the current file is informational until the next
 baseline refresh. A benchmark present in the baseline but missing from the
@@ -87,6 +95,34 @@ def _load(path: Path) -> dict[str, float]:
     benchmark so the caller picks the metric without re-reading."""
     data = json.loads(path.read_text(encoding="utf-8"))
     return {b["name"]: b["stats"] for b in data["benchmarks"]}
+
+
+def _load_overrides(path: Path) -> dict[str, float]:
+    """Parse a threshold-override file into `{cell: threshold_pct}`.
+
+    Raises ValueError on a malformed entry, a missing cause, or a duplicate
+    cell: the override file is the one place a gate is loosened, so it must
+    say why for every cell.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    entries = data.get("overrides") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: expected an object with an 'overrides' list")
+    out: dict[str, float] = {}
+    for entry in entries:
+        cell = entry.get("cell") if isinstance(entry, dict) else None
+        pct = entry.get("threshold_pct") if isinstance(entry, dict) else None
+        cause = entry.get("cause") if isinstance(entry, dict) else None
+        if not isinstance(cell, str) or not cell:
+            raise ValueError(f"{path}: override without a 'cell' name: {entry!r}")
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or pct <= 0:
+            raise ValueError(f"{path}: override for {cell!r} needs a positive numeric 'threshold_pct'")
+        if not isinstance(cause, str) or not cause.strip():
+            raise ValueError(f"{path}: override for {cell!r} needs a non-empty 'cause'")
+        if cell in out:
+            raise ValueError(f"{path}: duplicate override for {cell!r}")
+        out[cell] = float(pct)
+    return out
 
 
 def _watch_band(rows: list[tuple[str, float, float, float]], threshold: float) -> list[tuple[str, float, float, float]]:
@@ -182,6 +218,13 @@ def main() -> int:
         action="store_true",
         help="Fail when the current run contains benchmarks absent from the baseline.",
     )
+    p.add_argument(
+        "--threshold-overrides",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="JSON file of per-cell thresholds (cell, threshold_pct, cause); unknown cell names fail the run.",
+    )
     p.add_argument("--quiet", action="store_true", help="Suppress the summary table on pass.")
     p.add_argument(
         "--record-history",
@@ -209,6 +252,10 @@ def main() -> int:
         current = _load(args.current)
         validate_measurements(baseline, args.metric)
         validate_measurements(current, args.metric)
+        overrides = _load_overrides(args.threshold_overrides) if args.threshold_overrides else {}
+        unknown = sorted(set(overrides) - set(baseline) - set(current))
+        if unknown:
+            raise ValueError(f"threshold override names cell(s) in neither capture: {', '.join(unknown)}")
     except (QualificationError, OSError, ValueError) as error:
         print(f"no valid perf verdict: {error}", file=sys.stderr)
         return 2
@@ -238,8 +285,12 @@ def main() -> int:
     # Sort worst regressions first.
     rows.sort(key=lambda r: -r[3])
 
-    regressions = [r for r in rows if r[3] > args.threshold]
-    band = _watch_band(rows, args.threshold)
+    def limit(name: str) -> float:
+        return overrides.get(name, args.threshold)
+
+    regressions = [r for r in rows if r[3] > limit(r[0])]
+    # Overridden cells have their own limit, so the default band does not describe them.
+    band = [r for r in _watch_band(rows, args.threshold) if r[0] not in overrides]
     name_w = max((len(r[0]) for r in rows), default=20)
 
     if not args.quiet or regressions:
@@ -249,7 +300,9 @@ def main() -> int:
         print(f"  {'benchmark':<{name_w}}  {'baseline':>14}  {'current':>14}  {'delta':>8}")
         print(f"  {'-' * name_w}  {'-' * 14}  {'-' * 14}  {'-' * 8}")
         for name, b, c, delta in rows:
-            flag = " <<" if delta > args.threshold else ""
+            flag = " <<" if delta > limit(name) else ""
+            if name in overrides:
+                flag += f"  (cell threshold {overrides[name]:+.1f}%)"
             print(f"  {name:<{name_w}}  {b:>14.3e}  {c:>14.3e}  {delta:>+7.1f}%{flag}")
 
     # The watch band prints in every run, quiet or not: it is the whole point
@@ -275,9 +328,9 @@ def main() -> int:
             for name in unbaselined:
                 print(f"  + {name}")
     if regressions:
-        print(f"\nFAIL: {len(regressions)} benchmark(s) regressed > {args.threshold:+.1f}% on {args.metric}:")
+        print(f"\nFAIL: {len(regressions)} benchmark(s) regressed past their threshold on {args.metric}:")
         for name, _, _, delta in regressions:
-            print(f"  - {name}: {delta:+.1f}%")
+            print(f"  - {name}: {delta:+.1f}% (> {limit(name):+.1f}%)")
         print(
             "\nIf the regression is intentional (e.g. behaviour change worth the cost), "
             "capture via `make refresh-release-constants`, qualify the capture with "

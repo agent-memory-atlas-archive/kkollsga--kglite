@@ -112,7 +112,7 @@ def test_regression_goes_to_the_fail_list_not_the_watch_band(tmp_path: Path) -> 
     result = _compare(tmp_path, ["broken"], _current_at({"broken": 25.0}))
     assert result.returncode == 1
     assert "APPROACHING" not in result.stdout
-    assert "1 benchmark(s) regressed > +20.0%" in result.stdout
+    assert "1 benchmark(s) regressed past their threshold" in result.stdout
 
 
 def test_watch_band_derives_from_the_passed_threshold(tmp_path: Path) -> None:
@@ -194,3 +194,83 @@ def test_history_is_skipped_when_the_local_folder_is_absent(tmp_path: Path) -> N
     assert result.returncode == 0
     assert "recurrence record skipped" in result.stdout
     assert not history.exists()
+
+
+OVERRIDE_CELL = "test_bench_traversal"
+
+
+def _overrides(tmp_path: Path, cells: dict[str, float]) -> list[str]:
+    path = tmp_path / "overrides.json"
+    path.write_text(
+        json.dumps({"overrides": [{"cell": c, "threshold_pct": t, "cause": "test cause"} for c, t in cells.items()]}),
+        encoding="utf-8",
+    )
+    return ["--threshold-overrides", str(path)]
+
+
+def test_override_cell_passes_between_default_and_cell_threshold(tmp_path: Path) -> None:
+    result = _compare(
+        tmp_path,
+        [OVERRIDE_CELL],
+        _current_at({OVERRIDE_CELL: 25.0}),
+        extra_args=["--threshold", "20", *_overrides(tmp_path, {OVERRIDE_CELL: 30})],
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_override_cell_fails_past_its_own_threshold(tmp_path: Path) -> None:
+    result = _compare(
+        tmp_path,
+        [OVERRIDE_CELL],
+        _current_at({OVERRIDE_CELL: 31.0}),
+        extra_args=["--threshold", "20", *_overrides(tmp_path, {OVERRIDE_CELL: 30})],
+    )
+    assert result.returncode == 1
+    assert f"{OVERRIDE_CELL}: +31.0% (> +30.0%)" in result.stdout
+
+
+def test_override_does_not_loosen_an_unrelated_cell(tmp_path: Path) -> None:
+    result = _compare(
+        tmp_path,
+        [OVERRIDE_CELL, "other"],
+        _current_at({OVERRIDE_CELL: 25.0, "other": 21.0}),
+        extra_args=["--threshold", "20", *_overrides(tmp_path, {OVERRIDE_CELL: 30})],
+    )
+    assert result.returncode == 1
+    assert "other: +21.0%" in result.stdout
+    assert f"{OVERRIDE_CELL}: " not in result.stdout.split("FAIL:")[-1]
+
+
+def test_override_naming_an_absent_cell_is_an_error(tmp_path: Path) -> None:
+    result = _compare(
+        tmp_path,
+        [OVERRIDE_CELL],
+        _current_at({OVERRIDE_CELL: 0.0}),
+        extra_args=_overrides(tmp_path, {"renamed_cell": 30}),
+    )
+    assert result.returncode == 2
+    assert "renamed_cell" in result.stderr
+
+
+def test_override_without_a_cause_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "overrides.json"
+    path.write_text(json.dumps({"overrides": [{"cell": OVERRIDE_CELL, "threshold_pct": 30}]}), encoding="utf-8")
+    result = _compare(
+        tmp_path, [OVERRIDE_CELL], [OVERRIDE_CELL], extra_args=["--threshold-overrides", str(path)]
+    )
+    assert result.returncode == 2
+    assert "cause" in result.stderr
+
+
+def test_committed_overrides_name_only_cells_in_the_committed_baselines() -> None:
+    """The shipped override file must resolve against the Linux baseline row set."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import compare_bench
+    finally:
+        sys.path.pop(0)
+    overrides = compare_bench._load_overrides(ROOT / "scripts" / "perf_threshold_overrides.json")
+    names = {b["name"] for b in json.loads((ROOT / "tests/benchmarks/baselines/current.linux.json").read_text())["benchmarks"]}
+    assert set(overrides) <= names
+    assert len(overrides) == 3
+    assert set(overrides.values()) == {30.0}
