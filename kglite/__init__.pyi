@@ -11041,7 +11041,9 @@ class Session:
     they raise :class:`NotDurableError`. A session from
     :meth:`KnowledgeGraph.session` keeps its non-durable behaviour: it never
     logs, and refuses writes when its source is a durable graph. A durable
-    session has no embedding-model binding.
+    session has no embedding-model binding. After :meth:`close`, writes,
+    :meth:`begin`, :meth:`save` and :meth:`sync` raise :class:`FileIoError`;
+    reads still answer.
     """
 
     def cypher(

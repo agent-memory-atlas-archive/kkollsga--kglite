@@ -22,8 +22,10 @@ new graph. They are the simplest pattern for rebuild-and-swap services.
 
 ## Shared `Session`
 
-Use `graph.session()` / `kglite.open_session(...)` when threads or tasks need
-one evolving graph:
+Use `graph.session()` / `kglite.open_session(path)` when threads or tasks need
+one evolving graph. For durable writes from several threads, use
+`kglite.open_session(path, durable=...)` instead; see
+{doc}`/python/guides/durable-apps`. Example without durability:
 
 ```python
 store = graph.session()

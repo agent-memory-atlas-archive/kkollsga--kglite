@@ -344,9 +344,45 @@ snapshot = g.freeze()
 snapshot.cypher("MATCH (o:Order) RETURN count(o)")
 ```
 
+### Choosing `open()` or `open_session()`
+
+Both take `durable=` and the same writer lease. Pick by how many threads write.
+
+| | `kglite.open(path, durable=...)` | `kglite.open_session(path, durable=...)` |
+|---|---|---|
+| Returns | `KnowledgeGraph` | thread-safe `Session` |
+| Writers | one thread owns the graph | any number of threads call `execute()` and `begin()` |
+| API | builder, fluent and bulk loaders, in-place writes, embedder | Cypher, `begin()` / `commit()`; no fluent or bulk loaders, no embedder |
+| Commits at `"full"` | one statement per fsync | concurrent writers share fsyncs (group commit) |
+| Readers | `freeze()` snapshots | `cypher()` on the session; never waits on a writer's fsync |
+
+Passing `durable` to `open_session()` selects this form. Without it,
+`open_session(path)` is the read-only load.
+
+```python
+import kglite
+from concurrent.futures import ThreadPoolExecutor
+
+with kglite.open_session("app.kgl", durable="full") as s:
+    with ThreadPoolExecutor(8) as pool:
+        list(pool.map(lambda i: s.execute("CREATE (:Task {id: $i})", params={"i": i}), range(100)))
+    print(s.cypher("MATCH (t:Task) RETURN count(t) AS n").scalar())  # 100
+```
+
+- **Lease:** the session holds the writer lease from open until `close()`. A second owner raises `WriterLeaseHeldError`.
+- **Transactions:** `s.begin()` returns a `SessionTransaction`; `commit()` publishes it as one unit. A stale commit raises `TransactionConflictError`.
+- **Persistence:** `save()` writes a checkpoint, `sync()` takes a power-safe point, and `close()` checkpoints then releases the lease.
+- **Recovery:** the log replays on open, so a crash then a reopen through `open()` or `open_session()` recovers every committed write.
+- **`auto_checkpoint_wal_mib`:** folds the log into the checkpoint on a background thread, as on `open()`.
+
+**After `close()` a durable `Session` differs from a `KnowledgeGraph`.**
+`KnowledgeGraph.close()` leaves a detached, mutable graph (see above). A closed
+`Session` refuses every write, `begin()`, `commit()`, `save()` and `sync()` with
+`FileIoError`. Reads still answer from the last state. `close()` itself is idempotent.
+
 ### Sessions on a durable graph
 
-**Durability and shared concurrent writes don't combine in one handle.** A
+**A `graph.session()` handle cannot combine durability with shared concurrent writes.** A
 `Session` (`graph.session()` / `kglite.open_session(...)`) serves shared reads and
 serialized writes. Its `execute()` writes land on a working copy visible only
 through that session, reachable by neither the log nor the owning graph's
@@ -354,8 +390,8 @@ through that session, reachable by neither the log nor the owning graph's
 
 - A `Session` write against a durable graph therefore **raises**, rather than
   applying a mutation nothing can persist. Reads are unaffected.
-- For a durable app, keep writes on the durable `KnowledgeGraph` itself, where
-  they are serialized and `fsync`'d. Use `freeze()` snapshots for concurrent reads.
+- For a durable app with one writer thread, keep writes on the durable `KnowledgeGraph` itself, where they are serialized and `fsync`'d. Use `freeze()` snapshots for concurrent reads.
+- For concurrent durable writers, use `kglite.open_session(path, durable=...)` instead.
 
 After the source ends ownership, two cases apply:
 
