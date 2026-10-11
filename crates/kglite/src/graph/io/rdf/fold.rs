@@ -380,12 +380,18 @@ mod tests {
             Value::DateTime(NaiveDate::from_ymd_opt(2020, 1, 15).unwrap())
         );
         match datatype_to_value("2020-01-15T08:30:00Z", &xsd("dateTime")) {
-            Value::Timestamp(_) => {}
-            other => panic!("expected Timestamp, got {:?}", other),
+            Value::ZonedDateTime { offset_secs: 0, .. } => {}
+            other => panic!("expected a zoned UTC datetime, got {:?}", other),
         }
         match datatype_to_value("2020-01-15T08:30:00.123+02:00", &xsd("dateTime")) {
+            Value::ZonedDateTime {
+                offset_secs: 7200, ..
+            } => {}
+            other => panic!("expected a +02:00 zoned datetime, got {:?}", other),
+        }
+        match datatype_to_value("2020-01-15T08:30:00", &xsd("dateTime")) {
             Value::Timestamp(_) => {}
-            other => panic!("expected Timestamp, got {:?}", other),
+            other => panic!("expected a local Timestamp, got {:?}", other),
         }
     }
 
@@ -408,11 +414,23 @@ mod tests {
     }
 
     #[test]
-    fn zoned_datetime_preserves_fraction_and_utc_day() {
-        for (lexical, day, hour, nanos) in [
-            ("2025-01-02T00:30:05.123456Z", 2, 0, 123_456_000),
-            ("2025-01-02T00:30:05.123456789+02:00", 1, 22, 123_456_789),
-            ("2025-01-02T23:30:05.123456789-05:00", 3, 4, 123_456_789),
+    fn zoned_datetime_preserves_fraction_utc_day_and_offset() {
+        for (lexical, day, hour, nanos, offset) in [
+            ("2025-01-02T00:30:05.123456Z", 2, 0, 123_456_000, 0),
+            (
+                "2025-01-02T00:30:05.123456789+02:00",
+                1,
+                22,
+                123_456_789,
+                7200,
+            ),
+            (
+                "2025-01-02T23:30:05.123456789-05:00",
+                3,
+                4,
+                123_456_789,
+                -18000,
+            ),
         ] {
             let expected = NaiveDate::from_ymd_opt(2025, 1, day)
                 .unwrap()
@@ -420,7 +438,11 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 datatype_to_value(lexical, &xsd("dateTime")),
-                Value::Timestamp(expected),
+                Value::ZonedDateTime {
+                    utc: expected,
+                    offset_secs: offset,
+                    zone: None,
+                },
                 "{lexical}"
             );
         }

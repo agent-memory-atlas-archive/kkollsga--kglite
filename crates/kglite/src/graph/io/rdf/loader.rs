@@ -784,7 +784,7 @@ ex:bob a foaf:Person ;
         assert!(matches!(props.get("ex__born"), Some(Value::DateTime(_))));
         assert!(matches!(
             props.get("ex__lastSeen"),
-            Some(Value::Timestamp(_))
+            Some(Value::ZonedDateTime { .. })
         ));
 
         // Both people materialised.

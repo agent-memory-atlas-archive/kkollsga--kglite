@@ -366,13 +366,12 @@ def test_every_query_surface_declares_its_own_deadline_default() -> None:
             assert needle in text, f"{path.name} must declare its deadline: missing {needle!r}"
 
 
-def test_both_sides_of_the_aware_datetime_divergence_are_documented() -> None:
-    """Python converts an aware `datetime` to naive UTC; Bolt refuses one. Both
-    are right for their surface, so neither page may describe only its own half
-    — a reader who finds one behaviour must be told the other exists."""
+def test_python_and_bolt_document_the_same_zoned_datetime_contract() -> None:
+    """Python and Bolt both keep a timezone-aware datetime as a zoned value. Each
+    page must say so and link the other, so neither half is documented alone."""
     python_side = (REPO_ROOT / "docs/python/value-projection.md").read_text(encoding="utf-8")
     bolt_side = (REPO_ROOT / "docs/operators/bolt-server.md").read_text(encoding="utf-8")
-    assert "zoneless" in python_side and "Bolt server" in python_side
-    assert "refuses" in python_side, "the Python page must name Bolt's refusal"
-    assert "zoneless" in bolt_side and "naive UTC" in bolt_side
+    assert "ZonedDateTime" in python_side and "DateTimeZoneId" in python_side
+    assert "operators/bolt-server" in python_side, "the Python page must link the Bolt half"
+    assert "DateTimeZoneId" in bolt_side and "zoned value" in bolt_side
     assert "value-projection" in bolt_side, "the Bolt page must link the Python half"
