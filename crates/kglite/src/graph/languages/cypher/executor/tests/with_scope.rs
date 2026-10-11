@@ -403,3 +403,106 @@ fn a_dropped_variable_read_by_with_order_by_does_not_reach_later_clauses() {
         vec![vec![s("x"), s("y")]],
     );
 }
+
+// ========================================================================
+// An aggregating (or DISTINCT) WITH's ORDER BY reads its grouping keys
+// ========================================================================
+//
+// `WITH a.n AS n, count(*) AS c ORDER BY a.n` names a grouping key by the
+// expression the WITH projected it from. The aggregation rebuilds its rows
+// from the projection, so the sort key used to resolve against rows without
+// `a` and tie on NULL: input order, silently.
+
+/// `M` nodes inserted so that first-seen group order (b, a, c) differs from
+/// sorted order; `k` gives a second grouping key.
+fn grouped_graph() -> DirGraph {
+    let mut graph = DirGraph::new();
+    run_write(
+        &mut graph,
+        "CREATE (:M {n:'b', k:1}) CREATE (:M {n:'a', k:2}) CREATE (:M {n:'b', k:1}) \
+         CREATE (:M {n:'c', k:1}) CREATE (:M {n:'a', k:1}) CREATE (:M {n:'a', k:2})",
+    );
+    graph
+}
+
+fn sc(text: &str, count: i64) -> Vec<Value> {
+    vec![s(text), Value::Int64(count)]
+}
+
+#[test]
+fn aggregating_with_order_by_reads_a_property_grouping_key() {
+    let graph = grouped_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH a.n AS n, count(*) AS c ORDER BY a.n RETURN n, c",
+        vec![sc("a", 3), sc("b", 2), sc("c", 1)],
+    );
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH a.n AS n, count(*) AS c ORDER BY a.n DESC RETURN n, c",
+        vec![sc("c", 1), sc("b", 2), sc("a", 3)],
+    );
+}
+
+#[test]
+fn aggregating_with_order_by_reads_a_computed_grouping_key() {
+    let graph = grouped_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH toUpper(a.n) AS u, count(*) AS c ORDER BY toUpper(a.n) DESC \
+         SKIP 1 LIMIT 1 RETURN u, c",
+        vec![sc("B", 2)],
+    );
+}
+
+#[test]
+fn aggregating_with_order_by_reads_several_grouping_keys() {
+    let graph = grouped_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH a.n AS n, a.k AS k, count(*) AS c ORDER BY a.k DESC, a.n \
+         RETURN n, k, c",
+        vec![
+            vec![s("a"), Value::Int64(2), Value::Int64(2)],
+            vec![s("a"), Value::Int64(1), Value::Int64(1)],
+            vec![s("b"), Value::Int64(1), Value::Int64(2)],
+            vec![s("c"), Value::Int64(1), Value::Int64(1)],
+        ],
+    );
+}
+
+#[test]
+fn aggregating_with_order_by_reads_a_value_grouping_key() {
+    let graph = grouped_graph();
+    assert_rows(
+        &graph,
+        "UNWIND [3, 1, 3, 2] AS v WITH v * 10 AS t, count(*) AS c ORDER BY v * 10 DESC \
+         RETURN t, c",
+        vec![
+            vec![Value::Int64(30), Value::Int64(2)],
+            vec![Value::Int64(20), Value::Int64(1)],
+            vec![Value::Int64(10), Value::Int64(1)],
+        ],
+    );
+}
+
+#[test]
+fn distinct_with_order_by_reads_the_projected_expression() {
+    let graph = grouped_graph();
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH DISTINCT a.n AS n ORDER BY a.n DESC RETURN n",
+        ids(&["c", "b", "a"]),
+    );
+}
+
+#[test]
+fn the_sort_key_rewrite_leaves_other_keys_alone() {
+    let graph = grouped_graph();
+    // An aliased aggregate still sorts by its alias, ties keep input order.
+    assert_rows(
+        &graph,
+        "MATCH (a:M) WITH a.n AS n, count(*) AS c ORDER BY c DESC, n RETURN n, c",
+        vec![sc("a", 3), sc("b", 2), sc("c", 1)],
+    );
+}

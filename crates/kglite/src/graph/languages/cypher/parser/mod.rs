@@ -22,6 +22,7 @@ use crate::graph::core::pattern_matching::ParamLabel;
 
 pub mod clauses;
 pub mod expression;
+mod grouping_sort;
 pub mod load_csv;
 pub mod match_pattern;
 pub mod predicate;
@@ -642,13 +643,15 @@ impl CypherParser {
                     clauses.push(self.parse_cypher25_clause()?);
                 }
                 Some(CypherToken::Identifier(s)) if s.eq_ignore_ascii_case("FORMAT") => {
-                    return Ok((clauses, self.parse_format_tail(end_at_rbrace)?))
+                    grouping_sort::rewrite_merging_with_sort_keys(&mut clauses);
+                    return Ok((clauses, self.parse_format_tail(end_at_rbrace)?));
                 }
                 Some(t) => return Err(self.unexpected_clause_start(t)),
                 None => break,
             }
         }
 
+        grouping_sort::rewrite_merging_with_sort_keys(&mut clauses);
         Ok((clauses, OutputFormat::Default))
     }
 

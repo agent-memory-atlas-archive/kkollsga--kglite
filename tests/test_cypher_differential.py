@@ -895,6 +895,33 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (a:Person) WITH a.name AS n WHERE a.age > 25 RETURN n ORDER BY n",
         None,
     ),
+    # An aggregating or DISTINCT WITH's ORDER BY names a grouping key by the
+    # expression it projected; the key resolves to the projected column in
+    # every plan, including the fused aggregate/top-k shapes.
+    (
+        "with_aggregate_order_by_grouping_expression",
+        "small_graph",
+        "MATCH (a:Person) WITH a.age AS g, count(*) AS c ORDER BY a.age, c RETURN g, c",
+        None,
+    ),
+    (
+        "with_aggregate_order_by_grouping_expression_desc_limit",
+        "small_graph",
+        "MATCH (a:Person) WITH a.age AS g, count(*) AS c ORDER BY a.age DESC SKIP 1 LIMIT 2 RETURN g, c",
+        None,
+    ),
+    (
+        "with_aggregate_order_by_computed_grouping_expression",
+        "small_graph",
+        "MATCH (a:Person) WITH toUpper(a.name) AS u, count(*) AS c ORDER BY toUpper(a.name) RETURN u, c",
+        None,
+    ),
+    (
+        "with_distinct_order_by_projected_expression",
+        "small_graph",
+        "MATCH (a:Person) WITH DISTINCT a.age AS g ORDER BY a.age DESC RETURN g",
+        None,
+    ),
     (
         "string_predicates_on_non_strings",
         "small_graph",

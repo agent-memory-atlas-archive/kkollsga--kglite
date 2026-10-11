@@ -191,6 +191,11 @@ before upgrading.
 
 ### Fixed
 
+- **An aggregating or `DISTINCT` `WITH` can order by the expression it grouped on.**
+  - Before: `MATCH (a:X) WITH a.n AS n, count(*) AS c ORDER BY a.n RETURN n, c` raised `Undefined variable 'a'`.
+  - Now: a sort key that is, in full, a non-aggregate item's expression sorts on that item's alias (`ORDER BY a.n`, `ORDER BY toUpper(a.n) DESC`). The item needs an alias.
+  - Unchanged: a key that only reads the same variables (`ORDER BY a.n + 1`), a key naming an unaliased item, and an aggregate over a dropped variable (`ORDER BY max(a.x)`) are still refused.
+
 - **`WHERE m.key = row.key` over a map-valued `UNWIND` row no longer scans the type once per row.**
   - Before: `UNWIND $rows AS row MATCH (m:M) WHERE m.key = row.key` took time quadratic in the row count. Release, memory mode, 8,000 rows over 8,000 nodes: 8,400 ms (best of 3).
   - Now: the predicate is pushed into the pattern like `{key: row.key}` and `WITH row.key AS k`, which both took 4-6 ms. The same query takes 4.2 ms (best of 3, controls unchanged).

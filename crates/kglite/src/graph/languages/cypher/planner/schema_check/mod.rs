@@ -1804,6 +1804,11 @@ mod tests {
             "MATCH (a:Person) WITH a.name AS n ORDER BY a.age SKIP 1 LIMIT 1 RETURN n",
             "MATCH (a:Person) WITH a.name AS n WHERE a.age > 1 RETURN n",
             "MATCH (a:Person) WITH a.name AS n ORDER BY a.age LIMIT 3 WHERE a.age > 1 RETURN n",
+            // A sort key written as the grouping-key expression it projects.
+            "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY a.name RETURN n, c",
+            "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY a.name DESC SKIP 1 RETURN n",
+            "MATCH (a:Person) WITH toUpper(a.name) AS u, count(*) AS c ORDER BY toUpper(a.name) RETURN u",
+            "MATCH (a:Person) WITH DISTINCT a.name AS n ORDER BY a.name RETURN n",
         ];
         for source in accepted {
             let q = parse_cypher(source).unwrap();
@@ -1812,6 +1817,9 @@ mod tests {
         let refused = [
             "MATCH (a:Person) WITH DISTINCT a.name AS n ORDER BY a.age RETURN n",
             "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY a.age RETURN n",
+            // A fresh aggregate over a dropped variable, and a non-key expression.
+            "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY max(a.age) RETURN n",
+            "MATCH (a:Person) WITH a.name AS n, count(*) AS c ORDER BY a.name + a.age RETURN n",
             "MATCH (a:Person) WITH DISTINCT a.name AS n WHERE a.age > 1 RETURN n",
             "MATCH (a:Person) RETURN DISTINCT a.name AS n ORDER BY a.age",
             // An aggregate sort key needs an aggregating projection.
