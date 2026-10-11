@@ -20,6 +20,7 @@ def test_geographic_dbscan_preserves_original_indices_when_fields_are_missing():
         "Geo",
         "id",
         columns=["lat", "lon"],
+        on_invalid="warn",
     )
     rows = graph.cypher(
         "MATCH (g:Geo) CALL cluster({method: 'dbscan', eps: 3.0, min_points: 2}) "

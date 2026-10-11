@@ -47,7 +47,7 @@ def _assert_abut_and_empty(messages):
 
 def test_set_temporal_raises_both_advisories() -> None:
     g = kglite.KnowledgeGraph()
-    g.add_nodes(_frame(), "S", "id")
+    g.add_nodes(_frame(), "S", "id", on_invalid="warn")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         g.set_temporal("S", "vf", "vt", convention="closed", empty_when="to_before_from")
@@ -71,7 +71,7 @@ def test_a_loader_declaration_raises_both_advisories() -> None:
 
 def test_a_cypher_declaration_reports_both_advisories() -> None:
     g = kglite.KnowledgeGraph()
-    g.add_nodes(_frame(), "S", "id")
+    g.add_nodes(_frame(), "S", "id", on_invalid="warn")
     res = g.cypher(
         "CALL db.temporal.declare({node: 'S', from: 'vf', to: 'vt', convention: 'closed', "
         "empty_when: 'to_before_from'}) YIELD declared RETURN declared"
@@ -87,7 +87,7 @@ def test_a_labelled_load_raises_its_shadow_warning_beside_the_empty_interval() -
     frame = pd.DataFrame({"pid": [10], "id": [99], "vf": [day], "vt": [day]})
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        g.add_nodes(frame, "P", "pid", labels=["X"])
+        g.add_nodes(frame, "P", "pid", labels=["X"], on_invalid="warn")
     messages = _user_warnings(caught)
     assert any("empty interval" in m for m in messages), messages
     assert any("'id' column is not readable" in m for m in messages), messages

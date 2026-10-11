@@ -177,7 +177,7 @@ def ingest_node(kind: str, path: str) -> kglite.KnowledgeGraph:
     if path == "add_nodes":
         df = pd.DataFrame({"id": [1]})
         df["p"] = _prop_series(kind, val)
-        kg.add_nodes(df, "N", "id")
+        kg.add_nodes(df, "N", "id", on_invalid="warn")
     elif path == "from_records":
         spec = {"nodes": [{"type": "N", "id_field": "id", "records": [{"id": 1, "p": val}]}]}
         kg = kglite.from_records(spec)
@@ -211,7 +211,7 @@ def ingest_edge(kind: str, path: str) -> kglite.KnowledgeGraph:
     if path == "add_connections":
         df = pd.DataFrame({"s": [1], "t": [2]})
         df["p"] = _prop_series(kind, val)
-        kg.add_connections(df, "R", "N", "s", "N", "t", columns=["p"])
+        kg.add_connections(df, "R", "N", "s", "N", "t", columns=["p"], on_invalid="warn")
     elif path == "from_records":
         spec = {
             "nodes": [{"type": "N", "id_field": "id", "records": [{"id": 1}, {"id": 2}]}],

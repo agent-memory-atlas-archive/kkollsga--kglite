@@ -139,7 +139,7 @@ def test_a_refused_bulk_frame_captures_nothing_under_full_enrichment():
 
     bad = pd.DataFrame({"s": [1, 1], "t": [2, 3], "since": [2021, 2022], "weight": [4, "heavy"]})
     with pytest.raises(kglite.ConstraintViolationError):
-        graph.add_connections(bad, "KNOWS", "Person", "s", "Person", "t")
+        graph.add_connections(bad, "KNOWS", "Person", "s", "Person", "t", on_invalid="warn")
 
     assert _events(graph, cursor) == [], "a refused frame published an event"
     assert _stored_edge(graph) == [{"since": 2020, "weight": 3}], "a refused frame changed the edge"

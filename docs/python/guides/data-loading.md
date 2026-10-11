@@ -123,9 +123,10 @@ print(report)
 #  'nodes_skipped': 0, 'has_errors': False, 'processing_time_ms': 0.4, ...}
 ```
 
-A `UserWarning` fires automatically when the report has skipped
-rows or `has_errors=True` — silent partial successes are surfaced
-without you needing to inspect the report.
+A row with a null or unstorable ID refuses the whole call by default
+(`on_invalid='error'`), before anything is written. Pass `on_invalid='warn'`
+to load the usable rows and get a `UserWarning` when the report has skipped
+rows, or `on_invalid='skip'` for the same without the warning.
 
 **Ingest the columns you query.** The per-row cost of a scan tracks
 the number of properties *declared* on the scanned type, not the

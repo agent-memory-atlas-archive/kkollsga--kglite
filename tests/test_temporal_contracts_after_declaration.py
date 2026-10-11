@@ -157,6 +157,7 @@ def test_load_errors_number_rows_by_zero_based_position() -> None:
             "N",
             "code",
             column_types={"d": "datetime"},
+            on_invalid="warn",
         )
     with pytest.raises(kglite.ArgumentError, match=r"row 1 \(0-based\) has"):
         g.add_nodes(pd.DataFrame({"code": ["a", None]}), "Q", "code", on_invalid="error")

@@ -1,18 +1,17 @@
 //! What the bulk loaders do with an input row — or a column — they cannot use
 //! as given.
 //!
-//! `add_nodes` and `add_relationships` have always *tolerated* bad input: a row
-//! whose id will not key a node is dropped, a heterogeneous object column is
-//! stringified, and the caller learns about it from a `UserWarning` and the
-//! returned report. That is the right default for an exploratory load and the
-//! wrong one for a pipeline, where a silently short load is a data-loss bug
-//! discovered downstream.
+//! A row whose id will not key a node is dropped and a heterogeneous object
+//! column is stringified. A silently short load is a data-loss bug discovered
+//! downstream, so the loaders refuse by default and tolerating is opt-in.
 //!
 //! `on_invalid` lets the caller choose per call:
 //!
-//! - `"warn"` (default) — today's behaviour, unchanged.
-//! - `"error"` — refuse the whole call *before* it mutates anything, naming
-//!   how many rows are unusable, which row is the first, and what it holds.
+//! - `"error"` (default) — refuse the whole call *before* it mutates anything,
+//!   naming how many rows are unusable, which row is the first, and what it
+//!   holds.
+//! - `"warn"` — load the usable rows, count the rest in the report and emit a
+//!   `UserWarning`.
 //! - `"skip"` — do the same work as `"warn"` without the warning; the counts
 //!   stay in the returned report.
 //!
@@ -27,10 +26,10 @@ use pyo3::Bound;
 /// The `on_invalid` policy of one loader call.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum OnInvalid {
-    /// Emit a `UserWarning` and continue. The historical behaviour.
-    #[default]
+    /// Emit a `UserWarning` and continue.
     Warn,
-    /// Refuse the call. Raises before anything is written.
+    /// Refuse the call. Raises before anything is written. The loaders' default.
+    #[default]
     Error,
     /// Continue silently; the returned report still carries the counts.
     Skip,
@@ -49,9 +48,11 @@ impl OnInvalid {
         }
     }
 
-    /// Whether this policy still wants the loader's summary `UserWarning`.
+    /// Whether the loader's summary `UserWarning` is wanted. `Error` keeps it:
+    /// the up-front refusal covers unusable ids only, so a type mismatch that
+    /// the load records as an error must not become silent under the default.
     pub fn warns(self) -> bool {
-        matches!(self, Self::Warn)
+        !matches!(self, Self::Skip)
     }
 
     /// Whether this policy turns an unusable input into a raised error.

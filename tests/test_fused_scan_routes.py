@@ -313,6 +313,7 @@ def test_mixed_type_column_under_string_and_numeric_predicates():
         "T",
         "id",
         "t",
+        on_invalid="warn",
     )
     for query in (
         "MATCH (n:T) WHERE n.v = 'x' RETURN count(*) AS c",
@@ -554,6 +555,7 @@ def test_loader_stringified_column_aggregates_to_null_average():
         "id",
         "name",
         columns=["v"],
+        on_invalid="warn",
     )
     # The stringification itself, pinned: it is why there is no numeric value.
     assert _rows(graph, "MATCH (n:L) RETURN n.v AS v ORDER BY n.id") == [

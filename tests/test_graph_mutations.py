@@ -268,7 +268,7 @@ class TestBulkLoadWarnings:
         df = pd.DataFrame({"id": [None, "x2"], "name": ["A", "B"]})
         with warnings.catch_warnings(record=True) as wlist:
             warnings.simplefilter("always")
-            graph.add_nodes(df, "T", "id", "name")
+            graph.add_nodes(df, "T", "id", "name", on_invalid="warn")
         kinds = {w.category for w in wlist}
         assert UserWarning in kinds
         msgs = " | ".join(str(w.message) for w in wlist)

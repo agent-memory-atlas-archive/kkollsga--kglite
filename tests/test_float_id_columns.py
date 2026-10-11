@@ -42,7 +42,7 @@ class TestFloatNodeIds:
         graph = KnowledgeGraph()
         ids = [3_100_000_000_001.0, float("nan"), 3_100_000_000_003.0]
         with pytest.warns(UserWarning, match="1 of 3 rows skipped"):
-            report = graph.add_nodes(_employees(ids), "Employee", "emp_id", "name")
+            report = graph.add_nodes(_employees(ids), "Employee", "emp_id", "name", on_invalid="warn")
         assert (report["nodes_created"], report["nodes_skipped"]) == (2, 1)
 
     def test_negative_whole_floats_are_kept(self):

@@ -202,9 +202,15 @@ class TestOnInvalidNodes:
     def _mixed(self):
         return pd.DataFrame({"id": [1, None, 3], "name": ["a", "b", "c"]})
 
-    def test_default_warns_and_loads_the_rest(self, recwarn):
+    def test_default_refuses_like_error(self):
         graph = KnowledgeGraph()
-        report = graph.add_nodes(self._mixed(), "T", "id", "name")
+        with pytest.raises(kglite.ArgumentError, match="1 of 3 rows"):
+            graph.add_nodes(self._mixed(), "T", "id", "name")
+        assert graph.cypher("MATCH (n:T) RETURN count(n) AS c")[0]["c"] == 0
+
+    def test_explicit_warn_warns_and_loads_the_rest(self, recwarn):
+        graph = KnowledgeGraph()
+        report = graph.add_nodes(self._mixed(), "T", "id", "name", on_invalid="warn")
         assert (report["nodes_created"], report["nodes_skipped"]) == (2, 1)
         assert any("skipped" in str(w.message) for w in recwarn)
 
@@ -241,7 +247,7 @@ class TestObjectColumnStringification:
     def test_mixed_object_column_warns_naming_column_and_row(self, recwarn):
         graph = KnowledgeGraph()
         df = pd.DataFrame({"id": [1, 2, 3], "v": [10, 20, "N/A"]})
-        graph.add_nodes(df, "T", "id")
+        graph.add_nodes(df, "T", "id", on_invalid="warn")
         messages = [str(w.message) for w in recwarn]
         assert any("'v'" in m and "row 0" in m and "column_types" in m for m in messages), messages
         # ...and the values really are text now, which is what the warning says.
@@ -273,7 +279,7 @@ class TestIdSkipMessage:
         # id, which turns integer keys into text rather than widening them.
         graph = KnowledgeGraph()
         df = pd.DataFrame({"id": [1, 2**40]})
-        report = graph.add_nodes(df, "T", "id", column_types={"id": "uniqueid"})
+        report = graph.add_nodes(df, "T", "id", column_types={"id": "uniqueid"}, on_invalid="warn")
         assert report["nodes_skipped"] == 1
         reason = " ".join(report["errors"])
         assert "'int64'" in reason, reason
@@ -284,7 +290,7 @@ class TestIdSkipMessage:
         # the compact key gets the compact key, and the row that does not fit
         # is still reported rather than silently widened behind their back.
         graph = KnowledgeGraph()
-        graph.add_nodes(pd.DataFrame({"id": [1, 2**40]}), "T", "id", column_types={"id": "uniqueid"})
+        graph.add_nodes(pd.DataFrame({"id": [1, 2**40]}), "T", "id", column_types={"id": "uniqueid"}, on_invalid="warn")
         assert graph.cypher("MATCH (n:T) RETURN n.id AS i").to_df()["i"].tolist() == [1]
 
     def test_error_names_the_value_that_does_not_fit(self):

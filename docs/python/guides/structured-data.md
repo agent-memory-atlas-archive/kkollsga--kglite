@@ -185,7 +185,7 @@ A cell that parses as none of these is handled by route:
 
 | Route | Result |
 |---|---|
-| Direct `add_nodes` / `add_relationships` | Stored as NULL **and reported** through `on_invalid`: a warning by default, a refusal under `on_invalid='error'`. |
+| Direct `add_nodes` / `add_relationships` | Stored as NULL **and reported** through `on_invalid`: a refusal by default, a warning under `on_invalid='warn'`. |
 | Blueprint declared cells | Keep their documented NULL-on-invalid behaviour. One build warning per column reports them instead. |
 
 An empty or blank cell is a missing value on both routes and is not reported.

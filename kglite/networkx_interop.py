@@ -540,7 +540,7 @@ def from_networkx(
     nodes_by_type, type_of_node = _collect_nodes(nx_graph, key_mode, spec)
     for ntype, rows in nodes_by_type.items():
         df = _ingestion_frame(rows, ("id", "title"))
-        g.add_nodes(df, ntype, "id", "title")
+        g.add_nodes(df, ntype, "id", "title", on_invalid="warn")
 
     edges_by_key = _collect_edges(nx_graph, key_mode, type_of_node, spec)
     for (ctype, stype, ttype), rows in edges_by_key.items():
@@ -552,6 +552,7 @@ def from_networkx(
             "src",
             ttype,
             "tgt",
+            on_invalid="warn",
         )
 
     return g

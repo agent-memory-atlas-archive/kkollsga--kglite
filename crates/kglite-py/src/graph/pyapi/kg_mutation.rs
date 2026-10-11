@@ -1283,7 +1283,7 @@ impl KnowledgeGraph {
 #[pymethods]
 impl KnowledgeGraph {
     /// Add nodes from a pandas DataFrame.
-    #[pyo3(signature = (data, node_type, unique_id_field, node_title_field=None, columns=None, conflict_handling=None, skip_columns=None, column_types=None, timeseries=None, nullable_int_downcast=false, labels=None, managed_reload=false, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
+    #[pyo3(signature = (data, node_type, unique_id_field, node_title_field=None, columns=None, conflict_handling=None, skip_columns=None, column_types=None, timeseries=None, nullable_int_downcast=false, labels=None, managed_reload=false, git_sha=None, modified_by=None, on_invalid="error", convention=None, empty_when=None))]
     // The public Python loader exposes independently optional ingestion controls.
     #[allow(clippy::too_many_arguments)]
     fn add_nodes(
@@ -1533,7 +1533,7 @@ impl KnowledgeGraph {
     }
 
     /// Add relationships from a DataFrame or read-only Cypher query.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None, distinct=false))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="error", convention=None, empty_when=None, distinct=false))]
     // The public Python loader supports DataFrame and query modes with optional controls.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn add_relationships(
@@ -1588,7 +1588,7 @@ impl KnowledgeGraph {
     }
 
     /// Replace each input source node's relationships of a type with the input's — an atomic edge upsert.
-    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="warn", convention=None, empty_when=None))]
+    #[pyo3(signature = (data, connection_type, source_type, source_id_field, target_type, target_id_field, source_title_field=None, target_title_field=None, columns=None, skip_columns=None, conflict_handling=None, column_types=None, query=None, extra_properties=None, git_sha=None, modified_by=None, on_invalid="error", convention=None, empty_when=None))]
     // The same loader arguments add_relationships takes.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn replace_relationships(

@@ -9,6 +9,15 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- **`on_invalid` defaults to `'error'` on every bulk loader.**
+  - Affects `add_nodes`, `add_relationships` and their `connection`-named twins.
+  - Before: a row with a null or unstorable ID was skipped with a `UserWarning`, and the rest loaded.
+  - Now: the call raises `ArgumentError` before anything is written, naming the unusable row count, the first row and what it holds. A cell stored as NULL for a typed column, and an object column that would be stringified, refuse the same way.
+  - Clean input is unaffected.
+  - Migration: pass `on_invalid='warn'` for the old behaviour, or `on_invalid='skip'` for the same without the warning.
+
 ## [0.19.7] - 2026-10-11
 
 ### Breaking changes and migration

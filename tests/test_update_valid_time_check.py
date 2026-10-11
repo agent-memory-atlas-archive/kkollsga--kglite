@@ -34,6 +34,7 @@ def declared():
         "T",
         "id",
         "title",
+        on_invalid="warn",
     )
     g.set_temporal("T", "vf", "vt")
     return g

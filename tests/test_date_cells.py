@@ -50,7 +50,7 @@ def test_add_nodes_reads_basic_dates_and_reports_only_real_failures() -> None:
     graph = kglite.KnowledgeGraph()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        graph.add_nodes(FRAME, "M", "id", column_types={"vf": "date", "vt": "date"})
+        graph.add_nodes(FRAME, "M", "id", column_types={"vf": "date", "vt": "date"}, on_invalid="warn")
     assert graph.cypher(ROWS).to_list() == EXPECTED
     messages = _messages(caught)
     vf = [m for m in messages if "Column 'vf'" in m]

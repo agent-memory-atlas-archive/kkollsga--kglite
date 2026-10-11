@@ -532,9 +532,15 @@ class TestOnInvalidConnections:
     def _edges(self):
         return pd.DataFrame({"s": [1, None], "t": [2, 2]})
 
-    def test_default_warns_and_loads_the_rest(self, recwarn):
+    def test_default_refuses_like_error(self):
         graph = self._graph()
-        report = graph.add_connections(self._edges(), "K", "P", "s", "P", "t")
+        with pytest.raises(kglite.ArgumentError, match="1 of 2 rows"):
+            graph.add_connections(self._edges(), "K", "P", "s", "P", "t")
+        assert graph.cypher("MATCH ()-[r:K]->() RETURN count(r) AS c")[0]["c"] == 0
+
+    def test_explicit_warn_warns_and_loads_the_rest(self, recwarn):
+        graph = self._graph()
+        report = graph.add_connections(self._edges(), "K", "P", "s", "P", "t", on_invalid="warn")
         assert (report["connections_created"], report["connections_skipped"]) == (1, 1)
         assert any("skipped" in str(w.message) for w in recwarn)
 
@@ -683,7 +689,9 @@ class TestSharedRelationshipTypeOwnership:
         source type, so the next Project load merged and folded its repeated
         (10, 1) pair onto one relationship."""
         g = self._graph()
-        empty = g.add_relationships(self._typed_frame(*nothing), "HAS_HOLDER", "Project", "src", "Company", "tgt")
+        empty = g.add_relationships(
+            self._typed_frame(*nothing), "HAS_HOLDER", "Project", "src", "Company", "tgt", on_invalid="warn"
+        )
         assert empty["connections_created"] == 0
         report = g.add_relationships(
             self._typed_frame([10, 10], [1, 1]), "HAS_HOLDER", "Project", "src", "Company", "tgt"

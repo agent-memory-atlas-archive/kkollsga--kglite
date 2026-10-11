@@ -116,7 +116,7 @@ def test_query_parameter_keeps_ndarray_and_nonfinite_float_support(query_surface
 def test_declared_ingestion_keeps_tolerant_unsupported_value_policy():
     graph = kglite.KnowledgeGraph()
     with pytest.warns(UserWarning, match="stored as text"):
-        graph.add_nodes(pd.DataFrame({"id": [1], "value": [object()]}), "N", "id")
+        graph.add_nodes(pd.DataFrame({"id": [1], "value": [object()]}), "N", "id", on_invalid="warn")
     value = graph.cypher("MATCH(n:N) RETURN n.value AS value").to_list()[0]["value"]
     assert isinstance(value, str)
     assert value.startswith("<object object at 0x")

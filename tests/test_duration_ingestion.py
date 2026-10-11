@@ -21,7 +21,7 @@ DAY_2H = "duration({days: 1, hours: 2})"
 
 def node_graph(frame, **kwargs):
     g = kglite.KnowledgeGraph()
-    g.add_nodes(frame, "T", "id", **kwargs)
+    g.add_nodes(frame, "T", "id", **kwargs, on_invalid="warn")
     return g
 
 

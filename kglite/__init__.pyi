@@ -2224,7 +2224,7 @@ class KnowledgeGraph:
         managed_reload: bool = False,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
-        on_invalid: Literal["warn", "error", "skip"] = "warn",
+        on_invalid: Literal["warn", "error", "skip"] = "error",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
@@ -2318,8 +2318,8 @@ class KnowledgeGraph:
                 whole number (an integer column with a gap arrives from pandas
                 as float, which is read the same). No other number is a date.
                 A cell that parses as neither is stored as NULL and
-                reported through ``on_invalid`` (a ``UserWarning`` by default,
-                a refusal under ``'error'``), naming the column, the count and
+                reported through ``on_invalid`` (a refusal by default, a
+                ``UserWarning`` under ``'warn'``), naming the column, the count and
                 the first offending row; an empty or blank cell is a missing
                 value and is not reported.
                 Also supports spatial types: ``'location.lat'``, ``'location.lon'``,
@@ -2401,9 +2401,9 @@ class KnowledgeGraph:
                 a row whose ID is null, or holds a value the declared ID type
                 cannot store.
 
-                - ``'warn'`` (default) — load the usable rows, count the rest
+                - ``'warn'`` — load the usable rows, count the rest
                   in the report, and emit a ``UserWarning``.
-                - ``'error'`` — refuse the whole call. Raises
+                - ``'error'`` (default) — refuse the whole call. Raises
                   :class:`ArgumentError` naming how many rows are unusable, the
                   first offending row's position and what it holds. Nothing is
                   written, so the graph is exactly as it was.
@@ -2481,7 +2481,7 @@ class KnowledgeGraph:
         extra_properties: Optional[dict[str, Any]] = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
-        on_invalid: Literal["warn", "error", "skip"] = "warn",
+        on_invalid: Literal["warn", "error", "skip"] = "error",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
         distinct: bool = False,
@@ -2560,8 +2560,8 @@ class KnowledgeGraph:
             modified_by: Actor id stamped when the edge type has
                 ``auto_timestamp=True``.
             on_invalid: What to do about rows whose source or target ID is
-                null. ``'warn'`` (default) skips them, counts them in the
-                report and emits a ``UserWarning``; ``'error'`` refuses the
+                null. ``'warn'`` skips them, counts them in the
+                report and emits a ``UserWarning``; ``'error'`` (default) refuses the
                 whole call with :class:`ArgumentError`, naming the count, the
                 first offending row and the value it holds, before anything is
                 written; ``'skip'`` is ``'warn'`` without the warning. A row
@@ -2637,7 +2637,7 @@ class KnowledgeGraph:
         extra_properties: Optional[dict[str, Any]] = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
-        on_invalid: Literal["warn", "error", "skip"] = "warn",
+        on_invalid: Literal["warn", "error", "skip"] = "error",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
         distinct: bool = False,
@@ -2663,7 +2663,7 @@ class KnowledgeGraph:
         extra_properties: Optional[dict[str, Any]] = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
-        on_invalid: Literal["warn", "error", "skip"] = "warn",
+        on_invalid: Literal["warn", "error", "skip"] = "error",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:
@@ -2713,8 +2713,8 @@ class KnowledgeGraph:
             modified_by: Actor id stamped when the edge type has
                 ``auto_timestamp=True``.
             on_invalid: What to do about rows whose source or target ID is
-                null. ``'warn'`` (default) skips them, counts them in the
-                report and emits a ``UserWarning``; ``'error'`` refuses the
+                null. ``'warn'`` skips them, counts them in the
+                report and emits a ``UserWarning``; ``'error'`` (default) refuses the
                 whole call with :class:`ArgumentError`, naming the count, the
                 first offending row and the value it holds, before anything is
                 written; ``'skip'`` is ``'warn'`` without the warning. A row
@@ -2752,7 +2752,7 @@ class KnowledgeGraph:
         extra_properties: Optional[dict[str, Any]] = None,
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
-        on_invalid: Literal["warn", "error", "skip"] = "warn",
+        on_invalid: Literal["warn", "error", "skip"] = "error",
         convention: Optional[Literal["closed", "half_open"]] = None,
         empty_when: Optional[Literal["to_before_from"]] = None,
     ) -> dict[str, Any]:

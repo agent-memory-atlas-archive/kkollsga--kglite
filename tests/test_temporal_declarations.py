@@ -958,7 +958,9 @@ class TestAVersionIsComparedByWhatItHolds:
 
     @staticmethod
     def _load(g, frame):
-        return g.add_relationships(frame, "R", "N", "s", "N", "t", column_types=PERIOD_TYPES, convention="half_open")
+        return g.add_relationships(
+            frame, "R", "N", "s", "N", "t", column_types=PERIOD_TYPES, convention="half_open", on_invalid="warn"
+        )
 
     @pytest.mark.parametrize("storage", ["default", "mapped", "disk"])
     def test_a_property_set_in_cypher_makes_the_stored_edge_differ(self, storage, tmp_path):
