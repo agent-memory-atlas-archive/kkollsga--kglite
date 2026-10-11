@@ -22,7 +22,9 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | `String(String)` | UTF-8 | STRING (sized) |
 | `DateTime(NaiveDate)` | calendar date | Struct `0x44` (Date) |
 | `Timestamp(NaiveDateTime)` | date + time-of-day, including fractional nanoseconds | local date-time structure |
-| `ZonedDateTime { utc, offset_secs }` | an instant plus the UTC offset it was written in | Struct `0x49` (DateTime) |
+| `ZonedDateTime { utc, offset_secs, zone }` | an instant plus the UTC offset (and optional IANA zone) it was written in | Struct `0x49` (DateTime), or the `DateTimeZoneId` structure for a named zone |
+| `LocalTime(nanos)` | time of day, no offset, to the nanosecond | `LocalTime` structure |
+| `Time { nanos, offset_secs }` | time of day plus a UTC offset | `Time` structure |
 | `Point { lat, lon }` | 2D geographical point | Struct `0x58` (Point2D, srid=4326) |
 | `Duration { months, days, seconds, nanos }` | Neo4j-shape calendar duration | Struct `0x45` (Duration) |
 | **`NodeRef(u32)`** | **internal reference (see below)** | — never crosses the boundary |
@@ -33,7 +35,9 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | **`Map(BTreeMap<String, Value>)`** | string-keyed map (deterministic order) | MAP (sized) |
 
 Persistence uses the explicitly versioned RGF v8/Postcard container. The
-current reader accepts v8, v7, v6 and v5. It rejects v4/bincode and older containers
+current reader accepts v8, v7, v6 and v5. A v8 file carries a checksum over
+its header and metadata, and a file written by this build cannot be opened by
+0.19.x or older. It rejects v4/bincode and older containers
 with a clear migration/rebuild error.
 
 ### Timestamps and dates
@@ -44,8 +48,10 @@ fractional seconds. They omit the fractional suffix for whole-second values.
 - **Bolt `LocalDateTime`** preserves epoch seconds and nanoseconds. Chrono
   leap-second values outside its 0–999,999,999 nanosecond field are rejected with
   a typed error.
-- **Python's native `datetime`** supports microseconds. Its conversion cannot
-  represent finer digits.
+- **Python's native `datetime` and `time`** support microseconds. Their
+  conversion cannot represent finer digits, so a read floors to the microsecond.
+  A `Duration` is not floored: Python reads its sub-second part as a
+  `nanoseconds` key.
 - **Python types.** A `Timestamp` arrives as a naive `datetime.datetime` and a
   `ZonedDateTime` as an aware one. Its `tzinfo` is a `zoneinfo.ZoneInfo` for a
   named zone and a fixed offset otherwise. A
@@ -64,6 +70,18 @@ fractional seconds. They omit the fractional suffix for whole-second values.
   keeps its offset and an offset-free one reads as UTC. `localdatetime()` returns
   a `Timestamp` with its local wall time. Neither parsed constructor drops
   fractional seconds.
+
+### Reading a nanosecond value back into a write
+
+A Python read floors sub-microsecond digits of a `Timestamp`, `ZonedDateTime`,
+`LocalTime` or `Time`. Writing that Python value back stores the floored value.
+
+| Task | Lossless route |
+|------|----------------|
+| Change a stored value | Update inside Cypher: `SET n.t = n.t + duration({hours: 1})` |
+| Copy a value between nodes | `MATCH (a), (b) SET b.t = a.t` |
+| Show or export exact digits | Read `toString(n.t)` |
+| Compare in Python | Compare in Cypher (`WHERE n.t > $cutoff`) |
 
 ### Zoned datetimes
 

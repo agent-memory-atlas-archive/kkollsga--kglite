@@ -258,6 +258,8 @@ the value has a named zone), `time()` a `Time`, and `localdatetime()` a
 `LocalDateTime`. Two zoned datetimes are equal when they name
 the same instant, so the offset is display information.
 
+A `Duration` carries its nanoseconds both ways: an inbound `Duration` with negative or oversized `nanoseconds` is normalised to seconds plus 0 to 999999999 nanoseconds.
+
 The Python API keeps an aware `datetime` as a zoned value as well. See
 {doc}`../python/value-projection` for the Python half.
 

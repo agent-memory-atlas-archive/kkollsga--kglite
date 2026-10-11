@@ -1505,12 +1505,29 @@ RETURN node.title, round(distance_m / 1000.0, 1) AS km
 
 ## Temporal Functions
 
-This section covers date and datetime values, date arithmetic, and the
+This section covers the temporal value kinds, date arithmetic, and the
 `valid_at` / `valid_during` validity tests. To ask a whole statement as of an
 instant, prefix it with
 [`FOR VALID_TIME AS OF`](#statement-context-for-valid_time-as-of). The
 [valid-time guide](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html)
 covers declaring intervals and modelling history.
+
+### Temporal value kinds
+
+| Kind | Constructor | Identity and comparison | Python |
+|------|-------------|-------------------------|--------|
+| Date | `date()` | A calendar day | `datetime.date` |
+| Local datetime | `localdatetime()` | Wall-clock reading, no offset; read as UTC where it meets a zoned value | naive `datetime.datetime` |
+| Zoned datetime | `datetime()` | The UTC instant; the offset or IANA zone is display only | aware `datetime.datetime` (`ZoneInfo` for a named zone) |
+| Local time | `localtime()` | Clock reading; comparable with its own kind only | naive `datetime.time` |
+| Time | `time()` | The UTC reading of the clock; the offset is display only | aware `datetime.time` |
+| Duration | `duration(...)` | Months, days, seconds and nanoseconds, each compared separately | dict with `months`, `days`, `seconds`, and `nanoseconds` when non-zero |
+
+- **Resolution.** Every kind keeps nanoseconds. Python reads floor to the microsecond, because `datetime` and `time` hold no finer digit.
+- **Lossless routes.** Update inside Cypher (`SET n.t = …`) or read `toString(n.t)` when digits below the microsecond matter. Writing a Python-read value back stores the floored value.
+- **Statement clock.** Every no-argument constructor reads one clock per statement.
+- **Named zones.** `datetime(...)` takes IANA zones and applies the daylight-saving rules in [Named time zones](#named-time-zones). `time()` and `localtime()` take a numeric offset only.
+- **Valid time.** Bounds and `FOR VALID_TIME AS OF` instants follow the one comparison rule under "Query dates and bounds" below.
 
 | Function | Description |
 |----------|-------------|
@@ -1655,7 +1672,7 @@ silence one layer out rather than remove it.
   true and `time('10:00+01:00') < time('09:35:14Z')` is true. `DISTINCT` and
   grouping merge such values and keep the first offset. A `LocalTime` against a
   `Time`, a date or a datetime is incomparable: `=` is false and `<`/`>` give null.
-- Each single-string form returns NULL on unparseable input.
+- A single-string form raises on unparseable input and returns NULL for a NULL argument.
 
 ```python
 # Nodes active at a point in time
@@ -2049,13 +2066,14 @@ A zoned datetime may carry an IANA zone (`Europe/Oslo`, `America/New_York`, `Aus
 
 ### Duration semantics
 
-A `Duration` value carries three independent components:
+A `Duration` value carries four independent components:
 
 | Component | Source                              | Units              |
 |-----------|-------------------------------------|--------------------|
 | `months`  | `years` + `months` from constructor | calendar months    |
 | `days`    | `weeks` + `days` from constructor   | clock days         |
 | `seconds` | `hours` + `minutes` + `seconds`     | clock seconds      |
+| `nanos`   | sub-second part of `seconds`        | nanoseconds, 0 to 999999999 |
 
 A constructor value may be fractional: a fraction of a month spills into days
 (30.436875 days to the month) and a fraction of a day into seconds, so
@@ -2474,6 +2492,7 @@ string rather than as graph structure.
 
 A one-key object `{"$date": "2020-01-01"}`,
 `{"$datetime": "2020-01-01T10:00:00+02:00"}`,
+`{"$zdatetime": "2020-01-02T03:04:05+02:00"}`,
 `{"$localtime": "10:00:00.5"}`, `{"$time": "10:00:00+01:00"}` or
 `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` parses to that date,
 datetime, local time, time or duration, as query parameters do. With a malformed payload it stays

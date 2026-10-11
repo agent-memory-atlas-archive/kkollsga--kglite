@@ -217,7 +217,10 @@ reopen folds the two back together automatically.
 
 ### WAL format compatibility
 
-The current writer uses WAL format **4**. The reader decodes formats **2–4**.
+The current writer uses WAL format **12**. The reader decodes formats **2–12**.
+
+- **What format 12 adds.** Durations with nanoseconds and the `LocalTime`, `Time` and `ZonedDateTime` values. A log of an older format keeps replaying; the first append moves its header to 12.
+- **Older readers.** A 0.19.x binary refuses a format 12 log with `unsupported WAL format version 12 (this build reads v2-v11)`. Open the graph with 0.20 to replay it. Deleting the `-wal` sidecar discards every write since the last checkpoint.
 
 - **What format 4 records.** Complete node state, and the complete property-map
   multiplicity of each affected parallel-relationship group.

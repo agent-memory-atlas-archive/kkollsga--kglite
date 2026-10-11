@@ -718,7 +718,11 @@ class ResultView:
         (``time()``) an aware ``datetime.time`` whose ``tzinfo`` is a fixed
         offset. ``datetime.time`` holds microseconds, so a time finer than that
         returns floored to the microsecond (``toString()`` in Cypher shows every
-        digit). (Earlier
+        digit). **Read-modify-write hazard:** passing a floored value back as a
+        parameter or column stores the floored value over the exact one. To
+        keep every digit, update inside Cypher (``SET n.t = …``) or read
+        ``toString(n.t)``. Durations are not floored: a sub-second duration
+        carries a ``nanoseconds`` key. (Earlier
         releases returned a date as its ISO string; ``d.isoformat()`` gives
         that text.)
         A returned date can be passed straight back into a query as a
@@ -8135,6 +8139,9 @@ class KnowledgeGraph:
                 the instant at UTC. A naive ``datetime``
                 binds as a local datetime and a pure date as a date. Microseconds
                 are preserved (``datetime.datetime`` holds no finer digits).
+                Passing a value read from a nanosecond ``time`` or ``datetime``
+                back as a parameter stores its microsecond floor; update inside
+                Cypher (``SET n.t = …``) when the finer digits matter.
                 Container values
                 allow at most 64 active list, tuple, dict or ndarray expansions
                 (an ndarray and its converted list each count). Recursive
@@ -11460,9 +11467,8 @@ class FrozenGraph:
         :attr:`ResultView.diagnostics` carries ``row_limit`` plus the exact
         pre-truncation ``total_rows``.
 
-        Parameter conversion — including the naive-UTC normalisation of a
-        timezone-aware ``datetime``, which the Bolt server refuses rather than
-        converting — is identical to :meth:`KnowledgeGraph.cypher`.
+        Parameter conversion — including the zoned datetime a timezone-aware
+        ``datetime`` binds as — is identical to :meth:`KnowledgeGraph.cypher`.
 
         Omitted/None options inherit the snapshot's captured defaults. The built-in
         Python timeout is 180_000ms; ``timeout_ms=0`` disables that query deadline.
@@ -11558,8 +11564,8 @@ class Transaction:
         Args:
             query: Cypher query string. Supports ``EXPLAIN`` and ``PROFILE`` prefixes.
             params: Optional query parameters. Converted exactly as
-                :meth:`KnowledgeGraph.cypher` converts them, timezone-aware
-                ``datetime`` normalisation to naive UTC included.
+                :meth:`KnowledgeGraph.cypher` converts them, including the
+                zoned datetime a timezone-aware ``datetime`` binds as.
             to_df: If True, return a pandas DataFrame.
             write_scope: Role-scoped write whitelist — see
                 :meth:`KnowledgeGraph.cypher`.

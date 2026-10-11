@@ -14,15 +14,20 @@ before upgrading.
 - **Files and logs written by this build cannot be opened by 0.19.x or older.**
   - Formats that move: `.kgl` container v7 → v8, write-ahead log 11 → 12, disk-graph directory format 2 → 3.
   - Every file this build writes uses the new numbers, whether or not it holds a sub-second duration.
-  - An older binary refuses them by version and never misreads them. The published 0.19.7 reports, for the `.kgl` file, `container version 8, but this library only supports up to version 7. Please upgrade kglite.`; for the log, `unsupported WAL format version 12 (this build reads v2-v11)`; and for the directory, `disk graph uses on-disk format 3, but this library only supports up to format 2. Please upgrade kglite.`
+  - An older binary refuses them by version and never misreads them. The message points the right way: it says to upgrade `kglite`.
+  - Observed with the published 0.19.7 wheel:
+    - `.kgl` file, `kglite.load` or `kglite.open`: `File format error (a.kgl): File uses .kgl container version 8, but this library only supports up to version 7. Please upgrade kglite.`
+    - Write-ahead log (`<graph>-wal`), `kglite.open`: `failed to read the write-ahead log at 'dur-wal': unsupported WAL format version 12 (this build reads v2-v11). A WAL newer than the binary cannot be replayed safely: ...`
+    - Disk-graph directory: `File format error (disk): disk graph uses on-disk format 3, but this library only supports up to format 2. Please upgrade kglite.`
+  - 0.19.0 and older give the same `.kgl` and log messages with their own supported range (`up to version 6`, `v2-v10`). Their disk-graph message is `invalid id_indices.bin: unsupported raw index version`, which means the same thing.
   - This build still reads `.kgl` v5, v6 and v7, logs 2 through 11 and format-2 directories. Opening an old log and writing to it moves its header to 12.
+  - A refused log is not lost. Open it with this build to replay it. Deleting the `-wal` sidecar discards every write since the last checkpoint, so do that only to give up that work.
   - Downgrading is not possible. Before upgrading, keep a 0.19.x copy of any file an older consumer still reads; `export_csv()` output is format-stable.
   - Migration: upgrade every reader of a shared file (for example the `kglite` wheel and any Rust consumer) together.
 - **A `.kgl` v8 file carries a checksum over its header and metadata.**
   - Before: one flipped byte in the metadata JSON or the length fields was parsed, or misparsed, as if the writer had meant it.
   - Now: the load fails with `header/metadata checksum mismatch ... the file is corrupt`, from `load`, `from_bytes` and the load estimate alike.
   - Section payloads keep their own digests.
-- **The `.kgl` byte digests in `value_byte_identity_tests` moved with the container version.** The value bytes did not: every whole-second duration serialises to the bytes it always did (pinned by the golden table).
 
 - **`on_invalid` defaults to `'error'` on every bulk loader.**
   - Affects `add_nodes`, `add_relationships` and their `connection`-named twins.
@@ -40,7 +45,6 @@ before upgrading.
   - Node: a JS `Date` parameter binds as a `ZonedDateTime` at UTC and `datetime()` returns the new `ZonedDateTime` class (it was `LocalDateTime`). Java: a datetime cell is an `OffsetDateTime`. Bolt: a zoned datetime is a `DateTime` structure. The C ABI and JSON use `{"$zdatetime": "…"}`; a `{"$datetime": "…"}` text that carries an offset now also binds a zoned value.
   - Storage: a zoned value lives in a mixed column, not the dense timestamp column. A `SET` of `datetime()` onto a disk-mode timestamp column turns that column into a mixed one on the next save; use `localdatetime()` for a timestamp column that is written in bulk.
   - Migration: call `localdatetime()` where a zone-less value was the point; give `datetime()` an explicit offset where the display should differ from UTC.
-- **`IS :: DATETIME` and `IS :: ZONED DATETIME` are accepted property types** (they were refused as unsupported), and a local datetime does not satisfy them.
 - **`localtime()` and `time()` return time values, not strings.**
   - Before: both returned `HH:MM:SS` text, so `localtime() + duration(...)` and `time('10:00') < time('11:00')` worked on strings.
   - Now: `localtime()` is a `LocalTime` and `time()` a `Time`, and the text is `toString(t)`. A `Time` carries a UTC offset; a string with no offset is read as UTC.
@@ -48,8 +52,16 @@ before upgrading.
   - `datetime.time` values change meaning too: a Python `datetime.time` parameter was refused, and a `time` object column was refused as an object column. Both now load as time values.
   - Migration: compare and sort `LocalTime`/`Time` values directly; call `toString(t)` where the text was the point; give `time(...)` a numeric offset if you passed a zone name.
 
+- **Python reads floor sub-microsecond `time` and `datetime` values, and a write-back stores the floor.**
+  - `datetime.time` and `datetime.datetime` hold microseconds, so a `LocalTime`, `Time` or `ZonedDateTime` with finer digits reads into Python truncated to the microsecond.
+  - Hazard: Reading `n.t` with `g.cypher("MATCH (n) RETURN n.t AS t").to_list()` and passing that value back as a parameter, or loading it through `add_nodes`, writes the floored value over the exact one.
+  - Do: update inside Cypher (`SET n.t = n.t + duration({hours: 1})`, `SET n.t = localtime('10:00:00.123456789')`) when digits below the microsecond matter.
+  - Do: read `toString(n.t)` when you need the exact digits in Python.
+  - Durations are not floored: they carry `nanoseconds`.
+
 ### Added
 
+- **`IS :: DATETIME` and `IS :: ZONED DATETIME` are accepted property types** (they were refused as unsupported), and a local datetime does not satisfy them.
 - **One valid-time comparison rule, written once and named in every refusal.**
   - Every validity bound and query instant is a point on one UTC timeline: a date is its whole UTC day, a local datetime is read as UTC, a zoned datetime (fixed offset or IANA zone) is its UTC instant, and an ISO string is read by `date()` / `datetime()`.
   - A time of day (`localtime()`, `time()`), a duration, a number, a boolean, a list, a `NULL` query instant or an unparsable string is refused. The error names the accepted kinds and the kind found: `10:00 (LOCAL TIME) is not a date, a local datetime, a zoned datetime or an ISO date/datetime string`. A stored bound adds `the from bound` / `the to bound` in front.
@@ -78,7 +90,6 @@ before upgrading.
   - Cargo feature `iana-zones` (on by default) bundles the tz database; a build without it refuses zone names with an error naming the feature and reads a stored named-zone value as its stored offset.
   - New file-format tags only: `Value` wire tag 20 (tag 19 plus the zone **name**, so files do not depend on the database numbering) and overflow-bag tag 16.
 - **`{datetime: z, timezone: tz}` converts, as in Neo4j.** A zoned `datetime` or `time` base moves to the new `timezone` as the same instant (`12:00+01:00` becomes `16:00+05:00`). A local base takes the zone as written, and `truncate` with a `timezone` override re-places the truncated reading.
-- **Rust: `Value::ZonedDateTime { utc, offset_secs, zone }`**, with `kglite::api::zoned_datetime` for the wall-clock derivation, the ISO text and its parser, and `kglite::api::time_zone::ZoneId` (kglite's own zone handle: the tz database crate does not appear in the public API). `ColumnType` and `ColumnData` gain `ZonedDateTime`; `DeclaredType` gains `ZonedDateTime`.
 - **`LocalTime` and `Time` are values.**
   - `localtime()` and `time()` accept ISO text (`HH`, `HHMM`, `HH:MM`, `HH:MM:SS[.f]` to nine digits; `time` also takes `Z`, `±HH`, `±HHMM`, `±HH:MM`) and maps (`{hour, minute, second, millisecond, microsecond, nanosecond, timezone, time}`).
   - Accessors: `t.hour` to `t.nanosecond`, and for a `Time` `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone`. `toString(t)` prints the shortest ISO form, `21:40:32.142+01:00`, `10:00Z`.
@@ -92,8 +103,6 @@ before upgrading.
   - Node: new `LocalTime` and `Time` classes. Java: `LocalTime` and `OffsetTime`. The C ABI and JSON use `{"$localtime": "10:00:00.5"}` and `{"$time": "10:00:00+01:00"}`; `kglite.h` is unchanged.
   - Bolt reads and writes `LocalTime` and `Time` structures.
   - RDF export writes `xsd:time` (an offset marks a `Time`), and import reads it. The CSV tree and blueprints add the `localtime` and `time` column types. JSON export and SQL export write the ISO text.
-- **Rust: `Value::LocalTime(u64)` and `Value::Time { nanos, offset_secs }`**, with `kglite::api::time_of_day` for the clock encoding and text forms. `ColumnType` and `ColumnData` gain `LocalTime` and `Time`; `DeclaredType` gains `LocalTime` and `ZonedTime`.
-
 - **Durations keep sub-second precision to the nanosecond in Cypher.**
   - `duration({milliseconds: 1})`, `duration({nanoseconds: 1})`, `duration({seconds: 1.5})` and ISO text such as `duration('PT0.000000001S')` build exact values. Before, any total between two whole seconds raised `sub-second durations are not supported`.
   - A fraction finer than one nanosecond rounds to the nearest nanosecond.
@@ -110,7 +119,6 @@ before upgrading.
   - The C ABI's `$duration` tag carries `nanoseconds` when non-zero. `kglite.h` is unchanged.
   - Blueprint `duration` cells and `from_records` `$duration` accept an optional `nanoseconds`.
   - RDF export writes a sub-second duration of uniform sign as an `xsd:duration` with a fractional seconds part, and a mixed-sign one as `kg:duration` with a fourth `nanoseconds` field. RDF import reads both.
-- **Rust: `Value::Duration` gains `nanos: i32`** (`0..1_000_000_000`; the sign rides on `seconds`). `BorrowedValue` gains a matching `Duration` variant.
 - **`kglite.open_session(path, durable=...)` opens a durable, thread-safe `Session`.**
   - Use it for a threaded server: any number of threads call `execute()` and `begin()` on one session, with no borrow error.
   - `durable` is `"full"`, `"normal"`, `"off"` or a bool. Passing it selects this form; without it `open_session(path)` is the read-only load, unchanged.
@@ -121,9 +129,12 @@ before upgrading.
   - `auto_checkpoint_wal_mib` folds the log into the checkpoint on a background thread, as on `kglite.open`.
   - A durable session has no embedding-model binding.
   - `g.session()` on a durable `KnowledgeGraph` still refuses writes.
-- **Rust: `OpenError::Session` carries `failure: LogOpenFailure`.** A binding maps an unreadable log, a failed replay and a refused open to different error classes without reading the message.
-
 ### Fixed
+
+- **An aggregating or `DISTINCT` `WITH` can order by the expression it grouped on.**
+  - Before: `MATCH (a:X) WITH a.n AS n, count(*) AS c ORDER BY a.n RETURN n, c` raised `Undefined variable 'a'`.
+  - Now: a sort key that is, in full, a non-aggregate item's expression sorts on that item's alias (`ORDER BY a.n`, `ORDER BY toUpper(a.n) DESC`). The item needs an alias.
+  - Unchanged: a key that only reads the same variables (`ORDER BY a.n + 1`), a key naming an unaliased item, and an aggregate over a dropped variable (`ORDER BY max(a.x)`) are still refused.
 
 - **`datetime()`, `date()`, `localdatetime()`, `time()` and `localtime()` read the clock once per statement.**
   - Before: every call read the system clock, so `datetime() = datetime()` was false about a third of the time and `duration.inSeconds(datetime(), datetime())` was often non-zero.
@@ -142,6 +153,13 @@ before upgrading.
   - Before: a pandas object column of `datetime.date` or `datetime.datetime` cells was stored as text, and refused under `on_invalid='error'` as a "mixed-type" column.
   - Now: all-`date` cells load as dates, all-`datetime` / `pd.Timestamp` cells as datetimes (aware values convert to UTC as before), and all-`int` or all-`float` cells as numbers. `None`, `NaN` and `NaT` are NULL.
   - A column mixing `date` and `datetime` cells, or holding `Decimal`, `time` or integers beyond 64 bits, is still stored as text and still refused under `'error'`.
+
+### Rust API
+
+- `Value::ZonedDateTime { utc, offset_secs, zone }`, with `kglite::api::zoned_datetime` for the wall-clock derivation, the ISO text and its parser, and `kglite::api::time_zone::ZoneId` (kglite's own zone handle: the tz database crate does not appear in the public API). `ColumnType` and `ColumnData` gain `ZonedDateTime`; `DeclaredType` gains `ZonedDateTime`.
+- `Value::LocalTime(u64)` and `Value::Time { nanos, offset_secs }`, with `kglite::api::time_of_day` for the clock encoding and text forms. `ColumnType` and `ColumnData` gain `LocalTime` and `Time`; `DeclaredType` gains `LocalTime` and `ZonedTime`.
+- `Value::Duration` gains `nanos: i32` (`0..1_000_000_000`; the sign rides on `seconds`). `BorrowedValue` gains a matching `Duration` variant.
+- `OpenError::Session` carries `failure: LogOpenFailure`. A binding maps an unreadable log, a failed replay and a refused open to different error classes without reading the message.
 
 ## [0.19.7] - 2026-10-11
 
@@ -324,11 +342,6 @@ before upgrading.
 - `Session::next_lsn()` and `Session::last_lsn()` report the log position.
 
 ### Fixed
-
-- **An aggregating or `DISTINCT` `WITH` can order by the expression it grouped on.**
-  - Before: `MATCH (a:X) WITH a.n AS n, count(*) AS c ORDER BY a.n RETURN n, c` raised `Undefined variable 'a'`.
-  - Now: a sort key that is, in full, a non-aggregate item's expression sorts on that item's alias (`ORDER BY a.n`, `ORDER BY toUpper(a.n) DESC`). The item needs an alias.
-  - Unchanged: a key that only reads the same variables (`ORDER BY a.n + 1`), a key naming an unaliased item, and an aggregate over a dropped variable (`ORDER BY max(a.x)`) are still refused.
 
 - **`WHERE m.key = row.key` over a map-valued `UNWIND` row no longer scans the type once per row.**
   - Before: `UNWIND $rows AS row MATCH (m:M) WHERE m.key = row.key` took time quadratic in the row count. Release, memory mode, 8,000 rows over 8,000 nodes: 8,400 ms (best of 3).

@@ -144,13 +144,13 @@ parsing.
 
 ## Persistence
 
-`.kgl` snapshots use the current RGF v7 container:
+`.kgl` snapshots use the current RGF v8 container:
 
 ```text
-magic RGF\x07
+magic RGF\x08
 codec tag (Postcard)
 core-data version (u32 LE)
-JSON metadata length + metadata
+JSON metadata length + metadata + header/metadata CRC32 (v8)
 zstd-compressed topology section
 zstd-compressed column sections by node type
 optional node-embedding, relationship-embedding (core data version 4 only),
@@ -159,7 +159,7 @@ optional rebuildable index sections: node and relationship HNSW, BM25 text
 ```
 
 Container, codec, and core-data versions are separate. The current reader
-accepts RGF v7, v6 and v5. RGF v4/bincode and older containers are detected
+accepts RGF v8, v7, v6 and v5. RGF v4/bincode and older containers are detected
 and refused with a 0.13.4 conversion or rebuild message. Within v5, metadata
 additions use serde defaults where compatible, while incompatible embedded
 cache layouts are detected explicitly. Index definitions are stored so
