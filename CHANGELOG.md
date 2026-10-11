@@ -18,6 +18,14 @@ before upgrading.
   - Clean input is unaffected.
   - Migration: pass `on_invalid='warn'` for the old behaviour, or `on_invalid='skip'` for the same without the warning.
 
+### Fixed
+
+- **Object columns of dates and datetimes load as temporal values, not text.**
+  - Affects `add_nodes`, `add_relationships` and their `connection`-named twins.
+  - Before: a pandas object column of `datetime.date` or `datetime.datetime` cells was stored as text, and refused under `on_invalid='error'` as a "mixed-type" column.
+  - Now: all-`date` cells load as dates, all-`datetime` / `pd.Timestamp` cells as datetimes (aware values convert to UTC as before), and all-`int` or all-`float` cells as numbers. `None`, `NaN` and `NaT` are NULL.
+  - A column mixing `date` and `datetime` cells, or holding `Decimal`, `time` or integers beyond 64 bits, is still stored as text and still refused under `'error'`.
+
 ## [0.19.7] - 2026-10-11
 
 ### Breaking changes and migration

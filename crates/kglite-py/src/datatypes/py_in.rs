@@ -861,12 +861,49 @@ fn warn_object_stringification(
         on_invalid,
         format!(
             "Column '{col_name}' has object dtype holding {inferred} values{offender}: the \
-             columnar store has no mixed-type column, so every value is stored as text and \
-             comparisons, ordering and aggregates over it become text operations. Give the \
+             columnar store has no native column for values of this kind, so every value would be stored as \
+             text and comparisons, ordering and aggregates over it become text operations. Give the \
              column a real dtype (astype('int64'), pd.to_datetime, …) or name one with \
              column_types={{'{col_name}': …}} — 'string' if text is what you want."
         ),
     )
+}
+
+/// The native column type of a homogeneous object column, `None` when the
+/// cells have no single faithful native type (mixed kinds, `Decimal`, `time`,
+/// integers beyond `i64`, …).
+///
+/// pandas has no date dtype, so a column of `datetime.date` objects is the
+/// normal way to hold dates; `datetime.datetime` / `pd.Timestamp` objects are
+/// the object-dtype spelling of `datetime64`. A column mixing `date` and
+/// `datetime` cells is left to the stringification path rather than guessed at.
+fn homogeneous_object_type(
+    series: &Bound<'_, PyAny>,
+    inferred: &str,
+) -> PyResult<Option<ColumnType>> {
+    use pyo3::types::{PyBool, PyDate, PyDateTime};
+    match inferred {
+        "floating" => return Ok(Some(ColumnType::Float64)),
+        "integer" | "date" | "datetime" | "mixed" => {}
+        _ => return Ok(None),
+    }
+    let cells = series.call_method0("dropna")?.call_method0("tolist")?;
+    let cells = cells.cast::<PyList>()?;
+    if cells.is_empty() {
+        return Ok(None);
+    }
+    let all = |pred: &dyn Fn(&Bound<'_, PyAny>) -> bool| cells.iter().all(|c| pred(&c));
+    Ok(if all(&|c| c.cast::<PyDateTime>().is_ok()) {
+        Some(ColumnType::Timestamp)
+    } else if all(&|c| c.is_instance_of::<PyDate>() && c.cast::<PyDateTime>().is_err()) {
+        Some(ColumnType::DateTime)
+    } else if inferred == "integer"
+        && all(&|c| !c.is_instance_of::<PyBool>() && c.extract::<i64>().is_ok())
+    {
+        Some(ColumnType::Int64)
+    } else {
+        None
+    })
 }
 
 /// The first cell of an object column that is not already a `str`, as
@@ -934,6 +971,9 @@ fn determine_column_type(
                 .extract()?;
             if inferred == "boolean" {
                 return Ok(ColumnType::Boolean);
+            }
+            if let Some(ct) = homogeneous_object_type(series, &inferred)? {
+                return Ok(ct);
             }
             warn_object_stringification(series, col_name, &inferred, on_invalid)?;
             Ok(ColumnType::String)

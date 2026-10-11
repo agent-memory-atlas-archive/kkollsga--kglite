@@ -1889,7 +1889,10 @@ def from_networkx(
     shapes — they never share a column.
 
     Node and edge property columns preserve exact signed 64-bit integers,
-    including columns with missing values, before DataFrame ingestion. Mixed
+    including columns with missing values, before DataFrame ingestion. An
+    object column whose non-null cells are all ``datetime.date``, all
+    ``datetime.datetime`` / ``pd.Timestamp``, all ``int`` or all ``float`` loads
+    as that type. Mixed
     object columns retain the ordinary ingestion policy: values are stored as
     text with a warning, using each scalar's original spelling before that
     conversion. This does not provide a typed round-trip for heterogeneous
