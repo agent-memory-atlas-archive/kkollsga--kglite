@@ -60,7 +60,7 @@ def test_map_form_takes_row_values(graph) -> None:
         ("date({month: 1})", "missing 'year'"),
         ("date({year: 2010, hour: 1})", "unknown key 'hour'"),
         ("localdatetime({year: 2010, timezone: 'Z'})", "unknown key 'timezone'"),
-        ("datetime({year: 2010, timezone: 'Europe/Oslo'})", "named time zones"),
+        ("datetime({year: 2010, timezone: 'Not/AZone'})", "Not/AZone"),
         ("datetime({year: 2010, hour: 25})", "is not a valid datetime"),
     ],
 )

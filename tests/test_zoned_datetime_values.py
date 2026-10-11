@@ -438,10 +438,10 @@ def test_exports_write_a_named_zone_as_text_and_rdf_as_its_offset(graph, tmp_pat
     assert "2026-07-15T12:00+02:00[Europe/Oslo]" in graph.export_string("json")
     out = tmp_path / "csv"
     graph.export_csv(str(out))
-    assert "2026-07-15T12:00+02:00[Europe/Oslo]" in (out / "nodes" / "Z.csv").read_text()
+    assert "2026-07-15T12:00+02:00[Europe/Oslo]" in (out / "nodes" / "Z.csv").read_text(encoding="utf-8")
     # RDF has no zone names: xsd:dateTime keeps the offset, and reading it back is
     # the same instant (a fixed-offset value).
     nq = tmp_path / "g.nq"
     graph.export_rdf(str(nq))
-    text = nq.read_text()
+    text = nq.read_text(encoding="utf-8")
     assert '"2026-07-15T12:00:00+02:00"' in text and "Europe/Oslo" not in text

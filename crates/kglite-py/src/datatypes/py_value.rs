@@ -921,8 +921,13 @@ mod tests {
                 .unwrap()
                 .and_hms_opt(10, 0, 0)
                 .unwrap();
-            assert!(query(&aware).ok() == Some(Value::Timestamp(noon_utc)));
-            assert_eq!(ingest(&aware), Value::Timestamp(noon_utc));
+            let zoned = Value::ZonedDateTime {
+                utc: noon_utc,
+                offset_secs: 7200,
+                zone: None,
+            };
+            assert!(query(&aware).ok() == Some(zoned.clone()));
+            assert_eq!(ingest(&aware), zoned);
         });
     }
 

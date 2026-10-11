@@ -99,7 +99,7 @@ export async function flow(): Promise<void> {
   const instantDate: Date = instant.toDate();
   void instantDate;
   const named = new ZonedDateTime(2026, 7, 15, 12, 0, 0, 0, null, 'Europe/Oslo');
-  const zoneName: string | null = named.timeZone;
+  const zoneName: string | undefined = named.timeZone;
   void zoneName;
   const text: string =
     date.toString() + stamp.toString() + span.toString() + point.toString() + clock.toString() + zoned.toString() + instant.toString();

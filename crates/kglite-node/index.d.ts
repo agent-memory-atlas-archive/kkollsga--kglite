@@ -180,7 +180,7 @@ export declare class ZonedDateTime {
   /** Seconds east of UTC. */
   readonly offsetSeconds: number
   /** The IANA zone name, or `null` for a fixed offset. */
-  readonly timeZone: string | null
+  readonly timeZone?: string
   /**
    * The wall clock at `offsetSeconds` (default 0, UTC). With `timeZone` (an IANA
    * name) the zone's rules place the reading: a reading the clock skipped moves
