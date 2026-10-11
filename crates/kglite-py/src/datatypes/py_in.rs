@@ -887,7 +887,9 @@ fn homogeneous_object_type(
     use pyo3::types::{PyBool, PyDate, PyDateTime};
     match inferred {
         "floating" => return Ok(Some(ColumnType::Float64)),
-        "integer" | "date" | "datetime" | "mixed" => {}
+        // pandas 2.x reports an all-float object column that holds a `None` as
+        // "mixed-integer-float" even with `skipna=True`; the cells decide.
+        "integer" | "date" | "datetime" | "mixed" | "mixed-integer-float" => {}
         _ => return Ok(None),
     }
     let cells = series.call_method0("dropna")?.call_method0("tolist")?;
@@ -896,7 +898,9 @@ fn homogeneous_object_type(
         return Ok(None);
     }
     let all = |pred: &dyn Fn(&Bound<'_, PyAny>) -> bool| cells.iter().all(|c| pred(&c));
-    Ok(if all(&|c| c.cast::<PyDateTime>().is_ok()) {
+    Ok(if inferred == "mixed-integer-float" {
+        all(&|c| c.is_instance_of::<pyo3::types::PyFloat>()).then_some(ColumnType::Float64)
+    } else if all(&|c| c.cast::<PyDateTime>().is_ok()) {
         Some(ColumnType::Timestamp)
     } else if all(&|c| c.is_instance_of::<PyDate>() && c.cast::<PyDateTime>().is_err()) {
         Some(ColumnType::DateTime)
