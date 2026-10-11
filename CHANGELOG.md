@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.19.7] - 2026-10-11
+
 ### Breaking changes and migration
 
 - **`date()`, `datetime()`, `localdatetime()`, `time()` and `localtime()` raise on an unparsable string.**

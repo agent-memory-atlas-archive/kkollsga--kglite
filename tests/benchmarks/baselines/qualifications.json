@@ -198,10 +198,16 @@
       "sha256": "2aba75082af0fcf960e2edf240bedd06fd87812026e23125048ca02e4589d844",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-09 22:30-22:32 local on Mac16,10 (M4, 16 GiB), load average 3.1-4.0 (concurrent sessions); repeat of a 22:21-22:28 capture at load 4.4-6.4 that agreed within 1-2% on every control. vs accepted 0_19_4.json, min: controls var_length_1_8 +0.0%, cypher_match +0.0%, khop3_unwind -0.4%, shortest_path -0.9%, khop3_in_list -2.0% (no uniform shift). test_bench_hop1_deg3_memory renamed to test_bench_hop1_deg3_expand_memory: the old name's pre-0.19.5 rows measured the fused count(*) (~1 us), so it read as millions of percent of drift; the renamed cell starts its longitudinal record here. Highest cell cypher_match_materialized +16.1% (twice; below the gate); release A/Bs vs the published 0.19.5 wheel (same interpreter, ABAB x2) on macOS and on Windows (Ryzen 9 3900X, -2.3/-1.9%) showed it flat, so the offset predates this release.",
+    "0_19_7.json": {
+      "evidence": "Release capture 2026-10-11 07:01-07:03 local on Mac16,10 (M4, 16 GiB), load average 3.6-5.7 (an unrelated cargo release build of another project on ~2 cores). A first capture at 06:55-07:00 (load 6-10, same build) read return_id_10k +31% / return_node_10k +26% with khop controls +10%; it was discarded. vs accepted 0_19_6.json, min: controls var_length_1_8 -0.3%, cypher_match +0.0%, khop3_unwind -0.2%, shortest_path -3.1%, khop3_in_list -0.5% (no uniform shift). Highest cell save_kgl +10.0% (below the gate). Same-interpreter (3.14.3) ABAB A/B vs the published 0.19.6 wheel on RETURN id(n)/n/n.name over 10k nodes: flat (min 0.903-0.926 vs 0.851-0.937 ms; 2.178-2.236 vs 2.173-2.206 ms).",
       "platform": "Darwin/arm64",
-      "sha256": "2aba75082af0fcf960e2edf240bedd06fd87812026e23125048ca02e4589d844",
+      "sha256": "fb3bc1877c056672f23260612dee9d80268cb1848796c177e8f8d8186b1b9751",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-11 07:01-07:03 local on Mac16,10 (M4, 16 GiB), load average 3.6-5.7 (an unrelated cargo release build of another project on ~2 cores). A first capture at 06:55-07:00 (load 6-10, same build) read return_id_10k +31% / return_node_10k +26% with khop controls +10%; it was discarded. vs accepted 0_19_6.json, min: controls var_length_1_8 -0.3%, cypher_match +0.0%, khop3_unwind -0.2%, shortest_path -3.1%, khop3_in_list -0.5% (no uniform shift). Highest cell save_kgl +10.0% (below the gate). Same-interpreter (3.14.3) ABAB A/B vs the published 0.19.6 wheel on RETURN id(n)/n/n.name over 10k nodes: flat (min 0.903-0.926 vs 0.851-0.937 ms; 2.178-2.236 vs 2.173-2.206 ms).",
+      "platform": "Darwin/arm64",
+      "sha256": "fb3bc1877c056672f23260612dee9d80268cb1848796c177e8f8d8186b1b9751",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -278,7 +284,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_6.json",
+    "Darwin/arm64": "0_19_7.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1

@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (28_571_264, "0.19.6"),  # host release build
-    "linux": (34_792_952, "0.19.5"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (28_868_960, "0.19.7"),  # host release build
+    "linux": (35_136_312, "0.19.6"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.19.5-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "d97724330627d92acaf65e1b935f70a7ae26306ce5d0011818bcf6f3c827723c"
+LINUX_SIZE_WHEEL = "kglite-0.19.6-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "63ae6353e8f58ad0a67727144cf0c5173e97ac9cdb85871f257d0a41691678c0"
 
 
 @pytest.mark.binary_size
@@ -635,6 +635,13 @@ def test_binary_size_regression():
         fold-back, in-place auto-commit with its undo path, the batch read
         cursor, the per-query cancel token, lazy property NDV and the
         lifted durable-open / auto-commit session API.
+
+      - 0.19.7:       28,868,960 bytes (≈27.5 MB), +297,696 (+1.0%) over
+        0.19.6: the core group-commit queue with fsync outside the graph
+        lock and publish-after-durable, aggregate window functions, the
+        temporal TCK cluster, WAL-recorded text indexes, the non-aggregating
+        WITH scope rule, the per-value parameterised plan cache and the
+        UNWIND/WITH key pushdown into patterns.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
