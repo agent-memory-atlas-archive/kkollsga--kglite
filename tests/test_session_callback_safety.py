@@ -243,3 +243,109 @@ def run_child(mode, reader):
     if mode == "concurrent":
         assert "reader_entered" in stdout
     assert '"complete": true' in stdout
+
+
+# --- durable graphs -----------------------------------------------------------------------------
+#
+# A write on a durable handle holds the handle's mutable borrow while the embedder callback runs. A
+# second thread (or the callback itself) touching the same handle raises "accessed concurrently"
+# instead of waiting; a Session taken earlier still reads the committed snapshot and refuses writes.
+# These cases pin that contract in a bounded child so a lock cycle fails instead of hanging pytest.
+
+DURABLE_CHILD = textwrap.dedent(
+    r"""
+    import json, os, sys, threading
+    import kglite
+
+    mode, path = sys.argv[1:]
+
+    class Model:
+        dimension = 2
+        hook = None
+        def embed(self, texts):
+            if self.hook:
+                self.hook()
+            return [[0.0, 1.0] if t == "beta" else [1.0, 0.0] for t in texts]
+
+    g = kglite.open(path, durable="full")
+    g.cypher("CREATE (:Doc {id:1,body:'alpha',m:0}),(:Doc {id:2,body:'beta',m:0})")
+    model = Model()
+    g.set_embedder(model)
+    g.embed_texts("Doc", "body", show_progress=False)
+    session = g.session()
+    seen = {}
+
+    def in_thread(fn):
+        box = {}
+        def run():
+            try:
+                box["ok"] = fn()
+            except BaseException as e:
+                box["err"] = f"{type(e).__name__}: {e}"
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(5)
+        box["hung"] = t.is_alive()
+        return box
+
+    def hook():
+        if mode == "reader_thread":
+            seen["r"] = in_thread(lambda: g.cypher("MATCH (d:Doc) RETURN count(d) AS c").to_list())
+        elif mode == "writer_thread":
+            seen["r"] = in_thread(lambda: g.cypher("CREATE (:Late {id:5})").to_list())
+        elif mode == "reentrant_write":
+            try:
+                g.cypher("CREATE (:Re {id:6})")
+                seen["r"] = {"ok": True}
+            except BaseException as e:
+                seen["r"] = {"err": f"{type(e).__name__}: {e}"}
+        elif mode == "session_reader":
+            seen["r"] = in_thread(lambda: session.cypher("MATCH (d:Doc) RETURN d.m AS m ORDER BY d.id").to_list())
+        elif mode == "session_writer":
+            seen["r"] = in_thread(lambda: session.execute("CREATE (:S {id:7})").to_list())
+
+    model.hook = hook
+    rows = g.cypher(
+        "MATCH (d:Doc) SET d.m = 1, d.s = text_score(d, 'body', 'query') RETURN d.id AS id, d.s AS s ORDER BY id"
+    ).to_list()
+    print(json.dumps({"rows": rows, "seen": seen}), flush=True)
+    os._exit(0)  # no save, no close: the parent reopens what the log carries
+    """
+)
+
+
+@pytest.mark.parametrize(
+    ("mode", "check"),
+    [
+        ("reader_thread", lambda r: "accessed concurrently" in r["err"]),
+        ("writer_thread", lambda r: "accessed concurrently" in r["err"]),
+        ("reentrant_write", lambda r: "accessed concurrently" in r["err"]),
+        ("session_reader", lambda r: r["ok"] == [{"m": 0}, {"m": 0}]),
+        ("session_writer", lambda r: "durable" in r["err"]),
+    ],
+)
+def test_durable_write_with_a_callback_embedder_keeps_todays_concurrency_contract(mode, check, tmp_path):
+    path = tmp_path / "app.kgl"
+    process = subprocess.Popen(
+        [sys.executable, "-c", DURABLE_CHILD, mode, str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate(timeout=2)
+        pytest.fail(f"durable callback lock cycle: {mode}\n{stdout}\n{stderr}")
+    assert process.returncode == 0, (stdout, stderr)
+    result = __import__("json").loads(stdout.strip().splitlines()[-1])
+    assert result["rows"] == [{"id": 1, "s": 1.0}, {"id": 2, "s": 0.0}]
+    outcome = result["seen"]["r"]
+    assert outcome.get("hung") is not True, outcome
+    assert check(outcome), outcome
+
+    # The outer write survived the hard exit; nothing the refused callers tried reached the log.
+    reopened = kglite.open(str(path), durable="full")
+    assert reopened.cypher("MATCH (d:Doc) RETURN d.m AS m ORDER BY d.id").to_list() == [{"m": 1}, {"m": 1}]
+    assert reopened.cypher("MATCH (n) WHERE n:Late OR n:Re OR n:S RETURN count(n) AS c").scalar() == 0

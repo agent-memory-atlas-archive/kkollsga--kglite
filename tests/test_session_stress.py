@@ -11,6 +11,10 @@ Default suite excludes them (slow). Treat a failure here as a real concurrency
 bug, not flakiness — the invariants are exact, not statistical.
 """
 
+import json
+import subprocess
+import sys
+import textwrap
 import threading
 
 import pandas as pd
@@ -188,3 +192,101 @@ def test_per_thread_cursor_fluent_under_load():
 
     assert errors == [], f"per-thread cursor errors: {errors[:3]}"
     assert bad == [], f"cursor fluent chains returned wrong counts: {bad[:3]}"
+
+
+# --- durable graph -----------------------------------------------------------------------------
+#
+# Threaded readers, a Session reader, and writers against one durable handle, with and without an
+# embedder callback that releases the GIL inside the write. The invariants hold on every engine that
+# keeps the durable contract, so they survive the swap that lets writers queue instead of raising:
+# a write either lands exactly once or raises the one allowed concurrency error, readers never see an
+# impossible count, and after a hard exit the log carries exactly the writes that returned.
+
+DURABLE_CHILD = textwrap.dedent(
+    r"""
+    import json, os, sys, threading, time
+    import kglite
+
+    path, with_callback = sys.argv[1], sys.argv[2] == "callback"
+    WRITERS, PER, READERS = 4, 20, 3
+
+    class Model:
+        dimension = 2
+        def embed(self, texts):
+            time.sleep(0.002)  # releases the GIL while the write is in flight
+            return [[1.0, 0.0] for _ in texts]
+
+    g = kglite.open(path, durable="full")
+    g.cypher("UNWIND range(1, 4) AS i CREATE (:Doc {id: i, hits: 0})")
+    if with_callback:
+        g.set_embedder(Model())
+        g.cypher("MATCH (d:Doc) SET d.body = 'x'")
+        g.embed_texts("Doc", "body", show_progress=False)
+    session = g.session()
+    done = threading.Event()
+    errors, landed, impossible = [], [0] * WRITERS, []
+
+    def write(w):
+        q = ("MATCH (d:Doc {id: $id}) SET d.hits = d.hits + 1, d.s = text_score(d, 'body', 'q')"
+             if with_callback else "MATCH (d:Doc {id: $id}) SET d.hits = d.hits + 1")
+        for _ in range(PER):
+            try:
+                g.cypher(q, params={"id": w + 1})
+                landed[w] += 1
+            except RuntimeError as e:
+                if "accessed concurrently" not in str(e):
+                    errors.append(repr(e))
+            except Exception as e:
+                errors.append(repr(e))
+
+    def read():
+        while not done.is_set():
+            try:
+                c = session.cypher("MATCH (d:Doc) RETURN count(d) AS c").to_list()[0]["c"]
+                if c != 4:
+                    impossible.append(c)
+                g.cypher("MATCH (d:Doc) RETURN count(d) AS c")
+            except RuntimeError as e:
+                if "accessed concurrently" not in str(e):
+                    errors.append(repr(e))
+            except Exception as e:
+                errors.append(repr(e))
+
+    readers = [threading.Thread(target=read) for _ in range(READERS)]
+    writers = [threading.Thread(target=write, args=(w,)) for w in range(WRITERS)]
+    for t in readers + writers:
+        t.start()
+    for t in writers:
+        t.join()
+    done.set()
+    for t in readers:
+        t.join()
+    live = g.cypher("MATCH (d:Doc) RETURN d.id AS id, d.hits AS h ORDER BY id").to_list()
+    print(json.dumps({"landed": landed, "live": live, "errors": errors, "impossible": impossible}), flush=True)
+    os._exit(0)
+    """
+)
+
+
+@pytest.mark.stress
+@pytest.mark.parametrize("flavour", ["plain", "callback"])
+def test_durable_threaded_readers_and_writers_lose_nothing_across_a_hard_exit(flavour, tmp_path):
+    path = tmp_path / "app.kgl"
+    done = subprocess.run(
+        [sys.executable, "-c", DURABLE_CHILD, str(path), flavour],
+        capture_output=True,
+        text=True,
+        timeout=90,  # a hang is a failure, well inside the 120 s ceiling
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    out = json.loads(done.stdout.strip().splitlines()[-1])
+    assert out["errors"] == [], out["errors"][:3]
+    assert out["impossible"] == [], "a Session reader saw a node count that never existed"
+    # Each writer owns one document: its counter equals the writes that returned, live...
+    assert [row["h"] for row in out["live"]] == out["landed"]
+    # ...and after the hard exit.
+    reopened = kglite.open(str(path), durable="full")
+    assert [r["h"] for r in reopened.cypher("MATCH (d:Doc) RETURN d.id AS id, d.hits AS h ORDER BY id").to_list()] == (
+        out["landed"]
+    )
+    assert sum(out["landed"]) > 0, "no write landed; the stress proved nothing"

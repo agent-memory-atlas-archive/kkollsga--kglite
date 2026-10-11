@@ -343,17 +343,29 @@ os._exit(0)
 """
 
 
-def observe(scenario: str, g) -> dict:
+def observe(scenario: str, g, scenarios: dict | None = None) -> dict:
     """Read ``scenario``'s queries and API probes back from ``g`` as plain JSON."""
-    spec = SCENARIOS[scenario]
+    spec = (scenarios or SCENARIOS)[scenario]
     queries = {name: g.cypher(q).to_list() for name, q in spec["queries"].items()}
     api = {name: eval(expr, {"g": g}) for name, expr in spec["api"].items()}  # noqa: S307 - trusted literals above
     return json.loads(json.dumps({"queries": queries, "api": api}, default=str))
 
 
-def _write_scenario(name: str) -> None:
-    spec = SCENARIOS[name]
-    target = FIXTURE_DIR / name
+def _write_scenario(
+    name: str,
+    *,
+    scenarios: dict | None = None,
+    expected: dict | None = None,
+    fixture_dir: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
+    """Write one scenario; the keyword overrides let a sibling builder reuse this with its own set.
+
+    ``cwd`` is where the child interpreters run (default: the repo root, so they import the tree
+    under test); a builder driving a published wheel passes a directory outside the repo.
+    """
+    spec = (scenarios or SCENARIOS)[name]
+    target = (fixture_dir or FIXTURE_DIR) / name
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True)
@@ -362,7 +374,7 @@ def _write_scenario(name: str) -> None:
         script = _CHILD.format(path=graph_path, level=spec["level"], body=textwrap.dedent(body).strip())
         # The repo root is the working directory so the child imports the
         # tree under test, not an installed wheel.
-        subprocess.run([sys.executable, "-c", script], check=True, cwd=REPO_ROOT)
+        subprocess.run([sys.executable, "-c", script], check=True, cwd=cwd or REPO_ROOT)
     for stray in target.glob("*.lock-owner"):
         stray.unlink()
     wal = target / "app.kgl-wal"
@@ -374,17 +386,17 @@ def _write_scenario(name: str) -> None:
     scratch = Path(tempfile.mkdtemp()) / name
     shutil.copytree(target, scratch)
     recovered = kglite.open(str(scratch / "app.kgl"), durable=spec["level"])
-    got = observe(name, recovered)
+    got = observe(name, recovered, scenarios)
     del recovered
-    problems = compare(name, got)
+    problems = compare(name, got, expected)
     if problems:
         raise SystemExit(f"{name}: recovered state differs from EXPECTED:\n" + "\n".join(problems))
     print(f"wrote {target}/ ({sum(p.stat().st_size for p in target.iterdir())} bytes)")
 
 
-def compare(name: str, got: dict) -> list[str]:
+def compare(name: str, got: dict, expected: dict | None = None) -> list[str]:
     """Differences between a recovered readback and the hand-derived expectation."""
-    want = EXPECTED[name]
+    want = (expected or EXPECTED)[name]
     problems = []
     for section in ("queries", "api"):
         for key, expected in want[section].items():
