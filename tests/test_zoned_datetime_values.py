@@ -70,11 +70,11 @@ def test_text_and_accessors(graph):
     assert one(graph, "RETURN toString(datetime('1984-10-11T12:31:00Z')) AS v") == "1984-10-11T12:31Z"
 
 
-def test_a_named_zone_is_refused_for_now(graph):
-    with pytest.raises(Exception, match="named time zones"):
-        graph.cypher("RETURN datetime('2015-07-21T21:40[Europe/Oslo]') AS v")
-    with pytest.raises(Exception, match="named time zones"):
-        graph.cypher("RETURN datetime({year: 2015, timezone: 'Europe/Oslo'}) AS v")
+def test_an_unknown_zone_is_refused_by_name(graph):
+    with pytest.raises(Exception, match="Mars/Base"):
+        graph.cypher("RETURN datetime('2015-07-21T21:40[Mars/Base]') AS v")
+    with pytest.raises(Exception, match="Mars/Base"):
+        graph.cypher("RETURN datetime({year: 2015, timezone: 'Mars/Base'}) AS v")
 
 
 def test_aware_parameters_keep_their_offset_and_naive_ones_stay_local(graph):
@@ -325,3 +325,123 @@ def test_valid_time_with_zoned_bounds_in_every_storage_mode(mode, tmp_path):
             "FOR VALID_TIME AS OF datetime('2000-01-01T11:00:00Z') MATCH (w:W) RETURN w.id AS id"
         ).to_list()
     ) == [2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Named IANA zones. Oslo is +01:00 until 2026-03-29 01:00Z and +02:00 until
+# 2026-10-25 01:00Z; every expectation is derived by hand from those rules.
+# ---------------------------------------------------------------------------
+
+zoneinfo = pytest.importorskip("zoneinfo")
+OSLO = zoneinfo.ZoneInfo("Europe/Oslo")
+
+
+def test_a_named_zone_reads_back_as_an_aware_datetime_in_that_zone(graph):
+    got = one(graph, "RETURN datetime('2026-07-15T12:00[Europe/Oslo]') AS v")
+    assert got == dt.datetime(2026, 7, 15, 12, 0, tzinfo=OSLO)
+    assert got.tzinfo.key == "Europe/Oslo"
+    assert got.utcoffset() == dt.timedelta(hours=2)
+    assert got.hour == 12, "the wall clock is the one in the zone"
+    # The same instant in a fixed offset is the same moment but not the same tzinfo.
+    fixed = one(graph, "RETURN datetime('2026-07-15T12:00+02:00') AS v")
+    assert fixed == got and not hasattr(fixed.tzinfo, "key")
+
+
+def test_dst_gap_and_overlap_read_back_with_the_rules_of_the_zone(graph):
+    # 02:30 on 2026-03-29 is skipped in Oslo: 03:30+02:00 (01:30Z).
+    gap = one(graph, "RETURN datetime('2026-03-29T02:30[Europe/Oslo]') AS v")
+    assert (gap.hour, gap.minute, gap.utcoffset()) == (3, 30, dt.timedelta(hours=2))
+    assert gap == dt.datetime(2026, 3, 29, 1, 30, tzinfo=UTC)
+    # 02:30 on 2026-10-25 happens twice: the earlier is +02:00 (fold=0), the
+    # later +01:00 (fold=1).
+    early = one(graph, "RETURN datetime('2026-10-25T02:30[Europe/Oslo]') AS v")
+    late = one(graph, "RETURN datetime('2026-10-25T02:30+01:00[Europe/Oslo]') AS v")
+    assert (early.hour, early.minute, early.fold, early.utcoffset()) == (2, 30, 0, dt.timedelta(hours=2))
+    assert (late.hour, late.minute, late.fold, late.utcoffset()) == (2, 30, 1, dt.timedelta(hours=1))
+    assert late - early == dt.timedelta(0), "Python compares two same-zone datetimes by wall clock"
+    assert late.astimezone(UTC) - early.astimezone(UTC) == dt.timedelta(hours=1)
+    # Southern hemisphere: Sydney repeats 02:30 on 2026-04-05 (earlier is +11:00).
+    sydney = one(graph, "RETURN datetime('2026-04-05T02:30[Australia/Sydney]') AS v")
+    assert sydney.utcoffset() == dt.timedelta(hours=11) and sydney.fold == 0
+
+
+def test_an_aware_parameter_keeps_a_zoneinfo_zone_and_a_fixed_one_stays_fixed(graph):
+    # 02:30 on 2026-10-25 with fold=1 is the later occurrence, +01:00.
+    later = dt.datetime(2026, 10, 25, 2, 30, tzinfo=OSLO, fold=1)
+    row = graph.cypher(
+        "RETURN $z.timezone AS zone, $z.offset AS off, toString($z) AS text, "
+        "$f.timezone AS fzone, toString($f) AS ftext",
+        params={"z": later, "f": dt.datetime(2026, 7, 15, 12, 0, tzinfo=tz(2))},
+    ).to_list()[0]
+    assert row == {
+        "zone": "Europe/Oslo",
+        "off": "+01:00",
+        "text": "2026-10-25T02:30+01:00[Europe/Oslo]",
+        "fzone": "+02:00",
+        "ftext": "2026-07-15T12:00+02:00",
+    }
+    # Zone identity never splits equality: the same instant in two zones is one value.
+    assert graph.cypher(
+        "RETURN $a = $b AS same",
+        params={
+            "a": dt.datetime(2026, 7, 15, 12, 0, tzinfo=OSLO),
+            "b": dt.datetime(2026, 7, 15, 6, 0, tzinfo=zoneinfo.ZoneInfo("America/New_York")),
+        },
+    ).to_list() == [{"same": True}]
+
+
+def test_a_named_zone_survives_a_nested_round_trip(graph):
+    value = dt.datetime(2026, 7, 15, 12, 0, tzinfo=OSLO)
+    back = graph.cypher("RETURN [$v, {k: $v}] AS v", params={"v": value}).to_list()[0]["v"]
+    assert back[0].tzinfo.key == "Europe/Oslo" and back[1]["k"].tzinfo.key == "Europe/Oslo"
+
+
+@pytest.mark.parity
+@pytest.mark.parametrize("mode", MODES)
+def test_named_zones_survive_every_storage_mode(mode, tmp_path):
+    graph = _fresh(mode, tmp_path)
+    graph.cypher(
+        "CREATE (:Z {id: 1, z: datetime('2026-07-15T12:00[Europe/Oslo]')}), "
+        "(:Z {id: 2, z: datetime('2026-03-29T02:30[Europe/Oslo]')}), "
+        "(:Z {id: 3, z: datetime('2026-10-25T02:30+01:00[Europe/Oslo]')}), "
+        "(:Z {id: 4, z: datetime('2026-04-05T02:30[Australia/Sydney]')}), "
+        "(:Z {id: 5, z: datetime('2026-07-15T10:00Z')}), (:Z {id: 6})"
+    )
+    graph.cypher(
+        "MATCH (n:Z {id: 6}) SET n.z = datetime({year: 2026, month: 1, day: 15, hour: 9, timezone: 'America/New_York'})"
+    )
+    graph = _reopen(graph, mode, tmp_path)
+    rows = graph.cypher(
+        "MATCH (n:Z) RETURN n.id AS id, toString(n.z) AS z, n.z.timezone AS zone, n.z.epochSeconds AS es ORDER BY id"
+    ).to_list()
+    assert [(r["id"], r["z"], r["zone"], r["es"]) for r in rows] == [
+        (1, "2026-07-15T12:00+02:00[Europe/Oslo]", "Europe/Oslo", 1784109600),
+        (2, "2026-03-29T03:30+02:00[Europe/Oslo]", "Europe/Oslo", 1774747800),
+        (3, "2026-10-25T02:30+01:00[Europe/Oslo]", "Europe/Oslo", 1792891800),
+        (4, "2026-04-05T02:30+11:00[Australia/Sydney]", "Australia/Sydney", 1775316600),
+        (5, "2026-07-15T10:00Z", "Z", 1784109600),
+        (6, "2026-01-15T09:00-05:00[America/New_York]", "America/New_York", 1768485600),
+    ]
+    # Identity is the instant: id 1 (Oslo) and id 5 (UTC) are one value, found by either.
+    assert graph.cypher(
+        "MATCH (n:Z) WHERE n.z = datetime('2026-07-15T12:00+02:00') RETURN n.id AS id ORDER BY id"
+    ).to_list() == [{"id": 1}, {"id": 5}]
+    assert graph.cypher("MATCH (n:Z) RETURN count(DISTINCT n.z) AS c").to_list() == [{"c": 5}]
+    # Python reads the zone back as a zoneinfo tzinfo.
+    got = graph.cypher("MATCH (n:Z {id: 3}) RETURN n.z AS z").to_list()[0]["z"]
+    assert got.tzinfo.key == "Europe/Oslo" and got.fold == 1 and got.hour == 2
+
+
+def test_exports_write_a_named_zone_as_text_and_rdf_as_its_offset(graph, tmp_path):
+    graph.cypher("CREATE (:Z {id: 1, z: datetime('2026-07-15T12:00[Europe/Oslo]')})")
+    # JSON and CSV carry the Neo4j text, zone name included.
+    assert "2026-07-15T12:00+02:00[Europe/Oslo]" in graph.export_string("json")
+    out = tmp_path / "csv"
+    graph.export_csv(str(out))
+    assert "2026-07-15T12:00+02:00[Europe/Oslo]" in (out / "nodes" / "Z.csv").read_text()
+    # RDF has no zone names: xsd:dateTime keeps the offset, and reading it back is
+    # the same instant (a fixed-offset value).
+    nq = tmp_path / "g.nq"
+    graph.export_rdf(str(nq))
+    text = nq.read_text()
+    assert '"2026-07-15T12:00:00+02:00"' in text and "Europe/Oslo" not in text

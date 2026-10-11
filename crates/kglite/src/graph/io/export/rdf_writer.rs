@@ -276,9 +276,10 @@ impl<'a> Emitter<'a> {
             Value::Time { nanos, offset_secs } => {
                 typed(xsd_time_lexical(*nanos, Some(*offset_secs)), &self.xsd_time)
             }
-            Value::ZonedDateTime { utc, offset_secs } => {
-                typed(xsd_zoned_lexical(*utc, *offset_secs), &self.xsd_date_time)
-            }
+            // RDF has no zone names: a named zone is written as the offset it had.
+            Value::ZonedDateTime {
+                utc, offset_secs, ..
+            } => typed(xsd_zoned_lexical(*utc, *offset_secs), &self.xsd_date_time),
             Value::Point { lat, lon } => typed(format!("POINT({lon} {lat})"), &self.geo_wkt),
             // A sub-second part is an `xsd:duration` fraction when the sign is
             // uniform; the mixed-sign case takes the lossless `kg:duration` form.

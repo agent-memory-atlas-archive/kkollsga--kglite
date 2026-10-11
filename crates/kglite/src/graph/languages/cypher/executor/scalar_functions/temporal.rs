@@ -218,7 +218,9 @@ impl CypherExecutor<'_> {
             Value::DateTime(_) => Ok(val),
             Value::Timestamp(t) => Ok(Value::DateTime(t.date())),
             // The calendar date on the wall clock the value was written in.
-            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::DateTime(
+            Value::ZonedDateTime {
+                utc, offset_secs, ..
+            } => Ok(Value::DateTime(
                 crate::datatypes::zoned_datetime::wall_clock(utc, offset_secs).date(),
             )),
             Value::Map(map) => temporal_from_map(MapTarget::Date, &map),

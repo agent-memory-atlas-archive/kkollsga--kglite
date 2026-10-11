@@ -204,7 +204,8 @@ pub fn parse_offset(text: &str) -> Option<i32> {
 /// Why a time-of-day text did not parse.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TimeParseError {
-    /// A `[Region/City]` suffix: zone rules are not available for a time value.
+    /// A `[Region/City]` suffix: a time of day has no date to pick the zone's
+    /// offset by, so it takes numeric offsets only.
     NamedZone,
     /// Not a clock reading, or an offset that is not one.
     Malformed,

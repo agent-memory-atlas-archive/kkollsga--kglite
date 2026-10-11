@@ -702,10 +702,23 @@ pub(crate) fn datetime_to_value(value: &Bound<'_, PyDateTime>) -> PyResult<Value
     } else {
         None
     };
-    Ok(Value::ZonedDateTime {
-        utc,
-        offset_secs: offset_secs.unwrap_or(0),
-    })
+    let offset_secs = offset_secs.unwrap_or(0);
+    // A `zoneinfo.ZoneInfo` tzinfo names its zone; the zone's rules then give the
+    // offset, so the value keeps the name. Any other tzinfo is a fixed offset.
+    match zoneinfo_key(value).and_then(|key| kglite_core::api::time_zone::ZoneId::from_name(&key)) {
+        Some(zone) => Ok(Value::zoned_in(utc, zone)),
+        None => Ok(Value::zoned(utc, offset_secs)),
+    }
+}
+
+/// The IANA key of a datetime's `zoneinfo.ZoneInfo` tzinfo; `None` for any other
+/// tzinfo or a `ZoneInfo.from_file` zone, which has no key.
+fn zoneinfo_key(value: &Bound<'_, PyDateTime>) -> Option<String> {
+    let tz = value.get_tzinfo()?;
+    if tz.get_type().name().ok()?.to_str().ok()? != "ZoneInfo" {
+        return None;
+    }
+    tz.getattr("key").ok()?.extract::<String>().ok()
 }
 
 /// A `datetime.time` as a time of day: a naive one is a `LocalTime`, one whose

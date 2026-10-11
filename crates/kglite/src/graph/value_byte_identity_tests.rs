@@ -411,6 +411,7 @@ fn zoned(secs: i64, nanos: u32, offset_secs: i32) -> Value {
     Value::ZonedDateTime {
         utc: crate::datatypes::zoned_datetime::from_epoch(secs, nanos).unwrap(),
         offset_secs,
+        zone: None,
     }
 }
 
@@ -1291,3 +1292,73 @@ const KGL_FIXTURE_DIGEST: &str = "f930a12f2cc4b3b6954286091978cd276a7943475c107a
 /// regeneration rule as [`KGL_FIXTURE_DIGEST`].
 const KGL_INT_TITLE_DIGEST: &str =
     "0162f15f7550fbd1a279ce687a06ce4eadfce697c219bbcc7465238925253f80";
+
+// ---------------------------------------------------------------------------
+// Named zones: the appended tag 20 carries the zone by NAME, so the bytes do
+// not depend on the tz database's numbering and a build without `iana-zones`
+// can still read them.
+// ---------------------------------------------------------------------------
+
+/// 2015-07-21T20:40:32.142Z (epoch 1_437_511_232 s) shown in Europe/Oslo
+/// (+02:00 = 7200 s). Tag 0x14, zigzag epoch seconds, varint nanoseconds,
+/// zigzag offset (`c070`), then the name: length 11 and its ASCII bytes.
+const OSLO_NAMED_HEX: &str = "1480b9f5da0a80ffda43c0700b4575726f70652f4f736c6f";
+
+#[cfg(feature = "iana-zones")]
+#[test]
+fn a_named_zone_has_its_own_tag_and_round_trips_by_name() {
+    let utc = crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_000).unwrap();
+    let zone = crate::datatypes::time_zone::ZoneId::from_name("Europe/Oslo").unwrap();
+    let value = Value::zoned_in(utc, zone);
+    assert_eq!(hex(&encode(&value)), OSLO_NAMED_HEX);
+    // A fixed-offset value keeps tag 19 (the T3 golden is untouched).
+    assert!(hex(&encode(&zoned(1_437_511_232, 142_000_000, 7200))).starts_with("13"));
+    let back = decode::<Value>(&encode(&value)).unwrap();
+    let Value::ZonedDateTime {
+        offset_secs,
+        zone: Some(back_zone),
+        ..
+    } = back
+    else {
+        panic!("a named zone decodes with its zone");
+    };
+    assert_eq!((offset_secs, back_zone.name()), (7200, "Europe/Oslo"));
+    // A name the database lacks decodes as the stored offset, never an error.
+    let mut forged = encode(&value);
+    let name_at = forged.len() - 11;
+    forged[name_at..].copy_from_slice(b"Europe/Osla");
+    let Value::ZonedDateTime {
+        offset_secs, zone, ..
+    } = decode::<Value>(&forged).unwrap()
+    else {
+        panic!("an unknown name still decodes a zoned datetime");
+    };
+    assert_eq!((offset_secs, zone), (7200, None));
+}
+
+/// The same bytes, read by a build that carries no tz database: the value
+/// keeps its instant and its stored offset, with no zone.
+#[cfg(not(feature = "iana-zones"))]
+#[test]
+fn a_named_zone_written_elsewhere_reads_as_its_fixed_offset() {
+    let bytes: Vec<u8> = (0..OSLO_NAMED_HEX.len() / 2)
+        .map(|i| u8::from_str_radix(&OSLO_NAMED_HEX[2 * i..2 * i + 2], 16).unwrap())
+        .collect();
+    let Value::ZonedDateTime {
+        utc,
+        offset_secs,
+        zone,
+    } = decode::<Value>(&bytes).unwrap()
+    else {
+        panic!("tag 20 decodes a zoned datetime");
+    };
+    assert_eq!(
+        utc,
+        crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_000).unwrap()
+    );
+    assert_eq!((offset_secs, zone), (7200, None));
+    assert_eq!(
+        crate::datatypes::zoned_datetime::format_zoned_in(utc, offset_secs, zone),
+        "2015-07-21T22:40:32.142+02:00"
+    );
+}

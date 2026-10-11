@@ -40,6 +40,26 @@ pub fn graph_value_to_py(py: Python, graph: &GraphBackend, value: &Value) -> PyR
     value_to_py(py, &value)
 }
 
+/// The instant `utc` as an aware datetime in `zoneinfo.ZoneInfo(name)`, or
+/// `None` when the interpreter cannot load the zone (no tz database on the
+/// machine): the caller then falls back to the fixed offset, never an error.
+/// Converting the instant keeps it exact whatever tz database Python carries.
+fn named_datetime(py: Python, utc: &chrono::NaiveDateTime, name: &str) -> Option<Py<PyAny>> {
+    let zone = py
+        .import("zoneinfo")
+        .and_then(|m| m.getattr("ZoneInfo"))
+        .and_then(|class| class.call1((name,)))
+        .ok()?;
+    let instant = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(*utc, chrono::Utc)
+        .into_py_any(py)
+        .ok()?;
+    instant
+        .bind(py)
+        .call_method1("astimezone", (zone,))
+        .ok()
+        .map(Bound::unbind)
+}
+
 pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
     match value {
         Value::String(s) => s.clone().into_py_any(py),
@@ -55,9 +75,20 @@ pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
         // fixed-offset tzinfo. A time of day is at most 86 400 s of nanoseconds,
         // and `datetime.time` holds microseconds: the sub-microsecond part is
         // floored, the way a `Timestamp` already is by the chrono bridge.
-        // ZonedDateTime → aware datetime.datetime with a fixed-offset tzinfo at
-        // the offset it was written in; the same microsecond floor applies.
-        Value::ZonedDateTime { utc, offset_secs } => {
+        // ZonedDateTime → aware datetime.datetime: a `zoneinfo.ZoneInfo` tzinfo
+        // when the value has a named zone (and the interpreter can load it), else
+        // a fixed-offset tzinfo at the offset it was written in; the same
+        // microsecond floor applies.
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => {
+            if let Some(zone) = zone {
+                if let Some(named) = named_datetime(py, utc, zone.name()) {
+                    return Ok(named);
+                }
+            }
             let fixed = chrono::FixedOffset::east_opt(*offset_secs).ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err(format!(
                     "offset {offset_secs}s out of range"

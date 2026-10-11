@@ -164,9 +164,10 @@ export declare class Transaction {
 }
 
 /**
- * An instant with the UTC offset it was written in, to the nanosecond. The fields
- * read the wall clock at that offset. Two datetimes at the same instant are equal
- * in the engine whatever their offsets.
+ * An instant with the UTC offset it was written in, to the nanosecond, and
+ * optionally the IANA zone it was written in (`timeZone`, e.g. `Europe/Oslo`). The
+ * fields read the wall clock at that offset. Two datetimes at the same instant
+ * are equal in the engine whatever their offsets or zones.
  */
 export declare class ZonedDateTime {
   readonly year: number
@@ -178,9 +179,19 @@ export declare class ZonedDateTime {
   readonly nanosecond: number
   /** Seconds east of UTC. */
   readonly offsetSeconds: number
-  /** The wall clock at `offsetSeconds` (default 0, UTC). */
-  constructor(year: number, month: number, day: number, hour?: number | undefined | null, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null, offsetSeconds?: number | undefined | null)
-  /** ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC. */
+  /** The IANA zone name, or `null` for a fixed offset. */
+  readonly timeZone: string | null
+  /**
+   * The wall clock at `offsetSeconds` (default 0, UTC). With `timeZone` (an IANA
+   * name) the zone's rules place the reading: a reading the clock skipped moves
+   * forward by the gap, and a repeated one takes the earlier offset unless
+   * `offsetSeconds` names the later one.
+   */
+  constructor(year: number, month: number, day: number, hour?: number | undefined | null, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null, offsetSeconds?: number | undefined | null, timeZone?: string | undefined | null)
+  /**
+   * ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC, and
+   * the zone name in brackets when there is one (`…+01:00[Europe/Oslo]`).
+   */
   toString(): string
   /** The JS `Date` of this instant; sub-millisecond digits are dropped. */
   toDate(): Date

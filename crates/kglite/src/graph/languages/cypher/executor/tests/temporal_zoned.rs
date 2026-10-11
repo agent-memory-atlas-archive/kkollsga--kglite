@@ -13,6 +13,7 @@ fn at(rfc3339: &str) -> Value {
     Value::ZonedDateTime {
         utc: parsed.naive_utc(),
         offset_secs: parsed.offset().local_minus_utc(),
+        zone: None,
     }
 }
 
@@ -86,8 +87,9 @@ fn constructors_keep_the_offset_and_default_to_utc() {
             at("2015-07-21T21:05:32+01:00"),
         ),
         (
+            // A zoned base moves to the new zone (same instant), as in Neo4j.
             "datetime({datetime: datetime('2015-07-21T21:40:32+01:00'), timezone: '-02:00'})",
-            at("2015-07-21T21:40:32-02:00"),
+            at("2015-07-21T18:40:32-02:00"),
         ),
         (
             "datetime({date: date('2015-07-21'), time: time('10:30+02:00')})",
@@ -140,8 +142,9 @@ fn constructors_keep_the_offset_and_default_to_utc() {
 #[test]
 fn constructors_refuse_what_they_cannot_hold() {
     for query in [
-        "RETURN datetime('2015-07-21T21:40[Europe/Oslo]')",
-        "RETURN datetime({year: 2015, timezone: 'Europe/Oslo'})",
+        "RETURN datetime('2015-07-21T21:40[Mars/Base]')",
+        "RETURN datetime({year: 2015, timezone: 'Mars/Base'})",
+        "RETURN datetime({year: 2015, timezone: '+25:00'})",
         "RETURN datetime('2015-07-21T21:40+19:00')",
         "RETURN datetime('2015-07-21T25:00Z')",
         "RETURN datetime('nonsense')",

@@ -612,6 +612,7 @@ fn prepend_round_trips_or_refuses_every_instant() {
             Value::ZonedDateTime {
                 utc: date(year).and_hms_opt(10, 30, 0).unwrap(),
                 offset_secs: 3600,
+                zone: None,
             },
         ] {
             match prepend_valid_time("RETURN 1", ValidAt::At(&value)) {
@@ -824,7 +825,11 @@ fn zoned_instants_and_bounds_are_points_on_the_utc_timeline() {
             .unwrap()
             .and_hms_opt(12, 0, 0)
             .unwrap();
-        let param = Value::ZonedDateTime { utc, offset_secs };
+        let param = Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone: None,
+        };
         let params = HashMap::from([("t".to_string(), param.clone())]);
         let result = read(
             &graph,

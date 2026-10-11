@@ -161,9 +161,10 @@ impl LocalDateTime {
     }
 }
 
-/// An instant with the UTC offset it was written in, to the nanosecond. The fields
-/// read the wall clock at that offset. Two datetimes at the same instant are equal
-/// in the engine whatever their offsets.
+/// An instant with the UTC offset it was written in, to the nanosecond, and
+/// optionally the IANA zone it was written in (`timeZone`, e.g. `Europe/Oslo`). The
+/// fields read the wall clock at that offset. Two datetimes at the same instant
+/// are equal in the engine whatever their offsets or zones.
 #[napi]
 pub struct ZonedDateTime {
     #[napi(readonly)]
@@ -183,19 +184,30 @@ pub struct ZonedDateTime {
     /// Seconds east of UTC.
     #[napi(readonly)]
     pub offset_seconds: i32,
+    /// The IANA zone name, or `null` for a fixed offset.
+    #[napi(readonly)]
+    pub time_zone: Option<String>,
 }
 
 impl ZonedDateTime {
-    /// The UTC instant and offset an engine value carries.
-    pub fn to_parts(&self) -> (NaiveDateTime, i32) {
+    /// The UTC instant, offset and named zone an engine value carries.
+    pub fn to_parts(&self) -> (NaiveDateTime, i32, Option<kglite::api::time_zone::ZoneId>) {
         let wall = NaiveDate::from_ymd_opt(self.year, self.month, self.day)
             .and_then(|d| d.and_hms_nano_opt(self.hour, self.minute, self.second, self.nanosecond))
             .expect("validated at construction");
         let utc = kglite::api::zoned_datetime::utc_from_wall(wall, self.offset_seconds)
             .expect("validated at construction");
-        (utc, self.offset_seconds)
+        let zone = self
+            .time_zone
+            .as_deref()
+            .and_then(kglite::api::time_zone::ZoneId::from_name);
+        (utc, self.offset_seconds, zone)
     }
-    pub fn from_parts(utc: NaiveDateTime, offset_seconds: i32) -> Self {
+    pub fn from_parts(
+        utc: NaiveDateTime,
+        offset_seconds: i32,
+        zone: Option<kglite::api::time_zone::ZoneId>,
+    ) -> Self {
         let wall = kglite::api::zoned_datetime::wall_clock(utc, offset_seconds);
         Self {
             year: wall.year(),
@@ -206,15 +218,19 @@ impl ZonedDateTime {
             second: wall.second(),
             nanosecond: wall.nanosecond(),
             offset_seconds,
+            time_zone: zone.map(|z| z.name().to_string()),
         }
     }
 }
 
 #[napi]
 impl ZonedDateTime {
-    /// The wall clock at `offsetSeconds` (default 0, UTC).
-    // The JS constructor takes one wall-clock reading plus its offset, so the
-    // eight positional parameters are the public signature.
+    /// The wall clock at `offsetSeconds` (default 0, UTC). With `timeZone` (an IANA
+    /// name) the zone's rules place the reading: a reading the clock skipped moves
+    /// forward by the gap, and a repeated one takes the earlier offset unless
+    /// `offsetSeconds` names the later one.
+    // The JS constructor takes one wall-clock reading plus its offset and zone, so
+    // the nine positional parameters are the public signature.
     #[allow(clippy::too_many_arguments)]
     #[napi(constructor)]
     pub fn new(
@@ -226,8 +242,10 @@ impl ZonedDateTime {
         second: Option<u32>,
         nanosecond: Option<u32>,
         offset_seconds: Option<i32>,
+        time_zone: Option<String>,
     ) -> napi::Result<Self, &'static str> {
         contain(|| {
+            let preferred = offset_seconds;
             let (hour, minute, second, nanosecond, offset_seconds) = (
                 hour.unwrap_or(0),
                 minute.unwrap_or(0),
@@ -240,35 +258,49 @@ impl ZonedDateTime {
                     "invalid offset {offset_seconds}s: a datetime's offset is within ±18 hours"
                 )));
             }
-            NaiveDate::from_ymd_opt(year, month, day)
+            let invalid = || {
+                bad(format!(
+                    "invalid datetime {year}-{month}-{day} {hour}:{minute}:{second}.{nanosecond}"
+                ))
+            };
+            let wall = NaiveDate::from_ymd_opt(year, month, day)
                 .and_then(|d| d.and_hms_nano_opt(hour, minute, second, nanosecond))
-                .filter(|wall| {
-                    kglite::api::zoned_datetime::utc_from_wall(*wall, offset_seconds).is_some()
-                })
-                .map(|_| Self {
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                    nanosecond,
-                    offset_seconds,
-                })
-                .ok_or_else(|| {
-                    bad(format!(
-                        "invalid datetime {year}-{month}-{day} {hour}:{minute}:{second}.{nanosecond}"
-                    ))
-                })
+                .ok_or_else(invalid)?;
+            match time_zone {
+                None => {
+                    kglite::api::zoned_datetime::utc_from_wall(wall, offset_seconds)
+                        .ok_or_else(invalid)?;
+                    Ok(Self {
+                        year,
+                        month,
+                        day,
+                        hour,
+                        minute,
+                        second,
+                        nanosecond,
+                        offset_seconds,
+                        time_zone: None,
+                    })
+                }
+                Some(name) => {
+                    let zone = kglite::api::zoned_datetime::zone_by_name(&name)
+                        .map_err(|e| bad(e.to_string()))?;
+                    let at = zone.resolve_local(wall, preferred).ok_or_else(invalid)?;
+                    Ok(Self::from_parts(at.utc, at.offset_secs, Some(zone)))
+                }
+            }
         })
     }
 
-    /// ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC.
+    /// ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC, and
+    /// the zone name in brackets when there is one (`…+01:00[Europe/Oslo]`).
     #[napi(js_name = "toString")]
     pub fn to_iso(&self) -> napi::Result<String, &'static str> {
         contain(|| {
-            let (utc, offset) = self.to_parts();
-            Ok(kglite::api::zoned_datetime::format_zoned(utc, offset))
+            let (utc, offset, zone) = self.to_parts();
+            Ok(kglite::api::zoned_datetime::format_zoned_in(
+                utc, offset, zone,
+            ))
         })
     }
 
@@ -276,7 +308,8 @@ impl ZonedDateTime {
     #[napi(js_name = "toDate", ts_return_type = "Date")]
     pub fn to_date<'e>(&self, env: &'e Env) -> napi::Result<napi::JsDate<'e>, &'static str> {
         contain(|| {
-            let ms = self.to_parts().0.and_utc().timestamp_millis() as f64;
+            let (utc, _, _) = self.to_parts();
+            let ms = utc.and_utc().timestamp_millis() as f64;
             env.create_date(ms)
                 .map_err(|e| to_sync_error(JsErr::from(e)))
         })

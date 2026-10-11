@@ -93,8 +93,9 @@ final class Json {
             case OffsetTime t -> writeTagged(out, "$time", DateTimeFormatter.ISO_OFFSET_TIME.format(t));
             case OffsetDateTime d ->
                     writeTagged(out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d));
+            // A region zone (Europe/Oslo) travels with its name; a plain offset zone stays an offset.
             case ZonedDateTime d -> writeTagged(
-                    out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d.toOffsetDateTime()));
+                    out, "$zdatetime", DateTimeFormatter.ISO_ZONED_DATE_TIME.format(d));
             case Instant i -> writeTagged(
                     out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(i.atOffset(ZoneOffset.UTC)));
             default -> throw new KgliteException(
@@ -347,7 +348,8 @@ final class Json {
      * Turn the one-key tagged objects the session's tagged result mode emits
      * back into the Java value they stand for, at any depth: {@code $float} to
      * {@link Double}, {@code $date} to {@link LocalDate}, {@code $datetime} to
-     * {@link LocalDateTime}, {@code $zdatetime} to {@link OffsetDateTime},
+     * {@link LocalDateTime}, {@code $zdatetime} to {@link OffsetDateTime} (or, when
+     * it names an IANA zone, {@link ZonedDateTime}),
      * {@code $localtime} to {@link LocalTime}, {@code $time}
      * to {@link OffsetTime}, {@code $duration} to {@link KgliteDuration},
      * {@code $point} to {@link Point}, and {@code $map} to the plain map it
@@ -404,7 +406,10 @@ final class Json {
                     return payload instanceof String text ? LocalDateTime.parse(text) : null;
                 }
                 case "$zdatetime" -> {
-                    return payload instanceof String text ? OffsetDateTime.parse(text) : null;
+                    if (!(payload instanceof String text)) {
+                        return null;
+                    }
+                    return text.indexOf('[') >= 0 ? ZonedDateTime.parse(text) : OffsetDateTime.parse(text);
                 }
                 case "$localtime" -> {
                     return payload instanceof String text ? LocalTime.parse(text) : null;

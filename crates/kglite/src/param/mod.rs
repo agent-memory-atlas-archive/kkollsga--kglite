@@ -491,10 +491,15 @@ fn value_to_json(v: &Value, mode: Encoding) -> serde_json::Value {
                 Encoding::Tagged => tag("$datetime", text),
             }
         }
-        Value::ZonedDateTime { utc, offset_secs } => {
-            let text = J::String(crate::datatypes::zoned_datetime::format_zoned(
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => {
+            let text = J::String(crate::datatypes::zoned_datetime::format_zoned_in(
                 *utc,
                 *offset_secs,
+                *zone,
             ));
             match mode {
                 Encoding::Natural => text,
@@ -586,9 +591,11 @@ pub fn kglite_value_to_csv_text(v: &Value) -> String {
         Value::UniqueId(n) | Value::NodeRef(n) => n.to_string(),
         Value::DateTime(d) => d.format("%Y-%m-%d").to_string(),
         Value::Timestamp(d) => d.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
-        Value::ZonedDateTime { utc, offset_secs } => {
-            crate::datatypes::zoned_datetime::format_zoned(*utc, *offset_secs)
-        }
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => crate::datatypes::zoned_datetime::format_zoned_in(*utc, *offset_secs, *zone),
         Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
         Value::Time { nanos, offset_secs } => {
             crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
@@ -1106,10 +1113,7 @@ mod temporal_constructor_contract_tests {
             let native =
                 chrono::NaiveDateTime::parse_from_str(expected, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
             let want = match offset {
-                Some(offset_secs) => Value::ZonedDateTime {
-                    utc: native,
-                    offset_secs,
-                },
+                Some(offset_secs) => Value::zoned(native, offset_secs),
                 None => Value::Timestamp(native),
             };
             // `==` on a zoned value ignores the offset; the debug form carries it.

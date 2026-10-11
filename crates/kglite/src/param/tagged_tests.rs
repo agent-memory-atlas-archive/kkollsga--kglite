@@ -39,7 +39,8 @@ fn datetime_tag_is_local_without_an_offset_and_zoned_with_one() {
             "{:?}",
             Value::ZonedDateTime {
                 utc: expected - chrono::Duration::milliseconds(250),
-                offset_secs: 7200
+                offset_secs: 7200,
+                zone: None,
             }
         )
     );
@@ -58,10 +59,57 @@ fn zdatetime_tag_is_an_instant_with_its_offset() {
     ] {
         assert_eq!(
             format!("{:?}", params[key]),
-            format!("{:?}", Value::ZonedDateTime { utc, offset_secs }),
+            format!(
+                "{:?}",
+                Value::ZonedDateTime {
+                    utc,
+                    offset_secs,
+                    zone: None
+                }
+            ),
             "{key}"
         );
     }
+}
+
+/// A named zone rides the same tag as ISO text with the zone in brackets; the
+/// offset in the text fixes the instant, the zone supplies the view of it.
+#[cfg(feature = "iana-zones")]
+#[test]
+fn zdatetime_tag_carries_a_named_zone_in_brackets() {
+    let tagged = params(
+        r#"{"oslo":{"$zdatetime":"2026-07-15T12:00+02:00[Europe/Oslo]"},"bare":{"$zdatetime":"2026-03-29T02:30[Europe/Oslo]"}}"#,
+    );
+    let value = &tagged["oslo"];
+    let Value::ZonedDateTime {
+        utc,
+        offset_secs,
+        zone: Some(zone),
+    } = value
+    else {
+        panic!("a bracketed zone binds a named value, got {value:?}");
+    };
+    assert_eq!((*offset_secs, zone.name()), (7200, "Europe/Oslo"));
+    assert_eq!(
+        *utc,
+        NaiveDate::from_ymd_opt(2026, 7, 15)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+    );
+    // 02:30 on the spring-forward night is skipped: 03:30+02:00 = 01:30Z.
+    assert_eq!(
+        kglite_value_to_json_tagged(&tagged["bare"])["$zdatetime"],
+        "2026-03-29T03:30+02:00[Europe/Oslo]"
+    );
+    // The tag text round-trips the zone.
+    let back = json_value_to_kglite_value(&kglite_value_to_json_tagged(value));
+    assert_eq!(format!("{back:?}"), format!("{value:?}"));
+    // An unknown name is a parameter error, never a silent fixed offset.
+    assert!(
+        json_text_to_query_value_map(r#"{"v":{"$zdatetime":"2026-07-15T12:00[Mars/Base]"}}"#)
+            .is_err()
+    );
 }
 
 #[test]
@@ -71,14 +119,17 @@ fn zoned_values_round_trip_through_their_tag_keeping_the_offset() {
         Value::ZonedDateTime {
             utc: base.and_hms_nano_opt(3, 4, 5, 250_000_001).unwrap(),
             offset_secs: 7200,
+            zone: None,
         },
         Value::ZonedDateTime {
             utc: base.and_hms_opt(0, 0, 0).unwrap(),
             offset_secs: -64_800,
+            zone: None,
         },
         Value::ZonedDateTime {
             utc: base.and_hms_opt(23, 59, 59).unwrap(),
             offset_secs: 0,
+            zone: None,
         },
     ] {
         let tagged = kglite_value_to_json_tagged(&value);

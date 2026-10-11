@@ -47,7 +47,8 @@ fractional seconds. They omit the fractional suffix for whole-second values.
 - **Python's native `datetime`** supports microseconds. Its conversion cannot
   represent finer digits.
 - **Python types.** A `Timestamp` arrives as a naive `datetime.datetime` and a
-  `ZonedDateTime` as an aware one with a fixed-offset `tzinfo`. A
+  `ZonedDateTime` as an aware one. Its `tzinfo` is a `zoneinfo.ZoneInfo` for a
+  named zone and a fixed offset otherwise. A
   `DateTime` (a date) arrives as a `datetime.date`. In `to_df()` both make
   `datetime64` columns (a date at midnight). Earlier releases returned a date as
   its ISO string, `'2024-03-09'`.
@@ -66,7 +67,8 @@ fractional seconds. They omit the fractional suffix for whole-second values.
 
 ### Zoned datetimes
 
-A `ZonedDateTime` is an instant plus the UTC offset it was written in.
+A `ZonedDateTime` is an instant plus the UTC offset it was written in. It may
+also carry the IANA zone (`Europe/Oslo`) that supplies the offset.
 
 - **Equality, order and hashing use the instant.** `10:00+01:00` equals
   `09:00Z`. `DISTINCT` and grouping merge such values and keep the first offset.
@@ -75,13 +77,16 @@ A `ZonedDateTime` is an instant plus the UTC offset it was written in.
   because every stored local stamp is a UTC instant.
 - **Python.** A timezone-aware `datetime` bound as a parameter becomes a
   `ZonedDateTime` with the offset it carries (a naive one stays a `Timestamp`).
-  A `ZonedDateTime` returns as an aware `datetime`, so `result - datetime.now()`
-  raises `TypeError`. An offset beyond ±18:00, or one that is not whole seconds,
-  keeps the instant at UTC. `datetime.datetime` holds microseconds, so finer
+  A `ZoneInfo` tzinfo also keeps the zone name, so the offset follows the zone's
+  daylight-saving rules. A `ZonedDateTime` returns as an aware `datetime`, so
+  `result - datetime.now()` raises `TypeError`. A repeated clock reading returns
+  with `fold=1` for its second occurrence. Without a tz database (Windows with no
+  `tzdata` package) a named zone returns as its fixed offset. An offset beyond
+  ±18:00, or one that is not whole seconds, keeps the instant at UTC. `datetime.datetime` holds microseconds, so finer
   digits floor on the Python side.
 - **DataFrame columns** still read a timezone-aware `datetime64` as UTC without a
   zone.
-- **Bolt** carries a `DateTime` (offset) and refuses a `DateTimeZoneId`; see
+- **Bolt** carries `DateTime` (offset) and `DateTimeZoneId` (named zone); see
   {doc}`../operators/bolt-server`.
 - **Storage.** A `ZonedDateTime` is stored in a mixed column, not the dense
   timestamp column. Use `localdatetime()` for a timestamp column that is written in

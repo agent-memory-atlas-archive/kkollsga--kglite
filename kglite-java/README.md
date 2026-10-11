@@ -204,6 +204,7 @@ follows, and the mapping is asserted in both directions by
 | path | `Map` | `nodes`, `relationships`, each a `List` of the maps above |
 | date | `LocalDate` | bound back as a `LocalDate`, it matches |
 | datetime (`datetime()`) | `OffsetDateTime` | an instant; the offset it was written in is kept, and two datetimes at one instant are equal in the engine |
+| datetime in a named zone (`datetime({..., timezone: 'Europe/Oslo'})`) | `ZonedDateTime` | the same instant with its IANA `ZoneId`; the zone never takes part in equality |
 | local datetime (`localdatetime()`) | `LocalDateTime` | no zone |
 | local time | `LocalTime` | nanosecond precision |
 | time | `OffsetTime` | the offset is kept; two `time` values at one instant of day are equal in the engine |
@@ -213,8 +214,9 @@ follows, and the mapping is asserted in both directions by
 Parameters accept the mirror set: `null`, `String`, `Boolean`, any `Number`,
 `Map` with `String` keys, `Iterable`, `Object[]`, nested freely. `LocalDate`
 binds as a Cypher date, `LocalDateTime` as a local datetime, and
-`OffsetDateTime`, `ZonedDateTime` (as its offset form) and `Instant` as a
-datetime keeping its offset. A local datetime is read as UTC where it meets a
+`OffsetDateTime` and `Instant` as a datetime keeping its offset, and
+`ZonedDateTime` as a datetime in its IANA zone (a `ZonedDateTime` whose zone is a
+plain offset binds as an offset datetime). A local datetime is read as UTC where it meets a
 datetime, so `WHERE r.since = $d` matches a stored `date()`. `LocalTime` binds as a
 local time and `OffsetTime` as a time with its offset. A bare `String` stays a
 string and never equals a date. Anything else (a POJO, another `java.time`

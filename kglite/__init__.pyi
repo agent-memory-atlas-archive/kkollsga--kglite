@@ -708,7 +708,11 @@ class ResultView:
         Temporal values come back as Python temporal values: a **date** is a
         ``datetime.date``, a **datetime** (``datetime()``) an aware
         ``datetime.datetime`` whose ``tzinfo`` is the fixed offset it was written
-        in, and a **local datetime** (``localdatetime()``) a naive one —
+        in (or a ``zoneinfo.ZoneInfo`` when it was written in a named IANA zone,
+        ``datetime({..., timezone: 'Europe/Oslo'})``; ``fold`` marks the second
+        occurrence of a repeated clock reading, and a machine without a tz
+        database gets the fixed offset), and a **local datetime**
+        (``localdatetime()``) a naive one —
         top-level, in lists and maps, and on every read route. A **local
         time** (``localtime()``) is a naive ``datetime.time`` and a **time**
         (``time()``) an aware ``datetime.time`` whose ``tzinfo`` is a fixed
@@ -8110,8 +8114,13 @@ class KnowledgeGraph:
                 ``datetime('2024-03-09T14:30+02:00')`` builds. Zoned values are
                 equal by instant, and a local datetime is read as UTC where it
                 meets one, so ``WHERE n.at > $aware`` keeps working against
-                stored local stamps. An offset beyond ±18:00, or one that is not
-                whole seconds, keeps the instant at UTC. A naive ``datetime``
+                stored local stamps. A ``datetime`` whose ``tzinfo`` is a
+                ``zoneinfo.ZoneInfo`` also keeps its zone name
+                (``Europe/Oslo``), so the value prints as
+                ``…+02:00[Europe/Oslo]`` and its offset follows the zone's
+                daylight-saving rules; the zone never affects equality. An
+                offset beyond ±18:00, or one that is not whole seconds, keeps
+                the instant at UTC. A naive ``datetime``
                 binds as a local datetime and a pure date as a date. Microseconds
                 are preserved (``datetime.datetime`` holds no finer digits).
                 Container values
@@ -8313,7 +8322,8 @@ class KnowledgeGraph:
             ResultView carries ``diagnostics`` / ``warnings``. Python result
             values follow :class:`ResultView`'s endpoint-reference and timestamp
             conversion contract — a date is a ``datetime.date``, a datetime an
-            aware ``datetime.datetime``, a local datetime a naive one, a local
+            aware ``datetime.datetime`` (a ``zoneinfo.ZoneInfo`` tzinfo for a
+            named zone), a local datetime a naive one, a local
             time a naive ``datetime.time`` and
             a time an aware one; format-specific details are in
             :doc:`Value projection </python/value-projection>`.

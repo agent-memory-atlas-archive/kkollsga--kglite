@@ -6,7 +6,8 @@ use super::temporal_iso::{
     date_from_iso_week, date_from_ordinal, date_from_quarter, day_of_quarter, parse_date_text,
     parse_local_datetime_text, parse_time_text,
 };
-use crate::datatypes::time_of_day::{naive_time, nanos_of, parse_offset, parse_time};
+use super::temporal_zoned::{zoned_from_wall_in, ZoneSpec};
+use crate::datatypes::time_of_day::{naive_time, nanos_of, parse_time, shift_nanos};
 use crate::datatypes::values::Value;
 use crate::datatypes::zoned_datetime::wall_clock;
 use crate::datatypes::PropMap;
@@ -99,7 +100,9 @@ pub(super) fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
         Value::Timestamp(t) => Some(*t),
         // The wall clock the value was written in.
-        Value::ZonedDateTime { utc, offset_secs } => Some(wall_clock(*utc, *offset_secs)),
+        Value::ZonedDateTime {
+            utc, offset_secs, ..
+        } => Some(wall_clock(*utc, *offset_secs)),
         Value::LocalTime(n) | Value::Time { nanos: n, .. } => {
             naive_time(*n).map(|t| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(t))
         }
@@ -153,8 +156,21 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
         }
     };
 
-    let offset_secs = if matches!(target, MapTarget::Time | MapTarget::DateTime) {
-        Some(map_offset(function, map)?)
+    let zoned_target = matches!(target, MapTarget::Time | MapTarget::DateTime);
+    let converted;
+    let map = if zoned_target {
+        match convert_bases(function, target, map)? {
+            Some(rebased) => {
+                converted = rebased;
+                &converted
+            }
+            None => map,
+        }
+    } else {
+        map
+    };
+    let spec = if zoned_target {
+        Some(map_zone(function, target, map)?)
     } else {
         None
     };
@@ -261,42 +277,99 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
         (MapTarget::LocalTime, _, Some(time)) => Value::LocalTime(nanos_of(time)),
         (MapTarget::Time, _, Some(time)) => Value::Time {
             nanos: nanos_of(time),
-            offset_secs: offset_secs.unwrap_or(0),
+            offset_secs: spec.and_then(ZoneSpec::fixed_offset).unwrap_or(0),
         },
         (MapTarget::DateTime, Some(date), Some(time)) => {
-            return super::temporal_zoned::zoned_from_wall(
-                date.and_time(time),
-                offset_secs.unwrap_or(0),
-            )
+            return zoned_from_wall_in(date.and_time(time), spec.unwrap_or(ZoneSpec::Fixed(0)))
         }
         (_, Some(date), Some(time)) => Value::Timestamp(date.and_time(time)),
         _ => Value::Null,
     })
 }
 
-/// The offset of a `time({...})` or `datetime({...})` map: its `timezone`, else
-/// the offset of a `datetime` or `time` base that has one, else UTC.
-fn map_offset(function: &str, map: &PropMap) -> Result<i32, String> {
-    match map.get("timezone") {
-        Some(Value::String(zone)) => parse_offset(zone).ok_or_else(|| {
-            format!(
-                "{function}(): timezone '{zone}' is not a numeric offset; named time zones are not supported yet"
+/// Where a `time({...})` or `datetime({...})` map places its reading: its
+/// `timezone` (a numeric offset or an IANA name), else the offset and zone of a
+/// zoned `datetime` or `time` base, else UTC. A time of day has no date to pick
+/// a named zone's offset by, so `time` takes numeric offsets only.
+fn map_zone(function: &str, target: MapTarget, map: &PropMap) -> Result<ZoneSpec, String> {
+    let spec = match map.get("timezone") {
+        Some(Value::String(zone)) => ZoneSpec::from_text(function, zone)?,
+        Some(other) => {
+            return Err(format!(
+                "{function}(): timezone must be a string, got {}",
+                other.type_name()
+            ))
+        }
+        None => match (map.get("datetime"), map.get("time")) {
+            (
+                Some(Value::ZonedDateTime {
+                    offset_secs, zone, ..
+                }),
+                _,
             )
-        }),
-        Some(other) => Err(format!(
-            "{function}(): timezone must be a string, got {}",
-            other.type_name()
-        )),
-        None => Ok(match (map.get("datetime"), map.get("time")) {
-            (Some(Value::ZonedDateTime { offset_secs, .. }), _) => *offset_secs,
-            (_, Some(Value::Time { offset_secs, .. })) => *offset_secs,
-            (_, Some(Value::String(text))) => parse_time(text)
-                .ok()
-                .and_then(|(_, offset)| offset)
-                .unwrap_or(0),
-            _ => 0,
-        }),
+            | (
+                _,
+                Some(Value::ZonedDateTime {
+                    offset_secs, zone, ..
+                }),
+            ) => ZoneSpec::of_value(*offset_secs, *zone),
+            (_, Some(Value::Time { offset_secs, .. })) => ZoneSpec::Fixed(*offset_secs),
+            (_, Some(Value::String(text))) => ZoneSpec::Fixed(
+                parse_time(text)
+                    .ok()
+                    .and_then(|(_, offset)| offset)
+                    .unwrap_or(0),
+            ),
+            _ => ZoneSpec::Fixed(0),
+        },
+    };
+    match (target, spec) {
+        (MapTarget::Time, ZoneSpec::Named(zone, preferred)) => match (map.get("timezone"), preferred) {
+            (None, Some(offset)) => Ok(ZoneSpec::Fixed(offset)),
+            _ => Err(format!(
+                "{function}(): the named zone '{}' cannot place a time of day, which has no date to pick its offset by; use a numeric offset such as +01:00, or read the time of a datetime in the zone",
+                zone.name()
+            )),
+        },
+        _ => Ok(spec),
     }
+}
+
+/// A zoned base (`datetime:` or `time:`) moved into the map's `timezone`: the
+/// same instant, written in the new zone, so `{datetime: d, timezone: '+05:00'}`
+/// of `12:00+01:00` is `16:00+05:00` and later components override that reading.
+/// A local base or text has no instant to move and takes the zone as written.
+/// `None` when nothing needs rebasing.
+fn convert_bases(
+    function: &str,
+    target: MapTarget,
+    map: &PropMap,
+) -> Result<Option<PropMap>, String> {
+    let Some(Value::String(zone)) = map.get("timezone") else {
+        return Ok(None);
+    };
+    let mut rebased: Option<PropMap> = None;
+    for key in ["datetime", "time"] {
+        let moved = match (map.get(key), ZoneSpec::from_text(function, zone)?) {
+            (Some(Value::ZonedDateTime { utc, .. }), ZoneSpec::Fixed(offset)) => {
+                Value::zoned(*utc, offset)
+            }
+            (Some(Value::ZonedDateTime { utc, .. }), ZoneSpec::Named(zone, _))
+                if target == MapTarget::DateTime =>
+            {
+                Value::zoned_in(*utc, zone)
+            }
+            (Some(Value::Time { nanos, offset_secs }), ZoneSpec::Fixed(offset)) => Value::Time {
+                nanos: shift_nanos(*nanos, i64::from(offset) - i64::from(*offset_secs), 0),
+                offset_secs: offset,
+            },
+            _ => continue,
+        };
+        rebased
+            .get_or_insert_with(|| map.clone())
+            .insert(key, moved);
+    }
+    Ok(rebased)
 }
 
 /// The calendar components a map named, before any base fills the rest.

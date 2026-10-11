@@ -2505,7 +2505,7 @@ pub kglite::api::mutation::ColumnData::String(alloc::vec::Vec<core::option::Opti
 pub kglite::api::mutation::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::api::mutation::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::api::mutation::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
-pub kglite::api::mutation::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32)>>)
+pub kglite::api::mutation::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32, core::option::Option<kglite::datatypes::time_zone::ZoneId>)>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
 pub fn kglite::datatypes::values::ColumnData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum kglite::api::mutation::ColumnType
@@ -4003,6 +4003,52 @@ pub fn kglite::api::time_of_day::format_time(u64, i32) -> alloc::string::String
 pub fn kglite::api::time_of_day::is_valid_nanos(u64) -> bool
 pub fn kglite::api::time_of_day::parse_offset(&str) -> core::option::Option<i32>
 pub fn kglite::api::time_of_day::parse_time(&str) -> core::result::Result<(u64, core::option::Option<i32>), kglite::datatypes::time_of_day::TimeParseError>
+pub mod kglite::api::time_zone
+pub enum kglite::api::time_zone::LocalFit
+pub kglite::api::time_zone::LocalFit::Exact
+pub kglite::api::time_zone::LocalFit::Gap
+pub kglite::api::time_zone::LocalFit::Overlap
+impl core::clone::Clone for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::clone(&self) -> kglite::datatypes::time_zone::LocalFit
+impl core::cmp::Eq for kglite::datatypes::time_zone::LocalFit
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::eq(&self, &kglite::datatypes::time_zone::LocalFit) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::time_zone::LocalFit
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::LocalFit
+pub struct kglite::api::time_zone::ZoneId(_)
+impl kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::at_instant(self, chrono::naive::datetime::NaiveDateTime) -> kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneId::from_name(&str) -> core::option::Option<kglite::datatypes::time_zone::ZoneId>
+pub fn kglite::datatypes::time_zone::ZoneId::name(self) -> &'static str
+pub fn kglite::datatypes::time_zone::ZoneId::offset_at(self, chrono::naive::datetime::NaiveDateTime) -> i32
+pub fn kglite::datatypes::time_zone::ZoneId::resolve_local(self, chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>) -> core::option::Option<kglite::datatypes::time_zone::ZoneInstant>
+impl core::clone::Clone for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::clone(&self) -> kglite::datatypes::time_zone::ZoneId
+impl core::cmp::Eq for kglite::datatypes::time_zone::ZoneId
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::eq(&self, &kglite::datatypes::time_zone::ZoneId) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for kglite::datatypes::time_zone::ZoneId
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::ZoneId
+pub struct kglite::api::time_zone::ZoneInstant
+pub kglite::api::time_zone::ZoneInstant::fit: kglite::datatypes::time_zone::LocalFit
+pub kglite::api::time_zone::ZoneInstant::offset_secs: i32
+pub kglite::api::time_zone::ZoneInstant::utc: chrono::naive::datetime::NaiveDateTime
+impl core::clone::Clone for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::clone(&self) -> kglite::datatypes::time_zone::ZoneInstant
+impl core::cmp::Eq for kglite::datatypes::time_zone::ZoneInstant
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::eq(&self, &kglite::datatypes::time_zone::ZoneInstant) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::time_zone::ZoneInstant
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::ZoneInstant
+pub const kglite::api::time_zone::IANA_ZONES: bool
 pub mod kglite::api::timeseries
 pub enum kglite::api::timeseries::DatePrecision
 pub kglite::api::timeseries::DatePrecision::Day
@@ -4079,21 +4125,53 @@ pub fn kglite::api::timeseries::validate_resolution(&str) -> core::result::Resul
 pub mod kglite::api::zoned_datetime
 pub enum kglite::api::zoned_datetime::ZonedParseError
 pub kglite::api::zoned_datetime::ZonedParseError::Malformed
-pub kglite::api::zoned_datetime::ZonedParseError::NamedZone
+pub kglite::api::zoned_datetime::ZonedParseError::UnknownZone(alloc::string::String)
+pub kglite::api::zoned_datetime::ZonedParseError::ZonesUnavailable(alloc::string::String)
 impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParseError
 impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
 pub fn kglite::datatypes::zoned_datetime::ZonedParseError::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParseError) -> bool
 impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParseError
 pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub struct kglite::api::zoned_datetime::WallParts
+pub kglite::api::zoned_datetime::WallParts::offset_secs: core::option::Option<i32>
+pub kglite::api::zoned_datetime::WallParts::wall: chrono::naive::datetime::NaiveDateTime
+pub kglite::api::zoned_datetime::WallParts::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::WallParts
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::WallParts
+pub fn kglite::datatypes::zoned_datetime::WallParts::eq(&self, &kglite::datatypes::zoned_datetime::WallParts) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::WallParts
+pub fn kglite::datatypes::zoned_datetime::WallParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::WallParts
+pub struct kglite::api::zoned_datetime::ZonedParts
+pub kglite::api::zoned_datetime::ZonedParts::offset_secs: i32
+pub kglite::api::zoned_datetime::ZonedParts::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::api::zoned_datetime::ZonedParts::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
+impl kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::into_value(self) -> kglite::datatypes::values::Value
+impl core::clone::Clone for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::clone(&self) -> kglite::datatypes::zoned_datetime::ZonedParts
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParts
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParts) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::zoned_datetime::ZonedParts
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParts
 pub fn kglite::api::zoned_datetime::epoch_parts(chrono::naive::datetime::NaiveDateTime) -> (i64, u32)
 pub fn kglite::api::zoned_datetime::format_zoned(chrono::naive::datetime::NaiveDateTime, i32) -> alloc::string::String
+pub fn kglite::api::zoned_datetime::format_zoned_in(chrono::naive::datetime::NaiveDateTime, i32, core::option::Option<kglite::datatypes::time_zone::ZoneId>) -> alloc::string::String
 pub fn kglite::api::zoned_datetime::from_epoch(i64, u32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
 pub fn kglite::api::zoned_datetime::parse_plain_date(&str) -> core::option::Option<chrono::naive::date::NaiveDate>
-pub fn kglite::api::zoned_datetime::parse_with_offset(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>), kglite::datatypes::zoned_datetime::ZonedParseError>
-pub fn kglite::api::zoned_datetime::parse_zoned(&str) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, i32), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::api::zoned_datetime::parse_with_zone(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<kglite::datatypes::zoned_datetime::WallParts, kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::api::zoned_datetime::parse_zoned(&str) -> core::result::Result<kglite::datatypes::zoned_datetime::ZonedParts, kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::api::zoned_datetime::resolve_wall(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>, core::option::Option<kglite::datatypes::time_zone::ZoneId>) -> core::option::Option<kglite::datatypes::zoned_datetime::ZonedParts>
+pub fn kglite::api::zoned_datetime::split_zone_suffix(&str) -> core::result::Result<(&str, core::option::Option<&str>), kglite::datatypes::zoned_datetime::ZonedParseError>
 pub fn kglite::api::zoned_datetime::utc_from_wall(chrono::naive::datetime::NaiveDateTime, i32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
 pub fn kglite::api::zoned_datetime::wall_clock(chrono::naive::datetime::NaiveDateTime, i32) -> chrono::naive::datetime::NaiveDateTime
+pub fn kglite::api::zoned_datetime::zone_by_name(&str) -> core::result::Result<kglite::datatypes::time_zone::ZoneId, kglite::datatypes::zoned_datetime::ZonedParseError>
 pub enum kglite::api::DefineOntologyError
 pub kglite::api::DefineOntologyError::Invalid(alloc::string::String)
 pub kglite::api::DefineOntologyError::Refused(kglite::api::OntologyDeclarationRefused)
@@ -4515,9 +4593,13 @@ pub kglite::api::Value::UniqueId(u32)
 pub kglite::api::Value::ZonedDateTime
 pub kglite::api::Value::ZonedDateTime::offset_secs: i32
 pub kglite::api::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::api::Value::ZonedDateTime::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str
+impl kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned(chrono::naive::datetime::NaiveDateTime, i32) -> kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned_in(chrono::naive::datetime::NaiveDateTime, kglite::datatypes::time_zone::ZoneId) -> kglite::datatypes::values::Value
 impl core::clone::Clone for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::clone(&self) -> kglite::datatypes::values::Value
 impl core::cmp::Eq for kglite::datatypes::values::Value
@@ -5996,6 +6078,52 @@ pub fn kglite::datatypes::time_of_day::parse_offset(&str) -> core::option::Optio
 pub fn kglite::datatypes::time_of_day::parse_time(&str) -> core::result::Result<(u64, core::option::Option<i32>), kglite::datatypes::time_of_day::TimeParseError>
 pub fn kglite::datatypes::time_of_day::shift_nanos(u64, i64, i32) -> u64
 pub fn kglite::datatypes::time_of_day::utc_nanos(u64, i32) -> i64
+pub mod kglite::datatypes::time_zone
+pub enum kglite::datatypes::time_zone::LocalFit
+pub kglite::datatypes::time_zone::LocalFit::Exact
+pub kglite::datatypes::time_zone::LocalFit::Gap
+pub kglite::datatypes::time_zone::LocalFit::Overlap
+impl core::clone::Clone for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::clone(&self) -> kglite::datatypes::time_zone::LocalFit
+impl core::cmp::Eq for kglite::datatypes::time_zone::LocalFit
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::eq(&self, &kglite::datatypes::time_zone::LocalFit) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::LocalFit
+pub fn kglite::datatypes::time_zone::LocalFit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::time_zone::LocalFit
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::LocalFit
+pub struct kglite::datatypes::time_zone::ZoneId(_)
+impl kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::at_instant(self, chrono::naive::datetime::NaiveDateTime) -> kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneId::from_name(&str) -> core::option::Option<kglite::datatypes::time_zone::ZoneId>
+pub fn kglite::datatypes::time_zone::ZoneId::name(self) -> &'static str
+pub fn kglite::datatypes::time_zone::ZoneId::offset_at(self, chrono::naive::datetime::NaiveDateTime) -> i32
+pub fn kglite::datatypes::time_zone::ZoneId::resolve_local(self, chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>) -> core::option::Option<kglite::datatypes::time_zone::ZoneInstant>
+impl core::clone::Clone for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::clone(&self) -> kglite::datatypes::time_zone::ZoneId
+impl core::cmp::Eq for kglite::datatypes::time_zone::ZoneId
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::eq(&self, &kglite::datatypes::time_zone::ZoneId) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::datatypes::time_zone::ZoneId
+pub fn kglite::datatypes::time_zone::ZoneId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for kglite::datatypes::time_zone::ZoneId
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::ZoneId
+pub struct kglite::datatypes::time_zone::ZoneInstant
+pub kglite::datatypes::time_zone::ZoneInstant::fit: kglite::datatypes::time_zone::LocalFit
+pub kglite::datatypes::time_zone::ZoneInstant::offset_secs: i32
+pub kglite::datatypes::time_zone::ZoneInstant::utc: chrono::naive::datetime::NaiveDateTime
+impl core::clone::Clone for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::clone(&self) -> kglite::datatypes::time_zone::ZoneInstant
+impl core::cmp::Eq for kglite::datatypes::time_zone::ZoneInstant
+impl core::cmp::PartialEq for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::eq(&self, &kglite::datatypes::time_zone::ZoneInstant) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_zone::ZoneInstant
+pub fn kglite::datatypes::time_zone::ZoneInstant::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::time_zone::ZoneInstant
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_zone::ZoneInstant
+pub const kglite::datatypes::time_zone::IANA_ZONES: bool
 pub mod kglite::datatypes::values
 pub enum kglite::datatypes::values::BorrowedValue<'a>
 pub kglite::datatypes::values::BorrowedValue::Boolean(bool)
@@ -6020,6 +6148,7 @@ pub kglite::datatypes::values::BorrowedValue::UniqueId(u32)
 pub kglite::datatypes::values::BorrowedValue::ZonedDateTime
 pub kglite::datatypes::values::BorrowedValue::ZonedDateTime::offset_secs: i32
 pub kglite::datatypes::values::BorrowedValue::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::datatypes::values::BorrowedValue::ZonedDateTime::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
 impl<'a> kglite::datatypes::values::BorrowedValue<'a>
 pub fn kglite::datatypes::values::BorrowedValue<'a>::to_value(self) -> kglite::datatypes::values::Value
 impl<'a> core::clone::Clone for kglite::datatypes::values::BorrowedValue<'a>
@@ -6040,7 +6169,7 @@ pub kglite::datatypes::values::ColumnData::String(alloc::vec::Vec<core::option::
 pub kglite::datatypes::values::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::datatypes::values::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::datatypes::values::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
-pub kglite::datatypes::values::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32)>>)
+pub kglite::datatypes::values::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32, core::option::Option<kglite::datatypes::time_zone::ZoneId>)>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
 pub fn kglite::datatypes::values::ColumnData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum kglite::datatypes::values::ColumnType
@@ -6117,9 +6246,13 @@ pub kglite::datatypes::values::Value::UniqueId(u32)
 pub kglite::datatypes::values::Value::ZonedDateTime
 pub kglite::datatypes::values::Value::ZonedDateTime::offset_secs: i32
 pub kglite::datatypes::values::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::datatypes::values::Value::ZonedDateTime::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str
+impl kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned(chrono::naive::datetime::NaiveDateTime, i32) -> kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned_in(chrono::naive::datetime::NaiveDateTime, kglite::datatypes::time_zone::ZoneId) -> kglite::datatypes::values::Value
 impl core::clone::Clone for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::clone(&self) -> kglite::datatypes::values::Value
 impl core::cmp::Eq for kglite::datatypes::values::Value
@@ -6234,21 +6367,53 @@ pub fn kglite::datatypes::values::raw_string(&kglite::datatypes::values::Value) 
 pub mod kglite::datatypes::zoned_datetime
 pub enum kglite::datatypes::zoned_datetime::ZonedParseError
 pub kglite::datatypes::zoned_datetime::ZonedParseError::Malformed
-pub kglite::datatypes::zoned_datetime::ZonedParseError::NamedZone
+pub kglite::datatypes::zoned_datetime::ZonedParseError::UnknownZone(alloc::string::String)
+pub kglite::datatypes::zoned_datetime::ZonedParseError::ZonesUnavailable(alloc::string::String)
 impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParseError
 impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
 pub fn kglite::datatypes::zoned_datetime::ZonedParseError::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParseError) -> bool
 impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParseError
 pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub struct kglite::datatypes::zoned_datetime::WallParts
+pub kglite::datatypes::zoned_datetime::WallParts::offset_secs: core::option::Option<i32>
+pub kglite::datatypes::zoned_datetime::WallParts::wall: chrono::naive::datetime::NaiveDateTime
+pub kglite::datatypes::zoned_datetime::WallParts::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::WallParts
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::WallParts
+pub fn kglite::datatypes::zoned_datetime::WallParts::eq(&self, &kglite::datatypes::zoned_datetime::WallParts) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::WallParts
+pub fn kglite::datatypes::zoned_datetime::WallParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::WallParts
+pub struct kglite::datatypes::zoned_datetime::ZonedParts
+pub kglite::datatypes::zoned_datetime::ZonedParts::offset_secs: i32
+pub kglite::datatypes::zoned_datetime::ZonedParts::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::datatypes::zoned_datetime::ZonedParts::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
+impl kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::into_value(self) -> kglite::datatypes::values::Value
+impl core::clone::Clone for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::clone(&self) -> kglite::datatypes::zoned_datetime::ZonedParts
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParts
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParts) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParts
+pub fn kglite::datatypes::zoned_datetime::ZonedParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::datatypes::zoned_datetime::ZonedParts
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParts
 pub fn kglite::datatypes::zoned_datetime::epoch_parts(chrono::naive::datetime::NaiveDateTime) -> (i64, u32)
 pub fn kglite::datatypes::zoned_datetime::format_zoned(chrono::naive::datetime::NaiveDateTime, i32) -> alloc::string::String
+pub fn kglite::datatypes::zoned_datetime::format_zoned_in(chrono::naive::datetime::NaiveDateTime, i32, core::option::Option<kglite::datatypes::time_zone::ZoneId>) -> alloc::string::String
 pub fn kglite::datatypes::zoned_datetime::from_epoch(i64, u32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
 pub fn kglite::datatypes::zoned_datetime::parse_plain_date(&str) -> core::option::Option<chrono::naive::date::NaiveDate>
-pub fn kglite::datatypes::zoned_datetime::parse_with_offset(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>), kglite::datatypes::zoned_datetime::ZonedParseError>
-pub fn kglite::datatypes::zoned_datetime::parse_zoned(&str) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, i32), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::datatypes::zoned_datetime::parse_with_zone(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<kglite::datatypes::zoned_datetime::WallParts, kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::datatypes::zoned_datetime::parse_zoned(&str) -> core::result::Result<kglite::datatypes::zoned_datetime::ZonedParts, kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::datatypes::zoned_datetime::resolve_wall(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>, core::option::Option<kglite::datatypes::time_zone::ZoneId>) -> core::option::Option<kglite::datatypes::zoned_datetime::ZonedParts>
+pub fn kglite::datatypes::zoned_datetime::split_zone_suffix(&str) -> core::result::Result<(&str, core::option::Option<&str>), kglite::datatypes::zoned_datetime::ZonedParseError>
 pub fn kglite::datatypes::zoned_datetime::utc_from_wall(chrono::naive::datetime::NaiveDateTime, i32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
 pub fn kglite::datatypes::zoned_datetime::wall_clock(chrono::naive::datetime::NaiveDateTime, i32) -> chrono::naive::datetime::NaiveDateTime
+pub fn kglite::datatypes::zoned_datetime::zone_by_name(&str) -> core::result::Result<kglite::datatypes::time_zone::ZoneId, kglite::datatypes::zoned_datetime::ZonedParseError>
 pub enum kglite::datatypes::Value
 pub kglite::datatypes::Value::Boolean(bool)
 pub kglite::datatypes::Value::DateTime(chrono::naive::date::NaiveDate)
@@ -6279,9 +6444,13 @@ pub kglite::datatypes::Value::UniqueId(u32)
 pub kglite::datatypes::Value::ZonedDateTime
 pub kglite::datatypes::Value::ZonedDateTime::offset_secs: i32
 pub kglite::datatypes::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
+pub kglite::datatypes::Value::ZonedDateTime::zone: core::option::Option<kglite::datatypes::time_zone::ZoneId>
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str
+impl kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned(chrono::naive::datetime::NaiveDateTime, i32) -> kglite::datatypes::values::Value
+pub fn kglite::datatypes::values::Value::zoned_in(chrono::naive::datetime::NaiveDateTime, kglite::datatypes::time_zone::ZoneId) -> kglite::datatypes::values::Value
 impl core::clone::Clone for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::clone(&self) -> kglite::datatypes::values::Value
 impl core::cmp::Eq for kglite::datatypes::values::Value

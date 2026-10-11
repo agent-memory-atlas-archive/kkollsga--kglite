@@ -22,7 +22,8 @@
 //! | `Map(entries)`                          | `Dict(entries.map(...))`      | `BoltDict = HashMap<String, BoltValue>`            |
 //! | `DateTime(NaiveDate)`                   | `Date(BoltDate { days })`     | Days since Unix epoch (1970-01-01)                 |
 //! | `Timestamp(NaiveDateTime)`             | `LocalDateTime`               | Epoch seconds and fractional nanoseconds preserved |
-//! | `ZonedDateTime { utc, offset_secs }`    | `DateTime(BoltDateTime { seconds, nanoseconds, tz_offset_seconds })` | `seconds` is the UTC epoch reading (Bolt 5 `DateTime`); inbound offset beyond ±18 h is `Protocol`; `DateTimeZoneId` is refused |
+//! | `ZonedDateTime { utc, offset_secs, zone: None }` | `DateTime(BoltDateTime { seconds, nanoseconds, tz_offset_seconds })` | `seconds` is the UTC epoch reading (Bolt 5 `DateTime`); inbound offset beyond ±18 h is `Protocol` |
+//! | `ZonedDateTime { .., zone: Some(z) }`   | `DateTimeZoneId(BoltDateTimeZoneId { seconds, nanoseconds, tz_id })` | `seconds` is the UTC epoch reading, `tz_id` the IANA name; inbound an unknown name, or any name on a build without `iana-zones`, is `Protocol` |
 //! | `LocalTime(nanos)`                      | `LocalTime(BoltLocalTime { nanoseconds })` | Nanoseconds since midnight; inbound outside one day is `Protocol` |
 //! | `Time { nanos, offset_secs }`           | `Time(BoltTime { nanoseconds, tz_offset_seconds })` | Local clock plus offset; inbound offset beyond ±18 h is `Protocol` |
 //! | `Duration { months, days, seconds, nanos }` | `Duration(BoltDuration {..})` | All i64; inbound `nanoseconds` may be negative or exceed 1e9 and is normalised into `seconds` plus 0..1e9 nanos |
@@ -105,13 +106,24 @@ pub fn to_bolt(value: &Value) -> Result<BoltValue, BoltError> {
         }
         // The Bolt 5 `DateTime` structure reads `seconds` as the UTC epoch reading
         // and carries the offset beside it, so the instant maps one to one.
-        Value::ZonedDateTime { utc, offset_secs } => {
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => {
             let (seconds, nanoseconds) = kglite::api::zoned_datetime::epoch_parts(*utc);
-            Ok(BoltValue::DateTime(BoltDateTime {
-                seconds,
-                nanoseconds: i64::from(nanoseconds),
-                tz_offset_seconds: i64::from(*offset_secs),
-            }))
+            Ok(match zone {
+                None => BoltValue::DateTime(BoltDateTime {
+                    seconds,
+                    nanoseconds: i64::from(nanoseconds),
+                    tz_offset_seconds: i64::from(*offset_secs),
+                }),
+                Some(zone) => BoltValue::DateTimeZoneId(boltr::types::BoltDateTimeZoneId {
+                    seconds,
+                    nanoseconds: i64::from(nanoseconds),
+                    tz_id: zone.name().to_string(),
+                }),
+            })
         }
         // Nanoseconds since local midnight, below one day, so the `i64` never saturates.
         Value::LocalTime(nanos) => Ok(BoltValue::LocalTime(BoltLocalTime {
@@ -511,13 +523,23 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
                         dt.tz_offset_seconds
                     ))
                 })?;
-            Ok(Value::ZonedDateTime { utc, offset_secs })
+            Ok(Value::zoned(utc, offset_secs))
         }
-        BoltValue::DateTimeZoneId(dt) => Err(BoltError::Protocol(format!(
-            "Bolt DateTimeZoneId parameters (zone '{}') are not supported yet — send a DateTime \
-             with a numeric offset, or a LocalDateTime / Date",
-            dt.tz_id
-        ))),
+        BoltValue::DateTimeZoneId(dt) => {
+            let utc = u32::try_from(dt.nanoseconds)
+                .ok()
+                .filter(|nanos| *nanos < 1_000_000_000)
+                .and_then(|nanos| kglite::api::zoned_datetime::from_epoch(dt.seconds, nanos))
+                .ok_or_else(|| {
+                    BoltError::Protocol(format!(
+                        "Bolt DateTimeZoneId out of range: seconds={}, nanoseconds={}",
+                        dt.seconds, dt.nanoseconds
+                    ))
+                })?;
+            let zone = kglite::api::zoned_datetime::zone_by_name(&dt.tz_id)
+                .map_err(|e| BoltError::Protocol(format!("Bolt DateTimeZoneId: {e}")))?;
+            Ok(Value::zoned_in(utc, zone))
+        }
         BoltValue::Point3D(_) => Err(BoltError::Protocol(
             "Bolt Point3D parameter not supported — kglite represents only 2D points".into(),
         )),
@@ -775,10 +797,7 @@ mod time_of_day_tests {
         let utc = chrono::DateTime::from_timestamp(1_437_511_232, 142_000_000)
             .unwrap()
             .naive_utc();
-        let value = Value::ZonedDateTime {
-            utc,
-            offset_secs: 3600,
-        };
+        let value = Value::zoned(utc, 3600);
         let bolt = BoltValue::DateTime(boltr::types::BoltDateTime {
             seconds: 1_437_511_232,
             nanoseconds: 142_000_000,
@@ -791,17 +810,47 @@ mod time_of_day_tests {
             format!("{:?}", from_bolt(&bolt).unwrap()),
             format!("{value:?}")
         );
-        let before_epoch = Value::ZonedDateTime {
-            utc: chrono::DateTime::from_timestamp(-1, 999_999_999)
+        let before_epoch = Value::zoned(
+            chrono::DateTime::from_timestamp(-1, 999_999_999)
                 .unwrap()
                 .naive_utc(),
-            offset_secs: -64_800,
-        };
+            -64_800,
+        );
         let nested = Value::List(vec![value, before_epoch]);
         assert_eq!(
             format!("{:?}", from_bolt(&to_bolt(&nested).unwrap()).unwrap()),
             format!("{nested:?}")
         );
+    }
+
+    /// A named zone travels as `DateTimeZoneId`: UTC seconds plus the IANA name,
+    /// and comes back with the zone and the offset the zone has at the instant.
+    #[test]
+    fn named_zones_travel_as_date_time_zone_id() {
+        // 2026-03-29T01:30Z is 03:30+02:00 in Oslo (the clock skipped 02:00-03:00).
+        let utc = chrono::DateTime::from_timestamp(1_774_747_800, 0)
+            .unwrap()
+            .naive_utc();
+        let zone = kglite::api::time_zone::ZoneId::from_name("Europe/Oslo").unwrap();
+        let value = Value::zoned_in(utc, zone);
+        let bolt = BoltValue::DateTimeZoneId(boltr::types::BoltDateTimeZoneId {
+            seconds: 1_774_747_800,
+            nanoseconds: 0,
+            tz_id: "Europe/Oslo".into(),
+        });
+        assert_eq!(to_bolt(&value).unwrap(), bolt);
+        assert_eq!(to_bolt_owned(value.clone()).unwrap(), bolt);
+        let back = from_bolt(&bolt).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{value:?}"));
+        let Value::ZonedDateTime {
+            offset_secs,
+            zone: Some(back_zone),
+            ..
+        } = back
+        else {
+            panic!("DateTimeZoneId decodes a named zoned datetime");
+        };
+        assert_eq!((offset_secs, back_zone.name()), (7200, "Europe/Oslo"));
     }
 
     #[test]
@@ -830,7 +879,12 @@ mod time_of_day_tests {
             BoltValue::DateTimeZoneId(boltr::types::BoltDateTimeZoneId {
                 seconds: 0,
                 nanoseconds: 0,
-                tz_id: "Europe/Oslo".into(),
+                tz_id: "Mars/Base".into(),
+            }),
+            BoltValue::DateTimeZoneId(boltr::types::BoltDateTimeZoneId {
+                seconds: 0,
+                nanoseconds: 1_000_000_000,
+                tz_id: "UTC".into(),
             }),
         ] {
             assert!(

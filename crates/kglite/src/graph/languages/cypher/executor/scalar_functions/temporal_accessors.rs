@@ -85,8 +85,12 @@ pub(in crate::graph::languages::cypher::executor) fn temporal_property(
             _ => date_part(*date, property),
         },
         Value::Timestamp(t) => datetime_part(*t, property),
-        Value::ZonedDateTime { utc, offset_secs } => {
-            return super::temporal_zoned::zoned_property(*utc, *offset_secs, property)
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => {
+            return super::temporal_zoned::zoned_property(*utc, *offset_secs, *zone, property)
                 .or(Some(Value::Null))
         }
         Value::LocalTime(nanos) => {

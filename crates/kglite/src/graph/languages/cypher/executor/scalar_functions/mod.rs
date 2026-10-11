@@ -47,12 +47,8 @@ pub(crate) fn parse_datetime_value(text: &str) -> Option<Value> {
         None => Some(Value::Timestamp(parsed.local)),
         Some(offset) => {
             let offset_secs = offset.local_minus_utc();
-            (offset_secs.abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS).then(|| {
-                Value::ZonedDateTime {
-                    utc: parsed.utc(),
-                    offset_secs,
-                }
-            })
+            (offset_secs.abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS)
+                .then(|| Value::zoned(parsed.utc(), offset_secs))
         }
     }
 }
@@ -91,7 +87,9 @@ impl<'a> CypherExecutor<'a> {
             }
             Value::Timestamp(t) => return Ok(Value::Timestamp(t)),
             // The wall clock the zoned value was written in.
-            Value::ZonedDateTime { utc, offset_secs } => {
+            Value::ZonedDateTime {
+                utc, offset_secs, ..
+            } => {
                 return Ok(Value::Timestamp(
                     crate::datatypes::zoned_datetime::wall_clock(utc, offset_secs),
                 ))

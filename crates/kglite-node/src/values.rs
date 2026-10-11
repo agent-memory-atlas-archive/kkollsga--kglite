@@ -270,9 +270,11 @@ impl ToJs {
             Value::UniqueId(n) | Value::NodeRef(n) => self.number(f64::from(*n)),
             Value::DateTime(d) => self.class(LocalDate::from_naive(*d)),
             Value::Timestamp(t) => self.class(LocalDateTime::from_naive(*t)),
-            Value::ZonedDateTime { utc, offset_secs } => {
-                self.class(ZonedDateTime::from_parts(*utc, *offset_secs))
-            }
+            Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            } => self.class(ZonedDateTime::from_parts(*utc, *offset_secs, *zone)),
             Value::LocalTime(n) => self.class(LocalTime::from_nanos(*n)),
             Value::Time { nanos, offset_secs } => {
                 self.class(Time::from_parts(*nanos, *offset_secs))
@@ -603,10 +605,7 @@ impl FromJs {
             // A JS `Date` is an instant: it binds as a zoned datetime at UTC.
             return chrono::DateTime::from_timestamp_millis(ms as i64)
                 .filter(|_| ms.is_finite())
-                .map(|t| Value::ZonedDateTime {
-                    utc: t.naive_utc(),
-                    offset_secs: 0,
-                })
+                .map(|t| Value::zoned(t.naive_utc(), 0))
                 .ok_or_else(|| JsErr::arg(format!("{path}: invalid Date")));
         }
         if self.flag(v, sys::napi_is_typedarray)?
@@ -648,8 +647,12 @@ impl FromJs {
             return Some(Value::Timestamp(t.to_naive()));
         }
         if let Some(t) = self.unwrap_class::<ZonedDateTime>(v) {
-            let (utc, offset_secs) = t.to_parts();
-            return Some(Value::ZonedDateTime { utc, offset_secs });
+            let (utc, offset_secs, zone) = t.to_parts();
+            return Some(Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            });
         }
         if let Some(t) = self.unwrap_class::<LocalTime>(v) {
             return Some(Value::LocalTime(t.to_nanos()));

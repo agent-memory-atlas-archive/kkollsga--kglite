@@ -147,6 +147,53 @@ const ROWS: &[Row] = &[
         ordered: true,
         literal: "datetime('2021-06-15T00:00:00.5Z')",
     },
+    // Named zones (feature `iana-zones`): identity is still the instant, so the
+    // zone never splits or merges a value. Oslo is +02:00 in June, so this is
+    // the instant of `zdt_b` (midnight UTC) and ties with it.
+    #[cfg(feature = "iana-zones")]
+    Row {
+        name: "zdt_oslo_tie",
+        family: "datetime",
+        pos: 30,
+        ordered: true,
+        literal: "datetime('2021-06-15T02:00[Europe/Oslo]')",
+    },
+    // 02:30 on 2021-03-28 is skipped in Oslo: 03:30+02:00, which is 01:30Z.
+    #[cfg(feature = "iana-zones")]
+    Row {
+        name: "zdt_oslo_gap",
+        family: "datetime",
+        pos: 27,
+        ordered: true,
+        literal: "datetime('2021-03-28T02:30[Europe/Oslo]')",
+    },
+    // 02:30 on 2021-10-31 is repeated in Oslo; the earlier is +02:00 = 00:30Z.
+    #[cfg(feature = "iana-zones")]
+    Row {
+        name: "zdt_oslo_fold_early",
+        family: "datetime",
+        pos: 60,
+        ordered: true,
+        literal: "datetime('2021-10-31T02:30[Europe/Oslo]')",
+    },
+    // The same instant written in Chicago (CDT, -05:00): equal across zones.
+    #[cfg(feature = "iana-zones")]
+    Row {
+        name: "zdt_chicago_fold_early",
+        family: "datetime",
+        pos: 60,
+        ordered: true,
+        literal: "datetime('2021-10-30T19:30[America/Chicago]')",
+    },
+    // The later occurrence, 02:30+01:00 = 01:30Z.
+    #[cfg(feature = "iana-zones")]
+    Row {
+        name: "zdt_oslo_fold_late",
+        family: "datetime",
+        pos: 70,
+        ordered: true,
+        literal: "datetime('2021-10-31T02:30+01:00[Europe/Oslo]')",
+    },
 ];
 
 fn value_of(row: &Row) -> Value {

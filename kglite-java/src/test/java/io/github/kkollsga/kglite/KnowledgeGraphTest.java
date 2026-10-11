@@ -216,6 +216,17 @@ class KnowledgeGraphTest {
             assertEquals(new KgliteDuration(0, 2, 0L), scalars.get("dur"));
             assertEquals(new Point(1.5, 2.5), scalars.get("pt"));
 
+            // A datetime in an IANA zone comes back as a ZonedDateTime with that ZoneId,
+            // and binding one back keeps the zone. 02:30 on 2026-03-29 does not exist in
+            // Oslo (02:00 -> 03:00), so the clock reads 03:30+02:00.
+            Map<String, Object> zoned = graph.query(
+                    "RETURN datetime({year: 2026, month: 3, day: 29, hour: 2, minute: 30,"
+                            + " timezone: 'Europe/Oslo'}) AS z, $p AS back",
+                    Map.of("p", java.time.ZonedDateTime.parse("2026-07-15T12:00+02:00[Europe/Oslo]"))).get(0);
+            assertEquals(java.time.ZonedDateTime.parse("2026-03-29T03:30+02:00[Europe/Oslo]"), zoned.get("z"));
+            assertEquals(java.time.ZoneId.of("Europe/Oslo"), ((java.time.ZonedDateTime) zoned.get("z")).getZone());
+            assertEquals(java.time.ZonedDateTime.parse("2026-07-15T12:00+02:00[Europe/Oslo]"), zoned.get("back"));
+
             // A sub-second duration keeps its nanoseconds in both directions.
             Map<String, Object> fine = graph.query(
                     "RETURN duration({milliseconds: -1500}) AS dur, $v AS back, $w AS wback",

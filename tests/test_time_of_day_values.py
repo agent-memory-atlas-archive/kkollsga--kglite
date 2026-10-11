@@ -61,11 +61,15 @@ def test_text_and_accessors(graph):
     }
 
 
-def test_a_named_zone_is_refused_for_now(graph):
-    with pytest.raises(Exception, match="named time zones"):
+def test_a_time_of_day_cannot_take_a_named_zone(graph):
+    # A named zone's offset depends on the date, which a time of day lacks.
+    with pytest.raises(Exception, match="no date"):
         graph.cypher("RETURN time('10:00[Europe/Oslo]') AS v")
-    with pytest.raises(Exception, match="named time zones"):
+    with pytest.raises(Exception, match="no date"):
         graph.cypher("RETURN time({hour: 10, timezone: 'Europe/Oslo'}) AS v")
+    # Reading the time of a datetime in the zone gives the offset it had that day.
+    got = graph.cypher("RETURN time(datetime('2026-07-15T10:00[Europe/Oslo]')) AS v").to_list()[0]["v"]
+    assert got.utcoffset() == dt.timedelta(hours=2) and got.hour == 10
 
 
 def test_time_parameters_bind_by_kind(graph):

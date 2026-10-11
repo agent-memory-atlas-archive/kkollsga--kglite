@@ -37,6 +37,12 @@
 //! | 13  | LocalTime  | u32 LE length (8) + u64 LE nanoseconds of day |
 //! | 14  | Time       | u32 LE length (12) + u64 LE nanoseconds of day + i32 LE offset seconds |
 //! | 15  | Duration   | u32 LE length (20) + i32 months + i32 days + i64 seconds + i32 nanoseconds, all LE |
+//! | 16  | ZonedDateTime in a named zone | u32 LE length (16 + n) + the tag-12 payload + n UTF-8 bytes of the IANA zone name |
+//!
+//! Tag 16 stores the zone by **name**, so the file does not depend on the tz
+//! database's internal numbering. A reader without the zone (no `iana-zones`
+//! feature, or a name its database lacks) reads the stored offset as a fixed
+//! offset.
 //!
 //! Tag 15 (`Duration`) is defensive: the bag is written only by the N-Triples
 //! builder, the streaming subgraph writer and legacy migration, none of which
@@ -92,13 +98,16 @@ pub const TAG_TIME: u8 = 14;
 /// A duration with a sub-second part (and every whole-second one): months, days,
 /// seconds, nanoseconds.
 pub const TAG_DURATION: u8 = 15;
+/// An instant in a named IANA zone: the [`TAG_ZONED_DATETIME`] payload followed
+/// by the zone name.
+pub const TAG_ZONED_DATETIME_NAMED: u8 = 16;
 
 /// Length of a [`TAG_DURATION`] payload: `i32` + `i32` + `i64` + `i32`.
 const DURATION_LEN: usize = 20;
 
 /// Highest tag this build knows how to *decode*. Tags above this are
 /// skipped via the length-prefix forward-compat rule (module docs).
-pub const MAX_KNOWN_TAG: u8 = TAG_DURATION;
+pub const MAX_KNOWN_TAG: u8 = TAG_ZONED_DATETIME_NAMED;
 
 /// Whether `read_value` can decode `tag`. Tag 8 is retired: it sits inside
 /// `..=MAX_KNOWN_TAG` yet must be skipped, not read.
@@ -149,7 +158,11 @@ pub fn encode_value(buf: &mut Vec<u8>, key: InternedKey, value: &Value) {
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
         Value::LocalTime(n) => encode_local_time(buf, *n),
         Value::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
-        Value::ZonedDateTime { utc, offset_secs } => encode_zoned(buf, utc, *offset_secs),
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => encode_zoned(buf, utc, *offset_secs, *zone),
         // NodeRef is transient and is written as null.
         Value::NodeRef(_) => buf.push(TAG_NULL),
         // Lists are persistable property values. Tag 8 is retired and
@@ -204,7 +217,11 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
         BorrowedValue::LocalTime(n) => encode_local_time(buf, *n),
         BorrowedValue::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
-        BorrowedValue::ZonedDateTime { utc, offset_secs } => encode_zoned(buf, utc, *offset_secs),
+        BorrowedValue::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => encode_zoned(buf, utc, *offset_secs, *zone),
     }
 }
 
@@ -215,13 +232,45 @@ const TIME_LEN: usize = 12;
 /// Length of a [`TAG_ZONED_DATETIME`] payload: `i64` + `u32` + `i32`.
 const ZONED_LEN: usize = 16;
 
-fn encode_zoned(buf: &mut Vec<u8>, utc: &chrono::NaiveDateTime, offset_secs: i32) {
+fn encode_zoned(
+    buf: &mut Vec<u8>,
+    utc: &chrono::NaiveDateTime,
+    offset_secs: i32,
+    zone: Option<crate::datatypes::time_zone::ZoneId>,
+) {
     let (secs, nanos) = crate::datatypes::zoned_datetime::epoch_parts(*utc);
-    buf.push(TAG_ZONED_DATETIME);
-    buf.extend_from_slice(&(ZONED_LEN as u32).to_le_bytes());
+    let name = zone.map_or("", |zone| zone.name());
+    buf.push(if zone.is_some() {
+        TAG_ZONED_DATETIME_NAMED
+    } else {
+        TAG_ZONED_DATETIME
+    });
+    buf.extend_from_slice(&((ZONED_LEN + name.len()) as u32).to_le_bytes());
     buf.extend_from_slice(&secs.to_le_bytes());
     buf.extend_from_slice(&nanos.to_le_bytes());
     buf.extend_from_slice(&offset_secs.to_le_bytes());
+    buf.extend_from_slice(name.as_bytes());
+}
+
+/// A [`TAG_ZONED_DATETIME_NAMED`] payload: the fixed form and the zone name. A
+/// name this build knows takes its offset from the zone's rules at the instant;
+/// one it does not know keeps the stored offset and no zone.
+fn decode_zoned_named(
+    payload: &[u8],
+) -> Option<(
+    chrono::NaiveDateTime,
+    i32,
+    Option<crate::datatypes::time_zone::ZoneId>,
+)> {
+    if payload.len() <= ZONED_LEN {
+        return None;
+    }
+    let (utc, stored) = decode_zoned(&payload[..ZONED_LEN])?;
+    let name = std::str::from_utf8(&payload[ZONED_LEN..]).ok()?;
+    Some(match crate::datatypes::time_zone::ZoneId::from_name(name) {
+        Some(zone) => (utc, zone.offset_at(utc), Some(zone)),
+        None => (utc, stored, None),
+    })
 }
 
 /// `None` for a payload of the wrong length, an instant out of range or an
@@ -290,7 +339,19 @@ fn decode_fixed_temporal(tag: u8, payload: &[u8]) -> Option<BorrowedValue<'stati
         }
         TAG_ZONED_DATETIME => {
             let (utc, offset_secs) = decode_zoned(payload)?;
-            BorrowedValue::ZonedDateTime { utc, offset_secs }
+            BorrowedValue::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone: None,
+            }
+        }
+        TAG_ZONED_DATETIME_NAMED => {
+            let (utc, offset_secs, zone) = decode_zoned_named(payload)?;
+            BorrowedValue::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            }
         }
         TAG_LOCAL_TIME => BorrowedValue::LocalTime(decode_local_time(payload)?),
         TAG_TIME => {
@@ -474,7 +535,16 @@ pub fn read_value(blob: &[u8], pos: &mut usize, type_tag: u8) -> Option<Value> {
         TAG_ZONED_DATETIME => {
             let bytes = read_len_prefixed(blob, pos)?;
             let (utc, offset_secs) = decode_zoned(bytes)?;
-            Some(Value::ZonedDateTime { utc, offset_secs })
+            Some(Value::zoned(utc, offset_secs))
+        }
+        TAG_ZONED_DATETIME_NAMED => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            let (utc, offset_secs, zone) = decode_zoned_named(bytes)?;
+            Some(Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            })
         }
         TAG_LOCAL_TIME => {
             let bytes = read_len_prefixed(blob, pos)?;
@@ -702,7 +772,12 @@ where
                     return Some(Err(e));
                 }
             }
-            TAG_TIMESTAMP_EXACT | TAG_ZONED_DATETIME | TAG_DURATION | TAG_LOCAL_TIME | TAG_TIME => {
+            TAG_TIMESTAMP_EXACT
+            | TAG_ZONED_DATETIME
+            | TAG_ZONED_DATETIME_NAMED
+            | TAG_DURATION
+            | TAG_LOCAL_TIME
+            | TAG_TIME => {
                 let Some(bytes) = read_len_prefixed(blob, pos) else {
                     return Some(Ok(()));
                 };
@@ -1310,6 +1385,80 @@ mod tests {
         }
     }
 
+    /// A named-zone instant is stored under tag 16 by NAME: it survives every
+    /// reader with its zone, and a bag whose name the build does not know reads as
+    /// the stored fixed offset (this is also what a build without `iana-zones`
+    /// does with every tag-16 entry).
+    #[cfg(feature = "iana-zones")]
+    #[test]
+    fn a_named_zone_round_trips_by_name_through_every_reader() {
+        let utc = crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_000).unwrap();
+        let zone = crate::datatypes::time_zone::ZoneId::from_name("Europe/Oslo").unwrap();
+        let value = Value::zoned_in(utc, zone);
+        let entries = vec![(key(1), Value::Int64(9)), (key(2), value.clone())];
+        let blob = blob_of(&entries);
+        let zone_of = |v: &Value| match v {
+            Value::ZonedDateTime {
+                offset_secs, zone, ..
+            } => Some((*offset_secs, zone.map(|z| z.name()))),
+            _ => None,
+        };
+        let want = Some((7200, Some("Europe/Oslo")));
+        assert_eq!(zone_of(&scan_blob(&blob, key(2)).unwrap()), want);
+        assert_eq!(zone_of(&decode_blob(&blob)[1].1), want);
+        let mut seen = None;
+        try_for_each_borrowed::<_, ()>(&blob, |k, b| {
+            if k == key(2) {
+                seen = zone_of(&b.to_value());
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, want);
+        let mut owned = Vec::new();
+        encode_value(&mut owned, key(2), &value);
+        let mut borrowed = Vec::new();
+        encode_value_borrowed(&mut borrowed, key(2), &BorrowedValue::of(&value).unwrap());
+        assert_eq!(owned, borrowed);
+        // The tag is 16 and the payload is the tag-12 payload plus the name.
+        assert_eq!(owned[8], TAG_ZONED_DATETIME_NAMED);
+        assert_eq!(&owned[13 + ZONED_LEN..], b"Europe/Oslo");
+        // A name this database lacks keeps the stored offset and no zone.
+        let mut forged = blob.clone();
+        let at = forged.len() - 1;
+        forged[at] = b'x';
+        assert_eq!(
+            zone_of(&scan_blob(&forged, key(2)).unwrap()),
+            Some((7200, None))
+        );
+    }
+
+    /// A tag-16 entry read by a build with no tz database is its fixed offset.
+    #[cfg(not(feature = "iana-zones"))]
+    #[test]
+    fn a_named_zone_entry_reads_as_its_fixed_offset_without_the_feature() {
+        let utc = crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_000).unwrap();
+        let mut fixed = Vec::new();
+        encode_value(&mut fixed, key(2), &Value::zoned(utc, 7200));
+        // Rewrite the tag-12 entry into the tag-16 form with a name appended.
+        let mut named = fixed[..8].to_vec();
+        named.push(TAG_ZONED_DATETIME_NAMED);
+        named.extend_from_slice(&((ZONED_LEN + 11) as u32).to_le_bytes());
+        named.extend_from_slice(&fixed[13..]);
+        named.extend_from_slice(b"Europe/Oslo");
+        let mut blob = 1u16.to_le_bytes().to_vec();
+        blob.extend_from_slice(&named);
+        let Some(Value::ZonedDateTime {
+            offset_secs,
+            zone,
+            utc: got,
+        }) = scan_blob(&blob, key(2))
+        else {
+            panic!("tag 16 decodes a zoned datetime");
+        };
+        assert_eq!((got, offset_secs, zone), (utc, 7200, None));
+    }
+
     /// LocalTime and Time are persistable: each round-trips through every
     /// reader, the borrowed encoder matches the owned one byte for byte, and a
     /// payload past the end of the day (or an offset past 18 h) ends the scan.
@@ -1330,10 +1479,12 @@ mod tests {
                 utc: crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_001)
                     .unwrap(),
                 offset_secs: 3_600,
+                zone: None,
             },
             Value::ZonedDateTime {
                 utc: crate::datatypes::zoned_datetime::from_epoch(-62_135_596_800, 0).unwrap(),
                 offset_secs: -64_800,
+                zone: None,
             },
         ];
         for (i, v) in values.iter().enumerate() {

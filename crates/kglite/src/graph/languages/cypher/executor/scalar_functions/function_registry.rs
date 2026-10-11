@@ -352,7 +352,7 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "datetime",
         aliases: &[],
         category: "temporal",
-        description: "An instant with an offset: now (offset Z), an ISO-8601 text with Z / ±HH:MM (no offset reads as UTC), or a {year, month, day, hour, ..., timezone} map; two datetimes are equal when they name the same instant. A named zone is refused",
+        description: "An instant with an offset: now (offset Z), an ISO-8601 text with Z / ±HH:MM (no offset reads as UTC), or a {year, month, day, hour, ..., timezone} map; two datetimes are equal when they name the same instant. A `[Europe/Oslo]` suffix or `timezone: 'Europe/Oslo'` places it in an IANA zone with daylight-saving rules",
         signature: "datetime(input :: STRING | MAP | DATE | LOCAL DATETIME | ZONED DATETIME?) :: ZONED DATETIME",
     },
     FunctionSpec {

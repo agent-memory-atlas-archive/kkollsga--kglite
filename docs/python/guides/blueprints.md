@@ -84,7 +84,7 @@ Available types:
 | `"duration"` | duration | Cell is a `{"months", "days", "seconds", "nanoseconds"}` object (each field optional; `nanoseconds` is 0 to 999999999 and adds to `seconds`), e.g. `{"days": 1, "seconds": 7200}`; anything else is null |
 | `"localtime"` | local time | Cell is `HH:MM[:SS[.fraction]]` with no offset; anything else, an offset included, is null |
 | `"time"` | time | Cell is `HH:MM[:SS[.fraction]]` followed by `Z` or `±HH:MM`; no offset means UTC; anything else is null |
-| `"zoneddatetime"` | zoned datetime | Cell is `YYYY-MM-DDTHH:MM[:SS[.fraction]]` followed by `Z` or `±HH:MM` (no offset means UTC); the offset is kept; anything else is null |
+| `"zoneddatetime"` | zoned datetime | Cell is `YYYY-MM-DDTHH:MM[:SS[.fraction]]` followed by `Z`, `±HH:MM` or a `[Region/City]` zone (no offset means UTC); the offset is kept, and so is the zone name; anything else is null |
 | `"text"` | text | Like `"string"`, but an empty cell is null and the empty string is written `\e` (a string starting with `\` doubles it): `\e` is `""`, `\\x` is `\x`. What the lossless CSV export writes |
 | `"timestamp"` | datetime | `YYYY-MM-DDTHH:MM:SS[.fraction]` (ISO 8601, no zone; a space may replace the `T`); anything else is null |
 | `"map"` | map | Cell is a JSON object; nested arrays and objects become lists and maps; anything else is null |

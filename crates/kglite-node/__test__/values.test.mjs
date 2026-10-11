@@ -162,6 +162,27 @@ test('zoned datetimes round-trip with their nanoseconds and offset', async () =>
   assert.throws(() => new ZonedDateTime(2024, 2, 1, 0, 0, 0, 0, 64801), (e) => e.code === 'InvalidArgument');
 });
 
+test('named zones: the class carries the IANA name and DST rules place the reading', async () => {
+  // 02:30 on 2026-03-29 does not exist in Oslo (02:00 -> 03:00): 03:30+02:00.
+  const gap = new ZonedDateTime(2026, 3, 29, 2, 30, 0, 0, null, 'Europe/Oslo');
+  assert.equal(String(gap), '2026-03-29T03:30+02:00[Europe/Oslo]');
+  assert.equal(gap.timeZone, 'Europe/Oslo');
+  assert.equal(gap.offsetSeconds, 7200);
+  assert.equal(gap.toDate().getTime(), Date.parse('2026-03-29T01:30:00Z'));
+  // 02:30 on 2026-10-25 happens twice: the earlier (+02:00) unless the offset says otherwise.
+  assert.equal(String(new ZonedDateTime(2026, 10, 25, 2, 30, 0, 0, null, 'Europe/Oslo')), '2026-10-25T02:30+02:00[Europe/Oslo]');
+  assert.equal(String(new ZonedDateTime(2026, 10, 25, 2, 30, 0, 0, 3600, 'Europe/Oslo')), '2026-10-25T02:30+01:00[Europe/Oslo]');
+  const z = await roundTrip(gap);
+  assert.ok(z instanceof ZonedDateTime);
+  assert.equal(z.timeZone, 'Europe/Oslo');
+  assert.equal(String(z), '2026-03-29T03:30+02:00[Europe/Oslo]');
+  assert.ok(!new ZonedDateTime(2024, 1, 1).timeZone);
+  assert.throws(() => new ZonedDateTime(2024, 1, 1, 0, 0, 0, 0, null, 'Mars/Base'), (e) => e.code === 'InvalidArgument');
+  const r = await graph.executeRead("RETURN datetime('2026-07-15T12:00[Europe/Oslo]') AS z");
+  assert.equal(r.rows[0].z.timeZone, 'Europe/Oslo');
+  assert.equal(String(r.rows[0].z), '2026-07-15T12:00+02:00[Europe/Oslo]');
+});
+
 test('datetime() returns the zoned class and compares by instant', async () => {
   const r = await graph.executeRead(
     "RETURN datetime('2024-05-06T08:00:00+01:00') AS z, datetime('2024-05-06T08:00:00+01:00') = datetime('2024-05-06T07:00:00Z') AS same, localdatetime('2024-05-06T08:00:00') AS l",

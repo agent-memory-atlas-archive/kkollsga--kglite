@@ -5,6 +5,7 @@
 //! only make sense at the Rust ↔ Python boundary.
 pub mod prop_map;
 pub mod time_of_day;
+pub mod time_zone;
 pub mod values;
 pub mod zoned_datetime;
 

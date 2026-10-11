@@ -182,7 +182,12 @@ impl CypherExecutor<'_> {
                 "time",
                 Value::LocalTime(crate::datatypes::time_of_day::nanos_of(truncated.time())),
             ),
-            // The truncated clock keeps the offset it had (UTC for a local value).
+            // The truncated clock keeps the offset it had (UTC for a local value);
+            // a `timezone` override re-places it, so it is handed over as local.
+            MapTarget::Time if map.contains_key("timezone") => map.insert(
+                "time",
+                Value::LocalTime(crate::datatypes::time_of_day::nanos_of(truncated.time())),
+            ),
             MapTarget::Time => map.insert(
                 "time",
                 Value::Time {
@@ -193,16 +198,22 @@ impl CypherExecutor<'_> {
                     },
                 },
             ),
-            // A zoned datetime truncates its wall clock and keeps its offset (UTC
-            // for a local value); the `timezone` override moves the result.
+            // A zoned datetime truncates its wall clock and keeps its offset and
+            // zone (UTC for a local value). A `timezone` override re-places the
+            // truncated reading, so it is handed over as a local one.
+            MapTarget::DateTime if map.contains_key("timezone") => {
+                map.insert("datetime", Value::Timestamp(truncated))
+            }
             MapTarget::DateTime => {
-                let offset_secs = match &temporal {
-                    Value::ZonedDateTime { offset_secs, .. } => *offset_secs,
-                    _ => 0,
+                let spec = match &temporal {
+                    Value::ZonedDateTime {
+                        offset_secs, zone, ..
+                    } => super::temporal_zoned::ZoneSpec::of_value(*offset_secs, *zone),
+                    _ => super::temporal_zoned::ZoneSpec::Fixed(0),
                 };
                 map.insert(
                     "datetime",
-                    super::temporal_zoned::zoned_from_wall(truncated, offset_secs)?,
+                    super::temporal_zoned::zoned_from_wall_in(truncated, spec)?,
                 )
             }
             _ => map.insert("datetime", Value::Timestamp(truncated)),

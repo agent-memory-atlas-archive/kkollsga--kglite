@@ -441,7 +441,9 @@ fn build_column_data(
                     if raw.nulls[r][src_idx] {
                         return None;
                     }
-                    crate::datatypes::zoned_datetime::parse_zoned(&raw.rows[r][src_idx]).ok()
+                    crate::datatypes::zoned_datetime::parse_zoned(&raw.rows[r][src_idx])
+                        .ok()
+                        .map(|p| (p.utc, p.offset_secs, p.zone))
                 })
                 .collect(),
         )),

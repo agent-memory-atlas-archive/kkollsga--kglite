@@ -51,7 +51,7 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
         "$zdatetime" => payload.as_str().and_then(|text| {
             crate::datatypes::zoned_datetime::parse_zoned(text)
                 .ok()
-                .map(|(utc, offset_secs)| Value::ZonedDateTime { utc, offset_secs })
+                .map(crate::datatypes::zoned_datetime::ZonedParts::into_value)
         }),
         "$localtime" => payload.as_str().and_then(|text| {
             match crate::datatypes::time_of_day::parse_time(text) {

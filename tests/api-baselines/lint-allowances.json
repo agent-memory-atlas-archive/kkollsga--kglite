@@ -41,7 +41,7 @@
       "classification": "test"
     },
     {
-      "identity": "crates/kglite-node/src/classes.rs::fn:new:pub fn new( year: i32, month: u32, day: u32, hour: Option<u32>, minute: Option<u32>, second: Option<u32>, nanosecond: Option<u32>, offset_seconds: Option<i32>, ) -> napi::Result<Self, &'static str>::clippy::too_many_arguments",
+      "identity": "crates/kglite-node/src/classes.rs::fn:new:pub fn new( year: i32, month: u32, day: u32, hour: Option<u32>, minute: Option<u32>, second: Option<u32>, nanosecond: Option<u32>, offset_seconds: Option<i32>, time_zone: Option<String>, ) -> napi::Result<Self, &'static str>::clippy::too_many_arguments",
       "classification": "transitional"
     },
     {

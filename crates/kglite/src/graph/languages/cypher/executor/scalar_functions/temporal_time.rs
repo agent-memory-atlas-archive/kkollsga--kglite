@@ -12,7 +12,7 @@ use crate::datatypes::values::Value;
 fn parse_text(function: &str, text: &str) -> Result<(u64, Option<i32>), String> {
     parse_time(text).map_err(|e| match e {
         TimeParseError::NamedZone => format!(
-            "{function}(): named time zones are not supported on time values; use a numeric offset such as +01:00"
+            "{function}(): a time of day cannot take a named time zone (it has no date to pick the zone's offset by); use a numeric offset such as +01:00, or read the time of a datetime in the zone"
         ),
         TimeParseError::Malformed => format!(
             "{function}(): cannot parse '{text}' as a time (HH, HH:MM, HH:MM:SS or HH:MM:SS.fff, with an optional Z or +HH:MM offset)"
@@ -45,9 +45,12 @@ impl CypherExecutor<'_> {
             local @ Value::LocalTime(_) => Ok(local),
             Value::Time { nanos, .. } => Ok(Value::LocalTime(nanos)),
             Value::Timestamp(t) => Ok(Value::LocalTime(nanos_of(t.time()))),
-            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::LocalTime(
-                super::temporal_zoned::wall_time_nanos(utc, offset_secs),
-            )),
+            Value::ZonedDateTime {
+                utc, offset_secs, ..
+            } => Ok(Value::LocalTime(super::temporal_zoned::wall_time_nanos(
+                utc,
+                offset_secs,
+            ))),
             Value::Null => Ok(Value::Null),
             other => Err(format!(
                 "localtime() argument must be a string, a map or a time or datetime, got {}",
@@ -84,7 +87,9 @@ impl CypherExecutor<'_> {
                 offset_secs: 0,
             }),
             // The wall clock and offset the value was written in.
-            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::Time {
+            Value::ZonedDateTime {
+                utc, offset_secs, ..
+            } => Ok(Value::Time {
                 nanos: super::temporal_zoned::wall_time_nanos(utc, offset_secs),
                 offset_secs,
             }),

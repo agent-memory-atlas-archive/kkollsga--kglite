@@ -24,7 +24,7 @@ use serde_json::{json, Map, Value as Json};
 use crate::datatypes::prop_map::PropMap;
 use crate::datatypes::time_of_day::{format_clock, format_time, parse_time};
 use crate::datatypes::values::{raw_string, Value};
-use crate::datatypes::zoned_datetime::{format_zoned, parse_zoned};
+use crate::datatypes::zoned_datetime::{format_zoned_in, parse_zoned};
 
 const TAGS: [&str; 9] = [
     "$date",
@@ -72,9 +72,14 @@ pub(crate) fn to_json(value: &Value) -> Json {
         Value::Time { nanos, offset_secs } => {
             tagged("$time", json!(format_time(*nanos, *offset_secs)))
         }
-        Value::ZonedDateTime { utc, offset_secs } => {
-            tagged("$zdatetime", json!(format_zoned(*utc, *offset_secs)))
-        }
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => tagged(
+            "$zdatetime",
+            json!(format_zoned_in(*utc, *offset_secs, *zone)),
+        ),
         Value::Point { lat, lon } => tagged("$point", json!({"lat": lat, "lon": lon})),
         Value::Duration {
             months,
@@ -134,10 +139,10 @@ fn decode_tagged(object: &Map<String, Json>) -> Option<Value> {
             _ => None,
         },
         "$zdatetime" => {
-            let (utc, offset_secs) = parse_zoned(payload.as_str()?).ok()?;
+            let parts = parse_zoned(payload.as_str()?).ok()?;
             (1..=9999)
-                .contains(&utc.year())
-                .then_some(Value::ZonedDateTime { utc, offset_secs })
+                .contains(&parts.utc.year())
+                .then(|| parts.into_value())
         }
         "$duration" => {
             let fields = payload.as_object()?;

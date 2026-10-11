@@ -983,9 +983,11 @@ pub(super) fn value_display_compact(v: &Value, truncate_at: Option<usize>) -> St
         Value::Time { nanos, offset_secs } => {
             crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
         }
-        Value::ZonedDateTime { utc, offset_secs } => {
-            crate::datatypes::zoned_datetime::format_zoned(*utc, *offset_secs)
-        }
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => crate::datatypes::zoned_datetime::format_zoned_in(*utc, *offset_secs, *zone),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::Null => String::new(),
         Value::List(_)

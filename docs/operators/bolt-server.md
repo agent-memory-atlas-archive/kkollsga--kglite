@@ -249,12 +249,13 @@ Zoned PackStream temporals map onto zoned values, and the offset travels with th
 | PackStream | Value | Notes |
 |---|---|---|
 | `DateTime` | zoned datetime | `seconds` is the UTC epoch reading; the offset must be within ±18:00 |
+| `DateTimeZoneId` | zoned datetime in a named zone | `seconds` is the UTC epoch reading and `tz_id` an IANA name; an unknown name, or any name on a build without the `iana-zones` feature, is `Neo.ClientError.Request.Invalid` |
 | `Time` | zoned time | the clock reading plus its offset |
 | `LocalDateTime`, `LocalTime`, `Date` | local datetime, local time, date | no offset |
-| `DateTimeZoneId` | refused | `Neo.ClientError.Request.Invalid`; send a `DateTime` with a numeric offset |
 
-Results mirror this: `datetime()` returns a `DateTime`, `time()` a `Time`, and
-`localdatetime()` a `LocalDateTime`. Two zoned datetimes are equal when they name
+Results mirror this: `datetime()` returns a `DateTime` (or a `DateTimeZoneId` when
+the value has a named zone), `time()` a `Time`, and `localdatetime()` a
+`LocalDateTime`. Two zoned datetimes are equal when they name
 the same instant, so the offset is display information.
 
 The Python API keeps an aware `datetime` as a zoned value as well. See

@@ -147,7 +147,7 @@ fn a_malformed_zoned_tag_is_a_parameter_error() {
     let query = CString::new("RETURN $v AS v").unwrap();
     for bad in [
         r#"{"v": {"$zdatetime": "2020-01-02T03:04+19:00"}}"#,
-        r#"{"v": {"$zdatetime": "2020-01-02T03:04[Europe/Oslo]"}}"#,
+        r#"{"v": {"$zdatetime": "2020-01-02T03:04[Mars/Base]"}}"#,
         r#"{"v": {"$zdatetime": "nonsense"}}"#,
         r#"{"v": {"$zdatetime": 5}}"#,
     ] {
@@ -167,4 +167,27 @@ fn a_malformed_zoned_tag_is_a_parameter_error() {
         unsafe { kglite_free_string(error) };
     }
     unsafe { kglite_session_free(session) };
+}
+
+/// A named zone rides the existing `$zdatetime` tag as ISO text with the zone in
+/// brackets: no new symbol and no new tag, so a prebuilt consumer is unaffected.
+/// The zone never takes part in equality, only in the text and the `timezone`
+/// accessor.
+#[test]
+fn a_named_zone_rides_the_zdatetime_tag_with_its_name() {
+    let params = r#"{
+        "oslo": {"$zdatetime": "2026-07-15T12:00+02:00[Europe/Oslo]"},
+        "utc": {"$zdatetime": "2026-07-15T10:00Z"}
+    }"#;
+    let out = row(
+        "RETURN $oslo = $utc AS same_instant, $oslo.timezone AS zone, toString($oslo) AS text, \
+         $oslo AS echoed, \
+         datetime('2026-03-29T02:30[Europe/Oslo]') AS gap",
+        params,
+    );
+    assert_eq!(out["same_instant"], true);
+    assert_eq!(out["zone"], "Europe/Oslo");
+    assert_eq!(out["text"], "2026-07-15T12:00+02:00[Europe/Oslo]");
+    assert_eq!(out["echoed"], "2026-07-15T12:00+02:00[Europe/Oslo]");
+    assert_eq!(out["gap"], "2026-03-29T03:30+02:00[Europe/Oslo]");
 }

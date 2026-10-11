@@ -293,6 +293,7 @@ mod tests {
                     utc: NaiveDateTime::parse_from_str("2026-08-18 09:30:00", "%Y-%m-%d %H:%M:%S")
                         .unwrap(),
                     offset_secs: 7200,
+                    zone: None,
                 },
             ),
             ("list", Value::List(vec![Value::Int64(1)])),

@@ -266,6 +266,7 @@ fn truncate_rounds_down_then_applies_overrides() {
                     .and_hms_opt(3, 0, 0)
                     .unwrap(),
                 offset_secs: 0,
+                zone: None,
             },
         ),
     ] {

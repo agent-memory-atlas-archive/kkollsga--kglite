@@ -63,8 +63,9 @@ fn constructors_read_the_iso_spellings_and_offsets() {
             zoned("10:30", 7200),
         ),
         (
+            // A zoned base moves to the new offset (same instant), as in Neo4j.
             "time({time: time('10:00+02:00'), timezone: '-01:00'})",
-            zoned("10:00", -3600),
+            zoned("07:00", -3600),
         ),
         ("time(localtime('10:00'))", zoned("10:00", 0)),
         ("time(time('10:00+01:00'))", zoned("10:00", 3600)),

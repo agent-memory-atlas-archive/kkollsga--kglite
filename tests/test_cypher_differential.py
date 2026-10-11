@@ -1515,6 +1515,39 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         None,
     ),
     ("zoned_lt_now", "zoned_graph", "MATCH (m:M) WHERE m.z < datetime() RETURN m.id AS id", None),
+    # A named zone is a view of the same instant: Oslo is +01:00 in January and
+    # +02:00 in June, so these name the stored instants of ids 1 and 2/3.
+    (
+        "zoned_named_eq",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z = datetime('1990-01-01T09:00[Europe/Oslo]') RETURN m.id AS id",
+        None,
+    ),
+    (
+        "zoned_named_in_list",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z IN [datetime('2020-06-01T02:00[Europe/Oslo]'),"
+        " datetime('1990-01-01T00:00[America/New_York]')] RETURN m.id AS id",
+        None,
+    ),
+    (
+        "zoned_named_range",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z > datetime('2000-01-01T00:00[Europe/Oslo]') RETURN m.id AS id",
+        None,
+    ),
+    (
+        "zoned_named_shifted_eq",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z + duration('P1D') = datetime('1990-01-02T09:00[Europe/Oslo]') RETURN m.id AS id",
+        None,
+    ),
+    (
+        "zoned_named_dst_gap_literal",
+        "zoned_graph",
+        "MATCH (m:M) WHERE datetime('2026-03-29T02:30[Europe/Oslo]') = datetime('2026-03-29T01:30Z') RETURN m.id AS id",
+        None,
+    ),
     ("zoned_gt_local_stamp", "zoned_graph", "MATCH (m:M) WHERE m.ts > m.z RETURN m.id AS id", None),
     (
         "zoned_eq_param",

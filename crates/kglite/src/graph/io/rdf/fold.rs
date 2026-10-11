@@ -256,7 +256,7 @@ fn parse_xsd_datetime(value: &str) -> Value {
         if representable(utc.year())
             && offset_secs.unsigned_abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS as u32
         {
-            return Value::ZonedDateTime { utc, offset_secs };
+            return Value::zoned(utc, offset_secs);
         }
     }
     let base = strip_tz_suffix(value);

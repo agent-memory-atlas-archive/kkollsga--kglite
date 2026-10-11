@@ -262,9 +262,19 @@ pub mod api {
     /// offset-datetime types to and from these.
     pub mod zoned_datetime {
         pub use crate::datatypes::zoned_datetime::{
-            epoch_parts, format_zoned, from_epoch, parse_plain_date, parse_with_offset,
-            parse_zoned, utc_from_wall, wall_clock, ZonedParseError,
+            epoch_parts, format_zoned, format_zoned_in, from_epoch, parse_plain_date,
+            parse_with_zone, parse_zoned, resolve_wall, split_zone_suffix, utc_from_wall,
+            wall_clock, zone_by_name, WallParts, ZonedParseError, ZonedParts,
         };
+    }
+
+    /// Named IANA time zones for `Value::ZonedDateTime`: [`ZoneId`] is kglite's
+    /// own handle (the database crate never appears in this API), resolved from
+    /// a name and queried for its offset and for DST gap / overlap resolution.
+    /// [`IANA_ZONES`] says whether this build carries the database; without it
+    /// no `ZoneId` can be built and stored named values read as their offset.
+    pub mod time_zone {
+        pub use crate::datatypes::time_zone::{LocalFit, ZoneId, ZoneInstant, IANA_ZONES};
     }
 
     /// Bulk graph construction + maintenance. `add_edges_from_specs` is

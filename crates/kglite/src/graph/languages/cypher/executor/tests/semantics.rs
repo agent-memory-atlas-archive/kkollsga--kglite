@@ -132,6 +132,7 @@ fn zoned_value(utc: chrono::NaiveDateTime) -> Value {
     Value::ZonedDateTime {
         utc,
         offset_secs: 0,
+        zone: None,
     }
 }
 

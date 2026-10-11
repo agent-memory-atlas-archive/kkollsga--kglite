@@ -51,7 +51,7 @@ before upgrading.
 ### Added
 
 - **`ZonedDateTime` is a value.**
-  - Cypher: `datetime()` takes ISO text with `Z`, `±HH`, `±HHMM`, `±HH:MM` or `±HH:MM:SS` (within ±18:00), the week, ordinal and quarter date spellings, and maps (`{year, ..., nanosecond, timezone}` with a numeric offset, or `{datetime: …}` / `{date: …, time: …}` bases that keep their offset). A named zone (`[Europe/Oslo]`, `timezone: 'Europe/Oslo'`) is refused until zone rules ship.
+  - Cypher: `datetime()` takes ISO text with `Z`, `±HH`, `±HHMM`, `±HH:MM` or `±HH:MM:SS` (within ±18:00), the week, ordinal and quarter date spellings, and maps (`{year, ..., nanosecond, timezone}` with a numeric offset, or `{datetime: …}` / `{date: …, time: …}` bases that keep their offset).
   - Accessors: `z.year` to `z.nanosecond` read the wall clock at the offset; `z.offset`, `z.offsetSeconds`, `z.offsetMinutes` and `z.timezone` read the offset; `z.epochSeconds` and `z.epochMillis` read the instant.
   - Arithmetic: `z ± duration` moves months and days on the wall clock, then seconds and nanoseconds on the instant; `z ± n` moves days; `z - z` and `z - localdatetime` are durations of instants. `datetime.truncate` truncates the wall clock and keeps the offset (`timezone` overrides it). `duration.between` of two zoned values uses the instants; against a local side the zoned one is read at its wall clock.
   - A zoned value is a valid `FOR VALID_TIME AS OF` instant and a valid stored bound, at its UTC instant, in every storage mode. `valid_at=` takes an aware `datetime`.
@@ -60,9 +60,19 @@ before upgrading.
 - **Every binding and export carries zoned datetimes.**
   - Python: an aware `datetime.datetime` in and out; a declared `'zoneddatetime'` column keeps each offset. `datetime.datetime` holds microseconds, so finer digits floor on the Python side (`toString()` shows them).
   - Node: new `ZonedDateTime` class (wall-clock fields, `offsetSeconds`, `toDate()`). Java: `OffsetDateTime` out, and `OffsetDateTime`, `ZonedDateTime` (as its offset) and `Instant` in. The C ABI and JSON use `{"$zdatetime": "2020-01-02T03:04:05.25+02:00"}`; `kglite.h` is unchanged.
-  - Bolt reads and writes the `DateTime` structure (`seconds` is the UTC epoch reading). `DateTimeZoneId` stays refused.
+  - Bolt reads and writes the `DateTime` structure (`seconds` is the UTC epoch reading).
   - RDF export writes `xsd:dateTime` with the offset and import reads an offset or `Z` back as a zoned value (a literal without one is a local datetime). The CSV tree and blueprints add the `zoneddatetime` column type. JSON and SQL export write the ISO text.
-- **Rust: `Value::ZonedDateTime { utc, offset_secs }`**, with `kglite::api::zoned_datetime` for the wall-clock derivation, the ISO text and its parser. `ColumnType` and `ColumnData` gain `ZonedDateTime`; `DeclaredType` gains `ZonedDateTime`.
+- **Named time zones (IANA).**
+  - Cypher: `datetime('2026-03-29T02:30[Europe/Oslo]')`, `datetime({..., timezone: 'Europe/Oslo'})` and `{datetime: d, timezone: 'Asia/Tokyo'}` build a zoned datetime in an IANA zone. `toString` prints `2026-03-29T03:30+02:00[Europe/Oslo]`, and `z.timezone` returns the name (the offset text for a fixed-offset value).
+  - Daylight saving follows Neo4j: a clock reading the zone skipped moves forward by the gap (`02:30` on Oslo's spring-forward night is `03:30+02:00`); a repeated reading takes the earlier offset unless the text gives the other one. `z + duration` moves months and days on the wall clock and seconds on the instant, so `+ P1D` across a change is 23 or 25 elapsed hours and `+ PT24H` is always 24.
+  - Equality, order, hashing and `DISTINCT` still use the instant: the zone never splits or merges values.
+  - Python: a `datetime` with a `zoneinfo.ZoneInfo` tzinfo binds as a named-zone value and a named zone returns with a `ZoneInfo` tzinfo (`fold=1` marks the second occurrence of a repeated reading; a machine without a tz database gets the fixed offset). Node: `ZonedDateTime` gains `timeZone` and a ninth constructor argument. Java: a region-zoned datetime is a `ZonedDateTime` with its `ZoneId`, in and out. Bolt: `DateTimeZoneId` is accepted and sent (it was refused). The C ABI and JSON carry the zone as a bracketed suffix on the existing `$zdatetime` text; `kglite.h` is unchanged.
+  - RDF export writes the offset (RDF has no zone names); CSV, JSON and SQL export write the bracketed text.
+  - A `time()` or `localtime()` with a named zone is still refused: a time of day has no date to pick the offset by. Read the time of a zoned datetime instead.
+  - Cargo feature `iana-zones` (on by default) bundles the tz database; a build without it refuses zone names with an error naming the feature and reads a stored named-zone value as its stored offset.
+  - New file-format tags only: `Value` wire tag 20 (tag 19 plus the zone **name**, so files do not depend on the database numbering) and overflow-bag tag 16.
+- **`{datetime: z, timezone: tz}` converts, as in Neo4j.** A zoned `datetime` or `time` base moves to the new `timezone` as the same instant (`12:00+01:00` becomes `16:00+05:00`). A local base takes the zone as written, and `truncate` with a `timezone` override re-places the truncated reading.
+- **Rust: `Value::ZonedDateTime { utc, offset_secs, zone }`**, with `kglite::api::zoned_datetime` for the wall-clock derivation, the ISO text and its parser, and `kglite::api::time_zone::ZoneId` (kglite's own zone handle: the tz database crate does not appear in the public API). `ColumnType` and `ColumnData` gain `ZonedDateTime`; `DeclaredType` gains `ZonedDateTime`.
 - **`LocalTime` and `Time` are values.**
   - `localtime()` and `time()` accept ISO text (`HH`, `HHMM`, `HH:MM`, `HH:MM:SS[.f]` to nine digits; `time` also takes `Z`, `±HH`, `±HHMM`, `±HH:MM`) and maps (`{hour, minute, second, millisecond, microsecond, nanosecond, timezone, time}`).
   - Accessors: `t.hour` to `t.nanosecond`, and for a `Time` `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone`. `toString(t)` prints the shortest ISO form, `21:40:32.142+01:00`, `10:00Z`.

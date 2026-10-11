@@ -225,9 +225,12 @@ pub(super) fn coerce_naive_datetime(v: &Value) -> Option<chrono::NaiveDateTime> 
         Value::Timestamp(dt) => Some(*dt),
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
         // The wall clock the zoned value was written in.
-        Value::ZonedDateTime { utc, offset_secs } => Some(
-            crate::datatypes::zoned_datetime::wall_clock(*utc, *offset_secs),
-        ),
+        Value::ZonedDateTime {
+            utc, offset_secs, ..
+        } => Some(crate::datatypes::zoned_datetime::wall_clock(
+            *utc,
+            *offset_secs,
+        )),
         _ => None,
     }
 }

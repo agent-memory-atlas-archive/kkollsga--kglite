@@ -4,6 +4,7 @@ use super::py_value::is_numpy_ndarray;
 pub use super::py_value::{py_query_parameter_to_value, py_value_to_value, F32Rows};
 use super::type_conversions::{to_bool, to_datetime, to_f64, to_i64, to_timestamp, to_u32};
 use super::values::{ColumnData, ColumnType, DataFrame, FilterCondition, Value};
+use kglite_core::api::time_zone::ZoneId;
 use pyo3::prelude::*;
 use pyo3::types::{PyDateTime, PyDelta, PyDict, PyList, PyTime, PyTuple};
 use pyo3::Bound;
@@ -382,6 +383,9 @@ fn time_cells<T>(
     Ok(cells)
 }
 
+/// One zoned-datetime cell: the UTC instant, its offset in seconds and its named zone.
+type ZonedCell = (chrono::NaiveDateTime, i32, Option<ZoneId>);
+
 /// A zoned-datetime column's cells: each `datetime.datetime` through
 /// `py_value::datetime_to_value`. An aware value keeps its offset; a naive one is
 /// read as UTC. Anything else is stored as null and reported under `on_invalid`.
@@ -390,7 +394,7 @@ fn zoned_cells(
     null_mask: &[bool],
     col_name: &str,
     on_invalid: OnInvalid,
-) -> PyResult<Vec<Option<(chrono::NaiveDateTime, i32)>>> {
+) -> PyResult<Vec<Option<ZonedCell>>> {
     let mut cells = Vec::with_capacity(null_mask.len());
     let (mut rejected, mut first) = (0usize, None);
     for (row, &is_null) in null_mask.iter().enumerate() {
@@ -405,8 +409,12 @@ fn zoned_cells(
             .and_then(|dt| super::py_value::datetime_to_value(dt).map_err(|e| e.to_string()))
             .ok()
             .and_then(|v| match v {
-                Value::ZonedDateTime { utc, offset_secs } => Some((utc, offset_secs)),
-                Value::Timestamp(utc) => Some((utc, 0)),
+                Value::ZonedDateTime {
+                    utc,
+                    offset_secs,
+                    zone,
+                } => Some((utc, offset_secs, zone)),
+                Value::Timestamp(utc) => Some((utc, 0, None)),
                 _ => None,
             });
         if converted.is_none() {

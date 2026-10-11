@@ -1,6 +1,7 @@
 use super::prop_map::PropMap;
 use super::time_of_day::{format_clock, format_time, utc_nanos};
-use super::zoned_datetime::format_zoned;
+use super::time_zone::ZoneId;
+use super::zoned_datetime::format_zoned_in;
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,12 +141,17 @@ pub enum Value {
     /// the wall clock is `utc + offset_secs`. **Identity is the instant**:
     /// `10:00+01:00` equals `09:00Z`, `Eq`/`Ord`/`Hash` ignore the offset, and
     /// `DISTINCT`/grouping keep the first offset seen. Produced by `datetime()`
-    /// and an aware Python `datetime.datetime`. **Wire**: appended tag 19
-    /// (epoch seconds, nanoseconds, offset); a later named-zone form appends
-    /// its own tag, as `DurationFine` did, rather than widening this one.
+    /// and an aware Python `datetime.datetime`. `zone` is the named IANA zone
+    /// the value was written in, when it has one: then `offset_secs` is the
+    /// zone's offset at `utc` (kept in step by every constructor) and the value
+    /// prints as `…+01:00[Europe/Oslo]`; the zone never takes part in identity.
+    /// **Wire**: appended tag 19 (epoch seconds, nanoseconds, offset) for a
+    /// fixed-offset value and appended tag 20 (the same plus the zone *name*)
+    /// for a named one; a build without `iana-zones` reads tag 20 as its offset.
     ZonedDateTime {
         utc: NaiveDateTime,
         offset_secs: i32,
+        zone: Option<ZoneId>,
     },
 }
 
@@ -202,6 +208,7 @@ enum WireRef<'a> {
     LocalTime(&'a u64),
     Time(&'a u64, &'a i32),
     ZonedDateTime(i64, u32, &'a i32),
+    ZonedDateTimeNamed(i64, u32, &'a i32, &'static str),
 }
 
 #[derive(Deserialize)]
@@ -239,6 +246,7 @@ enum Wire {
     LocalTime(u64),
     Time(u64, i32),
     ZonedDateTime(i64, u32, i32),
+    ZonedDateTimeNamed(i64, u32, i32, String),
 }
 
 impl Serialize for Value {
@@ -282,9 +290,19 @@ impl Serialize for Value {
             Value::Timestamp(v) => WireRef::Timestamp(v),
             Value::LocalTime(v) => WireRef::LocalTime(v),
             Value::Time { nanos, offset_secs } => WireRef::Time(nanos, offset_secs),
-            Value::ZonedDateTime { utc, offset_secs } => {
+            Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            } => {
                 let utc = utc.and_utc();
-                WireRef::ZonedDateTime(utc.timestamp(), utc.timestamp_subsec_nanos(), offset_secs)
+                let (secs, nanos) = (utc.timestamp(), utc.timestamp_subsec_nanos());
+                match zone {
+                    None => WireRef::ZonedDateTime(secs, nanos, offset_secs),
+                    Some(zone) => {
+                        WireRef::ZonedDateTimeNamed(secs, nanos, offset_secs, zone.name())
+                    }
+                }
             }
         }
         .serialize(serializer)
@@ -336,13 +354,58 @@ impl<'de> Deserialize<'de> for Value {
                 let utc = chrono::DateTime::from_timestamp(secs, nanos)
                     .ok_or_else(|| serde::de::Error::custom("zoned datetime instant out of range"))?
                     .naive_utc();
-                Value::ZonedDateTime { utc, offset_secs }
+                Value::ZonedDateTime {
+                    utc,
+                    offset_secs,
+                    zone: None,
+                }
+            }
+            Wire::ZonedDateTimeNamed(secs, nanos, offset_secs, name) => {
+                let utc = chrono::DateTime::from_timestamp(secs, nanos)
+                    .ok_or_else(|| serde::de::Error::custom("zoned datetime instant out of range"))?
+                    .naive_utc();
+                // The name is the persisted truth. A build that knows it takes
+                // its offset from the rules; one that does not (no `iana-zones`,
+                // or a name a newer database dropped) keeps the stored offset,
+                // so the value is never lost.
+                match ZoneId::from_name(&name) {
+                    Some(zone) => Value::ZonedDateTime {
+                        utc,
+                        offset_secs: zone.offset_at(utc),
+                        zone: Some(zone),
+                    },
+                    None => Value::ZonedDateTime {
+                        utc,
+                        offset_secs,
+                        zone: None,
+                    },
+                }
             }
         })
     }
 }
 
 impl Value {
+    /// An instant written at a fixed UTC offset (no named zone).
+    #[inline]
+    pub fn zoned(utc: NaiveDateTime, offset_secs: i32) -> Value {
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone: None,
+        }
+    }
+
+    /// An instant seen in a named zone: the offset is the zone's at `utc`.
+    #[inline]
+    pub fn zoned_in(utc: NaiveDateTime, zone: ZoneId) -> Value {
+        Value::ZonedDateTime {
+            utc,
+            offset_secs: zone.offset_at(utc),
+            zone: Some(zone),
+        }
+    }
+
     pub(crate) fn clear_relationship_incarnations(&mut self) {
         match self {
             Value::Relationship(rel) => rel.clear_incarnation(),
@@ -576,6 +639,7 @@ pub enum BorrowedValue<'a> {
     ZonedDateTime {
         utc: chrono::NaiveDateTime,
         offset_secs: i32,
+        zone: Option<ZoneId>,
     },
 }
 
@@ -610,9 +674,14 @@ impl<'a> BorrowedValue<'a> {
                 nanos: *nanos,
                 offset_secs: *offset_secs,
             },
-            Value::ZonedDateTime { utc, offset_secs } => BorrowedValue::ZonedDateTime {
+            Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            } => BorrowedValue::ZonedDateTime {
                 utc: *utc,
                 offset_secs: *offset_secs,
+                zone: *zone,
             },
             _ => return None,
         })
@@ -631,9 +700,15 @@ impl<'a> BorrowedValue<'a> {
             Value::Timestamp(t) => BorrowedValue::Timestamp(t),
             Value::LocalTime(n) => BorrowedValue::LocalTime(n),
             Value::Time { nanos, offset_secs } => BorrowedValue::Time { nanos, offset_secs },
-            Value::ZonedDateTime { utc, offset_secs } => {
-                BorrowedValue::ZonedDateTime { utc, offset_secs }
-            }
+            Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            } => BorrowedValue::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            },
             _ => return None,
         })
     }
@@ -666,9 +741,15 @@ impl<'a> BorrowedValue<'a> {
             },
             BorrowedValue::LocalTime(n) => Value::LocalTime(n),
             BorrowedValue::Time { nanos, offset_secs } => Value::Time { nanos, offset_secs },
-            BorrowedValue::ZonedDateTime { utc, offset_secs } => {
-                Value::ZonedDateTime { utc, offset_secs }
-            }
+            BorrowedValue::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            } => Value::ZonedDateTime {
+                utc,
+                offset_secs,
+                zone,
+            },
         }
     }
 }
@@ -1102,8 +1183,8 @@ pub enum ColumnData {
     LocalTime(Vec<Option<u64>>),
     /// `(nanoseconds of day, offset seconds)` per cell, materialised as `Value::Time`.
     Time(Vec<Option<(u64, i32)>>),
-    /// `(UTC instant, offset seconds)` per cell, materialised as `Value::ZonedDateTime`.
-    ZonedDateTime(Vec<Option<(NaiveDateTime, i32)>>),
+    /// `(UTC instant, offset seconds, named zone)` per cell, materialised as `Value::ZonedDateTime`.
+    ZonedDateTime(Vec<Option<(NaiveDateTime, i32, Option<ZoneId>)>>),
 }
 
 #[derive(Debug)]
@@ -1137,9 +1218,14 @@ impl Column {
             ColumnData::Time(vec) => vec
                 .get(row_idx)?
                 .map(|(nanos, offset_secs)| Value::Time { nanos, offset_secs }),
-            ColumnData::ZonedDateTime(vec) => vec
-                .get(row_idx)?
-                .map(|(utc, offset_secs)| Value::ZonedDateTime { utc, offset_secs }),
+            ColumnData::ZonedDateTime(vec) => {
+                vec.get(row_idx)?
+                    .map(|(utc, offset_secs, zone)| Value::ZonedDateTime {
+                        utc,
+                        offset_secs,
+                        zone,
+                    })
+            }
         }
     }
 
@@ -1560,9 +1646,11 @@ impl DataFrame {
                         _ => vec.push(None),
                     },
                     ColumnData::ZonedDateTime(vec) => match val {
-                        Value::ZonedDateTime { utc, offset_secs } => {
-                            vec.push(Some((utc, offset_secs)))
-                        }
+                        Value::ZonedDateTime {
+                            utc,
+                            offset_secs,
+                            zone,
+                        } => vec.push(Some((utc, offset_secs, zone))),
                         _ => vec.push(None),
                     },
                 }
@@ -1866,7 +1954,11 @@ fn value_to_text(val: Value) -> Option<String> {
         Value::Point { lat, lon } => Some(format!("POINT({} {})", lon, lat)),
         Value::LocalTime(n) => Some(format_clock(n)),
         Value::Time { nanos, offset_secs } => Some(format_time(nanos, offset_secs)),
-        Value::ZonedDateTime { utc, offset_secs } => Some(format_zoned(utc, offset_secs)),
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => Some(format_zoned_in(utc, offset_secs, zone)),
         other => Some(format_value_precise_timestamps(&other)),
     }
 }
@@ -1969,7 +2061,11 @@ pub fn raw_string(value: &Value) -> String {
         ),
         Value::LocalTime(n) => format_clock(*n),
         Value::Time { nanos, offset_secs } => format_time(*nanos, *offset_secs),
-        Value::ZonedDateTime { utc, offset_secs } => format_zoned(*utc, *offset_secs),
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => format_zoned_in(*utc, *offset_secs, *zone),
         Value::Null => String::new(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::List(_)
@@ -2010,9 +2106,11 @@ fn format_value_with_timestamp(value: &Value, timestamp_format: &str) -> String 
         Value::Time { nanos, offset_secs } => {
             format!("\"{}\"", format_time(*nanos, *offset_secs))
         }
-        Value::ZonedDateTime { utc, offset_secs } => {
-            format!("\"{}\"", format_zoned(*utc, *offset_secs))
-        }
+        Value::ZonedDateTime {
+            utc,
+            offset_secs,
+            zone,
+        } => format!("\"{}\"", format_zoned_in(*utc, *offset_secs, *zone)),
         Value::Null => "NULL".to_string(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::Duration {

@@ -82,10 +82,7 @@ pub(crate) fn equality_keys(value: &Value) -> Option<Vec<Value>> {
 /// The zoned value at the instant `utc`, for an index key: identity is the
 /// instant, so the offset it carries does not matter.
 fn zoned_utc(utc: chrono::NaiveDateTime) -> Value {
-    Value::ZonedDateTime {
-        utc,
-        offset_secs: 0,
-    }
+    Value::zoned(utc, 0)
 }
 
 /// The stored temporal values `=` finds equal to the text `s`: a date when `s`
