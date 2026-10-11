@@ -707,7 +707,12 @@ class ResultView:
 
         Temporal values come back as Python temporal values: a **date** is a
         ``datetime.date`` and a **datetime** a naive ``datetime.datetime`` —
-        top-level, in lists and maps, and on every read route. (Earlier
+        top-level, in lists and maps, and on every read route. A **local
+        time** (``localtime()``) is a naive ``datetime.time`` and a **time**
+        (``time()``) an aware ``datetime.time`` whose ``tzinfo`` is a fixed
+        offset. ``datetime.time`` holds microseconds, so a time finer than that
+        returns floored to the microsecond (``toString()`` in Cypher shows every
+        digit). (Earlier
         releases returned a date as its ISO string; ``d.isoformat()`` gives
         that text.)
         A returned date can be passed straight back into a query as a
@@ -1839,10 +1844,10 @@ def from_records(
         ValueError: If the spec JSON is malformed, a required field is missing,
             or any key is not one this loader reads.
         TypeError: If a record value is of a type a JSON records spec cannot
-            carry, naming the value and its type: a ``time`` (the graph has no
-            time-of-day type). A ``date``, ``datetime`` or
-            ``timedelta`` loads typed — it is sent as the tagged object
-            ``{"$date": …}`` / ``{"$datetime": …}`` / ``{"$duration": …}``,
+            carry, naming the value and its type. A ``date``, ``datetime``,
+            ``time`` or ``timedelta`` loads typed — it is sent as the tagged
+            object ``{"$date": …}`` / ``{"$datetime": …}`` /
+            ``{"$localtime": …}`` / ``{"$time": …}`` / ``{"$duration": …}``,
             which a spec given as JSON text can use directly. ``pd.NaT``
             becomes ``null``.
     """
@@ -1929,8 +1934,8 @@ def from_networkx(
     Node and edge property columns preserve exact signed 64-bit integers,
     including columns with missing values, before DataFrame ingestion. An
     object column whose non-null cells are all ``datetime.date``, all
-    ``datetime.datetime`` / ``pd.Timestamp``, all ``int`` or all ``float`` loads
-    as that type. Mixed
+    ``datetime.datetime`` / ``pd.Timestamp``, all naive ``datetime.time``, all
+    aware ``datetime.time``, all ``int`` or all ``float`` loads as that type. Mixed
     object columns retain the ordinary ingestion policy: values are stored as
     text with a warning, using each scalar's original spelling before that
     conversion. This does not provide a typed round-trip for heterogeneous
@@ -2333,7 +2338,8 @@ class KnowledgeGraph:
             column_types: Override column dtypes, e.g. ``{'col': 'string'}``.
                 Supported: ``'string'``, ``'integer'``, ``'float'``,
                 ``'datetime'``, ``'timestamp'``, ``'uniqueid'``, ``'list'``,
-                ``'map'``, ``'duration'``, and ``'validFrom'`` /
+                ``'map'``, ``'duration'``, ``'localtime'``, ``'time'``, and
+                ``'validFrom'`` /
                 ``'validTo'`` (a validity interval, with its end rule set by
                 *convention*; see below).
                 A ``timedelta64`` column (numpy or pyarrow-backed) or a column
@@ -2343,6 +2349,12 @@ class KnowledgeGraph:
                 999999999, added to the signed seconds) when the duration has
                 a sub-second part. A cell that is not a ``timedelta`` is
                 stored as NULL and reported through ``on_invalid``.
+                A column of naive ``datetime.time`` loads as ``'localtime'``
+                values and a column of aware ones as ``'time'`` values (the
+                offset kept); a column mixing the two is refused as an
+                object column is. A cell of the other kind in a declared
+                ``'localtime'`` / ``'time'`` column is stored as NULL and
+                reported through ``on_invalid``.
                 A column of Python lists/tuples is auto-detected as a native
                 ``'list'`` property (stored structurally, not stringified), so
                 ``'y' IN n.aliases`` tests membership and ``UNWIND n.aliases``
@@ -8294,7 +8306,8 @@ class KnowledgeGraph:
             ResultView carries ``diagnostics`` / ``warnings``. Python result
             values follow :class:`ResultView`'s endpoint-reference and timestamp
             conversion contract — a date is a ``datetime.date``, a datetime a
-            ``datetime.datetime``; format-specific details are in
+            ``datetime.datetime``, a local time a naive ``datetime.time`` and
+            a time an aware one; format-specific details are in
             :doc:`Value projection </python/value-projection>`.
 
         Raises:

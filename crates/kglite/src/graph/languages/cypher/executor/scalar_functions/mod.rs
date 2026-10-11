@@ -23,6 +23,7 @@ pub(in crate::graph::languages::cypher::executor) mod temporal_accessors;
 mod temporal_duration;
 mod temporal_iso;
 mod temporal_map;
+mod temporal_time;
 mod temporal_truncate;
 mod timeseries;
 mod utility;
@@ -30,7 +31,6 @@ pub(super) mod validity;
 mod vector;
 
 pub(super) use function_registry::{FunctionSpec, FUNCTIONS};
-use shared::*;
 
 /// Parse a datetime string exactly as `datetime(s)` does: an offset is
 /// applied, normalising the reading to UTC. `None` when `datetime(s)` is null.
@@ -49,84 +49,44 @@ impl<'a> CypherExecutor<'a> {
         self.eval_collection_fn(name, args, row)
     }
 
-    /// Evaluate `localdatetime()` / `localtime()` (and `time(str)`). The no-arg
-    /// form reads the local wall clock — a timestamp for `localdatetime()`, an
-    /// `HH:MM:SS` string for `localtime()`; the single-string form
-    /// validates/normalises, returns `Null` for a null argument and raises on an
-    /// unparseable string (as `date()`/`datetime()` do). Any other arity/type is
-    /// an error.
-    fn eval_local_temporal(
-        &self,
-        args: &[Expression],
-        row: &ResultRow,
-        kind: LocalTemporalKind,
-    ) -> Result<Value, String> {
+    /// Evaluate `localdatetime()`. The no-arg form reads the local wall clock;
+    /// the single-string form validates/normalises, returns `Null` for a null
+    /// argument and raises on an unparseable string (as `date()`/`datetime()`
+    /// do). Any other arity/type is an error.
+    fn eval_localdatetime(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         use chrono::NaiveTime;
         if args.is_empty() {
-            let now = chrono::Local::now();
-            return match kind {
-                LocalTemporalKind::DateTime => Ok(Value::Timestamp(now.naive_local())),
-                // localtime() stays a string — there is no time-of-day Value variant.
-                LocalTemporalKind::Time => Ok(Value::String(now.format("%H:%M:%S").to_string())),
-            };
+            return Ok(Value::Timestamp(chrono::Local::now().naive_local()));
         }
         if args.len() != 1 {
-            return Err("local temporal functions take 0 or 1 string argument".into());
+            return Err("localdatetime() takes 0 or 1 argument".into());
         }
-        let val = self.evaluate_expression(&args[0], row)?;
-        let s = match val {
+        let s = match self.evaluate_expression(&args[0], row)? {
             Value::String(s) => s,
             Value::Null => return Ok(Value::Null),
             Value::Map(map) => {
-                let target = match kind {
-                    LocalTemporalKind::DateTime => temporal_map::MapTarget::LocalDateTime,
-                    LocalTemporalKind::Time => temporal_map::MapTarget::LocalTime,
-                };
-                return temporal_map::temporal_from_map(target, &map);
+                return temporal_map::temporal_from_map(
+                    temporal_map::MapTarget::LocalDateTime,
+                    &map,
+                );
             }
-            Value::Timestamp(t) => {
-                return Ok(match kind {
-                    LocalTemporalKind::DateTime => Value::Timestamp(t),
-                    LocalTemporalKind::Time => {
-                        Value::String(temporal_iso::format_local_time(t.time()))
-                    }
-                });
-            }
-            Value::DateTime(d) if matches!(kind, LocalTemporalKind::DateTime) => {
-                return Ok(Value::Timestamp(d.and_time(NaiveTime::MIN)));
-            }
+            Value::Timestamp(t) => return Ok(Value::Timestamp(t)),
+            Value::DateTime(d) => return Ok(Value::Timestamp(d.and_time(NaiveTime::MIN))),
             _ => {
-                return Err(match kind {
-                    LocalTemporalKind::DateTime => {
-                        "localdatetime() argument must be a string, a map or a temporal value"
-                    }
-                    LocalTemporalKind::Time => {
-                        "localtime() argument must be a string, a map or a temporal value"
-                    }
-                }
-                .into())
+                return Err(
+                    "localdatetime() argument must be a string, a map or a temporal value".into(),
+                )
             }
         };
-        match kind {
-            LocalTemporalKind::DateTime => {
-                // The ISO calendar/clock spellings first; then the zoned
-                // forms, read as `local` rather than `utc`: this function
-                // names the *local* reading, so an offset-bearing input keeps
-                // its wall clock and only loses the zone label — the opposite
-                // of `datetime()`, which normalises. The time is never dropped.
-                temporal_iso::parse_local_datetime_text(&s)
-                    .map(Value::Timestamp)
-                    .or_else(|| shared::parse_iso_datetime(&s).map(|parsed| Value::Timestamp(parsed.local)))
-                    .ok_or_else(|| {
-                        format!("localdatetime(): cannot parse '{s}' as an ISO-8601 datetime")
-                    })
-            }
-            LocalTemporalKind::Time => temporal_iso::parse_time_text(&s)
-                .map(|t| Value::String(temporal_iso::format_local_time(t)))
-                .ok_or_else(|| {
-                    format!("time()/localtime(): cannot parse '{s}' as HH, HH:MM, HH:MM:SS or HH:MM:SS.fff")
-                }),
-        }
+        // The ISO calendar/clock spellings first; then the zoned forms, read
+        // as `local` rather than `utc`: this function names the *local*
+        // reading, so an offset-bearing input keeps its wall clock and only
+        // loses the zone label — the opposite of `datetime()`, which
+        // normalises. The time is never dropped.
+        temporal_iso::parse_local_datetime_text(&s)
+            .map(Value::Timestamp)
+            .or_else(|| shared::parse_iso_datetime(&s).map(|parsed| Value::Timestamp(parsed.local)))
+            .ok_or_else(|| format!("localdatetime(): cannot parse '{s}' as an ISO-8601 datetime"))
     }
 
     /// Resolve a function argument that denotes a node to its live

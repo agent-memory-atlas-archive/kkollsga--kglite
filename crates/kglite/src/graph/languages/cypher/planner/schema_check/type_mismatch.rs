@@ -43,6 +43,9 @@
 //!   *and*, value-dependently, with strings (the string is parsed). A
 //!   temporal-vs-string comparison therefore never warns: whether it is null
 //!   depends on the literal's contents, which is not a plan-time fact.
+//! - **Time of day** — `LOCAL TIME`/`ZONED TIME`, intercomparable only with
+//!   each other's own kind at runtime; the family stays optimistic and warns
+//!   only against numbers, text and booleans.
 //! - `DURATION` and `POINT` have no `compare_values` arms at all — even
 //!   same-type — so they are placed in no family and nothing is said about
 //!   them.
@@ -113,6 +116,8 @@ enum TypeFamily {
     Text,
     Boolean,
     Temporal,
+    /// `LOCAL TIME` and `ZONED TIME`: comparable among themselves only.
+    TimeOfDay,
 }
 
 impl TypeFamily {
@@ -124,6 +129,7 @@ impl TypeFamily {
             DeclaredType::String => Some(Self::Text),
             DeclaredType::Boolean => Some(Self::Boolean),
             DeclaredType::Date | DeclaredType::LocalDateTime => Some(Self::Temporal),
+            DeclaredType::LocalTime | DeclaredType::ZonedTime => Some(Self::TimeOfDay),
             DeclaredType::Duration | DeclaredType::Point => None,
         }
     }
@@ -142,6 +148,7 @@ impl TypeFamily {
             "float" | "double" | "f64" | "number" | "float64" => Some(Self::Numeric),
             "boolean" | "bool" => Some(Self::Boolean),
             "datetime" | "date" | "timestamp" => Some(Self::Temporal),
+            "localtime" | "time" => Some(Self::TimeOfDay),
             _ => None,
         }
     }
@@ -154,6 +161,7 @@ impl TypeFamily {
             Value::String(_) => Some(Self::Text),
             Value::Boolean(_) => Some(Self::Boolean),
             Value::DateTime(_) | Value::Timestamp(_) => Some(Self::Temporal),
+            Value::LocalTime(_) | Value::Time { .. } => Some(Self::TimeOfDay),
             _ => None,
         }
     }

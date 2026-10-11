@@ -95,6 +95,8 @@ pub fn map_blueprint_type(ty: &str) -> Option<ColumnType> {
         "date" | "datetime" | "validFrom" | "validTo" => Some(ColumnType::DateTime),
         "list" | "array" => Some(ColumnType::List),
         "duration" => Some(ColumnType::Duration),
+        "localtime" => Some(ColumnType::LocalTime),
+        "time" => Some(ColumnType::Time),
         _ => None,
     }
 }
@@ -117,6 +119,8 @@ pub fn blueprint_type_keyword(ct: &ColumnType) -> Option<&'static str> {
         ColumnType::DateTime => Some("date"),
         ColumnType::List => Some("list"),
         ColumnType::Duration => Some("duration"),
+        ColumnType::LocalTime => Some("localtime"),
+        ColumnType::Time => Some("time"),
         ColumnType::UniqueId | ColumnType::Timestamp | ColumnType::Map => None,
     }
 }
@@ -411,7 +415,35 @@ fn build_column_data(
                 .map(|r| parse_duration_cell(&raw.rows[r][src_idx], raw.nulls[r][src_idx]))
                 .collect(),
         )),
+        ColumnType::LocalTime => Ok(ColumnData::LocalTime(
+            (0..n)
+                .map(
+                    |r| match parse_time_cell(&raw.rows[r][src_idx], raw.nulls[r][src_idx]) {
+                        Some((nanos, None)) => Some(nanos),
+                        _ => None,
+                    },
+                )
+                .collect(),
+        )),
+        ColumnType::Time => Ok(ColumnData::Time(
+            (0..n)
+                .map(|r| {
+                    parse_time_cell(&raw.rows[r][src_idx], raw.nulls[r][src_idx])
+                        .map(|(nanos, offset)| (nanos, offset.unwrap_or(0)))
+                })
+                .collect(),
+        )),
     }
+}
+
+/// A cell declared `localtime` or `time`: `HH:MM[:SS[.fraction]]`, with a
+/// `Z`/`±HH:MM` offset for `time`. Anything else is null, as an unparseable
+/// int cell is; a `localtime` cell carrying an offset is null too.
+fn parse_time_cell(text: &str, is_null: bool) -> Option<(u64, Option<i32>)> {
+    if is_null {
+        return None;
+    }
+    crate::datatypes::time_of_day::parse_time(text).ok()
 }
 
 /// A cell declared `duration`: the `{"months", "days", "seconds"}` object a

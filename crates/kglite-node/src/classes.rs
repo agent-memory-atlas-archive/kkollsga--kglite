@@ -161,6 +161,175 @@ impl LocalDateTime {
     }
 }
 
+/// A time of day with no offset, to the nanosecond.
+#[napi]
+pub struct LocalTime {
+    #[napi(readonly)]
+    pub hour: u32,
+    #[napi(readonly)]
+    pub minute: u32,
+    #[napi(readonly)]
+    pub second: u32,
+    #[napi(readonly)]
+    pub nanosecond: u32,
+}
+
+/// Nanoseconds since midnight for a validated clock reading, `None` when the
+/// reading is not a time of day (hour 24, minute 60, a leap second, …).
+fn clock_nanos(hour: u32, minute: u32, second: u32, nanosecond: u32) -> Option<u64> {
+    (hour < 24 && minute < 60 && second < 60 && nanosecond < 1_000_000_000).then(|| {
+        (u64::from(hour) * 3600 + u64::from(minute) * 60 + u64::from(second)) * 1_000_000_000
+            + u64::from(nanosecond)
+    })
+}
+
+impl LocalTime {
+    pub fn to_nanos(&self) -> u64 {
+        clock_nanos(self.hour, self.minute, self.second, self.nanosecond)
+            .expect("validated at construction")
+    }
+    pub fn from_nanos(nanos: u64) -> Self {
+        let secs = nanos / 1_000_000_000;
+        Self {
+            hour: (secs / 3600) as u32,
+            minute: (secs / 60 % 60) as u32,
+            second: (secs % 60) as u32,
+            nanosecond: (nanos % 1_000_000_000) as u32,
+        }
+    }
+}
+
+#[napi]
+impl LocalTime {
+    #[napi(constructor)]
+    pub fn new(
+        hour: u32,
+        minute: Option<u32>,
+        second: Option<u32>,
+        nanosecond: Option<u32>,
+    ) -> napi::Result<Self, &'static str> {
+        contain(|| {
+            let (minute, second, nanosecond) = (
+                minute.unwrap_or(0),
+                second.unwrap_or(0),
+                nanosecond.unwrap_or(0),
+            );
+            clock_nanos(hour, minute, second, nanosecond)
+                .map(|_| Self {
+                    hour,
+                    minute,
+                    second,
+                    nanosecond,
+                })
+                .ok_or_else(|| {
+                    bad(format!(
+                        "invalid time {hour}:{minute}:{second}.{nanosecond}"
+                    ))
+                })
+        })
+    }
+
+    /// ISO-8601 with seconds omitted when zero and the shortest of 0, 3, 6 or 9 fractional digits.
+    #[napi(js_name = "toString")]
+    pub fn to_iso(&self) -> napi::Result<String, &'static str> {
+        contain(|| Ok(kglite::api::time_of_day::format_clock(self.to_nanos())))
+    }
+
+    #[napi(js_name = "toJSON")]
+    pub fn to_json(&self) -> napi::Result<String, &'static str> {
+        self.to_iso()
+    }
+}
+
+/// A time of day with a UTC offset (whole seconds, within ±18 hours), to the nanosecond.
+/// Two times at the same instant of day are equal in the engine whatever their offsets.
+#[napi]
+pub struct Time {
+    #[napi(readonly)]
+    pub hour: u32,
+    #[napi(readonly)]
+    pub minute: u32,
+    #[napi(readonly)]
+    pub second: u32,
+    #[napi(readonly)]
+    pub nanosecond: u32,
+    /// Seconds east of UTC.
+    #[napi(readonly)]
+    pub offset_seconds: i32,
+}
+
+impl Time {
+    pub fn to_nanos(&self) -> u64 {
+        clock_nanos(self.hour, self.minute, self.second, self.nanosecond)
+            .expect("validated at construction")
+    }
+    pub fn from_parts(nanos: u64, offset_seconds: i32) -> Self {
+        let local = LocalTime::from_nanos(nanos);
+        Self {
+            hour: local.hour,
+            minute: local.minute,
+            second: local.second,
+            nanosecond: local.nanosecond,
+            offset_seconds,
+        }
+    }
+}
+
+#[napi]
+impl Time {
+    #[napi(constructor)]
+    pub fn new(
+        hour: u32,
+        minute: Option<u32>,
+        second: Option<u32>,
+        nanosecond: Option<u32>,
+        offset_seconds: Option<i32>,
+    ) -> napi::Result<Self, &'static str> {
+        contain(|| {
+            let (minute, second, nanosecond, offset_seconds) = (
+                minute.unwrap_or(0),
+                second.unwrap_or(0),
+                nanosecond.unwrap_or(0),
+                offset_seconds.unwrap_or(0),
+            );
+            if offset_seconds.abs() > kglite::api::time_of_day::MAX_OFFSET_SECS {
+                return Err(bad(format!(
+                    "invalid offset {offset_seconds}s: a time's offset is within ±18 hours"
+                )));
+            }
+            clock_nanos(hour, minute, second, nanosecond)
+                .map(|_| Self {
+                    hour,
+                    minute,
+                    second,
+                    nanosecond,
+                    offset_seconds,
+                })
+                .ok_or_else(|| {
+                    bad(format!(
+                        "invalid time {hour}:{minute}:{second}.{nanosecond}"
+                    ))
+                })
+        })
+    }
+
+    /// ISO-8601 with the offset: `10:00:00.5+01:00`, `10:00Z`.
+    #[napi(js_name = "toString")]
+    pub fn to_iso(&self) -> napi::Result<String, &'static str> {
+        contain(|| {
+            Ok(kglite::api::time_of_day::format_time(
+                self.to_nanos(),
+                self.offset_seconds,
+            ))
+        })
+    }
+
+    #[napi(js_name = "toJSON")]
+    pub fn to_json(&self) -> napi::Result<String, &'static str> {
+        self.to_iso()
+    }
+}
+
 /// A Cypher duration: calendar months and days are kept apart from clock seconds.
 #[napi]
 pub struct Duration {

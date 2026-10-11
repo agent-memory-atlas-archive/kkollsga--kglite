@@ -1,13 +1,13 @@
 //! Absolute goldens for the openCypher temporal functions on the value model
 //! this engine has: a date, a zoneless datetime (`Timestamp`), a time of day
-//! carried as text, and a months/days/seconds duration. Constructor key forms,
+//! (`LocalTime`, `Time`), and a months/days/seconds duration. Constructor key forms,
 //! ISO 8601 string spellings and canonical rendering are shared executor
 //! semantics, so the differential corpus cannot see them; each expectation is
 //! the value the openCypher specification gives.
 
 use super::*;
 
-fn run(query: &str) -> Result<Value, String> {
+pub(super) fn run(query: &str) -> Result<Value, String> {
     let graph = DirGraph::new();
     let parsed = parser::parse_cypher(query)
         .unwrap_or_else(|e| panic!("query failed to parse: {query}\n  error: {e}"));
@@ -17,7 +17,7 @@ fn run(query: &str) -> Result<Value, String> {
     Ok(result.rows[0][0].clone())
 }
 
-fn cell(query: &str) -> Value {
+pub(super) fn cell(query: &str) -> Value {
     run(query).unwrap_or_else(|e| panic!("query failed: {query}\n  error: {e}"))
 }
 
@@ -27,6 +27,19 @@ fn date(y: i32, m: u32, d: u32) -> Value {
 
 fn text(s: &str) -> Value {
     Value::String(s.to_string())
+}
+
+fn local_time(clock: &str) -> Value {
+    let time = crate::datatypes::time_of_day::parse_clock(clock).unwrap();
+    Value::LocalTime(crate::datatypes::time_of_day::nanos_of(time))
+}
+
+fn zoned_time(clock: &str, offset_secs: i32) -> Value {
+    let time = crate::datatypes::time_of_day::parse_clock(clock).unwrap();
+    Value::Time {
+        nanos: crate::datatypes::time_of_day::nanos_of(time),
+        offset_secs,
+    }
 }
 
 fn local_datetime(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32, nanos: u32) -> Value {
@@ -123,7 +136,16 @@ fn local_time_maps_and_strings_render_canonically() {
             "12:31:14.645",
         ),
     ] {
-        assert_eq!(cell(&format!("RETURN {query}")), text(expected), "{query}");
+        assert_eq!(
+            cell(&format!("RETURN {query}")),
+            local_time(expected),
+            "{query}"
+        );
+        assert_eq!(
+            cell(&format!("RETURN toString({query})")),
+            text(expected),
+            "{query}"
+        );
     }
 }
 
@@ -247,10 +269,21 @@ fn truncate_rounds_down_then_applies_overrides() {
         ("localtime.truncate('hour', localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123}), {nanosecond: 2})", "12:00:00.000000002"),
         ("localtime.truncate('day', localdatetime({year: 1984, month: 10, day: 11, hour: 12}), {})", "00:00"),
         ("localtime.truncate('minute', localtime('12:31:14.645'))", "12:31"),
-        ("time.truncate('second', localtime('12:31:14.645'))", "12:31:14"),
     ] {
-        assert_eq!(cell(&format!("RETURN {query}")), text(expected), "{query}");
+        assert_eq!(
+            cell(&format!("RETURN {query}")),
+            local_time(expected),
+            "{query}"
+        );
     }
+    assert_eq!(
+        cell("RETURN time.truncate('second', localtime('12:31:14.645'))"),
+        zoned_time("12:31:14", 0)
+    );
+    assert_eq!(
+        cell("RETURN time.truncate('minute', time('12:31:14+01:00'))"),
+        zoned_time("12:31", 3600)
+    );
 }
 
 #[test]

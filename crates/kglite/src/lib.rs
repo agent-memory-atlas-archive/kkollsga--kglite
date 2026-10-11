@@ -245,6 +245,17 @@ pub mod api {
         };
     }
 
+    /// Times of day: the nanosecond-of-day encoding behind `Value::LocalTime`
+    /// and `Value::Time`, their ISO 8601 text forms (`10:00:00.5`,
+    /// `10:00+01:00`, `Z`) and the bounds a binding checks an inbound value
+    /// against. Bindings convert their own native time types to and from these.
+    pub mod time_of_day {
+        pub use crate::datatypes::time_of_day::{
+            format_clock, format_offset, format_time, is_valid_nanos, parse_offset, parse_time,
+            TimeParseError, MAX_OFFSET_SECS, NANOS_PER_DAY,
+        };
+    }
+
     /// Bulk graph construction + maintenance. `add_edges_from_specs` is
     /// the DataFrame-free edge-ingest path that non-Python bindings use
     /// (the C ABI's `kglite_create_edges_batch` wraps it); the DataFrame-based

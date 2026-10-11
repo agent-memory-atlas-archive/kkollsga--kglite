@@ -147,6 +147,7 @@ struct Emitter<'a> {
     xsd_boolean: NamedNode,
     xsd_date: NamedNode,
     xsd_date_time: NamedNode,
+    xsd_time: NamedNode,
     xsd_duration: NamedNode,
     geo_wkt: NamedNode,
     kg_json: NamedNode,
@@ -171,6 +172,7 @@ impl<'a> Emitter<'a> {
             xsd_boolean: named(xsd::BOOLEAN),
             xsd_date: named(xsd::DATE),
             xsd_date_time: named(xsd::DATE_TIME),
+            xsd_time: named(xsd::TIME),
             xsd_duration: named(xsd::DURATION),
             geo_wkt: iri(GEO_WKT.to_string()),
             kg_json: iri(KG_JSON.to_string()),
@@ -268,6 +270,12 @@ impl<'a> Emitter<'a> {
                 t.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
                 &self.xsd_date_time,
             ),
+            // `xsd:time` always spells the seconds; the offset marks a `Time`
+            // and its absence a `LocalTime`, which is how the reader tells them apart.
+            Value::LocalTime(n) => typed(xsd_time_lexical(*n, None), &self.xsd_time),
+            Value::Time { nanos, offset_secs } => {
+                typed(xsd_time_lexical(*nanos, Some(*offset_secs)), &self.xsd_time)
+            }
             Value::Point { lat, lon } => typed(format!("POINT({lon} {lat})"), &self.geo_wkt),
             // A sub-second part is an `xsd:duration` fraction when the sign is
             // uniform; the mixed-sign case takes the lossless `kg:duration` form.
@@ -296,6 +304,25 @@ impl<'a> Emitter<'a> {
             other => Literal::new_simple_literal(raw_string(other)),
         })
     }
+}
+
+/// The `xsd:time` lexical form: `hh:mm:ss[.fraction]` with trailing fraction
+/// zeros trimmed, then `Z` or `±hh:mm` when an offset is given.
+fn xsd_time_lexical(nanos: u64, offset_secs: Option<i32>) -> String {
+    let secs = nanos / 1_000_000_000;
+    let sub = nanos % 1_000_000_000;
+    let mut text = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+    if sub != 0 {
+        let fraction = format!("{sub:09}");
+        text.push('.');
+        text.push_str(fraction.trim_end_matches('0'));
+    }
+    if let Some(offset) = offset_secs {
+        // A sub-minute offset has no xsd spelling; it is written with seconds,
+        // which this crate's reader accepts and a strict xsd validator would not.
+        text.push_str(&crate::datatypes::time_of_day::format_offset(offset));
+    }
+    text
 }
 
 /// `P{y}Y{m}M{d}DT{s}S` for a duration whose fields agree in sign; `None`

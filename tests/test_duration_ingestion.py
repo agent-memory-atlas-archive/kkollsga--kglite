@@ -135,6 +135,8 @@ def test_from_records_types_timedelta_date_and_datetime():
                             "d": dt.timedelta(days=1, hours=2),
                             "on": dt.date(2020, 1, 1),
                             "at": dt.datetime(2020, 1, 1, 10, tzinfo=dt.timezone(dt.timedelta(hours=2))),
+                            "lt": dt.time(10, 30),
+                            "zt": dt.time(10, 30, tzinfo=dt.timezone(dt.timedelta(hours=1))),
                         },
                         {"id": 2, "d": {"$duration": {"days": 1, "seconds": 7200}}},
                     ],
@@ -144,9 +146,13 @@ def test_from_records_types_timedelta_date_and_datetime():
     )
     rows = g.cypher(
         f"MATCH (n:T) RETURN n.id AS id, n.d = {DAY_2H} AS eq, n.on = date('2020-01-01') AS on, "
-        "n.at = datetime('2020-01-01T08:00:00') AS at ORDER BY id"
+        "n.at = datetime('2020-01-01T08:00:00') AS at, n.lt = localtime('10:30') AS lt, "
+        "n.zt = time('09:30Z') AS zt ORDER BY id"
     ).to_list()
-    assert rows == [{"id": 1, "eq": True, "on": True, "at": True}, {"id": 2, "eq": True, "on": None, "at": None}]
+    assert rows == [
+        {"id": 1, "eq": True, "on": True, "at": True, "lt": True, "zt": True},
+        {"id": 2, "eq": True, "on": None, "at": None, "lt": None, "zt": None},
+    ]
 
 
 def _frame_blueprint(tmp_path):

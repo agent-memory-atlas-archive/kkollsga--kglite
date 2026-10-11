@@ -188,6 +188,8 @@ fn pandas_type_keyword(ct: &ColumnType) -> Option<&'static str> {
         ColumnType::DateTime => Some("date"),
         ColumnType::List => Some("list"),
         ColumnType::Duration => Some("duration"),
+        ColumnType::LocalTime => Some("localtime"),
+        ColumnType::Time => Some("time"),
         // `map_blueprint_type` yields none of these, so the arm is unreachable
         // from a blueprint; leaving the column untyped is the honest fallback.
         ColumnType::UniqueId | ColumnType::Timestamp | ColumnType::Map => None,

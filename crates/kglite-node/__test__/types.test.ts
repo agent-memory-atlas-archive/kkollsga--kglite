@@ -6,7 +6,9 @@ import {
   KgFloat,
   LocalDate,
   LocalDateTime,
+  LocalTime,
   Point,
+  Time,
   Transaction,
   type KgliteError,
   type KgNode,
@@ -89,7 +91,12 @@ export async function flow(): Promise<void> {
   const stamp = new LocalDateTime(2024, 2, 29, 12, 30);
   const span = new Duration(1, 2, 3);
   const point = new Point(59.9, 10.7);
-  const text: string = date.toString() + stamp.toString() + span.toString() + point.toString();
+  const clock = new LocalTime(10, 30);
+  const zoned = new Time(10, 30, 0, 0, 3600);
+  const offset: number = zoned.offsetSeconds;
+  const text: string =
+    date.toString() + stamp.toString() + span.toString() + point.toString() + clock.toString() + zoned.toString();
+  void offset;
   const jsDate: Date = stamp.toDate();
   const year: number = date.year;
   void [text, jsDate, year];

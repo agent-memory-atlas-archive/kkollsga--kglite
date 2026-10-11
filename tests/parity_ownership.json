@@ -1513,5 +1513,23 @@
   },
   "tests/test_index_listing_parity.py::test_an_index_is_reported_by_has_index_and_list_indexes[disk_reopened]": {
     "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_time_of_day_values.py::test_times_of_day_survive_every_storage_mode[mapped_kgl]": {
+    "owner": "storage-parity"
   }
 }

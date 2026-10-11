@@ -4,6 +4,7 @@
 //! `type_conversions`) live in the kglite-py wrapper crate — they
 //! only make sense at the Rust ↔ Python boundary.
 pub mod prop_map;
+pub mod time_of_day;
 pub mod values;
 
 pub use prop_map::{PropKey, PropMap};

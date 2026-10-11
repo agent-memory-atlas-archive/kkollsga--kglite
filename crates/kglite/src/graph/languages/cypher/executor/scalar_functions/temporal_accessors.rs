@@ -85,6 +85,16 @@ pub(in crate::graph::languages::cypher::executor) fn temporal_property(
             _ => date_part(*date, property),
         },
         Value::Timestamp(t) => datetime_part(*t, property),
+        Value::LocalTime(nanos) => {
+            return Some(super::temporal_time::time_property(*nanos, None, property))
+        }
+        Value::Time { nanos, offset_secs } => {
+            return Some(super::temporal_time::time_property(
+                *nanos,
+                Some(*offset_secs),
+                property,
+            ))
+        }
         Value::Duration {
             months,
             days,

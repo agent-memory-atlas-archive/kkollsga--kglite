@@ -1,0 +1,101 @@
+//! `LocalTime` and `Time` through the C ABI: the `$localtime` / `$time` parameter
+//! tags, the natural ISO text in result JSON, and equality by instant of day.
+
+use std::ffi::{c_char, CStr, CString};
+
+use kglite_c::{
+    kglite_cypher_result_free, kglite_cypher_result_rows_json, kglite_free_string,
+    kglite_graph_new, kglite_session_execute_read, kglite_session_free, kglite_session_new,
+    KgliteCypherResult, KgliteSession, KgliteStatusCode,
+};
+
+fn row(query: &str, params: &str) -> serde_json::Value {
+    let graph = kglite_graph_new();
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    unsafe { kglite_session_new(graph, &mut session) };
+    let query_c = CString::new(query).unwrap();
+    let params_c = CString::new(params).unwrap();
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    let mut error: *const c_char = std::ptr::null();
+    let rc = unsafe {
+        kglite_session_execute_read(
+            session,
+            query_c.as_ptr(),
+            params_c.as_ptr(),
+            &mut result,
+            &mut error,
+        )
+    };
+    assert_eq!(rc, KgliteStatusCode::Ok, "{query}");
+    let json = unsafe { kglite_cypher_result_rows_json(result) };
+    let rows: serde_json::Value =
+        serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
+    unsafe {
+        kglite_free_string(json);
+        kglite_cypher_result_free(result);
+        kglite_session_free(session);
+    }
+    rows[0].clone()
+}
+
+#[test]
+fn time_tags_bind_as_typed_values_and_compare_by_instant() {
+    let params = r#"{
+        "l": {"$localtime": "10:00:00.5"},
+        "z": {"$time": "10:00:00+01:00"},
+        "u": {"$time": "09:00:00Z"},
+        "later": {"$time": "09:35:14Z"}
+    }"#;
+    let out = row(
+        "RETURN $l = localtime('10:00:00.500') AS local_same, $z = $u AS zoned_same, \
+         $z < $later AS before, $l = $z AS mixed, toString($z) AS text, $z.offsetSeconds AS off",
+        params,
+    );
+    assert_eq!(out["local_same"], true);
+    assert_eq!(out["zoned_same"], true, "10:00+01:00 is 09:00Z");
+    assert_eq!(out["before"], true);
+    assert_eq!(out["mixed"], false);
+    assert_eq!(out["text"], "10:00+01:00");
+    assert_eq!(out["off"], 3600);
+}
+
+#[test]
+fn result_json_renders_the_shortest_iso_text() {
+    let out = row(
+        "RETURN localtime('10:15:30.123456789') AS l, time('10:00:00.5-05:30') AS z, \
+         time('21:40:00Z') AS utc",
+        "{}",
+    );
+    assert_eq!(out["l"], "10:15:30.123456789");
+    assert_eq!(out["z"], "10:00:00.500-05:30");
+    assert_eq!(out["utc"], "21:40Z");
+}
+
+#[test]
+fn a_malformed_time_tag_is_a_parameter_error() {
+    let graph = kglite_graph_new();
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    unsafe { kglite_session_new(graph, &mut session) };
+    let query = CString::new("RETURN $v AS v").unwrap();
+    for bad in [
+        r#"{"v": {"$localtime": "10:00+01:00"}}"#,
+        r#"{"v": {"$time": "25:00"}}"#,
+        r#"{"v": {"$time": "10:00[Europe/Oslo]"}}"#,
+    ] {
+        let params = CString::new(bad).unwrap();
+        let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+        let mut error: *const c_char = std::ptr::null();
+        let rc = unsafe {
+            kglite_session_execute_read(
+                session,
+                query.as_ptr(),
+                params.as_ptr(),
+                &mut result,
+                &mut error,
+            )
+        };
+        assert_ne!(rc, KgliteStatusCode::Ok, "{bad} must be refused");
+        unsafe { kglite_free_string(error) };
+    }
+    unsafe { kglite_session_free(session) };
+}

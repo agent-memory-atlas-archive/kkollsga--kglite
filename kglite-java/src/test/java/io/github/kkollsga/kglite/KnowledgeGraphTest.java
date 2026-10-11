@@ -234,6 +234,37 @@ class KnowledgeGraphTest {
     }
 
     @Test
+    @DisplayName("times of day come back as LocalTime and OffsetTime and bind again")
+    void timeOfDayCellsAndParameters() {
+        try (KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {
+            Map<String, Object> cells = graph.query(
+                    "RETURN localtime('10:15:30.123456789') AS l, time('10:00+01:00') AS t,"
+                            + " time('10:00Z') AS z").get(0);
+            assertEquals(java.time.LocalTime.of(10, 15, 30, 123_456_789), cells.get("l"));
+            assertEquals(java.time.OffsetTime.of(10, 0, 0, 0, java.time.ZoneOffset.ofHours(1)),
+                    cells.get("t"), "the offset is kept");
+            assertEquals(java.time.OffsetTime.of(10, 0, 0, 0, java.time.ZoneOffset.UTC), cells.get("z"));
+
+            // Bound again, a value is the one it came from; the offset survives the trip.
+            for (String column : List.of("l", "t", "z")) {
+                assertEquals(cells.get(column),
+                        graph.query("RETURN $v AS v", Map.of("v", cells.get(column))).get(0).get("v"),
+                        column + " round-trips as a parameter");
+            }
+            // Equality is by instant of day, so 10:00+01:00 is 09:00Z; a local time is neither.
+            Map<String, Object> compared = graph.query(
+                    "RETURN $a = $b AS same, $a = $l AS mixed, $a < $c AS before",
+                    Map.of("a", java.time.OffsetTime.parse("10:00+01:00"),
+                            "b", java.time.OffsetTime.parse("09:00Z"),
+                            "c", java.time.OffsetTime.parse("09:35:14Z"),
+                            "l", java.time.LocalTime.of(10, 0))).get(0);
+            assertEquals(true, compared.get("same"));
+            assertEquals(false, compared.get("mixed"));
+            assertEquals(true, compared.get("before"));
+        }
+    }
+
+    @Test
     @DisplayName("java.time parameters bind as dates and datetimes, matching stored values")
     void dateAndDatetimeParameters() {
         try (KnowledgeGraph graph = KnowledgeGraph.createInMemory()) {

@@ -563,6 +563,10 @@ fn json_value(value: &Value) -> String {
             "{{\"months\":{},\"days\":{},\"seconds\":{},\"nanoseconds\":{}}}",
             months, days, seconds, nanos
         ),
+        Value::LocalTime(n) => json_string(&crate::datatypes::time_of_day::format_clock(*n)),
+        Value::Time { nanos, offset_secs } => json_string(
+            &crate::datatypes::time_of_day::format_time(*nanos, *offset_secs),
+        ),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => idx.to_string(),
         // JSON-encode these variants recursively via

@@ -375,7 +375,11 @@ impl<'a> CypherExecutor<'a> {
         let value = self.evaluate_expression(expression, row)?;
         match &value {
             Value::String(string) => Ok(Self::string_property(string, property)),
-            Value::DateTime(_) | Value::Timestamp(_) | Value::Duration { .. } => Ok(
+            Value::DateTime(_)
+            | Value::Timestamp(_)
+            | Value::Duration { .. }
+            | Value::LocalTime(_)
+            | Value::Time { .. } => Ok(
                 scalar_functions::temporal_accessors::temporal_property(&value, property)
                     .unwrap_or(Value::Null),
             ),

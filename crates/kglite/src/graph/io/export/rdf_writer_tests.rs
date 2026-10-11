@@ -44,3 +44,15 @@ fn fractional_seconds_spell_one_signed_xsd_duration() {
     );
     assert_eq!(duration_lexical_fine(1, 0, -1, 5), None);
 }
+
+#[test]
+fn xsd_time_always_spells_the_seconds_and_marks_an_offset() {
+    assert_eq!(xsd_time_lexical(0, None), "00:00:00");
+    assert_eq!(xsd_time_lexical(36_000_500_000_000, None), "10:00:00.5");
+    assert_eq!(
+        xsd_time_lexical(86_399_999_999_999, Some(-19_800)),
+        "23:59:59.999999999-05:30"
+    );
+    assert_eq!(xsd_time_lexical(36_000_000_000_000, Some(0)), "10:00:00Z");
+    assert_eq!(xsd_time_lexical(1, Some(3600)), "00:00:00.000000001+01:00");
+}

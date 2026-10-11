@@ -22,6 +22,8 @@
 //! | `Map(entries)`                          | `Dict(entries.map(...))`      | `BoltDict = HashMap<String, BoltValue>`            |
 //! | `DateTime(NaiveDate)`                   | `Date(BoltDate { days })`     | Days since Unix epoch (1970-01-01)                 |
 //! | `Timestamp(NaiveDateTime)`             | `LocalDateTime`               | Epoch seconds and fractional nanoseconds preserved |
+//! | `LocalTime(nanos)`                      | `LocalTime(BoltLocalTime { nanoseconds })` | Nanoseconds since midnight; inbound outside one day is `Protocol` |
+//! | `Time { nanos, offset_secs }`           | `Time(BoltTime { nanoseconds, tz_offset_seconds })` | Local clock plus offset; inbound offset beyond ±18 h is `Protocol` |
 //! | `Duration { months, days, seconds, nanos }` | `Duration(BoltDuration {..})` | All i64; inbound `nanoseconds` may be negative or exceed 1e9 and is normalised into `seconds` plus 0..1e9 nanos |
 //! | `Point { lat, lon }`                    | `Point2D(BoltPoint2D { .. })` | srid=4326 for WGS84; Bolt convention x=lon, y=lat  |
 //! | `Node { id, labels, properties }`       | `Node(BoltNode { id, labels, properties, element_id })` | `element_id = id.to_string()` |
@@ -38,8 +40,8 @@ use std::collections::HashMap;
 
 use boltr::error::BoltError;
 use boltr::types::{
-    BoltDate, BoltDict, BoltDuration, BoltLocalDateTime, BoltNode, BoltPath, BoltPoint2D,
-    BoltRelationship, BoltUnboundRelationship, BoltValue,
+    BoltDate, BoltDict, BoltDuration, BoltLocalDateTime, BoltLocalTime, BoltNode, BoltPath,
+    BoltPoint2D, BoltRelationship, BoltTime, BoltUnboundRelationship, BoltValue,
 };
 
 use kglite::api::Value;
@@ -100,6 +102,14 @@ pub fn to_bolt(value: &Value) -> Result<BoltValue, BoltError> {
                 nanoseconds: i64::from(utc.timestamp_subsec_nanos()),
             }))
         }
+        // Nanoseconds since local midnight, below one day, so the `i64` never saturates.
+        Value::LocalTime(nanos) => Ok(BoltValue::LocalTime(BoltLocalTime {
+            nanoseconds: *nanos as i64,
+        })),
+        Value::Time { nanos, offset_secs } => Ok(BoltValue::Time(BoltTime {
+            nanoseconds: *nanos as i64,
+            tz_offset_seconds: i64::from(*offset_secs),
+        })),
         Value::Point { lat, lon } => Ok(BoltValue::Point2D(BoltPoint2D {
             // SRID 4326 = WGS84 (geographic lat/lon). Bolt convention
             // is x=longitude, y=latitude. kglite stores them named, so
@@ -437,12 +447,42 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
                 })?;
             Ok(Value::Timestamp(stamp.naive_utc()))
         }
-        BoltValue::Time(_)
-        | BoltValue::LocalTime(_)
-        | BoltValue::DateTime(_)
-        | BoltValue::DateTimeZoneId(_) => Err(BoltError::Protocol(
-            "Bolt zoned timestamp / time-of-day parameters not supported — kglite's \
-             temporal Values are zoneless (use LocalDateTime / Date)"
+        BoltValue::LocalTime(t) => {
+            let nanos = u64::try_from(t.nanoseconds)
+                .ok()
+                .filter(|n| kglite::api::time_of_day::is_valid_nanos(*n))
+                .ok_or_else(|| {
+                    BoltError::Protocol(format!(
+                        "Bolt LocalTime out of range: nanoseconds={}",
+                        t.nanoseconds
+                    ))
+                })?;
+            Ok(Value::LocalTime(nanos))
+        }
+        BoltValue::Time(t) => {
+            let nanos = u64::try_from(t.nanoseconds)
+                .ok()
+                .filter(|n| kglite::api::time_of_day::is_valid_nanos(*n))
+                .ok_or_else(|| {
+                    BoltError::Protocol(format!(
+                        "Bolt Time out of range: nanoseconds={}",
+                        t.nanoseconds
+                    ))
+                })?;
+            let offset_secs = i32::try_from(t.tz_offset_seconds)
+                .ok()
+                .filter(|o| o.abs() <= kglite::api::time_of_day::MAX_OFFSET_SECS)
+                .ok_or_else(|| {
+                    BoltError::Protocol(format!(
+                        "Bolt Time offset out of range: tz_offset_seconds={}",
+                        t.tz_offset_seconds
+                    ))
+                })?;
+            Ok(Value::Time { nanos, offset_secs })
+        }
+        BoltValue::DateTime(_) | BoltValue::DateTimeZoneId(_) => Err(BoltError::Protocol(
+            "Bolt zoned DateTime parameters not supported — kglite's datetime Values are \
+             zoneless (use LocalDateTime / Date)"
                 .into(),
         )),
         BoltValue::Point3D(_) => Err(BoltError::Protocol(
@@ -623,6 +663,87 @@ mod fractional_timestamp_contract_tests {
             let nested = Value::List(vec![value]);
             assert_eq!(from_bolt(&to_bolt(&nested).unwrap()).unwrap(), nested);
         }
+    }
+}
+
+#[cfg(test)]
+mod time_of_day_tests {
+    use super::*;
+
+    #[test]
+    fn local_time_and_time_round_trip_with_their_nanoseconds_and_offset() {
+        let local = Value::LocalTime(36_000_500_000_001);
+        let zoned = Value::Time {
+            nanos: 86_399_999_999_999,
+            offset_secs: -19_800,
+        };
+        assert_eq!(
+            to_bolt(&local).unwrap(),
+            BoltValue::LocalTime(BoltLocalTime {
+                nanoseconds: 36_000_500_000_001
+            })
+        );
+        assert_eq!(
+            to_bolt(&zoned).unwrap(),
+            BoltValue::Time(BoltTime {
+                nanoseconds: 86_399_999_999_999,
+                tz_offset_seconds: -19_800
+            })
+        );
+        for value in [local, zoned] {
+            let back = from_bolt(&to_bolt(&value).unwrap()).unwrap();
+            // `==` ignores a Time's offset; the debug form carries it.
+            assert_eq!(format!("{back:?}"), format!("{value:?}"));
+            assert_eq!(
+                to_bolt_owned(value.clone()).unwrap(),
+                to_bolt(&value).unwrap()
+            );
+        }
+        let nested = Value::List(vec![Value::Time {
+            nanos: 1,
+            offset_secs: 3600,
+        }]);
+        assert_eq!(
+            format!("{:?}", from_bolt(&to_bolt(&nested).unwrap()).unwrap()),
+            format!("{nested:?}")
+        );
+    }
+
+    #[test]
+    fn out_of_range_inbound_times_are_protocol_errors() {
+        for bad in [
+            BoltValue::LocalTime(BoltLocalTime { nanoseconds: -1 }),
+            BoltValue::LocalTime(BoltLocalTime {
+                nanoseconds: 86_400_000_000_000,
+            }),
+            BoltValue::Time(BoltTime {
+                nanoseconds: 86_400_000_000_000,
+                tz_offset_seconds: 0,
+            }),
+            BoltValue::Time(BoltTime {
+                nanoseconds: 0,
+                tz_offset_seconds: 64_801,
+            }),
+            BoltValue::Time(BoltTime {
+                nanoseconds: 0,
+                tz_offset_seconds: i64::MAX,
+            }),
+        ] {
+            assert!(
+                matches!(from_bolt(&bad), Err(BoltError::Protocol(_))),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zoned_datetimes_stay_refused_until_they_are_values() {
+        let zoned = BoltValue::DateTime(boltr::types::BoltDateTime {
+            seconds: 0,
+            nanoseconds: 0,
+            tz_offset_seconds: 3600,
+        });
+        assert!(matches!(from_bolt(&zoned), Err(BoltError::Protocol(_))));
     }
 }
 

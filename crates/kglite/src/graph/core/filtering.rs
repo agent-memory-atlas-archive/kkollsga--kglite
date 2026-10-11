@@ -315,6 +315,10 @@ pub fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
             parse_date_string(s).map(|parsed| parsed.cmp(date))
         }
         (Value::Timestamp(a), Value::Timestamp(b)) => Some(a.cmp(b)),
+        // Times of day order among their own kind only: a LocalTime has no
+        // offset to compare with a Time, and neither has a date.
+        (Value::LocalTime(a), Value::LocalTime(b)) => Some(a.cmp(b)),
+        (Value::Time { .. }, Value::Time { .. }) => Some(a.cmp(b)),
         // A date-only value compares as midnight on that date.
         (Value::Timestamp(a), Value::DateTime(b)) => b.and_hms_opt(0, 0, 0).map(|bt| a.cmp(&bt)),
         (Value::DateTime(a), Value::Timestamp(b)) => a.and_hms_opt(0, 0, 0).map(|at| at.cmp(b)),
@@ -428,12 +432,14 @@ fn is_numeric(v: &Value) -> bool {
 /// | 4 | `List` | |
 /// | 5 | `Path` | |
 /// | 6 | `DateTime`, `Timestamp` | one rank, not two: a date compares as midnight on that date, so a column mixing dates and timestamps still orders chronologically |
-/// | 7 | `Duration` | last of Neo4j's temporal group |
-/// | 8 | `Point` | KGLite-only slot: after the temporal group, before `String` |
-/// | 9 | `String` | |
-/// | 10 | `Boolean` | |
-/// | 11 | `UniqueId`, `Int64`, `Float64` | one numeric rank — numbers compare *numerically* across the three, never by variant |
-/// | 12 | `Null` | NULL last ascending / first descending, per Neo4j |
+/// | 7 | `LocalTime` | |
+/// | 8 | `Time` | ordered by its UTC reading, offsets ignored |
+/// | 9 | `Duration` | last of Neo4j's temporal group |
+/// | 10 | `Point` | KGLite-only slot: after the temporal group, before `String` |
+/// | 11 | `String` | |
+/// | 12 | `Boolean` | |
+/// | 13 | `UniqueId`, `Int64`, `Float64` | one numeric rank — numbers compare *numerically* across the three, never by variant |
+/// | 14 | `Null` | NULL last ascending / first descending, per Neo4j |
 ///
 /// `ORDER BY` never reaches the NULL rank:
 /// [`SortSpec`](crate::graph::languages::cypher::executor::ordering::SortSpec)
@@ -449,12 +455,14 @@ fn type_rank(v: &Value) -> u8 {
         Value::List(_) => 4,
         Value::Path(_) => 5,
         Value::DateTime(_) | Value::Timestamp(_) => 6,
-        Value::Duration { .. } => 7,
-        Value::Point { .. } => 8,
-        Value::String(_) => 9,
-        Value::Boolean(_) => 10,
-        Value::UniqueId(_) | Value::Int64(_) | Value::Float64(_) => 11,
-        Value::Null => 12,
+        Value::LocalTime(_) => 7,
+        Value::Time { .. } => 8,
+        Value::Duration { .. } => 9,
+        Value::Point { .. } => 10,
+        Value::String(_) => 11,
+        Value::Boolean(_) => 12,
+        Value::UniqueId(_) | Value::Int64(_) | Value::Float64(_) => 13,
+        Value::Null => 14,
     }
 }
 
@@ -477,6 +485,9 @@ pub fn total_order(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::NodeRef(x), Value::NodeRef(y)) => x.cmp(y),
         (Value::DateTime(_) | Value::Timestamp(_), Value::DateTime(_) | Value::Timestamp(_)) => {
             as_datetime(a).cmp(&as_datetime(b))
+        }
+        (Value::LocalTime(_), Value::LocalTime(_)) | (Value::Time { .. }, Value::Time { .. }) => {
+            a.cmp(b)
         }
         (
             Value::Duration {

@@ -57,10 +57,7 @@ impl<'a> CypherExecutor<'a> {
                 // Accepts date() and datetime() operands (and a mix). Whole
                 // days go in `days`; any remaining sub-day delta (when a
                 // Timestamp is involved) is carried in `seconds` and `nanos`.
-                match (coerce_naive_datetime(&a), coerce_naive_datetime(&b)) {
-                    (Some(start), Some(end)) => duration_between(start, end),
-                    _ => Err("duration.between() arguments must be datetime values".into()),
-                }
+                duration_between_values(&a, &b)
             }
             // Temporal arithmetic (2026-05-25 broad-scan lift).
             // Real use case: "events scheduled in the next N days":
@@ -162,8 +159,8 @@ impl<'a> CypherExecutor<'a> {
                 Ok(truncated.map(Value::DateTime).unwrap_or(Value::Null))
             }
             n if temporal_truncate::is_namespaced(n) => self.eval_namespaced_temporal(n, args, row),
-            "localdatetime" => self.eval_local_temporal(args, row, LocalTemporalKind::DateTime),
-            "localtime" => self.eval_local_temporal(args, row, LocalTemporalKind::Time),
+            "localdatetime" => self.eval_localdatetime(args, row),
+            "localtime" => self.eval_localtime(args, row),
             "time" => self.eval_time(args, row),
             _ => return Ok(None),
         };
@@ -229,16 +226,6 @@ impl CypherExecutor<'_> {
         }
     }
 
-    /// `time()`: the time of day in UTC as `HH:MM:SS`, as `datetime()` reads
-    /// the clock; the one-string form parses as `localtime(str)` does.
-    fn eval_time(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
-        if args.is_empty() {
-            let now = chrono::Utc::now().format("%H:%M:%S").to_string();
-            return Ok(Value::String(now));
-        }
-        self.eval_local_temporal(args, row, LocalTemporalKind::Time)
-    }
-
     /// `datetime()`, `datetime(string | map | date | datetime)`.
     fn eval_datetime(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         // Now in naive UTC, as every stored datetime, validity instant and
@@ -274,6 +261,18 @@ impl CypherExecutor<'_> {
                 val
             )),
         }
+    }
+}
+
+/// `duration.between` of two temporal values: two times of day differ in
+/// seconds and nanoseconds, anything else is read as a date or datetime.
+fn duration_between_values(a: &Value, b: &Value) -> Result<Value, String> {
+    if let Some(delta) = super::temporal_time::time_between(a, b) {
+        return delta;
+    }
+    match (coerce_naive_datetime(a), coerce_naive_datetime(b)) {
+        (Some(start), Some(end)) => duration_between(start, end),
+        _ => Err("duration.between() arguments must be datetime values".into()),
     }
 }
 

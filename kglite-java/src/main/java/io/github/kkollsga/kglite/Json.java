@@ -5,6 +5,8 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -87,6 +89,8 @@ final class Json {
             case LocalDate d -> writeTagged(out, "$date", DateTimeFormatter.ISO_LOCAL_DATE.format(d));
             case LocalDateTime d ->
                     writeTagged(out, "$datetime", DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(d));
+            case LocalTime t -> writeTagged(out, "$localtime", DateTimeFormatter.ISO_LOCAL_TIME.format(t));
+            case OffsetTime t -> writeTagged(out, "$time", DateTimeFormatter.ISO_OFFSET_TIME.format(t));
             case OffsetDateTime d ->
                     writeTagged(out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d));
             case ZonedDateTime d -> writeTagged(
@@ -97,7 +101,8 @@ final class Json {
                     "cannot bind a " + value.getClass().getName() + " as a Cypher parameter;"
                             + " use null, String, Boolean, a Number, Map, Iterable, Object[],"
                             + " float[], double[], LocalDate, LocalDateTime, OffsetDateTime,"
-                            + " ZonedDateTime, Instant, Point, KgliteDuration, Period or Duration");
+                            + " ZonedDateTime, Instant, LocalTime, OffsetTime, Point, KgliteDuration,"
+                            + " Period or Duration");
         }
     }
 
@@ -342,7 +347,8 @@ final class Json {
      * Turn the one-key tagged objects the session's tagged result mode emits
      * back into the Java value they stand for, at any depth: {@code $float} to
      * {@link Double}, {@code $date} to {@link LocalDate}, {@code $datetime} to
-     * {@link LocalDateTime}, {@code $duration} to {@link KgliteDuration},
+     * {@link LocalDateTime}, {@code $localtime} to {@link LocalTime}, {@code $time}
+     * to {@link OffsetTime}, {@code $duration} to {@link KgliteDuration},
      * {@code $point} to {@link Point}, and {@code $map} to the plain map it
      * escapes. A one-key map whose payload does not fit its tag is left as a
      * map.
@@ -395,6 +401,12 @@ final class Json {
                 }
                 case "$datetime" -> {
                     return payload instanceof String text ? LocalDateTime.parse(text) : null;
+                }
+                case "$localtime" -> {
+                    return payload instanceof String text ? LocalTime.parse(text) : null;
+                }
+                case "$time" -> {
+                    return payload instanceof String text ? OffsetTime.parse(text) : null;
                 }
                 case "$duration" -> {
                     if (payload instanceof Map<?, ?> fields) {

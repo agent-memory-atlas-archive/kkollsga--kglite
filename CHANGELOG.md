@@ -30,8 +30,29 @@ before upgrading.
   - Now: the call raises `ArgumentError` before anything is written, naming the unusable row count, the first row and what it holds. A cell stored as NULL for a typed column, and an object column that would be stringified, refuse the same way.
   - Clean input is unaffected.
   - Migration: pass `on_invalid='warn'` for the old behaviour, or `on_invalid='skip'` for the same without the warning.
+- **`localtime()` and `time()` return time values, not strings.**
+  - Before: both returned `HH:MM:SS` text, so `localtime() + duration(...)` and `time('10:00') < time('11:00')` worked on strings.
+  - Now: `localtime()` is a `LocalTime` and `time()` a `Time`, and the text is `toString(t)`. A `Time` carries a UTC offset; a string with no offset is read as UTC.
+  - `time(...)` with a named zone (`[Europe/Oslo]`, `timezone: 'Europe/Oslo'`) is refused; a numeric offset works.
+  - `datetime.time` values change meaning too: a Python `datetime.time` parameter was refused, and a `time` object column was refused as an object column. Both now load as time values.
+  - Migration: compare and sort `LocalTime`/`Time` values directly; call `toString(t)` where the text was the point; give `time(...)` a numeric offset if you passed a zone name.
 
 ### Added
+
+- **`LocalTime` and `Time` are values.**
+  - `localtime()` and `time()` accept ISO text (`HH`, `HHMM`, `HH:MM`, `HH:MM:SS[.f]` to nine digits; `time` also takes `Z`, `±HH`, `±HHMM`, `±HH:MM`) and maps (`{hour, minute, second, millisecond, microsecond, nanosecond, timezone, time}`).
+  - Accessors: `t.hour` to `t.nanosecond`, and for a `Time` `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone`. `toString(t)` prints the shortest ISO form, `21:40:32.142+01:00`, `10:00Z`.
+  - `time ± duration` moves the seconds and nanoseconds, wrapping at 24 hours; months and days are ignored. `localtime.truncate` and `time.truncate` work; `duration.between` of two times is seconds and nanoseconds.
+  - Two `Time` values compare at their UTC readings: `time('10:00+01:00') = time('09:00Z')` and `time('10:00+01:00') < time('09:35:14Z')` are both true. `DISTINCT` and grouping merge equal instants and keep the first offset.
+  - A `LocalTime` is incomparable with a `Time`, a date and a datetime: `=` is false and `<` gives null.
+  - `IS :: LOCAL TIME` and `IS :: ZONED TIME` (also `TIME`) are accepted property-type constraints. A time is refused as a validity bound and as a `FOR VALID_TIME AS OF` instant.
+  - New file-format tags only: `Value` wire tags 17 (`LocalTime`) and 18 (`Time`), overflow-bag tags 13 and 14. They ride the container, log and directory format moves listed above.
+- **Every binding and export carries time values.**
+  - Python: `LocalTime` is a naive `datetime.time`, `Time` an aware one with a fixed-offset `tzinfo`. A `datetime.time` parameter, a `time` object column (`column_types` `'localtime'` / `'time'`) and a `from_records` value load as the matching kind. `datetime.time` holds microseconds, so a finer time reads back floored; `toString()` shows every digit.
+  - Node: new `LocalTime` and `Time` classes. Java: `LocalTime` and `OffsetTime`. The C ABI and JSON use `{"$localtime": "10:00:00.5"}` and `{"$time": "10:00:00+01:00"}`; `kglite.h` is unchanged.
+  - Bolt reads and writes `LocalTime` and `Time` structures. Zoned `DateTime` structures stay refused.
+  - RDF export writes `xsd:time` (an offset marks a `Time`), and import reads it. The CSV tree and blueprints add the `localtime` and `time` column types. JSON export and SQL export write the ISO text.
+- **Rust: `Value::LocalTime(u64)` and `Value::Time { nanos, offset_secs }`**, with `kglite::api::time_of_day` for the clock encoding and text forms. `ColumnType` and `ColumnData` gain `LocalTime` and `Time`; `DeclaredType` gains `LocalTime` and `ZonedTime`.
 
 - **Durations keep sub-second precision to the nanosecond in Cypher.**
   - `duration({milliseconds: 1})`, `duration({nanoseconds: 1})`, `duration({seconds: 1.5})` and ISO text such as `duration('PT0.000000001S')` build exact values. Before, any total between two whole seconds raised `sub-second durations are not supported`.

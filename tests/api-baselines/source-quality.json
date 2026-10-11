@@ -45,8 +45,8 @@
     {
       "path": "crates/kglite-py/src/datatypes/py_in.rs",
       "qualified_name": "crate::convert_pandas_series",
-      "lines": 185,
-      "branches": 57,
+      "lines": 183,
+      "branches": 56,
       "nesting": 5
     },
     {
@@ -171,8 +171,8 @@
     {
       "path": "crates/kglite/src/graph/languages/cypher/executor/scalar_functions/temporal.rs",
       "qualified_name": "crate::CypherExecutor<'a>::eval_temporal_fn",
-      "lines": 157,
-      "branches": 61,
+      "lines": 154,
+      "branches": 59,
       "nesting": 3
     },
     {

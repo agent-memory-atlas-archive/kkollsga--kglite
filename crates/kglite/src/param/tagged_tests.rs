@@ -91,6 +91,71 @@ fn result_encoding_round_trips_through_the_tag() {
 }
 
 #[test]
+fn time_tags_become_local_and_zoned_times() {
+    let params = params(
+        r#"{"l":{"$localtime":"10:00:00.5"},"z":{"$time":"10:00:00+01:00"},"u":{"$time":"10:00"},"m":{"$time":"23:59:59.999999999-05:30"}}"#,
+    );
+    assert_eq!(params["l"], Value::LocalTime(36_000_500_000_000));
+    assert_eq!(
+        params["z"],
+        Value::Time {
+            nanos: 36_000_000_000_000,
+            offset_secs: 3600
+        }
+    );
+    // No offset on a `$time` is UTC, as `time('10:00')` reads it.
+    assert_eq!(
+        params["u"],
+        Value::Time {
+            nanos: 36_000_000_000_000,
+            offset_secs: 0
+        }
+    );
+    assert_eq!(
+        params["m"],
+        Value::Time {
+            nanos: 86_399_999_999_999,
+            offset_secs: -19_800
+        }
+    );
+}
+
+#[test]
+fn time_values_round_trip_through_their_tags_keeping_the_offset() {
+    for value in [
+        Value::LocalTime(0),
+        Value::LocalTime(86_399_999_999_999),
+        Value::Time {
+            nanos: 36_000_000_000_000,
+            offset_secs: 3600,
+        },
+        Value::Time {
+            nanos: 1,
+            offset_secs: -64_800,
+        },
+    ] {
+        let tagged = kglite_value_to_json_tagged(&value);
+        let back = json_value_to_kglite_value(&tagged);
+        // `==` ignores a `Time`'s offset, so compare the debug form too.
+        assert_eq!(format!("{back:?}"), format!("{value:?}"), "{tagged}");
+        // Natural mode is the bare ISO text.
+        assert!(kglite_value_to_json(&value).is_string());
+    }
+    assert_eq!(
+        kglite_value_to_json_tagged(&Value::Time {
+            nanos: 36_000_000_000_000,
+            offset_secs: 3600
+        })
+        .to_string(),
+        r#"{"$time":"10:00+01:00"}"#
+    );
+    assert_eq!(
+        kglite_value_to_json(&Value::LocalTime(36_000_500_000_000)).to_string(),
+        r#""10:00:00.500""#
+    );
+}
+
+#[test]
 fn tags_apply_inside_lists_and_maps() {
     let params = params(r#"{"v":[{"$date":"2020-01-01"},{"at":{"$date":"2021-02-03"}}]}"#);
     let Value::List(items) = &params["v"] else {
@@ -120,6 +185,11 @@ fn malformed_tags_are_rejected_with_their_path() {
         (r#"{"v":{"$duration":{"days":1.5}}}"#, "$.v"),
         (r#"{"v":{"$duration":{"days":4294967296}}}"#, "$.v"),
         (r#"{"v":{"$duration":"P1D"}}"#, "$.v"),
+        (r#"{"v":{"$localtime":"10:00+01:00"}}"#, "$.v"),
+        (r#"{"v":{"$localtime":"25:00"}}"#, "$.v"),
+        (r#"{"v":{"$time":"10:00+19:00"}}"#, "$.v"),
+        (r#"{"v":{"$time":"10:00[Europe/Oslo]"}}"#, "$.v"),
+        (r#"{"v":{"$time":36000}}"#, "$.v"),
     ] {
         let error = rejection(source);
         assert_eq!(

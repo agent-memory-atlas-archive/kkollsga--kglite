@@ -471,15 +471,15 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "localtime",
         aliases: &[],
         category: "temporal",
-        description: "Local time of day as HH:MM:SS — there is no time-of-day value type",
-        signature: "localtime(input :: STRING?) :: STRING",
+        description: "Local wall-clock time of day, or one read from ISO text, a {hour, minute, ...} map or a time or datetime",
+        signature: "localtime(input :: STRING | MAP | ZONED TIME | DATETIME?) :: LOCAL TIME",
     },
     FunctionSpec {
         name: "time",
         aliases: &[],
         category: "temporal",
-        description: "Time of day in UTC as HH:MM:SS (localtime() is the local clock); KGLite has no zoned time type",
-        signature: "time(input :: STRING?) :: STRING",
+        description: "Time of day with a UTC offset: the UTC clock, or one read from ISO text with Z / ±HH:MM, a {hour, ..., timezone} map or a time; two times compare at their UTC readings",
+        signature: "time(input :: STRING | MAP | LOCAL TIME | DATETIME?) :: ZONED TIME",
     },
     // ── graph ─────────────────────────────────────────────────────────────
     FunctionSpec {

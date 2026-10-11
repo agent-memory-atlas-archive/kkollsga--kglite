@@ -297,7 +297,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite/src/datatypes/values.rs::mod:tests::clippy::approx_constant",
+      "identity": "crates/kglite/src/datatypes/values_tests.rs::module::clippy::approx_constant",
       "classification": "test"
     },
     {
@@ -908,6 +908,10 @@
     },
     {
       "identity": "crates/kglite/src/graph/value_byte_identity_tests.rs::enum:Shipped::dead_code",
+      "classification": "dead-code"
+    },
+    {
+      "identity": "crates/kglite/src/graph/value_byte_identity_tests.rs::enum:UpToDurationFine::dead_code",
       "classification": "dead-code"
     }
   ]

@@ -51,6 +51,12 @@ pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
         // chrono bridge). Dates used to be ISO strings.
         Value::DateTime(d) => d.into_py_any(py),
         Value::Timestamp(dt) => dt.into_py_any(py),
+        // LocalTime → naive datetime.time, Time → aware datetime.time with a
+        // fixed-offset tzinfo. A time of day is at most 86 400 s of nanoseconds,
+        // and `datetime.time` holds microseconds: the sub-microsecond part is
+        // floored, the way a `Timestamp` already is by the chrono bridge.
+        Value::LocalTime(nanos) => time_to_py(py, *nanos, None),
+        Value::Time { nanos, offset_secs } => time_to_py(py, *nanos, Some(*offset_secs)),
         Value::Point { lat, lon } => {
             let dict = PyDict::new(py);
             dict.set_item("latitude", lat)?;
@@ -117,6 +123,34 @@ pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
             Ok(dict.into_any().unbind())
         }
     }
+}
+
+/// A time of day as `datetime.time`; aware (`timezone(timedelta(seconds=…))`)
+/// when `offset` is given.
+fn time_to_py(py: Python, nanos: u64, offset: Option<i32>) -> PyResult<Py<PyAny>> {
+    use pyo3::types::{PyTime, PyTzInfo};
+    let secs = nanos / 1_000_000_000;
+    let micros = ((nanos % 1_000_000_000) / 1_000) as u32;
+    let tz = match offset {
+        Some(offset) => {
+            let fixed = chrono::FixedOffset::east_opt(offset).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!("offset {offset}s out of range"))
+            })?;
+            Some(fixed.into_pyobject(py)?)
+        }
+        None => None,
+    };
+    let tz: Option<&Bound<'_, PyTzInfo>> = tz.as_ref();
+    Ok(PyTime::new(
+        py,
+        (secs / 3600) as u8,
+        (secs / 60 % 60) as u8,
+        (secs % 60) as u8,
+        micros,
+        tz,
+    )?
+    .into_any()
+    .unbind())
 }
 
 /// A materialised node as the Python dict `{id, labels, properties}`.

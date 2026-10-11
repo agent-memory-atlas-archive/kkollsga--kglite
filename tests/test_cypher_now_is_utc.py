@@ -24,14 +24,15 @@ row = g.cypher(
 ).to_list()[0]
 utc = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 local = dt.datetime.now()
-def seconds_of_day(text):
-    h, m, s = map(int, text.split(":"))
-    return h * 3600 + m * 60 + s
+def seconds_of_day(t):
+    return t.hour * 3600 + t.minute * 60 + t.second
 def clock_gap(a, b):
     gap = abs(a - b) % 86400
     return min(gap, 86400 - gap)
 now_utc = utc.hour * 3600 + utc.minute * 60 + utc.second
 now_local = local.hour * 3600 + local.minute * 60 + local.second
+assert row["t"].utcoffset() == dt.timedelta(0), row["t"]
+assert row["lt"].tzinfo is None, row["lt"]
 print(json.dumps({
     "offset": (local - utc).total_seconds(),
     "datetime": abs((row["dt"] - utc).total_seconds()),

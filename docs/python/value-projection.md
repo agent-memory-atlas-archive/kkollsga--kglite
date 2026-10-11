@@ -49,6 +49,14 @@ fractional seconds. They omit the fractional suffix for whole-second values.
   `DateTime` (a date) arrives as a `datetime.date`. In `to_df()` both make
   `datetime64` columns (a date at midnight). Earlier releases returned a date as
   its ISO string, `'2024-03-09'`.
+- **Times of day.** A `LocalTime` arrives as a naive `datetime.time` and a
+  `Time` as an aware `datetime.time` with a fixed-offset `tzinfo`. A
+  `datetime.time` bound as a parameter, or held in a DataFrame column, goes the
+  other way: naive is a `LocalTime`, aware is a `Time`. `datetime.time` holds
+  microseconds, so a finer time returns floored to the microsecond; `toString()`
+  in Cypher shows every digit. Bolt carries both as `LocalTime` and `Time`, the C
+  ABI and JSON as `{"$localtime": …}` and `{"$time": …}`, RDF as `xsd:time`
+  (an offset marks a `Time`).
 - **Constructors.** `datetime()` normalises offset-bearing input to UTC.
   `localdatetime()` keeps its local wall time. Neither parsed constructor drops
   fractional seconds.

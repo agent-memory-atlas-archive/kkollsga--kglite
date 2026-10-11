@@ -1,10 +1,10 @@
 //! ISO 8601 text forms of the zoneless temporal values: parsing the calendar
 //! (`YYYY-MM-DD`, `YYYYMMDD`, ISO week `YYYY-Www-D`, ordinal `YYYY-DDD`) and
-//! clock (`HH`, `HHMM`, `HH:MM:SS.fff`) spellings, and rendering a clock in
-//! the canonical minimal form (`HH:MM`, `HH:MM:SS`, fraction in groups of
-//! three digits). Pure functions over `chrono`, shared by the `date()`,
-//! `localtime()` and `localdatetime()` constructors.
-use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+//! clock (`HH`, `HHMM`, `HH:MM:SS.fff`) spellings. Clock rendering and the
+//! offset forms live in [`crate::datatypes::time_of_day`]. Pure functions over
+//! `chrono`, shared by the `date()`, `localtime()` and `localdatetime()`
+//! constructors.
+use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime};
 
 fn digits(s: &str) -> Option<u32> {
     if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
@@ -158,53 +158,7 @@ pub(super) fn parse_date_text(text: &str) -> Option<NaiveDate> {
 /// Parse a clock reading: `HH`, `HHMM`, `HHMMSS[.f]`, `HH:MM`, `HH:MM:SS[.f]`
 /// (fraction of 1-9 digits). No zone suffix is accepted.
 pub(super) fn parse_time_text(text: &str) -> Option<NaiveTime> {
-    let s = text.trim();
-    if !s.is_ascii() {
-        return None;
-    }
-    let (clock, fraction) = match s.split_once('.') {
-        Some((clock, fraction)) => (clock, Some(fraction)),
-        None => (s, None),
-    };
-    let (hour, minute, second) = if clock.contains(':') {
-        let parts: Vec<&str> = clock.split(':').collect();
-        if parts.iter().any(|p| p.len() != 2) {
-            return None;
-        }
-        match parts.as_slice() {
-            [h, m] => (digits(h)?, digits(m)?, 0),
-            [h, m, sec] => (digits(h)?, digits(m)?, digits(sec)?),
-            _ => return None,
-        }
-    } else {
-        match clock.len() {
-            2 => (digits(clock)?, 0, 0),
-            4 => (digits(&clock[..2])?, digits(&clock[2..])?, 0),
-            6 => (
-                digits(&clock[..2])?,
-                digits(&clock[2..4])?,
-                digits(&clock[4..])?,
-            ),
-            _ => return None,
-        }
-    };
-    let nanos = match fraction {
-        None => 0,
-        Some(f) if (1..=9).contains(&f.len()) && f.bytes().all(|b| b.is_ascii_digit()) => {
-            // A fraction needs a seconds field to hang from.
-            let has_seconds = if clock.contains(':') {
-                clock.len() == 8
-            } else {
-                clock.len() == 6
-            };
-            if !has_seconds {
-                return None;
-            }
-            digits(f)? * 10u32.pow(9 - f.len() as u32)
-        }
-        Some(_) => return None,
-    };
-    NaiveTime::from_hms_nano_opt(hour, minute, second, nanos)
+    crate::datatypes::time_of_day::parse_clock(text)
 }
 
 /// Parse `<date>[T<time>]` where both halves take any spelling above; a bare
@@ -214,26 +168,6 @@ pub(super) fn parse_local_datetime_text(text: &str) -> Option<NaiveDateTime> {
     match s.split_once('T') {
         Some((date, time)) => Some(parse_date_text(date)?.and_time(parse_time_text(time)?)),
         None => parse_date_text(s)?.and_hms_opt(0, 0, 0),
-    }
-}
-
-/// Render a clock the way openCypher prints a local time: seconds are
-/// omitted when zero (and no fraction), the fraction is printed in groups of
-/// three digits (milli-, micro-, nanoseconds).
-pub(crate) fn format_local_time(t: NaiveTime) -> String {
-    let nanos = t.nanosecond();
-    if nanos == 0 && t.second() == 0 {
-        return format!("{:02}:{:02}", t.hour(), t.minute());
-    }
-    let base = format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second());
-    if nanos == 0 {
-        base
-    } else if nanos.is_multiple_of(1_000_000) {
-        format!("{base}.{:03}", nanos / 1_000_000)
-    } else if nanos.is_multiple_of(1_000) {
-        format!("{base}.{:06}", nanos / 1_000)
-    } else {
-        format!("{base}.{nanos:09}")
     }
 }
 
@@ -288,8 +222,9 @@ mod tests {
             ("12:31:14.000000003", "12:31:14.000000003"),
             ("12:31:14.645876", "12:31:14.645876"),
         ] {
+            let nanos = crate::datatypes::time_of_day::nanos_of(parse_time_text(text).unwrap());
             assert_eq!(
-                format_local_time(parse_time_text(text).unwrap()),
+                crate::datatypes::time_of_day::format_clock(nanos),
                 rendered,
                 "{text}"
             );

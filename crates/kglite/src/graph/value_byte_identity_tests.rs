@@ -317,6 +317,15 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                 ),
             ])),
         ),
+    ]
+    .into_iter()
+    .chain(appended_value_fixtures())
+    .collect()
+}
+
+/// The variants appended after `Timestamp`: `DurationFine` (16), `LocalTime` (17), `Time` (18).
+fn appended_value_fixtures() -> Vec<(&'static str, Value)> {
+    vec![
         // Sub-second durations: the appended `DurationFine` tag (16). A
         // `nanos == 0` duration above must keep tag 9; these must not.
         (
@@ -354,6 +363,35 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                 seconds: 0,
                 nanos: 5,
             }]),
+        ),
+        // Times of day: the appended `LocalTime` (17) and `Time` (18) tags,
+        // payloads varint nanoseconds-of-day and a zigzag offset in seconds.
+        ("local_time_midnight", Value::LocalTime(0)),
+        ("local_time", Value::LocalTime(36_000_500_000_000)),
+        ("local_time_last_nano", Value::LocalTime(86_399_999_999_999)),
+        (
+            "time",
+            Value::Time {
+                nanos: 36_000_000_000_000,
+                offset_secs: 3600,
+            },
+        ),
+        (
+            "time_extreme_offset",
+            Value::Time {
+                nanos: 1,
+                offset_secs: -64_800,
+            },
+        ),
+        (
+            "list_times",
+            Value::List(vec![
+                Value::LocalTime(5),
+                Value::Time {
+                    nanos: 7,
+                    offset_secs: -1,
+                },
+            ]),
         ),
     ]
 }
@@ -399,6 +437,12 @@ const VALUE_BYTE_GOLDEN: &[(&str, &str)] = &[
     ("duration_fine", "10020305e807"),
     ("duration_fine_extremes", "10ffffffff0ffeffffff0fffffffffffffffffff01fea7d6b907"),
     ("list_fine_duration", "0d01100000000a"),
+    ("local_time_midnight", "1100"),
+    ("local_time", "1180ca8ea8e09708"),
+    ("local_time_last_nano", "11ffffbb8ac9d213"),
+    ("time", "128080d9b9de9708a038"),
+    ("time_extreme_offset", "1201bff407"),
+    ("list_times", "0d021105120701"),
 ];
 
 /// Standalone struct encodings — the projection-boundary types serialized on
@@ -717,6 +761,63 @@ fn duration_wire_forms_round_trip_and_an_old_reader_refuses_the_fine_tag() {
     assert!(decode::<Shipped>(&fine_bytes).is_err());
     let nested = encode(&Value::List(vec![Value::Null, fine]));
     assert!(decode::<Shipped>(&nested).is_err());
+}
+
+/// The time-of-day tags are appended after `DurationFine`: a reader built before
+/// them refuses the bytes instead of misreading them, alone or nested.
+#[test]
+fn an_old_reader_refuses_the_time_of_day_tags() {
+    // The variants are decode targets only: the test reads the Result, never the payload.
+    #[derive(serde::Deserialize, Debug)]
+    #[allow(dead_code)]
+    enum UpToDurationFine {
+        UniqueId(u32),
+        Int64(i64),
+        Float64(f64),
+        String(String),
+        Boolean(bool),
+        DateTime(String),
+        Point {
+            lat: f64,
+            lon: f64,
+        },
+        Null,
+        NodeRef(u32),
+        Duration {
+            months: i32,
+            days: i32,
+            seconds: i64,
+        },
+        Node(u8),
+        Relationship(u8),
+        Path(u8),
+        List(Vec<UpToDurationFine>),
+        Map(u8),
+        Timestamp(String),
+        DurationFine {
+            months: i32,
+            days: i32,
+            seconds: i64,
+            nanos: i32,
+        },
+    }
+    let local = Value::LocalTime(36_000_500_000_000);
+    let zoned = Value::Time {
+        nanos: 36_000_000_000_000,
+        offset_secs: 3600,
+    };
+    for value in [local.clone(), zoned.clone()] {
+        let bytes = encode(&value);
+        assert!(decode::<UpToDurationFine>(&bytes).is_err());
+        assert_eq!(decode::<Value>(&bytes).unwrap(), value);
+        let nested = encode(&Value::List(vec![Value::Null, value]));
+        assert!(decode::<UpToDurationFine>(&nested).is_err());
+    }
+    // The decoded offset survives the round trip even though `==` ignores it.
+    let Value::Time { offset_secs, .. } = decode::<Value>(&encode(&zoned)).unwrap() else {
+        panic!("a Time decodes to a Time");
+    };
+    assert_eq!(offset_secs, 3600);
 }
 
 /// The self-describing (JSON) encoding of `Value` is reachable through the

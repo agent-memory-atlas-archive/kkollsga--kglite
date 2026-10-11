@@ -1048,6 +1048,8 @@ fn borrowed_kind(v: &BorrowedValue<'_>) -> &'static str {
         BorrowedValue::List(_) => "List",
         BorrowedValue::Map(_) => "Map",
         BorrowedValue::Duration { .. } => "Duration",
+        BorrowedValue::LocalTime(_) => "LocalTime",
+        BorrowedValue::Time { .. } => "Time",
     }
 }
 

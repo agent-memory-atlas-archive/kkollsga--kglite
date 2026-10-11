@@ -131,7 +131,8 @@ impl CypherExecutor<'_> {
         }
         let target = match name {
             "date.truncate" => MapTarget::Date,
-            "localtime.truncate" | "time.truncate" => MapTarget::LocalTime,
+            "localtime.truncate" => MapTarget::LocalTime,
+            "time.truncate" => MapTarget::Time,
             "localdatetime.truncate" => MapTarget::LocalDateTime,
             _ => MapTarget::DateTime,
         };
@@ -150,7 +151,7 @@ impl CypherExecutor<'_> {
         let unit = unit.to_ascii_lowercase();
         let allowed = match target {
             MapTarget::Date => CALENDAR_UNITS.iter().chain(&["day"]).any(|u| *u == unit),
-            MapTarget::LocalTime => CLOCK_UNITS.contains(&unit.as_str()),
+            MapTarget::LocalTime | MapTarget::Time => CLOCK_UNITS.contains(&unit.as_str()),
             _ => CALENDAR_UNITS.contains(&unit.as_str()) || CLOCK_UNITS.contains(&unit.as_str()),
         };
         if !allowed {
@@ -177,7 +178,21 @@ impl CypherExecutor<'_> {
         };
         match target {
             MapTarget::Date => map.insert("date", Value::DateTime(truncated.date())),
-            MapTarget::LocalTime => map.insert("time", Value::Timestamp(truncated)),
+            MapTarget::LocalTime => map.insert(
+                "time",
+                Value::LocalTime(crate::datatypes::time_of_day::nanos_of(truncated.time())),
+            ),
+            // The truncated clock keeps the offset it had (UTC for a local value).
+            MapTarget::Time => map.insert(
+                "time",
+                Value::Time {
+                    nanos: crate::datatypes::time_of_day::nanos_of(truncated.time()),
+                    offset_secs: match &temporal {
+                        Value::Time { offset_secs, .. } => *offset_secs,
+                        _ => 0,
+                    },
+                },
+            ),
             _ => map.insert("datetime", Value::Timestamp(truncated)),
         };
         temporal_from_map(target, &map)

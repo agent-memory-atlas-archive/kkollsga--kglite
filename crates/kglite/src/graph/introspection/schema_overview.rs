@@ -924,6 +924,8 @@ pub(super) fn value_type_name(v: &Value) -> &'static str {
         Value::UniqueId(_) => "uniqueid",
         Value::Point { .. } => "point",
         Value::Duration { .. } => "duration",
+        Value::LocalTime(_) => "localtime",
+        Value::Time { .. } => "time",
         Value::Null => "unknown",
         Value::NodeRef(_) => "noderef",
         // These typically appear in query results, not as stored
@@ -976,6 +978,10 @@ pub(super) fn value_display_compact(v: &Value, truncate_at: Option<usize>) -> St
             seconds,
             nanos,
         } => format!("dur(M={},D={},S={},N={})", months, days, seconds, nanos),
+        Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
+        Value::Time { nanos, offset_secs } => {
+            crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
+        }
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::Null => String::new(),
         Value::List(_)

@@ -87,6 +87,11 @@ enum ScalarKey {
     /// `Timestamp(d @ 00:00)` — folding the date into its midnight instant
     /// is the same statement with one variant.
     Timestamp(NaiveDateTime),
+    /// A `LocalTime`, by nanoseconds of day. Its own key space: a local time is
+    /// incomparable with a `Time`, so the two never share a key.
+    LocalTime(u64),
+    /// A `Time` at its UTC reading, offsets ignored, as its equality is.
+    Time(i64),
 }
 
 /// The hash index built for lists longer than [`LINEAR_MAX`].
@@ -360,6 +365,10 @@ fn scalar_key(value: &Value) -> Option<ScalarKey> {
         Value::Boolean(b) => Some(ScalarKey::Bool(*b)),
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0).map(ScalarKey::Timestamp),
         Value::Timestamp(t) => Some(ScalarKey::Timestamp(*t)),
+        Value::LocalTime(n) => Some(ScalarKey::LocalTime(*n)),
+        Value::Time { nanos, offset_secs } => Some(ScalarKey::Time(
+            crate::datatypes::time_of_day::utc_nanos(*nanos, *offset_secs),
+        )),
         _ => None,
     }
 }

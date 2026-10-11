@@ -66,9 +66,7 @@ impl<'a> CypherExecutor<'a> {
                 );
                 Ok(Value::String(uuid))
             }
-            // localdatetime() / localtime() / time() dispatch in
-            // temporal.rs via eval_local_temporal (documented on the
-            // helper in mod.rs).
+            // localdatetime() / localtime() / time() dispatch in temporal.rs.
             "rand" | "random" => {
                 // Top 53 bits → f64 mantissa to avoid precision loss.
                 let x = next_random_u64();

@@ -2547,8 +2547,10 @@ pub kglite::api::mutation::ColumnData::Duration(alloc::vec::Vec<core::option::Op
 pub kglite::api::mutation::ColumnData::Float64(alloc::vec::Vec<core::option::Option<f64>>)
 pub kglite::api::mutation::ColumnData::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub kglite::api::mutation::ColumnData::List(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<kglite::datatypes::values::Value>>>)
+pub kglite::api::mutation::ColumnData::LocalTime(alloc::vec::Vec<core::option::Option<u64>>)
 pub kglite::api::mutation::ColumnData::Map(alloc::vec::Vec<core::option::Option<kglite::datatypes::prop_map::PropMap>>)
 pub kglite::api::mutation::ColumnData::String(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
+pub kglite::api::mutation::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::api::mutation::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::api::mutation::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
@@ -2560,8 +2562,10 @@ pub kglite::api::mutation::ColumnType::Duration
 pub kglite::api::mutation::ColumnType::Float64
 pub kglite::api::mutation::ColumnType::Int64
 pub kglite::api::mutation::ColumnType::List
+pub kglite::api::mutation::ColumnType::LocalTime
 pub kglite::api::mutation::ColumnType::Map
 pub kglite::api::mutation::ColumnType::String
+pub kglite::api::mutation::ColumnType::Time
 pub kglite::api::mutation::ColumnType::Timestamp
 pub kglite::api::mutation::ColumnType::UniqueId
 impl core::clone::Clone for kglite::datatypes::values::ColumnType
@@ -4027,6 +4031,24 @@ pub fn kglite::api::text_indexes::list_text_indexes(&kglite::api::DirGraph) -> a
 pub fn kglite::api::text_indexes::refresh_text_index(&kglite::api::DirGraph, &str, &str) -> core::option::Option<usize>
 pub fn kglite::api::text_indexes::text_index_store<'a>(&'a kglite::api::DirGraph, &str, &str) -> core::option::Option<&'a kglite::api::text_indexes::TextIndexStore>
 pub type kglite::api::text_indexes::TermId = u32
+pub mod kglite::api::time_of_day
+pub enum kglite::api::time_of_day::TimeParseError
+pub kglite::api::time_of_day::TimeParseError::Malformed
+pub kglite::api::time_of_day::TimeParseError::NamedZone
+impl core::cmp::Eq for kglite::datatypes::time_of_day::TimeParseError
+impl core::cmp::PartialEq for kglite::datatypes::time_of_day::TimeParseError
+pub fn kglite::datatypes::time_of_day::TimeParseError::eq(&self, &kglite::datatypes::time_of_day::TimeParseError) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_of_day::TimeParseError
+pub fn kglite::datatypes::time_of_day::TimeParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_of_day::TimeParseError
+pub const kglite::api::time_of_day::MAX_OFFSET_SECS: i32
+pub const kglite::api::time_of_day::NANOS_PER_DAY: u64
+pub fn kglite::api::time_of_day::format_clock(u64) -> alloc::string::String
+pub fn kglite::api::time_of_day::format_offset(i32) -> alloc::string::String
+pub fn kglite::api::time_of_day::format_time(u64, i32) -> alloc::string::String
+pub fn kglite::api::time_of_day::is_valid_nanos(u64) -> bool
+pub fn kglite::api::time_of_day::parse_offset(&str) -> core::option::Option<i32>
+pub fn kglite::api::time_of_day::parse_time(&str) -> core::result::Result<(u64, core::option::Option<i32>), kglite::datatypes::time_of_day::TimeParseError>
 pub mod kglite::api::timeseries
 pub enum kglite::api::timeseries::DatePrecision
 pub kglite::api::timeseries::DatePrecision::Day
@@ -4502,6 +4524,7 @@ pub kglite::api::Value::Duration::seconds: i64
 pub kglite::api::Value::Float64(f64)
 pub kglite::api::Value::Int64(i64)
 pub kglite::api::Value::List(alloc::vec::Vec<kglite::datatypes::values::Value>)
+pub kglite::api::Value::LocalTime(u64)
 pub kglite::api::Value::Map(kglite::datatypes::prop_map::PropMap)
 pub kglite::api::Value::Node(alloc::boxed::Box<kglite::datatypes::values::NodeValue>)
 pub kglite::api::Value::NodeRef(u32)
@@ -4512,6 +4535,9 @@ pub kglite::api::Value::Point::lat: f64
 pub kglite::api::Value::Point::lon: f64
 pub kglite::api::Value::Relationship(alloc::boxed::Box<kglite::datatypes::values::RelValue>)
 pub kglite::api::Value::String(alloc::string::String)
+pub kglite::api::Value::Time
+pub kglite::api::Value::Time::nanos: u64
+pub kglite::api::Value::Time::offset_secs: i32
 pub kglite::api::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::api::Value::UniqueId(u32)
 impl kglite::datatypes::values::Value
@@ -5957,6 +5983,29 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::prop_map::Prop
 pub fn kglite::datatypes::prop_map::PropMap::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub type kglite::datatypes::prop_map::PropKey = alloc::string::String
 pub type kglite::datatypes::prop_map::PropMapIter<'a> = core::iter::adapters::map::Map<core::slice::iter::Iter<'a, (kglite::datatypes::prop_map::PropKey, kglite::datatypes::values::Value)>, fn(&'a (kglite::datatypes::prop_map::PropKey, kglite::datatypes::values::Value)) -> (&'a str, &'a kglite::datatypes::values::Value)>
+pub mod kglite::datatypes::time_of_day
+pub enum kglite::datatypes::time_of_day::TimeParseError
+pub kglite::datatypes::time_of_day::TimeParseError::Malformed
+pub kglite::datatypes::time_of_day::TimeParseError::NamedZone
+impl core::cmp::Eq for kglite::datatypes::time_of_day::TimeParseError
+impl core::cmp::PartialEq for kglite::datatypes::time_of_day::TimeParseError
+pub fn kglite::datatypes::time_of_day::TimeParseError::eq(&self, &kglite::datatypes::time_of_day::TimeParseError) -> bool
+impl core::fmt::Debug for kglite::datatypes::time_of_day::TimeParseError
+pub fn kglite::datatypes::time_of_day::TimeParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::time_of_day::TimeParseError
+pub const kglite::datatypes::time_of_day::MAX_OFFSET_SECS: i32
+pub const kglite::datatypes::time_of_day::NANOS_PER_DAY: u64
+pub fn kglite::datatypes::time_of_day::format_clock(u64) -> alloc::string::String
+pub fn kglite::datatypes::time_of_day::format_offset(i32) -> alloc::string::String
+pub fn kglite::datatypes::time_of_day::format_time(u64, i32) -> alloc::string::String
+pub fn kglite::datatypes::time_of_day::is_valid_nanos(u64) -> bool
+pub fn kglite::datatypes::time_of_day::naive_time(u64) -> core::option::Option<chrono::naive::time::NaiveTime>
+pub fn kglite::datatypes::time_of_day::nanos_of(chrono::naive::time::NaiveTime) -> u64
+pub fn kglite::datatypes::time_of_day::parse_clock(&str) -> core::option::Option<chrono::naive::time::NaiveTime>
+pub fn kglite::datatypes::time_of_day::parse_offset(&str) -> core::option::Option<i32>
+pub fn kglite::datatypes::time_of_day::parse_time(&str) -> core::result::Result<(u64, core::option::Option<i32>), kglite::datatypes::time_of_day::TimeParseError>
+pub fn kglite::datatypes::time_of_day::shift_nanos(u64, i64, i32) -> u64
+pub fn kglite::datatypes::time_of_day::utc_nanos(u64, i32) -> i64
 pub mod kglite::datatypes::values
 pub enum kglite::datatypes::values::BorrowedValue<'a>
 pub kglite::datatypes::values::BorrowedValue::Boolean(bool)
@@ -5969,9 +6018,13 @@ pub kglite::datatypes::values::BorrowedValue::Duration::seconds: i64
 pub kglite::datatypes::values::BorrowedValue::Float64(f64)
 pub kglite::datatypes::values::BorrowedValue::Int64(i64)
 pub kglite::datatypes::values::BorrowedValue::List(&'a [kglite::datatypes::values::Value])
+pub kglite::datatypes::values::BorrowedValue::LocalTime(u64)
 pub kglite::datatypes::values::BorrowedValue::Map(&'a kglite::datatypes::prop_map::PropMap)
 pub kglite::datatypes::values::BorrowedValue::Null
 pub kglite::datatypes::values::BorrowedValue::String(&'a str)
+pub kglite::datatypes::values::BorrowedValue::Time
+pub kglite::datatypes::values::BorrowedValue::Time::nanos: u64
+pub kglite::datatypes::values::BorrowedValue::Time::offset_secs: i32
 pub kglite::datatypes::values::BorrowedValue::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::values::BorrowedValue::UniqueId(u32)
 impl<'a> kglite::datatypes::values::BorrowedValue<'a>
@@ -5988,8 +6041,10 @@ pub kglite::datatypes::values::ColumnData::Duration(alloc::vec::Vec<core::option
 pub kglite::datatypes::values::ColumnData::Float64(alloc::vec::Vec<core::option::Option<f64>>)
 pub kglite::datatypes::values::ColumnData::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub kglite::datatypes::values::ColumnData::List(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<kglite::datatypes::values::Value>>>)
+pub kglite::datatypes::values::ColumnData::LocalTime(alloc::vec::Vec<core::option::Option<u64>>)
 pub kglite::datatypes::values::ColumnData::Map(alloc::vec::Vec<core::option::Option<kglite::datatypes::prop_map::PropMap>>)
 pub kglite::datatypes::values::ColumnData::String(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
+pub kglite::datatypes::values::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::datatypes::values::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::datatypes::values::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
@@ -6001,8 +6056,10 @@ pub kglite::datatypes::values::ColumnType::Duration
 pub kglite::datatypes::values::ColumnType::Float64
 pub kglite::datatypes::values::ColumnType::Int64
 pub kglite::datatypes::values::ColumnType::List
+pub kglite::datatypes::values::ColumnType::LocalTime
 pub kglite::datatypes::values::ColumnType::Map
 pub kglite::datatypes::values::ColumnType::String
+pub kglite::datatypes::values::ColumnType::Time
 pub kglite::datatypes::values::ColumnType::Timestamp
 pub kglite::datatypes::values::ColumnType::UniqueId
 impl core::clone::Clone for kglite::datatypes::values::ColumnType
@@ -6046,6 +6103,7 @@ pub kglite::datatypes::values::Value::Duration::seconds: i64
 pub kglite::datatypes::values::Value::Float64(f64)
 pub kglite::datatypes::values::Value::Int64(i64)
 pub kglite::datatypes::values::Value::List(alloc::vec::Vec<kglite::datatypes::values::Value>)
+pub kglite::datatypes::values::Value::LocalTime(u64)
 pub kglite::datatypes::values::Value::Map(kglite::datatypes::prop_map::PropMap)
 pub kglite::datatypes::values::Value::Node(alloc::boxed::Box<kglite::datatypes::values::NodeValue>)
 pub kglite::datatypes::values::Value::NodeRef(u32)
@@ -6056,6 +6114,9 @@ pub kglite::datatypes::values::Value::Point::lat: f64
 pub kglite::datatypes::values::Value::Point::lon: f64
 pub kglite::datatypes::values::Value::Relationship(alloc::boxed::Box<kglite::datatypes::values::RelValue>)
 pub kglite::datatypes::values::Value::String(alloc::string::String)
+pub kglite::datatypes::values::Value::Time
+pub kglite::datatypes::values::Value::Time::nanos: u64
+pub kglite::datatypes::values::Value::Time::offset_secs: i32
 pub kglite::datatypes::values::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::values::Value::UniqueId(u32)
 impl kglite::datatypes::values::Value
@@ -6183,6 +6244,7 @@ pub kglite::datatypes::Value::Duration::seconds: i64
 pub kglite::datatypes::Value::Float64(f64)
 pub kglite::datatypes::Value::Int64(i64)
 pub kglite::datatypes::Value::List(alloc::vec::Vec<kglite::datatypes::values::Value>)
+pub kglite::datatypes::Value::LocalTime(u64)
 pub kglite::datatypes::Value::Map(kglite::datatypes::prop_map::PropMap)
 pub kglite::datatypes::Value::Node(alloc::boxed::Box<kglite::datatypes::values::NodeValue>)
 pub kglite::datatypes::Value::NodeRef(u32)
@@ -6193,6 +6255,9 @@ pub kglite::datatypes::Value::Point::lat: f64
 pub kglite::datatypes::Value::Point::lon: f64
 pub kglite::datatypes::Value::Relationship(alloc::boxed::Box<kglite::datatypes::values::RelValue>)
 pub kglite::datatypes::Value::String(alloc::string::String)
+pub kglite::datatypes::Value::Time
+pub kglite::datatypes::Value::Time::nanos: u64
+pub kglite::datatypes::Value::Time::offset_secs: i32
 pub kglite::datatypes::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::Value::UniqueId(u32)
 impl kglite::datatypes::values::Value

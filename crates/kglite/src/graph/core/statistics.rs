@@ -262,6 +262,8 @@ fn calculate_stats_for_nodes(
                             Value::UniqueId(_) => "unique_id",
                             Value::Point { .. } => "point",
                             Value::Duration { .. } => "duration",
+                            Value::LocalTime(_) => "localtime",
+                            Value::Time { .. } => "time",
                             Value::Null => "null",
                             Value::NodeRef(_) => "noderef",
                             // Collection / graph-entity variants

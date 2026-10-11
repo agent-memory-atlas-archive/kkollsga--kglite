@@ -33,7 +33,9 @@
 //! | 9   | List       | u32 LE length + Postcard(`Vec<Value>`)   |
 //! | 10  | Map        | u32 LE length + Postcard(`BTreeMap`)     |
 //! | 11  | Timestamp  | u32 LE length (12) + i64 LE seconds + u32 LE nanoseconds |
-//! | 12-14 | (reserved) | zoned datetime / local time / time — length-prefixed |
+//! | 12  | (reserved) | zoned datetime — length-prefixed         |
+//! | 13  | LocalTime  | u32 LE length (8) + u64 LE nanoseconds of day |
+//! | 14  | Time       | u32 LE length (12) + u64 LE nanoseconds of day + i32 LE offset seconds |
 //! | 15  | Duration   | u32 LE length (20) + i32 months + i32 days + i64 seconds + i32 nanoseconds, all LE |
 //!
 //! Tag 15 (`Duration`) is defensive: the bag is written only by the N-Triples
@@ -81,7 +83,12 @@ pub const TAG_MAP_POSTCARD: u8 = 10;
 /// but no longer written.
 pub const TAG_TIMESTAMP_EXACT: u8 = 11;
 
-/// Tags 12-14 are reserved for zoned datetime, local time and time.
+/// Tag 12 is reserved for the zoned datetime.
+///
+/// A time of day without an offset: nanoseconds since midnight.
+pub const TAG_LOCAL_TIME: u8 = 13;
+/// A time of day with an offset: nanoseconds since midnight, then offset seconds.
+pub const TAG_TIME: u8 = 14;
 /// A duration with a sub-second part (and every whole-second one): months, days,
 /// seconds, nanoseconds.
 pub const TAG_DURATION: u8 = 15;
@@ -93,11 +100,11 @@ const DURATION_LEN: usize = 20;
 /// skipped via the length-prefix forward-compat rule (module docs).
 pub const MAX_KNOWN_TAG: u8 = TAG_DURATION;
 
-/// Whether `read_value` can decode `tag`. Tags 12-14 are reserved and tag 8 is
+/// Whether `read_value` can decode `tag`. Tag 12 is reserved and tag 8 is
 /// retired: they sit inside `..=MAX_KNOWN_TAG` yet must be skipped, not read.
 #[inline]
 fn is_decodable_tag(tag: u8) -> bool {
-    tag <= MAX_KNOWN_TAG && tag != TAG_LIST && !(12..=14).contains(&tag)
+    tag <= MAX_KNOWN_TAG && tag != TAG_LIST && tag != 12
 }
 
 // ─── Encoders ────────────────────────────────────────────────────────────────
@@ -140,6 +147,8 @@ pub fn encode_value(buf: &mut Vec<u8>, key: InternedKey, value: &Value) {
             seconds,
             nanos,
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
+        Value::LocalTime(n) => encode_local_time(buf, *n),
+        Value::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
         // NodeRef is transient and is written as null.
         Value::NodeRef(_) => buf.push(TAG_NULL),
         // Lists are persistable property values. Tag 8 is retired and
@@ -192,7 +201,72 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
             seconds,
             nanos,
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
+        BorrowedValue::LocalTime(n) => encode_local_time(buf, *n),
+        BorrowedValue::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
     }
+}
+
+/// Length of a [`TAG_LOCAL_TIME`] payload: `u64`.
+const LOCAL_TIME_LEN: usize = 8;
+/// Length of a [`TAG_TIME`] payload: `u64` + `i32`.
+const TIME_LEN: usize = 12;
+
+fn encode_local_time(buf: &mut Vec<u8>, nanos: u64) {
+    buf.push(TAG_LOCAL_TIME);
+    buf.extend_from_slice(&(LOCAL_TIME_LEN as u32).to_le_bytes());
+    buf.extend_from_slice(&nanos.to_le_bytes());
+}
+
+fn encode_time(buf: &mut Vec<u8>, nanos: u64, offset_secs: i32) {
+    buf.push(TAG_TIME);
+    buf.extend_from_slice(&(TIME_LEN as u32).to_le_bytes());
+    buf.extend_from_slice(&nanos.to_le_bytes());
+    buf.extend_from_slice(&offset_secs.to_le_bytes());
+}
+
+/// `None` for a payload of the wrong length or a clock reading past the end of
+/// the day: corrupt, not a value to fabricate.
+fn decode_local_time(payload: &[u8]) -> Option<u64> {
+    if payload.len() != LOCAL_TIME_LEN {
+        return None;
+    }
+    let nanos = u64::from_le_bytes(payload.try_into().ok()?);
+    crate::datatypes::time_of_day::is_valid_nanos(nanos).then_some(nanos)
+}
+
+/// As [`decode_local_time`], and an offset outside ±18:00 is corrupt too.
+fn decode_time(payload: &[u8]) -> Option<(u64, i32)> {
+    if payload.len() != TIME_LEN {
+        return None;
+    }
+    let nanos = u64::from_le_bytes(payload[..8].try_into().ok()?);
+    let offset = i32::from_le_bytes(payload[8..].try_into().ok()?);
+    (crate::datatypes::time_of_day::is_valid_nanos(nanos)
+        && offset.abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS)
+        .then_some((nanos, offset))
+}
+
+/// The borrowed value of a length-prefixed temporal payload, `None` when the
+/// payload is corrupt for its tag.
+fn decode_fixed_temporal(tag: u8, payload: &[u8]) -> Option<BorrowedValue<'static>> {
+    Some(match tag {
+        TAG_TIMESTAMP_EXACT => BorrowedValue::Timestamp(decode_timestamp_exact(payload)?),
+        TAG_DURATION => {
+            let (months, days, seconds, nanos) = decode_duration(payload)?;
+            BorrowedValue::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            }
+        }
+        TAG_LOCAL_TIME => BorrowedValue::LocalTime(decode_local_time(payload)?),
+        TAG_TIME => {
+            let (nanos, offset_secs) = decode_time(payload)?;
+            BorrowedValue::Time { nanos, offset_secs }
+        }
+        _ => return None,
+    })
 }
 
 fn encode_duration(buf: &mut Vec<u8>, months: i32, days: i32, seconds: i64, nanos: i32) {
@@ -364,6 +438,15 @@ pub fn read_value(blob: &[u8], pos: &mut usize, type_tag: u8) -> Option<Value> {
                 seconds,
                 nanos,
             })
+        }
+        TAG_LOCAL_TIME => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            Some(Value::LocalTime(decode_local_time(bytes)?))
+        }
+        TAG_TIME => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            let (nanos, offset_secs) = decode_time(bytes)?;
+            Some(Value::Time { nanos, offset_secs })
         }
         TAG_LIST_POSTCARD => {
             let bytes = read_len_prefixed(blob, pos)?;
@@ -582,33 +665,16 @@ where
                     return Some(Err(e));
                 }
             }
-            TAG_TIMESTAMP_EXACT => {
+            TAG_TIMESTAMP_EXACT | TAG_DURATION | TAG_LOCAL_TIME | TAG_TIME => {
                 let Some(bytes) = read_len_prefixed(blob, pos) else {
                     return Some(Ok(()));
                 };
-                // A payload that is not a timestamp is corrupt: end the scan
-                // without fabricating a value, as a corrupt list or map does.
-                let Some(ts) = decode_timestamp_exact(bytes) else {
+                // A payload that is not its tag's value is corrupt: end the scan
+                // without fabricating one, as a corrupt list or map does.
+                let Some(value) = decode_fixed_temporal(tag, bytes) else {
                     return Some(Ok(()));
                 };
-                if let Err(e) = f(key, BorrowedValue::Timestamp(ts)) {
-                    return Some(Err(e));
-                }
-            }
-            TAG_DURATION => {
-                let Some(bytes) = read_len_prefixed(blob, pos) else {
-                    return Some(Ok(()));
-                };
-                let Some((months, days, seconds, nanos)) = decode_duration(bytes) else {
-                    return Some(Ok(()));
-                };
-                let duration = BorrowedValue::Duration {
-                    months,
-                    days,
-                    seconds,
-                    nanos,
-                };
-                if let Err(e) = f(key, duration) {
+                if let Err(e) = f(key, value) {
                     return Some(Err(e));
                 }
             }
@@ -1173,14 +1239,15 @@ mod tests {
         }
     }
 
-    /// Tags 12-14 are reserved for zoned datetime / local time / time. They are
-    /// length-prefixed, so a reader that cannot decode them steps over the one
+    /// Tag 12 is reserved for the zoned datetime. It is
+    /// length-prefixed, so a reader that cannot decode it steps over the one
     /// entry and keeps the rest of the row; tag 15 with a corrupt payload ends
     /// the scan rather than fabricating a duration.
     #[test]
     fn reserved_temporal_tags_are_skipped_and_a_corrupt_duration_is_not_invented() {
         let keep = [(key(1), Value::Int64(1)), (key(3), Value::Int64(3))];
-        for reserved in 12u8..=14 {
+        let reserved = 12u8;
+        {
             let mut blob = blob_of(&[keep[0].clone()]);
             blob[..2].copy_from_slice(&3u16.to_le_bytes());
             blob.extend_from_slice(&key(2).as_u64().to_le_bytes());
@@ -1201,6 +1268,63 @@ mod tests {
             let mut blob = 1u16.to_le_bytes().to_vec();
             blob.extend_from_slice(&key(1).as_u64().to_le_bytes());
             blob.push(TAG_DURATION);
+            blob.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            blob.extend_from_slice(&payload);
+            assert_eq!(decode_blob(&blob), vec![]);
+        }
+    }
+
+    /// LocalTime and Time are persistable: each round-trips through every
+    /// reader, the borrowed encoder matches the owned one byte for byte, and a
+    /// payload past the end of the day (or an offset past 18 h) ends the scan.
+    #[test]
+    fn times_of_day_round_trip_through_every_reader() {
+        let values = [
+            Value::LocalTime(0),
+            Value::LocalTime(86_399_999_999_999),
+            Value::Time {
+                nanos: 36_000_500_000_000,
+                offset_secs: 3_600,
+            },
+            Value::Time {
+                nanos: 1,
+                offset_secs: -64_800,
+            },
+        ];
+        for (i, v) in values.iter().enumerate() {
+            let entries = vec![
+                (key(1), Value::Int64(9)),
+                (key(2), v.clone()),
+                (key(3), Value::Null),
+            ];
+            let blob = blob_of(&entries);
+            assert_eq!(decode_blob(&blob), entries, "case {i}: decode_blob");
+            assert_eq!(scan_blob(&blob, key(2)), Some(v.clone()), "case {i}");
+            let mut seen = Vec::new();
+            try_for_each_borrowed::<_, ()>(&blob, |k, b| {
+                seen.push((k, b.to_value()));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(seen, entries, "case {i}: borrowed visit");
+            let mut owned = Vec::new();
+            encode_value(&mut owned, key(2), v);
+            let mut borrowed = Vec::new();
+            encode_value_borrowed(&mut borrowed, key(2), &BorrowedValue::of(v).unwrap());
+            assert_eq!(owned, borrowed, "case {i}");
+        }
+        for (tag, payload) in [
+            (TAG_LOCAL_TIME, 86_400_000_000_000u64.to_le_bytes().to_vec()),
+            (TAG_LOCAL_TIME, vec![0u8; 7]),
+            (TAG_TIME, {
+                let mut p = 0u64.to_le_bytes().to_vec();
+                p.extend_from_slice(&64_801i32.to_le_bytes());
+                p
+            }),
+        ] {
+            let mut blob = 1u16.to_le_bytes().to_vec();
+            blob.extend_from_slice(&key(1).as_u64().to_le_bytes());
+            blob.push(tag);
             blob.extend_from_slice(&(payload.len() as u32).to_le_bytes());
             blob.extend_from_slice(&payload);
             assert_eq!(decode_blob(&blob), vec![]);

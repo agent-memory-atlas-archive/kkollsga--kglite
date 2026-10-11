@@ -169,17 +169,6 @@ pub(super) fn parse_iso_datetime(s: &str) -> Option<ParsedIsoDateTime> {
         })
 }
 
-/// Which wall-clock "now" shape a `local*`/`time` function produces.
-/// DateTime emits a Timestamp; time-only forms emit strings because
-/// KGLite has no standalone time-of-day Value variant.
-#[derive(Clone, Copy)]
-pub(super) enum LocalTemporalKind {
-    /// `localdatetime()` → `YYYY-MM-DDTHH:MM:SS` (no offset).
-    DateTime,
-    /// `localtime()` / `time()` → `HH:MM:SS`.
-    Time,
-}
-
 /// Advance the thread-local xorshift64 PRNG one step and return the
 /// raw 64-bit state. Shared by `rand()`/`random()` and `randomUUID()`.
 ///

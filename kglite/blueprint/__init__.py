@@ -132,8 +132,9 @@ def _json_scalar(value: Any) -> Any:
     ``date``, ``datetime`` and ``timedelta`` become the one-key tagged objects
     the records loader decodes — ``{"$date": …}``, ``{"$datetime": …}`` (an
     offset is applied, normalising to UTC) and ``{"$duration": …}`` — so they
-    load typed rather than as text. A ``time`` has no graph type and is
-    refused. A ``timedelta``'s sub-second part travels as ``nanoseconds``.
+    load typed rather than as text. A ``time`` becomes ``{"$localtime": …}``
+    when naive and ``{"$time": …}`` when aware (its offset kept). A
+    ``timedelta``'s sub-second part travels as ``nanoseconds``.
     ``pd.NaT`` carries no value and becomes ``null``.
     """
     if isinstance(value, (_datetime.datetime, _datetime.date, _datetime.timedelta)):
@@ -152,10 +153,7 @@ def _json_scalar(value: Any) -> Any:
             duration["nanoseconds"] = nanos
         return {"$duration": duration}
     if isinstance(value, _datetime.time):
-        raise TypeError(
-            f"from_records: a time value ({value!r}) cannot be carried in a JSON records spec — "
-            "the graph has no time-of-day type. Pass it as a string."
-        )
+        return {"$time" if value.utcoffset() is not None else "$localtime": value.isoformat()}
     raise TypeError(
         f"from_records: a record value of type {type(value).__name__!r} ({value!r}) cannot be "
         "carried in a JSON records spec"

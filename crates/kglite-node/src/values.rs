@@ -13,7 +13,7 @@ use kglite::api::{NodeValue, PropMap, RelValue, Value};
 use napi::bindgen_prelude::{validate_type_tag, ToNapiValue, TypeTag};
 use napi::sys;
 
-use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, Point};
+use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, LocalTime, Point, Time};
 use crate::errors::{JsErr, JsRes};
 
 /// Deepest list/map nesting converted into JS. The parser bounds query
@@ -268,6 +268,10 @@ impl ToJs {
             Value::UniqueId(n) | Value::NodeRef(n) => self.number(f64::from(*n)),
             Value::DateTime(d) => self.class(LocalDate::from_naive(*d)),
             Value::Timestamp(t) => self.class(LocalDateTime::from_naive(*t)),
+            Value::LocalTime(n) => self.class(LocalTime::from_nanos(*n)),
+            Value::Time { nanos, offset_secs } => {
+                self.class(Time::from_parts(*nanos, *offset_secs))
+            }
             Value::Duration {
                 months,
                 days,
@@ -633,6 +637,15 @@ impl FromJs {
         }
         if let Some(t) = self.unwrap_class::<LocalDateTime>(v) {
             return Some(Value::Timestamp(t.to_naive()));
+        }
+        if let Some(t) = self.unwrap_class::<LocalTime>(v) {
+            return Some(Value::LocalTime(t.to_nanos()));
+        }
+        if let Some(t) = self.unwrap_class::<Time>(v) {
+            return Some(Value::Time {
+                nanos: t.to_nanos(),
+                offset_secs: t.offset_seconds,
+            });
         }
         if let Some(d) = self.unwrap_class::<Duration>(v) {
             return Some(Value::Duration {

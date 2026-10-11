@@ -407,6 +407,8 @@ pub fn kglite_value_to_json(v: &Value) -> serde_json::Value {
 /// |-------|------|
 /// | date | `{"$date": "2020-01-01"}` |
 /// | timestamp | `{"$datetime": "2020-01-02T03:04:05.250"}` (no zone) |
+/// | local time | `{"$localtime": "10:00:00.5"}` |
+/// | time | `{"$time": "10:00:00+01:00"}` |
 /// | duration | `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` |
 /// | point | `{"$point": {"lat": 60.1, "lon": 5.2}}` |
 /// | NaN, infinities | `{"$float": "NaN"}`, `"inf"`, `"-inf"` |
@@ -419,9 +421,11 @@ pub fn kglite_value_to_json_tagged(v: &Value) -> serde_json::Value {
 }
 
 /// Every tag key, for escaping a user map that would otherwise read as a tag.
-const TAG_KEYS: [&str; 6] = [
+const TAG_KEYS: [&str; 8] = [
     "$date",
     "$datetime",
+    "$localtime",
+    "$time",
     "$duration",
     "$point",
     "$float",
@@ -483,6 +487,23 @@ fn value_to_json(v: &Value, mode: Encoding) -> serde_json::Value {
             match mode {
                 Encoding::Natural => text,
                 Encoding::Tagged => tag("$datetime", text),
+            }
+        }
+        Value::LocalTime(n) => {
+            let text = J::String(crate::datatypes::time_of_day::format_clock(*n));
+            match mode {
+                Encoding::Natural => text,
+                Encoding::Tagged => tag("$localtime", text),
+            }
+        }
+        Value::Time { nanos, offset_secs } => {
+            let text = J::String(crate::datatypes::time_of_day::format_time(
+                *nanos,
+                *offset_secs,
+            ));
+            match mode {
+                Encoding::Natural => text,
+                Encoding::Tagged => tag("$time", text),
             }
         }
         Value::Point { lat, lon } if matches!(mode, Encoding::Tagged) => tag(
@@ -553,6 +574,10 @@ pub fn kglite_value_to_csv_text(v: &Value) -> String {
         Value::UniqueId(n) | Value::NodeRef(n) => n.to_string(),
         Value::DateTime(d) => d.format("%Y-%m-%d").to_string(),
         Value::Timestamp(d) => d.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+        Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
+        Value::Time { nanos, offset_secs } => {
+            crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
+        }
         Value::Point { lat, lon } => format!("POINT({lon} {lat})"),
         Value::Duration {
             months,

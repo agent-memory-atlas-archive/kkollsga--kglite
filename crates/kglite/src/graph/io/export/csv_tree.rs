@@ -100,6 +100,8 @@ fn keyword(kind: ColumnKind) -> &'static str {
         ColumnKind::DateTime => "date",
         ColumnKind::Timestamp => "timestamp",
         ColumnKind::Duration => "duration",
+        ColumnKind::LocalTime => "localtime",
+        ColumnKind::Time => "time",
         ColumnKind::List => "list",
         ColumnKind::Map => "map",
         ColumnKind::Point => "point",

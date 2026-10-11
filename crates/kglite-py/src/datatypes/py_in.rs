@@ -5,7 +5,7 @@ pub use super::py_value::{py_query_parameter_to_value, py_value_to_value, F32Row
 use super::type_conversions::{to_bool, to_datetime, to_f64, to_i64, to_timestamp, to_u32};
 use super::values::{ColumnData, ColumnType, DataFrame, FilterCondition, Value};
 use pyo3::prelude::*;
-use pyo3::types::{PyDelta, PyDict, PyList, PyTuple};
+use pyo3::types::{PyDelta, PyDict, PyList, PyTime, PyTuple};
 use pyo3::Bound;
 use std::collections::HashMap;
 
@@ -335,6 +335,86 @@ fn duration_cells(
     Ok(cells)
 }
 
+/// A time-of-day column's cells: each `datetime.time` through
+/// `py_value::time_to_value`, kept when `keep` accepts its kind (a naive time in
+/// a `Time` column, or an aware one in a `LocalTime` column, is not silently
+/// reinterpreted). Anything else is stored as null and reported under
+/// `on_invalid`.
+fn time_cells<T>(
+    py_list: &Bound<'_, PyList>,
+    null_mask: &[bool],
+    col_name: &str,
+    on_invalid: OnInvalid,
+    keep: impl Fn(Value) -> Option<T>,
+) -> PyResult<Vec<Option<T>>> {
+    let mut cells = Vec::with_capacity(null_mask.len());
+    let (mut rejected, mut first) = (0usize, None);
+    for (row, &is_null) in null_mask.iter().enumerate() {
+        if is_null {
+            cells.push(None);
+            continue;
+        }
+        let item = py_list.get_item(row)?;
+        let converted = item
+            .cast::<PyTime>()
+            .map_err(|_| "not a time".to_string())
+            .and_then(|time| super::py_value::time_to_value(time).map_err(|e| e.to_string()))
+            .ok()
+            .and_then(&keep);
+        if converted.is_none() {
+            rejected += 1;
+            first.get_or_insert_with(|| {
+                (row, item.repr().map(|r| r.to_string()).unwrap_or_default())
+            });
+        }
+        cells.push(converted);
+    }
+    if let Some((row, shown)) = first {
+        on_invalid::report(
+            py_list.py(),
+            on_invalid,
+            format!(
+                "Column '{col_name}': {rejected} value(s) could not be stored as a time of day \
+                 (row {row} (0-based) holds {shown}) and are stored as NULL."
+            ),
+        )?;
+    }
+    Ok(cells)
+}
+
+/// The cells of an object column holding durations or times of day.
+fn temporal_object_column(
+    col_type: ColumnType,
+    cells: &Bound<'_, PyList>,
+    null_mask: &[bool],
+    col_name: &str,
+    on_invalid: OnInvalid,
+) -> PyResult<ColumnData> {
+    Ok(match col_type {
+        ColumnType::LocalTime => ColumnData::LocalTime(time_cells(
+            cells,
+            null_mask,
+            col_name,
+            on_invalid,
+            |v| match v {
+                Value::LocalTime(nanos) => Some(nanos),
+                _ => None,
+            },
+        )?),
+        ColumnType::Time => ColumnData::Time(time_cells(
+            cells,
+            null_mask,
+            col_name,
+            on_invalid,
+            |v| match v {
+                Value::Time { nanos, offset_secs } => Some((nanos, offset_secs)),
+                _ => None,
+            },
+        )?),
+        _ => ColumnData::Duration(duration_cells(cells, null_mask, col_name, on_invalid)?),
+    })
+}
+
 fn convert_pandas_series(
     series: &Bound<'_, PyAny>,
     col_type: ColumnType,
@@ -512,12 +592,10 @@ fn convert_pandas_series(
                 })
             },
         )?)),
-        ColumnType::Duration => Ok(ColumnData::Duration(duration_cells(
-            py_list.cast::<PyList>()?,
-            &null_mask,
-            col_name,
-            on_invalid,
-        )?)),
+        ColumnType::Duration | ColumnType::LocalTime | ColumnType::Time => {
+            let cells = py_list.cast::<PyList>()?;
+            temporal_object_column(col_type, cells, &null_mask, col_name, on_invalid)
+        }
     }
 }
 
@@ -661,6 +739,8 @@ fn pandas_to_dataframe_with_text_policy(
                         "list" | "array" => ColumnType::List,
                         "map" | "dict" => ColumnType::Map,
                         "duration" | "timedelta" => ColumnType::Duration,
+                        "localtime" => ColumnType::LocalTime,
+                        "time" => ColumnType::Time,
                         _ => {
                             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                                 "Unsupported column type '{}' specified for column '{}'",
@@ -889,7 +969,7 @@ fn homogeneous_object_type(
         "floating" => return Ok(Some(ColumnType::Float64)),
         // pandas 2.x reports an all-float object column that holds a `None` as
         // "mixed-integer-float" even with `skipna=True`; the cells decide.
-        "integer" | "date" | "datetime" | "mixed" | "mixed-integer-float" => {}
+        "integer" | "date" | "datetime" | "time" | "mixed" | "mixed-integer-float" => {}
         _ => return Ok(None),
     }
     let cells = series.call_method0("dropna")?.call_method0("tolist")?;
@@ -900,6 +980,23 @@ fn homogeneous_object_type(
     let all = |pred: &dyn Fn(&Bound<'_, PyAny>) -> bool| cells.iter().all(|c| pred(&c));
     Ok(if inferred == "mixed-integer-float" {
         all(&|c| c.is_instance_of::<pyo3::types::PyFloat>()).then_some(ColumnType::Float64)
+    } else if inferred == "time" || all(&|c| c.cast::<PyTime>().is_ok()) {
+        // Naive times are a LocalTime column, aware ones a Time column; a
+        // column holding both has no single faithful type.
+        let aware = |c: &Bound<'_, PyAny>| {
+            c.call_method0("utcoffset")
+                .map(|offset| !offset.is_none())
+                .unwrap_or(false)
+        };
+        if !all(&|c| c.cast::<PyTime>().is_ok()) {
+            None
+        } else if all(&|c| !aware(c)) {
+            Some(ColumnType::LocalTime)
+        } else if all(&aware) {
+            Some(ColumnType::Time)
+        } else {
+            None
+        }
     } else if all(&|c| c.cast::<PyDateTime>().is_ok()) {
         Some(ColumnType::Timestamp)
     } else if all(&|c| c.is_instance_of::<PyDate>() && c.cast::<PyDateTime>().is_err()) {

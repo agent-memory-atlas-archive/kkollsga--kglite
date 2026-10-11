@@ -242,7 +242,9 @@ JSON has no date type, so a date or datetime parameter is a one-key tagged
 object: `{"$date": "2020-01-01"}` binds a date (parsed as `date()` parses),
 `{"$datetime": "2020-01-01T10:00:00+02:00"}` binds a datetime (parsed as
 `datetime()` parses; an offset is applied, normalising to UTC), and
-`{"$duration": {"months": 0, "days": 1, "seconds": 0}}` binds a duration. The
+`{"$duration": {"months": 0, "days": 1, "seconds": 0}}` binds a duration,
+`{"$localtime": "10:00:00.5"}` binds a local time (no offset allowed) and
+`{"$time": "10:00:00+01:00"}` a time (no offset means UTC). The
 payloads are the shapes result rows render those types as, so a cell read back
 and wrapped in its tag matches the stored value. A bare string stays a string.
 An object with any other key, or with a tag key beside other keys, is an
@@ -280,6 +282,7 @@ bound again is unchanged.
 
 - `{"$date": "2020-01-02"}`
 - `{"$datetime": "2020-01-02T03:04:05.250"}`, with no zone
+- `{"$localtime": "10:00:00.5"}` and `{"$time": "10:00:00+01:00"}`
 - `{"$duration": {"months": 0, "days": 1, "seconds": 0}}`
 - `{"$point": {"lat": 60.1, "lon": 5.2}}`
 - `{"$float": "NaN" | "inf" | "-inf"}`

@@ -3,9 +3,10 @@
 //! ISO week, ordinal day, quarter), clock components, and an existing temporal
 //! value to copy the unnamed components from (`{date: d, hour: 10}`).
 use super::temporal_iso::{
-    date_from_iso_week, date_from_ordinal, date_from_quarter, day_of_quarter, format_local_time,
-    parse_date_text, parse_local_datetime_text, parse_time_text,
+    date_from_iso_week, date_from_ordinal, date_from_quarter, day_of_quarter, parse_date_text,
+    parse_local_datetime_text, parse_time_text,
 };
+use crate::datatypes::time_of_day::{naive_time, nanos_of, parse_offset, parse_time};
 use crate::datatypes::values::Value;
 use crate::datatypes::PropMap;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
@@ -15,6 +16,8 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 pub(super) enum MapTarget {
     Date,
     LocalTime,
+    /// A time of day with an offset (`timezone`, or the `time` base's, or UTC).
+    Time,
     LocalDateTime,
     /// Zoneless like `LocalDateTime`: this engine stores datetimes in UTC.
     DateTime,
@@ -44,6 +47,7 @@ impl MapTarget {
         match self {
             MapTarget::Date => "date",
             MapTarget::LocalTime => "localtime",
+            MapTarget::Time => "time",
             MapTarget::LocalDateTime => "localdatetime",
             MapTarget::DateTime => "datetime",
         }
@@ -55,8 +59,14 @@ impl MapTarget {
         match self {
             MapTarget::Date => date,
             MapTarget::LocalTime => time,
+            MapTarget::Time => time || key == "timezone",
             MapTarget::LocalDateTime | MapTarget::DateTime => date || time || key == "datetime",
         }
+    }
+
+    /// Whether the target carries a calendar date.
+    fn has_date(self) -> bool {
+        !matches!(self, MapTarget::LocalTime | MapTarget::Time)
     }
 
     fn accepted(self) -> &'static str {
@@ -66,6 +76,9 @@ impl MapTarget {
             }
             MapTarget::LocalTime => {
                 "hour, minute, second, millisecond, microsecond, nanosecond, time"
+            }
+            MapTarget::Time => {
+                "hour, minute, second, millisecond, microsecond, nanosecond, time, timezone"
             }
             MapTarget::LocalDateTime | MapTarget::DateTime => {
                 "year, month, day, week, dayOfWeek, ordinalDay, quarter, dayOfQuarter, hour, minute, second, millisecond, microsecond, nanosecond, date, time, datetime"
@@ -80,6 +93,9 @@ pub(super) fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
     match value {
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
         Value::Timestamp(t) => Some(*t),
+        Value::LocalTime(n) | Value::Time { nanos: n, .. } => {
+            naive_time(*n).map(|t| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(t))
+        }
         Value::String(s) => parse_local_datetime_text(s).or_else(|| {
             parse_time_text(s).map(|t| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(t))
         }),
@@ -89,7 +105,11 @@ pub(super) fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
 
 pub(super) fn base_time(value: &Value) -> Option<NaiveTime> {
     match value {
-        Value::String(s) => parse_time_text(s).or_else(|| base_datetime(value).map(|t| t.time())),
+        Value::LocalTime(n) | Value::Time { nanos: n, .. } => naive_time(*n),
+        Value::String(s) => parse_time(s)
+            .ok()
+            .and_then(|(nanos, _)| naive_time(nanos))
+            .or_else(|| base_datetime(value).map(|t| t.time())),
         _ => base_datetime(value).map(|t| t.time()),
     }
 }
@@ -126,9 +146,14 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
         }
     };
 
+    let offset_secs = if target == MapTarget::Time {
+        Some(map_offset(function, map)?)
+    } else {
+        None
+    };
     let mut date = None;
     let mut time = None;
-    if target != MapTarget::LocalTime {
+    if target.has_date() {
         let year = component("year")?;
         let month = component("month")?;
         let day = component("day")?;
@@ -226,10 +251,38 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
     };
     Ok(match (target, date, time) {
         (MapTarget::Date, Some(date), _) => Value::DateTime(date),
-        (MapTarget::LocalTime, _, Some(time)) => Value::String(format_local_time(time)),
+        (MapTarget::LocalTime, _, Some(time)) => Value::LocalTime(nanos_of(time)),
+        (MapTarget::Time, _, Some(time)) => Value::Time {
+            nanos: nanos_of(time),
+            offset_secs: offset_secs.unwrap_or(0),
+        },
         (_, Some(date), Some(time)) => Value::Timestamp(date.and_time(time)),
         _ => Value::Null,
     })
+}
+
+/// The offset of a `time({...})` map: its `timezone`, else the offset of a
+/// `time` base that has one, else UTC.
+fn map_offset(function: &str, map: &PropMap) -> Result<i32, String> {
+    match map.get("timezone") {
+        Some(Value::String(zone)) => parse_offset(zone).ok_or_else(|| {
+            format!(
+                "{function}(): timezone '{zone}' is not a numeric offset; named time zones are not supported on time values"
+            )
+        }),
+        Some(other) => Err(format!(
+            "{function}(): timezone must be a string, got {}",
+            other.type_name()
+        )),
+        None => Ok(match map.get("time") {
+            Some(Value::Time { offset_secs, .. }) => *offset_secs,
+            Some(Value::String(text)) => parse_time(text)
+                .ok()
+                .and_then(|(_, offset)| offset)
+                .unwrap_or(0),
+            _ => 0,
+        }),
+    }
 }
 
 /// The calendar components a map named, before any base fills the rest.

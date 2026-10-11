@@ -77,6 +77,13 @@ fn xsd_to_value(value: &str, local: &str) -> Value {
 
         "dateTime" => parse_xsd_datetime(value),
 
+        // With an offset (or `Z`) a `Time`, without one a `LocalTime`.
+        "time" => match crate::datatypes::time_of_day::parse_time(value) {
+            Ok((nanos, Some(offset_secs))) => Value::Time { nanos, offset_secs },
+            Ok((nanos, None)) => Value::LocalTime(nanos),
+            Err(_) => Value::String(value.to_string()),
+        },
+
         "duration" | "dayTimeDuration" | "yearMonthDuration" => {
             parse_xsd_duration(value).unwrap_or_else(|| Value::String(value.to_string()))
         }
@@ -453,6 +460,30 @@ mod tests {
             datatype_to_value("x", "http://example.org/custom"),
             Value::String("x".to_string())
         );
+    }
+
+    #[test]
+    fn xsd_time_is_local_without_an_offset_and_zoned_with_one() {
+        let time = |v: &str| datatype_to_value(v, &xsd("time"));
+        assert_eq!(time("10:00:00.5"), Value::LocalTime(36_000_500_000_000));
+        for (text, offset_secs) in [
+            ("10:00:00Z", 0),
+            ("10:00:00+01:00", 3600),
+            ("10:00:00-05:30", -19_800),
+        ] {
+            let Value::Time {
+                nanos,
+                offset_secs: got,
+            } = time(text)
+            else {
+                panic!("{text} should be a Time");
+            };
+            assert_eq!((nanos, got), (36_000_000_000_000, offset_secs), "{text}");
+        }
+        // Not a time of day: kept as text.
+        for bad in ["24:00:00", "10:00:00+19:00", "noon"] {
+            assert_eq!(time(bad), Value::String(bad.to_string()), "{bad}");
+        }
     }
 
     #[test]

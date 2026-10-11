@@ -659,7 +659,7 @@ class TestRandomUUID:
 
 
 class TestLocalTemporal:
-    """localdatetime() → datetime.datetime; localtime(), time() → ISO strings."""
+    """localdatetime() → datetime.datetime; localtime() → naive datetime.time; time() → aware."""
 
     def test_localdatetime_no_arg_is_datetime(self):
         import datetime
@@ -669,19 +669,19 @@ class TestLocalTemporal:
         # 0.12 Cluster 1: localdatetime() now returns a real datetime value.
         assert isinstance(v, datetime.datetime), repr(v)
 
-    def test_localtime_no_arg_iso(self):
-        import re
+    def test_localtime_no_arg_is_a_naive_time(self):
+        import datetime
 
         g = rg.KnowledgeGraph()
         v = g.cypher("RETURN localtime() AS v")[0]["v"]
-        assert re.match(r"^\d{2}:\d{2}:\d{2}$", v), v
+        assert isinstance(v, datetime.time) and v.tzinfo is None, repr(v)
 
-    def test_time_no_arg_iso(self):
-        import re
+    def test_time_no_arg_is_a_utc_time(self):
+        import datetime
 
         g = rg.KnowledgeGraph()
         v = g.cypher("RETURN time() AS v")[0]["v"]
-        assert re.match(r"^\d{2}:\d{2}:\d{2}$", v), v
+        assert isinstance(v, datetime.time) and v.utcoffset() == datetime.timedelta(0), repr(v)
 
     def test_localdatetime_parse(self):
         import datetime
@@ -698,9 +698,12 @@ class TestLocalTemporal:
         assert v == datetime.datetime(2024, 3, 15, 0, 0, 0)
 
     def test_time_parse_hh_mm(self):
+        import datetime
+
         g = rg.KnowledgeGraph()
         v = g.cypher("RETURN time('10:30') AS v")[0]["v"]
-        assert v == "10:30"
+        assert v == datetime.time(10, 30, tzinfo=datetime.timezone.utc)
+        assert g.cypher("RETURN toString(time('10:30')) AS v")[0]["v"] == "10:30Z"
 
     def test_localdatetime_bad_input_raises(self):
         g = rg.KnowledgeGraph()

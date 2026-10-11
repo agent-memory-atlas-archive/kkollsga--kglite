@@ -202,16 +202,19 @@ follows, and the mapping is asserted in both directions by
 | node | `Map` | `id`, `labels`, `properties` |
 | relationship | `Map` | `id`, `start`, `end`, `type`, `properties` |
 | path | `Map` | `nodes`, `relationships`, each a `List` of the maps above |
-| date | `String` | ISO `"2020-01-01"`; bind it back as a `LocalDate` to match it |
-| datetime | `String` | ISO `"2020-01-01T08:00:00"`, normalised to UTC, no zone suffix |
-| duration | `Map` | `months`, `days`, `seconds` |
-| point | `Map` | `latitude`, `longitude` |
+| date | `LocalDate` | bound back as a `LocalDate`, it matches |
+| datetime | `LocalDateTime` | normalised to UTC, no zone |
+| local time | `LocalTime` | nanosecond precision |
+| time | `OffsetTime` | the offset is kept; two `time` values at one instant of day are equal in the engine |
+| duration | `KgliteDuration` | `months`, `days`, `seconds`, `nanos` |
+| point | `Point` | `latitude`, `longitude` |
 
 Parameters accept the mirror set: `null`, `String`, `Boolean`, any `Number`,
 `Map` with `String` keys, `Iterable`, `Object[]`, nested freely. `LocalDate`
 binds as a Cypher date, and `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime`
 and `Instant` bind as a datetime (an offset is applied, so the stored value is
-UTC), so `WHERE r.since = $d` matches a stored `date()`. A bare `String` stays a
+UTC), so `WHERE r.since = $d` matches a stored `date()`. `LocalTime` binds as a
+local time and `OffsetTime` as a time with its offset. A bare `String` stays a
 string and never equals a date. Anything else (a POJO, another `java.time`
 type) is rejected before the call reaches the engine, with a message
 naming the type. Always parameterise — concatenating a

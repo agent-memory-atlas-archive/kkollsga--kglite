@@ -159,6 +159,8 @@ fn vocabulary_type(ct: &ColumnType) -> Option<ColumnType> {
         ColumnType::DateTime => Some(ColumnType::DateTime),
         ColumnType::List => Some(ColumnType::List),
         ColumnType::Duration => Some(ColumnType::Duration),
+        ColumnType::LocalTime => Some(ColumnType::LocalTime),
+        ColumnType::Time => Some(ColumnType::Time),
         ColumnType::Timestamp | ColumnType::Map => None,
     }
 }
@@ -177,6 +179,8 @@ fn type_label(ct: &ColumnType) -> &'static str {
         ColumnType::Timestamp => "timestamp",
         ColumnType::Map => "map",
         ColumnType::Duration => "duration",
+        ColumnType::LocalTime => "localtime",
+        ColumnType::Time => "time",
     }
 }
 
@@ -193,6 +197,10 @@ fn canonical_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::DateTime(d) => d.format("%Y-%m-%d").to_string(),
         Value::Timestamp(t) => t.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+        Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
+        Value::Time { nanos, offset_secs } => {
+            crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
+        }
         // Compact JSON, nested values included — the same spelling
         // `typing::parse_list_cell` reads back.
         other => {

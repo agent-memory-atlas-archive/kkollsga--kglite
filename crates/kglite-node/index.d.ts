@@ -104,6 +104,18 @@ export declare class LocalDateTime {
   toJSON(): string
 }
 
+/** A time of day with no offset, to the nanosecond. */
+export declare class LocalTime {
+  readonly hour: number
+  readonly minute: number
+  readonly second: number
+  readonly nanosecond: number
+  constructor(hour: number, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null)
+  /** ISO-8601 with seconds omitted when zero and the shortest of 0, 3, 6 or 9 fractional digits. */
+  toString(): string
+  toJSON(): string
+}
+
 /** A WGS-84 point. */
 export declare class Point {
   readonly latitude: number
@@ -121,6 +133,23 @@ export declare class RowStream {
 }
 
 /** An open transaction, from `graph.begin()` or passed to the `graph.transaction()` callback. */
+/**
+ * A time of day with a UTC offset (whole seconds, within ±18 hours), to the nanosecond.
+ * Two times at the same instant of day are equal in the engine whatever their offsets.
+ */
+export declare class Time {
+  readonly hour: number
+  readonly minute: number
+  readonly second: number
+  readonly nanosecond: number
+  /** Seconds east of UTC. */
+  readonly offsetSeconds: number
+  constructor(hour: number, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null, offsetSeconds?: number | undefined | null)
+  /** ISO-8601 with the offset: `10:00:00.5+01:00`, `10:00Z`. */
+  toString(): string
+  toJSON(): string
+}
+
 export declare class Transaction {
   /** Run a Cypher statement inside the transaction. */
   run(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
@@ -232,13 +261,13 @@ export interface KgRelationship {
  * Any value a query can return.
  *
  * `Int64` is `number` when exact and `bigint` beyond 2^53 - 1 (`integers: 'bigint'`
- * makes every integer a `bigint`). Dates, datetimes, durations and points are the
+ * makes every integer a `bigint`). Dates, datetimes, times of day, durations and points are the
  * exported classes; nodes, relationships and paths are plain objects.
  *
  * `JSON.stringify` throws on a `bigint` (a JavaScript rule, not a kglite one): pass a
  * replacer, or define `BigInt.prototype.toJSON`, when a result may hold one.
  */
-export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | KgMap
+export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | LocalTime | Time | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | KgMap
 
 /**
  * Who holds a writer lease. `pid`, `since` and `label` are what the holder published

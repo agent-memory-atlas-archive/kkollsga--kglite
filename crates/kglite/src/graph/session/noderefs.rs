@@ -137,6 +137,8 @@ impl Resolver<'_> {
                             | Value::Null
                             | Value::Duration { .. }
                             | Value::Timestamp(_)
+                            | Value::LocalTime(_)
+                            | Value::Time { .. }
                     )
                 }) {
                     return None;

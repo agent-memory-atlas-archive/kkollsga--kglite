@@ -77,6 +77,8 @@ pub enum ColumnKind {
     Timestamp,
     Point,
     Duration,
+    LocalTime,
+    Time,
     List,
     Map,
     /// No row holds a value.
@@ -98,6 +100,8 @@ impl ColumnKind {
             Value::Timestamp(_) => Self::Timestamp,
             Value::Point { .. } => Self::Point,
             Value::Duration { .. } => Self::Duration,
+            Value::LocalTime(_) => Self::LocalTime,
+            Value::Time { .. } => Self::Time,
             Value::List(_) => Self::List,
             Value::Map(_) => Self::Map,
             Value::Null | Value::NodeRef(_) => return None,

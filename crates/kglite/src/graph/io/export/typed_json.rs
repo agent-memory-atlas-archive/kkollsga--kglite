@@ -22,11 +22,14 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use serde_json::{json, Map, Value as Json};
 
 use crate::datatypes::prop_map::PropMap;
+use crate::datatypes::time_of_day::{format_clock, format_time, parse_time};
 use crate::datatypes::values::{raw_string, Value};
 
-const TAGS: [&str; 6] = [
+const TAGS: [&str; 8] = [
     "$date",
     "$datetime",
+    "$localtime",
+    "$time",
     "$duration",
     "$point",
     "$float",
@@ -63,6 +66,10 @@ pub(crate) fn to_json(value: &Value) -> Json {
         Value::Boolean(b) => json!(b),
         Value::DateTime(d) => tagged("$date", json!(d.to_string())),
         Value::Timestamp(t) => tagged("$datetime", json!(t.format(TIMESTAMP_FORMAT).to_string())),
+        Value::LocalTime(n) => tagged("$localtime", json!(format_clock(*n))),
+        Value::Time { nanos, offset_secs } => {
+            tagged("$time", json!(format_time(*nanos, *offset_secs)))
+        }
         Value::Point { lat, lon } => tagged("$point", json!({"lat": lat, "lon": lon})),
         Value::Duration {
             months,
@@ -113,6 +120,14 @@ fn decode_tagged(object: &Map<String, Json>) -> Option<Value> {
             .ok()
             .filter(|t| (1..=9999).contains(&t.year()))
             .map(Value::Timestamp),
+        "$localtime" => match parse_time(payload.as_str()?) {
+            Ok((nanos, None)) => Some(Value::LocalTime(nanos)),
+            _ => None,
+        },
+        "$time" => match parse_time(payload.as_str()?) {
+            Ok((nanos, Some(offset_secs))) => Some(Value::Time { nanos, offset_secs }),
+            _ => None,
+        },
         "$duration" => {
             let fields = payload.as_object()?;
             let field = |name: &str| fields.get(name).and_then(Json::as_i64);
@@ -211,6 +226,40 @@ mod tests {
             Value::List(vec![Value::Null, Value::Boolean(true)]),
         ]);
         assert_eq!(round(&list), list);
+    }
+
+    #[test]
+    fn times_of_day_survive_with_their_offset() {
+        let values = [
+            Value::LocalTime(36_000_500_000_000),
+            Value::Time {
+                nanos: 86_399_999_999_999,
+                offset_secs: -19_800,
+            },
+            Value::Time {
+                nanos: 0,
+                offset_secs: 0,
+            },
+        ];
+        for value in values {
+            // `==` ignores a Time's offset; the debug form carries it.
+            assert_eq!(format!("{:?}", round(&value)), format!("{value:?}"));
+            let nested = Value::List(vec![value.clone()]);
+            assert_eq!(format!("{:?}", round(&nested)), format!("{nested:?}"));
+        }
+        assert_eq!(
+            to_json(&Value::Time {
+                nanos: 36_000_000_000_000,
+                offset_secs: 3600
+            })
+            .to_string(),
+            r#"{"$time":"10:00+01:00"}"#
+        );
+        // A `$localtime` with an offset, and a `$time` without one, are not typed values.
+        for bad in [r#"{"$localtime":"10:00Z"}"#, r#"{"$time":"10:00"}"#] {
+            let json: Json = serde_json::from_str(bad).unwrap();
+            assert!(matches!(from_json(&json), Value::Map(_)), "{bad}");
+        }
     }
 
     #[test]

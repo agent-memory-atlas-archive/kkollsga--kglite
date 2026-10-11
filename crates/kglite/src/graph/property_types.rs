@@ -37,6 +37,8 @@
 //! | `LOCAL DATETIME`| `Timestamp(NaiveDateTime)`         |
 //! | `DURATION`      | `Duration { months, days, seconds }` |
 //! | `POINT`         | `Point { lat, lon }`               |
+//! | `LOCAL TIME`    | `LocalTime(nanos)`                 |
+//! | `ZONED TIME`, `TIME` | `Time { nanos, offset_secs }` |
 //!
 //! Two mapping decisions are worth stating, because the variant names do not
 //! read the way they map:
@@ -47,9 +49,10 @@
 //!   *and* a wall-clock time is `Value::Timestamp(NaiveDateTime)`, and naive
 //!   means no offset, which is exactly Neo4j's `LOCAL DATETIME`. Neither
 //!   variant carries a timezone, so **`ZONED DATETIME` (and its Neo4j alias
-//!   `DATETIME`), `LOCAL TIME` and `ZONED TIME` are unsupported**: accepting
-//!   `DATETIME` and enforcing it against an offset-free value would promise a
-//!   zoned type kglite cannot represent.
+//!   `DATETIME`) is unsupported**: accepting `DATETIME` and enforcing it
+//!   against an offset-free value would promise a zoned type kglite cannot
+//!   represent. `LOCAL TIME` and `ZONED TIME` have exact counterparts in
+//!   `LocalTime` and `Time`.
 //! - **`INTEGER` accepts `Value::UniqueId` as well as `Value::Int64`.**
 //!   `UniqueId` is kglite's compact encoding of an auto-assigned or numeric
 //!   node id, not a distinct user-facing type: it prints as an integer,
@@ -94,6 +97,8 @@ pub enum DeclaredType {
     LocalDateTime,
     Duration,
     Point,
+    LocalTime,
+    ZonedTime,
 }
 
 impl DeclaredType {
@@ -118,6 +123,8 @@ impl DeclaredType {
             "LOCAL DATETIME" => Some(Self::LocalDateTime),
             "DURATION" => Some(Self::Duration),
             "POINT" => Some(Self::Point),
+            "LOCAL TIME" => Some(Self::LocalTime),
+            "ZONED TIME" | "TIME" => Some(Self::ZonedTime),
             _ => None,
         }
     }
@@ -134,6 +141,8 @@ impl DeclaredType {
             Self::LocalDateTime => "LOCAL DATETIME",
             Self::Duration => "DURATION",
             Self::Point => "POINT",
+            Self::LocalTime => "LOCAL TIME",
+            Self::ZonedTime => "ZONED TIME",
         }
     }
 
@@ -158,6 +167,8 @@ impl DeclaredType {
             Self::LocalDateTime => matches!(value, Value::Timestamp(_)),
             Self::Duration => matches!(value, Value::Duration { .. }),
             Self::Point => matches!(value, Value::Point { .. }),
+            Self::LocalTime => matches!(value, Value::LocalTime(_)),
+            Self::ZonedTime => matches!(value, Value::Time { .. }),
         }
     }
 
@@ -172,6 +183,8 @@ impl DeclaredType {
             "LOCAL DATETIME",
             "DURATION",
             "POINT",
+            "LOCAL TIME",
+            "ZONED TIME",
         ]
     }
 }
@@ -215,6 +228,8 @@ pub fn value_type_name(value: &Value) -> &'static str {
         Value::Timestamp(_) => "LOCAL DATETIME",
         Value::Duration { .. } => "DURATION",
         Value::Point { .. } => "POINT",
+        Value::LocalTime(_) => "LOCAL TIME",
+        Value::Time { .. } => "ZONED TIME",
         Value::List(_) => "LIST",
         Value::Map(_) => "MAP",
         Value::Node(_) | Value::NodeRef(_) => "NODE",
@@ -259,6 +274,14 @@ mod tests {
                 },
             ),
             ("point", Value::Point { lat: 1.0, lon: 2.0 }),
+            ("local_time", Value::LocalTime(36_000_000_000_000)),
+            (
+                "zoned_time",
+                Value::Time {
+                    nanos: 36_000_000_000_000,
+                    offset_secs: 3600,
+                },
+            ),
             ("list", Value::List(vec![Value::Int64(1)])),
             ("map", Value::Map(crate::datatypes::PropMap::new())),
         ]
@@ -277,6 +300,8 @@ mod tests {
             DeclaredType::LocalDateTime => &["timestamp"],
             DeclaredType::Duration => &["duration"],
             DeclaredType::Point => &["point"],
+            DeclaredType::LocalTime => &["local_time"],
+            DeclaredType::ZonedTime => &["zoned_time"],
         }
     }
 
@@ -368,8 +393,6 @@ mod tests {
             "any",
             // Real Neo4j types kglite has no exact Value for.
             "ZONED DATETIME",
-            "LOCAL TIME",
-            "ZONED TIME",
             "MAP",
             "NODE",
             "RELATIONSHIP",

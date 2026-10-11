@@ -45,8 +45,8 @@ an embedded, Cypher-queryable graph runs in-process:
 | **Procedures** (`CALL`) | centralities (pagerank, betweenness, closeness, degree), community (louvain, leiden, label propagation), components, k-core, clustering, `triangle_count` / `transitivity`, `eccentricity` / `diameter`, `ready_set` (dependency frontier), `shortest_path_length`, `kg_knn`, structural validators (`duplicate_title`, `cycle_2step`, `parallel_edges`, …) |
 | **Vector + text** | `vector_score(…)` (HNSW index, exact fallback), `text_score(…)` (query vector, or query text via a pluggable embedder), `text_bm25(…)` (lexical BM25 over `build_text_index`, or `db.relationship_text_index.build` for relationships), `score_fuse(…)` (combine the lanes into one score) — hybrid semantic, lexical and structural in one query |
 | **Spatial** | `point(…)`, `distance(…)`, `wkt_within` / `intersects`, buffer / hull / union, k-NN — see [Spatial](#spatial-functions) |
-| **Temporal** | `date()` / `datetime()` / `localdatetime()`, `duration(…)`, `duration.between`, date arithmetic, `valid_at` / `valid_during` — see [Temporal](#temporal-functions) |
-| **Value types** | int, float, string, bool, **date**, **timestamp** (date + time), duration, point, list, map, node, relationship, path |
+| **Temporal** | `date()` / `datetime()` / `localdatetime()` / `localtime()` / `time()`, `duration(…)`, `duration.between`, date arithmetic, `valid_at` / `valid_during` — see [Temporal](#temporal-functions) |
+| **Value types** | int, float, string, bool, **date**, **timestamp** (date + time), **local time**, **time** (time + offset), duration, point, list, map, node, relationship, path |
 | **Transactions** | multi-statement with snapshot isolation + rollback (`Session` / `Transaction`) |
 | **Change data capture** | opt-in change stream with stateless cursors — `CALL db.cdc.enable/status/current/earliest/query/disable`, see [Change data capture](#change-data-capture-call-dbcdc) |
 | **Storage** | identical Cypher across in-memory, mmap, and on-disk modes (largest graph run: Wikidata, 124M nodes / 861M edges) |
@@ -1524,21 +1524,23 @@ covers declaring intervals and modelling history.
 | `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). An unparseable string raises; a null argument gives null |
 | `datetime()` | Now in naive UTC (no-arg form) — the clock every stored datetime, validity instant and `auto_timestamp` uses |
 | `localdatetime()` | Local wall-clock datetime; 1-arg form parses/normalises a string (raises on bad input). Unlike `datetime(str)` it keeps the wall-clock reading of a zoned input and drops only the zone label. Takes the ISO week and ordinal date spellings (`'2015-W30-2T214032.142'`, `'2015-202T21:40:32'`, `'2015T214032'`) and every `datetime({...})` map form, including `{date: d, time: t, ...}` and `{datetime: dt, ...}` |
-| `time()` | Time of day in UTC as an `HH:MM:SS` string (no-arg form); 1-arg form parses/normalises a string as `localtime(str)` does (raises on bad input) |
-| `localtime()` | Local wall-clock time of day as an `HH:MM:SS` string (no-arg form). The 1-arg forms return the canonical text: `HH:MM`, `HH:MM:SS` when the seconds are not zero, and a fraction in groups of three digits (`12:31:14.645`). They read `HH`, `HHMM`, `HHMMSS[.f]`, `HH:MM` and `HH:MM:SS[.f]`, a map (`localtime({hour: 12, minute: 31, millisecond: 645})`, `{time: t, second: 42}`), or a datetime (its time of day); bad input raises |
+| `time()` | A `Time` value: the UTC clock (no-arg form), with offset `Z`. `time(str)` reads `HH`, `HHMM`, `HHMMSS[.f]`, `HH:MM` or `HH:MM:SS[.f]` followed by `Z`, `±HH`, `±HHMM` or `±HH:MM` (no offset means UTC). `time({hour, minute, second, millisecond, microsecond, nanosecond, timezone, time})` builds one; `timezone` is a numeric offset, and a `time` base keeps its own offset. A named zone (`[Europe/Oslo]`, `timezone: 'Europe/Oslo'`) is refused. Within ±18:00; bad input raises; null gives null |
+| `localtime()` | A `LocalTime` value: the local wall clock (no-arg form). `localtime(str)` reads the same clock spellings as `time(str)` and drops any offset; a map (`localtime({hour: 12, minute: 31, millisecond: 645})`, `{time: t, second: 42}`), a `Time` or a datetime (its time of day) also work; bad input raises. `toString` gives the shortest ISO text: `HH:MM`, `HH:MM:SS` when the seconds are not zero, and a fraction in groups of three digits (`12:31:14.645`) |
 | `n.d.year`, `n.d.month`, `n.d.day` | Extract component from a DateTime property (chained accessor — works in `RETURN`, `WHERE`, `ORDER BY`) |
 | `n.d.dayOfWeek`, `n.d.dayOfYear`, `n.d.epochSeconds` | Other temporal field accessors |
 | `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay`, `d.dayOfQuarter` | Calendar accessors of a date or datetime (`weekDay` is `dayOfWeek`; `week` and `weekYear` are the ISO week and week-year) |
 | `t.hour`, `t.minute`, `t.second`, `t.millisecond`, `t.microsecond`, `t.nanosecond`, `t.epochMillis` | Clock accessors of a datetime; an unknown accessor on a datetime is null |
+| `t.hour` … `t.nanosecond`, `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone` | Accessors of a `LocalTime` or `Time`. `offset` and `timezone` are the offset text (`+01:00`, `Z`); the offset accessors are null on a `LocalTime`; any other accessor is null |
 | `dur.quarters`, `dur.weeks`, `dur.quartersOfYear`, `dur.monthsOfQuarter`, `dur.monthsOfYear`, `dur.daysOfWeek`, `dur.minutesOfHour`, `dur.secondsOfMinute` | Duration accessors beside `years`, `months`, `days`, `hours`, `minutes`, `seconds`; `milliseconds`, `microseconds` and `nanoseconds` count the whole duration in that unit, and `millisecondsOfSecond`, `microsecondsOfSecond` and `nanosecondsOfSecond` give the sub-second part |
 | `duration({days: N, months: M, ...})` | Build a Duration value (see [Duration semantics](#duration-semantics) below) |
-| `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and the remaining seconds and nanoseconds are returned as a Duration |
+| `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and the remaining seconds and nanoseconds are returned as a Duration. Between two times of day it is seconds and nanoseconds only: two `Time` values differ at their UTC readings, a `LocalTime` against a `Time` at their clock readings. A time against a date or datetime raises |
 | `duration.inMonths(d1, d2)`, `duration.inDays(d1, d2)`, `duration.inSeconds(d1, d2)` | The whole months, days or seconds from `d1` to `d2` (dates or datetimes), as a duration holding only that unit; negative when `d2` is earlier |
 | `add_days(date, n)` / `add_months(date, n)` / `add_years(date, n)` | Checked calendar shift; returns NULL when the requested date is outside the representable range |
 | `date_truncate(date, unit)` | Start of `year`, `month`, `week`, or `day` |
 | `date.truncate(unit, t [, overrides])` | Round a date or datetime down to the start of `millennium`, `century`, `decade`, `year`, `weekYear`, `quarter`, `month`, `week` or `day`, then apply the override map as the constructor does: `date.truncate('month', d, {day: 5})`, `date.truncate('week', d, {dayOfWeek: 2})` |
 | `localdatetime.truncate(unit, t [, overrides])`, `datetime.truncate(...)` | The same for a datetime; the units also include `hour`, `minute`, `second`, `millisecond` and `microsecond`: `localdatetime.truncate('hour', t, {nanosecond: 2})`. `datetime.truncate` is zoneless like `datetime()` |
-| `localtime.truncate(unit, t [, overrides])`, `time.truncate(...)` | A time of day (text) or the time of a datetime, rounded down to `day` (midnight), `hour`, `minute`, `second`, `millisecond` or `microsecond` |
+| `localtime.truncate(unit, t [, overrides])`, `time.truncate(...)` | A `LocalTime`, a `Time` or the time of a datetime, rounded down to `day` (midnight), `hour`, `minute`, `second`, `millisecond` or `microsecond`. `time.truncate` keeps the offset of a `Time` (UTC for anything else); an override map can set `timezone` |
+| `time ± duration({...})` | Move a `LocalTime` or `Time` by the duration's seconds and nanoseconds, wrapping modulo 24 hours. Months and days are ignored, since a time of day has no date to carry them into; the offset is kept |
 | `date + duration({days: N})` | Add a duration to a date |
 | `duration * integer` / `integer * duration` | Scale all duration components with checked arithmetic |
 | `date_diff(d1, d2)` | Days between two dates (legacy; same as `d2 - d1` returning Int64 directly) |
@@ -1624,8 +1626,13 @@ silence one layer out rather than remove it.
   zone.
 - An offset-bearing `datetime(str)` is normalized to naive UTC.
   `localdatetime(str)` keeps the local wall-clock reading and drops the zone.
-- `localtime()` and `time()` return `HH:MM:SS` strings, because KGLite has no
-  time-only value type.
+- `localtime()` returns a `LocalTime` and `time()` a `Time`. Both were `HH:MM:SS`
+  strings before 0.20.0; `toString()` gives the text.
+- Times of day compare with their own kind. Two `Time` values compare at their
+  UTC readings, offsets ignored, so `time('10:00+01:00') = time('09:00Z')` is
+  true and `time('10:00+01:00') < time('09:35:14Z')` is true. `DISTINCT` and
+  grouping merge such values and keep the first offset. A `LocalTime` against a
+  `Time`, a date or a datetime is incomparable: `=` is false and `<`/`>` give null.
 - Each single-string form returns NULL on unparseable input.
 
 ```python
@@ -2428,9 +2435,10 @@ float / bool / string. Invalid JSON or a non-string argument returns `null`
 string rather than as graph structure.
 
 A one-key object `{"$date": "2020-01-01"}`,
-`{"$datetime": "2020-01-01T10:00:00+02:00"}` or
+`{"$datetime": "2020-01-01T10:00:00+02:00"}`,
+`{"$localtime": "10:00:00.5"}`, `{"$time": "10:00:00+01:00"}` or
 `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` parses to that date,
-datetime or duration, as query parameters do. With a malformed payload it stays
+datetime, local time, time or duration, as query parameters do. With a malformed payload it stays
 a map.
 
 The code graph keeps `Function.parameters`, `Class.fields`, and
@@ -5384,7 +5392,7 @@ from this shorter list.
 | **String** | `split`, `replace`, `substring`, `left`, `right`, `trim`, `ltrim`, `rtrim`, `reverse` |
 | **Math** | `abs`, `ceil`/`ceiling`, `floor`, `round`, `sqrt`, `sign`, `log`/`ln`, `log10`, `exp`, `pow`, `pi`, `rand`, `randomUUID`, trig: `sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`atan2`/`cot`/`haversin`/`degrees`/`radians` |
 | **Spatial** | `point(lat, lon)`, `point({latitude, longitude})`, `distance(a, b)`, `contains(a, b)`, `intersects(a, b)`, `centroid(n)`, `area(n)`, `perimeter(n)`, `latitude(point)`, `longitude(point)` |
-| **Temporal** | `date(str)`, `datetime(str)`, `localdatetime()` (timestamp values), `localtime()`/`time()` (ISO strings), `duration.between(d1, d2)`, `date_diff(d1, d2)`, `date ± N` (days), `date - date` → duration, `d.year`/`d.month`/`d.day`, `valid_at(...)`, `valid_during(...)` |
+| **Temporal** | `date(str)`, `datetime(str)`, `localdatetime()` (timestamp values), `localtime()`/`time()` (`LocalTime`/`Time` values), `duration.between(d1, d2)`, `date_diff(d1, d2)`, `date ± N` (days), `date - date` → duration, `d.year`/`d.month`/`d.day`, `valid_at(...)`, `valid_during(...)` |
 | **Semantic** | `text_score(n, prop, query [, metric] [, options])` — scores a list `query` as a vector, embeds a string `query` via `set_embedder()`, cosine/dot_product/euclidean/poincare; `embedding_norm(n, prop)` — L2 norm (hierarchy depth) |
 | **Timeseries** | `ts_sum`, `ts_avg`, `ts_min`, `ts_max`, `ts_count`, `ts_at`, `ts_first`, `ts_last`, `ts_delta`, `ts_series` — date-string args with resolution validation |
 | **Mutations** | `CREATE (n:Label {props})`, strict `INSERT (n IS Label&Other {props})`, `CREATE`/`INSERT` relationships, `SET n.prop = expr`, `SET n += map`, `SET n = map`, `DELETE`, `NODETACH DELETE`, `DETACH DELETE`, `REMOVE n.prop`, `MERGE ... ON CREATE SET ... ON MATCH SET` |

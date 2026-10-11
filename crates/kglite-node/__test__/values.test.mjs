@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { kglite, freshGraph } from './helpers.mjs';
 
-const { LocalDate, LocalDateTime, Duration, Point, KgFloat } = kglite;
+const { LocalDate, LocalDateTime, LocalTime, Time, Duration, Point, KgFloat } = kglite;
 
 const { graph, cleanup } = await freshGraph();
 const { graph: bigGraph, cleanup: cleanupBig } = await freshGraph({ integers: 'bigint' });
@@ -139,6 +139,33 @@ test('datetimes: a JS Date parameter is a UTC datetime with millisecond precisio
   assert.ok(back instanceof LocalDateTime);
   assert.equal(String(back), '2024-05-06T07:08:09.123');
   await assert.rejects(roundTrip(new Date(NaN)), (e) => e.code === 'InvalidArgument');
+});
+
+test('times of day round-trip with their nanoseconds and offset', async () => {
+  const local = await roundTrip(new LocalTime(10, 15, 30, 123456789));
+  assert.ok(local instanceof LocalTime);
+  assert.deepEqual([local.hour, local.minute, local.second, local.nanosecond], [10, 15, 30, 123456789]);
+  assert.equal(String(local), '10:15:30.123456789');
+  assert.equal(JSON.stringify(local), '"10:15:30.123456789"');
+  const zoned = await roundTrip(new Time(10, 0, 0, 500_000_000, 3600));
+  assert.ok(zoned instanceof Time);
+  assert.equal(zoned.offsetSeconds, 3600);
+  assert.equal(String(zoned), '10:00:00.500+01:00');
+  assert.equal(String(await roundTrip(new Time(21, 40, 0, 0, 0))), '21:40Z');
+  assert.equal(String(await roundTrip(new Time(23, 59, 59, 999999999, -64800))), '23:59:59.999999999-18:00');
+  assert.throws(() => new LocalTime(24), (e) => e.code === 'InvalidArgument');
+  assert.throws(() => new LocalTime(10, 60), (e) => e.code === 'InvalidArgument');
+  assert.throws(() => new Time(10, 0, 0, 0, 64801), (e) => e.code === 'InvalidArgument');
+});
+
+test('time-of-day values returned by Cypher functions are the same classes', async () => {
+  const r = await graph.executeRead("RETURN localtime('10:00') AS l, time('10:00+01:00') AS t, time('10:00+01:00') = time('09:00Z') AS same, toString(time('10:00+01:00')) AS text");
+  assert.ok(r.rows[0].l instanceof LocalTime);
+  assert.equal(r.rows[0].l.hour, 10);
+  assert.ok(r.rows[0].t instanceof Time);
+  assert.equal(r.rows[0].t.offsetSeconds, 3600);
+  assert.equal(r.rows[0].same, true);
+  assert.equal(r.rows[0].text, '10:00+01:00');
 });
 
 test('durations and points round-trip', async () => {

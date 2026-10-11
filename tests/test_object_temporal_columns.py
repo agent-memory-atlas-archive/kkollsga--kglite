@@ -114,7 +114,7 @@ def test_timedelta_objects_are_durations_with_their_sub_second_part():
         [10, "N/A"],
         [1, 2**70],
         [Decimal("1.5"), None],
-        [dt.time(1, 2), None],
+        [dt.time(1, 2), dt.time(1, 2, tzinfo=dt.timezone.utc)],
     ],
 )
 def test_mixed_or_unmapped_object_columns_stay_refused_under_error(values):

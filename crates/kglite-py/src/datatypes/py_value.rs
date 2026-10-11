@@ -6,8 +6,8 @@ use super::values::Value;
 use pyo3::exceptions::{PyOverflowError, PyRecursionError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyTuple, PyTzInfo,
-    PyTzInfoAccess,
+    PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyTime, PyTuple,
+    PyTzInfo, PyTzInfoAccess,
 };
 
 const MAX_CONTAINER_DEPTH: usize = 64;
@@ -500,6 +500,10 @@ fn convert_query_value(
                 .map(Value::List)
         });
     }
+    // Last, so the hot scalar and container arms above never pay for it.
+    if let Ok(time) = value.cast::<PyTime>() {
+        return time_to_value(time).map_err(QueryConversionError::Python);
+    }
     // A numpy scalar's bare `__name__` ('complex128') is not a type anyone can
     // look up; qualify it with the module it came from.
     let type_name = numpy_type
@@ -623,6 +627,10 @@ fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyRes
                 .map(Value::List)
         });
     }
+    // Last, so the hot scalar and container arms above never pay for it.
+    if let Ok(time) = value.cast::<PyTime>() {
+        return time_to_value(time);
+    }
     Ok(Value::Null)
 }
 
@@ -669,6 +677,32 @@ pub(crate) fn datetime_to_utc_naive(
     normalized
         .call_method("replace", (), Some(&kwargs))?
         .extract::<chrono::NaiveDateTime>()
+}
+
+/// A `datetime.time` as a time of day: a naive one is a `LocalTime`, one whose
+/// `utcoffset()` is a `timedelta` a `Time` at that offset. The offset must be
+/// whole seconds within ±18:00.
+pub(crate) fn time_to_value(time: &Bound<'_, PyTime>) -> PyResult<Value> {
+    let field = |name: &str| -> PyResult<u64> { time.getattr(name)?.extract() };
+    let nanos = (field("hour")? * 3600 + field("minute")? * 60 + field("second")?) * 1_000_000_000
+        + field("microsecond")? * 1_000;
+    let offset = time.call_method0("utcoffset")?;
+    if offset.is_none() {
+        return Ok(Value::LocalTime(nanos));
+    }
+    let delta = offset.cast::<PyDelta>()?;
+    let get = |name: &str| -> PyResult<i64> { delta.getattr(name)?.extract() };
+    if get("microseconds")? != 0 {
+        return Err(PyValueError::new_err(
+            "a time's UTC offset must be a whole number of seconds",
+        ));
+    }
+    let seconds = get("days")? * 86_400 + get("seconds")?;
+    let offset_secs = i32::try_from(seconds)
+        .ok()
+        .filter(|s| s.abs() <= kglite_core::api::time_of_day::MAX_OFFSET_SECS)
+        .ok_or_else(|| PyValueError::new_err("a time's UTC offset must be within ±18:00"))?;
+    Ok(Value::Time { nanos, offset_secs })
 }
 
 /// A `datetime.timedelta` (or `pd.Timedelta`) as a `Value::Duration`. Its

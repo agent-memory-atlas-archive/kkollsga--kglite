@@ -1,5 +1,6 @@
 /// Shared value operations: arithmetic, type coercion, aggregation, and formatting.
 /// Used by both the Cypher executor and the equation parser.
+use crate::datatypes::time_of_day::{format_clock, format_time};
 use crate::datatypes::values::Value;
 
 // ============================================================================
@@ -286,6 +287,14 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 nanos,
             })
         }
+        (
+            time @ (Value::LocalTime(_) | Value::Time { .. }),
+            Value::Duration { seconds, nanos, .. },
+        )
+        | (
+            Value::Duration { seconds, nanos, .. },
+            time @ (Value::LocalTime(_) | Value::Time { .. }),
+        ) => Ok(shift_time_of_day(time, *seconds, *nanos)),
         _ => arithmetic_add_fallback(a, b),
     }
 }
@@ -376,6 +385,14 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 nanos,
             })
         }
+        (
+            time @ (Value::LocalTime(_) | Value::Time { .. }),
+            Value::Duration { seconds, nanos, .. },
+        ) => Ok(
+            negate_clock(*seconds, *nanos).map_or(Value::Null, |(negated, negated_nanos)| {
+                shift_time_of_day(time, negated, negated_nanos)
+            }),
+        ),
         _ => arithmetic_sub_fallback(a, b),
     }
 }
@@ -414,6 +431,23 @@ pub fn arithmetic_mul_checked(a: &Value, b: &Value) -> Result<Value, String> {
         seconds,
         nanos,
     })
+}
+
+/// A time of day moved by a duration's seconds and nanoseconds, wrapped
+/// modulo 24 h. Months and days have no meaning without a date and are ignored.
+fn shift_time_of_day(time: &Value, seconds: i64, nanos: i32) -> Value {
+    use crate::datatypes::time_of_day::shift_nanos;
+    match time {
+        Value::LocalTime(n) => Value::LocalTime(shift_nanos(*n, seconds, nanos)),
+        Value::Time {
+            nanos: n,
+            offset_secs,
+        } => Value::Time {
+            nanos: shift_nanos(*n, seconds, nanos),
+            offset_secs: *offset_secs,
+        },
+        _ => Value::Null,
+    }
 }
 
 const NANOS: i128 = 1_000_000_000;
@@ -597,6 +631,8 @@ pub fn format_value_compact(val: &Value) -> String {
             "duration(M={}, D={}, S={}, N={})",
             months, days, seconds, nanos
         ),
+        Value::LocalTime(n) => format_clock(*n),
+        Value::Time { nanos, offset_secs } => format_time(*nanos, *offset_secs),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         // Keep the existing collection grammar while retaining timestamp fractions.
@@ -656,6 +692,8 @@ pub fn format_value_compact_into(buf: &mut String, val: &Value) {
             months, days, seconds, nanos
         )
         .unwrap(),
+        Value::LocalTime(n) => buf.push_str(&format_clock(*n)),
+        Value::Time { nanos, offset_secs } => buf.push_str(&format_time(*nanos, *offset_secs)),
         Value::Null => buf.push_str("null"),
         Value::NodeRef(idx) => write!(buf, "node#{}", idx).unwrap(),
         // Same collection grammar as the allocating compact formatter.

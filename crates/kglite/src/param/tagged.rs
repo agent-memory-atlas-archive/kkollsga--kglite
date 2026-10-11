@@ -1,13 +1,16 @@
 //! Tagged JSON objects for query parameter types JSON has no spelling for.
 //!
-//! An object with exactly one key, `$date`, `$datetime`, `$duration`, `$point` or
-//! `$float`, is a typed value rather than a map. The payloads are the shapes
+//! An object with exactly one key, `$date`, `$datetime`, `$localtime`, `$time`,
+//! `$duration`, `$point` or `$float`, is a typed value rather than a map. The payloads are the shapes
 //! [`super::kglite_value_to_json`] renders those types as, so a result cell
 //! wrapped in its tag reads back as the value it came from:
 //!
 //! - `{"$date": "2020-01-01"}` → `Value::DateTime`, parsed as `date()` parses
 //! - `{"$datetime": "2020-01-01T08:00:00+02:00"}` → `Value::Timestamp`, parsed
 //!   as `datetime()` parses (an offset is applied, normalising to UTC)
+//! - `{"$localtime": "10:00:00.5"}` → `Value::LocalTime` (no offset allowed)
+//! - `{"$time": "10:00:00+01:00"}` → `Value::Time`; a text without an offset
+//!   is read as UTC, as `time('10:00')` is
 //! - `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` → `Value::Duration`
 //!   (each field optional, default 0; no other field allowed)
 //! - `{"$float": "NaN"}`, `{"$float": "inf"}`, `{"$float": "-inf"}` →
@@ -41,6 +44,20 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
         "$datetime" => payload.as_str().and_then(|text| {
             crate::graph::languages::cypher::executor::scalar_functions::parse_datetime_utc(text)
                 .map(Value::Timestamp)
+        }),
+        "$localtime" => payload.as_str().and_then(|text| {
+            match crate::datatypes::time_of_day::parse_time(text) {
+                Ok((nanos, None)) => Some(Value::LocalTime(nanos)),
+                _ => None,
+            }
+        }),
+        "$time" => payload.as_str().and_then(|text| {
+            crate::datatypes::time_of_day::parse_time(text)
+                .ok()
+                .map(|(nanos, offset)| Value::Time {
+                    nanos,
+                    offset_secs: offset.unwrap_or(0),
+                })
         }),
         "$duration" => decode_duration(payload),
         "$point" => decode_point(payload),
