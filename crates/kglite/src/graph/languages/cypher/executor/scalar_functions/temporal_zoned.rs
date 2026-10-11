@@ -112,14 +112,14 @@ pub(super) fn parse_datetime_text(text: &str) -> Result<Value, String> {
 }
 
 impl CypherExecutor<'_> {
-    /// `datetime()` (now, UTC), `datetime(string | map | temporal)`.
+    /// `datetime()` (the statement clock, UTC), `datetime(string | map | temporal)`.
     pub(super) fn eval_datetime(
         &self,
         args: &[Expression],
         row: &ResultRow,
     ) -> Result<Value, String> {
         if args.is_empty() {
-            return Ok(Value::zoned(chrono::Utc::now().naive_utc(), 0));
+            return Ok(Value::zoned(self.budget.statement_clock().utc(), 0));
         }
         if args.len() != 1 {
             return Err(

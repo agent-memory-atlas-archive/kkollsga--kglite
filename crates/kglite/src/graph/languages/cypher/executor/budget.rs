@@ -1,7 +1,8 @@
 //! Query-wide cardinality guards shared by every Cypher execution path.
 
+use super::statement_clock::StatementClock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Absolute ceiling on materialized rows and retained collection items for a
 /// query that sets no explicit `max_work_units`.
@@ -44,6 +45,11 @@ pub struct ExecutionBudget {
 struct BudgetInner {
     max_work_units: Option<usize>,
     collection_items: AtomicUsize,
+    /// The statement's clock reading, taken by the first constructor that
+    /// asks. It lives here because this `Arc` is the one thing every nested
+    /// executor of a statement already shares (the per-row evaluators of a
+    /// write, `CALL { }` bodies, the valid-time slice's child).
+    clock: OnceLock<StatementClock>,
 }
 
 /// What a check is charging, which decides whether the no-`max_work_units`
@@ -131,6 +137,20 @@ impl ExecutionBudget {
     #[inline]
     pub fn max_work_units(&self) -> Option<usize> {
         self.inner.max_work_units
+    }
+
+    /// A budget whose statement clock already reads `clock`.
+    #[cfg(test)]
+    pub(crate) fn with_clock(clock: StatementClock) -> Self {
+        let budget = Self::default();
+        let _ = budget.inner.clock.set(clock);
+        budget
+    }
+
+    /// The statement's clock: read on first use, the same value afterwards.
+    #[inline]
+    pub(crate) fn statement_clock(&self) -> StatementClock {
+        *self.inner.clock.get_or_init(StatementClock::read)
     }
 
     /// The in-flight ceiling a *materializing* caller holds a pattern

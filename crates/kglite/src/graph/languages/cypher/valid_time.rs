@@ -33,11 +33,11 @@ use super::result::{ResultRow, TemporalDiagnostics};
 use super::tokenizer::{tokenize_cypher_with_positions, CypherToken};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::{
-    today_utc, EdgeGuard, ElementFilter, GuardTemplate, MergedGuard, TemplateScope,
-    ValidTimeSelector,
+    EdgeGuard, ElementFilter, GuardTemplate, MergedGuard, TemplateScope, ValidTimeSelector,
 };
 use crate::graph::core::pattern_matching::{Pattern, PatternElement};
 use crate::graph::features::temporal::{self, eval, ValidTimeDefault};
+use crate::graph::languages::cypher::executor::budget::ExecutionBudget;
 use crate::graph::schema::DirGraph;
 
 /// The one axis that lowers.
@@ -414,6 +414,7 @@ pub(crate) fn execution_scope(
     query: &CypherQuery,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
+    budget: &ExecutionBudget,
 ) -> Result<ExecutionScope, String> {
     let Some(context) = &query.context else {
         return Ok(ExecutionScope::default());
@@ -421,7 +422,7 @@ pub(crate) fn execution_scope(
     if is_all(context) {
         return Ok(ExecutionScope::default());
     }
-    resolve_execution_scope(query, context, graph, params)
+    resolve_execution_scope(query, context, graph, params, budget)
 }
 
 #[cold]
@@ -431,10 +432,11 @@ fn resolve_execution_scope(
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
+    budget: &ExecutionBudget,
 ) -> Result<ExecutionScope, String> {
     // Resolved before the template is looked at, so an instant that does not
     // resolve is raised whatever the statement reaches.
-    let instant = resolve_instant(context, graph, params)?;
+    let instant = resolve_instant(context, graph, params, budget)?;
     let merged = merged_of(query, context);
     let scope = ExecutionScope {
         filter: None,
@@ -500,11 +502,14 @@ fn merge_scope_templates(query: &CypherQuery, into: &mut GuardTemplate) {
 }
 
 /// The context's instant, evaluated once per execution. Only an
-/// `AS OF` context has one.
+/// `AS OF` context has one. `date()` and the default context's "today" read
+/// `budget`'s statement clock, the reading the statement's own `date()` calls
+/// report.
 fn resolve_instant(
     context: &StatementContext,
     graph: &DirGraph,
     params: &HashMap<String, Value>,
+    budget: &ExecutionBudget,
 ) -> Result<eval::Instant, String> {
     let ContextInstant::AsOf(expression) = &context.instant else {
         return Err("FOR VALID_TIME ALL has no instant".to_string());
@@ -515,7 +520,7 @@ fn resolve_instant(
         Expression::FunctionCall { name, args, .. }
             if args.is_empty() && name.eq_ignore_ascii_case("date") =>
         {
-            return Ok(eval::Instant::Date(today_utc()));
+            return Ok(eval::Instant::Date(budget.statement_clock().today()));
         }
         Expression::Literal(value) => {
             return eval::parse_instant(value)
@@ -530,6 +535,7 @@ fn resolve_instant(
         _ => {}
     }
     let value = CypherExecutor::with_params(graph, params, None)
+        .with_budget(budget.clone())
         .evaluate_expression(expression, &ResultRow::new())?;
     eval::parse_instant(&value).map_err(|err| format!("FOR VALID_TIME AS OF: {err}"))
 }
@@ -559,7 +565,7 @@ pub(crate) fn temporal_echo(
     if is_all(context) {
         return all_echo(context, graph);
     }
-    let instant = resolve_instant(context, graph, params).ok()?;
+    let instant = resolve_instant(context, graph, params, &ExecutionBudget::default()).ok()?;
     let merged = merged_of(query, context);
     // A statement that reaches no declared target is filtered by nothing.
     let (hidden, endpoint_invalid, route) = if merged.template.is_empty() {
@@ -637,7 +643,7 @@ fn plain_text_if_timeless(
     graph: &DirGraph,
     params: &HashMap<String, Value>,
 ) -> Option<String> {
-    let instant = resolve_instant(context, graph, params).ok()?;
+    let instant = resolve_instant(context, graph, params, &ExecutionBudget::default()).ok()?;
     if !temporal::endpoint_index::declared_timeless_at(graph, instant, || declared_template(graph))
     {
         return None;

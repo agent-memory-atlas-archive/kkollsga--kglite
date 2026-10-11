@@ -21,7 +21,7 @@ fn parse_text(function: &str, text: &str) -> Result<(u64, Option<i32>), String> 
 }
 
 impl CypherExecutor<'_> {
-    /// `localtime()` (the local wall clock), `localtime(string | map | temporal)`.
+    /// `localtime()` (the statement clock on the local wall), `localtime(string | map | temporal)`.
     /// An offset on the text or on a `Time` is dropped: the wall-clock reading
     /// is kept, as `localdatetime()` keeps it.
     pub(super) fn eval_localtime(
@@ -30,7 +30,9 @@ impl CypherExecutor<'_> {
         row: &ResultRow,
     ) -> Result<Value, String> {
         if args.is_empty() {
-            return Ok(Value::LocalTime(nanos_of(chrono::Local::now().time())));
+            return Ok(Value::LocalTime(nanos_of(
+                self.budget.statement_clock().local().time(),
+            )));
         }
         if args.len() != 1 {
             return Err(
@@ -59,12 +61,12 @@ impl CypherExecutor<'_> {
         }
     }
 
-    /// `time()` (now, in UTC), `time(string | map | temporal)`. A reading with
+    /// `time()` (the statement clock, in UTC), `time(string | map | temporal)`. A reading with
     /// no offset is UTC, as `datetime()` reads one.
     pub(super) fn eval_time(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         if args.is_empty() {
             return Ok(Value::Time {
-                nanos: nanos_of(chrono::Utc::now().time()),
+                nanos: nanos_of(self.budget.statement_clock().utc().time()),
                 offset_secs: 0,
             });
         }

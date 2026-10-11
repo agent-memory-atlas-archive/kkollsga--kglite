@@ -34,6 +34,9 @@
 //!   earlier clause bound, as pattern bindings or node values
 //! - [`star_projection`] — `*` written beside other projection items:
 //!   which names it stands for, and which explicit item wins a collision
+//! - [`one_clock_per_statement`] — `datetime()`, `date()`, `localtime()` and kin read
+//!   one clock per statement, in reads, writes, `CALL { }` bodies and the
+//!   valid-time context
 //! - [`strings`] — string functions and procedure list arguments
 //! - [`tck_cheap_gaps`] — radix literals, `^`, `tail`, `toBoolean`, decimal-string
 //!   `toInteger`, list ordering
@@ -82,6 +85,7 @@ mod lists;
 mod match_stream;
 mod mutations;
 mod node_embedding_procedures;
+mod one_clock_per_statement;
 mod parallel;
 mod relationship_identity;
 mod relationship_property_precedence;

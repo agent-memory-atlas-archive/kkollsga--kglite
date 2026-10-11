@@ -64,14 +64,14 @@ impl<'a> CypherExecutor<'a> {
         self.eval_collection_fn(name, args, row)
     }
 
-    /// Evaluate `localdatetime()`. The no-arg form reads the local wall clock;
+    /// Evaluate `localdatetime()`. The no-arg form reads the statement clock on the local wall;
     /// the single-string form validates/normalises, returns `Null` for a null
     /// argument and raises on an unparseable string (as `date()`/`datetime()`
     /// do). Any other arity/type is an error.
     fn eval_localdatetime(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
         use chrono::NaiveTime;
         if args.is_empty() {
-            return Ok(Value::Timestamp(chrono::Local::now().naive_local()));
+            return Ok(Value::Timestamp(self.budget.statement_clock().local()));
         }
         if args.len() != 1 {
             return Err("localdatetime() takes 0 or 1 argument".into());

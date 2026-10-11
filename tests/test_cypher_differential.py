@@ -1515,6 +1515,13 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         None,
     ),
     ("zoned_lt_now", "zoned_graph", "MATCH (m:M) WHERE m.z < datetime() RETURN m.id AS id", None),
+    # One clock per statement: two now-calls agree, so the filter keeps every row on every route.
+    (
+        "now_twice_equal",
+        "zoned_graph",
+        "MATCH (m:M) WHERE datetime() = datetime() AND localtime() = localtime() RETURN m.id AS id",
+        None,
+    ),
     # A named zone is a view of the same instant: Oslo is +01:00 in January and
     # +02:00 in June, so these name the stored instants of ids 1 and 2/3.
     (

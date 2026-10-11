@@ -119,6 +119,10 @@ before upgrading.
 
 ### Fixed
 
+- **`datetime()`, `date()`, `localdatetime()`, `time()` and `localtime()` read the clock once per statement.**
+  - Before: every call read the system clock, so `datetime() = datetime()` was false about a third of the time and `duration.inSeconds(datetime(), datetime())` was often non-zero.
+  - Now: all calls in one statement return the same instant, including inside writes, `CALL { }` bodies and the default valid-time "today". `SET n.t = datetime()` stamps one instant on every row.
+  - `datetime()` with no argument is still refused after `FOR VALID_TIME AS OF`; pass the moment as a parameter.
 - **`load_ntriples` into a graph that already holds data no longer loses properties on save.**
   - Affects `nid`, `P31` and every predicate property of the loaded entities, in any graph with at least one earlier typed node (for example a Cypher `CREATE`). It was not specific to `durable` graphs: a durable graph checkpoints after the load, so a crash then recovered the property-less file.
   - Before: the file kept ids, titles and edges, and every other property read back as null.

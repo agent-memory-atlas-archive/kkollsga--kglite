@@ -1514,7 +1514,7 @@ covers declaring intervals and modelling history.
 
 | Function | Description |
 |----------|-------------|
-| `date()` | Today's date in UTC (no-arg form) |
+| `date()` | Today's date in UTC (no-arg form). Every no-argument temporal constructor (`date()`, `datetime()`, `localdatetime()`, `time()`, `localtime()`) reads one clock per statement, so `datetime() = datetime()` is true and every row a statement writes gets the same instant |
 | `date(str)` | Parse a date string to a DateTime (date-only) value: `'YYYY'`, `'YYYY-MM'`, `'YYYY-MM-DD'`, `'YYYYMM'`, `'YYYYMMDD'`, an ISO week date (`'2015-W30-2'`, `'2015W302'`, `'2015-W30'`) or an ordinal date (`'2015-202'`, `'2015202'`); any other string raises (a null argument gives null) |
 | `date(datetime)` | The date part of a datetime value |
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
@@ -1840,8 +1840,8 @@ declares validity runs as `FOR VALID_TIME AS OF date()`** (today, UTC).
 - The instant is a quoted ISO date or datetime, `$param`, `date(…)` /
   `datetime(…)` of a literal or parameter, or `date()` for today in UTC.
 - `datetime()` with no argument is refused there. The statement resolves its
-  instant more than once, and the clock moves between readings. Pass the moment
-  as a `$param`.
+  instant more than once (the plan check, the execution filter, the echo), each
+  with its own clock reading. Pass the moment as a `$param`.
 
 Every binding's `valid_at` writes the same prefix:
 
@@ -1874,7 +1874,8 @@ MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
   - An inline-map value that is an expression (`{id: COUNT { (:Well) }}`) is
     evaluated under the context too.
 - **Execution.** The instant is resolved once per execution. A `$param` or
-  `date()` is read when the statement runs, so a cached plan never carries one.
+  `date()` is read when the statement runs (by the statement clock, the one reading
+  `date()` and `datetime()` report in that statement), so a cached plan never carries one.
   - These keep their fast routes under a context: counts (`count(*)` over a
     label, a type or the whole graph), node scans with an aggregate or
     `ORDER BY … LIMIT`, top-k over matched rows, retrieval top-k, `elementId`
