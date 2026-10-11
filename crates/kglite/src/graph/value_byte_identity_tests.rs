@@ -47,7 +47,7 @@
 use crate::datatypes::values::{NodeValue, PathValue, RelValue, Value};
 use crate::datatypes::PropMap;
 use crate::graph::wal::{MutationOp, WalFrame};
-use crate::serde_codec::{encode_versioned, CURRENT_CODEC};
+use crate::serde_codec::{decode_exact_with, encode_versioned, DecodeLimits, CURRENT_CODEC};
 use std::collections::BTreeMap;
 
 /// Environment switch that turns a failing golden run into a regeneration
@@ -60,6 +60,17 @@ fn hex(bytes: &[u8]) -> String {
 
 fn encode<T: serde::Serialize>(v: &T) -> Vec<u8> {
     encode_versioned(CURRENT_CODEC, v, u64::MAX).expect("encode fixture")
+}
+
+fn decode<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, crate::serde_codec::CodecError> {
+    decode_exact_with(
+        CURRENT_CODEC,
+        bytes,
+        bytes.len() as u64,
+        DecodeLimits::new(u64::MAX, u64::MAX),
+    )
 }
 
 /// N2 changed the property container's *type*; the fixtures below are the
@@ -666,12 +677,12 @@ fn duration_wire_forms_round_trip_and_an_old_reader_refuses_the_fine_tag() {
         seconds: -3,
         nanos: 500,
     };
-    let whole_bytes = postcard::to_stdvec(&whole).unwrap();
-    let fine_bytes = postcard::to_stdvec(&fine).unwrap();
+    let whole_bytes = encode(&whole);
+    let fine_bytes = encode(&fine);
     assert_eq!(hex(&whole_bytes), "09020305");
     assert_eq!(hex(&fine_bytes), "10020305e807");
-    assert_eq!(postcard::from_bytes::<Value>(&whole_bytes).unwrap(), whole);
-    assert_eq!(postcard::from_bytes::<Value>(&fine_bytes).unwrap(), fine);
+    assert_eq!(decode::<Value>(&whole_bytes).unwrap(), whole);
+    assert_eq!(decode::<Value>(&fine_bytes).unwrap(), fine);
 
     // The shape of `Value` as 0.19.x declared it: sixteen variants, tags 0..=15.
     // The variants are decode targets only: the test reads the Result, never the payload.
@@ -702,10 +713,10 @@ fn duration_wire_forms_round_trip_and_an_old_reader_refuses_the_fine_tag() {
         Map(u8),
         Timestamp(String),
     }
-    assert!(postcard::from_bytes::<Shipped>(&whole_bytes).is_ok());
-    assert!(postcard::from_bytes::<Shipped>(&fine_bytes).is_err());
-    let nested = postcard::to_stdvec(&Value::List(vec![Value::Null, fine])).unwrap();
-    assert!(postcard::from_bytes::<Shipped>(&nested).is_err());
+    assert!(decode::<Shipped>(&whole_bytes).is_ok());
+    assert!(decode::<Shipped>(&fine_bytes).is_err());
+    let nested = encode(&Value::List(vec![Value::Null, fine]));
+    assert!(decode::<Shipped>(&nested).is_err());
 }
 
 /// The self-describing (JSON) encoding of `Value` is reachable through the
