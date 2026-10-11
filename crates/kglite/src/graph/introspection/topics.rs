@@ -812,7 +812,7 @@ pub(super) fn write_topic_spatial(xml: &mut String) {
 
 pub(super) fn write_topic_temporal(xml: &mut String) {
     xml.push_str("  <temporal>\n");
-    xml.push_str("    <desc>Date values and arithmetic, and the valid_at/valid_during validity tests. To ask a whole statement as of an instant use the FOR VALID_TIME AS OF prefix (see context). NULL bounds are open-ended.</desc>\n");
+    xml.push_str("    <desc>Date values and arithmetic, and the valid_at/valid_during validity tests. To ask a whole statement as of an instant use the FOR VALID_TIME AS OF prefix (see context). NULL bounds are open-ended. One comparison rule for every bound and instant: a date is its whole UTC day, a local datetime is read as UTC, a zoned datetime is its UTC instant, an ISO string is read as date()/datetime(); a time of day, duration, number or other string is refused, naming the accepted kinds.</desc>\n");
     xml.push_str("    <functions>\n");
     xml.push_str("      <fn name=\"date(str) / datetime(str)\">Parse date string to DateTime value. Supports 'YYYY-MM-DD' format.</fn>\n");
     xml.push_str("      <fn name=\"date_diff(d1, d2)\">Days between two dates (d1 - d2). Same as date subtraction.</fn>\n");

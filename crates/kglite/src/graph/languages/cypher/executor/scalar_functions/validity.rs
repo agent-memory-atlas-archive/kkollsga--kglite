@@ -767,7 +767,7 @@ impl ValidityBounds<'_> {
                 };
             format!(
                 "{}(): the {argument} argument {err}, so it cannot be compared with {}.{field} ({}). \
-                 Pass a date such as date('2009'), a datetime, or an ISO string such as '2009-06-30'",
+                 Pass a date such as date('2009'), a local or zoned datetime, or an ISO string such as '2009-06-30'",
                 self.function,
                 self.var_name,
                 value_type_name(bound)

@@ -1031,6 +1031,7 @@ jobs:
             tests/test_timestamp_column_parity.py \
             tests/test_time_of_day_values.py \
             tests/test_zoned_datetime_values.py \
+            tests/test_valid_time_comparison_rule.py \
             tests/test_temporal_persistence.py tests/test_valid_time_oracle.py \
             tests/test_valid_time_reach.py tests/test_valid_time_peer_hist.py \
             tests/test_temporal_empty_intervals.py \

@@ -116,7 +116,9 @@ def test_fluent_date_arguments_take_dates_and_datetimes(storage, when, tmp_path)
 
 def test_fluent_date_arguments_refuse_other_types() -> None:
     g = _graph(None, None)
-    with pytest.raises(TypeError, match="date must be a date string, a datetime.date or a datetime.datetime"):
+    with pytest.raises(
+        TypeError, match="date must be a date, a local datetime, a zoned datetime or an ISO date/datetime string"
+    ):
         g.select("M", temporal=False).valid_at(2003)
     with pytest.raises(kglite.ArgumentError, match="also accepted"):
         g.select("M", temporal=False).valid_at("garbage")

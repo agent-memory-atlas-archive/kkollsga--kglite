@@ -712,7 +712,9 @@ pub(crate) fn plan_instant(query: &CypherQuery, graph: &DirGraph) -> Option<eval
         Expression::Literal(_) => true,
         Expression::FunctionCall { name, args, .. } => {
             matches!(args.as_slice(), [Expression::Literal(_)])
-                && (name.eq_ignore_ascii_case("date") || name.eq_ignore_ascii_case("datetime"))
+                && (name.eq_ignore_ascii_case("date")
+                    || name.eq_ignore_ascii_case("datetime")
+                    || name.eq_ignore_ascii_case("localdatetime"))
         }
         _ => false,
     };

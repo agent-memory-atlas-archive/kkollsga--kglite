@@ -1593,13 +1593,20 @@ valid. Both NULL = always valid.
 - A relationship type's declared bound counts as known even before any
   relationship has a value for it.
 
-**Query dates:** `valid_at` / `valid_during` take a `date()` or `datetime()`
-value, or a string read as those functions read it. `'2009'` = `date('2009')` =
-2009-01-01, and an offset in a datetime string is applied and normalised to UTC.
-Any other value (an unparsable string, an integer, `null`) raises
-`CypherExecutionError`. So does a stored bound that is not a date, a datetime or
-an ISO string. A datetime bound compares exactly against a datetime and at date
-grain against a date.
+**Query dates and bounds — one comparison rule.** Every bound and query instant
+is a point on one UTC timeline:
+
+- A **date** is its whole UTC day; comparing a date with anything is at date grain.
+- A **local datetime** is read as UTC.
+- A **zoned datetime** (fixed offset or IANA zone) is its UTC instant; the offset and zone are display only.
+- An **ISO string** is read by `date()` when it has no time part (`'2009'` = `date('2009')` = 2009-01-01), else by `datetime()` with any offset applied; then as above.
+- A **`NULL`** stored bound is open.
+- **Anything else** (a `localtime()` / `time()` value, a duration, a number, a boolean, a list, a `NULL` query instant, an unparsable string) raises `CypherExecutionError`.
+
+The error names the accepted kinds and the kind it found: `10:00 (LOCAL TIME) is
+not a date, a local datetime, a zoned datetime or an ISO date/datetime string`.
+A stored bound raises the same text after `the from bound` / `the to bound`.
+Two datetimes compare exactly.
 
 **Magnitude/error policy:** a well-typed date/calendar shift that lands outside
 the representable chrono range returns NULL. These cases raise
@@ -1838,7 +1845,8 @@ declares validity runs as `FOR VALID_TIME AS OF date()`** (today, UTC).
 
 - The prefix stands before or after `EXPLAIN` / `PROFILE`.
 - The instant is a quoted ISO date or datetime, `$param`, `date(…)` /
-  `datetime(…)` of a literal or parameter, or `date()` for today in UTC.
+  `datetime(…)` / `localdatetime(…)` of a literal or parameter, or `date()` for
+  today in UTC. The comparison rule above reads each kind.
 - `datetime()` with no argument is refused there. The statement resolves its
   instant more than once (the plan check, the execution filter, the echo), each
   with its own clock reading. Pass the moment as a `$param`.
@@ -1863,8 +1871,9 @@ MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
     own source node's type (else its type's unkeyed one) **and** both its
     endpoints pass, named or not.
   - Undeclared labels and types are timeless.
-  - A NULL or missing bound is open. A bound that is not a date, a datetime or
-    an ISO string raises, naming the element.
+  - A NULL or missing bound is open. A bound the comparison rule refuses
+    (anything but a date, a local or zoned datetime or an ISO string) raises,
+    naming the element and the accepted kinds.
   - An id seek (`{id: …}`) finds the version valid at the instant when several
     version nodes share the id, whichever numeric kind each stores it as. When
     more than one is valid, it takes the last in the type's node order, in every

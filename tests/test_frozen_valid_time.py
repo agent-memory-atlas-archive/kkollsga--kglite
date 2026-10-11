@@ -136,9 +136,9 @@ def test_bad_instants_and_graphs_without_declarations_are_refused(ledger):
     with pytest.raises(TypeError, match="valid_at"):
         ledger.freeze(valid_at=object())
     # A time of day is a value now, so it converts and is refused as an instant.
-    with pytest.raises(ValueError, match="valid_at.*LOCAL TIME.*not a date or datetime"):
+    with pytest.raises(ValueError, match="valid_at.*LOCAL TIME.*not a date, a local datetime, a zoned datetime"):
         ledger.freeze(valid_at=dt.time(12))
-    with pytest.raises(ValueError, match="valid_at.*ZONED TIME.*not a date or datetime"):
+    with pytest.raises(ValueError, match="valid_at.*ZONED TIME.*not a date, a local datetime, a zoned datetime"):
         ledger.freeze(valid_at=dt.time(12, tzinfo=dt.timezone.utc))
     with pytest.raises(ValueError, match="needs a validity declaration"):
         kglite.KnowledgeGraph().freeze(valid_at="2020-01-01")

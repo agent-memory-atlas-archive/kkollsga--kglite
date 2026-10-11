@@ -108,13 +108,16 @@ pub(crate) enum BoundSide {
     To,
 }
 
+/// The kinds a validity bound or a query instant may take, named in every
+/// refusal so the three surfaces (Cypher, fluent, MCP) word it one way.
+pub(crate) const ACCEPTED_KINDS: &str =
+    "a date, a local datetime, a zoned datetime or an ISO date/datetime string";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TemporalError {
-    /// The query instant is not a date, a datetime, or a string that
-    /// `date()` / `datetime()` can read.
+    /// The query instant is not one of [`ACCEPTED_KINDS`].
     Instant { found: &'static str, shown: String },
-    /// A stored bound is not NULL, a date, a datetime or a readable ISO
-    /// string.
+    /// A stored bound is neither NULL (open) nor one of [`ACCEPTED_KINDS`].
     Bound {
         side: BoundSide,
         found: &'static str,
@@ -126,7 +129,7 @@ impl fmt::Display for TemporalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TemporalError::Instant { found, shown } => {
-                write!(f, "{shown} ({found}) is not a date or datetime")
+                write!(f, "{shown} ({found}) is not {ACCEPTED_KINDS}")
             }
             TemporalError::Bound { side, found, shown } => {
                 let side = match side {
@@ -135,7 +138,7 @@ impl fmt::Display for TemporalError {
                 };
                 write!(
                     f,
-                    "the {side} bound {shown} ({found}) is not a date, a datetime or an ISO date string"
+                    "the {side} bound {shown} ({found}) is not {ACCEPTED_KINDS} (NULL leaves it open)"
                 )
             }
         }

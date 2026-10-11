@@ -1585,5 +1585,68 @@
   },
   "tests/test_zoned_datetime_values.py::test_named_zones_survive_every_storage_mode[mapped_kgl]": {
     "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_every_instant_kind_reads_the_same_on_every_path[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_literals_in_the_statement_prefix_follow_the_rule[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[disk]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[disk_reopened]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[memory_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_zoned_bounds_written_by_cypher_are_compared_by_instant[mapped_kgl]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_aware_frame_bounds_are_stored_as_utc_instants[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_aware_frame_bounds_are_stored_as_utc_instants[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_valid_time_comparison_rule.py::test_aware_frame_bounds_are_stored_as_utc_instants[disk]": {
+    "owner": "storage-parity"
   }
 }

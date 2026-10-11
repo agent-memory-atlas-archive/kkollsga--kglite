@@ -228,6 +228,33 @@ graph.cypher("FOR VALID_TIME ALL " + CHAIN).to_list()
 # [{'manager': 'Chloe'}, {'manager': 'Dan'}, {'manager': 'Eva'}, {'manager': 'Eva'}]
 ```
 
+### How an instant is compared
+
+Every validity bound and every query instant is a point on one UTC timeline.
+The same rule holds for `FOR VALID_TIME AS OF`, `valid_at=`, `freeze(valid_at=)`,
+`valid_at()` / `valid_during()`, the loaders and a write to a declared bound.
+
+| Value | Read as |
+|---|---|
+| Date | Its whole UTC day. Comparing a date with anything is at date grain. |
+| Local datetime | The same wall-clock reading as UTC. |
+| Zoned datetime (fixed offset or IANA zone) | Its UTC instant. The offset and the zone name are display only. |
+| ISO string | Read by `date()` when it has no time part (`'2009'` is 2009-01-01), else by `datetime()` with any offset applied; then as above. |
+| `NULL` stored bound | Open: no limit on that side. |
+| Anything else | Refused. |
+
+"Anything else" covers a time of day (`localtime()`, `time()`), a duration, a
+number, a boolean, a list, a `NULL` query instant and a string that is not a date.
+The error names the accepted kinds and the kind it found:
+
+```text
+10:00 (LOCAL TIME) is not a date, a local datetime, a zoned datetime or an ISO date/datetime string
+```
+
+A stored bound raises the same text, prefixed by the side and the element
+(`the to bound … is not …`). Two datetimes compare exactly; a bound finer than a
+microsecond keeps its guard, as before.
+
 ### One instant per statement
 
 A statement takes one instant. A write under an explicit instant is refused.
@@ -523,10 +550,10 @@ graph.cypher("""
 # [{'team': 'Data'}, {'team': 'Infrastructure'}, {'team': 'Ops'}]
 ```
 
-A query date is a `date()` or `datetime()` value, or a string read the way
-those functions read it (`'2009'` is 2009-01-01). Anything else (an integer,
-`null`, `'garbage'`) raises `CypherExecutionError` rather than matching
-nothing. A stored bound that is not a date raises it too.
+A query date follows the comparison rule in
+[How an instant is compared](#how-an-instant-is-compared). Anything it refuses
+(an integer, `null`, `'garbage'`, a time of day) raises `CypherExecutionError`
+rather than matching nothing. A stored bound the rule refuses raises it too.
 
 ### When to use the functions
 

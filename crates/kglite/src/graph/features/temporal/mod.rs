@@ -30,6 +30,8 @@ pub(crate) mod persist;
 #[cfg(test)]
 mod persist_tests;
 mod request;
+#[cfg(test)]
+mod rule_tests;
 pub(crate) mod slice;
 mod validate;
 pub(crate) mod vector_mask;

@@ -50,6 +50,12 @@ before upgrading.
 
 ### Added
 
+- **One valid-time comparison rule, written once and named in every refusal.**
+  - Every validity bound and query instant is a point on one UTC timeline: a date is its whole UTC day, a local datetime is read as UTC, a zoned datetime (fixed offset or IANA zone) is its UTC instant, and an ISO string is read by `date()` / `datetime()`.
+  - A time of day (`localtime()`, `time()`), a duration, a number, a boolean, a list, a `NULL` query instant or an unparsable string is refused. The error names the accepted kinds and the kind found: `10:00 (LOCAL TIME) is not a date, a local datetime, a zoned datetime or an ISO date/datetime string`. A stored bound adds `the from bound` / `the to bound` in front.
+  - The text is the same from `cypher(valid_at=)`, `FOR VALID_TIME AS OF`, `freeze()`, `valid_at()` / `valid_during()`, a write to a declared bound, `db.temporal.declare` and the MCP `valid_at`; the fluent `valid_at()` / `valid_during()` / `date()` `TypeError` for a wrong Python type uses the same wording.
+  - No bound kind that was accepted before is refused now. See "How an instant is compared" in `docs/python/guides/valid-time.md`.
+- **`FOR VALID_TIME AS OF localdatetime('…')` and `localdatetime($param)`** are accepted beside `date(…)` and `datetime(…)`.
 - **`ZonedDateTime` is a value.**
   - Cypher: `datetime()` takes ISO text with `Z`, `±HH`, `±HHMM`, `±HH:MM` or `±HH:MM:SS` (within ±18:00), the week, ordinal and quarter date spellings, and maps (`{year, ..., nanosecond, timezone}` with a numeric offset, or `{datetime: …}` / `{date: …, time: …}` bases that keep their offset).
   - Accessors: `z.year` to `z.nanosecond` read the wall clock at the offset; `z.offset`, `z.offsetSeconds`, `z.offsetMinutes` and `z.timezone` read the offset; `z.epochSeconds` and `z.epochMillis` read the instant.
@@ -123,6 +129,9 @@ before upgrading.
   - Before: every call read the system clock, so `datetime() = datetime()` was false about a third of the time and `duration.inSeconds(datetime(), datetime())` was often non-zero.
   - Now: all calls in one statement return the same instant, including inside writes, `CALL { }` bodies and the default valid-time "today". `SET n.t = datetime()` stamps one instant on every row.
   - `datetime()` with no argument is still refused after `FOR VALID_TIME AS OF`; pass the moment as a parameter.
+- **A timezone-aware pandas column whose local times are all midnight keeps its instants.**
+  - Before: `add_nodes` typed such a column as dates and stored the wall date, so midnight in Oslo (23:00 UTC the day before) became that day.
+  - Now: an aware column is judged on its UTC instants, as an aware column with a time of day already was. Local midnight east of UTC loads as the previous day at 22:00 or 23:00 UTC, and west of UTC as a timestamp at 04:00 to 12:00 UTC, not as a date.
 - **`load_ntriples` into a graph that already holds data no longer loses properties on save.**
   - Affects `nid`, `P31` and every predicate property of the loaded entities, in any graph with at least one earlier typed node (for example a Cypher `CREATE`). It was not specific to `durable` graphs: a durable graph checkpoints after the load, so a crash then recovered the property-less file.
   - Before: the file kept ids, titles and edges, and every other property read back as null.

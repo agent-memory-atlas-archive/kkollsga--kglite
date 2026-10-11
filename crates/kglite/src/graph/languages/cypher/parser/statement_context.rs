@@ -15,7 +15,8 @@ pub(super) const DOUBLED_CONTEXT: &str =
     "A statement takes one FOR <axis> AS OF context; this one has two";
 
 const INSTANT_FORMS: &str = "a quoted ISO date or datetime, $param, date('…'), date($param), \
-                             datetime('…'), datetime($param), or date() for today (UTC)";
+                             datetime('…'), datetime($param), localdatetime('…'), \
+                             localdatetime($param), or date() for today (UTC)";
 
 impl CypherParser {
     /// Parse `FOR <axis> AS OF <instant>` or `FOR <axis> ALL`; the caller has
@@ -93,7 +94,7 @@ impl CypherParser {
     }
 }
 
-/// A literal string, a parameter, or `date` / `datetime` of one — and
+/// A literal string, a parameter, or `date` / `datetime` / `localdatetime` of one — and
 /// `date()` with no argument, today in UTC when the statement executes.
 /// `datetime()` with no argument is not accepted: the statement resolves its
 /// instant more than once (the timeless-plan check, the execution filter, the
@@ -115,7 +116,12 @@ fn is_context_instant(expression: &Expression) -> bool {
             let date = name.eq_ignore_ascii_case("date");
             match args.as_slice() {
                 [] => date,
-                [arg] => (date || name.eq_ignore_ascii_case("datetime")) && operand(arg),
+                [arg] => {
+                    (date
+                        || name.eq_ignore_ascii_case("datetime")
+                        || name.eq_ignore_ascii_case("localdatetime"))
+                        && operand(arg)
+                }
                 _ => false,
             }
         }

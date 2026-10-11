@@ -2397,15 +2397,17 @@ class KnowledgeGraph:
                 the declaration, it is checked before anything is written: a
                 declaration of the type naming other properties or another
                 ``convention``, a row of this call whose interval is inverted
-                (``from`` after ``to``), and a stored bound that is not a
-                date, a datetime or an ISO date string each raise
+                (``from`` after ``to``), and a stored bound that is not
+                a date, a local or zoned datetime or an ISO date/datetime string
+                each raise
                 :class:`ArgumentError`. A closed declaration whose rows end on
                 the day another begins emits a ``UserWarning`` suggesting
                 ``'half_open'``. **A load onto a type that is already declared
                 answers to the same rule**, with or without these column
                 types: before anything is written, a row that would leave a
-                node with an inverted interval or a bound that is not a date,
-                a datetime or an ISO date string raises
+                node with an inverted interval or a bound that is not
+                a date, a local or zoned datetime or an ISO date/datetime string
+                raises
                 :class:`ArgumentError` naming the row by its 0-based position.
                 A row whose interval is empty under ``'half_open'`` (``from``
                 equal to ``to``: valid at no instant, as an assignment created
@@ -3049,8 +3051,9 @@ class KnowledgeGraph:
 
         Raises:
             ValueError: If ``temporal=True`` and *node_type* has no temporal
-                configuration, or a node's validity bound is not a date, a
-                datetime or an ISO date string (the message starts
+                configuration, or a node's validity bound is not
+                a date, a local or zoned datetime or an ISO date/datetime string
+                (the message starts
                 ``select():`` and names the node and the property).
         """
         ...
@@ -3147,7 +3150,7 @@ class KnowledgeGraph:
             ArgumentError: If a relationship type in the graph holds several
                 unkeyed validity declarations (under any date context,
                 including the default, today), or a validity bound the step
-                reads is not a date, a datetime or an ISO date string.
+                reads is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -3222,7 +3225,7 @@ class KnowledgeGraph:
             ArgumentError: If *direction* is not one of the valid values, if
                 *connection_type* holds several unkeyed validity declarations
                 under a date context, or if a validity bound it reads is not
-                a date, a datetime or an ISO date string.
+                a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -3258,6 +3261,8 @@ class KnowledgeGraph:
                 ``'2024-01-15T12:00'``), a ``datetime.date`` or a
                 ``datetime.datetime``. A datetime is taken at its date (an
                 aware one in UTC) — the fluent filters work at date grain.
+                Any other type (``datetime.time``, ``datetime.timedelta``, a
+                number) raises ``TypeError`` naming the accepted kinds.
                 Defaults to the ``date()`` context, else today (UTC).
             date_from_field: Name of the start-date property. Auto-detected if temporal config exists.
             date_to_field: Name of the end-date property. Auto-detected if temporal config exists.
@@ -3271,7 +3276,7 @@ class KnowledgeGraph:
                 ``date_from`` nor ``date_to`` (or lacks the default beside a
                 named field) — rather than reading the missing property as an
                 open bound and keeping every node; or if a node's validity
-                bound is not a date, a datetime or an ISO date string.
+                bound is not a date, a local or zoned datetime or an ISO date/datetime string.
             ArgumentError: If *date* is a string that is not a date.
             TypeError: If *date* is neither a string nor a ``datetime.date``.
         """
@@ -3305,7 +3310,7 @@ class KnowledgeGraph:
         Raises:
             ValueError: As :meth:`valid_at` — a field the type does not have,
                 an undeclared type with no default fields, or a validity bound
-                that is not a date, a datetime or an ISO date string.
+                that is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -4088,7 +4093,7 @@ class KnowledgeGraph:
             ArgumentError: If a relationship type in the graph holds several
                 unkeyed validity declarations (under any date context,
                 including the default, today), or a validity bound the step
-                reads is not a date, a datetime or an ISO date string.
+                reads is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -4276,7 +4281,7 @@ class KnowledgeGraph:
                 reaches an edge of that type), rather than keeping every edge;
                 if the type holds several unkeyed declarations (re-declare
                 them per ``source_type``); or if a validity bound it reads is
-                not a date, a datetime or an ISO date string.
+                not a date, a local or zoned datetime or an ISO date/datetime string.
 
         Examples::
 
@@ -5506,7 +5511,14 @@ class KnowledgeGraph:
 
         Args:
             valid_at: Freeze the graph as of an instant — a ``datetime.date``,
-                a ``datetime.datetime`` or an ISO date/datetime string. Every
+                a ``datetime.datetime`` or an ISO date/datetime string. One comparison rule governs every bound
+                and instant: a date is its whole UTC day, a local datetime is
+                read as UTC, an aware (zoned) ``datetime.datetime`` is its UTC
+                instant (its offset or ``ZoneInfo`` is display only), and an
+                ISO string is read by ``date()`` / ``datetime()``. Any other
+                value (a ``datetime.time``, a ``datetime.timedelta``, a number)
+                raises ``ValueError`` naming the accepted kinds and the kind
+                found. Every
                 :meth:`FrozenGraph.cypher` on the handle then answers as
                 ``cypher(query, valid_at=…)`` on this graph would, with no
                 copy: the handle runs each query behind the same
@@ -7132,8 +7144,8 @@ class KnowledgeGraph:
                 per node with its ``type`` and ``id``. Also raised when a
                 relationship type in the graph holds several unkeyed validity
                 declarations (under any date context, including the default,
-                today), or a validity bound the step reads is not a date, a
-                datetime or an ISO date string.
+                today), or a validity bound the step reads is not
+                a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -7339,7 +7351,7 @@ class KnowledgeGraph:
             ArgumentError: If a relationship type in the graph holds several
                 unkeyed validity declarations (under any date context,
                 including the default, today), or a validity bound the step
-                reads is not a date, a datetime or an ISO date string.
+                reads is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -7358,7 +7370,7 @@ class KnowledgeGraph:
             ArgumentError: If a relationship type in the graph holds several
                 unkeyed validity declarations (under any date context,
                 including the default, today), or a validity bound the step
-                reads is not a date, a datetime or an ISO date string.
+                reads is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 
@@ -7390,7 +7402,7 @@ class KnowledgeGraph:
             ArgumentError: If a relationship type in the graph holds several
                 unkeyed validity declarations (under any date context,
                 including the default, today), or a validity bound the step
-                reads is not a date, a datetime or an ISO date string.
+                reads is not a date, a local or zoned datetime or an ISO date/datetime string.
             OSError: If the file cannot be written.
 
         Example:
@@ -8266,8 +8278,15 @@ class KnowledgeGraph:
                   per-Cypher-execution concept and does not reach the
                   Python loader API.
             valid_at: Run the query as of an instant — a ``datetime.date``,
-                a ``datetime.datetime``, or an ISO date / datetime string.
-                Exactly the statement prefix ``FOR VALID_TIME AS OF
+                a ``datetime.datetime`` (naive: read as UTC; aware: its UTC
+                instant), or an ISO date / datetime string. One comparison rule governs every bound
+                and instant: a date is its whole UTC day, a local datetime is
+                read as UTC, an aware (zoned) ``datetime.datetime`` is its UTC
+                instant (its offset or ``ZoneInfo`` is display only), and an
+                ISO string is read by ``date()`` / ``datetime()``. Any other
+                value (a ``datetime.time``, a ``datetime.timedelta``, a number)
+                raises ``ValueError`` naming the accepted kinds and the kind
+                found. Exactly the statement prefix ``FOR VALID_TIME AS OF
                 date('…')`` (``datetime('…')`` for a time) written before
                 ``query``, so the two spellings are one feature: the prefix
                 may stand before or after ``EXPLAIN`` / ``PROFILE``, and a
@@ -11473,7 +11492,7 @@ class FrozenGraph:
 
         Raises:
             ArgumentError: on a ``valid_at`` handle, when a node's declared
-                bound is not a date, a datetime or an ISO string.
+                bound is not a date, a local or zoned datetime or an ISO date/datetime string.
         """
         ...
 

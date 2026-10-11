@@ -1193,7 +1193,16 @@ fn datetime64_column_type(series: &Bound<'_, PyAny>) -> PyResult<ColumnType> {
         return Ok(ColumnType::DateTime);
     }
     // `series.dt.normalize()` zeroes the time-of-day; any element that then
-    // differs from the original carried a nonzero time.
+    // differs from the original carried a nonzero time. An aware column is
+    // judged on its UTC instants, the values the cells are stored as: local
+    // midnight in Oslo is 23:00 UTC the day before, and typing it `DateTime`
+    // would store the wall date, a different point on the time line.
+    let dt = non_null.getattr("dt")?;
+    let non_null = if dt.getattr("tz")?.is_none() {
+        non_null
+    } else {
+        dt.call_method1("tz_convert", ("UTC",))?
+    };
     let dt = non_null.getattr("dt")?;
     let normalized = dt.call_method0("normalize")?;
     let differs = non_null.call_method1("ne", (normalized,))?;
@@ -1352,7 +1361,8 @@ pub fn query_date(
             .map_err(|e| argument_error(format!("{argument}: {e}")));
     }
     Err(pyo3::exceptions::PyTypeError::new_err(format!(
-        "{argument} must be a date string, a datetime.date or a datetime.datetime, not {}",
+        "{argument} must be a date, a local datetime, a zoned datetime or an ISO date/datetime \
+         string (a datetime.date, a naive or aware datetime.datetime, or a str), not {}",
         value.get_type().name()?
     )))
 }
