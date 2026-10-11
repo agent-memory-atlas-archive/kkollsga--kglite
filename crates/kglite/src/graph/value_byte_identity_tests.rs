@@ -230,6 +230,77 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
             "timestamp",
             Value::Timestamp(date.and_hms_opt(10, 30, 45).unwrap()),
         ),
+        // Appended fixtures: second members of two-valued shapes and the
+        // temporal values nested in collections, pinned before any temporal
+        // variant is added to the enum.
+        ("bool_false", Value::Boolean(false)),
+        ("unique_id_zero", Value::UniqueId(0)),
+        ("float64_large", Value::Float64(1e300)),
+        (
+            "timestamp_subsecond",
+            Value::Timestamp(date.and_hms_micro_opt(10, 30, 45, 123_456).unwrap()),
+        ),
+        (
+            "timestamp_midnight",
+            Value::Timestamp(date.and_hms_opt(0, 0, 0).unwrap()),
+        ),
+        (
+            "duration_zero",
+            Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: 0,
+            },
+        ),
+        (
+            "duration_extremes",
+            Value::Duration {
+                months: i32::MIN,
+                days: i32::MAX,
+                seconds: i64::MIN,
+            },
+        ),
+        (
+            "point_negative",
+            Value::Point {
+                lat: -33.8688,
+                lon: -151.2093,
+            },
+        ),
+        ("noderef_zero", Value::NodeRef(0)),
+        (
+            "list_temporal",
+            Value::List(vec![
+                Value::DateTime(date),
+                Value::Timestamp(date.and_hms_micro_opt(1, 2, 3, 4).unwrap()),
+                Value::Duration {
+                    months: 0,
+                    days: 1,
+                    seconds: 2,
+                },
+                Value::Point { lat: 1.0, lon: 2.0 },
+                Value::NodeRef(3),
+                Value::Null,
+            ]),
+        ),
+        (
+            "map_temporal",
+            Value::Map(map(&[
+                ("d", Value::DateTime(date)),
+                (
+                    "dur",
+                    Value::Duration {
+                        months: 2,
+                        days: 0,
+                        seconds: -1,
+                    },
+                ),
+                (
+                    "ts",
+                    Value::Timestamp(date.and_hms_opt(23, 59, 59).unwrap()),
+                ),
+            ])),
+        ),
     ]
 }
 
@@ -259,7 +330,17 @@ const VALUE_BYTE_GOLDEN: &[(&str, &str)] = &[
     ("map_with_node_value", "0e01016e0a2a0206506572736f6e08456d706c6f7965650703616765013c046369747903044f736c6f026964010e066e65737465640e01016b0301760673636f7265730d020102020000000000000440057469746c650305416c69636504747970650306506572736f6e"),
     ("relationship", "0b032a2b054b4e4f5753020573696e636501c81f0677656967687402000000000000e03f"),
     ("path", "0c012a0206506572736f6e08456d706c6f7965650703616765013c046369747903044f736c6f026964010e066e65737465640e01016b0301760673636f7265730d020102020000000000000440057469746c650305416c69636504747970650306506572736f6e01032a2b054b4e4f5753020573696e636501c81f0677656967687402000000000000e03f"),
-    ("timestamp", "0f13323032342d30332d31355431303a33303a3435"),
+    ("timestamp", "0f13323032342d30332d31355431303a33303a3435"),    ("bool_false", "0400"),
+    ("unique_id_zero", "0000"),
+    ("float64_large", "029c7500883ce4377e"),
+    ("timestamp_subsecond", "0f1a323032342d30332d31355431303a33303a34352e313233343536"),
+    ("timestamp_midnight", "0f13323032342d30332d31355430303a30303a3030"),
+    ("duration_zero", "09000000"),
+    ("duration_extremes", "09ffffffff0ffeffffff0fffffffffffffffffff01"),
+    ("point_negative", "06e561a1d634ef40c0b1e1e995b2e662c0"),
+    ("noderef_zero", "0800"),
+    ("list_temporal", "0d06050a323032342d30332d31350f1a323032342d30332d31355430313a30323a30332e3030303030340900020406000000000000f03f0000000000000040080307"),
+    ("map_temporal", "0e030164050a323032342d30332d313503647572090400010274730f13323032342d30332d31355432333a35393a3539"),
 ];
 
 /// Standalone struct encodings — the projection-boundary types serialized on

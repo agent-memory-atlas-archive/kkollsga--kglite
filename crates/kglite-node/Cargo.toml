@@ -16,7 +16,8 @@ crate-type = ["cdylib"]
 doctest = false
 
 [features]
-default = []
+default = ["iana-zones"]
+iana-zones = ["kglite/iana-zones"]
 # Exposes `__panic()` so the smoke test can prove panic containment. Must never
 # be enabled in a published build: the npm packaging job builds without it.
 test-hooks = ["kglite/test-seam"]

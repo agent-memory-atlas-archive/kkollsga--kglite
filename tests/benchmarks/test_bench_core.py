@@ -9,6 +9,7 @@ import json
 import sys
 from typing import NamedTuple
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -794,6 +795,88 @@ def test_bench_timestamp_order_by_limit(benchmark, timestamp_graph):
         return graph.cypher("MATCH (n:T) RETURN n ORDER BY n.t DESC LIMIT 10").to_list()
 
     assert [row["n"]["id"] for row in benchmark(query_and_consume)] == expected
+
+
+@pytest.mark.benchmark
+def test_bench_timestamp_marshal_to_python(benchmark, timestamp_graph):
+    """100k timestamp cells converted to Python `datetime` objects."""
+    graph, _ = timestamp_graph
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:T) RETURN n.t AS t").to_list()
+
+    rows = benchmark(query_and_consume)
+    assert len(rows) == TIMESTAMP_ROWS
+
+
+# ---------------------------------------------------------------------------
+# Date columns
+# ---------------------------------------------------------------------------
+#
+# Baseline cells for the temporal value model work: none of them touches a new
+# variant, so any movement is the cost of widened `Value` matches.
+
+DATE_ROWS = 1_000_000
+_DATE_DISTINCT = 3650  # about ten years of days
+_DATE_EPOCH_DAY = 10_957  # 2000-01-01, in days since 1970
+
+
+class DateGraph(NamedTuple):
+    graph: KnowledgeGraph
+    frame: pd.DataFrame
+
+
+@pytest.fixture(scope="module")
+def date_graph():
+    """1M nodes with a date-only datetime64 column `d` of 3650 distinct days.
+
+    7919 is coprime with 3650, so the days are spread evenly and unsorted in
+    insertion order.
+    """
+    n = DATE_ROWS
+    nid = np.arange(n, dtype=np.int64)
+    days = (nid * 7919) % _DATE_DISTINCT + _DATE_EPOCH_DAY
+    frame = pd.DataFrame({"nid": nid, "name": ["x"] * n, "d": pd.to_datetime(days, unit="D")})
+    graph = KnowledgeGraph()
+    graph.add_nodes(frame, "D", "nid", "name")
+    return DateGraph(graph, frame)
+
+
+@pytest.mark.benchmark
+def test_bench_date_group_by_count(benchmark, date_graph):
+    """Group 1M date cells into their 3650 distinct values (hash + equality)."""
+    graph, _ = date_graph
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:D) RETURN n.d AS d, count(*) AS c").to_list()
+
+    rows = benchmark(query_and_consume)
+    assert len(rows) == _DATE_DISTINCT
+    assert sum(row["c"] for row in rows) == DATE_ROWS
+
+
+@pytest.mark.benchmark
+def test_bench_date_where_ge_literal(benchmark, date_graph):
+    """Range filter `n.d >= date(...)` over 1M date cells."""
+    graph, frame = date_graph
+    cutoff = pd.Timestamp("2005-01-01")
+    expected = int((frame["d"] >= cutoff).sum())
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:D) WHERE n.d >= date('2005-01-01') RETURN count(*) AS c").to_list()
+
+    assert benchmark(query_and_consume) == [{"c": expected}]
+
+
+@pytest.mark.benchmark
+def test_bench_date_marshal_to_python(benchmark, date_graph):
+    """100k date cells converted to Python `date` objects."""
+    graph, _ = date_graph
+
+    def query_and_consume():
+        return graph.cypher("MATCH (n:D) RETURN n.d AS d LIMIT 100000").to_list()
+
+    assert len(benchmark(query_and_consume)) == 100_000
 
 
 # ---------------------------------------------------------------------------

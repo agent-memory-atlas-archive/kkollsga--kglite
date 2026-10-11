@@ -121,6 +121,10 @@ pub enum Value {
     Timestamp(NaiveDateTime),
 }
 
+// 32 B is load-bearing for `Mixed` columns and row buffers; a new temporal
+// payload must fit in 24 B beside the tag.
+const _: () = assert!(std::mem::size_of::<Value>() == 32);
+
 impl Value {
     pub(crate) fn clear_relationship_incarnations(&mut self) {
         match self {

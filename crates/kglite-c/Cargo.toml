@@ -22,8 +22,9 @@ name = "kglite_c"
 doctest = false
 
 [features]
-# Mirror kglite's feature shape. Off by default.
-default = []
+# Mirror kglite's feature shape. Only `iana-zones` is on by default.
+default = ["iana-zones"]
+iana-zones = ["kglite/iana-zones"]
 fastembed = ["kglite/fastembed"]
 rdf = ["kglite/rdf"]
 
