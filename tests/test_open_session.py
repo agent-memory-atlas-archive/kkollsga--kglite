@@ -453,8 +453,10 @@ def test_the_log_is_folded_into_the_checkpoint_in_the_background(tmp_path):
     with kglite.open_session(str(path), durable="normal", auto_checkpoint_wal_mib=1) as s:
         for i in range(600):  # ~2.4 MiB of frames against a 1 MiB bound
             s.execute("CREATE (:N {id: $i, pad: $p})", params={"i": i, "p": payload})
+        # The checkpoint writes the file and then trims the log, both off the
+        # writer thread, so poll for the trim rather than for the file.
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and not path.exists():
+        while time.monotonic() < deadline and not (path.exists() and wal.stat().st_size < 2 * 1024 * 1024):
             time.sleep(0.05)
         assert path.exists(), "an online checkpoint must have written the file before close()"
         assert wal.stat().st_size < 2 * 1024 * 1024, "and trimmed the log"

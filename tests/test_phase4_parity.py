@@ -129,7 +129,7 @@ def _parity_query(kg: KnowledgeGraph) -> list[tuple]:
 # Changing this digest without a format bump is a refactor bug — the
 # whole point of this test is to trip loudly when the `.kgl` byte layout
 # silently drifts.
-GOLDEN_V3_DIGEST = "84e06dc381a194814142ba36fb4036762e5b7ffe5a6aa6eb9892eee8e13a9e2f"
+GOLDEN_V3_DIGEST = "fb38fd59fb0786fdfbae0cba2b83645b7d76326ba96ddea677717d709839073e"
 
 # The v3 → v4 format break cleared this set. The
 # v4 loader rejects v3 files (per the user-decided hard break
@@ -144,6 +144,11 @@ GOLDEN_V3_DIGEST = "84e06dc381a194814142ba36fb4036762e5b7ffe5a6aa6eb9892eee8e13a
 # back to a working v4 era.
 ACCEPTABLE_DIGESTS: frozenset[str] = frozenset(
     {
+        # Demoted from GOLDEN_V3_DIGEST by the `.kgl` **v8** container: the
+        # magic moves to v8 and a CRC32 over the header and metadata JSON is
+        # appended inside the metadata block. Sections and codec are v7's.
+        # This build still reads v7 (`file_load_contract_tests.rs`).
+        "84e06dc381a194814142ba36fb4036762e5b7ffe5a6aa6eb9892eee8e13a9e2f",
         # Demoted from GOLDEN_V3_DIGEST by the register-scale program, which
         # bumps the container to `.kgl` **v7**. The only byte that moves is the
         # magic (`RGF\x06` -> `RGF\x07`): layout, metadata and codec are v6's
