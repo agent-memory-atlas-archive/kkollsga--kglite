@@ -54,13 +54,16 @@ def test_negative_and_whole_second_values_keep_their_sign():
     assert [(r["neg"], r["pos"]) for r in rows] == [(True, False), (False, True)]
 
 
-def test_sub_second_values_are_reported_not_truncated():
-    frame = pd.DataFrame({"id": [1, 2], "d": pd.to_timedelta(["1.5 seconds", "2 seconds"])})
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+def test_sub_second_values_keep_their_nanoseconds():
+    frame = pd.DataFrame({"id": [1, 2, 3], "d": pd.to_timedelta(["1.5 seconds", "2 seconds", "-1500000001 ns"])})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         g = node_graph(frame)
-    assert any("whole seconds" in str(w.message) for w in caught), [str(w.message) for w in caught]
-    assert durations(g) == [None, {"months": 0, "days": 0, "seconds": 2}]
+    assert durations(g) == [
+        {"months": 0, "days": 0, "seconds": 1, "nanoseconds": 500_000_000},
+        {"months": 0, "days": 0, "seconds": 2},
+        {"months": 0, "days": 0, "seconds": -2, "nanoseconds": 499_999_999},
+    ]
 
 
 def test_object_column_of_timedelta_loads_as_duration():
@@ -189,4 +192,53 @@ def test_blueprint_csv_duration_declaration(tmp_path):
         (True, {"months": 0, "days": 1, "seconds": 7200}),
         (None, None),
         (None, None),
+    ]
+
+
+def test_query_parameter_timedelta_keeps_microseconds_and_pandas_nanoseconds():
+    g = kglite.KnowledgeGraph()
+    rows = g.cypher(
+        "RETURN $us AS us, $ns AS ns, $neg AS neg, $us = duration({microseconds: 5}) AS eq",
+        params={
+            "us": dt.timedelta(microseconds=5),
+            "ns": pd.Timedelta(1, "ns"),
+            "neg": dt.timedelta(microseconds=-5),
+        },
+    ).to_list()
+    assert rows == [
+        {
+            "us": {"months": 0, "days": 0, "seconds": 0, "nanoseconds": 5000},
+            "ns": {"months": 0, "days": 0, "seconds": 0, "nanoseconds": 1},
+            "neg": {"months": 0, "days": 0, "seconds": -1, "nanoseconds": 999_995_000},
+            "eq": True,
+        }
+    ]
+
+
+def test_cypher_nanosecond_duration_reads_back_with_the_key_only_when_non_zero():
+    g = kglite.KnowledgeGraph()
+    row = g.cypher("RETURN duration({nanoseconds: 1}) AS a, duration({seconds: 3}) AS b").to_list()[0]
+    assert row["a"] == {"months": 0, "days": 0, "seconds": 0, "nanoseconds": 1}
+    assert row["b"] == {"months": 0, "days": 0, "seconds": 3}
+
+
+def test_from_records_timedelta_keeps_its_sub_second_part():
+    spec = {
+        "nodes": [
+            {
+                "type": "T",
+                "id_field": "id",
+                "records": [
+                    {"id": 1, "d": dt.timedelta(seconds=1, microseconds=5)},
+                    {"id": 2, "d": dt.timedelta(microseconds=-5)},
+                    {"id": 3, "d": pd.Timedelta(7, "ns")},
+                ],
+            }
+        ]
+    }
+    g = kglite.from_records(spec)
+    assert durations(g) == [
+        {"months": 0, "days": 0, "seconds": 1, "nanoseconds": 5000},
+        {"months": 0, "days": 0, "seconds": -1, "nanoseconds": 999_995_000},
+        {"months": 0, "days": 0, "seconds": 0, "nanoseconds": 7},
     ]

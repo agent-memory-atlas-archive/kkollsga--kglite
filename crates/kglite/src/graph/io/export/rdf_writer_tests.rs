@@ -27,3 +27,20 @@ fn a_base_must_be_absolute_slash_terminated_and_outside_well_known_namespaces() 
     assert!(validate_base("http://xmlns.com/foaf/0.1/").is_err());
     assert!(validate_base("not an iri/").is_err());
 }
+
+#[test]
+fn fractional_seconds_spell_one_signed_xsd_duration() {
+    assert_eq!(
+        duration_lexical_fine(0, 0, 1, 500_000_000).as_deref(),
+        Some("PT1.5S")
+    );
+    assert_eq!(
+        duration_lexical_fine(0, 0, -2, 500_000_000).as_deref(),
+        Some("-PT1.5S")
+    );
+    assert_eq!(
+        duration_lexical_fine(1, 2, 0, 1).as_deref(),
+        Some("P1M2DT0.000000001S")
+    );
+    assert_eq!(duration_lexical_fine(1, 0, -1, 5), None);
+}

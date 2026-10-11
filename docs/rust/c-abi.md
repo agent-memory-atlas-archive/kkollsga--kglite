@@ -272,7 +272,7 @@ result, and free every independently returned string with
 `kglite_free_string`.
 
 Result rows use natural JSON by default, as every earlier release did. A date
-and a datetime are strings, a duration is `{"months", "days", "seconds"}`, a
+and a datetime are strings, a duration is `{"months", "days", "seconds"}` plus `"nanoseconds"` when non-zero, a
 point is `{"latitude", "longitude"}`, and a non-finite float is `null`. Call
 `kglite_session_set_result_encoding(session, 1)` (`KGLITE_RESULT_ENCODING_TAGGED`)
 to render those values as the tags a parameter accepts, so a cell read back and

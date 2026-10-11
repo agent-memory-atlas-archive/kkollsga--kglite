@@ -62,17 +62,21 @@ pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
         Value::NodeRef(idx) => idx.into_py_any(py),
         // Value::Duration → Python dict {months, days, seconds}.
         // 0.9.0 Cluster 2.
-        // T1b: the dict has no nanoseconds key yet.
+        // `nanoseconds` (0..1e9, added to the signed seconds) appears only when
+        // non-zero, so whole-second durations compare equal to the 3-key dict.
         Value::Duration {
             months,
             days,
             seconds,
-            ..
+            nanos,
         } => {
             let dict = PyDict::new(py);
             dict.set_item("months", months)?;
             dict.set_item("days", days)?;
             dict.set_item("seconds", seconds)?;
+            if *nanos != 0 {
+                dict.set_item("nanoseconds", nanos)?;
+            }
             Ok(dict.into_any().unbind())
         }
         // Native conversion of the collection / graph-entity variants —

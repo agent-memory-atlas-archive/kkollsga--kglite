@@ -18,10 +18,12 @@ export declare class Duration {
   readonly months: number
   readonly days: number
   readonly seconds: number
-  constructor(months?: number | undefined | null, days?: number | undefined | null, seconds?: number | undefined | null)
+  /** Sub-second part, 0 to 999999999, added to the (signed) `seconds`. */
+  readonly nanoseconds: number
+  constructor(months?: number | undefined | null, days?: number | undefined | null, seconds?: number | undefined | null, nanoseconds?: number | undefined | null)
   /** ISO-8601 (`P1Y2M3DT4S`); zero parts are omitted and a zero duration is `PT0S`. */
   toString(): string
-  toJSON(): { months: number; days: number; seconds: number }
+  toJSON(): { months: number; days: number; seconds: number; nanoseconds?: number }
 }
 
 /** A graph opened by [`open`]. */

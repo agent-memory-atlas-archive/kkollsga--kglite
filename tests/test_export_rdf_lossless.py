@@ -86,6 +86,22 @@ def test_round_trip_loses_nothing(storage, fmt, tmp_path):
     assert valid_time_answers(back) == valid_time_answers(source)
 
 
+def test_sub_second_durations_round_trip_in_both_spellings(tmp_path):
+    g = KnowledgeGraph()
+    g.cypher(
+        "CREATE (:Role {id: 1, title: 'r', pos: duration({seconds: 1, nanoseconds: 500}), "
+        "neg: duration({milliseconds: -1500}), mixed: duration({months: 1, days: -2, nanoseconds: 7})})"
+    )
+    _, back, path = export_and_load(g, tmp_path)
+    text = path.read_text(encoding="utf-8")
+    assert '"PT1.0000005S"^^<http://www.w3.org/2001/XMLSchema#duration>' in text
+    assert '"-PT1.5S"^^<http://www.w3.org/2001/XMLSchema#duration>' in text
+    assert re.search(r'"1,-2,0,7"\^\^<[^>]*duration>', text)
+    query = "MATCH (r:Role) RETURN r.pos AS pos, r.neg AS neg, r.mixed AS mixed"
+    assert back.cypher(query).to_list() == g.cypher(query).to_list()
+    assert back.cypher(query).to_list()[0]["pos"]["nanoseconds"] == 500
+
+
 def test_duplicate_id_versions_stay_two_nodes(tmp_path):
     source = build_source("memory", tmp_path)
     _, back, _ = export_and_load(source, tmp_path)

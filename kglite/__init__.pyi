@@ -1840,8 +1840,7 @@ def from_records(
             or any key is not one this loader reads.
         TypeError: If a record value is of a type a JSON records spec cannot
             carry, naming the value and its type: a ``time`` (the graph has no
-            time-of-day type), or a ``timedelta`` with a sub-second part (a
-            duration holds whole seconds). A ``date``, ``datetime`` or
+            time-of-day type). A ``date``, ``datetime`` or
             ``timedelta`` loads typed — it is sent as the tagged object
             ``{"$date": …}`` / ``{"$datetime": …}`` / ``{"$duration": …}``,
             which a spec given as JSON text can use directly. ``pd.NaT``
@@ -2340,9 +2339,10 @@ class KnowledgeGraph:
                 A ``timedelta64`` column (numpy or pyarrow-backed) or a column
                 of ``datetime.timedelta`` loads as ``'duration'`` values —
                 equal to ``duration({...})``, and read back as
-                ``{'months', 'days', 'seconds'}``. A duration holds whole
-                seconds: a cell with a sub-second part is stored as NULL and
-                reported through ``on_invalid``.
+                ``{'months', 'days', 'seconds'}``, plus ``'nanoseconds'`` (0 to
+                999999999, added to the signed seconds) when the duration has
+                a sub-second part. A cell that is not a ``timedelta`` is
+                stored as NULL and reported through ``on_invalid``.
                 A column of Python lists/tuples is auto-detected as a native
                 ``'list'`` property (stored structurally, not stringified), so
                 ``'y' IN n.aliases`` tests membership and ``UNWIND n.aliases``
@@ -7460,8 +7460,9 @@ class KnowledgeGraph:
         int and string keeps them apart, and a null title stays null. A
         ``xsd:date`` / ``xsd:dateTime`` literal with a year outside 1..9999
         stays text, with a warning. Raises on an empty ``path``. A duration whose months, days and seconds disagree
-        in sign is written as ``kg:duration`` (``months,days,seconds``) and
-        reads back as a duration; the importer adds the ``uri`` property only
+        in sign is written as ``kg:duration`` (``months,days,seconds``, plus
+        ``,nanoseconds`` when non-zero) and reads back as a duration; a
+        sub-second part of uniform sign is an ``xsd:duration`` fraction; the importer adds the ``uri`` property only
         to RDF without a ``kg:manifest``. Parallel edges without properties
         are written as repeated identical statements, which a set-semantics
         RDF consumer collapses. ``load_rdf`` builds an in-memory graph

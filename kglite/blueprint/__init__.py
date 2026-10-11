@@ -133,8 +133,8 @@ def _json_scalar(value: Any) -> Any:
     the records loader decodes — ``{"$date": …}``, ``{"$datetime": …}`` (an
     offset is applied, normalising to UTC) and ``{"$duration": …}`` — so they
     load typed rather than as text. A ``time`` has no graph type and is
-    refused, as is a ``timedelta`` with a sub-second part: a duration holds
-    whole seconds. ``pd.NaT`` carries no value and becomes ``null``.
+    refused. A ``timedelta``'s sub-second part travels as ``nanoseconds``.
+    ``pd.NaT`` carries no value and becomes ``null``.
     """
     if isinstance(value, (_datetime.datetime, _datetime.date, _datetime.timedelta)):
         if str(value) == "NaT":  # pandas' missing timestamp / timedelta
@@ -144,11 +144,13 @@ def _json_scalar(value: Any) -> Any:
     if isinstance(value, _datetime.date):
         return {"$date": value.isoformat()}
     if isinstance(value, _datetime.timedelta):
-        if value.microseconds or getattr(value, "nanoseconds", 0):
-            raise TypeError(f"from_records: {value!r} has a sub-second part; a duration holds whole seconds")
         total = value.days * 86_400 + value.seconds
         days = abs(total) // 86_400 * (1 if total >= 0 else -1)
-        return {"$duration": {"days": days, "seconds": total - days * 86_400}}
+        duration = {"days": days, "seconds": total - days * 86_400}
+        nanos = value.microseconds * 1_000 + getattr(value, "nanoseconds", 0)
+        if nanos:
+            duration["nanoseconds"] = nanos
+        return {"$duration": duration}
     if isinstance(value, _datetime.time):
         raise TypeError(
             f"from_records: a time value ({value!r}) cannot be carried in a JSON records spec — "

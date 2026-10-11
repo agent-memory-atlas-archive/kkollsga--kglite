@@ -22,7 +22,7 @@
 //! | `Map(entries)`                          | `Dict(entries.map(...))`      | `BoltDict = HashMap<String, BoltValue>`            |
 //! | `DateTime(NaiveDate)`                   | `Date(BoltDate { days })`     | Days since Unix epoch (1970-01-01)                 |
 //! | `Timestamp(NaiveDateTime)`             | `LocalDateTime`               | Epoch seconds and fractional nanoseconds preserved |
-//! | `Duration { months, days, seconds }`    | `Duration(BoltDuration {..})` | All i64; kglite has second precision (`nanoseconds: 0`) |
+//! | `Duration { months, days, seconds, nanos }` | `Duration(BoltDuration {..})` | All i64; inbound `nanoseconds` may be negative or exceed 1e9 and is normalised into `seconds` plus 0..1e9 nanos |
 //! | `Point { lat, lon }`                    | `Point2D(BoltPoint2D { .. })` | srid=4326 for WGS84; Bolt convention x=lon, y=lat  |
 //! | `Node { id, labels, properties }`       | `Node(BoltNode { id, labels, properties, element_id })` | `element_id = id.to_string()` |
 //! | `Relationship { id, start_id, end_id, rel_type, properties }` | `Relationship(BoltRelationship { ... })` | `element_id` / `start_element_id` / `end_element_id` = stringified ids |
@@ -108,17 +108,18 @@ pub fn to_bolt(value: &Value) -> Result<BoltValue, BoltError> {
             x: *lon,
             y: *lat,
         })),
-        // T1b: sub-second nanos are not yet carried to Bolt.
+        // The engine value is `seconds + nanos / 1e9` with `nanos` in 0..1e9, a
+        // pair Bolt's `seconds` + `nanoseconds` fields carry as they are.
         Value::Duration {
             months,
             days,
             seconds,
-            ..
+            nanos,
         } => Ok(BoltValue::Duration(BoltDuration {
             months: i64::from(*months),
             days: i64::from(*days),
             seconds: *seconds,
-            nanoseconds: 0,
+            nanoseconds: i64::from(*nanos),
         })),
 
         // ---- Node / Relationship / Path ---------------------------------
@@ -388,21 +389,22 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
                 })?;
             Ok(Value::DateTime(date))
         }
-        BoltValue::Duration(d) => Ok(Value::Duration {
-            months: i32::try_from(d.months).map_err(|_| {
-                BoltError::Protocol(format!(
-                    "Bolt Duration.months out of i32 range: {}",
-                    d.months
-                ))
-            })?,
-            days: i32::try_from(d.days).map_err(|_| {
-                BoltError::Protocol(format!("Bolt Duration.days out of i32 range: {}", d.days))
-            })?,
-            seconds: d.seconds,
-            // T1b: the driver's nanoseconds are still truncated here; the
-            // engine value can now carry them.
-            nanos: 0,
-        }),
+        BoltValue::Duration(d) => {
+            let (bolt_seconds, bolt_nanos) = normalise_bolt_seconds(d.seconds, d.nanoseconds)?;
+            Ok(Value::Duration {
+                months: i32::try_from(d.months).map_err(|_| {
+                    BoltError::Protocol(format!(
+                        "Bolt Duration.months out of i32 range: {}",
+                        d.months
+                    ))
+                })?,
+                days: i32::try_from(d.days).map_err(|_| {
+                    BoltError::Protocol(format!("Bolt Duration.days out of i32 range: {}", d.days))
+                })?,
+                seconds: bolt_seconds,
+                nanos: bolt_nanos,
+            })
+        }
         BoltValue::Point2D(p) => {
             // SRID 4326 is WGS84 (geographic lat/lon). Other SRIDs (e.g.
             // 7203 for Cartesian) aren't representable as kglite's
@@ -463,6 +465,20 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
     }
 }
 
+/// Fold a Bolt duration's `seconds` and (possibly negative or oversized)
+/// `nanoseconds` into the engine's signed seconds plus 0..1e9 nanos.
+fn normalise_bolt_seconds(seconds: i64, nanoseconds: i64) -> Result<(i64, i32), BoltError> {
+    const NANOS: i128 = 1_000_000_000;
+    let total = i128::from(seconds) * NANOS + i128::from(nanoseconds);
+    let whole = i64::try_from(total.div_euclid(NANOS)).map_err(|_| {
+        BoltError::Protocol(format!(
+            "Bolt Duration seconds out of i64 range: {seconds}s + {nanoseconds}ns"
+        ))
+    })?;
+    // rem_euclid is below 1e9, so it fits an i32.
+    Ok((whole, total.rem_euclid(NANOS) as i32))
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -487,6 +503,55 @@ mod tests {
             rel_type: "R".into(),
             properties: kglite::datatypes::PropMap::new(),
         }
+    }
+
+    fn bolt_duration(seconds: i64, nanoseconds: i64) -> BoltValue {
+        BoltValue::Duration(BoltDuration {
+            months: 1,
+            days: 2,
+            seconds,
+            nanoseconds,
+        })
+    }
+
+    #[test]
+    fn duration_nanoseconds_cross_the_wire_both_ways() {
+        let fine = Value::Duration {
+            months: 1,
+            days: 2,
+            seconds: -2,
+            nanos: 500_000_000,
+        };
+        assert_eq!(to_bolt(&fine).unwrap(), bolt_duration(-2, 500_000_000));
+        assert_eq!(
+            to_bolt_owned(fine.clone()).unwrap(),
+            bolt_duration(-2, 500_000_000)
+        );
+        assert_eq!(from_bolt(&bolt_duration(-2, 500_000_000)).unwrap(), fine);
+    }
+
+    #[test]
+    fn inbound_duration_nanoseconds_are_normalised() {
+        // (seconds, nanoseconds) -> (seconds, 0..1e9 nanos): negative, oversized
+        // and mixed-sign pairs all describe the same total.
+        for ((seconds, nanoseconds), expected) in [
+            ((0, -1), (-1, 999_999_999)),
+            ((1, -500_000_000), (0, 500_000_000)),
+            ((-1, -500_000_000), (-2, 500_000_000)),
+            ((0, 2_500_000_000), (2, 500_000_000)),
+            ((3, 7), (3, 7)),
+        ] {
+            let Ok(Value::Duration {
+                seconds: s,
+                nanos: n,
+                ..
+            }) = from_bolt(&bolt_duration(seconds, nanoseconds))
+            else {
+                panic!("({seconds}, {nanoseconds}) must bind");
+            };
+            assert_eq!((s, n), expected, "({seconds}, {nanoseconds})");
+        }
+        assert!(from_bolt(&bolt_duration(i64::MAX, 1_000_000_000)).is_err());
     }
 
     #[test]

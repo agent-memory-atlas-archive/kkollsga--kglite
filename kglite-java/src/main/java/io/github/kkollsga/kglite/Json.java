@@ -80,17 +80,10 @@ final class Json {
                 writeNumber(out, p.longitude());
                 out.append("}}");
             }
-            case KgliteDuration d -> writeDuration(out, d.months(), d.days(), d.seconds());
+            case KgliteDuration d -> writeDuration(out, d.months(), d.days(), d.seconds(), d.nanos());
             case java.time.Period p -> writeDuration(
-                    out, Math.toIntExact(p.toTotalMonths()), p.getDays(), 0L);
-            case java.time.Duration d -> {
-                if (d.getNano() != 0) {
-                    throw new KgliteException(
-                            "a java.time.Duration with a sub-second part cannot be bound: "
-                                    + "the engine stores whole seconds");
-                }
-                writeDuration(out, 0, 0, d.getSeconds());
-            }
+                    out, Math.toIntExact(p.toTotalMonths()), p.getDays(), 0L, 0);
+            case java.time.Duration d -> writeDuration(out, 0, 0, d.getSeconds(), d.getNano());
             case LocalDate d -> writeTagged(out, "$date", DateTimeFormatter.ISO_LOCAL_DATE.format(d));
             case LocalDateTime d ->
                     writeTagged(out, "$datetime", DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(d));
@@ -121,10 +114,15 @@ final class Json {
         out.append('}');
     }
 
-    private static void writeDuration(StringBuilder out, int months, int days, long seconds) {
+    private static void writeDuration(
+            StringBuilder out, int months, int days, long seconds, int nanos) {
         out.append("{\"$duration\":{\"months\":").append(months);
         out.append(",\"days\":").append(days);
-        out.append(",\"seconds\":").append(seconds).append("}}");
+        out.append(",\"seconds\":").append(seconds);
+        if (nanos != 0) {
+            out.append(",\"nanoseconds\":").append(nanos);
+        }
+        out.append("}}");
     }
 
     /** Write a JSON array of {@code length} elements, each emitted by {@code element}. */
@@ -403,7 +401,8 @@ final class Json {
                         return new KgliteDuration(
                                 Math.toIntExact(whole(fields.get("months"))),
                                 Math.toIntExact(whole(fields.get("days"))),
-                                whole(fields.get("seconds")));
+                                whole(fields.get("seconds")),
+                                Math.toIntExact(whole(fields.get("nanoseconds"))));
                     }
                     return null;
                 }

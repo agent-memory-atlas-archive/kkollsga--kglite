@@ -40,7 +40,15 @@ before upgrading.
   - `toString(d)` prints the fraction (`PT0.000000001S`, `PT-0.5S`). `d.nanoseconds`, `d.milliseconds` and `d.microseconds` count the whole duration; `d.nanosecondsOfSecond` and its two siblings give the sub-second part.
   - `duration.between` and `duration.inSeconds` keep the sub-second part. `inDays` and `inMonths` stay whole.
   - Two durations that differ only in nanoseconds are not equal. A duration with nanoseconds JSON-encodes with an extra `nanoseconds` key; whole-second durations render as before.
-  - Python, Node, Java, Bolt and the C ABI still convert a duration to whole seconds. A sub-second duration read through them loses its nanoseconds until the binding work lands.
+- **Every binding and export keeps a duration's nanoseconds.**
+  - Python reads a sub-second duration as a dict with an extra `nanoseconds` key (0 to 999999999, added to the signed `seconds`). Whole-second durations keep the three-key dict, so existing `==` checks hold.
+  - `datetime.timedelta` and `pd.Timedelta` parameters, `timedelta64` columns and `from_records` values keep their microseconds and nanoseconds. Before, a sub-second cell was stored as NULL (columns) or refused (parameters, records).
+  - Node: `Duration` gains a read-only `nanoseconds` and an optional fourth constructor argument. `toJSON()` adds `nanoseconds` only when non-zero.
+  - Java: `KgliteDuration` gains a `nanos` component; the three-argument constructor stays. A `java.time.Duration` with a nano part now binds instead of throwing.
+  - Bolt carries the nanoseconds both ways. An inbound `Duration` with negative or oversized `nanoseconds` is normalised to seconds plus 0 to 999999999 nanoseconds.
+  - The C ABI's `$duration` tag carries `nanoseconds` when non-zero. `kglite.h` is unchanged.
+  - Blueprint `duration` cells and `from_records` `$duration` accept an optional `nanoseconds`.
+  - RDF export writes a sub-second duration of uniform sign as an `xsd:duration` with a fractional seconds part, and a mixed-sign one as `kg:duration` with a fourth `nanoseconds` field. RDF import reads both.
 - **Rust: `Value::Duration` gains `nanos: i32`** (`0..1_000_000_000`; the sign rides on `seconds`). `BorrowedValue` gains a matching `Duration` variant.
 - **`kglite.open_session(path, durable=...)` opens a durable, thread-safe `Session`.**
   - Use it for a threaded server: any number of threads call `execute()` and `begin()` on one session, with no borrow error.

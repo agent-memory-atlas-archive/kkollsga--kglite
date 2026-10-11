@@ -83,6 +83,14 @@ fn cases() -> Vec<(&'static str, serde_json::Value)> {
             json!({"$duration": {"months": 1, "days": 2, "seconds": 3}}),
         ),
         (
+            "duration({days: 1, nanoseconds: 7})",
+            json!({"$duration": {"months": 0, "days": 1, "seconds": 0, "nanoseconds": 7}}),
+        ),
+        (
+            "duration({seconds: -1, nanoseconds: 999999999})",
+            json!({"$duration": {"months": 0, "days": 0, "seconds": -1, "nanoseconds": 999999999}}),
+        ),
+        (
             "point({latitude: 60.5, longitude: -5.25})",
             json!({"$point": {"lat": 60.5, "lon": -5.25}}),
         ),

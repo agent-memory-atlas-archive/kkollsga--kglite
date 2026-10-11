@@ -211,6 +211,14 @@ class KnowledgeGraphTest {
             assertEquals(new KgliteDuration(0, 2, 0L), scalars.get("dur"));
             assertEquals(new Point(1.5, 2.5), scalars.get("pt"));
 
+            // A sub-second duration keeps its nanoseconds in both directions.
+            Map<String, Object> fine = graph.query(
+                    "RETURN duration({milliseconds: -1500}) AS dur, $v AS back, $w AS wback",
+                    Map.of("v", java.time.Duration.ofMillis(-1500), "w", new KgliteDuration(0, 0, 1, 7))).get(0);
+            assertEquals(new KgliteDuration(0, 0, -2, 500_000_000), fine.get("dur"));
+            assertEquals(fine.get("dur"), fine.get("back"), "java.time.Duration binds with its nanos");
+            assertEquals(new KgliteDuration(0, 0, 1, 7), fine.get("wback"));
+
             // Every typed cell, read back and bound again, is the value it came from.
             for (String column : List.of("d", "t", "dur", "pt")) {
                 assertEquals(scalars.get(column),

@@ -285,9 +285,9 @@ fn object_cells<T>(
 type DurationCell = (i32, i32, i64, i32);
 
 /// A duration column's cells: each `timedelta` (or `pd.Timedelta`) as
-/// `(months, days, seconds)`. A cell with a sub-second part, or one that is not
-/// a timedelta, is stored as null and reported under `on_invalid` — a duration
-/// holds whole seconds, and truncating would change the value unannounced.
+/// `(months, days, seconds, nanos)`, sub-second part exact. A cell that is not
+/// a timedelta, or whose days overflow, is stored as null and reported under
+/// `on_invalid`.
 fn duration_cells(
     py_list: &Bound<'_, PyList>,
     null_mask: &[bool],
@@ -327,9 +327,8 @@ fn duration_cells(
             py_list.py(),
             on_invalid,
             format!(
-                "Column '{col_name}': {rejected} value(s) could not be stored as a duration of \
-                 whole seconds (row {row} (0-based) holds {shown}) and are stored as NULL. Round the \
-                 column to whole seconds (e.g. .dt.round('s')) to keep them."
+                "Column '{col_name}': {rejected} value(s) could not be stored as a duration \
+                 (row {row} (0-based) holds {shown}) and are stored as NULL."
             ),
         )?;
     }

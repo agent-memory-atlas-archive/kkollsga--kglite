@@ -494,13 +494,12 @@ def test_bracket_subscript_into_map_works():
 # ── from_records loud-error contract for Python values with no graph type ───
 @pytest.mark.parametrize(
     "val",
-    [datetime.time(3, 4, 5), datetime.timedelta(seconds=1.5)],
-    ids=["time", "sub_second_timedelta"],
+    [datetime.time(3, 4, 5)],
+    ids=["time"],
 )
 def test_from_records_rejects_untyped_python_values_loudly(val):
-    """A time of day, or a timedelta with a sub-second part, has no graph
-    value: from_records fails loudly rather than storing text or truncating.
-    Dates, datetimes and whole-second timedeltas load typed (the matrix)."""
+    """A time of day has no graph value: from_records fails loudly rather than
+    storing text. Dates, datetimes and timedeltas load typed (the matrix)."""
     spec = {"nodes": [{"type": "N", "id_field": "id", "records": [{"id": 1, "p": val}]}]}
     with pytest.raises(TypeError):
         kglite.from_records(spec)

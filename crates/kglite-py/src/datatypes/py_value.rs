@@ -674,8 +674,9 @@ pub(crate) fn datetime_to_utc_naive(
 /// A `datetime.timedelta` (or `pd.Timedelta`) as a `Value::Duration`. Its
 /// whole seconds split into days and seconds that keep the delta's sign, the
 /// components `duration({days, seconds})` builds, so `timedelta(hours=-1)`
-/// equals `duration({hours: -1})`. A duration holds whole seconds; a delta
-/// with a sub-second part is refused rather than truncated.
+/// equals `duration({hours: -1})`. The microseconds (plus `pd.Timedelta`'s
+/// `nanoseconds`) are the non-negative nanosecond part added on top, as
+/// `timedelta` itself normalises them.
 pub(crate) fn delta_to_duration(delta: &Bound<'_, PyDelta>) -> Result<Value, String> {
     // The limited API has no timedelta accessors; the attributes are public.
     let field = |name: &str| -> i64 {
@@ -684,21 +685,14 @@ pub(crate) fn delta_to_duration(delta: &Bound<'_, PyDelta>) -> Result<Value, Str
             .and_then(|value| value.extract())
             .unwrap_or(0)
     };
-    if field("microseconds") != 0 || field("nanoseconds") != 0 {
-        return Err(format!(
-            "{} has a sub-second part; a duration holds whole seconds",
-            delta
-                .repr()
-                .map_or_else(|_| "timedelta".to_string(), |r| r.to_string())
-        ));
-    }
     let total = field("days") * 86_400 + field("seconds");
     let days = i32::try_from(total / 86_400).map_err(|_| "timedelta days exceed the i32 range")?;
+    let nanos = field("microseconds") * 1_000 + field("nanoseconds");
     Ok(Value::Duration {
         months: 0,
         days,
         seconds: total % 86_400,
-        nanos: 0,
+        nanos: i32::try_from(nanos).map_err(|_| "timedelta sub-second part out of range")?,
     })
 }
 

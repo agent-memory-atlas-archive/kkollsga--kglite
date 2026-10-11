@@ -113,7 +113,9 @@ The `kg:` namespace is `https://kglite.readthedocs.io/ns/kg#`. It defines:
 - the datatype `kg:json`: a list or map as JSON. A date, timestamp, duration, point
   or non-finite float is a one-key tagged object such as `{"$date": "2020-01-01"}`.
 - the datatype `kg:duration`: a duration whose months, days and seconds disagree in
-  sign, spelled `months,days,seconds`.
+  sign, spelled `months,days,seconds`, with a trailing `,nanoseconds` when non-zero.
+  A sub-second duration of uniform sign is an `xsd:duration` with a fractional
+  seconds part instead.
 
 Nodes that share an id, such as the two versions of Ada above, are told apart by a
 `;<node index>` suffix on all but one of them. No prefixes are declared.

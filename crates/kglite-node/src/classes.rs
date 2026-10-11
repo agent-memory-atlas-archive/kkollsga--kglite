@@ -170,6 +170,9 @@ pub struct Duration {
     pub days: i32,
     #[napi(readonly)]
     pub seconds: i64,
+    /// Sub-second part, 0 to 999999999, added to the (signed) `seconds`.
+    #[napi(readonly)]
+    pub nanoseconds: i32,
 }
 
 #[napi]
@@ -179,12 +182,18 @@ impl Duration {
         months: Option<i32>,
         days: Option<i32>,
         seconds: Option<i64>,
+        nanoseconds: Option<i32>,
     ) -> napi::Result<Self, &'static str> {
         contain(|| {
+            let nanoseconds = nanoseconds.unwrap_or(0);
+            if !(0..1_000_000_000).contains(&nanoseconds) {
+                return Err(bad("Duration nanoseconds must be in 0..999999999".into()));
+            }
             Ok(Self {
                 months: months.unwrap_or(0),
                 days: days.unwrap_or(0),
                 seconds: seconds.unwrap_or(0),
+                nanoseconds,
             })
         })
     }
@@ -192,12 +201,19 @@ impl Duration {
     /// ISO-8601 (`P1Y2M3DT4S`); zero parts are omitted and a zero duration is `PT0S`.
     #[napi(js_name = "toString")]
     pub fn to_iso(&self) -> napi::Result<String, &'static str> {
-        contain(|| Ok(iso_duration(self.months, self.days, self.seconds)))
+        contain(|| {
+            Ok(iso_duration(
+                self.months,
+                self.days,
+                self.seconds,
+                self.nanoseconds,
+            ))
+        })
     }
 
     #[napi(
         js_name = "toJSON",
-        ts_return_type = "{ months: number; days: number; seconds: number }"
+        ts_return_type = "{ months: number; days: number; seconds: number; nanoseconds?: number }"
     )]
     pub fn to_json<'e>(&self, env: &'e Env) -> napi::Result<Object<'e>, &'static str> {
         contain(|| {
@@ -208,12 +224,17 @@ impl Duration {
             set(&mut o, "months", f64::from(self.months))?;
             set(&mut o, "days", f64::from(self.days))?;
             set(&mut o, "seconds", self.seconds as f64)?;
+            if self.nanoseconds != 0 {
+                set(&mut o, "nanoseconds", f64::from(self.nanoseconds))?;
+            }
             Ok(o)
         })
     }
 }
 
-pub fn iso_duration(months: i32, days: i32, seconds: i64) -> String {
+/// ISO text for a duration. The seconds field is `seconds + nanoseconds / 1e9`,
+/// so a negative total with a fraction prints as one signed decimal.
+pub fn iso_duration(months: i32, days: i32, seconds: i64, nanoseconds: i32) -> String {
     let (years, months) = (months / 12, months % 12);
     let mut out = String::from("P");
     for (n, unit) in [
@@ -225,7 +246,15 @@ pub fn iso_duration(months: i32, days: i32, seconds: i64) -> String {
             out.push_str(&format!("{n}{unit}"));
         }
     }
-    if seconds != 0 || out == "P" {
+    if nanoseconds != 0 {
+        let (sign, whole, frac) = if seconds < 0 {
+            ("-", -(seconds + 1), 1_000_000_000 - nanoseconds)
+        } else {
+            ("", seconds, nanoseconds)
+        };
+        let frac = format!("{frac:09}");
+        out.push_str(&format!("T{sign}{whole}.{}S", frac.trim_end_matches('0')));
+    } else if seconds != 0 || out == "P" {
         out.push_str(&format!("T{seconds}S"));
     }
     out
@@ -300,10 +329,13 @@ mod tests {
 
     #[test]
     fn iso_duration_shapes() {
-        assert_eq!(iso_duration(0, 0, 0), "PT0S");
-        assert_eq!(iso_duration(14, 3, 4), "P1Y2M3DT4S");
-        assert_eq!(iso_duration(1, 0, 0), "P1M");
-        assert_eq!(iso_duration(-1, -2, -3), "P-1M-2DT-3S");
+        assert_eq!(iso_duration(0, 0, 0, 0), "PT0S");
+        assert_eq!(iso_duration(14, 3, 4, 0), "P1Y2M3DT4S");
+        assert_eq!(iso_duration(1, 0, 0, 0), "P1M");
+        assert_eq!(iso_duration(-1, -2, -3, 0), "P-1M-2DT-3S");
+        assert_eq!(iso_duration(0, 0, 1, 500_000_000), "PT1.5S");
+        assert_eq!(iso_duration(0, 0, -2, 500_000_000), "PT-1.5S");
+        assert_eq!(iso_duration(0, 1, 0, 1), "P1DT0.000000001S");
     }
 
     #[test]

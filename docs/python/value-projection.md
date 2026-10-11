@@ -23,7 +23,7 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | `DateTime(NaiveDate)` | calendar date | Struct `0x44` (Date) |
 | `Timestamp(NaiveDateTime)` | date + time-of-day, including fractional nanoseconds | local date-time structure |
 | `Point { lat, lon }` | 2D geographical point | Struct `0x58` (Point2D, srid=4326) |
-| `Duration { months, days, seconds }` | Neo4j-shape calendar duration | Struct `0x45` (Duration) |
+| `Duration { months, days, seconds, nanos }` | Neo4j-shape calendar duration | Struct `0x45` (Duration) |
 | **`NodeRef(u32)`** | **internal reference (see below)** | — never crosses the boundary |
 | **`Node(Box<NodeValue>)`** | materialised node `(id, labels, properties)` | Struct `0x4E` (Node) |
 | **`Relationship(Box<RelValue>)`** | materialised rel `(id, start, end, type, properties)` | Struct `0x52` (Relationship) |
@@ -360,7 +360,7 @@ Bolt PackStream analogue. For other targets:
   | `Path` | `{"nodes": [...], "relationships": [...]}` |
   | `DateTime` / `Timestamp` | ISO-8601 strings (`"2024-03-09"`, `"2024-03-09T14:30:05"`) |
   | `Point` | `{"latitude", "longitude"}` |
-  | `Duration` | `{"months", "days", "seconds"}` |
+  | `Duration` | `{"months", "days", "seconds"}`, plus `"nanoseconds"` when non-zero |
   | `UniqueId` | number |
   | raw `NodeRef` (before graph-aware output resolution) | number |
 

@@ -269,9 +269,8 @@ impl<'a> Emitter<'a> {
                 &self.xsd_date_time,
             ),
             Value::Point { lat, lon } => typed(format!("POINT({lon} {lat})"), &self.geo_wkt),
-            // A sub-second part always takes the lossless `kg:duration` form: the
-            // normalised sign split (negative seconds, positive nanos) has no
-            // single-sign `xsd:duration` spelling.
+            // A sub-second part is an `xsd:duration` fraction when the sign is
+            // uniform; the mixed-sign case takes the lossless `kg:duration` form.
             Value::Duration {
                 months,
                 days,
@@ -286,10 +285,13 @@ impl<'a> Emitter<'a> {
                 days,
                 seconds,
                 nanos,
-            } => typed(
-                format!("{months},{days},{seconds},{nanos}"),
-                &self.kg_duration,
-            ),
+            } => match duration_lexical_fine(*months, *days, *seconds, *nanos) {
+                Some(text) => typed(text, &self.xsd_duration),
+                None => typed(
+                    format!("{months},{days},{seconds},{nanos}"),
+                    &self.kg_duration,
+                ),
+            },
             Value::List(_) | Value::Map(_) => typed(to_json(value).to_string(), &self.kg_json),
             other => Literal::new_simple_literal(raw_string(other)),
         })
@@ -321,6 +323,33 @@ fn duration_lexical(months: i32, days: i32, seconds: i64) -> Option<String> {
     if seconds > 0 || text.len() == 1 + usize::from(negative) {
         text.push_str(&format!("T{seconds}S"));
     }
+    Some(text)
+}
+
+/// `xsd:duration` for a duration with a non-zero `nanos` (the sign rides on
+/// `seconds`, nanos is 1..1e9). A negative total spells `-(s + f)` as
+/// `(-seconds - 1)` whole seconds and `1e9 - nanos` fractional ones. `None`
+/// when months or days disagree in sign with the total.
+fn duration_lexical_fine(months: i32, days: i32, seconds: i64, nanos: i32) -> Option<String> {
+    let negative = seconds < 0;
+    if negative && (months > 0 || days > 0) || !negative && (months < 0 || days < 0) {
+        return None;
+    }
+    let (whole, frac) = if negative {
+        (
+            seconds.checked_neg()?.checked_sub(1)?,
+            1_000_000_000 - nanos,
+        )
+    } else {
+        (seconds, nanos)
+    };
+    let mut text = if months == 0 && days == 0 {
+        String::from(if negative { "-P" } else { "P" })
+    } else {
+        duration_lexical(months, days, 0)?
+    };
+    let frac = format!("{frac:09}");
+    text.push_str(&format!("T{whole}.{}S", frac.trim_end_matches('0')));
     Some(text)
 }
 

@@ -153,6 +153,17 @@ test('durations and points round-trip', async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(p)), { latitude: 59.91, longitude: 10.75 });
 });
 
+test('a duration keeps its nanoseconds both ways', async () => {
+  const d = await roundTrip(new Duration(0, 0, 1, 500));
+  assert.deepEqual([d.seconds, d.nanoseconds], [1, 500]);
+  assert.equal(String(d), 'PT1.0000005S');
+  assert.deepEqual(JSON.parse(JSON.stringify(d)), { months: 0, days: 0, seconds: 1, nanoseconds: 500 });
+  assert.equal(new Duration(1, 2, 3).nanoseconds, 0);
+  assert.throws(() => new Duration(0, 0, 0, 1_000_000_000), (e) => e.code === 'InvalidArgument');
+  const r = await graph.executeRead('RETURN duration({nanoseconds: 1}) AS u');
+  assert.equal(r.rows[0].u.nanoseconds, 1);
+});
+
 test('temporal values returned by Cypher functions are the same classes', async () => {
   const r = await graph.executeRead("RETURN date('2020-01-02') AS d, duration({months: 1, days: 5}) AS u");
   assert.ok(r.rows[0].d instanceof LocalDate);

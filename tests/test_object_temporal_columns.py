@@ -98,11 +98,13 @@ def test_homogeneous_int_and_float_objects_load_as_numbers():
     assert floats.cypher("MATCH (n:T) RETURN sum(n.d) AS s").scalar() == 4.0
 
 
-def test_whole_second_timedelta_objects_are_durations_sub_second_refused():
+def test_timedelta_objects_are_durations_with_their_sub_second_part():
     g = _graph([dt.timedelta(seconds=5), None])
     assert g.cypher("MATCH (n:T) RETURN n.d IS NOT NULL AS ok ORDER BY n.id").to_list()[0]["ok"] is True
-    with pytest.raises(kglite.ArgumentError):
-        _graph([dt.timedelta(milliseconds=5)])
+    fine = _graph([dt.timedelta(milliseconds=5)])
+    assert fine.cypher("MATCH (n:T) RETURN n.d AS d").to_list() == [
+        {"d": {"months": 0, "days": 0, "seconds": 0, "nanoseconds": 5_000_000}}
+    ]
 
 
 @pytest.mark.parametrize(

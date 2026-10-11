@@ -121,8 +121,9 @@ fn kg_duration_to_value(value: &str) -> Value {
 }
 
 /// Parse an `xsd:duration` (`-P1Y2M3DT4H5M6S`) to a [`Value::Duration`] of
-/// months, days and whole seconds. `None` for a malformed form, a fractional
-/// number, or a field that overflows, so the caller keeps the string.
+/// months, days, seconds and nanoseconds; the seconds field may carry up to
+/// nine fractional digits. `None` for a malformed form, a fraction anywhere
+/// else, or a field that overflows, so the caller keeps the string.
 fn parse_xsd_duration(value: &str) -> Option<Value> {
     let (negative, rest) = match value.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -137,17 +138,29 @@ fn parse_xsd_duration(value: &str) -> Option<Value> {
         return None;
     }
     // Sum `<digits><designator>` fields, each designator at most once.
-    fn fields(part: &str, allowed: &[char]) -> Option<Vec<(char, i64)>> {
-        let mut out: Vec<(char, i64)> = Vec::new();
+    fn fields(part: &str, allowed: &[char]) -> Option<Vec<(char, i64, i32)>> {
+        let mut out: Vec<(char, i64, i32)> = Vec::new();
         let mut digits = String::new();
         for ch in part.chars() {
-            if ch.is_ascii_digit() {
+            if ch.is_ascii_digit() || (ch == '.' && !digits.contains('.')) {
                 digits.push(ch);
             } else if allowed.contains(&ch) && !digits.is_empty() {
-                if out.iter().any(|(c, _)| *c == ch) {
+                if out.iter().any(|(c, _, _)| *c == ch) {
                     return None;
                 }
-                out.push((ch, digits.parse().ok()?));
+                let (whole, frac) = match digits.split_once('.') {
+                    Some((w, f)) if ch == 'S' && !w.is_empty() && !f.is_empty() && f.len() <= 9 => {
+                        (w, f)
+                    }
+                    Some(_) => return None,
+                    None => (digits.as_str(), ""),
+                };
+                let nanos: i32 = if frac.is_empty() {
+                    0
+                } else {
+                    format!("{frac:0<9}").parse().ok()?
+                };
+                out.push((ch, whole.parse().ok()?, nanos));
                 digits.clear();
             } else {
                 return None;
@@ -158,7 +171,8 @@ fn parse_xsd_duration(value: &str) -> Option<Value> {
     let mut months: i64 = 0;
     let mut days: i64 = 0;
     let mut seconds: i64 = 0;
-    for (ch, n) in fields(date_part, &['Y', 'M', 'D'])? {
+    let mut nanos: i32 = 0;
+    for (ch, n, _) in fields(date_part, &['Y', 'M', 'D'])? {
         match ch {
             'Y' => months = months.checked_add(n.checked_mul(12)?)?,
             'M' => months = months.checked_add(n)?,
@@ -169,21 +183,31 @@ fn parse_xsd_duration(value: &str) -> Option<Value> {
         if time.is_empty() {
             return None;
         }
-        for (ch, n) in fields(time, &['H', 'M', 'S'])? {
+        for (ch, n, frac) in fields(time, &['H', 'M', 'S'])? {
             let unit = match ch {
                 'H' => 3600,
                 'M' => 60,
                 _ => 1,
             };
+            if ch == 'S' {
+                nanos = frac;
+            }
             seconds = seconds.checked_add(n.checked_mul(unit)?)?;
         }
     }
     let sign = if negative { -1 } else { 1 };
+    // The sign lives on `seconds`; a negative duration with a fraction is
+    // `-(s + f)` = `(-s - 1)` whole seconds plus `1e9 - f` nanoseconds.
+    let (seconds, nanos) = if negative && nanos > 0 {
+        (-seconds.checked_add(1)?, 1_000_000_000 - nanos)
+    } else {
+        (seconds * sign, nanos)
+    };
     Some(Value::Duration {
         months: i32::try_from(months * sign).ok()?,
         days: i32::try_from(days * sign).ok()?,
-        seconds: seconds * sign,
-        nanos: 0,
+        seconds,
+        nanos,
     })
 }
 
@@ -452,8 +476,35 @@ mod tests {
                 nanos: 0
             }
         );
-        // Malformed or fractional forms keep their text.
-        for bad in ["P", "PT", "P1.5D", "1Y", "P1Y1Y"] {
+        assert_eq!(
+            dur("PT1.5S"),
+            Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: 1,
+                nanos: 500_000_000
+            }
+        );
+        assert_eq!(
+            dur("-PT1.5S"),
+            Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: -2,
+                nanos: 500_000_000
+            }
+        );
+        // Malformed forms and fractions outside the seconds field keep their text.
+        for bad in [
+            "P",
+            "PT",
+            "P1.5D",
+            "1Y",
+            "P1Y1Y",
+            "PT.5S",
+            "PT1.S",
+            "PT1.1234567891S",
+        ] {
             assert_eq!(dur(bad), Value::String(bad.to_string()), "{bad}");
         }
     }
