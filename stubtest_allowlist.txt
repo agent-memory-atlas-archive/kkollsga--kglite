@@ -7,6 +7,7 @@ kglite.ResultIter
 kglite.ResultView
 kglite.Session
 kglite.Transaction
+kglite.SessionTransaction
 kglite.okf.VaultReport
 kglite.okf.ExportReport
 
