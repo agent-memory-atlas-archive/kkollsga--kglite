@@ -6,6 +6,7 @@
   "feature_classifications": {
     "default": "profile-root",
     "fastembed": "public-api",
+    "iana-zones": "implementation-only",
     "okf": "public-api",
     "parallel-bz2": "implementation-only",
     "rdf": "public-api",
