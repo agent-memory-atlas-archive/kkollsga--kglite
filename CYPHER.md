@@ -1520,25 +1520,27 @@ covers declaring intervals and modelling history.
 | `date({year, month, day})` | Build a date from integers (openCypher's map form): `date({year: y, month: 1, day: 1})`. `month` and `day` default to 1; an impossible date, an unknown key or a non-integer component raises; a null component gives null |
 | `date({year, week, dayOfWeek})`, `date({year, ordinalDay})`, `date({year, quarter, dayOfQuarter})` | The other calendar spellings. `dayOfWeek` and `dayOfQuarter` default to 1; a week, ordinal day or quarter day outside its year raises |
 | `date({date: d, ...})` | Copy a date, datetime or datetime text and override components: `date({date: d, day: 28})`. A `week` override keeps `d`'s `dayOfWeek` and defaults `year` to `d`'s week-year; an `ordinalDay` or `quarter` override keeps `d`'s year and, for a quarter, its `dayOfQuarter` |
-| `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond})` | Build a zoneless datetime the same way, with the same week, ordinal and quarter spellings and the `date`, `time` and `datetime` bases; missing time fields are 0. A `timezone` key is refused |
-| `datetime(str)` | Parse an ISO-8601 stamp to a Timestamp (date + time). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and a zoned `…Z` / `…±HH:MM`. **A zone is normalised to UTC**, since `Value::Timestamp` carries no zone. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). An unparseable string raises; a null argument gives null |
-| `datetime()` | Now in naive UTC (no-arg form) — the clock every stored datetime, validity instant and `auto_timestamp` uses |
-| `localdatetime()` | Local wall-clock datetime; 1-arg form parses/normalises a string (raises on bad input). Unlike `datetime(str)` it keeps the wall-clock reading of a zoned input and drops only the zone label. Takes the ISO week and ordinal date spellings (`'2015-W30-2T214032.142'`, `'2015-202T21:40:32'`, `'2015T214032'`) and every `datetime({...})` map form, including `{date: d, time: t, ...}` and `{datetime: dt, ...}` |
+| `datetime({year, month, day, hour, minute, second, millisecond, microsecond, nanosecond, timezone})` | Build a `ZonedDateTime` the same way, with the same week, ordinal and quarter spellings and the `date`, `time` and `datetime` bases (a `datetime` or `time` base keeps its offset); missing time fields are 0. `timezone` is a numeric offset (`'+01:00'`, `'Z'`; within ±18:00); without it the offset is the base's, else UTC. A named zone is refused |
+| `datetime(str)` | Parse an ISO-8601 stamp to a `ZonedDateTime` (an instant plus the offset it was written in). Accepts `YYYY-MM-DD`, `…THH:MM`, `…THH:MM:SS[.fff]`, and `Z` / `±HH` / `±HHMM` / `±HH:MM` / `±HH:MM:SS` offsets; the week and ordinal date spellings work too. **No offset reads as UTC.** A named zone (`[Europe/Oslo]`) is refused. Sub-second digits are kept and compare: `datetime('…42.317')` is later than `datetime('…42')` (a Python `datetime` result carries them to the microsecond). An unparseable string raises; a null argument gives null |
+| `datetime(local)`, `datetime(date)`, `datetime(zoned)` | A local datetime or a date attaches UTC; a zoned value is returned as it is |
+| `datetime()` | Now at offset `Z` (no-arg form) — the clock every stored datetime, validity instant and `auto_timestamp` uses |
+| `localdatetime()` | Local wall-clock datetime (a `Timestamp`, no offset); 1-arg form parses/normalises a string (raises on bad input). Unlike `datetime(str)` it keeps the wall-clock reading of a zoned input and drops only the offset. Takes the ISO week and ordinal date spellings (`'2015-W30-2T214032.142'`, `'2015-202T21:40:32'`, `'2015T214032'`) and every `datetime({...})` map form, including `{date: d, time: t, ...}` and `{datetime: dt, ...}` |
 | `time()` | A `Time` value: the UTC clock (no-arg form), with offset `Z`. `time(str)` reads `HH`, `HHMM`, `HHMMSS[.f]`, `HH:MM` or `HH:MM:SS[.f]` followed by `Z`, `±HH`, `±HHMM` or `±HH:MM` (no offset means UTC). `time({hour, minute, second, millisecond, microsecond, nanosecond, timezone, time})` builds one; `timezone` is a numeric offset, and a `time` base keeps its own offset. A named zone (`[Europe/Oslo]`, `timezone: 'Europe/Oslo'`) is refused. Within ±18:00; bad input raises; null gives null |
 | `localtime()` | A `LocalTime` value: the local wall clock (no-arg form). `localtime(str)` reads the same clock spellings as `time(str)` and drops any offset; a map (`localtime({hour: 12, minute: 31, millisecond: 645})`, `{time: t, second: 42}`), a `Time` or a datetime (its time of day) also work; bad input raises. `toString` gives the shortest ISO text: `HH:MM`, `HH:MM:SS` when the seconds are not zero, and a fraction in groups of three digits (`12:31:14.645`) |
 | `n.d.year`, `n.d.month`, `n.d.day` | Extract component from a DateTime property (chained accessor — works in `RETURN`, `WHERE`, `ORDER BY`) |
 | `n.d.dayOfWeek`, `n.d.dayOfYear`, `n.d.epochSeconds` | Other temporal field accessors |
 | `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay`, `d.dayOfQuarter` | Calendar accessors of a date or datetime (`weekDay` is `dayOfWeek`; `week` and `weekYear` are the ISO week and week-year) |
 | `t.hour`, `t.minute`, `t.second`, `t.millisecond`, `t.microsecond`, `t.nanosecond`, `t.epochMillis` | Clock accessors of a datetime; an unknown accessor on a datetime is null |
+| `z.offset`, `z.offsetSeconds`, `z.offsetMinutes`, `z.timezone`, `z.epochSeconds`, `z.epochMillis` | Extra accessors of a `ZonedDateTime`. The date and clock accessors read the wall clock at the offset; `epochSeconds` and `epochMillis` read the instant; `offset` and `timezone` are the offset text (`+01:00`, `Z`). A `Timestamp` has no offset accessors (they are null) |
 | `t.hour` … `t.nanosecond`, `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone` | Accessors of a `LocalTime` or `Time`. `offset` and `timezone` are the offset text (`+01:00`, `Z`); the offset accessors are null on a `LocalTime`; any other accessor is null |
 | `dur.quarters`, `dur.weeks`, `dur.quartersOfYear`, `dur.monthsOfQuarter`, `dur.monthsOfYear`, `dur.daysOfWeek`, `dur.minutesOfHour`, `dur.secondsOfMinute` | Duration accessors beside `years`, `months`, `days`, `hours`, `minutes`, `seconds`; `milliseconds`, `microseconds` and `nanoseconds` count the whole duration in that unit, and `millisecondsOfSecond`, `microsecondsOfSecond` and `nanosecondsOfSecond` give the sub-second part |
 | `duration({days: N, months: M, ...})` | Build a Duration value (see [Duration semantics](#duration-semantics) below) |
-| `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and the remaining seconds and nanoseconds are returned as a Duration. Between two times of day it is seconds and nanoseconds only: two `Time` values differ at their UTC readings, a `LocalTime` against a `Time` at their clock readings. A time against a date or datetime raises |
+| `duration.between(d1, d2)` | Difference between two date, timestamp or zoned-datetime values; whole days and the remaining seconds and nanoseconds are returned as a Duration. Two zoned values differ by their instants; against a date or local datetime the zoned one is read at its own wall clock. Between two times of day it is seconds and nanoseconds only: two `Time` values differ at their UTC readings, a `LocalTime` against a `Time` at their clock readings. A time against a date or datetime raises |
 | `duration.inMonths(d1, d2)`, `duration.inDays(d1, d2)`, `duration.inSeconds(d1, d2)` | The whole months, days or seconds from `d1` to `d2` (dates or datetimes), as a duration holding only that unit; negative when `d2` is earlier |
 | `add_days(date, n)` / `add_months(date, n)` / `add_years(date, n)` | Checked calendar shift; returns NULL when the requested date is outside the representable range |
 | `date_truncate(date, unit)` | Start of `year`, `month`, `week`, or `day` |
 | `date.truncate(unit, t [, overrides])` | Round a date or datetime down to the start of `millennium`, `century`, `decade`, `year`, `weekYear`, `quarter`, `month`, `week` or `day`, then apply the override map as the constructor does: `date.truncate('month', d, {day: 5})`, `date.truncate('week', d, {dayOfWeek: 2})` |
-| `localdatetime.truncate(unit, t [, overrides])`, `datetime.truncate(...)` | The same for a datetime; the units also include `hour`, `minute`, `second`, `millisecond` and `microsecond`: `localdatetime.truncate('hour', t, {nanosecond: 2})`. `datetime.truncate` is zoneless like `datetime()` |
+| `localdatetime.truncate(unit, t [, overrides])`, `datetime.truncate(...)` | The same for a datetime; the units also include `hour`, `minute`, `second`, `millisecond` and `microsecond`: `localdatetime.truncate('hour', t, {nanosecond: 2})`. `datetime.truncate` truncates the wall clock of a zoned value and keeps its offset (a `timezone` override moves it; a local value is read at UTC) |
 | `localtime.truncate(unit, t [, overrides])`, `time.truncate(...)` | A `LocalTime`, a `Time` or the time of a datetime, rounded down to `day` (midnight), `hour`, `minute`, `second`, `millisecond` or `microsecond`. `time.truncate` keeps the offset of a `Time` (UTC for anything else); an override map can set `timezone` |
 | `time ± duration({...})` | Move a `LocalTime` or `Time` by the duration's seconds and nanoseconds, wrapping modulo 24 hours. Months and days are ignored, since a time of day has no date to carry them into; the offset is kept |
 | `date + duration({days: N})` | Add a duration to a date |
@@ -1619,13 +1621,26 @@ on two integers raise `CypherExecutionError` when the result leaves the signed
 no wire format kglite ships over can carry, so promoting it would move the
 silence one layer out rather than remove it.
 
-**`datetime()` and `localdatetime()` return timestamp values.**
+**`datetime()` returns a zoned datetime; `localdatetime()` a local one.**
 
 - With no argument, `datetime()` (like `date()` and `time()`) reads the clock in
-  UTC. `localdatetime()` (like `localtime()`) reads it in the process's local
-  zone.
-- An offset-bearing `datetime(str)` is normalized to naive UTC.
-  `localdatetime(str)` keeps the local wall-clock reading and drops the zone.
+  UTC, at offset `Z`. `localdatetime()` (like `localtime()`) reads it in the
+  process's local zone, with no offset.
+- `datetime(str)` keeps the offset it was written in (no offset means UTC).
+  `localdatetime(str)` keeps the local wall-clock reading and drops the offset.
+- **Zoned equality, order and hashing use the instant.**
+  `datetime('2024-03-15T10:30+02:00') = datetime('2024-03-15T08:30Z')` is true.
+  `DISTINCT` and grouping merge such values and keep the first offset; read
+  `.offset` where the offset itself matters.
+- **A local datetime is read as UTC where it meets a zoned one**, and a date is
+  its midnight UTC. `WHERE n.created_at > datetime()`, `datetime() - n.created_at`
+  and `FOR VALID_TIME AS OF datetime()` therefore keep answering against stored
+  local stamps, which the engine has always written as UTC instants. This is the
+  one place KGLite answers where openCypher answers null.
+- `datetime ± duration` moves months and days on the wall clock and then seconds
+  and nanoseconds on the instant. A zoned value is stored in a mixed column (not
+  the dense timestamp column), so write bulk timestamp columns with
+  `localdatetime()`.
 - `localtime()` returns a `LocalTime` and `time()` a `Time`. Both were `HH:MM:SS`
   strings before 0.20.0; `toString()` gives the text.
 - Times of day compare with their own kind. Two `Time` values compare at their
@@ -4720,14 +4735,14 @@ counterpart:
 | `LOCAL DATETIME` | a date *and* wall-clock time, with no timezone |
 | `DURATION` | a duration value |
 | `POINT` | a point value |
+| `LOCAL TIME` | a time of day with no offset |
+| `ZONED TIME`, `TIME` | a time of day with an offset |
+| `ZONED DATETIME`, `DATETIME` | an instant with an offset (what `datetime()` returns); a `LOCAL DATETIME` does not satisfy it |
 
 Anything else is **rejected by name**, and the error lists the names that do
-work. That covers `LIST<...>`, unions, `ZONED DATETIME` / `LOCAL TIME` /
-`ZONED TIME`, and decorated forms like `STRING NOT NULL`. This is deliberate:
-KGLite has no timezone-aware or time-of-day-only value, so accepting
-`ZONED DATETIME` would promise a type it cannot represent, and a constraint that
-enforces something other than what was written is worse than one that was
-refused. For those shapes use `define_schema()` + `validate_schema()`, or
+work. That covers `LIST<...>`, `MAP`, unions, and decorated forms like
+`STRING NOT NULL`. This is deliberate: a constraint that enforces something
+other than what was written is worse than one that was refused. For those shapes use `define_schema()` + `validate_schema()`, or
 `lock_schema()`.
 
 **A type constraint is not an existence constraint.** As in Neo4j, `null` and an

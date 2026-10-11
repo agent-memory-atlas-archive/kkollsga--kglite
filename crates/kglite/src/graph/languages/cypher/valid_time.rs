@@ -743,7 +743,7 @@ pub(crate) fn valid_counts(
 /// Why [`prepend_valid_time`] or a valid-time view refused a query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrependError {
-    /// The instant is not a date, a datetime or an ISO date/datetime string,
+    /// The instant is not a date, a (local or zoned) datetime or an ISO date/datetime string,
     /// or it is one a `FOR VALID_TIME AS OF` literal cannot spell.
     BadInstant(String),
     /// The query already carries a `FOR … AS OF` context and `valid_at=`
@@ -790,6 +790,7 @@ pub(crate) fn instant_literal(instant: &Value) -> Result<String, PrependError> {
     let year = match instant {
         Value::DateTime(date) => Some(date.year()),
         Value::Timestamp(ts) => Some(ts.year()),
+        Value::ZonedDateTime { utc, .. } => Some(utc.year()),
         _ => None,
     };
     if let Some(year) = year.filter(|year| *year < 0) {
@@ -803,6 +804,13 @@ pub(crate) fn instant_literal(instant: &Value) -> Result<String, PrependError> {
         (Value::Timestamp(ts), _) => {
             Ok(format!("datetime('{}')", ts.format("%Y-%m-%dT%H:%M:%S%.f")))
         }
+        // The UTC reading, which a text without an offset names: `FOR … AS OF`
+        // reads the point on the UTC timeline, so the offset the value was
+        // written in does not travel (and a wide year stays spellable).
+        (Value::ZonedDateTime { utc, .. }, _) => Ok(format!(
+            "datetime('{}')",
+            utc.format("%Y-%m-%dT%H:%M:%S%.f")
+        )),
         (Value::String(text), Ok(eval::Instant::Date(_))) => Ok(format!("date('{text}')")),
         (Value::String(text), Ok(eval::Instant::Timestamp(_))) => Ok(format!("datetime('{text}')")),
         (_, Err(err)) => Err(PrependError::BadInstant(format!("valid_at: {err}"))),

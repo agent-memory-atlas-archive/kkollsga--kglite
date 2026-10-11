@@ -217,47 +217,14 @@ impl CypherExecutor<'_> {
             }
             Value::DateTime(_) => Ok(val),
             Value::Timestamp(t) => Ok(Value::DateTime(t.date())),
+            // The calendar date on the wall clock the value was written in.
+            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::DateTime(
+                crate::datatypes::zoned_datetime::wall_clock(utc, offset_secs).date(),
+            )),
             Value::Map(map) => temporal_from_map(MapTarget::Date, &map),
             Value::Null => Ok(Value::Null),
             _ => Err(format!(
                 "date() argument must be a string, a date, a datetime or a map, got {:?}",
-                val
-            )),
-        }
-    }
-
-    /// `datetime()`, `datetime(string | map | date | datetime)`.
-    fn eval_datetime(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
-        // Now in naive UTC, as every stored datetime, validity instant and
-        // `auto_timestamp` is; offset-bearing input below is normalised to UTC
-        // too. Both retain fractions. `localdatetime()` is the local clock.
-        if args.is_empty() {
-            return Ok(Value::Timestamp(chrono::Utc::now().naive_utc()));
-        }
-        if args.len() != 1 {
-            return Err(
-                "datetime() requires 0 or 1 argument: datetime() or datetime('2024-03-15T10:30:00')".into(),
-            );
-        }
-        let val = self.evaluate_expression(&args[0], row)?;
-        match val {
-            Value::String(s) => {
-                // Full ISO datetime (zoned or not), else a bare date at
-                // midnight. A zone is normalised to UTC because
-                // `Value::Timestamp` has no zone field to carry it —
-                // the offset is applied, never discarded.
-                parse_iso_datetime(&s)
-                    .map(|parsed| Value::Timestamp(parsed.utc()))
-                    .ok_or_else(|| {
-                        format!("datetime(): cannot parse '{s}' as an ISO-8601 datetime")
-                    })
-            }
-            Value::Timestamp(_) => Ok(val),
-            Value::DateTime(d) => Ok(Value::Timestamp(d.and_hms_opt(0, 0, 0).unwrap_or_default())),
-            Value::Map(map) => temporal_from_map(MapTarget::DateTime, &map),
-            Value::Null => Ok(Value::Null),
-            _ => Err(format!(
-                "datetime() argument must be a string or a map, got {:?}",
                 val
             )),
         }
@@ -269,6 +236,13 @@ impl CypherExecutor<'_> {
 fn duration_between_values(a: &Value, b: &Value) -> Result<Value, String> {
     if let Some(delta) = super::temporal_time::time_between(a, b) {
         return delta;
+    }
+    // Two instants differ by the time between them. With a local side the zoned
+    // one is read at its own wall clock (its offset is dropped), which
+    // `coerce_naive_datetime` does.
+    if let (Value::ZonedDateTime { utc: start, .. }, Value::ZonedDateTime { utc: end, .. }) = (a, b)
+    {
+        return duration_between(*start, *end);
     }
     match (coerce_naive_datetime(a), coerce_naive_datetime(b)) {
         (Some(start), Some(end)) => duration_between(start, end),

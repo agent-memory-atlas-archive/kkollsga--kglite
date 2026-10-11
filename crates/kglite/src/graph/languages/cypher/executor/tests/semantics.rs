@@ -128,34 +128,50 @@ fn timestamp(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> Value {
     )
 }
 
+fn zoned_value(utc: chrono::NaiveDateTime) -> Value {
+    Value::ZonedDateTime {
+        utc,
+        offset_secs: 0,
+    }
+}
+
+fn zoned(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> Value {
+    zoned_value(
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(hh, mm, ss)
+            .unwrap(),
+    )
+}
+
 #[test]
-fn datetime_preserves_time_and_normalises_the_zone_to_utc() {
+fn datetime_preserves_time_and_names_the_instant() {
     let graph = DirGraph::new();
     let cases: &[(&str, Value)] = &[
         // Zone-less: unchanged, and the case that always worked.
         (
             "RETURN datetime('2024-01-15T10:30:00') AS d",
-            timestamp(2024, 1, 15, 10, 30, 0),
+            zoned(2024, 1, 15, 10, 30, 0),
         ),
         // `Z` is UTC — the reading is already UTC.
         (
             "RETURN datetime('2024-01-15T10:30:00Z') AS d",
-            timestamp(2024, 1, 15, 10, 30, 0),
+            zoned(2024, 1, 15, 10, 30, 0),
         ),
         // A positive offset is *applied*, not dropped: 10:30+02:00 is 08:30 UTC.
         (
             "RETURN datetime('2024-01-15T10:30:00+02:00') AS d",
-            timestamp(2024, 1, 15, 8, 30, 0),
+            zoned(2024, 1, 15, 8, 30, 0),
         ),
         // A negative offset likewise, across the date boundary.
         (
             "RETURN datetime('2024-01-15T01:30:00-05:00') AS d",
-            timestamp(2024, 1, 15, 6, 30, 0),
+            zoned(2024, 1, 15, 6, 30, 0),
         ),
         // Fractions survive both UTC parsing and offset normalization.
         (
             "RETURN datetime('2024-01-15T10:30:00.500Z') AS d",
-            Value::Timestamp(
+            zoned_value(
                 chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
                     .unwrap()
                     .and_hms_milli_opt(10, 30, 0, 500)
@@ -164,7 +180,7 @@ fn datetime_preserves_time_and_normalises_the_zone_to_utc() {
         ),
         (
             "RETURN datetime('2024-01-15T10:30:00.123456789+02:00') AS d",
-            Value::Timestamp(
+            zoned_value(
                 chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
                     .unwrap()
                     .and_hms_nano_opt(8, 30, 0, 123_456_789)
@@ -174,12 +190,12 @@ fn datetime_preserves_time_and_normalises_the_zone_to_utc() {
         // Minute precision.
         (
             "RETURN datetime('2024-01-15T10:30') AS d",
-            timestamp(2024, 1, 15, 10, 30, 0),
+            zoned(2024, 1, 15, 10, 30, 0),
         ),
         // A bare date still means midnight.
         (
             "RETURN datetime('2024-01-15') AS d",
-            timestamp(2024, 1, 15, 0, 0, 0),
+            zoned(2024, 1, 15, 0, 0, 0),
         ),
         // NULL input stays NULL; unparseable strings raise (see
         // `unparsable_temporal_literals_raise`).
@@ -189,11 +205,19 @@ fn datetime_preserves_time_and_normalises_the_zone_to_utc() {
         // chrono's unsigned-`%Y` rule.
         (
             "RETURN datetime('10000-01-01T00:00:00') AS d",
-            timestamp(10000, 1, 1, 0, 0, 0),
+            zoned(10000, 1, 1, 0, 0, 0),
         ),
     ];
+    // Zoned equality is the instant, so the offset is checked apart.
     for (query, expected) in cases {
         assert_eq!(one_cell(&graph, query), *expected, "for: {query}");
+        assert!(
+            matches!(
+                one_cell(&graph, query),
+                Value::ZonedDateTime { .. } | Value::Null
+            ),
+            "for: {query}"
+        );
     }
 }
 

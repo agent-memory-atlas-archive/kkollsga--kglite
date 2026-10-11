@@ -41,6 +41,10 @@
       "classification": "test"
     },
     {
+      "identity": "crates/kglite-node/src/classes.rs::fn:new:pub fn new( year: i32, month: u32, day: u32, hour: Option<u32>, minute: Option<u32>, second: Option<u32>, nanosecond: Option<u32>, offset_seconds: Option<i32>, ) -> napi::Result<Self, &'static str>::clippy::too_many_arguments",
+      "classification": "transitional"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/mod.rs::fn:compare_inner:pub(crate) fn compare_inner( inner: &Arc<DirGraph>, selection: &mut CowSelection, target_type: Option<&str>, config: &kglite_core::api::fluent::MethodConfig, conditions: Option<&HashMap<String, FilterCondition>>, sort_fields: Option<&Vec<(String, bool)>>, limit: Option<usize>, estimated: usize, vali::clippy::too_many_arguments",
       "classification": "boundary"
     },

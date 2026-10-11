@@ -287,7 +287,9 @@ impl MembershipIndex {
         }
         let cross = match value {
             Value::String(_) => self.temporals.as_slice(),
-            Value::DateTime(_) | Value::Timestamp(_) => self.temporal_strings.as_slice(),
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. } => {
+                self.temporal_strings.as_slice()
+            }
             _ => &[],
         };
         if cross.is_empty() {
@@ -333,7 +335,10 @@ fn build_index(values: &[Value]) -> MembershipIndex {
                     if beyond_exact_int_range(other) {
                         index.residual.push(other.clone());
                     }
-                    if matches!(other, Value::DateTime(_) | Value::Timestamp(_)) {
+                    if matches!(
+                        other,
+                        Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. }
+                    ) {
                         index.temporals.push(other.clone());
                     }
                 }
@@ -365,6 +370,9 @@ fn scalar_key(value: &Value) -> Option<ScalarKey> {
         Value::Boolean(b) => Some(ScalarKey::Bool(*b)),
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0).map(ScalarKey::Timestamp),
         Value::Timestamp(t) => Some(ScalarKey::Timestamp(*t)),
+        // The instant shares the local datetime's key space: `values_equal` reads
+        // a local datetime as UTC, so the two are equal exactly when instants are.
+        Value::ZonedDateTime { utc, .. } => Some(ScalarKey::Timestamp(*utc)),
         Value::LocalTime(n) => Some(ScalarKey::LocalTime(*n)),
         Value::Time { nanos, offset_secs } => Some(ScalarKey::Time(
             crate::datatypes::time_of_day::utc_nanos(*nanos, *offset_secs),

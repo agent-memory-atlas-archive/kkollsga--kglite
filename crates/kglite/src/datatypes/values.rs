@@ -1,5 +1,6 @@
 use super::prop_map::PropMap;
 use super::time_of_day::{format_clock, format_time, utc_nanos};
+use super::zoned_datetime::format_zoned;
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -133,6 +134,19 @@ pub enum Value {
         nanos: u64,
         offset_secs: i32,
     },
+    /// An instant with the UTC offset it was written in. `utc` is the instant
+    /// (the engine's UTC-naive convention, shared with [`Value::Timestamp`]);
+    /// `offset_secs` is the whole-second offset (±18 h) kept for display, so
+    /// the wall clock is `utc + offset_secs`. **Identity is the instant**:
+    /// `10:00+01:00` equals `09:00Z`, `Eq`/`Ord`/`Hash` ignore the offset, and
+    /// `DISTINCT`/grouping keep the first offset seen. Produced by `datetime()`
+    /// and an aware Python `datetime.datetime`. **Wire**: appended tag 19
+    /// (epoch seconds, nanoseconds, offset); a later named-zone form appends
+    /// its own tag, as `DurationFine` did, rather than widening this one.
+    ZonedDateTime {
+        utc: NaiveDateTime,
+        offset_secs: i32,
+    },
 }
 
 // 32 B is load-bearing for `Mixed` columns and row buffers; a new temporal
@@ -144,7 +158,7 @@ const _: () = assert!(std::mem::size_of::<Value>() == 32);
 // ---------------------------------------------------------------------------
 //
 // `Value`'s serde tag is the *declaration index* of the mirror enums below, so
-// their order is the file format: tags 0..=18 are frozen, and a new variant
+// their order is the file format: tags 0..=19 are frozen, and a new variant
 // appends. The mirrors exist because `Duration` is one in-memory variant with
 // two wire shapes (a struct variant cannot gain a trailing field in postcard):
 // `nanos == 0` keeps the original three-field tag 9 so every older file, WAL
@@ -187,6 +201,7 @@ enum WireRef<'a> {
     },
     LocalTime(&'a u64),
     Time(&'a u64, &'a i32),
+    ZonedDateTime(i64, u32, &'a i32),
 }
 
 #[derive(Deserialize)]
@@ -223,6 +238,7 @@ enum Wire {
     },
     LocalTime(u64),
     Time(u64, i32),
+    ZonedDateTime(i64, u32, i32),
 }
 
 impl Serialize for Value {
@@ -266,6 +282,10 @@ impl Serialize for Value {
             Value::Timestamp(v) => WireRef::Timestamp(v),
             Value::LocalTime(v) => WireRef::LocalTime(v),
             Value::Time { nanos, offset_secs } => WireRef::Time(nanos, offset_secs),
+            Value::ZonedDateTime { utc, offset_secs } => {
+                let utc = utc.and_utc();
+                WireRef::ZonedDateTime(utc.timestamp(), utc.timestamp_subsec_nanos(), offset_secs)
+            }
         }
         .serialize(serializer)
     }
@@ -312,6 +332,12 @@ impl<'de> Deserialize<'de> for Value {
             Wire::Timestamp(v) => Value::Timestamp(v),
             Wire::LocalTime(v) => Value::LocalTime(v),
             Wire::Time(nanos, offset_secs) => Value::Time { nanos, offset_secs },
+            Wire::ZonedDateTime(secs, nanos, offset_secs) => {
+                let utc = chrono::DateTime::from_timestamp(secs, nanos)
+                    .ok_or_else(|| serde::de::Error::custom("zoned datetime instant out of range"))?
+                    .naive_utc();
+                Value::ZonedDateTime { utc, offset_secs }
+            }
         })
     }
 }
@@ -546,6 +572,11 @@ pub enum BorrowedValue<'a> {
         nanos: u64,
         offset_secs: i32,
     },
+    /// Mirrors [`Value::ZonedDateTime`].
+    ZonedDateTime {
+        utc: chrono::NaiveDateTime,
+        offset_secs: i32,
+    },
 }
 
 impl<'a> BorrowedValue<'a> {
@@ -579,6 +610,10 @@ impl<'a> BorrowedValue<'a> {
                 nanos: *nanos,
                 offset_secs: *offset_secs,
             },
+            Value::ZonedDateTime { utc, offset_secs } => BorrowedValue::ZonedDateTime {
+                utc: *utc,
+                offset_secs: *offset_secs,
+            },
             _ => return None,
         })
     }
@@ -596,6 +631,9 @@ impl<'a> BorrowedValue<'a> {
             Value::Timestamp(t) => BorrowedValue::Timestamp(t),
             Value::LocalTime(n) => BorrowedValue::LocalTime(n),
             Value::Time { nanos, offset_secs } => BorrowedValue::Time { nanos, offset_secs },
+            Value::ZonedDateTime { utc, offset_secs } => {
+                BorrowedValue::ZonedDateTime { utc, offset_secs }
+            }
             _ => return None,
         })
     }
@@ -628,6 +666,9 @@ impl<'a> BorrowedValue<'a> {
             },
             BorrowedValue::LocalTime(n) => Value::LocalTime(n),
             BorrowedValue::Time { nanos, offset_secs } => Value::Time { nanos, offset_secs },
+            BorrowedValue::ZonedDateTime { utc, offset_secs } => {
+                Value::ZonedDateTime { utc, offset_secs }
+            }
         }
     }
 }
@@ -688,6 +729,7 @@ impl PartialEq for Value {
                     offset_secs: bo,
                 },
             ) => utc_nanos(*an, *ao) == utc_nanos(*bn, *bo),
+            (Value::ZonedDateTime { utc: a, .. }, Value::ZonedDateTime { utc: b, .. }) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::NodeRef(a), Value::NodeRef(b)) => a == b,
             (
@@ -760,6 +802,7 @@ impl Ord for Value {
                 Value::Timestamp(_) => 15,
                 Value::LocalTime(_) => 16,
                 Value::Time { .. } => 17,
+                Value::ZonedDateTime { .. } => 18,
             }
         }
         match (self, other) {
@@ -828,6 +871,7 @@ impl Ord for Value {
                     offset_secs: bo,
                 },
             ) => utc_nanos(*an, *ao).cmp(&utc_nanos(*bn, *bo)),
+            (Value::ZonedDateTime { utc: a, .. }, Value::ZonedDateTime { utc: b, .. }) => a.cmp(b),
             _ => disc(self).cmp(&disc(other)),
         }
     }
@@ -895,6 +939,8 @@ impl Hash for Value {
             Value::LocalTime(v) => v.hash(state),
             // The UTC reading only: `Eq` ignores the offset.
             Value::Time { nanos, offset_secs } => utc_nanos(*nanos, *offset_secs).hash(state),
+            // The instant only: `Eq` ignores the offset.
+            Value::ZonedDateTime { utc, .. } => utc.hash(state),
         }
     }
 }
@@ -961,6 +1007,7 @@ impl Value {
             Value::Timestamp(_) => "Timestamp",
             Value::LocalTime(_) => "LocalTime",
             Value::Time { .. } => "Time",
+            Value::ZonedDateTime { .. } => "ZonedDateTime",
         }
     }
 }
@@ -1000,6 +1047,8 @@ pub enum ColumnType {
     LocalTime,
     /// A time-of-day-with-offset column — each cell is a `Value::Time`.
     Time,
+    /// An instant-with-offset column — each cell is a `Value::ZonedDateTime`.
+    ZonedDateTime,
 }
 
 impl fmt::Display for ColumnType {
@@ -1017,6 +1066,7 @@ impl fmt::Display for ColumnType {
             ColumnType::Duration => "Duration",
             ColumnType::LocalTime => "LocalTime",
             ColumnType::Time => "Time",
+            ColumnType::ZonedDateTime => "ZonedDateTime",
         };
         write!(f, "{}", type_str)
     }
@@ -1052,6 +1102,8 @@ pub enum ColumnData {
     LocalTime(Vec<Option<u64>>),
     /// `(nanoseconds of day, offset seconds)` per cell, materialised as `Value::Time`.
     Time(Vec<Option<(u64, i32)>>),
+    /// `(UTC instant, offset seconds)` per cell, materialised as `Value::ZonedDateTime`.
+    ZonedDateTime(Vec<Option<(NaiveDateTime, i32)>>),
 }
 
 #[derive(Debug)]
@@ -1085,6 +1137,9 @@ impl Column {
             ColumnData::Time(vec) => vec
                 .get(row_idx)?
                 .map(|(nanos, offset_secs)| Value::Time { nanos, offset_secs }),
+            ColumnData::ZonedDateTime(vec) => vec
+                .get(row_idx)?
+                .map(|(utc, offset_secs)| Value::ZonedDateTime { utc, offset_secs }),
         }
     }
 
@@ -1109,6 +1164,7 @@ impl ColumnData {
             ColumnData::Duration(vec) => vec.iter().any(Option::is_some),
             ColumnData::LocalTime(vec) => vec.iter().any(Option::is_some),
             ColumnData::Time(vec) => vec.iter().any(Option::is_some),
+            ColumnData::ZonedDateTime(vec) => vec.iter().any(Option::is_some),
         }
     }
 
@@ -1126,6 +1182,7 @@ impl ColumnData {
             ColumnData::Duration(vec) => vec.len(),
             ColumnData::LocalTime(vec) => vec.len(),
             ColumnData::Time(vec) => vec.len(),
+            ColumnData::ZonedDateTime(vec) => vec.len(),
         }
     }
 }
@@ -1150,6 +1207,7 @@ impl DataFrame {
                     ColumnType::Duration => ColumnData::Duration(Vec::new()),
                     ColumnType::LocalTime => ColumnData::LocalTime(Vec::new()),
                     ColumnType::Time => ColumnData::Time(Vec::new()),
+                    ColumnType::ZonedDateTime => ColumnData::ZonedDateTime(Vec::new()),
                 };
                 column_indices.insert(name.clone(), idx);
                 Column {
@@ -1189,6 +1247,7 @@ impl DataFrame {
                 ColumnData::Duration(v) => ColumnData::Duration(pick(v, keep)),
                 ColumnData::LocalTime(v) => ColumnData::LocalTime(pick(v, keep)),
                 ColumnData::Time(v) => ColumnData::Time(pick(v, keep)),
+                ColumnData::ZonedDateTime(v) => ColumnData::ZonedDateTime(pick(v, keep)),
             };
             out.add_column(column.name.clone(), column.col_type.clone(), data)
                 .expect("a column of a valid frame re-adds to an empty one");
@@ -1332,7 +1391,8 @@ impl DataFrame {
             | (ColumnType::Map, ColumnData::Map(_))
             | (ColumnType::Duration, ColumnData::Duration(_))
             | (ColumnType::LocalTime, ColumnData::LocalTime(_))
-            | (ColumnType::Time, ColumnData::Time(_)) => (),
+            | (ColumnType::Time, ColumnData::Time(_))
+            | (ColumnType::ZonedDateTime, ColumnData::ZonedDateTime(_)) => (),
             _ => return Err(format!("Data type mismatch for column {}", name)),
         }
 
@@ -1418,6 +1478,9 @@ impl DataFrame {
                 ColumnType::Duration => ColumnData::Duration(Vec::with_capacity(num_rows)),
                 ColumnType::LocalTime => ColumnData::LocalTime(Vec::with_capacity(num_rows)),
                 ColumnType::Time => ColumnData::Time(Vec::with_capacity(num_rows)),
+                ColumnType::ZonedDateTime => {
+                    ColumnData::ZonedDateTime(Vec::with_capacity(num_rows))
+                }
             })
             .collect();
 
@@ -1496,6 +1559,12 @@ impl DataFrame {
                         Value::Time { nanos, offset_secs } => vec.push(Some((nanos, offset_secs))),
                         _ => vec.push(None),
                     },
+                    ColumnData::ZonedDateTime(vec) => match val {
+                        Value::ZonedDateTime { utc, offset_secs } => {
+                            vec.push(Some((utc, offset_secs)))
+                        }
+                        _ => vec.push(None),
+                    },
                 }
             }
         }
@@ -1528,73 +1597,79 @@ impl DataFrame {
     /// properties onto edges derived from a Cypher query.
     pub fn add_constant_column(&mut self, name: String, value: Value) -> Result<(), String> {
         let num_rows = self.row_count();
-        let (col_type, data) = match value {
-            Value::UniqueId(v) => (
-                ColumnType::UniqueId,
-                ColumnData::UniqueId(vec![Some(v); num_rows]),
-            ),
-            Value::Int64(v) => (
-                ColumnType::Int64,
-                ColumnData::Int64(vec![Some(v); num_rows]),
-            ),
-            Value::Float64(v) => (
-                ColumnType::Float64,
-                ColumnData::Float64(vec![Some(v); num_rows]),
-            ),
-            Value::String(v) => (
-                ColumnType::String,
-                ColumnData::String(vec![Some(v); num_rows]),
-            ),
-            Value::Boolean(v) => (
-                ColumnType::Boolean,
-                ColumnData::Boolean(vec![Some(v); num_rows]),
-            ),
-            Value::DateTime(v) => (
-                ColumnType::DateTime,
-                ColumnData::DateTime(vec![Some(v); num_rows]),
-            ),
-            Value::Timestamp(v) => (
-                ColumnType::String,
-                ColumnData::String(vec![
-                    Some(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string());
-                    num_rows
-                ]),
-            ),
-            Value::Null => return Err("Cannot add a constant column with Null value".to_string()),
-            Value::Point { lat, lon } => (
-                ColumnType::String,
-                ColumnData::String(vec![Some(format!("POINT({} {})", lon, lat)); num_rows]),
-            ),
-            Value::NodeRef(_) => {
-                return Err("Cannot add a constant column with NodeRef value".to_string())
-            }
-            Value::Duration { .. } => {
-                return Err(
-                    "Cannot add a constant column with Duration value — durations are \
+        let (col_type, data) =
+            match value {
+                Value::UniqueId(v) => (
+                    ColumnType::UniqueId,
+                    ColumnData::UniqueId(vec![Some(v); num_rows]),
+                ),
+                Value::Int64(v) => (
+                    ColumnType::Int64,
+                    ColumnData::Int64(vec![Some(v); num_rows]),
+                ),
+                Value::Float64(v) => (
+                    ColumnType::Float64,
+                    ColumnData::Float64(vec![Some(v); num_rows]),
+                ),
+                Value::String(v) => (
+                    ColumnType::String,
+                    ColumnData::String(vec![Some(v); num_rows]),
+                ),
+                Value::Boolean(v) => (
+                    ColumnType::Boolean,
+                    ColumnData::Boolean(vec![Some(v); num_rows]),
+                ),
+                Value::DateTime(v) => (
+                    ColumnType::DateTime,
+                    ColumnData::DateTime(vec![Some(v); num_rows]),
+                ),
+                Value::Timestamp(v) => (
+                    ColumnType::String,
+                    ColumnData::String(vec![
+                        Some(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string());
+                        num_rows
+                    ]),
+                ),
+                Value::Null => {
+                    return Err("Cannot add a constant column with Null value".to_string())
+                }
+                Value::Point { lat, lon } => (
+                    ColumnType::String,
+                    ColumnData::String(vec![Some(format!("POINT({} {})", lon, lat)); num_rows]),
+                ),
+                Value::NodeRef(_) => {
+                    return Err("Cannot add a constant column with NodeRef value".to_string())
+                }
+                Value::Duration { .. } => {
+                    return Err(
+                        "Cannot add a constant column with Duration value — durations are \
                      query-time-only (0.9.0 Cluster 2)"
-                        .to_string(),
-                )
-            }
-            Value::LocalTime(_) | Value::Time { .. } => {
-                return Err(
+                            .to_string(),
+                    )
+                }
+                Value::LocalTime(_) | Value::Time { .. } => return Err(
                     "Cannot add a constant column with a LocalTime or Time value — time-of-day \
                      values have no column type"
                         .to_string(),
-                )
-            }
-            Value::List(_)
-            | Value::Map(_)
-            | Value::Node(_)
-            | Value::Relationship(_)
-            | Value::Path(_) => {
-                return Err(
-                    "Cannot add a constant column with List/Map/Node/Relationship/Path value \
+                ),
+                Value::ZonedDateTime { .. } => return Err(
+                    "Cannot add a constant column with a ZonedDateTime value — zoned datetimes \
+                     have no constant-column form"
+                        .to_string(),
+                ),
+                Value::List(_)
+                | Value::Map(_)
+                | Value::Node(_)
+                | Value::Relationship(_)
+                | Value::Path(_) => {
+                    return Err(
+                        "Cannot add a constant column with List/Map/Node/Relationship/Path value \
                      — collection and graph-entity variants are query-result-time values, \
                      not column types"
-                        .to_string(),
-                )
-            }
-        };
+                            .to_string(),
+                    )
+                }
+            };
         self.add_column(name, col_type, data)
     }
 }
@@ -1617,6 +1692,7 @@ mod kind {
     pub const DURATION: u16 = 1 << 10;
     pub const LOCAL_TIME: u16 = 1 << 11;
     pub const TIME: u16 = 1 << 12;
+    pub const ZONED: u16 = 1 << 13;
 }
 
 /// Kind bit contributed by one value. `Null` and the internal `NodeRef`
@@ -1637,6 +1713,7 @@ fn value_kind_bit(val: &Value) -> u16 {
         Value::Duration { .. } => kind::DURATION,
         Value::LocalTime(_) => kind::LOCAL_TIME,
         Value::Time { .. } => kind::TIME,
+        Value::ZonedDateTime { .. } => kind::ZONED,
         Value::Point { .. } | Value::Node(_) | Value::Relationship(_) | Value::Path(_) => {
             kind::TEXTUAL
         }
@@ -1684,6 +1761,8 @@ impl IntFit {
 /// - only durations → Duration
 /// - only local times → LocalTime, only zoned times → Time (a mix of the two,
 ///   or with anything else, is text)
+/// - only zoned datetimes → ZonedDateTime (a mix with local datetimes or dates
+///   is text, so the offsets survive)
 /// - anything else → String, each value in its natural text form
 fn resolve_column_type(kinds: u16, fit: IntFit) -> ColumnType {
     const NUMERIC: u16 = kind::UNIQUE_ID | kind::INT64 | kind::FLOAT64;
@@ -1710,6 +1789,7 @@ fn resolve_column_type(kinds: u16, fit: IntFit) -> ColumnType {
         k if k == kind::DURATION => ColumnType::Duration,
         k if k == kind::LOCAL_TIME => ColumnType::LocalTime,
         k if k == kind::TIME => ColumnType::Time,
+        k if k == kind::ZONED => ColumnType::ZonedDateTime,
         _ => ColumnType::String,
     }
 }
@@ -1786,6 +1866,7 @@ fn value_to_text(val: Value) -> Option<String> {
         Value::Point { lat, lon } => Some(format!("POINT({} {})", lon, lat)),
         Value::LocalTime(n) => Some(format_clock(n)),
         Value::Time { nanos, offset_secs } => Some(format_time(nanos, offset_secs)),
+        Value::ZonedDateTime { utc, offset_secs } => Some(format_zoned(utc, offset_secs)),
         other => Some(format_value_precise_timestamps(&other)),
     }
 }
@@ -1888,6 +1969,7 @@ pub fn raw_string(value: &Value) -> String {
         ),
         Value::LocalTime(n) => format_clock(*n),
         Value::Time { nanos, offset_secs } => format_time(*nanos, *offset_secs),
+        Value::ZonedDateTime { utc, offset_secs } => format_zoned(*utc, *offset_secs),
         Value::Null => String::new(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::List(_)
@@ -1927,6 +2009,9 @@ fn format_value_with_timestamp(value: &Value, timestamp_format: &str) -> String 
         Value::LocalTime(n) => format!("\"{}\"", format_clock(*n)),
         Value::Time { nanos, offset_secs } => {
             format!("\"{}\"", format_time(*nanos, *offset_secs))
+        }
+        Value::ZonedDateTime { utc, offset_secs } => {
+            format!("\"{}\"", format_zoned(*utc, *offset_secs))
         }
         Value::Null => "NULL".to_string(),
         Value::NodeRef(idx) => format!("node#{}", idx),
@@ -2000,6 +2085,7 @@ fn format_col_type(col_type: &ColumnType) -> String {
         ColumnType::Duration => "duration",
         ColumnType::LocalTime => "localtime",
         ColumnType::Time => "time",
+        ColumnType::ZonedDateTime => "zoneddatetime",
     }
     .to_string()
 }

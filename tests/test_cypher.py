@@ -1596,20 +1596,21 @@ class TestBugDatetimeFunction:
         assert "2024-03-15" in str(rows[0]["dt"])
 
     def test_datetime_with_timezone(self, cypher_graph):
-        """A zone is applied, not silently dropped along with the time.
+        """A zone is kept, not silently dropped along with the time.
 
-        Before the fix this returned ``2024-03-15T00:00:00`` for every
+        Before an earlier fix this returned ``2024-03-15T00:00:00`` for every
         zone-bearing stamp: the exact ``%Y-%m-%dT%H:%M:%S`` parse missed the
         ``Z``, and the bare-date fallback split the string on ``T`` and
-        answered midnight. ``Value::Timestamp`` has no zone field, so the
-        offset is normalised into UTC rather than discarded.
+        answered midnight. ``datetime()`` is now a zoned value, so the wall
+        clock and the offset both survive.
         """
         rows = cypher_graph.cypher("RETURN datetime('2024-03-15T10:30:00Z') AS dt").to_list()
         assert len(rows) == 1
-        assert str(rows[0]["dt"]).replace(" ", "T") == "2024-03-15T10:30:00"
-        # +02:00 is two hours ahead of UTC, so the UTC reading is 08:30.
+        assert rows[0]["dt"].isoformat() == "2024-03-15T10:30:00+00:00"
+        # +02:00 is two hours ahead of UTC: the wall clock stays 10:30, the instant is 08:30Z.
         shifted = cypher_graph.cypher("RETURN datetime('2024-03-15T10:30:00+02:00') AS dt").to_list()
-        assert str(shifted[0]["dt"]).replace(" ", "T") == "2024-03-15T08:30:00"
+        assert shifted[0]["dt"].isoformat() == "2024-03-15T10:30:00+02:00"
+        assert shifted[0]["dt"].astimezone(__import__("datetime").timezone.utc).hour == 8
 
 
 class TestBugDateInvalidInput:

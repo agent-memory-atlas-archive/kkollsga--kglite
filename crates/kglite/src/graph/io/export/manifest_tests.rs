@@ -20,7 +20,7 @@ fn org_graph() -> DirGraph {
     let mut g = DirGraph::new();
     for q in [
         "CREATE (:Person:Employee {id: 1, title: 'Ada', hired: '2000-01-01', left: '2009-12-31', \
-         score: 1.5, active: true, at: datetime('2020-01-02T03:04:05'), tags: ['a', 'b'], \
+         score: 1.5, active: true, at: localdatetime('2020-01-02T03:04:05'), tags: ['a', 'b'], \
          meta: {k: 1}, span: duration({days: 3}), home: point({latitude: 1.0, longitude: 2.0})})",
         "CREATE (:Person:Employee {id: 1, title: 'Ada', hired: '2010-01-01', left: null})",
         "CREATE (:Plant {id: 'p1', title: 'North'})",

@@ -96,6 +96,7 @@ impl ScalarShape {
                 | (ScalarShape::Boolean, Value::Boolean(_))
                 | (ScalarShape::DateTime, Value::DateTime(_))
                 | (ScalarShape::DateTime, Value::Timestamp(_))
+                | (ScalarShape::DateTime, Value::ZonedDateTime { .. })
         )
     }
 }

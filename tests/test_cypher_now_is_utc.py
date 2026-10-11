@@ -1,6 +1,6 @@
 """The no-argument clock functions: ``datetime()``, ``date()`` and ``time()``
-read the clock in UTC — the zone every stored datetime, validity instant and
-``auto_timestamp`` stamp is naive in — and ``localdatetime()`` /
+read the clock in UTC — ``datetime()`` returns it as a zoned value at offset
+``Z`` — and ``localdatetime()`` /
 ``localtime()`` read the process's local zone, as their names say.
 
 The probe runs in a child process pinned to a zone with a non-whole-hour
@@ -32,10 +32,12 @@ def clock_gap(a, b):
 now_utc = utc.hour * 3600 + utc.minute * 60 + utc.second
 now_local = local.hour * 3600 + local.minute * 60 + local.second
 assert row["t"].utcoffset() == dt.timedelta(0), row["t"]
+assert row["dt"].utcoffset() == dt.timedelta(0), row["dt"]
+assert row["ldt"].tzinfo is None, row["ldt"]
 assert row["lt"].tzinfo is None, row["lt"]
 print(json.dumps({
     "offset": (local - utc).total_seconds(),
-    "datetime": abs((row["dt"] - utc).total_seconds()),
+    "datetime": abs((row["dt"].replace(tzinfo=None) - utc).total_seconds()),
     "localdatetime": abs((row["ldt"] - local).total_seconds()),
     "date": row["d"].isoformat() == utc.date().isoformat(),
     "time": clock_gap(seconds_of_day(row["t"]), now_utc),

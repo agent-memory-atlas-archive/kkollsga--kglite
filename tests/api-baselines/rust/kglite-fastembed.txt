@@ -2505,6 +2505,7 @@ pub kglite::api::mutation::ColumnData::String(alloc::vec::Vec<core::option::Opti
 pub kglite::api::mutation::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::api::mutation::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::api::mutation::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
+pub kglite::api::mutation::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32)>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
 pub fn kglite::datatypes::values::ColumnData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum kglite::api::mutation::ColumnType
@@ -2520,6 +2521,7 @@ pub kglite::api::mutation::ColumnType::String
 pub kglite::api::mutation::ColumnType::Time
 pub kglite::api::mutation::ColumnType::Timestamp
 pub kglite::api::mutation::ColumnType::UniqueId
+pub kglite::api::mutation::ColumnType::ZonedDateTime
 impl core::clone::Clone for kglite::datatypes::values::ColumnType
 pub fn kglite::datatypes::values::ColumnType::clone(&self) -> kglite::datatypes::values::ColumnType
 impl core::cmp::PartialEq for kglite::datatypes::values::ColumnType
@@ -4074,6 +4076,24 @@ pub fn kglite::api::timeseries::parse_date_query(&str) -> core::result::Result<(
 pub fn kglite::api::timeseries::validate_channel_length(usize, usize, &str) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::timeseries::validate_keys_sorted(&[chrono::naive::date::NaiveDate]) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::timeseries::validate_resolution(&str) -> core::result::Result<(), alloc::string::String>
+pub mod kglite::api::zoned_datetime
+pub enum kglite::api::zoned_datetime::ZonedParseError
+pub kglite::api::zoned_datetime::ZonedParseError::Malformed
+pub kglite::api::zoned_datetime::ZonedParseError::NamedZone
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParseError
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParseError) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::api::zoned_datetime::epoch_parts(chrono::naive::datetime::NaiveDateTime) -> (i64, u32)
+pub fn kglite::api::zoned_datetime::format_zoned(chrono::naive::datetime::NaiveDateTime, i32) -> alloc::string::String
+pub fn kglite::api::zoned_datetime::from_epoch(i64, u32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
+pub fn kglite::api::zoned_datetime::parse_plain_date(&str) -> core::option::Option<chrono::naive::date::NaiveDate>
+pub fn kglite::api::zoned_datetime::parse_with_offset(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::api::zoned_datetime::parse_zoned(&str) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, i32), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::api::zoned_datetime::utc_from_wall(chrono::naive::datetime::NaiveDateTime, i32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
+pub fn kglite::api::zoned_datetime::wall_clock(chrono::naive::datetime::NaiveDateTime, i32) -> chrono::naive::datetime::NaiveDateTime
 pub enum kglite::api::DefineOntologyError
 pub kglite::api::DefineOntologyError::Invalid(alloc::string::String)
 pub kglite::api::DefineOntologyError::Refused(kglite::api::OntologyDeclarationRefused)
@@ -4492,6 +4512,9 @@ pub kglite::api::Value::Time::nanos: u64
 pub kglite::api::Value::Time::offset_secs: i32
 pub kglite::api::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::api::Value::UniqueId(u32)
+pub kglite::api::Value::ZonedDateTime
+pub kglite::api::Value::ZonedDateTime::offset_secs: i32
+pub kglite::api::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str
@@ -5994,6 +6017,9 @@ pub kglite::datatypes::values::BorrowedValue::Time::nanos: u64
 pub kglite::datatypes::values::BorrowedValue::Time::offset_secs: i32
 pub kglite::datatypes::values::BorrowedValue::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::values::BorrowedValue::UniqueId(u32)
+pub kglite::datatypes::values::BorrowedValue::ZonedDateTime
+pub kglite::datatypes::values::BorrowedValue::ZonedDateTime::offset_secs: i32
+pub kglite::datatypes::values::BorrowedValue::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
 impl<'a> kglite::datatypes::values::BorrowedValue<'a>
 pub fn kglite::datatypes::values::BorrowedValue<'a>::to_value(self) -> kglite::datatypes::values::Value
 impl<'a> core::clone::Clone for kglite::datatypes::values::BorrowedValue<'a>
@@ -6014,6 +6040,7 @@ pub kglite::datatypes::values::ColumnData::String(alloc::vec::Vec<core::option::
 pub kglite::datatypes::values::ColumnData::Time(alloc::vec::Vec<core::option::Option<(u64, i32)>>)
 pub kglite::datatypes::values::ColumnData::Timestamp(alloc::vec::Vec<core::option::Option<chrono::naive::datetime::NaiveDateTime>>)
 pub kglite::datatypes::values::ColumnData::UniqueId(alloc::vec::Vec<core::option::Option<u32>>)
+pub kglite::datatypes::values::ColumnData::ZonedDateTime(alloc::vec::Vec<core::option::Option<(chrono::naive::datetime::NaiveDateTime, i32)>>)
 impl core::fmt::Debug for kglite::datatypes::values::ColumnData
 pub fn kglite::datatypes::values::ColumnData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum kglite::datatypes::values::ColumnType
@@ -6029,6 +6056,7 @@ pub kglite::datatypes::values::ColumnType::String
 pub kglite::datatypes::values::ColumnType::Time
 pub kglite::datatypes::values::ColumnType::Timestamp
 pub kglite::datatypes::values::ColumnType::UniqueId
+pub kglite::datatypes::values::ColumnType::ZonedDateTime
 impl core::clone::Clone for kglite::datatypes::values::ColumnType
 pub fn kglite::datatypes::values::ColumnType::clone(&self) -> kglite::datatypes::values::ColumnType
 impl core::cmp::PartialEq for kglite::datatypes::values::ColumnType
@@ -6086,6 +6114,9 @@ pub kglite::datatypes::values::Value::Time::nanos: u64
 pub kglite::datatypes::values::Value::Time::offset_secs: i32
 pub kglite::datatypes::values::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::values::Value::UniqueId(u32)
+pub kglite::datatypes::values::Value::ZonedDateTime
+pub kglite::datatypes::values::Value::ZonedDateTime::offset_secs: i32
+pub kglite::datatypes::values::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str
@@ -6200,6 +6231,24 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::RelVal
 pub fn kglite::datatypes::values::RelValue::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub fn kglite::datatypes::values::format_value(&kglite::datatypes::values::Value) -> alloc::string::String
 pub fn kglite::datatypes::values::raw_string(&kglite::datatypes::values::Value) -> alloc::string::String
+pub mod kglite::datatypes::zoned_datetime
+pub enum kglite::datatypes::zoned_datetime::ZonedParseError
+pub kglite::datatypes::zoned_datetime::ZonedParseError::Malformed
+pub kglite::datatypes::zoned_datetime::ZonedParseError::NamedZone
+impl core::cmp::Eq for kglite::datatypes::zoned_datetime::ZonedParseError
+impl core::cmp::PartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::eq(&self, &kglite::datatypes::zoned_datetime::ZonedParseError) -> bool
+impl core::fmt::Debug for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::ZonedParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::datatypes::zoned_datetime::ZonedParseError
+pub fn kglite::datatypes::zoned_datetime::epoch_parts(chrono::naive::datetime::NaiveDateTime) -> (i64, u32)
+pub fn kglite::datatypes::zoned_datetime::format_zoned(chrono::naive::datetime::NaiveDateTime, i32) -> alloc::string::String
+pub fn kglite::datatypes::zoned_datetime::from_epoch(i64, u32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
+pub fn kglite::datatypes::zoned_datetime::parse_plain_date(&str) -> core::option::Option<chrono::naive::date::NaiveDate>
+pub fn kglite::datatypes::zoned_datetime::parse_with_offset(&str, impl core::ops::function::Fn(&str) -> core::option::Option<chrono::naive::date::NaiveDate>) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, core::option::Option<i32>), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::datatypes::zoned_datetime::parse_zoned(&str) -> core::result::Result<(chrono::naive::datetime::NaiveDateTime, i32), kglite::datatypes::zoned_datetime::ZonedParseError>
+pub fn kglite::datatypes::zoned_datetime::utc_from_wall(chrono::naive::datetime::NaiveDateTime, i32) -> core::option::Option<chrono::naive::datetime::NaiveDateTime>
+pub fn kglite::datatypes::zoned_datetime::wall_clock(chrono::naive::datetime::NaiveDateTime, i32) -> chrono::naive::datetime::NaiveDateTime
 pub enum kglite::datatypes::Value
 pub kglite::datatypes::Value::Boolean(bool)
 pub kglite::datatypes::Value::DateTime(chrono::naive::date::NaiveDate)
@@ -6227,6 +6276,9 @@ pub kglite::datatypes::Value::Time::nanos: u64
 pub kglite::datatypes::Value::Time::offset_secs: i32
 pub kglite::datatypes::Value::Timestamp(chrono::naive::datetime::NaiveDateTime)
 pub kglite::datatypes::Value::UniqueId(u32)
+pub kglite::datatypes::Value::ZonedDateTime
+pub kglite::datatypes::Value::ZonedDateTime::offset_secs: i32
+pub kglite::datatypes::Value::ZonedDateTime::utc: chrono::naive::datetime::NaiveDateTime
 impl kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::as_string(&self) -> core::option::Option<alloc::string::String>
 pub fn kglite::datatypes::values::Value::type_name(&self) -> &'static str

@@ -22,6 +22,7 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | `String(String)` | UTF-8 | STRING (sized) |
 | `DateTime(NaiveDate)` | calendar date | Struct `0x44` (Date) |
 | `Timestamp(NaiveDateTime)` | date + time-of-day, including fractional nanoseconds | local date-time structure |
+| `ZonedDateTime { utc, offset_secs }` | an instant plus the UTC offset it was written in | Struct `0x49` (DateTime) |
 | `Point { lat, lon }` | 2D geographical point | Struct `0x58` (Point2D, srid=4326) |
 | `Duration { months, days, seconds, nanos }` | Neo4j-shape calendar duration | Struct `0x45` (Duration) |
 | **`NodeRef(u32)`** | **internal reference (see below)** | — never crosses the boundary |
@@ -45,7 +46,8 @@ fractional seconds. They omit the fractional suffix for whole-second values.
   a typed error.
 - **Python's native `datetime`** supports microseconds. Its conversion cannot
   represent finer digits.
-- **Python types.** A `Timestamp` arrives as a naive `datetime.datetime`. A
+- **Python types.** A `Timestamp` arrives as a naive `datetime.datetime` and a
+  `ZonedDateTime` as an aware one with a fixed-offset `tzinfo`. A
   `DateTime` (a date) arrives as a `datetime.date`. In `to_df()` both make
   `datetime64` columns (a date at midnight). Earlier releases returned a date as
   its ISO string, `'2024-03-09'`.
@@ -57,31 +59,33 @@ fractional seconds. They omit the fractional suffix for whole-second values.
   in Cypher shows every digit. Bolt carries both as `LocalTime` and `Time`, the C
   ABI and JSON as `{"$localtime": …}` and `{"$time": …}`, RDF as `xsd:time`
   (an offset marks a `Time`).
-- **Constructors.** `datetime()` normalises offset-bearing input to UTC.
-  `localdatetime()` keeps its local wall time. Neither parsed constructor drops
+- **Constructors.** `datetime()` returns a `ZonedDateTime`: offset-bearing input
+  keeps its offset and an offset-free one reads as UTC. `localdatetime()` returns
+  a `Timestamp` with its local wall time. Neither parsed constructor drops
   fractional seconds.
 
-### Timezone-aware `datetime` parameters
+### Zoned datetimes
 
-**A timezone-aware `datetime` bound as a query parameter is converted to UTC
-and stored without a zone.** KGLite's temporal values are zoneless, so
-`datetime(2024, 3, 9, 14, 30, tzinfo=timezone(timedelta(hours=2)))` binds as
-`2024-03-09T12:30`. This is exactly how the Cypher `datetime()` constructor
-normalises an offset-bearing literal. Bind a naive datetime when you want the
-wall-clock value preserved.
+A `ZonedDateTime` is an instant plus the UTC offset it was written in.
 
-The Bolt server does **not** do this. It receives an explicitly zoned PackStream
-type and *refuses* the parameter (`Neo.ClientError.Request.Invalid`) rather than
-converting it. The two surfaces differ on purpose:
-
-- Python's `datetime` arrives through a conversion the language already forces.
-  The value has no wire representation that carries the zone onward.
-- A PackStream `DateTime` is a distinct type a driver expects to round-trip.
-  Converting it would silently corrupt that round-trip.
-- Making Python refuse would break working code for no gain.
-- Making Bolt convert would lose data.
-
-See {doc}`../operators/bolt-server` for the Bolt half.
+- **Equality, order and hashing use the instant.** `10:00+01:00` equals
+  `09:00Z`. `DISTINCT` and grouping merge such values and keep the first offset.
+- **A local datetime is read as UTC where it meets a zoned one.** `WHERE
+  n.created_at > datetime()` keeps working against stored `Timestamp` values,
+  because every stored local stamp is a UTC instant.
+- **Python.** A timezone-aware `datetime` bound as a parameter becomes a
+  `ZonedDateTime` with the offset it carries (a naive one stays a `Timestamp`).
+  A `ZonedDateTime` returns as an aware `datetime`, so `result - datetime.now()`
+  raises `TypeError`. An offset beyond ±18:00, or one that is not whole seconds,
+  keeps the instant at UTC. `datetime.datetime` holds microseconds, so finer
+  digits floor on the Python side.
+- **DataFrame columns** still read a timezone-aware `datetime64` as UTC without a
+  zone.
+- **Bolt** carries a `DateTime` (offset) and refuses a `DateTimeZoneId`; see
+  {doc}`../operators/bolt-server`.
+- **Storage.** A `ZonedDateTime` is stored in a mixed column, not the dense
+  timestamp column. Use `localdatetime()` for a timestamp column that is written in
+  bulk.
 
 ## `NodeRef` vs `Node` — reference vs materialised
 

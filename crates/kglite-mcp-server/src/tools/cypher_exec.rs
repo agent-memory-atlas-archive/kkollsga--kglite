@@ -866,7 +866,7 @@ pub(crate) fn push_value_repr(out: &mut String, val: &Value) {
         Value::Point { lat, lon } => {
             let _ = write!(out, "POINT({lon} {lat})");
         }
-        Value::LocalTime(_) | Value::Time { .. } => {
+        Value::LocalTime(_) | Value::Time { .. } | Value::ZonedDateTime { .. } => {
             out.push_str(&kglite::api::fluent::format_value_compact(val))
         }
         Value::Duration {

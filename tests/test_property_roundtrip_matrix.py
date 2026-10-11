@@ -81,6 +81,7 @@ import kglite
 # ── Value kinds ─────────────────────────────────────────────────────────────
 _DATE = datetime.date(2020, 1, 2)
 _DT = datetime.datetime(2020, 1, 2, 3, 4, 5)
+_ZDT = datetime.datetime(2020, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
 _POINT_READBACK = {"latitude": 1.0, "longitude": 2.0}
 
 # name -> (python value | None if not python-constructible, cypher literal,
@@ -92,7 +93,8 @@ KINDS: dict[str, tuple[object, str, object]] = {
     "bool": (True, "true", True),
     "none": (None, "null", None),
     "date": (_DATE, "date('2020-01-02')", _DATE),
-    "datetime": (_DT, "datetime('2020-01-02T03:04:05')", _DT),
+    "datetime": (_DT, "localdatetime('2020-01-02T03:04:05')", _DT),
+    "zoned_datetime": (_ZDT, "datetime('2020-01-02T03:04:05+02:00')", _ZDT),
     "duration": (
         datetime.timedelta(days=1, hours=2),
         "duration({days: 1, hours: 2})",
@@ -264,6 +266,8 @@ def _node_outcome(kind: str, path: str):
         return ("skip", "Point has no Python literal; only creatable via cypher point()")
     if path == "from_records" and kind in _JSON_UNSERIALISABLE:
         return _RAISES_JSON
+    if kind == "zoned_datetime" and path in ("add_nodes", "add_connections"):
+        return ("skip", "a DataFrame column reads an aware datetime at UTC without a zone (declare 'zoneddatetime')")
     return "ok"
 
 
@@ -272,6 +276,8 @@ def _edge_outcome(kind: str, path: str):
         return ("skip", "Point has no Python literal; only creatable via cypher point()")
     if path == "from_records" and kind in _JSON_UNSERIALISABLE:
         return _RAISES_JSON
+    if kind == "zoned_datetime" and path in ("add_nodes", "add_connections"):
+        return ("skip", "a DataFrame column reads an aware datetime at UTC without a zone (declare 'zoneddatetime')")
     return "ok"
 
 

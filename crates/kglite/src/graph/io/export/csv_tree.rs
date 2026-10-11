@@ -102,6 +102,7 @@ fn keyword(kind: ColumnKind) -> &'static str {
         ColumnKind::Duration => "duration",
         ColumnKind::LocalTime => "localtime",
         ColumnKind::Time => "time",
+        ColumnKind::ZonedDateTime => "zoneddatetime",
         ColumnKind::List => "list",
         ColumnKind::Map => "map",
         ColumnKind::Point => "point",

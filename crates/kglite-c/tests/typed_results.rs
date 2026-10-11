@@ -75,8 +75,16 @@ fn cases() -> Vec<(&'static str, serde_json::Value)> {
     vec![
         ("date('2020-01-02')", json!({"$date": "2020-01-02"})),
         (
-            "datetime('2020-01-02T03:04:05.250')",
+            "localdatetime('2020-01-02T03:04:05.250')",
             json!({"$datetime": "2020-01-02T03:04:05.250"}),
+        ),
+        (
+            "datetime('2020-01-02T03:04:05.250+02:00')",
+            json!({"$zdatetime": "2020-01-02T03:04:05.250+02:00"}),
+        ),
+        (
+            "datetime('2020-01-02T03:04:05Z')",
+            json!({"$zdatetime": "2020-01-02T03:04:05Z"}),
         ),
         (
             "duration({months: 1, days: 2, seconds: 3})",

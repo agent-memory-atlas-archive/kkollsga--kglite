@@ -423,10 +423,28 @@ class TestQueryDerivedConnectionProps:
         assert [row["w"] for row in result] == [1.0, 1.5]
 
     def test_datetime_column_roundtrips(self):
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         graph = self._graph()
         graph.cypher("MATCH (a:P {id: 1}) SET a.ts = datetime('2024-03-15T10:30:45')")
+        graph.add_connections(
+            None,
+            "TS",
+            "P",
+            "src",
+            "P",
+            "tgt",
+            query=("MATCH (a:P {id: 1}), (b:P {id: 2}) RETURN a.id AS src, b.id AS tgt, a.ts AS ts"),
+        )
+        result = graph.cypher("MATCH (:P)-[e:TS]->(:P) RETURN e.ts AS ts")
+        assert len(result) == 1
+        assert result[0]["ts"] == datetime(2024, 3, 15, 10, 30, 45, tzinfo=timezone.utc)
+
+    def test_local_datetime_column_roundtrips(self):
+        from datetime import datetime
+
+        graph = self._graph()
+        graph.cypher("MATCH (a:P {id: 1}) SET a.ts = localdatetime('2024-03-15T10:30:45')")
         graph.add_connections(
             None,
             "TS",

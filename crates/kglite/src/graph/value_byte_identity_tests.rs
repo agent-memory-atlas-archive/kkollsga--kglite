@@ -393,7 +393,25 @@ fn appended_value_fixtures() -> Vec<(&'static str, Value)> {
                 },
             ]),
         ),
+        // Zoned datetimes: the appended `ZonedDateTime` tag (19), payload a
+        // zigzag epoch-seconds varint, a varint nanosecond part and a zigzag
+        // offset in seconds. The instant is stored, so the offset is display.
+        ("zoned_epoch", zoned(0, 0, 0)),
+        ("zoned", zoned(1_437_511_232, 142_000_000, 3600)),
+        ("zoned_pre_epoch", zoned(-1, 999_999_999, -64_800)),
+        ("zoned_min", zoned(-62_135_596_800, 0, 64_800)),
+        (
+            "list_zoned",
+            Value::List(vec![zoned(5, 7, -1), zoned(0, 0, 0)]),
+        ),
     ]
+}
+
+fn zoned(secs: i64, nanos: u32, offset_secs: i32) -> Value {
+    Value::ZonedDateTime {
+        utc: crate::datatypes::zoned_datetime::from_epoch(secs, nanos).unwrap(),
+        offset_secs,
+    }
 }
 
 // ============================================================================
@@ -443,6 +461,11 @@ const VALUE_BYTE_GOLDEN: &[(&str, &str)] = &[
     ("time", "128080d9b9de9708a038"),
     ("time_extreme_offset", "1201bff407"),
     ("list_times", "0d021105120701"),
+    ("zoned_epoch", "13000000"),
+    ("zoned", "1380b9f5da0a80ffda43a038"),
+    ("zoned_pre_epoch", "1301ff93ebdc03bff407"),
+    ("zoned_min", "13ffdb8ff9ce0300c0f407"),
+    ("list_zoned", "0d02130a070113000000"),
 ];
 
 /// Standalone struct encodings — the projection-boundary types serialized on
@@ -763,10 +786,10 @@ fn duration_wire_forms_round_trip_and_an_old_reader_refuses_the_fine_tag() {
     assert!(decode::<Shipped>(&nested).is_err());
 }
 
-/// The time-of-day tags are appended after `DurationFine`: a reader built before
+/// The time-of-day and zoned-datetime tags are appended after `DurationFine`: a reader built before
 /// them refuses the bytes instead of misreading them, alone or nested.
 #[test]
-fn an_old_reader_refuses_the_time_of_day_tags() {
+fn an_old_reader_refuses_the_time_of_day_and_zoned_tags() {
     // The variants are decode targets only: the test reads the Result, never the payload.
     #[derive(serde::Deserialize, Debug)]
     #[allow(dead_code)]
@@ -806,7 +829,8 @@ fn an_old_reader_refuses_the_time_of_day_tags() {
         nanos: 36_000_000_000_000,
         offset_secs: 3600,
     };
-    for value in [local.clone(), zoned.clone()] {
+    let instant = zoned_instant();
+    for value in [local.clone(), zoned.clone(), instant.clone()] {
         let bytes = encode(&value);
         assert!(decode::<UpToDurationFine>(&bytes).is_err());
         assert_eq!(decode::<Value>(&bytes).unwrap(), value);
@@ -818,6 +842,15 @@ fn an_old_reader_refuses_the_time_of_day_tags() {
         panic!("a Time decodes to a Time");
     };
     assert_eq!(offset_secs, 3600);
+    let Value::ZonedDateTime { offset_secs, .. } = decode::<Value>(&encode(&instant)).unwrap()
+    else {
+        panic!("a ZonedDateTime decodes to a ZonedDateTime");
+    };
+    assert_eq!(offset_secs, 3600);
+}
+
+fn zoned_instant() -> Value {
+    zoned(1_437_511_232, 142_000_000, 3600)
 }
 
 /// The self-describing (JSON) encoding of `Value` is reachable through the

@@ -13,7 +13,9 @@ use kglite::api::{NodeValue, PropMap, RelValue, Value};
 use napi::bindgen_prelude::{validate_type_tag, ToNapiValue, TypeTag};
 use napi::sys;
 
-use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, LocalTime, Point, Time};
+use crate::classes::{
+    Duration, KgFloat, LocalDate, LocalDateTime, LocalTime, Point, Time, ZonedDateTime,
+};
 use crate::errors::{JsErr, JsRes};
 
 /// Deepest list/map nesting converted into JS. The parser bounds query
@@ -268,6 +270,9 @@ impl ToJs {
             Value::UniqueId(n) | Value::NodeRef(n) => self.number(f64::from(*n)),
             Value::DateTime(d) => self.class(LocalDate::from_naive(*d)),
             Value::Timestamp(t) => self.class(LocalDateTime::from_naive(*t)),
+            Value::ZonedDateTime { utc, offset_secs } => {
+                self.class(ZonedDateTime::from_parts(*utc, *offset_secs))
+            }
             Value::LocalTime(n) => self.class(LocalTime::from_nanos(*n)),
             Value::Time { nanos, offset_secs } => {
                 self.class(Time::from_parts(*nanos, *offset_secs))
@@ -595,9 +600,13 @@ impl FromJs {
                 unsafe { sys::napi_get_date_value(self.env, v, &mut ms) },
                 "date value",
             )?;
+            // A JS `Date` is an instant: it binds as a zoned datetime at UTC.
             return chrono::DateTime::from_timestamp_millis(ms as i64)
                 .filter(|_| ms.is_finite())
-                .map(|t| Value::Timestamp(t.naive_utc()))
+                .map(|t| Value::ZonedDateTime {
+                    utc: t.naive_utc(),
+                    offset_secs: 0,
+                })
                 .ok_or_else(|| JsErr::arg(format!("{path}: invalid Date")));
         }
         if self.flag(v, sys::napi_is_typedarray)?
@@ -637,6 +646,10 @@ impl FromJs {
         }
         if let Some(t) = self.unwrap_class::<LocalDateTime>(v) {
             return Some(Value::Timestamp(t.to_naive()));
+        }
+        if let Some(t) = self.unwrap_class::<ZonedDateTime>(v) {
+            let (utc, offset_secs) = t.to_parts();
+            return Some(Value::ZonedDateTime { utc, offset_secs });
         }
         if let Some(t) = self.unwrap_class::<LocalTime>(v) {
             return Some(Value::LocalTime(t.to_nanos()));

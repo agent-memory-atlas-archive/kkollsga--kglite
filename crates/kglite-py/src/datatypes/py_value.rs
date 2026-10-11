@@ -472,9 +472,7 @@ fn convert_query_value(
         if is_pandas_nat(value) {
             return Ok(Value::Null);
         }
-        return datetime_to_utc_naive(datetime)
-            .map(Value::Timestamp)
-            .map_err(QueryConversionError::Python);
+        return datetime_to_value(datetime).map_err(QueryConversionError::Python);
     }
     if value.is_instance_of::<PyDate>() {
         if let Ok(date) = value.extract::<chrono::NaiveDate>() {
@@ -605,7 +603,7 @@ fn convert_value(value: &Bound<'_, PyAny>, state: &mut ConversionState) -> PyRes
     }
     // datetime is a date subclass: failure must not degrade to a date-only value.
     if let Ok(dt) = value.cast::<PyDateTime>() {
-        return datetime_to_utc_naive(dt).map(Value::Timestamp);
+        return datetime_to_value(dt);
     }
     if value.is_instance_of::<PyDate>() {
         if let Ok(d) = value.extract::<chrono::NaiveDate>() {
@@ -677,6 +675,37 @@ pub(crate) fn datetime_to_utc_naive(
     normalized
         .call_method("replace", (), Some(&kwargs))?
         .extract::<chrono::NaiveDateTime>()
+}
+
+/// A `datetime.datetime` as a value: a naive one is a local `Timestamp`, an
+/// aware one a `ZonedDateTime` at the instant it names, keeping the UTC offset it
+/// was written in (whole seconds within ±18:00; an offset outside that keeps the
+/// instant at UTC rather than refusing a value this binding always accepted).
+/// A tzinfo whose `utcoffset(dt)` is `None` is naive by Python's definition.
+pub(crate) fn datetime_to_value(value: &Bound<'_, PyDateTime>) -> PyResult<Value> {
+    if value.get_tzinfo().is_none() {
+        return value
+            .extract::<chrono::NaiveDateTime>()
+            .map(Value::Timestamp);
+    }
+    let offset = value.call_method0("utcoffset")?;
+    if offset.is_none() {
+        return datetime_to_utc_naive(value).map(Value::Timestamp);
+    }
+    let utc = datetime_to_utc_naive(value)?;
+    let delta = offset.cast::<PyDelta>()?;
+    let get = |name: &str| -> PyResult<i64> { delta.getattr(name)?.extract() };
+    let offset_secs = if get("microseconds")? == 0 {
+        i32::try_from(get("days")? * 86_400 + get("seconds")?)
+            .ok()
+            .filter(|s| s.abs() <= kglite_core::api::time_of_day::MAX_OFFSET_SECS)
+    } else {
+        None
+    };
+    Ok(Value::ZonedDateTime {
+        utc,
+        offset_secs: offset_secs.unwrap_or(0),
+    })
 }
 
 /// A `datetime.time` as a time of day: a naive one is a `LocalTime`, one whose

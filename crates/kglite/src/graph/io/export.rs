@@ -567,6 +567,9 @@ fn json_value(value: &Value) -> String {
         Value::Time { nanos, offset_secs } => json_string(
             &crate::datatypes::time_of_day::format_time(*nanos, *offset_secs),
         ),
+        Value::ZonedDateTime { utc, offset_secs } => json_string(
+            &crate::datatypes::zoned_datetime::format_zoned(*utc, *offset_secs),
+        ),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => idx.to_string(),
         // JSON-encode these variants recursively via

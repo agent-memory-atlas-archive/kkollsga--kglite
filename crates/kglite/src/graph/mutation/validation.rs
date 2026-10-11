@@ -228,7 +228,11 @@ pub fn value_matches_type(value: &Value, expected_type: &str) -> bool {
         }
         "list" | "array" => matches!(value, Value::List(_)),
         "boolean" | "bool" => matches!(value, Value::Boolean(_)),
-        "datetime" => matches!(value, Value::DateTime(_) | Value::Timestamp(_)),
+        "datetime" => matches!(
+            value,
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. }
+        ),
+        "zoneddatetime" => matches!(value, Value::ZonedDateTime { .. }),
         "date" => matches!(value, Value::DateTime(_)),
         "timestamp" => matches!(value, Value::Timestamp(_)),
         "localtime" => matches!(value, Value::LocalTime(_)),
@@ -255,6 +259,7 @@ pub fn get_value_type_name(value: &Value) -> String {
         Value::Duration { .. } => "duration".to_string(),
         Value::LocalTime(_) => "localtime".to_string(),
         Value::Time { .. } => "time".to_string(),
+        Value::ZonedDateTime { .. } => "zoneddatetime".to_string(),
         Value::Null => "null".to_string(),
         Value::NodeRef(_) => "noderef".to_string(),
         Value::List(_) => "list".to_string(),

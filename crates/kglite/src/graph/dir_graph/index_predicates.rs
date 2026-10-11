@@ -57,16 +57,35 @@ pub(crate) fn equality_keys(value: &Value) -> Option<Vec<Value>> {
         Value::DateTime(d) => {
             if let Some(midnight) = d.and_hms_opt(0, 0, 0) {
                 keys.push(Value::Timestamp(midnight));
+                keys.push(zoned_utc(midnight));
             }
         }
+        // A local datetime is read as UTC, so it equals the zoned value at the
+        // same instant (any offset: zoned identity ignores it).
         Value::Timestamp(t) => {
+            keys.push(zoned_utc(*t));
             if t.time() == chrono::NaiveTime::MIN {
                 keys.push(Value::DateTime(t.date()));
+            }
+        }
+        Value::ZonedDateTime { utc, .. } => {
+            keys.push(Value::Timestamp(*utc));
+            if utc.time() == chrono::NaiveTime::MIN {
+                keys.push(Value::DateTime(utc.date()));
             }
         }
         _ => return None,
     }
     Some(keys)
+}
+
+/// The zoned value at the instant `utc`, for an index key: identity is the
+/// instant, so the offset it carries does not matter.
+fn zoned_utc(utc: chrono::NaiveDateTime) -> Value {
+    Value::ZonedDateTime {
+        utc,
+        offset_secs: 0,
+    }
 }
 
 /// The stored temporal values `=` finds equal to the text `s`: a date when `s`
@@ -116,8 +135,10 @@ pub(crate) fn temporal_probe_needs_scan<'a, I: Iterator<Item = &'a Value>>(
     probe: &Value,
     keys: impl FnOnce() -> I,
 ) -> bool {
-    matches!(probe, Value::DateTime(_) | Value::Timestamp(_))
-        && keys().any(|key| {
+    matches!(
+        probe,
+        Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. }
+    ) && keys().any(|key| {
             matches!(key, Value::String(s) if crate::graph::core::filtering::parses_as_temporal(s))
         })
 }
@@ -309,10 +330,12 @@ fn scalar_ranges(lower: Bound<&Value>, upper: Bound<&Value>) -> Option<Vec<KeyRa
     if strings {
         let date = Value::DateTime(chrono::NaiveDate::MIN);
         let timestamp = Value::Timestamp(chrono::NaiveDate::MIN.and_hms_opt(0, 0, 0)?);
+        let zoned = zoned_utc(chrono::NaiveDate::MIN.and_hms_opt(0, 0, 0)?);
         for bound in values {
             if let Bound::Included(value) | Bound::Excluded(value) = bound {
                 if compare_values(&date, value).is_some()
                     || compare_values(&timestamp, value).is_some()
+                    || compare_values(&zoned, value).is_some()
                 {
                     return None;
                 }

@@ -240,8 +240,10 @@ edge/property ingestion keeps its declared tolerant conversion policy.
 
 JSON has no date type, so a date or datetime parameter is a one-key tagged
 object: `{"$date": "2020-01-01"}` binds a date (parsed as `date()` parses),
-`{"$datetime": "2020-01-01T10:00:00+02:00"}` binds a datetime (parsed as
-`datetime()` parses; an offset is applied, normalising to UTC), and
+`{"$datetime": "2020-01-01T10:00:00"}` binds a local datetime (a text that
+carries an offset binds a zoned one, as `{"$zdatetime": …}` does),
+`{"$zdatetime": "2020-01-01T10:00:00+02:00"}` binds an instant that keeps its
+offset (no offset means UTC, as `datetime()` reads it), and
 `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` binds a duration,
 `{"$localtime": "10:00:00.5"}` binds a local time (no offset allowed) and
 `{"$time": "10:00:00+01:00"}` a time (no offset means UTC). The
@@ -282,6 +284,7 @@ bound again is unchanged.
 
 - `{"$date": "2020-01-02"}`
 - `{"$datetime": "2020-01-02T03:04:05.250"}`, with no zone
+- `{"$zdatetime": "2020-01-02T03:04:05.250+02:00"}`, an instant with its offset
 - `{"$localtime": "10:00:00.5"}` and `{"$time": "10:00:00+01:00"}`
 - `{"$duration": {"months": 0, "days": 1, "seconds": 0}}`
 - `{"$point": {"lat": 60.1, "lon": 5.2}}`

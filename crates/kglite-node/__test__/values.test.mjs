@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { kglite, freshGraph } from './helpers.mjs';
 
-const { LocalDate, LocalDateTime, LocalTime, Time, Duration, Point, KgFloat } = kglite;
+const { LocalDate, LocalDateTime, LocalTime, Time, ZonedDateTime, Duration, Point, KgFloat } = kglite;
 
 const { graph, cleanup } = await freshGraph();
 const { graph: bigGraph, cleanup: cleanupBig } = await freshGraph({ integers: 'bigint' });
@@ -134,11 +134,43 @@ test('datetimes: nanoseconds survive, toDate() reads the wall clock as UTC', asy
   assert.equal(String(await roundTrip(new LocalDateTime(2024, 1, 2))), '2024-01-02T00:00:00');
 });
 
-test('datetimes: a JS Date parameter is a UTC datetime with millisecond precision', async () => {
+test('datetimes: a JS Date parameter is an instant at UTC with millisecond precision', async () => {
   const back = await roundTrip(new Date('2024-05-06T07:08:09.123Z'));
-  assert.ok(back instanceof LocalDateTime);
-  assert.equal(String(back), '2024-05-06T07:08:09.123');
+  assert.ok(back instanceof ZonedDateTime);
+  assert.equal(String(back), '2024-05-06T07:08:09.123Z');
+  assert.equal(back.toDate().getTime(), Date.parse('2024-05-06T07:08:09.123Z'));
   await assert.rejects(roundTrip(new Date(NaN)), (e) => e.code === 'InvalidArgument');
+});
+
+test('zoned datetimes round-trip with their nanoseconds and offset', async () => {
+  const z = await roundTrip(new ZonedDateTime(2024, 2, 29, 12, 30, 15, 123456789, 3600));
+  assert.ok(z instanceof ZonedDateTime);
+  assert.deepEqual(
+    [z.year, z.month, z.day, z.hour, z.minute, z.second, z.nanosecond, z.offsetSeconds],
+    [2024, 2, 29, 12, 30, 15, 123456789, 3600],
+  );
+  assert.equal(String(z), '2024-02-29T12:30:15.123456789+01:00');
+  assert.equal(JSON.stringify(z), '"2024-02-29T12:30:15.123456789+01:00"');
+  // The instant is 11:30:15.123456789Z, to the millisecond in a JS Date.
+  assert.equal(z.toDate().getTime(), Date.parse('2024-02-29T11:30:15.123Z'));
+  assert.equal(String(await roundTrip(new ZonedDateTime(2024, 1, 1, 0, 0, 0, 0, 0))), '2024-01-01T00:00Z');
+  assert.equal(
+    String(await roundTrip(new ZonedDateTime(2024, 1, 1, 23, 59, 59, 999999999, -64800))),
+    '2024-01-01T23:59:59.999999999-18:00',
+  );
+  assert.throws(() => new ZonedDateTime(2024, 2, 30), (e) => e.code === 'InvalidArgument');
+  assert.throws(() => new ZonedDateTime(2024, 2, 1, 0, 0, 0, 0, 64801), (e) => e.code === 'InvalidArgument');
+});
+
+test('datetime() returns the zoned class and compares by instant', async () => {
+  const r = await graph.executeRead(
+    "RETURN datetime('2024-05-06T08:00:00+01:00') AS z, datetime('2024-05-06T08:00:00+01:00') = datetime('2024-05-06T07:00:00Z') AS same, localdatetime('2024-05-06T08:00:00') AS l",
+  );
+  assert.ok(r.rows[0].z instanceof ZonedDateTime);
+  assert.equal(r.rows[0].z.offsetSeconds, 3600);
+  assert.equal(String(r.rows[0].z), '2024-05-06T08:00+01:00');
+  assert.equal(r.rows[0].same, true);
+  assert.ok(r.rows[0].l instanceof LocalDateTime);
 });
 
 test('times of day round-trip with their nanoseconds and offset', async () => {

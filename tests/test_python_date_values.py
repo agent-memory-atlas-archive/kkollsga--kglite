@@ -25,7 +25,7 @@ D = dt.date(2010, 1, 2)
 def graph() -> kglite.KnowledgeGraph:
     g = kglite.KnowledgeGraph()
     g.cypher(
-        "CREATE (a:M {n: 1, d: date('2010-01-02'), t: datetime('2010-01-02T03:04:05')})"
+        "CREATE (a:M {n: 1, d: date('2010-01-02'), t: localdatetime('2010-01-02T03:04:05')})"
         "-[:R {on: date('2011-05-06')}]->(:M {n: 2})"
     ).to_list()
     return g
@@ -71,7 +71,7 @@ def test_mixed_columns_keep_each_value(graph) -> None:
     assert df["v"].dtype == object and list(df["v"]) == [D, "x"]
     df = graph.cypher("UNWIND [date('2010-01-02'), 3] AS v RETURN v").to_df()
     assert df["v"].dtype == object and list(df["v"]) == [D, 3]
-    df = graph.cypher("UNWIND [date('2010-01-02'), datetime('2010-01-02T05:00:00')] AS v RETURN v").to_df()
+    df = graph.cypher("UNWIND [date('2010-01-02'), localdatetime('2010-01-02T05:00:00')] AS v RETURN v").to_df()
     assert str(df["v"].dtype) == "datetime64[ns]"
     assert list(df["v"]) == [pd.Timestamp(2010, 1, 2), pd.Timestamp(2010, 1, 2, 5)]
 

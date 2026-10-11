@@ -123,7 +123,7 @@ class SeasonalZone(dt.tzinfo):
     ],
 )
 @pytest.mark.parametrize("route", ["nodes", "edges"])
-def test_scalar_nested_timestamp_same_utc_instant(value, expected, route):
+def test_scalar_column_is_utc_naive_and_nested_datetime_keeps_its_offset(value, expected, route):
     graph = kglite.KnowledgeGraph()
     frame = pd.DataFrame(
         {
@@ -143,9 +143,13 @@ def test_scalar_nested_timestamp_same_utc_instant(value, expected, route):
         frame["src"], frame["dst"] = [1], [2]
         graph.add_connections(frame, "R", "N", "src", "N", "dst", column_types=types)
         query = "MATCH()-[n:R]->() RETURN n.v AS v,n.m.v AS m,n.l[0] AS l,n.day AS day"
+    # A declared timestamp column reads an aware cell at UTC without a zone; a
+    # datetime nested in a map or list keeps its offset (a zoned datetime), and one
+    # whose tzinfo reports no offset stays naive.
+    nested = value if value.utcoffset() is not None else expected
     assert_rows_equal(
         graph.cypher(query).to_list(),
-        [{"v": expected, "m": expected, "l": expected, "day": value.date()}],
+        [{"v": expected, "m": nested, "l": nested, "day": value.date()}],
         order="ordered",
     )
 

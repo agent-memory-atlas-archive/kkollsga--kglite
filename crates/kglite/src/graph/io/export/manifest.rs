@@ -79,6 +79,7 @@ pub enum ColumnKind {
     Duration,
     LocalTime,
     Time,
+    ZonedDateTime,
     List,
     Map,
     /// No row holds a value.
@@ -102,6 +103,7 @@ impl ColumnKind {
             Value::Duration { .. } => Self::Duration,
             Value::LocalTime(_) => Self::LocalTime,
             Value::Time { .. } => Self::Time,
+            Value::ZonedDateTime { .. } => Self::ZonedDateTime,
             Value::List(_) => Self::List,
             Value::Map(_) => Self::Map,
             Value::Null | Value::NodeRef(_) => return None,

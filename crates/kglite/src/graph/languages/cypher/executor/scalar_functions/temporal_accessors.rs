@@ -22,7 +22,7 @@ fn date_part(date: NaiveDate, property: &str) -> Option<i64> {
     })
 }
 
-fn datetime_part(t: NaiveDateTime, property: &str) -> Option<i64> {
+pub(super) fn datetime_part(t: NaiveDateTime, property: &str) -> Option<i64> {
     Some(match property {
         "hour" => t.hour() as i64,
         "minute" => t.minute() as i64,
@@ -85,6 +85,10 @@ pub(in crate::graph::languages::cypher::executor) fn temporal_property(
             _ => date_part(*date, property),
         },
         Value::Timestamp(t) => datetime_part(*t, property),
+        Value::ZonedDateTime { utc, offset_secs } => {
+            return super::temporal_zoned::zoned_property(*utc, *offset_secs, property)
+                .or(Some(Value::Null))
+        }
         Value::LocalTime(nanos) => {
             return Some(super::temporal_time::time_property(*nanos, None, property))
         }

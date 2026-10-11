@@ -264,6 +264,7 @@ fn calculate_stats_for_nodes(
                             Value::Duration { .. } => "duration",
                             Value::LocalTime(_) => "localtime",
                             Value::Time { .. } => "time",
+                            Value::ZonedDateTime { .. } => "zoneddatetime",
                             Value::Null => "null",
                             Value::NodeRef(_) => "noderef",
                             // Collection / graph-entity variants

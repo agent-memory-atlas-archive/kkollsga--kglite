@@ -610,7 +610,9 @@ def test_datetime_keeps_and_compares_sub_second_digits():
         "datetime('2021-11-15T21:06:42.317') > datetime('2021-11-15T21:06:42.316') AS later, "
         "datetime('2021-11-15T21:06:42.317+02:00') AS zoned"
     ).to_list()[0]
-    assert row["a"] == dt.datetime(2021, 11, 15, 21, 6, 42, 317000)
+    # An offset-free text reads as UTC; an offset is kept on the value.
+    assert row["a"] == dt.datetime(2021, 11, 15, 21, 6, 42, 317000, tzinfo=dt.timezone.utc)
     assert row["same"] is False
     assert row["later"] is True
-    assert row["zoned"] == dt.datetime(2021, 11, 15, 19, 6, 42, 317000)
+    assert row["zoned"] == dt.datetime(2021, 11, 15, 19, 6, 42, 317000, tzinfo=dt.timezone.utc)
+    assert row["zoned"].utcoffset() == dt.timedelta(hours=2)

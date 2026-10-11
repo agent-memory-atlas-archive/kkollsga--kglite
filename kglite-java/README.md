@@ -158,7 +158,7 @@ On a graph with a validity declaration (`CALL db.temporal.declare(...)`, see
 prefix `FOR VALID_TIME AS OF date('…')` before the text — the same prefix the
 Python and MCP bindings' `valid_at` write — rendered from `java.time`, never
 spliced: a `LocalDate` becomes `date('…')`, a `LocalDateTime` becomes
-`datetime('…')` read as naive UTC, and an `OffsetDateTime`, `ZonedDateTime` or
+`datetime('…')` read as UTC, and an `OffsetDateTime`, `ZonedDateTime` or
 `Instant` is converted to UTC first. A `String` is parsed as ISO before it is
 rendered. The answer holds only the elements valid at the instant, and
 `diagnostics().get("temporal")` echoes the instant, the declared targets the
@@ -203,7 +203,8 @@ follows, and the mapping is asserted in both directions by
 | relationship | `Map` | `id`, `start`, `end`, `type`, `properties` |
 | path | `Map` | `nodes`, `relationships`, each a `List` of the maps above |
 | date | `LocalDate` | bound back as a `LocalDate`, it matches |
-| datetime | `LocalDateTime` | normalised to UTC, no zone |
+| datetime (`datetime()`) | `OffsetDateTime` | an instant; the offset it was written in is kept, and two datetimes at one instant are equal in the engine |
+| local datetime (`localdatetime()`) | `LocalDateTime` | no zone |
 | local time | `LocalTime` | nanosecond precision |
 | time | `OffsetTime` | the offset is kept; two `time` values at one instant of day are equal in the engine |
 | duration | `KgliteDuration` | `months`, `days`, `seconds`, `nanos` |
@@ -211,9 +212,10 @@ follows, and the mapping is asserted in both directions by
 
 Parameters accept the mirror set: `null`, `String`, `Boolean`, any `Number`,
 `Map` with `String` keys, `Iterable`, `Object[]`, nested freely. `LocalDate`
-binds as a Cypher date, and `LocalDateTime`, `OffsetDateTime`, `ZonedDateTime`
-and `Instant` bind as a datetime (an offset is applied, so the stored value is
-UTC), so `WHERE r.since = $d` matches a stored `date()`. `LocalTime` binds as a
+binds as a Cypher date, `LocalDateTime` as a local datetime, and
+`OffsetDateTime`, `ZonedDateTime` (as its offset form) and `Instant` as a
+datetime keeping its offset. A local datetime is read as UTC where it meets a
+datetime, so `WHERE r.since = $d` matches a stored `date()`. `LocalTime` binds as a
 local time and `OffsetTime` as a time with its offset. A bare `String` stays a
 string and never equals a date. Anything else (a POJO, another `java.time`
 type) is rejected before the call reaches the engine, with a message

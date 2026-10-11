@@ -4,13 +4,15 @@
 use std::collections::HashMap;
 
 use napi::bindgen_prelude::{
-    BigInt, Date, Either3, Either5, Either6, FromNapiValue, Null, ToNapiValue, TypeName,
+    BigInt, Date, Either3, Either5, Either7, FromNapiValue, Null, ToNapiValue, TypeName,
     ValidateNapiValue,
 };
 use napi::sys;
 use napi_derive::napi;
 
-use crate::classes::{Duration, KgFloat, LocalDate, LocalDateTime, LocalTime, Point, Time};
+use crate::classes::{
+    Duration, KgFloat, LocalDate, LocalDateTime, LocalTime, Point, Time, ZonedDateTime,
+};
 
 /// Declares a type-only marker whose `type_name` is the TypeScript it should emit.
 macro_rules! ts_marker {
@@ -62,7 +64,7 @@ ts_marker!(
 /// Any value a query can return.
 ///
 /// `Int64` is `number` when exact and `bigint` beyond 2^53 - 1 (`integers: 'bigint'`
-/// makes every integer a `bigint`). Dates, datetimes, times of day, durations and points are the
+/// makes every integer a `bigint`). Dates, datetimes (local and zoned), times of day, durations and points are the
 /// exported classes; nodes, relationships and paths are plain objects.
 ///
 /// `JSON.stringify` throws on a `bigint` (a JavaScript rule, not a kglite one): pass a
@@ -70,7 +72,7 @@ ts_marker!(
 #[napi(js_name = "KgValue")]
 pub type KgValueType = Either5<
     Either5<Null, bool, f64, BigInt, String>,
-    Either6<LocalDate, LocalDateTime, LocalTime, Time, Duration, Point>,
+    Either7<LocalDate, LocalDateTime, ZonedDateTime, LocalTime, Time, Duration, Point>,
     Either3<KgNode, KgRelationship, KgPath>,
     Vec<KgValue>,
     KgMap,

@@ -161,6 +161,133 @@ impl LocalDateTime {
     }
 }
 
+/// An instant with the UTC offset it was written in, to the nanosecond. The fields
+/// read the wall clock at that offset. Two datetimes at the same instant are equal
+/// in the engine whatever their offsets.
+#[napi]
+pub struct ZonedDateTime {
+    #[napi(readonly)]
+    pub year: i32,
+    #[napi(readonly)]
+    pub month: u32,
+    #[napi(readonly)]
+    pub day: u32,
+    #[napi(readonly)]
+    pub hour: u32,
+    #[napi(readonly)]
+    pub minute: u32,
+    #[napi(readonly)]
+    pub second: u32,
+    #[napi(readonly)]
+    pub nanosecond: u32,
+    /// Seconds east of UTC.
+    #[napi(readonly)]
+    pub offset_seconds: i32,
+}
+
+impl ZonedDateTime {
+    /// The UTC instant and offset an engine value carries.
+    pub fn to_parts(&self) -> (NaiveDateTime, i32) {
+        let wall = NaiveDate::from_ymd_opt(self.year, self.month, self.day)
+            .and_then(|d| d.and_hms_nano_opt(self.hour, self.minute, self.second, self.nanosecond))
+            .expect("validated at construction");
+        let utc = kglite::api::zoned_datetime::utc_from_wall(wall, self.offset_seconds)
+            .expect("validated at construction");
+        (utc, self.offset_seconds)
+    }
+    pub fn from_parts(utc: NaiveDateTime, offset_seconds: i32) -> Self {
+        let wall = kglite::api::zoned_datetime::wall_clock(utc, offset_seconds);
+        Self {
+            year: wall.year(),
+            month: wall.month(),
+            day: wall.day(),
+            hour: wall.hour(),
+            minute: wall.minute(),
+            second: wall.second(),
+            nanosecond: wall.nanosecond(),
+            offset_seconds,
+        }
+    }
+}
+
+#[napi]
+impl ZonedDateTime {
+    /// The wall clock at `offsetSeconds` (default 0, UTC).
+    // The JS constructor takes one wall-clock reading plus its offset, so the
+    // eight positional parameters are the public signature.
+    #[allow(clippy::too_many_arguments)]
+    #[napi(constructor)]
+    pub fn new(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: Option<u32>,
+        minute: Option<u32>,
+        second: Option<u32>,
+        nanosecond: Option<u32>,
+        offset_seconds: Option<i32>,
+    ) -> napi::Result<Self, &'static str> {
+        contain(|| {
+            let (hour, minute, second, nanosecond, offset_seconds) = (
+                hour.unwrap_or(0),
+                minute.unwrap_or(0),
+                second.unwrap_or(0),
+                nanosecond.unwrap_or(0),
+                offset_seconds.unwrap_or(0),
+            );
+            if offset_seconds.abs() > kglite::api::time_of_day::MAX_OFFSET_SECS {
+                return Err(bad(format!(
+                    "invalid offset {offset_seconds}s: a datetime's offset is within ±18 hours"
+                )));
+            }
+            NaiveDate::from_ymd_opt(year, month, day)
+                .and_then(|d| d.and_hms_nano_opt(hour, minute, second, nanosecond))
+                .filter(|wall| {
+                    kglite::api::zoned_datetime::utc_from_wall(*wall, offset_seconds).is_some()
+                })
+                .map(|_| Self {
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    nanosecond,
+                    offset_seconds,
+                })
+                .ok_or_else(|| {
+                    bad(format!(
+                        "invalid datetime {year}-{month}-{day} {hour}:{minute}:{second}.{nanosecond}"
+                    ))
+                })
+        })
+    }
+
+    /// ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC.
+    #[napi(js_name = "toString")]
+    pub fn to_iso(&self) -> napi::Result<String, &'static str> {
+        contain(|| {
+            let (utc, offset) = self.to_parts();
+            Ok(kglite::api::zoned_datetime::format_zoned(utc, offset))
+        })
+    }
+
+    /// The JS `Date` of this instant; sub-millisecond digits are dropped.
+    #[napi(js_name = "toDate", ts_return_type = "Date")]
+    pub fn to_date<'e>(&self, env: &'e Env) -> napi::Result<napi::JsDate<'e>, &'static str> {
+        contain(|| {
+            let ms = self.to_parts().0.and_utc().timestamp_millis() as f64;
+            env.create_date(ms)
+                .map_err(|e| to_sync_error(JsErr::from(e)))
+        })
+    }
+
+    #[napi(js_name = "toJSON")]
+    pub fn to_json(&self) -> napi::Result<String, &'static str> {
+        self.to_iso()
+    }
+}
+
 /// A time of day with no offset, to the nanosecond.
 #[napi]
 pub struct LocalTime {

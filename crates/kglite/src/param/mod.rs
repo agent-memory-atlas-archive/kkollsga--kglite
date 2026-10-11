@@ -407,6 +407,7 @@ pub fn kglite_value_to_json(v: &Value) -> serde_json::Value {
 /// |-------|------|
 /// | date | `{"$date": "2020-01-01"}` |
 /// | timestamp | `{"$datetime": "2020-01-02T03:04:05.250"}` (no zone) |
+/// | zoned datetime | `{"$zdatetime": "2020-01-02T03:04:05.250+02:00"}` |
 /// | local time | `{"$localtime": "10:00:00.5"}` |
 /// | time | `{"$time": "10:00:00+01:00"}` |
 /// | duration | `{"$duration": {"months": 0, "days": 1, "seconds": 0}}` |
@@ -421,9 +422,10 @@ pub fn kglite_value_to_json_tagged(v: &Value) -> serde_json::Value {
 }
 
 /// Every tag key, for escaping a user map that would otherwise read as a tag.
-const TAG_KEYS: [&str; 8] = [
+const TAG_KEYS: [&str; 9] = [
     "$date",
     "$datetime",
+    "$zdatetime",
     "$localtime",
     "$time",
     "$duration",
@@ -487,6 +489,16 @@ fn value_to_json(v: &Value, mode: Encoding) -> serde_json::Value {
             match mode {
                 Encoding::Natural => text,
                 Encoding::Tagged => tag("$datetime", text),
+            }
+        }
+        Value::ZonedDateTime { utc, offset_secs } => {
+            let text = J::String(crate::datatypes::zoned_datetime::format_zoned(
+                *utc,
+                *offset_secs,
+            ));
+            match mode {
+                Encoding::Natural => text,
+                Encoding::Tagged => tag("$zdatetime", text),
             }
         }
         Value::LocalTime(n) => {
@@ -574,6 +586,9 @@ pub fn kglite_value_to_csv_text(v: &Value) -> String {
         Value::UniqueId(n) | Value::NodeRef(n) => n.to_string(),
         Value::DateTime(d) => d.format("%Y-%m-%d").to_string(),
         Value::Timestamp(d) => d.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+        Value::ZonedDateTime { utc, offset_secs } => {
+            crate::datatypes::zoned_datetime::format_zoned(*utc, *offset_secs)
+        }
         Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
         Value::Time { nanos, offset_secs } => {
             crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)
@@ -621,6 +636,10 @@ fn kglite_nested_value_to_csv_text(v: &Value) -> String {
         Value::String(s) => format!("\"{s}\""),
         Value::DateTime(d) => format!("\"{}\"", d.format("%Y-%m-%d")),
         Value::Timestamp(d) => format!("\"{}\"", d.format("%Y-%m-%dT%H:%M:%S%.f")),
+        // Quoted like the dates, as the nested text of every other renderer is.
+        Value::ZonedDateTime { .. } | Value::LocalTime(_) | Value::Time { .. } => {
+            format!("\"{}\"", kglite_value_to_csv_text(v))
+        }
         Value::Null => "NULL".to_string(),
         Value::NodeRef(index) => format!("node#{index}"),
         other => kglite_value_to_csv_text(other),
@@ -1059,28 +1078,46 @@ mod temporal_constructor_contract_tests {
         let graph = crate::graph::dir_graph::DirGraph::new();
         let params = std::collections::HashMap::new();
         let options = crate::api::session::ExecuteOptions::eager(&params);
-        for (query, expected) in [
+        // `datetime()` is the instant with the offset it was written in;
+        // `localdatetime()` keeps the wall clock and drops the offset.
+        for (query, expected, offset) in [
             (
                 "RETURN datetime('2025-01-02T00:04:05.123456789+02:00') AS t",
                 "2025-01-01T22:04:05.123456789",
+                Some(7200),
             ),
             (
                 "RETURN localdatetime('2025-01-02T00:04:05.123456789+02:00') AS t",
                 "2025-01-02T00:04:05.123456789",
+                None,
             ),
             (
                 "RETURN datetime('2025-01-02T03:04:05') AS t",
                 "2025-01-02T03:04:05",
+                Some(0),
             ),
             (
                 "RETURN localdatetime('2025-01-02T03:04:05.123456789') AS t",
                 "2025-01-02T03:04:05.123456789",
+                None,
             ),
         ] {
             let result = crate::api::session::execute_read(&graph, query, &options).unwrap();
             let native =
                 chrono::NaiveDateTime::parse_from_str(expected, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
-            assert_eq!(result.result.rows, vec![vec![Value::Timestamp(native)]]);
+            let want = match offset {
+                Some(offset_secs) => Value::ZonedDateTime {
+                    utc: native,
+                    offset_secs,
+                },
+                None => Value::Timestamp(native),
+            };
+            // `==` on a zoned value ignores the offset; the debug form carries it.
+            assert_eq!(
+                format!("{:?}", result.result.rows),
+                format!("{:?}", vec![vec![want]]),
+                "{query}"
+            );
         }
     }
 }
@@ -1106,8 +1143,10 @@ mod temporal_now_contract_tests {
             let before = now();
             let result = crate::api::session::execute_read(&graph, query, &options).unwrap();
             let after = now();
-            let Value::Timestamp(actual) = result.result.rows[0][0] else {
-                panic!("expected Timestamp")
+            let (Value::Timestamp(actual) | Value::ZonedDateTime { utc: actual, .. }) =
+                result.result.rows[0][0]
+            else {
+                panic!("expected a datetime")
             };
             assert!(
                 actual >= before && actual <= after,

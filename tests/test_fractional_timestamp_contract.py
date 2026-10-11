@@ -11,20 +11,26 @@ import pytest
 
 import kglite
 
+UTC = dt.timezone.utc
+
 
 @pytest.mark.parametrize("kind", ["datetime", "localdatetime"])
 @pytest.mark.parametrize("consumer", ["list", "scalar", "frame", "direct_frame", "csv", "string", "concat"])
 def test_timestamp_fraction_in_every_public_consumer(kind, consumer):
+    """The fraction survives every output for the local kind and the zoned one;
+    the zoned kind spells its offset (`Z`) and comes back aware."""
     graph = kglite.KnowledgeGraph()
     expression = f"{kind}('2025-01-02T03:04:05.123456')"
-    expected = dt.datetime(2025, 1, 2, 3, 4, 5, 123456)
+    zoned = kind == "datetime"
+    expected = dt.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=UTC if zoned else None)
+    text = expected.replace(tzinfo=None).isoformat() + ("Z" if zoned else "")
     if consumer == "csv":
         output = graph.cypher(f"RETURN {expression} AS t FORMAT CSV")
-        assert list(csv.DictReader(io.StringIO(output))) == [{"t": expected.isoformat()}]
+        assert list(csv.DictReader(io.StringIO(output))) == [{"t": text}]
     elif consumer in {"string", "concat"}:
         wrapped = f"toString({expression})" if consumer == "string" else f"'at:' || {expression}"
         prefix = "at:" if consumer == "concat" else ""
-        assert graph.cypher(f"RETURN {wrapped} AS t").scalar() == prefix + expected.isoformat()
+        assert graph.cypher(f"RETURN {wrapped} AS t").scalar() == prefix + text
     elif consumer == "direct_frame":
         assert graph.cypher(f"RETURN {expression} AS t", to_df=True).to_dict("records") == [{"t": expected}]
     else:
@@ -47,7 +53,9 @@ def test_cli_json_preserves_native_nanoseconds_and_whole_second_spelling(tmp_pat
             "kglite.cli",
             "query",
             str(path),
-            "RETURN datetime('2025-01-02T03:04:05.123456789') AS fraction, datetime('2025-01-02T03:04:05') AS whole",
+            "RETURN localdatetime('2025-01-02T03:04:05.123456789') AS fraction, "
+            "localdatetime('2025-01-02T03:04:05') AS whole, "
+            "datetime('2025-01-02T03:04:05.123456789+01:00') AS zoned",
             "--format",
             "json",
         ],
@@ -57,20 +65,32 @@ def test_cli_json_preserves_native_nanoseconds_and_whole_second_spelling(tmp_pat
         check=False,
     )
     assert process.returncode == 0, process.stderr
-    assert json.loads(process.stdout) == [{"fraction": "2025-01-02T03:04:05.123456789", "whole": "2025-01-02T03:04:05"}]
+    assert json.loads(process.stdout) == [
+        {
+            "fraction": "2025-01-02T03:04:05.123456789",
+            "whole": "2025-01-02T03:04:05",
+            "zoned": "2025-01-02T03:04:05.123456789+01:00",
+        }
+    ]
 
 
+@pytest.mark.parametrize("kind,suffix", [("localdatetime", ""), ("datetime", "Z")])
 @pytest.mark.parametrize("text", ["2025-01-02T03:04:05", "2025-01-02T03:04:05.123456789"])
 @pytest.mark.parametrize("operator", ["toString", "concat"])
-def test_nested_semantic_timestamp_text_is_exact(text, operator):
+def test_nested_semantic_timestamp_text_is_exact(kind, suffix, text, operator):
     graph = kglite.KnowledgeGraph()
-    expression = f"[{{t:datetime('{text}')}}]"
+    expression = f"[{{t:{kind}('{text}')}}]"
     wrapped = f"toString({expression})" if operator == "toString" else f"'at:' || {expression}"
     prefix = "at:" if operator == "concat" else ""
-    assert graph.cypher(f"RETURN {wrapped} AS t").scalar() == prefix + '[{t: "' + text + '"}]'
+    assert graph.cypher(f"RETURN {wrapped} AS t").scalar() == prefix + '[{t: "' + text + suffix + '"}]'
 
 
 def test_nested_query_csv_keeps_timestamp_fraction():
     graph = kglite.KnowledgeGraph()
-    output = graph.cypher("RETURN [datetime('2025-01-02T03:04:05.123456789')] AS t FORMAT CSV")
-    assert list(csv.DictReader(io.StringIO(output))) == [{"t": '["2025-01-02T03:04:05.123456789"]'}]
+    output = graph.cypher(
+        "RETURN [localdatetime('2025-01-02T03:04:05.123456789')] AS t, "
+        "[datetime('2025-01-02T03:04:05.123456789Z')] AS z FORMAT CSV"
+    )
+    assert list(csv.DictReader(io.StringIO(output))) == [
+        {"t": '["2025-01-02T03:04:05.123456789"]', "z": '["2025-01-02T03:04:05.123456789Z"]'}
+    ]

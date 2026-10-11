@@ -92,11 +92,11 @@ final class Json {
             case LocalTime t -> writeTagged(out, "$localtime", DateTimeFormatter.ISO_LOCAL_TIME.format(t));
             case OffsetTime t -> writeTagged(out, "$time", DateTimeFormatter.ISO_OFFSET_TIME.format(t));
             case OffsetDateTime d ->
-                    writeTagged(out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d));
+                    writeTagged(out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d));
             case ZonedDateTime d -> writeTagged(
-                    out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d.toOffsetDateTime()));
+                    out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(d.toOffsetDateTime()));
             case Instant i -> writeTagged(
-                    out, "$datetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(i.atOffset(ZoneOffset.UTC)));
+                    out, "$zdatetime", DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(i.atOffset(ZoneOffset.UTC)));
             default -> throw new KgliteException(
                     "cannot bind a " + value.getClass().getName() + " as a Cypher parameter;"
                             + " use null, String, Boolean, a Number, Map, Iterable, Object[],"
@@ -347,7 +347,8 @@ final class Json {
      * Turn the one-key tagged objects the session's tagged result mode emits
      * back into the Java value they stand for, at any depth: {@code $float} to
      * {@link Double}, {@code $date} to {@link LocalDate}, {@code $datetime} to
-     * {@link LocalDateTime}, {@code $localtime} to {@link LocalTime}, {@code $time}
+     * {@link LocalDateTime}, {@code $zdatetime} to {@link OffsetDateTime},
+     * {@code $localtime} to {@link LocalTime}, {@code $time}
      * to {@link OffsetTime}, {@code $duration} to {@link KgliteDuration},
      * {@code $point} to {@link Point}, and {@code $map} to the plain map it
      * escapes. A one-key map whose payload does not fit its tag is left as a
@@ -401,6 +402,9 @@ final class Json {
                 }
                 case "$datetime" -> {
                     return payload instanceof String text ? LocalDateTime.parse(text) : null;
+                }
+                case "$zdatetime" -> {
+                    return payload instanceof String text ? OffsetDateTime.parse(text) : null;
                 }
                 case "$localtime" -> {
                     return payload instanceof String text ? LocalTime.parse(text) : null;

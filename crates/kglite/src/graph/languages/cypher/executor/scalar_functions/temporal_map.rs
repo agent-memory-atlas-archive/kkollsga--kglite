@@ -8,6 +8,7 @@ use super::temporal_iso::{
 };
 use crate::datatypes::time_of_day::{naive_time, nanos_of, parse_offset, parse_time};
 use crate::datatypes::values::Value;
+use crate::datatypes::zoned_datetime::wall_clock;
 use crate::datatypes::PropMap;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
@@ -19,7 +20,7 @@ pub(super) enum MapTarget {
     /// A time of day with an offset (`timezone`, or the `time` base's, or UTC).
     Time,
     LocalDateTime,
-    /// Zoneless like `LocalDateTime`: this engine stores datetimes in UTC.
+    /// An instant with an offset (`timezone`, or the base's, or UTC).
     DateTime,
 }
 
@@ -60,7 +61,8 @@ impl MapTarget {
             MapTarget::Date => date,
             MapTarget::LocalTime => time,
             MapTarget::Time => time || key == "timezone",
-            MapTarget::LocalDateTime | MapTarget::DateTime => date || time || key == "datetime",
+            MapTarget::LocalDateTime => date || time || key == "datetime",
+            MapTarget::DateTime => date || time || key == "datetime" || key == "timezone",
         }
     }
 
@@ -80,8 +82,11 @@ impl MapTarget {
             MapTarget::Time => {
                 "hour, minute, second, millisecond, microsecond, nanosecond, time, timezone"
             }
-            MapTarget::LocalDateTime | MapTarget::DateTime => {
+            MapTarget::LocalDateTime => {
                 "year, month, day, week, dayOfWeek, ordinalDay, quarter, dayOfQuarter, hour, minute, second, millisecond, microsecond, nanosecond, date, time, datetime"
+            }
+            MapTarget::DateTime => {
+                "year, month, day, week, dayOfWeek, ordinalDay, quarter, dayOfQuarter, hour, minute, second, millisecond, microsecond, nanosecond, date, time, datetime, timezone"
             }
         }
     }
@@ -93,6 +98,8 @@ pub(super) fn base_datetime(value: &Value) -> Option<NaiveDateTime> {
     match value {
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
         Value::Timestamp(t) => Some(*t),
+        // The wall clock the value was written in.
+        Value::ZonedDateTime { utc, offset_secs } => Some(wall_clock(*utc, *offset_secs)),
         Value::LocalTime(n) | Value::Time { nanos: n, .. } => {
             naive_time(*n).map(|t| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(t))
         }
@@ -146,7 +153,7 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
         }
     };
 
-    let offset_secs = if target == MapTarget::Time {
+    let offset_secs = if matches!(target, MapTarget::Time | MapTarget::DateTime) {
         Some(map_offset(function, map)?)
     } else {
         None
@@ -256,27 +263,34 @@ pub(super) fn temporal_from_map(target: MapTarget, map: &PropMap) -> Result<Valu
             nanos: nanos_of(time),
             offset_secs: offset_secs.unwrap_or(0),
         },
+        (MapTarget::DateTime, Some(date), Some(time)) => {
+            return super::temporal_zoned::zoned_from_wall(
+                date.and_time(time),
+                offset_secs.unwrap_or(0),
+            )
+        }
         (_, Some(date), Some(time)) => Value::Timestamp(date.and_time(time)),
         _ => Value::Null,
     })
 }
 
-/// The offset of a `time({...})` map: its `timezone`, else the offset of a
-/// `time` base that has one, else UTC.
+/// The offset of a `time({...})` or `datetime({...})` map: its `timezone`, else
+/// the offset of a `datetime` or `time` base that has one, else UTC.
 fn map_offset(function: &str, map: &PropMap) -> Result<i32, String> {
     match map.get("timezone") {
         Some(Value::String(zone)) => parse_offset(zone).ok_or_else(|| {
             format!(
-                "{function}(): timezone '{zone}' is not a numeric offset; named time zones are not supported on time values"
+                "{function}(): timezone '{zone}' is not a numeric offset; named time zones are not supported yet"
             )
         }),
         Some(other) => Err(format!(
             "{function}(): timezone must be a string, got {}",
             other.type_name()
         )),
-        None => Ok(match map.get("time") {
-            Some(Value::Time { offset_secs, .. }) => *offset_secs,
-            Some(Value::String(text)) => parse_time(text)
+        None => Ok(match (map.get("datetime"), map.get("time")) {
+            (Some(Value::ZonedDateTime { offset_secs, .. }), _) => *offset_secs,
+            (_, Some(Value::Time { offset_secs, .. })) => *offset_secs,
+            (_, Some(Value::String(text))) => parse_time(text)
                 .ok()
                 .and_then(|(_, offset)| offset)
                 .unwrap_or(0),

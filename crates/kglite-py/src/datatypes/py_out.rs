@@ -55,6 +55,17 @@ pub fn value_to_py(py: Python, value: &Value) -> PyResult<Py<PyAny>> {
         // fixed-offset tzinfo. A time of day is at most 86 400 s of nanoseconds,
         // and `datetime.time` holds microseconds: the sub-microsecond part is
         // floored, the way a `Timestamp` already is by the chrono bridge.
+        // ZonedDateTime → aware datetime.datetime with a fixed-offset tzinfo at
+        // the offset it was written in; the same microsecond floor applies.
+        Value::ZonedDateTime { utc, offset_secs } => {
+            let fixed = chrono::FixedOffset::east_opt(*offset_secs).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "offset {offset_secs}s out of range"
+                ))
+            })?;
+            chrono::DateTime::<chrono::FixedOffset>::from_naive_utc_and_offset(*utc, fixed)
+                .into_py_any(py)
+        }
         Value::LocalTime(nanos) => time_to_py(py, *nanos, None),
         Value::Time { nanos, offset_secs } => time_to_py(py, *nanos, Some(*offset_secs)),
         Value::Point { lat, lon } => {

@@ -244,15 +244,20 @@ A RESET or a dropped connection stops the query the session is running.
 
 ## Timezone-aware datetime parameters
 
-A zoned PackStream temporal (`DateTime`, `DateTimeZoneId`, `Time`) is
-**refused** with `Neo.ClientError.Request.Invalid`. KGLite's temporal values
-are zoneless, so there is no lossless translation, and silently dropping the
-zone would corrupt a driver's round-trip. Send `LocalDateTime`, `LocalTime` or
-`Date` instead.
+Zoned PackStream temporals map onto zoned values, and the offset travels with the instant.
 
-The Python API deliberately differs. It *converts* an aware `datetime` to
-naive UTC. Its own Cypher `datetime()` constructor already does that to an
-offset-bearing literal, and there is no wire type on that side to corrupt. See
+| PackStream | Value | Notes |
+|---|---|---|
+| `DateTime` | zoned datetime | `seconds` is the UTC epoch reading; the offset must be within ±18:00 |
+| `Time` | zoned time | the clock reading plus its offset |
+| `LocalDateTime`, `LocalTime`, `Date` | local datetime, local time, date | no offset |
+| `DateTimeZoneId` | refused | `Neo.ClientError.Request.Invalid`; send a `DateTime` with a numeric offset |
+
+Results mirror this: `datetime()` returns a `DateTime`, `time()` a `Time`, and
+`localdatetime()` a `LocalDateTime`. Two zoned datetimes are equal when they name
+the same instant, so the offset is display information.
+
+The Python API keeps an aware `datetime` as a zoned value as well. See
 {doc}`../python/value-projection` for the Python half.
 
 The standing Bolt correctness and differential suites lock the supported

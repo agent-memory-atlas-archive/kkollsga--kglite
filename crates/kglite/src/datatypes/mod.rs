@@ -6,6 +6,7 @@
 pub mod prop_map;
 pub mod time_of_day;
 pub mod values;
+pub mod zoned_datetime;
 
 pub use prop_map::{PropKey, PropMap};
 pub use values::DataFrame;

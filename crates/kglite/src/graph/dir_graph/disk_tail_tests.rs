@@ -381,7 +381,7 @@ fn a_set_on_a_register_shaped_type_saves_without_flattening_it() {
     run(
         &mut graph,
         "MATCH (p:Employment) WHERE p.hire_year = 1951 AND p.valid_to IS NULL \
-         SET p.valid_to = datetime('2031-01-01T00:00:00.000001')",
+         SET p.valid_to = localdatetime('2031-01-01T00:00:00.000001')",
     )
     .unwrap();
     run(

@@ -61,31 +61,35 @@ def test_recovery_after_ordinary_map_key_error(reader):
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    "value, offset",
     [
-        (dt.datetime(2025, 1, 2, 3, 4, 5, 123456), dt.datetime(2025, 1, 2, 3, 4, 5, 123456)),
-        (
-            dt.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=dt.timezone.utc),
-            dt.datetime(2025, 1, 2, 3, 4, 5, 123456),
-        ),
+        (dt.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=dt.timezone.utc), dt.timedelta(0)),
         (
             dt.datetime(2025, 1, 2, 0, 30, 5, 123456, tzinfo=dt.timezone(dt.timedelta(hours=2))),
-            dt.datetime(2025, 1, 1, 22, 30, 5, 123456),
+            dt.timedelta(hours=2),
         ),
         (
             dt.datetime(2025, 1, 2, 23, 30, 5, 123456, tzinfo=dt.timezone(dt.timedelta(hours=-5))),
-            dt.datetime(2025, 1, 3, 4, 30, 5, 123456),
+            dt.timedelta(hours=-5),
         ),
+        # An offset that is not whole seconds keeps the instant at UTC.
         (
             dt.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=dt.timezone(dt.timedelta(microseconds=500000))),
-            dt.datetime(2025, 1, 2, 3, 4, 4, 623456),
+            dt.timedelta(0),
         ),
     ],
 )
-def test_datetime_normalizes_to_naive_utc_with_fraction(reader, value, expected):
+def test_aware_datetime_keeps_its_instant_and_offset_with_fraction(reader, value, offset):
     actual = _roundtrip(reader, {"events": [value]})["events"][0]
     assert type(actual) is dt.datetime
-    assert actual == expected
+    assert actual == value
+    assert actual.utcoffset() == offset
+
+
+def test_naive_datetime_stays_naive_with_fraction(reader):
+    value = dt.datetime(2025, 1, 2, 3, 4, 5, 123456)
+    actual = _roundtrip(reader, {"events": [value]})["events"][0]
+    assert actual == value
     assert actual.tzinfo is None
 
 
@@ -101,7 +105,9 @@ class SeasonalOffset(dt.tzinfo):
 
 def test_timezone_offset_is_evaluated_for_the_actual_date(reader):
     value = dt.datetime(2025, 7, 2, 0, 30, 5, 123456, tzinfo=SeasonalOffset())
-    assert _roundtrip(reader, value) == dt.datetime(2025, 7, 1, 22, 30, 5, 123456)
+    actual = _roundtrip(reader, value)
+    assert actual == dt.datetime(2025, 7, 1, 22, 30, 5, 123456, tzinfo=dt.timezone.utc)
+    assert actual.utcoffset() == dt.timedelta(hours=2), "the offset of that date, July, is +02:00"
 
 
 class NoOffset(dt.tzinfo):
@@ -111,7 +117,9 @@ class NoOffset(dt.tzinfo):
 
 def test_timezone_without_an_offset_remains_naive(reader):
     value = dt.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=NoOffset())
-    assert _roundtrip(reader, value) == dt.datetime(2025, 1, 2, 3, 4, 5, 123456)
+    actual = _roundtrip(reader, value)
+    assert actual == dt.datetime(2025, 1, 2, 3, 4, 5, 123456)
+    assert actual.tzinfo is None
 
 
 def test_pure_date_remains_date_only(reader):
@@ -120,7 +128,7 @@ def test_pure_date_remains_date_only(reader):
     assert got == dt.date(2025, 1, 2) and type(got) is dt.date
 
 
-def test_aware_timestamp_persists_as_utc(tmp_path):
+def test_aware_datetime_persists_with_its_offset(tmp_path):
     graph = kglite.KnowledgeGraph()
     value = dt.datetime(2025, 1, 2, 0, 30, 5, 123456, tzinfo=dt.timezone(dt.timedelta(hours=2)))
     graph.cypher("CREATE (:Event {id: 1, ts: $ts})", params={"ts": value})
@@ -128,5 +136,6 @@ def test_aware_timestamp_persists_as_utc(tmp_path):
     graph.save(path)
     loaded = kglite.load(path)
     actual = loaded.cypher("MATCH (e:Event) RETURN e.ts AS ts").to_list()[0]["ts"]
-    assert actual == dt.datetime(2025, 1, 1, 22, 30, 5, 123456)
+    assert actual == dt.datetime(2025, 1, 1, 22, 30, 5, 123456, tzinfo=dt.timezone.utc)
+    assert actual.utcoffset() == dt.timedelta(hours=2)
     assert type(actual) is dt.datetime

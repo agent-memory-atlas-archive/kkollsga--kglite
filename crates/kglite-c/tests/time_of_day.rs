@@ -1,5 +1,6 @@
-//! `LocalTime` and `Time` through the C ABI: the `$localtime` / `$time` parameter
-//! tags, the natural ISO text in result JSON, and equality by instant of day.
+//! `LocalTime`, `Time` and `ZonedDateTime` through the C ABI: the `$localtime` /
+//! `$time` / `$zdatetime` parameter tags, the natural ISO text in result JSON, and
+//! equality by instant.
 
 use std::ffi::{c_char, CStr, CString};
 
@@ -81,6 +82,74 @@ fn a_malformed_time_tag_is_a_parameter_error() {
         r#"{"v": {"$localtime": "10:00+01:00"}}"#,
         r#"{"v": {"$time": "25:00"}}"#,
         r#"{"v": {"$time": "10:00[Europe/Oslo]"}}"#,
+    ] {
+        let params = CString::new(bad).unwrap();
+        let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+        let mut error: *const c_char = std::ptr::null();
+        let rc = unsafe {
+            kglite_session_execute_read(
+                session,
+                query.as_ptr(),
+                params.as_ptr(),
+                &mut result,
+                &mut error,
+            )
+        };
+        assert_ne!(rc, KgliteStatusCode::Ok, "{bad} must be refused");
+        unsafe { kglite_free_string(error) };
+    }
+    unsafe { kglite_session_free(session) };
+}
+
+#[test]
+fn zoned_datetime_tags_keep_the_offset_and_compare_by_instant() {
+    let params = r#"{
+        "a": {"$zdatetime": "2020-01-02T03:04:05.25+02:00"},
+        "b": {"$zdatetime": "2020-01-02T01:04:05.25Z"},
+        "local": {"$datetime": "2020-01-02T01:04:05.25"},
+        "off": {"$datetime": "2020-01-02T03:04:05.25+02:00"}
+    }"#;
+    let out = row(
+        "RETURN $a = $b AS same, $a = $local AS local_same, $off = $a AS off_same, \
+         $a.offsetSeconds AS off, $off.offsetSeconds AS off_from_datetime, \
+         $local.offsetSeconds AS local_off, toString($a) AS text",
+        params,
+    );
+    assert_eq!(out["same"], true, "03:04:05.25+02:00 is 01:04:05.25Z");
+    assert_eq!(out["local_same"], true, "a local datetime reads as UTC");
+    assert_eq!(out["off_same"], true);
+    assert_eq!(out["off"], 7200);
+    assert_eq!(
+        out["off_from_datetime"], 7200,
+        "$datetime with an offset is zoned"
+    );
+    assert_eq!(out["local_off"], serde_json::Value::Null);
+    assert_eq!(out["text"], "2020-01-02T03:04:05.250+02:00");
+}
+
+#[test]
+fn result_json_renders_zoned_datetimes_with_their_offset() {
+    let out = row(
+        "RETURN datetime('2020-01-02T03:04:05.5-05:30') AS z, datetime('2020-01-02T03:04Z') AS utc, \
+         localdatetime('2020-01-02T03:04:05') AS l",
+        "{}",
+    );
+    assert_eq!(out["z"], "2020-01-02T03:04:05.500-05:30");
+    assert_eq!(out["utc"], "2020-01-02T03:04Z");
+    assert_eq!(out["l"], "2020-01-02T03:04:05");
+}
+
+#[test]
+fn a_malformed_zoned_tag_is_a_parameter_error() {
+    let graph = kglite_graph_new();
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    unsafe { kglite_session_new(graph, &mut session) };
+    let query = CString::new("RETURN $v AS v").unwrap();
+    for bad in [
+        r#"{"v": {"$zdatetime": "2020-01-02T03:04+19:00"}}"#,
+        r#"{"v": {"$zdatetime": "2020-01-02T03:04[Europe/Oslo]"}}"#,
+        r#"{"v": {"$zdatetime": "nonsense"}}"#,
+        r#"{"v": {"$zdatetime": 5}}"#,
     ] {
         let params = CString::new(bad).unwrap();
         let mut result: *mut KgliteCypherResult = std::ptr::null_mut();

@@ -161,6 +161,7 @@ fn vocabulary_type(ct: &ColumnType) -> Option<ColumnType> {
         ColumnType::Duration => Some(ColumnType::Duration),
         ColumnType::LocalTime => Some(ColumnType::LocalTime),
         ColumnType::Time => Some(ColumnType::Time),
+        ColumnType::ZonedDateTime => Some(ColumnType::ZonedDateTime),
         ColumnType::Timestamp | ColumnType::Map => None,
     }
 }
@@ -181,6 +182,7 @@ fn type_label(ct: &ColumnType) -> &'static str {
         ColumnType::Duration => "duration",
         ColumnType::LocalTime => "localtime",
         ColumnType::Time => "time",
+        ColumnType::ZonedDateTime => "zoneddatetime",
     }
 }
 
@@ -197,6 +199,9 @@ fn canonical_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::DateTime(d) => d.format("%Y-%m-%d").to_string(),
         Value::Timestamp(t) => t.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
+        Value::ZonedDateTime { utc, offset_secs } => {
+            crate::datatypes::zoned_datetime::format_zoned(*utc, *offset_secs)
+        }
         Value::LocalTime(n) => crate::datatypes::time_of_day::format_clock(*n),
         Value::Time { nanos, offset_secs } => {
             crate::datatypes::time_of_day::format_time(*nanos, *offset_secs)

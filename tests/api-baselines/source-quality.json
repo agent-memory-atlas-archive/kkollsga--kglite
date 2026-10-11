@@ -45,8 +45,8 @@
     {
       "path": "crates/kglite-py/src/datatypes/py_in.rs",
       "qualified_name": "crate::convert_pandas_series",
-      "lines": 183,
-      "branches": 56,
+      "lines": 181,
+      "branches": 55,
       "nesting": 5
     },
     {

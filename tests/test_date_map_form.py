@@ -29,7 +29,15 @@ def graph() -> kglite.KnowledgeGraph:
         ("date({year: 2010, month: 6, day: 30}) = date('2010-06-30')", True),
         (
             "datetime({year: 2010, month: 1, day: 2, hour: 3, minute: 4, second: 5, millisecond: 6})",
+            dt.datetime(2010, 1, 2, 3, 4, 5, 6000, tzinfo=dt.timezone.utc),
+        ),
+        (
+            "localdatetime({year: 2010, month: 1, day: 2, hour: 3, minute: 4, second: 5, millisecond: 6})",
             dt.datetime(2010, 1, 2, 3, 4, 5, 6000),
+        ),
+        (
+            "datetime({year: 2010, month: 1, day: 2, hour: 3, timezone: '+02:00'})",
+            dt.datetime(2010, 1, 2, 3, tzinfo=dt.timezone(dt.timedelta(hours=2))),
         ),
         ("datetime({year: 2010}) = datetime('2010-01-01T00:00:00')", True),
     ],
@@ -51,7 +59,8 @@ def test_map_form_takes_row_values(graph) -> None:
         ("date({year: 2010.5})", "year must be an integer"),
         ("date({month: 1})", "missing 'year'"),
         ("date({year: 2010, hour: 1})", "unknown key 'hour'"),
-        ("datetime({year: 2010, timezone: 'Z'})", "unknown key 'timezone'"),
+        ("localdatetime({year: 2010, timezone: 'Z'})", "unknown key 'timezone'"),
+        ("datetime({year: 2010, timezone: 'Europe/Oslo'})", "named time zones"),
         ("datetime({year: 2010, hour: 25})", "is not a valid datetime"),
     ],
 )

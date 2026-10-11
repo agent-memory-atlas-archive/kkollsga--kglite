@@ -97,6 +97,7 @@ pub fn map_blueprint_type(ty: &str) -> Option<ColumnType> {
         "duration" => Some(ColumnType::Duration),
         "localtime" => Some(ColumnType::LocalTime),
         "time" => Some(ColumnType::Time),
+        "zoneddatetime" => Some(ColumnType::ZonedDateTime),
         _ => None,
     }
 }
@@ -121,6 +122,7 @@ pub fn blueprint_type_keyword(ct: &ColumnType) -> Option<&'static str> {
         ColumnType::Duration => Some("duration"),
         ColumnType::LocalTime => Some("localtime"),
         ColumnType::Time => Some("time"),
+        ColumnType::ZonedDateTime => Some("zoneddatetime"),
         ColumnType::UniqueId | ColumnType::Timestamp | ColumnType::Map => None,
     }
 }
@@ -430,6 +432,16 @@ fn build_column_data(
                 .map(|r| {
                     parse_time_cell(&raw.rows[r][src_idx], raw.nulls[r][src_idx])
                         .map(|(nanos, offset)| (nanos, offset.unwrap_or(0)))
+                })
+                .collect(),
+        )),
+        ColumnType::ZonedDateTime => Ok(ColumnData::ZonedDateTime(
+            (0..n)
+                .map(|r| {
+                    if raw.nulls[r][src_idx] {
+                        return None;
+                    }
+                    crate::datatypes::zoned_datetime::parse_zoned(&raw.rows[r][src_idx]).ok()
                 })
                 .collect(),
         )),

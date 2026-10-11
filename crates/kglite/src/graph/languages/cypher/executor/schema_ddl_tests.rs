@@ -447,7 +447,7 @@ fn an_unsupported_property_type_names_the_supported_set() {
     let mut graph = person_graph();
     for query in [
         "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS :: LIST<INTEGER>",
-        "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS TYPED ZONED DATETIME",
+        "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS TYPED MAP",
         "CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS :: NUMBER",
     ] {
         let err = run_err(&mut graph, query);

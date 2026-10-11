@@ -247,12 +247,16 @@ fn representable(year: i32) -> bool {
 /// paths preserve nanoseconds. If only the date portion parses, returns a
 /// [`Value::DateTime`]; otherwise falls back to a string.
 fn parse_xsd_datetime(value: &str) -> Value {
-    // RFC 3339 covers `2020-01-01T12:30:00Z` and offset forms.
+    // RFC 3339 covers `2020-01-01T12:30:00Z` and offset forms; a literal that
+    // names an offset is an instant with that offset.
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
         let utc = dt.naive_utc();
+        let offset_secs = dt.offset().local_minus_utc();
         // The offset can carry a year-1 or year-9999 instant out of range.
-        if representable(utc.year()) {
-            return Value::Timestamp(utc);
+        if representable(utc.year())
+            && offset_secs.unsigned_abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS as u32
+        {
+            return Value::ZonedDateTime { utc, offset_secs };
         }
     }
     let base = strip_tz_suffix(value);

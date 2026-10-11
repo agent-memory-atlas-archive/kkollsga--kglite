@@ -96,6 +96,7 @@ mod tck_cheap_gaps;
 mod temporal_functions;
 mod temporal_procedures;
 mod temporal_time;
+mod temporal_zoned;
 mod text_bm25;
 mod valid_time_guard;
 mod value_kind_matrix;

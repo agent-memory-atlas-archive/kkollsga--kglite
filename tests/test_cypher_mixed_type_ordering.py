@@ -142,13 +142,28 @@ def test_a_date_and_a_timestamp_share_one_rank_and_order_chronologically(tiny_gr
     """Dates and timestamps are one rank, not two: a date compares as
     midnight, so a mixed column still reads chronologically."""
     rows = tiny_graph.cypher(
-        "UNWIND [datetime('2024-01-01T12:00:00'), date('2024-01-02'), date('2024-01-01'), "
-        "datetime('2023-12-31T23:00:00')] AS v RETURN v ORDER BY v ASC"
+        "UNWIND [localdatetime('2024-01-01T12:00:00'), date('2024-01-02'), date('2024-01-01'), "
+        "localdatetime('2023-12-31T23:00:00')] AS v RETURN v ORDER BY v ASC"
     ).to_list()
     assert [str(row["v"]) for row in rows] == [
         "2023-12-31 23:00:00",
         "2024-01-01",
         "2024-01-01 12:00:00",
+        "2024-01-02",
+    ]
+
+
+def test_a_zoned_datetime_shares_that_rank_and_orders_by_its_instant(tiny_graph):
+    """A zoned datetime sorts at its UTC instant among dates and local datetimes."""
+    rows = tiny_graph.cypher(
+        "UNWIND [datetime('2024-01-02T01:00:00+02:00'), date('2024-01-02'), localdatetime('2024-01-01T12:00:00'), "
+        "datetime('2023-12-31T23:30:00-01:00')] AS v RETURN v ORDER BY v ASC"
+    ).to_list()
+    # 2024-01-01T00:30Z, 2024-01-01T12:00 (read as UTC), 2024-01-01T23:00Z, 2024-01-02 (midnight UTC).
+    assert [str(row["v"]) for row in rows] == [
+        "2023-12-31 23:30:00-01:00",
+        "2024-01-01 12:00:00",
+        "2024-01-02 01:00:00+02:00",
         "2024-01-02",
     ]
 

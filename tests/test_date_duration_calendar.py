@@ -82,8 +82,21 @@ def test_date_with_duration(g, expr, expected):
         ("datetime('2024-01-15T00:00:00') + duration({days: 30})", datetime.datetime(2024, 2, 14)),
     ],
 )
-def test_datetime_with_duration(g, expr, expected):
-    assert val(g, expr) == expected
+@pytest.mark.parametrize("kind", ["localdatetime", "datetime"])
+def test_datetime_with_duration(g, expr, expected, kind):
+    """The calendar shift is the same for a local and a zoned datetime; the zoned
+    one keeps its (UTC) offset."""
+    got = val(g, expr.replace("datetime(", f"{kind}("))
+    if kind == "datetime":
+        expected = expected.replace(tzinfo=datetime.timezone.utc)
+        assert got.utcoffset() == datetime.timedelta(0)
+    assert got == expected
+
+
+def test_a_zoned_datetime_shifts_its_wall_clock_and_keeps_its_offset(g):
+    got = val(g, "datetime('2024-01-31T23:30:00+05:00') + duration({months: 1, hours: 2})")
+    assert got == datetime.datetime(2024, 3, 1, 1, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=5)))
+    assert got.utcoffset() == datetime.timedelta(hours=5)
 
 
 def test_matches_add_months_and_add_years(g):

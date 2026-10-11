@@ -131,7 +131,8 @@ def _json_scalar(value: Any) -> Any:
 
     ``date``, ``datetime`` and ``timedelta`` become the one-key tagged objects
     the records loader decodes — ``{"$date": …}``, ``{"$datetime": …}`` (an
-    offset is applied, normalising to UTC) and ``{"$duration": …}`` — so they
+    aware ``datetime`` loads as a zoned datetime that keeps its offset, a naive
+    one as a local datetime) and ``{"$duration": …}`` — so they
     load typed rather than as text. A ``time`` becomes ``{"$localtime": …}``
     when naive and ``{"$time": …}`` when aware (its offset kept). A
     ``timedelta``'s sub-second part travels as ``nanoseconds``.

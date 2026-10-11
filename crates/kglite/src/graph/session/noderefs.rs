@@ -139,6 +139,7 @@ impl Resolver<'_> {
                             | Value::Timestamp(_)
                             | Value::LocalTime(_)
                             | Value::Time { .. }
+                            | Value::ZonedDateTime { .. }
                     )
                 }) {
                     return None;

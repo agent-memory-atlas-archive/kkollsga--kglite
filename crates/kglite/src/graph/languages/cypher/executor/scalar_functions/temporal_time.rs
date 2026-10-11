@@ -45,6 +45,9 @@ impl CypherExecutor<'_> {
             local @ Value::LocalTime(_) => Ok(local),
             Value::Time { nanos, .. } => Ok(Value::LocalTime(nanos)),
             Value::Timestamp(t) => Ok(Value::LocalTime(nanos_of(t.time()))),
+            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::LocalTime(
+                super::temporal_zoned::wall_time_nanos(utc, offset_secs),
+            )),
             Value::Null => Ok(Value::Null),
             other => Err(format!(
                 "localtime() argument must be a string, a map or a time or datetime, got {}",
@@ -79,6 +82,11 @@ impl CypherExecutor<'_> {
             Value::Timestamp(t) => Ok(Value::Time {
                 nanos: nanos_of(t.time()),
                 offset_secs: 0,
+            }),
+            // The wall clock and offset the value was written in.
+            Value::ZonedDateTime { utc, offset_secs } => Ok(Value::Time {
+                nanos: super::temporal_zoned::wall_time_nanos(utc, offset_secs),
+                offset_secs,
             }),
             Value::Null => Ok(Value::Null),
             other => Err(format!(

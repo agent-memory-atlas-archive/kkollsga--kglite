@@ -39,7 +39,7 @@
 //!   nine pairs are intercomparable (`core/filtering.rs`), so a numeric
 //!   property against a numeric literal never warns.
 //! - **Text** — `STRING`. **Boolean** — `BOOLEAN`.
-//! - **Temporal** — `DATE`/`LOCAL DATETIME`, intercomparable with each other
+//! - **Temporal** — `DATE`/`LOCAL DATETIME`/`ZONED DATETIME`, intercomparable with each other
 //!   *and*, value-dependently, with strings (the string is parsed). A
 //!   temporal-vs-string comparison therefore never warns: whether it is null
 //!   depends on the literal's contents, which is not a plan-time fact.
@@ -128,7 +128,9 @@ impl TypeFamily {
             DeclaredType::Integer | DeclaredType::Float => Some(Self::Numeric),
             DeclaredType::String => Some(Self::Text),
             DeclaredType::Boolean => Some(Self::Boolean),
-            DeclaredType::Date | DeclaredType::LocalDateTime => Some(Self::Temporal),
+            DeclaredType::Date | DeclaredType::LocalDateTime | DeclaredType::ZonedDateTime => {
+                Some(Self::Temporal)
+            }
             DeclaredType::LocalTime | DeclaredType::ZonedTime => Some(Self::TimeOfDay),
             DeclaredType::Duration | DeclaredType::Point => None,
         }
@@ -147,7 +149,7 @@ impl TypeFamily {
             "integer" | "int" | "i64" | "int64" | "uniqueid" => Some(Self::Numeric),
             "float" | "double" | "f64" | "number" | "float64" => Some(Self::Numeric),
             "boolean" | "bool" => Some(Self::Boolean),
-            "datetime" | "date" | "timestamp" => Some(Self::Temporal),
+            "datetime" | "date" | "timestamp" | "zoneddatetime" => Some(Self::Temporal),
             "localtime" | "time" => Some(Self::TimeOfDay),
             _ => None,
         }
@@ -160,7 +162,9 @@ impl TypeFamily {
             Value::Int64(_) | Value::Float64(_) | Value::UniqueId(_) => Some(Self::Numeric),
             Value::String(_) => Some(Self::Text),
             Value::Boolean(_) => Some(Self::Boolean),
-            Value::DateTime(_) | Value::Timestamp(_) => Some(Self::Temporal),
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. } => {
+                Some(Self::Temporal)
+            }
             Value::LocalTime(_) | Value::Time { .. } => Some(Self::TimeOfDay),
             _ => None,
         }

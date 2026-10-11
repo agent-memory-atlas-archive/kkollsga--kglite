@@ -379,7 +379,8 @@ impl<'a> CypherExecutor<'a> {
             | Value::Timestamp(_)
             | Value::Duration { .. }
             | Value::LocalTime(_)
-            | Value::Time { .. } => Ok(
+            | Value::Time { .. }
+            | Value::ZonedDateTime { .. } => Ok(
                 scalar_functions::temporal_accessors::temporal_property(&value, property)
                     .unwrap_or(Value::Null),
             ),

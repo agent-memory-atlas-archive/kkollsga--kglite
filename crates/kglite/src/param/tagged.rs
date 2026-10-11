@@ -1,13 +1,17 @@
 //! Tagged JSON objects for query parameter types JSON has no spelling for.
 //!
-//! An object with exactly one key, `$date`, `$datetime`, `$localtime`, `$time`,
-//! `$duration`, `$point` or `$float`, is a typed value rather than a map. The payloads are the shapes
+//! An object with exactly one key, `$date`, `$datetime`, `$zdatetime`,
+//! `$localtime`, `$time`, `$duration`, `$point` or `$float`, is a typed value
+//! rather than a map. The payloads are the shapes
 //! [`super::kglite_value_to_json`] renders those types as, so a result cell
 //! wrapped in its tag reads back as the value it came from:
 //!
 //! - `{"$date": "2020-01-01"}` → `Value::DateTime`, parsed as `date()` parses
-//! - `{"$datetime": "2020-01-01T08:00:00+02:00"}` → `Value::Timestamp`, parsed
-//!   as `datetime()` parses (an offset is applied, normalising to UTC)
+//! - `{"$datetime": "2020-01-01T08:00:00"}` → `Value::Timestamp` (local); a
+//!   text that carries an offset, `{"$datetime": "2020-01-01T08:00:00+02:00"}`,
+//!   is a `Value::ZonedDateTime` keeping that offset
+//! - `{"$zdatetime": "2020-01-01T08:00:00+02:00"}` → `Value::ZonedDateTime`; a
+//!   text without an offset is read as UTC, as `datetime('...')` reads it
 //! - `{"$localtime": "10:00:00.5"}` → `Value::LocalTime` (no offset allowed)
 //! - `{"$time": "10:00:00+01:00"}` → `Value::Time`; a text without an offset
 //!   is read as UTC, as `time('10:00')` is
@@ -42,8 +46,12 @@ pub(super) fn decode(map: &serde_json::Map<String, serde_json::Value>) -> Option
                 .map(|(date, _)| Value::DateTime(date))
         }),
         "$datetime" => payload.as_str().and_then(|text| {
-            crate::graph::languages::cypher::executor::scalar_functions::parse_datetime_utc(text)
-                .map(Value::Timestamp)
+            crate::graph::languages::cypher::executor::scalar_functions::parse_datetime_value(text)
+        }),
+        "$zdatetime" => payload.as_str().and_then(|text| {
+            crate::datatypes::zoned_datetime::parse_zoned(text)
+                .ok()
+                .map(|(utc, offset_secs)| Value::ZonedDateTime { utc, offset_secs })
         }),
         "$localtime" => payload.as_str().and_then(|text| {
             match crate::datatypes::time_of_day::parse_time(text) {

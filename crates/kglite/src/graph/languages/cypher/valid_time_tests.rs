@@ -598,7 +598,7 @@ fn the_transient_equality_index_declines_under_a_graph_filter() {
 }
 
 /// Every instant `prepend_valid_time` accepts is written as text its own
-/// parser reads back to the same instant; one it cannot write is refused.
+/// parser reads back to the same instant (a zoned one at its UTC reading); one it cannot write is refused.
 #[test]
 fn prepend_round_trips_or_refuses_every_instant() {
     let graph = graph();
@@ -608,6 +608,11 @@ fn prepend_round_trips_or_refuses_every_instant() {
         for value in [
             Value::DateTime(date(year)),
             Value::Timestamp(date(year).and_hms_opt(10, 30, 0).unwrap()),
+            // A zoned instant travels as its UTC reading and comes back zoned.
+            Value::ZonedDateTime {
+                utc: date(year).and_hms_opt(10, 30, 0).unwrap(),
+                offset_secs: 3600,
+            },
         ] {
             match prepend_valid_time("RETURN 1", ValidAt::At(&value)) {
                 Ok(text) => {
@@ -619,7 +624,14 @@ fn prepend_round_trips_or_refuses_every_instant() {
                     let back = CypherExecutor::with_params(&graph, &none, None)
                         .evaluate_expression(instant, &ResultRow::new())
                         .unwrap();
-                    assert_eq!(back, value, "{text}");
+                    // `datetime('…')` reads as a zoned UTC instant, so a local
+                    // datetime comes back as the same point on the timeline, not
+                    // as the same kind of value.
+                    assert_eq!(
+                        eval::parse_instant(&back).unwrap(),
+                        eval::parse_instant(&value).unwrap(),
+                        "{text}"
+                    );
                 }
                 Err(err) => {
                     assert!(year < 0, "{value:?}: {err}");
@@ -760,4 +772,79 @@ fn typed_counts_without_secondary_labels_never_pass_over_the_nodes() {
         }
     }
     assert_eq!(node_count_probe::take(), 0);
+}
+
+/// A zoned datetime is a point on the UTC timeline wherever it appears: as a
+/// stored bound, as the `AS OF` literal, and as a bound parameter. A local
+/// bound is read as UTC, so the three kinds mix on one axis.
+#[test]
+fn zoned_instants_and_bounds_are_points_on_the_utc_timeline() {
+    let mut graph = DirGraph::new();
+    for query in [
+        // Well 1 is valid 00:00Z..=10:00Z, well 2 from 09:00Z (a local bound),
+        // well 3 from 11:00Z (text with an offset).
+        "CREATE (:Well {id: 1, vf: datetime('2000-01-01T05:00:00+05:00'), \
+                        vt: datetime('2000-01-01T12:00:00+02:00')}), \
+                (:Well {id: 2, vf: localdatetime('2000-01-01T09:00:00'), vt: null}), \
+                (:Well {id: 3, vf: '2000-01-01T11:00:00Z', vt: null})",
+        "CALL db.temporal.declare({node: 'Well', from: 'vf', to: 'vt', convention: 'closed'}) \
+         YIELD declared RETURN declared",
+    ] {
+        write(&mut graph, query);
+    }
+    let none = HashMap::new();
+    let ids = |instant: &str| -> Vec<Value> {
+        let query = format!("FOR VALID_TIME AS OF {instant} MATCH (w:Well) RETURN w.id");
+        well_ids(&read(&graph, &query, &none).unwrap_or_else(|e| panic!("{query}: {e}")))
+    };
+    let (w1, w2, w3) = (Value::Int64(1), Value::Int64(2), Value::Int64(3));
+    // The same instant at three offsets lands on the same wells.
+    for at in [
+        "datetime('2000-01-01T00:00:00Z')",
+        "datetime('2000-01-01T04:00:00+04:00')",
+        "datetime('1999-12-31T19:00:00-05:00')",
+    ] {
+        assert_eq!(ids(at), vec![w1.clone()], "{at}");
+    }
+    assert_eq!(
+        ids("datetime('2000-01-01T10:30:00+01:00')"),
+        vec![w1.clone(), w2.clone()]
+    );
+    assert_eq!(
+        ids("datetime('2000-01-01T10:00:00Z')"),
+        vec![w1.clone(), w2.clone()]
+    );
+    assert_eq!(
+        ids("datetime('2000-01-01T12:00:00Z')"),
+        vec![w2.clone(), w3.clone()]
+    );
+    // A zoned parameter and a prefix written by `valid_at=` agree.
+    for offset_secs in [0, 3600, -18_000] {
+        let utc = chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let param = Value::ZonedDateTime { utc, offset_secs };
+        let params = HashMap::from([("t".to_string(), param.clone())]);
+        let result = read(
+            &graph,
+            "FOR VALID_TIME AS OF $t MATCH (w:Well) RETURN w.id",
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            well_ids(&result),
+            vec![w2.clone(), w3.clone()],
+            "{offset_secs}"
+        );
+        let prefixed =
+            prepend_valid_time("MATCH (w:Well) RETURN w.id", ValidAt::At(&param)).unwrap();
+        assert_eq!(
+            well_ids(&read(&graph, &prefixed, &none).unwrap()),
+            vec![w2.clone(), w3.clone()],
+            "{prefixed}"
+        );
+    }
+    // The default today is a date, which reads at date grain.
+    assert!(read(&graph, "MATCH (w:Well) RETURN w.id", &none).is_ok());
 }

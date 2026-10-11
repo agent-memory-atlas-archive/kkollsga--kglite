@@ -159,7 +159,8 @@ fn parse_instant_str(text: &str) -> Option<Instant> {
         .map(Instant::Timestamp)
 }
 
-/// The query instant. A date or datetime value is taken as is; a string is
+/// The query instant. A date, local datetime or zoned datetime value is taken
+/// as is (a zoned one at its UTC instant); a string is
 /// read by the `date()` parser when it has no time part (`'2009'` is
 /// 2009-01-01) and by the `datetime()` parser otherwise (an offset is applied,
 /// normalised to UTC). Anything else, NULL included, is an error.
@@ -167,6 +168,9 @@ pub(crate) fn parse_instant(value: &Value) -> Result<Instant, TemporalError> {
     let parsed = match value {
         Value::DateTime(d) => Some(Instant::Date(*d)),
         Value::Timestamp(ts) => Some(Instant::Timestamp(*ts)),
+        // A zoned datetime is the point on the UTC timeline it names; its offset
+        // is display only.
+        Value::ZonedDateTime { utc, .. } => Some(Instant::Timestamp(*utc)),
         Value::String(s) => parse_instant_str(s),
         _ => None,
     };
@@ -182,6 +186,9 @@ fn parse_bound(value: &Value, side: BoundSide) -> Result<Option<Instant>, Tempor
         Value::Null => return Ok(None),
         Value::DateTime(d) => Some(Instant::Date(*d)),
         Value::Timestamp(ts) => Some(Instant::Timestamp(*ts)),
+        // A zoned datetime is the point on the UTC timeline it names; its offset
+        // is display only.
+        Value::ZonedDateTime { utc, .. } => Some(Instant::Timestamp(*utc)),
         Value::String(s) => parse_instant_str(s),
         _ => None,
     };

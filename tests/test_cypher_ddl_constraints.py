@@ -131,7 +131,7 @@ def test_an_unmappable_property_type_is_rejected_not_silently_accepted(graph) ->
     The accept-list is closed: a type name with no exact KGLite value
     counterpart is refused by name rather than approximated to a nearby one.
     """
-    for declared in ("LIST<INTEGER>", "ZONED DATETIME", "NUMBER"):
+    for declared in ("LIST<INTEGER>", "MAP", "NUMBER"):
         with pytest.raises(kglite.CypherExecutionError) as exc:
             graph.cypher(f"CREATE CONSTRAINT FOR (p:Person) REQUIRE p.age IS :: {declared}")
         message = str(exc.value)

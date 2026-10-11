@@ -31,28 +31,28 @@ const ROWS: &[Row] = &[
     Row {
         name: "date_a",
         family: "datetime",
-        pos: 1,
+        pos: 10,
         ordered: true,
         literal: "date('2020-01-02')",
     },
     Row {
         name: "ldt_a",
         family: "datetime",
-        pos: 2,
+        pos: 20,
         ordered: true,
         literal: "localdatetime('2020-01-02T03:04:05.25')",
     },
     Row {
         name: "date_b",
         family: "datetime",
-        pos: 3,
+        pos: 30,
         ordered: true,
         literal: "date('2021-06-15')",
     },
     Row {
         name: "ldt_b",
         family: "datetime",
-        pos: 4,
+        pos: 40,
         ordered: true,
         literal: "localdatetime('2021-06-15T00:00:00.5')",
     },
@@ -106,14 +106,66 @@ const ROWS: &[Row] = &[
         ordered: false,
         literal: "duration({seconds: 1, nanoseconds: 5})",
     },
+    // Zoned datetimes share the datetime family: a zoned value is its instant
+    // and a local datetime is read as UTC, so these tie with, or fall between,
+    // the date and local-datetime rows above by instant alone. The `datetime`
+    // kinds are appended last so earlier row indexes hold.
+    Row {
+        name: "zdt_a",
+        family: "datetime",
+        pos: 20,
+        ordered: true,
+        literal: "datetime('2020-01-02T03:04:05.25Z')",
+    },
+    // The same instant written at +02:00: equal, offset ignored.
+    Row {
+        name: "zdt_a_off",
+        family: "datetime",
+        pos: 20,
+        ordered: true,
+        literal: "datetime('2020-01-02T05:04:05.25+02:00')",
+    },
+    Row {
+        name: "zdt_mid",
+        family: "datetime",
+        pos: 25,
+        ordered: true,
+        literal: "datetime('2020-01-02T12:00:00Z')",
+    },
+    // Midnight UTC of the second date, written at +02:00: ties with `date_b`.
+    Row {
+        name: "zdt_b",
+        family: "datetime",
+        pos: 30,
+        ordered: true,
+        literal: "datetime('2021-06-15T02:00:00+02:00')",
+    },
+    Row {
+        name: "zdt_c",
+        family: "datetime",
+        pos: 40,
+        ordered: true,
+        literal: "datetime('2021-06-15T00:00:00.5Z')",
+    },
 ];
 
 fn value_of(row: &Row) -> Value {
     super::temporal_functions::cell(&format!("RETURN {}", row.literal))
 }
 
+/// Cypher `=`: the same family and the same position.
 fn same_kind_and_pos(a: &Row, b: &Row) -> bool {
     a.family == b.family && a.pos == b.pos
+}
+
+/// `Value` identity (`==`, `DISTINCT`, grouping): `=` and the same kind, so a
+/// date and the zoned value at its midnight stay two values.
+fn same_identity(a: &Row, b: &Row) -> bool {
+    kind_of(a) == kind_of(b) && same_kind_and_pos(a, b)
+}
+
+fn kind_of(row: &Row) -> &str {
+    row.name.split('_').next().unwrap_or(row.name)
 }
 
 fn hash_of(value: &Value) -> u64 {
@@ -157,7 +209,7 @@ fn eq_hash_and_ord_agree_for_every_pair() {
             // Within one kind, the table says which pairs are equal. The date
             // and datetime rows are two kinds of one family and never equal
             // here (no midnight datetime in the table).
-            if i != j && row_a.name.split('_').next() == row_b.name.split('_').next() {
+            if i != j && kind_of(row_a) == kind_of(row_b) {
                 assert_eq!(
                     equal,
                     same_kind_and_pos(row_a, row_b),
@@ -197,6 +249,21 @@ fn membership_finds_exactly_the_equal_values_hashed_or_linear() {
     // 10:00+01:00 is found by 09:00Z, and a local time is not found by a time.
     assert!(short.matches(&values[7]));
     assert!(!short.matches(&values[4]));
+    // A zoned instant is found by the same instant at another offset and by the
+    // local datetime read as UTC (and a date by its midnight), never by a
+    // neighbouring instant.
+    let zoned = |name: &str| {
+        let at = ROWS.iter().position(|r| r.name == name).unwrap();
+        values[at].clone()
+    };
+    let zoned_set = MembershipSet::new(vec![zoned("zdt_a"), Value::Int64(1)]);
+    assert!(zoned_set.matches(&zoned("zdt_a_off")));
+    assert!(zoned_set.matches(&zoned("ldt_a")));
+    assert!(!zoned_set.matches(&zoned("zdt_mid")));
+    assert!(!zoned_set.matches(&zoned("date_a")));
+    let date_set = MembershipSet::new((0..12).map(Value::Int64).chain([zoned("date_b")]).collect());
+    assert!(date_set.matches(&zoned("zdt_b")));
+    assert!(!date_set.matches(&zoned("zdt_c")));
     // A value of every other family is absent from a one-family set.
     let only_times = MembershipSet::new(values[6..9].to_vec());
     for (probe, row) in values.iter().zip(ROWS) {
@@ -390,11 +457,7 @@ fn check_graph(graph: &DirGraph, pass: &str) {
     let distinct_count = ROWS
         .iter()
         .enumerate()
-        .filter(|(i, r)| {
-            !ROWS[..*i]
-                .iter()
-                .any(|earlier| same_kind_and_pos(earlier, r))
-        })
+        .filter(|(i, r)| !ROWS[..*i].iter().any(|earlier| same_identity(earlier, r)))
         .count();
     assert_eq!(
         column(graph, "MATCH (n:M) RETURN DISTINCT n.v").len(),
@@ -412,8 +475,8 @@ fn check_graph(graph: &DirGraph, pass: &str) {
     );
     assert_eq!(
         two_equal.len(),
-        1,
-        "{pass}: one group holds the two equal times"
+        ROWS.len() - distinct_count,
+        "{pass}: a group holds each pair of equal values (the two times, the two instants)"
     );
 
     // ORDER BY lays the families out as contiguous blocks in rank order, and
@@ -459,6 +522,22 @@ fn check_graph(graph: &DirGraph, pass: &str) {
     };
     assert_eq!(pair[0], value_of(&ROWS[0]), "{pass}: min");
     assert_eq!(pair[1], value_of(&ROWS[10]), "{pass}: max");
+    // The same instant at two offsets is one DISTINCT value that keeps the
+    // first offset it met.
+    let distinct_zoned = column(
+        graph,
+        "MATCH (n:M) WHERE n.k IN ['zdt_a', 'zdt_a_off'] RETURN DISTINCT n.v",
+    );
+    assert_eq!(
+        distinct_zoned.len(),
+        1,
+        "{pass}: DISTINCT merges one instant"
+    );
+    assert!(
+        format!("{:?}", distinct_zoned[0]).contains("offset_secs: 0"),
+        "{pass}: DISTINCT keeps the first offset met, got {:?}",
+        distinct_zoned[0]
+    );
 }
 
 #[test]

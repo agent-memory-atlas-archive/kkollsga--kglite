@@ -170,7 +170,7 @@ assert int(r.to_df()["v"].iloc[0]) == 9007199254740993
 
 ### Dates and datetimes
 
-- Aware Python datetime cells normalize to naive UTC, like query parameters and nested maps/lists.
+- Aware Python datetime cells in a DataFrame column normalize to naive UTC. Query parameters and nested maps/lists keep the offset (a zoned datetime), and a column declared `'zoneddatetime'` keeps each cell's offset.
 - Explicit date-only loading retains the local calendar date.
 - Direct date loading keeps its historical `YYYY/MM/DD`, `DD-MM-YYYY` and `MM/DD/YYYY` aliases.
 - Blueprint declared date strings use the CSV grammar: ISO date/datetime, or epoch milliseconds of nine digits or more.

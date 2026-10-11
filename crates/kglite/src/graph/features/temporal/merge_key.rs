@@ -89,6 +89,8 @@ fn canonical_value(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Timestamp(ts) => canonical_instant(*ts),
+        // A zoned bound is its UTC instant, as a validity bound reads it.
+        Value::ZonedDateTime { utc, .. } => canonical_instant(*utc),
         Value::String(text) if may_parse_as_temporal(text) => {
             parse_datetime_string(text).map_or_else(|| value.clone(), canonical_instant)
         }

@@ -203,11 +203,16 @@ class KnowledgeGraphTest {
             // Temporal and spatial cells.
             Map<String, Object> scalars = graph.query(
                     "RETURN date('2020-01-01') AS d, datetime('2020-01-01T10:00:00+02:00') AS t,"
+                            + " localdatetime('2020-01-01T08:00:00') AS lt,"
                             + " duration({days: 2}) AS dur,"
                             + " point(1.5, 2.5) AS pt").get(0);
             assertEquals(java.time.LocalDate.of(2020, 1, 1), scalars.get("d"));
-            assertEquals(java.time.LocalDateTime.of(2020, 1, 1, 8, 0), scalars.get("t"),
-                    "normalised to UTC");
+            // A datetime is an instant that keeps the offset it was written in.
+            assertEquals(java.time.OffsetDateTime.parse("2020-01-01T10:00:00+02:00"), scalars.get("t"));
+            assertEquals(java.time.ZoneOffset.ofHours(2),
+                    ((java.time.OffsetDateTime) scalars.get("t")).getOffset(), "the offset is kept");
+            assertEquals(java.time.LocalDateTime.of(2020, 1, 1, 8, 0), scalars.get("lt"),
+                    "localdatetime() is the zone-less kind");
             assertEquals(new KgliteDuration(0, 2, 0L), scalars.get("dur"));
             assertEquals(new Point(1.5, 2.5), scalars.get("pt"));
 
@@ -220,7 +225,7 @@ class KnowledgeGraphTest {
             assertEquals(new KgliteDuration(0, 0, 1, 7), fine.get("wback"));
 
             // Every typed cell, read back and bound again, is the value it came from.
-            for (String column : List.of("d", "t", "dur", "pt")) {
+            for (String column : List.of("d", "t", "lt", "dur", "pt")) {
                 assertEquals(scalars.get(column),
                         graph.query("RETURN $v AS v", Map.of("v", scalars.get(column))).get(0).get("v"),
                         column + " round-trips as a parameter");

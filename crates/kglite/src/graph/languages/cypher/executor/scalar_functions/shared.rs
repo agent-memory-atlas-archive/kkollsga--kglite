@@ -218,11 +218,16 @@ pub(super) fn next_random_u128_halves() -> (u64, u64) {
 /// Coerce a temporal Value to `NaiveDateTime` for cross-type temporal
 /// arithmetic (`date_diff`, `duration.between`). A date-only `DateTime`
 /// is treated as midnight, so mixing `date()` and `datetime()` operands
-/// works. Returns `None` for non-temporal values.
+/// works, and a zoned datetime reads as its wall clock. Returns `None` for
+/// non-temporal values.
 pub(super) fn coerce_naive_datetime(v: &Value) -> Option<chrono::NaiveDateTime> {
     match v {
         Value::Timestamp(dt) => Some(*dt),
         Value::DateTime(d) => d.and_hms_opt(0, 0, 0),
+        // The wall clock the zoned value was written in.
+        Value::ZonedDateTime { utc, offset_secs } => Some(
+            crate::datatypes::zoned_datetime::wall_clock(*utc, *offset_secs),
+        ),
         _ => None,
     }
 }

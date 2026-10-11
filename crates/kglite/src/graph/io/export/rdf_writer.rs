@@ -276,6 +276,9 @@ impl<'a> Emitter<'a> {
             Value::Time { nanos, offset_secs } => {
                 typed(xsd_time_lexical(*nanos, Some(*offset_secs)), &self.xsd_time)
             }
+            Value::ZonedDateTime { utc, offset_secs } => {
+                typed(xsd_zoned_lexical(*utc, *offset_secs), &self.xsd_date_time)
+            }
             Value::Point { lat, lon } => typed(format!("POINT({lon} {lat})"), &self.geo_wkt),
             // A sub-second part is an `xsd:duration` fraction when the sign is
             // uniform; the mixed-sign case takes the lossless `kg:duration` form.
@@ -308,6 +311,24 @@ impl<'a> Emitter<'a> {
 
 /// The `xsd:time` lexical form: `hh:mm:ss[.fraction]` with trailing fraction
 /// zeros trimmed, then `Z` or `±hh:mm` when an offset is given.
+/// `2020-01-02T03:04:05.25+02:00`: the seconds are always spelled and the offset
+/// is whole minutes. A sub-minute offset has no `xsd:dateTime` spelling, so that
+/// instant is written at `Z`.
+fn xsd_zoned_lexical(utc: chrono::NaiveDateTime, offset_secs: i32) -> String {
+    use crate::datatypes::time_of_day::format_offset;
+    use crate::datatypes::zoned_datetime::wall_clock;
+    let offset_secs = if offset_secs % 60 == 0 {
+        offset_secs
+    } else {
+        0
+    };
+    format!(
+        "{}{}",
+        wall_clock(utc, offset_secs).format("%Y-%m-%dT%H:%M:%S%.f"),
+        format_offset(offset_secs)
+    )
+}
+
 fn xsd_time_lexical(nanos: u64, offset_secs: Option<i32>) -> String {
     let secs = nanos / 1_000_000_000;
     let sub = nanos % 1_000_000_000;

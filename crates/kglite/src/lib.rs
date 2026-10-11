@@ -256,6 +256,17 @@ pub mod api {
         };
     }
 
+    /// Zoned datetimes: the instant (UTC-naive) plus offset behind
+    /// `Value::ZonedDateTime`, the wall-clock derivation and the ISO text form
+    /// (`2015-07-21T21:40:32.142+01:00`). Bindings convert their own native
+    /// offset-datetime types to and from these.
+    pub mod zoned_datetime {
+        pub use crate::datatypes::zoned_datetime::{
+            epoch_parts, format_zoned, from_epoch, parse_plain_date, parse_with_offset,
+            parse_zoned, utc_from_wall, wall_clock, ZonedParseError,
+        };
+    }
+
     /// Bulk graph construction + maintenance. `add_edges_from_specs` is
     /// the DataFrame-free edge-ingest path that non-Python bindings use
     /// (the C ABI's `kglite_create_edges_batch` wraps it); the DataFrame-based

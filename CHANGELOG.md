@@ -30,6 +30,17 @@ before upgrading.
   - Now: the call raises `ArgumentError` before anything is written, naming the unusable row count, the first row and what it holds. A cell stored as NULL for a typed column, and an object column that would be stringified, refuse the same way.
   - Clean input is unaffected.
   - Migration: pass `on_invalid='warn'` for the old behaviour, or `on_invalid='skip'` for the same without the warning.
+- **`datetime()` returns a zoned datetime, not a zone-less timestamp.**
+  - Before: `datetime()` with no argument was the UTC clock as a local timestamp, and `datetime('2024-03-15T10:30:00+02:00')` applied the offset, dropped it and returned the UTC reading.
+  - Now: `datetime(...)` is a `ZonedDateTime` that keeps the offset it was written in. With no argument it is the UTC clock at offset `Z`; an offset-free text, map or date reads as UTC. `localdatetime()` still returns the zone-less timestamp.
+  - Zoned datetimes are equal, ordered, hashed, grouped and `DISTINCT`-merged by their **instant**: `datetime('2024-03-15T10:30+02:00') = datetime('2024-03-15T08:30Z')` is true, and the first offset seen survives a merge.
+  - A stored or computed local datetime is **read as UTC** wherever it meets a zoned one. `WHERE n.created_at > datetime()`, `datetime() - n.created_at` and `AS OF datetime()` keep answering as before against stored local stamps.
+  - Text changes: `toString(datetime())` ends in `Z` or `±HH:MM`, and drops zero seconds (`2024-03-15T10:30Z`).
+  - Python: `datetime()` and an offset input return an **aware** `datetime.datetime` (a fixed-offset `tzinfo`), so `result - datetime.now()` raises `TypeError`; subtract aware values or use `datetime.now(timezone.utc)`. A timezone-aware `datetime` parameter keeps its offset (it was converted to a UTC-naive timestamp); a naive one is still a local timestamp. DataFrame cells for a zoned column become `datetime64[ns, <offset>]` (or `object` when offsets differ) instead of naive. DataFrame input of a timezone-aware column is unchanged: it still loads as UTC without a zone.
+  - Node: a JS `Date` parameter binds as a `ZonedDateTime` at UTC and `datetime()` returns the new `ZonedDateTime` class (it was `LocalDateTime`). Java: a datetime cell is an `OffsetDateTime`. Bolt: a zoned datetime is a `DateTime` structure. The C ABI and JSON use `{"$zdatetime": "…"}`; a `{"$datetime": "…"}` text that carries an offset now also binds a zoned value.
+  - Storage: a zoned value lives in a mixed column, not the dense timestamp column. A `SET` of `datetime()` onto a disk-mode timestamp column turns that column into a mixed one on the next save; use `localdatetime()` for a timestamp column that is written in bulk.
+  - Migration: call `localdatetime()` where a zone-less value was the point; give `datetime()` an explicit offset where the display should differ from UTC.
+- **`IS :: DATETIME` and `IS :: ZONED DATETIME` are accepted property types** (they were refused as unsupported), and a local datetime does not satisfy them.
 - **`localtime()` and `time()` return time values, not strings.**
   - Before: both returned `HH:MM:SS` text, so `localtime() + duration(...)` and `time('10:00') < time('11:00')` worked on strings.
   - Now: `localtime()` is a `LocalTime` and `time()` a `Time`, and the text is `toString(t)`. A `Time` carries a UTC offset; a string with no offset is read as UTC.
@@ -39,6 +50,19 @@ before upgrading.
 
 ### Added
 
+- **`ZonedDateTime` is a value.**
+  - Cypher: `datetime()` takes ISO text with `Z`, `±HH`, `±HHMM`, `±HH:MM` or `±HH:MM:SS` (within ±18:00), the week, ordinal and quarter date spellings, and maps (`{year, ..., nanosecond, timezone}` with a numeric offset, or `{datetime: …}` / `{date: …, time: …}` bases that keep their offset). A named zone (`[Europe/Oslo]`, `timezone: 'Europe/Oslo'`) is refused until zone rules ship.
+  - Accessors: `z.year` to `z.nanosecond` read the wall clock at the offset; `z.offset`, `z.offsetSeconds`, `z.offsetMinutes` and `z.timezone` read the offset; `z.epochSeconds` and `z.epochMillis` read the instant.
+  - Arithmetic: `z ± duration` moves months and days on the wall clock, then seconds and nanoseconds on the instant; `z ± n` moves days; `z - z` and `z - localdatetime` are durations of instants. `datetime.truncate` truncates the wall clock and keeps the offset (`timezone` overrides it). `duration.between` of two zoned values uses the instants; against a local side the zoned one is read at its wall clock.
+  - A zoned value is a valid `FOR VALID_TIME AS OF` instant and a valid stored bound, at its UTC instant, in every storage mode. `valid_at=` takes an aware `datetime`.
+  - `IS :: ZONED DATETIME` constraints; the `zoneddatetime` blueprint and `column_types` keyword.
+  - New file-format tags only: `Value` wire tag 19 (epoch seconds, nanoseconds, offset) and overflow-bag tag 12. They ride the container, log and directory format moves listed above.
+- **Every binding and export carries zoned datetimes.**
+  - Python: an aware `datetime.datetime` in and out; a declared `'zoneddatetime'` column keeps each offset. `datetime.datetime` holds microseconds, so finer digits floor on the Python side (`toString()` shows them).
+  - Node: new `ZonedDateTime` class (wall-clock fields, `offsetSeconds`, `toDate()`). Java: `OffsetDateTime` out, and `OffsetDateTime`, `ZonedDateTime` (as its offset) and `Instant` in. The C ABI and JSON use `{"$zdatetime": "2020-01-02T03:04:05.25+02:00"}`; `kglite.h` is unchanged.
+  - Bolt reads and writes the `DateTime` structure (`seconds` is the UTC epoch reading). `DateTimeZoneId` stays refused.
+  - RDF export writes `xsd:dateTime` with the offset and import reads an offset or `Z` back as a zoned value (a literal without one is a local datetime). The CSV tree and blueprints add the `zoneddatetime` column type. JSON and SQL export write the ISO text.
+- **Rust: `Value::ZonedDateTime { utc, offset_secs }`**, with `kglite::api::zoned_datetime` for the wall-clock derivation, the ISO text and its parser. `ColumnType` and `ColumnData` gain `ZonedDateTime`; `DeclaredType` gains `ZonedDateTime`.
 - **`LocalTime` and `Time` are values.**
   - `localtime()` and `time()` accept ISO text (`HH`, `HHMM`, `HH:MM`, `HH:MM:SS[.f]` to nine digits; `time` also takes `Z`, `±HH`, `±HHMM`, `±HH:MM`) and maps (`{hour, minute, second, millisecond, microsecond, nanosecond, timezone, time}`).
   - Accessors: `t.hour` to `t.nanosecond`, and for a `Time` `t.offset`, `t.offsetSeconds`, `t.offsetMinutes`, `t.timezone`. `toString(t)` prints the shortest ISO form, `21:40:32.142+01:00`, `10:00Z`.
@@ -50,7 +74,7 @@ before upgrading.
 - **Every binding and export carries time values.**
   - Python: `LocalTime` is a naive `datetime.time`, `Time` an aware one with a fixed-offset `tzinfo`. A `datetime.time` parameter, a `time` object column (`column_types` `'localtime'` / `'time'`) and a `from_records` value load as the matching kind. `datetime.time` holds microseconds, so a finer time reads back floored; `toString()` shows every digit.
   - Node: new `LocalTime` and `Time` classes. Java: `LocalTime` and `OffsetTime`. The C ABI and JSON use `{"$localtime": "10:00:00.5"}` and `{"$time": "10:00:00+01:00"}`; `kglite.h` is unchanged.
-  - Bolt reads and writes `LocalTime` and `Time` structures. Zoned `DateTime` structures stay refused.
+  - Bolt reads and writes `LocalTime` and `Time` structures.
   - RDF export writes `xsd:time` (an offset marks a `Time`), and import reads it. The CSV tree and blueprints add the `localtime` and `time` column types. JSON export and SQL export write the ISO text.
 - **Rust: `Value::LocalTime(u64)` and `Value::Time { nanos, offset_secs }`**, with `kglite::api::time_of_day` for the clock encoding and text forms. `ColumnType` and `ColumnData` gain `LocalTime` and `Time`; `DeclaredType` gains `LocalTime` and `ZonedTime`.
 

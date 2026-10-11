@@ -27,6 +27,7 @@ query to DIFFERENTIAL_QUERIES** so the regression is permanent.
 
 from __future__ import annotations
 
+import datetime
 import math
 import re
 
@@ -313,6 +314,24 @@ def date_text_graph():
         " (:M {id: 3, label: '1990-01-01'})"
     ).to_list()
     graph.create_index("M", "vt")
+    return graph
+
+
+@pytest.fixture
+def zoned_graph():
+    """Stored zoned datetimes beside local stamps and dates that name the same
+    instants (a local stamp is read as UTC), with an equality index on the zoned
+    property so the scan, pushed and indexed routes all run."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (:M {id: 1, z: datetime('1990-01-01T10:00:00+02:00'), ts: localdatetime('1990-01-01T08:00:00'),"
+        " vt: date('1990-01-01')}),"
+        " (:M {id: 2, z: datetime('2020-06-01T02:00:00+02:00'), ts: localdatetime('2020-06-01T00:00:00'),"
+        " vt: date('2020-06-01')}),"
+        " (:M {id: 3, z: datetime('2020-06-01T00:00:00Z'), ts: localdatetime('2021-01-01T00:00:00')}),"
+        " (:M {id: 4, label: 'none'})"
+    ).to_list()
+    graph.create_index("M", "z")
     return graph
 
 
@@ -1470,6 +1489,49 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (m:M) WHERE m.label = date('1990-01-01') RETURN m.id AS id",
         None,
     ),
+    # A zoned datetime is its instant; a local stamp is read as UTC and a date is
+    # its midnight UTC, so `=`, `<`, `IN` and ordering agree on every route.
+    (
+        "zoned_eq_other_offset",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z = datetime('1990-01-01T08:00:00Z') RETURN m.id AS id",
+        None,
+    ),
+    (
+        "zoned_eq_local_stamp",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z = localdatetime('2020-06-01T00:00:00') RETURN m.id AS id",
+        None,
+    ),
+    ("zoned_eq_date", "zoned_graph", "MATCH (m:M) WHERE m.z = date('2020-06-01') RETURN m.id AS id", None),
+    ("zoned_prop_eq_local_prop", "zoned_graph", "MATCH (m:M) WHERE m.z = m.ts RETURN m.id AS id", None),
+    ("zoned_prop_eq_date_prop", "zoned_graph", "MATCH (m:M) WHERE m.z = m.vt RETURN m.id AS id", None),
+    ("zoned_inline_map", "zoned_graph", "MATCH (m:M {z: datetime('2020-06-01T00:00:00Z')}) RETURN m.id AS id", None),
+    (
+        "zoned_in_list",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z IN [datetime('2020-06-01T00:00:00Z'), localdatetime('1990-01-01T08:00:00')]"
+        " RETURN m.id AS id",
+        None,
+    ),
+    ("zoned_lt_now", "zoned_graph", "MATCH (m:M) WHERE m.z < datetime() RETURN m.id AS id", None),
+    ("zoned_gt_local_stamp", "zoned_graph", "MATCH (m:M) WHERE m.ts > m.z RETURN m.id AS id", None),
+    (
+        "zoned_eq_param",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z = $t RETURN m.id AS id",
+        {"t": datetime.datetime(2020, 6, 1, 0, 0, tzinfo=datetime.timezone.utc)},
+    ),
+    (
+        "zoned_count_eq",
+        "zoned_graph",
+        "MATCH (m:M) WHERE m.z = datetime('2020-06-01T00:00:00Z') RETURN count(*) AS c",
+        None,
+    ),
+    ("zoned_distinct", "zoned_graph", "MATCH (m:M) RETURN DISTINCT m.z AS z", None),
+    ("zoned_order", "zoned_graph", "MATCH (m:M) WHERE m.z IS NOT NULL RETURN m.id AS id ORDER BY m.z, m.id", None),
+    ("zoned_group", "zoned_graph", "MATCH (m:M) RETURN m.z AS z, count(*) AS c ORDER BY c DESC, z", None),
+    ("zoned_min_max", "zoned_graph", "MATCH (m:M) RETURN min(m.z) AS lo, max(m.z) AS hi", None),
     # A node the row holds as a value (`UNWIND collect(d)`, `startNode(r)`) or
     # a `CALL { }` import anchors a subquery pattern; the answers must not move.
     (

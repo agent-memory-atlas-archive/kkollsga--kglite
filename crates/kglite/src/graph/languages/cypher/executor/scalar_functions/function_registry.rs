@@ -352,8 +352,8 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "datetime",
         aliases: &[],
         category: "temporal",
-        description: "Now in UTC, a parsed ISO-8601 datetime normalised to UTC, or one built from a {year, month, day, hour, minute, second, ...} map",
-        signature: "datetime(input :: STRING | MAP?) :: DATETIME",
+        description: "An instant with an offset: now (offset Z), an ISO-8601 text with Z / ±HH:MM (no offset reads as UTC), or a {year, month, day, hour, ..., timezone} map; two datetimes are equal when they name the same instant. A named zone is refused",
+        signature: "datetime(input :: STRING | MAP | DATE | LOCAL DATETIME | ZONED DATETIME?) :: ZONED DATETIME",
     },
     FunctionSpec {
         name: "date_diff",
@@ -388,7 +388,7 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         aliases: &[],
         category: "temporal",
         description: "Round a temporal value down to the start of a unit (millennium to microsecond), then apply optional component overrides",
-        signature: "datetime.truncate(unit :: STRING, temporal :: DATE | DATETIME | STRING, overrides :: MAP?) :: DATETIME?",
+        signature: "datetime.truncate(unit :: STRING, temporal :: DATE | DATETIME | STRING, overrides :: MAP?) :: ZONED DATETIME?",
     },
     FunctionSpec {
         name: "localdatetime.truncate",
@@ -464,8 +464,8 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         name: "localdatetime",
         aliases: &[],
         category: "temporal",
-        description: "Local wall-clock now, or a parsed datetime keeping its wall clock",
-        signature: "localdatetime(input :: STRING?) :: DATETIME",
+        description: "Local wall-clock now, or a parsed datetime keeping its wall clock (a zoned datetime gives the wall clock it was written in)",
+        signature: "localdatetime(input :: STRING?) :: LOCAL DATETIME",
     },
     FunctionSpec {
         name: "localtime",

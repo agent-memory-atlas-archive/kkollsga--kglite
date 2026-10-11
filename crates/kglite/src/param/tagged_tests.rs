@@ -23,7 +23,7 @@ fn date_tag_becomes_a_date_value() {
 }
 
 #[test]
-fn datetime_tag_becomes_a_timestamp_normalised_to_utc() {
+fn datetime_tag_is_local_without_an_offset_and_zoned_with_one() {
     let params = params(
         r#"{"naive":{"$datetime":"2020-01-01T08:00:00.250"},"zoned":{"$datetime":"2020-01-01T10:00:00+02:00"}}"#,
     );
@@ -32,10 +32,61 @@ fn datetime_tag_becomes_a_timestamp_normalised_to_utc() {
         .and_hms_milli_opt(8, 0, 0, 250)
         .unwrap();
     assert_eq!(params["naive"], Value::Timestamp(expected));
+    // An offset keeps both the instant and the offset it was written in.
     assert_eq!(
-        params["zoned"],
-        Value::Timestamp(expected - chrono::Duration::milliseconds(250))
+        format!("{:?}", params["zoned"]),
+        format!(
+            "{:?}",
+            Value::ZonedDateTime {
+                utc: expected - chrono::Duration::milliseconds(250),
+                offset_secs: 7200
+            }
+        )
     );
+}
+
+#[test]
+fn zdatetime_tag_is_an_instant_with_its_offset() {
+    let params = params(
+        r#"{"a":{"$zdatetime":"2020-01-01T10:00:00+02:00"},"u":{"$zdatetime":"2020-01-01T10:00"},"z":{"$zdatetime":"2020-01-01T10:00:00.5Z"}}"#,
+    );
+    let base = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
+    for (key, utc, offset_secs) in [
+        ("a", base.and_hms_opt(8, 0, 0).unwrap(), 7200),
+        ("u", base.and_hms_opt(10, 0, 0).unwrap(), 0),
+        ("z", base.and_hms_milli_opt(10, 0, 0, 500).unwrap(), 0),
+    ] {
+        assert_eq!(
+            format!("{:?}", params[key]),
+            format!("{:?}", Value::ZonedDateTime { utc, offset_secs }),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn zoned_values_round_trip_through_their_tag_keeping_the_offset() {
+    let base = NaiveDate::from_ymd_opt(2020, 1, 2).unwrap();
+    for value in [
+        Value::ZonedDateTime {
+            utc: base.and_hms_nano_opt(3, 4, 5, 250_000_001).unwrap(),
+            offset_secs: 7200,
+        },
+        Value::ZonedDateTime {
+            utc: base.and_hms_opt(0, 0, 0).unwrap(),
+            offset_secs: -64_800,
+        },
+        Value::ZonedDateTime {
+            utc: base.and_hms_opt(23, 59, 59).unwrap(),
+            offset_secs: 0,
+        },
+    ] {
+        let tagged = kglite_value_to_json_tagged(&value);
+        let back = json_value_to_kglite_value(&tagged);
+        assert_eq!(format!("{back:?}"), format!("{value:?}"), "{tagged}");
+        // Natural mode is the bare ISO text.
+        assert!(kglite_value_to_json(&value).is_string());
+    }
 }
 
 #[test]

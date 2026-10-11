@@ -1050,6 +1050,7 @@ fn borrowed_kind(v: &BorrowedValue<'_>) -> &'static str {
         BorrowedValue::Duration { .. } => "Duration",
         BorrowedValue::LocalTime(_) => "LocalTime",
         BorrowedValue::Time { .. } => "Time",
+        BorrowedValue::ZonedDateTime { .. } => "ZonedDateTime",
     }
 }
 

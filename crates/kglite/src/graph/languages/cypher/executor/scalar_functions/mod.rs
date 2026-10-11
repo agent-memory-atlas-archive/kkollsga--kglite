@@ -25,6 +25,7 @@ mod temporal_iso;
 mod temporal_map;
 mod temporal_time;
 mod temporal_truncate;
+mod temporal_zoned;
 mod timeseries;
 mod utility;
 pub(super) mod validity;
@@ -36,6 +37,24 @@ pub(super) use function_registry::{FunctionSpec, FUNCTIONS};
 /// applied, normalising the reading to UTC. `None` when `datetime(s)` is null.
 pub(crate) fn parse_datetime_utc(text: &str) -> Option<chrono::NaiveDateTime> {
     shared::parse_iso_datetime(text).map(|parsed| parsed.utc())
+}
+
+/// A `datetime` text as a value: an instant with its offset when the text names
+/// one, else the local reading. The reader behind the `$datetime` parameter tag.
+pub(crate) fn parse_datetime_value(text: &str) -> Option<Value> {
+    let parsed = shared::parse_iso_datetime(text)?;
+    match parsed.offset {
+        None => Some(Value::Timestamp(parsed.local)),
+        Some(offset) => {
+            let offset_secs = offset.local_minus_utc();
+            (offset_secs.abs() <= crate::datatypes::time_of_day::MAX_OFFSET_SECS).then(|| {
+                Value::ZonedDateTime {
+                    utc: parsed.utc(),
+                    offset_secs,
+                }
+            })
+        }
+    }
 }
 
 impl<'a> CypherExecutor<'a> {
@@ -71,6 +90,12 @@ impl<'a> CypherExecutor<'a> {
                 );
             }
             Value::Timestamp(t) => return Ok(Value::Timestamp(t)),
+            // The wall clock the zoned value was written in.
+            Value::ZonedDateTime { utc, offset_secs } => {
+                return Ok(Value::Timestamp(
+                    crate::datatypes::zoned_datetime::wall_clock(utc, offset_secs),
+                ))
+            }
             Value::DateTime(d) => return Ok(Value::Timestamp(d.and_time(NaiveTime::MIN))),
             _ => {
                 return Err(
@@ -239,7 +264,7 @@ impl<'a> CypherExecutor<'a> {
     }
 
     /// Parse a date argument from a ts_*() function call.
-    /// Accepts string date queries, integer years, DateTime values, and Null.
+    /// Accepts string date queries, integer years, date and datetime values (a zoned one at its UTC day), and Null.
     pub(super) fn resolve_ts_date_arg(
         &self,
         expr: &Expression,
@@ -266,7 +291,7 @@ impl<'a> CypherExecutor<'a> {
                 *date,
                 crate::graph::features::timeseries::DatePrecision::Day,
             ))),
-            Value::Timestamp(t) => Ok(Some((
+            Value::Timestamp(t) | Value::ZonedDateTime { utc: t, .. } => Ok(Some((
                 t.date(),
                 crate::graph::features::timeseries::DatePrecision::Day,
             ))),

@@ -193,6 +193,18 @@ impl CypherExecutor<'_> {
                     },
                 },
             ),
+            // A zoned datetime truncates its wall clock and keeps its offset (UTC
+            // for a local value); the `timezone` override moves the result.
+            MapTarget::DateTime => {
+                let offset_secs = match &temporal {
+                    Value::ZonedDateTime { offset_secs, .. } => *offset_secs,
+                    _ => 0,
+                };
+                map.insert(
+                    "datetime",
+                    super::temporal_zoned::zoned_from_wall(truncated, offset_secs)?,
+                )
+            }
             _ => map.insert("datetime", Value::Timestamp(truncated)),
         };
         temporal_from_map(target, &map)

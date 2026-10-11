@@ -260,7 +260,13 @@ fn truncate_rounds_down_then_applies_overrides() {
         ),
         (
             format!("datetime.truncate('day', {ldt}, {{hour: 3}})"),
-            local_datetime(1984, 10, 11, 3, 0, 0, 0),
+            Value::ZonedDateTime {
+                utc: chrono::NaiveDate::from_ymd_opt(1984, 10, 11)
+                    .unwrap()
+                    .and_hms_opt(3, 0, 0)
+                    .unwrap(),
+                offset_secs: 0,
+            },
         ),
     ] {
         assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");

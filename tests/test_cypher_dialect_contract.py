@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -226,7 +226,7 @@ def test_public_claim_surfaces_do_not_promise_complete_or_drop_in_compatibility(
     assert "`FOREACH (x IN list \\| ...)` | Supported" in migration
     assert "| `allShortestPaths(...)` | Not supported" not in migration
     assert "`allShortestPaths(...)`." in migration
-    assert "`datetime()` and `localdatetime()` return zoneless timestamp values" in migration
+    assert "`datetime()` returns a zoned value that keeps the offset it was written in" in migration
 
 
 def test_overclaim_negation_must_govern_the_claim() -> None:
@@ -234,16 +234,18 @@ def test_overclaim_negation_must_govern_the_claim() -> None:
     assert _overclaims("This is not experimental; it is a Bolt drop-in.") == ["bolt drop-in"]
 
 
-def test_documented_timestamp_constructors_return_zoneless_values() -> None:
+def test_documented_datetime_constructors_keep_the_offset_and_the_local_one_drops_it() -> None:
     row = (
         kglite.KnowledgeGraph()
-        .cypher("RETURN datetime('2024-01-15T10:30:00+02:00') AS utc, localdatetime('2024-01-15T10:30:00') AS local")
+        .cypher("RETURN datetime('2024-01-15T10:30:00+02:00') AS zoned, localdatetime('2024-01-15T10:30:00') AS local")
         .to_list()[0]
     )
     assert row == {
-        "utc": datetime(2024, 1, 15, 8, 30),
+        "zoned": datetime(2024, 1, 15, 8, 30, tzinfo=timezone.utc),
         "local": datetime(2024, 1, 15, 10, 30),
     }
+    assert row["zoned"].utcoffset() == timedelta(hours=2)
+    assert row["local"].tzinfo is None
 
 
 def test_current_call_semantics_reach_public_claim_surfaces() -> None:

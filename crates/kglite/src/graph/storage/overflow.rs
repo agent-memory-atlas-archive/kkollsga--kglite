@@ -33,7 +33,7 @@
 //! | 9   | List       | u32 LE length + Postcard(`Vec<Value>`)   |
 //! | 10  | Map        | u32 LE length + Postcard(`BTreeMap`)     |
 //! | 11  | Timestamp  | u32 LE length (12) + i64 LE seconds + u32 LE nanoseconds |
-//! | 12  | (reserved) | zoned datetime — length-prefixed         |
+//! | 12  | ZonedDateTime | u32 LE length (16) + i64 LE epoch seconds + u32 LE nanoseconds + i32 LE offset seconds |
 //! | 13  | LocalTime  | u32 LE length (8) + u64 LE nanoseconds of day |
 //! | 14  | Time       | u32 LE length (12) + u64 LE nanoseconds of day + i32 LE offset seconds |
 //! | 15  | Duration   | u32 LE length (20) + i32 months + i32 days + i64 seconds + i32 nanoseconds, all LE |
@@ -83,8 +83,8 @@ pub const TAG_MAP_POSTCARD: u8 = 10;
 /// but no longer written.
 pub const TAG_TIMESTAMP_EXACT: u8 = 11;
 
-/// Tag 12 is reserved for the zoned datetime.
-///
+/// An instant with an offset: epoch seconds, nanoseconds, then offset seconds.
+pub const TAG_ZONED_DATETIME: u8 = 12;
 /// A time of day without an offset: nanoseconds since midnight.
 pub const TAG_LOCAL_TIME: u8 = 13;
 /// A time of day with an offset: nanoseconds since midnight, then offset seconds.
@@ -100,11 +100,11 @@ const DURATION_LEN: usize = 20;
 /// skipped via the length-prefix forward-compat rule (module docs).
 pub const MAX_KNOWN_TAG: u8 = TAG_DURATION;
 
-/// Whether `read_value` can decode `tag`. Tag 12 is reserved and tag 8 is
-/// retired: they sit inside `..=MAX_KNOWN_TAG` yet must be skipped, not read.
+/// Whether `read_value` can decode `tag`. Tag 8 is retired: it sits inside
+/// `..=MAX_KNOWN_TAG` yet must be skipped, not read.
 #[inline]
 fn is_decodable_tag(tag: u8) -> bool {
-    tag <= MAX_KNOWN_TAG && tag != TAG_LIST && tag != 12
+    tag <= MAX_KNOWN_TAG && tag != TAG_LIST
 }
 
 // ─── Encoders ────────────────────────────────────────────────────────────────
@@ -149,6 +149,7 @@ pub fn encode_value(buf: &mut Vec<u8>, key: InternedKey, value: &Value) {
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
         Value::LocalTime(n) => encode_local_time(buf, *n),
         Value::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
+        Value::ZonedDateTime { utc, offset_secs } => encode_zoned(buf, utc, *offset_secs),
         // NodeRef is transient and is written as null.
         Value::NodeRef(_) => buf.push(TAG_NULL),
         // Lists are persistable property values. Tag 8 is retired and
@@ -203,6 +204,7 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
         } => encode_duration(buf, *months, *days, *seconds, *nanos),
         BorrowedValue::LocalTime(n) => encode_local_time(buf, *n),
         BorrowedValue::Time { nanos, offset_secs } => encode_time(buf, *nanos, *offset_secs),
+        BorrowedValue::ZonedDateTime { utc, offset_secs } => encode_zoned(buf, utc, *offset_secs),
     }
 }
 
@@ -210,6 +212,32 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
 const LOCAL_TIME_LEN: usize = 8;
 /// Length of a [`TAG_TIME`] payload: `u64` + `i32`.
 const TIME_LEN: usize = 12;
+/// Length of a [`TAG_ZONED_DATETIME`] payload: `i64` + `u32` + `i32`.
+const ZONED_LEN: usize = 16;
+
+fn encode_zoned(buf: &mut Vec<u8>, utc: &chrono::NaiveDateTime, offset_secs: i32) {
+    let (secs, nanos) = crate::datatypes::zoned_datetime::epoch_parts(*utc);
+    buf.push(TAG_ZONED_DATETIME);
+    buf.extend_from_slice(&(ZONED_LEN as u32).to_le_bytes());
+    buf.extend_from_slice(&secs.to_le_bytes());
+    buf.extend_from_slice(&nanos.to_le_bytes());
+    buf.extend_from_slice(&offset_secs.to_le_bytes());
+}
+
+/// `None` for a payload of the wrong length, an instant out of range or an
+/// offset past ±18:00: corrupt, not a value to fabricate.
+fn decode_zoned(payload: &[u8]) -> Option<(chrono::NaiveDateTime, i32)> {
+    if payload.len() != ZONED_LEN {
+        return None;
+    }
+    let secs = i64::from_le_bytes(payload[0..8].try_into().ok()?);
+    let nanos = u32::from_le_bytes(payload[8..12].try_into().ok()?);
+    let offset = i32::from_le_bytes(payload[12..16].try_into().ok()?);
+    if offset.abs() > crate::datatypes::time_of_day::MAX_OFFSET_SECS {
+        return None;
+    }
+    crate::datatypes::zoned_datetime::from_epoch(secs, nanos).map(|utc| (utc, offset))
+}
 
 fn encode_local_time(buf: &mut Vec<u8>, nanos: u64) {
     buf.push(TAG_LOCAL_TIME);
@@ -259,6 +287,10 @@ fn decode_fixed_temporal(tag: u8, payload: &[u8]) -> Option<BorrowedValue<'stati
                 seconds,
                 nanos,
             }
+        }
+        TAG_ZONED_DATETIME => {
+            let (utc, offset_secs) = decode_zoned(payload)?;
+            BorrowedValue::ZonedDateTime { utc, offset_secs }
         }
         TAG_LOCAL_TIME => BorrowedValue::LocalTime(decode_local_time(payload)?),
         TAG_TIME => {
@@ -438,6 +470,11 @@ pub fn read_value(blob: &[u8], pos: &mut usize, type_tag: u8) -> Option<Value> {
                 seconds,
                 nanos,
             })
+        }
+        TAG_ZONED_DATETIME => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            let (utc, offset_secs) = decode_zoned(bytes)?;
+            Some(Value::ZonedDateTime { utc, offset_secs })
         }
         TAG_LOCAL_TIME => {
             let bytes = read_len_prefixed(blob, pos)?;
@@ -665,7 +702,7 @@ where
                     return Some(Err(e));
                 }
             }
-            TAG_TIMESTAMP_EXACT | TAG_DURATION | TAG_LOCAL_TIME | TAG_TIME => {
+            TAG_TIMESTAMP_EXACT | TAG_ZONED_DATETIME | TAG_DURATION | TAG_LOCAL_TIME | TAG_TIME => {
                 let Some(bytes) = read_len_prefixed(blob, pos) else {
                     return Some(Ok(()));
                 };
@@ -1239,14 +1276,13 @@ mod tests {
         }
     }
 
-    /// Tag 12 is reserved for the zoned datetime. It is
-    /// length-prefixed, so a reader that cannot decode it steps over the one
-    /// entry and keeps the rest of the row; tag 15 with a corrupt payload ends
-    /// the scan rather than fabricating a duration.
+    /// A tag past `MAX_KNOWN_TAG` is length-prefixed, so a reader that cannot
+    /// decode it steps over the one entry and keeps the rest of the row; tag 15
+    /// with a corrupt payload ends the scan rather than fabricating a duration.
     #[test]
-    fn reserved_temporal_tags_are_skipped_and_a_corrupt_duration_is_not_invented() {
+    fn unknown_temporal_tags_are_skipped_and_a_corrupt_duration_is_not_invented() {
         let keep = [(key(1), Value::Int64(1)), (key(3), Value::Int64(3))];
-        let reserved = 12u8;
+        let reserved = MAX_KNOWN_TAG + 1;
         {
             let mut blob = blob_of(&[keep[0].clone()]);
             blob[..2].copy_from_slice(&3u16.to_le_bytes());
@@ -1290,6 +1326,15 @@ mod tests {
                 nanos: 1,
                 offset_secs: -64_800,
             },
+            Value::ZonedDateTime {
+                utc: crate::datatypes::zoned_datetime::from_epoch(1_437_511_232, 142_000_001)
+                    .unwrap(),
+                offset_secs: 3_600,
+            },
+            Value::ZonedDateTime {
+                utc: crate::datatypes::zoned_datetime::from_epoch(-62_135_596_800, 0).unwrap(),
+                offset_secs: -64_800,
+            },
         ];
         for (i, v) in values.iter().enumerate() {
             let entries = vec![
@@ -1319,6 +1364,19 @@ mod tests {
             (TAG_TIME, {
                 let mut p = 0u64.to_le_bytes().to_vec();
                 p.extend_from_slice(&64_801i32.to_le_bytes());
+                p
+            }),
+            (TAG_ZONED_DATETIME, vec![0u8; 15]),
+            (TAG_ZONED_DATETIME, {
+                let mut p = 0i64.to_le_bytes().to_vec();
+                p.extend_from_slice(&0u32.to_le_bytes());
+                p.extend_from_slice(&64_801i32.to_le_bytes());
+                p
+            }),
+            (TAG_ZONED_DATETIME, {
+                let mut p = 0i64.to_le_bytes().to_vec();
+                p.extend_from_slice(&1_000_000_000u32.to_le_bytes());
+                p.extend_from_slice(&0i32.to_le_bytes());
                 p
             }),
         ] {

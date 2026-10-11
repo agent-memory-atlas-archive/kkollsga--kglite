@@ -141,8 +141,13 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
 fn is_temporal_text_pair(a: &Value, b: &Value) -> bool {
     matches!(
         (a, b),
-        (Value::DateTime(_) | Value::Timestamp(_), Value::String(_))
-            | (Value::String(_), Value::DateTime(_) | Value::Timestamp(_))
+        (
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. },
+            Value::String(_),
+        ) | (
+            Value::String(_),
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. },
+        )
     )
 }
 
@@ -247,6 +252,14 @@ fn scalar_values_equal(a: &Value, b: &Value) -> bool {
         // differently for the same pair.
         (Value::DateTime(date), Value::Timestamp(ts))
         | (Value::Timestamp(ts), Value::DateTime(date)) => date.and_hms_opt(0, 0, 0) == Some(*ts),
+        // A zoned datetime is its instant; a local datetime is read as UTC (the
+        // engine stores every local stamp as one) and a date as its midnight UTC.
+        (Value::ZonedDateTime { utc, .. }, Value::Timestamp(ts))
+        | (Value::Timestamp(ts), Value::ZonedDateTime { utc, .. }) => utc == ts,
+        (Value::ZonedDateTime { utc, .. }, Value::DateTime(date))
+        | (Value::DateTime(date), Value::ZonedDateTime { utc, .. }) => {
+            date.and_hms_opt(0, 0, 0) == Some(*utc)
+        }
         _ => false,
     }
 }
@@ -319,6 +332,23 @@ pub fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         // offset to compare with a Time, and neither has a date.
         (Value::LocalTime(a), Value::LocalTime(b)) => Some(a.cmp(b)),
         (Value::Time { .. }, Value::Time { .. }) => Some(a.cmp(b)),
+        // Zoned datetimes order by instant, against a local datetime read as UTC
+        // and a date as its midnight UTC.
+        (Value::ZonedDateTime { utc: a, .. }, Value::ZonedDateTime { utc: b, .. })
+        | (Value::ZonedDateTime { utc: a, .. }, Value::Timestamp(b)) => Some(a.cmp(b)),
+        (Value::Timestamp(a), Value::ZonedDateTime { utc: b, .. }) => Some(a.cmp(b)),
+        (Value::ZonedDateTime { utc, .. }, Value::DateTime(d)) => {
+            d.and_hms_opt(0, 0, 0).map(|midnight| utc.cmp(&midnight))
+        }
+        (Value::DateTime(d), Value::ZonedDateTime { utc, .. }) => {
+            d.and_hms_opt(0, 0, 0).map(|midnight| midnight.cmp(utc))
+        }
+        (Value::ZonedDateTime { utc, .. }, Value::String(s)) => {
+            parse_datetime_string(s).map(|p| utc.cmp(&p))
+        }
+        (Value::String(s), Value::ZonedDateTime { utc, .. }) => {
+            parse_datetime_string(s).map(|p| p.cmp(utc))
+        }
         // A date-only value compares as midnight on that date.
         (Value::Timestamp(a), Value::DateTime(b)) => b.and_hms_opt(0, 0, 0).map(|bt| a.cmp(&bt)),
         (Value::DateTime(a), Value::Timestamp(b)) => a.and_hms_opt(0, 0, 0).map(|at| at.cmp(b)),
@@ -431,7 +461,7 @@ fn is_numeric(v: &Value) -> bool {
 /// | 3 | `Relationship` | |
 /// | 4 | `List` | |
 /// | 5 | `Path` | |
-/// | 6 | `DateTime`, `Timestamp` | one rank, not two: a date compares as midnight on that date, so a column mixing dates and timestamps still orders chronologically |
+/// | 6 | `DateTime`, `Timestamp`, `ZonedDateTime` | one rank, not three: a date compares as midnight on that date and a zoned datetime as its UTC instant, so a column mixing them still orders chronologically |
 /// | 7 | `LocalTime` | |
 /// | 8 | `Time` | ordered by its UTC reading, offsets ignored |
 /// | 9 | `Duration` | last of Neo4j's temporal group |
@@ -454,7 +484,7 @@ fn type_rank(v: &Value) -> u8 {
         Value::Relationship(_) => 3,
         Value::List(_) => 4,
         Value::Path(_) => 5,
-        Value::DateTime(_) | Value::Timestamp(_) => 6,
+        Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. } => 6,
         Value::LocalTime(_) => 7,
         Value::Time { .. } => 8,
         Value::Duration { .. } => 9,
@@ -483,9 +513,10 @@ pub fn total_order(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
         (Value::Null, Value::Null) => Ordering::Equal,
         (Value::NodeRef(x), Value::NodeRef(y)) => x.cmp(y),
-        (Value::DateTime(_) | Value::Timestamp(_), Value::DateTime(_) | Value::Timestamp(_)) => {
-            as_datetime(a).cmp(&as_datetime(b))
-        }
+        (
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. },
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. },
+        ) => as_datetime(a).cmp(&as_datetime(b)),
         (Value::LocalTime(_), Value::LocalTime(_)) | (Value::Time { .. }, Value::Time { .. }) => {
             a.cmp(b)
         }
@@ -542,11 +573,13 @@ pub fn total_order(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
-/// The instant a temporal value sorts at: a date is midnight on that date.
+/// The instant a temporal value sorts at: a date is midnight on that date, a
+/// zoned datetime its UTC instant.
 #[inline]
 fn as_datetime(v: &Value) -> chrono::NaiveDateTime {
     match v {
         Value::Timestamp(t) => *t,
+        Value::ZonedDateTime { utc, .. } => *utc,
         Value::DateTime(d) => d.and_time(chrono::NaiveTime::MIN),
         _ => chrono::NaiveDateTime::MIN,
     }

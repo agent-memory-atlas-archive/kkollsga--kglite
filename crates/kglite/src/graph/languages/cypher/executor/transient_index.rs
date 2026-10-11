@@ -154,7 +154,9 @@ impl TransientEqIndex {
                         kinds.text = true;
                         kinds.bracketed |= text.starts_with('[');
                     }
-                    Value::DateTime(_) | Value::Timestamp(_) => kinds.temporal = true,
+                    Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. } => {
+                        kinds.temporal = true
+                    }
                     _ => {}
                 }
                 by_value.entry(canonical_key(val)).or_default().push(idx);
@@ -214,7 +216,9 @@ impl TransientEqIndex {
                     || text.starts_with('[')
                     || (self.kinds.temporal && parse_datetime_string(text).is_some())
             }
-            Value::DateTime(_) | Value::Timestamp(_) => self.kinds.text,
+            Value::DateTime(_) | Value::Timestamp(_) | Value::ZonedDateTime { .. } => {
+                self.kinds.text
+            }
             Value::Float64(f) if f.is_nan() => return Some(&[]),
             _ => false,
         };
@@ -238,6 +242,8 @@ fn canonical_key(value: Value) -> Value {
             canonical_id(&value).into_owned()
         }
         Value::Timestamp(ts) if ts.time() == chrono::NaiveTime::MIN => Value::DateTime(ts.date()),
+        // A zoned datetime equals the local reading of its UTC instant.
+        Value::ZonedDateTime { utc, .. } => canonical_key(Value::Timestamp(utc)),
         other => other,
     }
 }

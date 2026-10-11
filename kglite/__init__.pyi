@@ -706,7 +706,9 @@ class ResultView:
         """Convert all rows to a Python list of dicts (full materialization).
 
         Temporal values come back as Python temporal values: a **date** is a
-        ``datetime.date`` and a **datetime** a naive ``datetime.datetime`` —
+        ``datetime.date``, a **datetime** (``datetime()``) an aware
+        ``datetime.datetime`` whose ``tzinfo`` is the fixed offset it was written
+        in, and a **local datetime** (``localdatetime()``) a naive one —
         top-level, in lists and maps, and on every read route. A **local
         time** (``localtime()``) is a naive ``datetime.time`` and a **time**
         (``time()``) an aware ``datetime.time`` whose ``tzinfo`` is a fixed
@@ -1846,8 +1848,8 @@ def from_records(
         TypeError: If a record value is of a type a JSON records spec cannot
             carry, naming the value and its type. A ``date``, ``datetime``,
             ``time`` or ``timedelta`` loads typed — it is sent as the tagged
-            object ``{"$date": …}`` / ``{"$datetime": …}`` /
-            ``{"$localtime": …}`` / ``{"$time": …}`` / ``{"$duration": …}``,
+            object ``{"$date": …}`` / ``{"$datetime": …}`` (an aware one keeps its
+            offset) / ``{"$localtime": …}`` / ``{"$time": …}`` / ``{"$duration": …}``,
             which a spec given as JSON text can use directly. ``pd.NaT``
             becomes ``null``.
     """
@@ -2338,7 +2340,8 @@ class KnowledgeGraph:
             column_types: Override column dtypes, e.g. ``{'col': 'string'}``.
                 Supported: ``'string'``, ``'integer'``, ``'float'``,
                 ``'datetime'``, ``'timestamp'``, ``'uniqueid'``, ``'list'``,
-                ``'map'``, ``'duration'``, ``'localtime'``, ``'time'``, and
+                ``'map'``, ``'duration'``, ``'localtime'``, ``'time'``,
+                ``'zoneddatetime'``, and
                 ``'validFrom'`` /
                 ``'validTo'`` (a validity interval, with its end rule set by
                 *convention*; see below).
@@ -2355,6 +2358,11 @@ class KnowledgeGraph:
                 object column is. A cell of the other kind in a declared
                 ``'localtime'`` / ``'time'`` column is stored as NULL and
                 reported through ``on_invalid``.
+                A declared ``'zoneddatetime'`` column keeps each aware
+                ``datetime``'s offset (a naive cell is read as UTC); an
+                undeclared datetime column still reads an aware cell as UTC
+                without a zone, and a ``'zoneddatetime'`` column is held in a
+                mixed (not dense timestamp) column.
                 A column of Python lists/tuples is auto-detected as a native
                 ``'list'`` property (stored structurally, not stringified), so
                 ``'y' IN n.aliases`` tests membership and ``UNWIND n.aliases``
@@ -8095,19 +8103,18 @@ class KnowledgeGraph:
                 and call ``ResultView.to_df()`` when you want both the frame
                 and ``rv.warnings``.
             params: Optional parameter dict for ``$param`` substitution.
-                Timezone-aware ``datetime``
-                parameters are converted to UTC and stored **without a zone** —
-                KGLite's temporal values are zoneless, so
+                A timezone-aware ``datetime``
+                parameter binds as a **zoned datetime** that keeps its offset —
                 ``datetime(2024, 3, 9, 14, 30, tzinfo=timezone(timedelta(hours=2)))``
-                binds as ``2024-03-09T12:30``, exactly as the Cypher
-                ``datetime()`` constructor normalises an offset-bearing
-                literal. Bind a naive datetime when you want the wall-clock
-                value preserved. The Bolt server, which receives a zoned
-                PackStream type it cannot losslessly translate, *refuses* such
-                a parameter instead of converting it — the two surfaces
-                deliberately differ, because converting on the wire would
-                silently corrupt a driver's zoned round-trip. Microseconds are preserved; naive
-                datetimes and pure dates retain their existing meaning. Container values
+                binds as ``2024-03-09T14:30+02:00``, the value Cypher's
+                ``datetime('2024-03-09T14:30+02:00')`` builds. Zoned values are
+                equal by instant, and a local datetime is read as UTC where it
+                meets one, so ``WHERE n.at > $aware`` keeps working against
+                stored local stamps. An offset beyond ±18:00, or one that is not
+                whole seconds, keeps the instant at UTC. A naive ``datetime``
+                binds as a local datetime and a pure date as a date. Microseconds
+                are preserved (``datetime.datetime`` holds no finer digits).
+                Container values
                 allow at most 64 active list, tuple, dict or ndarray expansions
                 (an ndarray and its converted list each count). Recursive
                 containers raise ``ValueError``; exceeding this depth raises
@@ -8305,8 +8312,9 @@ class KnowledgeGraph:
             or CSV string when the query ends with ``FORMAT CSV``. Only the
             ResultView carries ``diagnostics`` / ``warnings``. Python result
             values follow :class:`ResultView`'s endpoint-reference and timestamp
-            conversion contract — a date is a ``datetime.date``, a datetime a
-            ``datetime.datetime``, a local time a naive ``datetime.time`` and
+            conversion contract — a date is a ``datetime.date``, a datetime an
+            aware ``datetime.datetime``, a local datetime a naive one, a local
+            time a naive ``datetime.time`` and
             a time an aware one; format-specific details are in
             :doc:`Value projection </python/value-projection>`.
 
@@ -11090,9 +11098,8 @@ class Session:
         :attr:`ResultView.diagnostics` carries ``row_limit`` plus the exact
         pre-truncation ``total_rows``.
 
-        Parameter conversion — including the naive-UTC normalisation of a
-        timezone-aware ``datetime``, which the Bolt server refuses rather than
-        converting — is identical to :meth:`KnowledgeGraph.cypher`.
+        Parameter conversion — including the zoned datetime a timezone-aware
+        ``datetime`` binds as — is identical to :meth:`KnowledgeGraph.cypher`.
 
         Omitted/None options inherit the defaults captured when the Session was
         created. The built-in Python timeout is 180_000ms; ``timeout_ms=0`` disables

@@ -2,9 +2,9 @@
 it was written, in every storage mode and after a save and reload.
 
 A timestamp the typed column cannot hold exactly — finer than a microsecond,
-which `datetime('...123456789')` and `localdatetime()` on Linux both produce —
+which `localdatetime('...123456789')` and `localdatetime()` on Linux both produce —
 must keep its precision and must never shift the rows after it. A leap second
-cannot be written from Cypher (`datetime('...:60')` reads as `:59`), so that
+cannot be written from Cypher (`localdatetime('...:60')` reads as `:59`), so that
 case is a Rust unit test (`timestamp_column_tests`).
 """
 
@@ -81,8 +81,8 @@ def test_a_row_without_a_value_then_a_nanosecond_value_keeps_later_rows_aligned(
     # One statement, so the type's property set is known when the first row
     # (which carries no timestamp) is stored.
     graph.cypher(
-        f"CREATE (:E {{id: 1}}), (:E {{id: 2, t: datetime('{NS}Z')}}), "
-        f"(:E {{id: 3, t: datetime('{US}Z')}}), (:E {{id: 4, t: datetime('{NS}Z')}})"
+        f"CREATE (:E {{id: 1}}), (:E {{id: 2, t: localdatetime('{NS}Z')}}), "
+        f"(:E {{id: 3, t: localdatetime('{US}Z')}}), (:E {{id: 4, t: localdatetime('{NS}Z')}})"
     )
     graph.cypher("CREATE (:E {id: 5})")
     graph = _reopen(graph, mode, tmp_path)
@@ -100,7 +100,7 @@ def test_set_of_a_nanosecond_value_over_a_typed_column_keeps_every_row(mode, tmp
         }
     )
     graph.add_nodes(frame, "E", "id", "name")
-    graph.cypher(f"MATCH (n:E {{id: 2}}) SET n.t = datetime('{NS}Z')")
+    graph.cypher(f"MATCH (n:E {{id: 2}}) SET n.t = localdatetime('{NS}Z')")
     graph = _reopen(graph, mode, tmp_path)
     assert _strings(graph) == [(1, US), (2, NS), (3, "2011-02-03T04:05:06.000007")]
 
@@ -110,8 +110,8 @@ def test_set_of_a_nanosecond_value_over_an_all_null_column_is_not_lost(mode, tmp
     graph = _fresh(mode, tmp_path)
     frame = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "t": pd.to_datetime([None, None]).astype("datetime64[us]")})
     graph.add_nodes(frame, "E", "id", "name")
-    graph.cypher(f"MATCH (n:E {{id: 1}}) SET n.t = datetime('{NS}Z')")
-    graph.cypher(f"CREATE (:E {{id: 3, t: datetime('{US}Z')}})")
+    graph.cypher(f"MATCH (n:E {{id: 1}}) SET n.t = localdatetime('{NS}Z')")
+    graph.cypher(f"CREATE (:E {{id: 3, t: localdatetime('{US}Z')}})")
     graph = _reopen(graph, mode, tmp_path)
     assert _strings(graph) == [(1, NS), (2, None), (3, US)]
 
@@ -125,8 +125,8 @@ def test_rollback_restores_a_timestamp_column(mode, tmp_path):
     )
     before = _strings(graph)
     tx = graph.begin()
-    tx.cypher(f"MATCH (n:E {{id: 1}}) SET n.t = datetime('{NS}Z')")
-    tx.cypher(f"CREATE (:E {{id: 3, t: datetime('{NS}Z')}})")
+    tx.cypher(f"MATCH (n:E {{id: 1}}) SET n.t = localdatetime('{NS}Z')")
+    tx.cypher(f"CREATE (:E {{id: 3, t: localdatetime('{NS}Z')}})")
     assert _strings(tx)[0] == (1, NS)
     tx.rollback()
     assert _strings(graph) == before
@@ -229,7 +229,7 @@ def test_valid_at_with_a_nanosecond_bound_reads_the_exact_bound(mode, tmp_path):
     answers are the same exact ones."""
     graph = _fresh(mode, tmp_path)
     graph.cypher("CREATE (:Role {id: 1, vf: $vf}), (:Role {id: 2, vf: $vf})", params={"vf": dt.datetime(2020, 1, 1)})
-    graph.cypher("MATCH (r:Role {id: 2}) SET r.vt = datetime('2020-06-30T12:00:00.000000001Z')")
+    graph.cypher("MATCH (r:Role {id: 2}) SET r.vt = localdatetime('2020-06-30T12:00:00.000000001Z')")
     graph.cypher("MATCH (r:Role {id: 1}) SET r.vt = $vt", params={"vt": dt.datetime(2020, 6, 30, 12)})
     graph.set_temporal("Role", "vf", "vt", convention="closed")
     graph = _reopen(graph, mode, tmp_path)

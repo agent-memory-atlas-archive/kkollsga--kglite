@@ -788,5 +788,6 @@ module.exports.Point = nativeBinding.Point
 module.exports.RowStream = nativeBinding.RowStream
 module.exports.Time = nativeBinding.Time
 module.exports.Transaction = nativeBinding.Transaction
+module.exports.ZonedDateTime = nativeBinding.ZonedDateTime
 module.exports.open = nativeBinding.open
 module.exports.version = nativeBinding.version

@@ -2,6 +2,7 @@
 /// Used by both the Cypher executor and the equation parser.
 use crate::datatypes::time_of_day::{format_clock, format_time};
 use crate::datatypes::values::Value;
+use crate::datatypes::zoned_datetime::{format_zoned, utc_from_wall, wall_clock};
 
 // ============================================================================
 // Type coercion
@@ -295,6 +296,35 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
             Value::Duration { seconds, nanos, .. },
             time @ (Value::LocalTime(_) | Value::Time { .. }),
         ) => Ok(shift_time_of_day(time, *seconds, *nanos)),
+        (Value::ZonedDateTime { utc, offset_secs }, Value::Int64(days))
+        | (Value::Int64(days), Value::ZonedDateTime { utc, offset_secs }) => {
+            Ok(shift_zoned(*utc, *offset_secs, 0, *days, 0, 0))
+        }
+        (
+            Value::ZonedDateTime { utc, offset_secs },
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
+        )
+        | (
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
+            Value::ZonedDateTime { utc, offset_secs },
+        ) => Ok(shift_zoned(
+            *utc,
+            *offset_secs,
+            i64::from(*months),
+            i64::from(*days),
+            *seconds,
+            *nanos,
+        )),
         _ => arithmetic_add_fallback(a, b),
     }
 }
@@ -322,6 +352,50 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 nanos,
             })
         }
+        // Two instants differ by the time between them; a local datetime is read
+        // as UTC, as it is everywhere it meets a zoned one.
+        (
+            Value::ZonedDateTime { utc: left, .. },
+            Value::ZonedDateTime { utc: right, .. } | Value::Timestamp(right),
+        )
+        | (Value::Timestamp(left), Value::ZonedDateTime { utc: right, .. }) => {
+            let delta = *left - *right;
+            let (seconds, nanos) = split_clock(
+                i128::from(delta.num_seconds()) * NANOS + i128::from(delta.subsec_nanos()),
+            )
+            .ok_or("Datetime difference exceeds the supported Duration range")?;
+            Ok(Value::Duration {
+                months: 0,
+                days: 0,
+                seconds,
+                nanos,
+            })
+        }
+        (Value::ZonedDateTime { utc, offset_secs }, Value::Int64(days)) => {
+            Ok(days.checked_neg().map_or(Value::Null, |days| {
+                shift_zoned(*utc, *offset_secs, 0, days, 0, 0)
+            }))
+        }
+        (
+            Value::ZonedDateTime { utc, offset_secs },
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
+        ) => Ok(
+            negate_clock(*seconds, *nanos).map_or(Value::Null, |(negated, negated_nanos)| {
+                shift_zoned(
+                    *utc,
+                    *offset_secs,
+                    -i64::from(*months),
+                    -i64::from(*days),
+                    negated,
+                    negated_nanos,
+                )
+            }),
+        ),
         (Value::DateTime(date), Value::Int64(days)) => Ok(checked_days(*days)
             .and_then(|delta| date.checked_sub_signed(delta))
             .map_or(Value::Null, Value::DateTime)),
@@ -431,6 +505,25 @@ pub fn arithmetic_mul_checked(a: &Value, b: &Value) -> Result<Value, String> {
         seconds,
         nanos,
     })
+}
+
+/// `zoned + duration`: months and days move the wall clock (the offset is fixed,
+/// so the instant follows), then seconds and nanoseconds move the instant. Null
+/// when the result leaves the representable range.
+fn shift_zoned(
+    utc: chrono::NaiveDateTime,
+    offset_secs: i32,
+    months: i64,
+    days: i64,
+    seconds: i64,
+    nanos: i32,
+) -> Value {
+    shift_timestamp(wall_clock(utc, offset_secs), months, days, 0, 0)
+        .and_then(|wall| utc_from_wall(wall, offset_secs))
+        .and_then(|moved| {
+            moved.checked_add_signed(chrono::TimeDelta::new(seconds, u32::try_from(nanos).ok()?)?)
+        })
+        .map_or(Value::Null, |utc| Value::ZonedDateTime { utc, offset_secs })
 }
 
 /// A time of day moved by a duration's seconds and nanoseconds, wrapped
@@ -633,6 +726,7 @@ pub fn format_value_compact(val: &Value) -> String {
         ),
         Value::LocalTime(n) => format_clock(*n),
         Value::Time { nanos, offset_secs } => format_time(*nanos, *offset_secs),
+        Value::ZonedDateTime { utc, offset_secs } => format_zoned(*utc, *offset_secs),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         // Keep the existing collection grammar while retaining timestamp fractions.
@@ -694,6 +788,9 @@ pub fn format_value_compact_into(buf: &mut String, val: &Value) {
         .unwrap(),
         Value::LocalTime(n) => buf.push_str(&format_clock(*n)),
         Value::Time { nanos, offset_secs } => buf.push_str(&format_time(*nanos, *offset_secs)),
+        Value::ZonedDateTime { utc, offset_secs } => {
+            buf.push_str(&format_zoned(*utc, *offset_secs))
+        }
         Value::Null => buf.push_str("null"),
         Value::NodeRef(idx) => write!(buf, "node#{}", idx).unwrap(),
         // Same collection grammar as the allocating compact formatter.

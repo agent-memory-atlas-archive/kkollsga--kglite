@@ -27,16 +27,25 @@ def test_date_property_stays_date_only():
     assert got == datetime.date(2024, 3, 15) and type(got) is datetime.date
 
 
-def test_datetime_constructor_returns_timestamp():
+def test_localdatetime_constructor_returns_timestamp():
+    g = kglite.KnowledgeGraph()
+    v = g.cypher("RETURN localdatetime('2024-03-15T10:30:45') AS v")[0]["v"]
+    assert v == datetime.datetime(2024, 3, 15, 10, 30, 45)
+    assert v.tzinfo is None
+
+
+def test_datetime_constructor_returns_an_instant_at_utc():
     g = kglite.KnowledgeGraph()
     v = g.cypher("RETURN datetime('2024-03-15T10:30:45') AS v")[0]["v"]
-    assert v == datetime.datetime(2024, 3, 15, 10, 30, 45)
+    assert v == datetime.datetime(2024, 3, 15, 10, 30, 45, tzinfo=datetime.timezone.utc)
 
 
 def test_timestamp_plus_duration_applies_seconds():
     g = kglite.KnowledgeGraph()
-    v = g.cypher("RETURN datetime('2024-03-15T10:30:00') + duration({hours: 2, minutes: 15}) AS v")[0]["v"]
+    v = g.cypher("RETURN localdatetime('2024-03-15T10:30:00') + duration({hours: 2, minutes: 15}) AS v")[0]["v"]
     assert v == datetime.datetime(2024, 3, 15, 12, 45, 0)
+    z = g.cypher("RETURN datetime('2024-03-15T10:30:00+01:00') + duration({hours: 2, minutes: 15}) AS v")[0]["v"]
+    assert z == datetime.datetime(2024, 3, 15, 12, 45, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=1)))
 
 
 def test_duration_between_timestamps_has_second_precision():

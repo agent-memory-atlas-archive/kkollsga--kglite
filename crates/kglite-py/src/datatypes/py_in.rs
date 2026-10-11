@@ -5,7 +5,7 @@ pub use super::py_value::{py_query_parameter_to_value, py_value_to_value, F32Row
 use super::type_conversions::{to_bool, to_datetime, to_f64, to_i64, to_timestamp, to_u32};
 use super::values::{ColumnData, ColumnType, DataFrame, FilterCondition, Value};
 use pyo3::prelude::*;
-use pyo3::types::{PyDelta, PyDict, PyList, PyTime, PyTuple};
+use pyo3::types::{PyDateTime, PyDelta, PyDict, PyList, PyTime, PyTuple};
 use pyo3::Bound;
 use std::collections::HashMap;
 
@@ -382,14 +382,63 @@ fn time_cells<T>(
     Ok(cells)
 }
 
+/// A zoned-datetime column's cells: each `datetime.datetime` through
+/// `py_value::datetime_to_value`. An aware value keeps its offset; a naive one is
+/// read as UTC. Anything else is stored as null and reported under `on_invalid`.
+fn zoned_cells(
+    py_list: &Bound<'_, PyList>,
+    null_mask: &[bool],
+    col_name: &str,
+    on_invalid: OnInvalid,
+) -> PyResult<Vec<Option<(chrono::NaiveDateTime, i32)>>> {
+    let mut cells = Vec::with_capacity(null_mask.len());
+    let (mut rejected, mut first) = (0usize, None);
+    for (row, &is_null) in null_mask.iter().enumerate() {
+        if is_null {
+            cells.push(None);
+            continue;
+        }
+        let item = py_list.get_item(row)?;
+        let converted = item
+            .cast::<PyDateTime>()
+            .map_err(|_| "not a datetime".to_string())
+            .and_then(|dt| super::py_value::datetime_to_value(dt).map_err(|e| e.to_string()))
+            .ok()
+            .and_then(|v| match v {
+                Value::ZonedDateTime { utc, offset_secs } => Some((utc, offset_secs)),
+                Value::Timestamp(utc) => Some((utc, 0)),
+                _ => None,
+            });
+        if converted.is_none() {
+            rejected += 1;
+            first.get_or_insert_with(|| {
+                (row, item.repr().map(|r| r.to_string()).unwrap_or_default())
+            });
+        }
+        cells.push(converted);
+    }
+    if let Some((row, shown)) = first {
+        on_invalid::report(
+            py_list.py(),
+            on_invalid,
+            format!(
+                "Column '{col_name}': {rejected} value(s) could not be stored as a zoned datetime \
+                 (row {row} (0-based) holds {shown}) and are stored as NULL."
+            ),
+        )?;
+    }
+    Ok(cells)
+}
+
 /// The cells of an object column holding durations or times of day.
 fn temporal_object_column(
     col_type: ColumnType,
-    cells: &Bound<'_, PyList>,
+    cells: &Bound<'_, PyAny>,
     null_mask: &[bool],
     col_name: &str,
     on_invalid: OnInvalid,
 ) -> PyResult<ColumnData> {
+    let cells = cells.cast::<PyList>()?;
     Ok(match col_type {
         ColumnType::LocalTime => ColumnData::LocalTime(time_cells(
             cells,
@@ -411,6 +460,10 @@ fn temporal_object_column(
                 _ => None,
             },
         )?),
+        ColumnType::ZonedDateTime => {
+            ColumnData::ZonedDateTime(zoned_cells(cells, null_mask, col_name, on_invalid)?)
+        }
+        // Only `Duration` reaches here besides the kinds above.
         _ => ColumnData::Duration(duration_cells(cells, null_mask, col_name, on_invalid)?),
     })
 }
@@ -592,10 +645,8 @@ fn convert_pandas_series(
                 })
             },
         )?)),
-        ColumnType::Duration | ColumnType::LocalTime | ColumnType::Time => {
-            let cells = py_list.cast::<PyList>()?;
-            temporal_object_column(col_type, cells, &null_mask, col_name, on_invalid)
-        }
+        // Duration, LocalTime, Time and ZonedDateTime: the object-cell columns.
+        other => temporal_object_column(other, &py_list, &null_mask, col_name, on_invalid),
     }
 }
 
@@ -741,6 +792,7 @@ fn pandas_to_dataframe_with_text_policy(
                         "duration" | "timedelta" => ColumnType::Duration,
                         "localtime" => ColumnType::LocalTime,
                         "time" => ColumnType::Time,
+                        "zoneddatetime" => ColumnType::ZonedDateTime,
                         _ => {
                             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                                 "Unsupported column type '{}' specified for column '{}'",
@@ -964,7 +1016,7 @@ fn homogeneous_object_type(
     series: &Bound<'_, PyAny>,
     inferred: &str,
 ) -> PyResult<Option<ColumnType>> {
-    use pyo3::types::{PyBool, PyDate, PyDateTime};
+    use pyo3::types::{PyBool, PyDate};
     match inferred {
         "floating" => return Ok(Some(ColumnType::Float64)),
         // pandas 2.x reports an all-float object column that holds a `None` as

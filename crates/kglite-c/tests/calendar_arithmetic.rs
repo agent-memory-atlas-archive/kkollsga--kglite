@@ -59,7 +59,16 @@ fn a_date_shifts_by_calendar_months() {
 #[test]
 fn a_datetime_shifts_by_months_then_days_then_time() {
     assert_eq!(
-        one_value("RETURN datetime('2024-01-31T10:30:00') + duration({months: 1, hours: 2}) AS v"),
+        one_value(
+            "RETURN localdatetime('2024-01-31T10:30:00') + duration({months: 1, hours: 2}) AS v"
+        ),
         "2024-02-29T12:30:00"
+    );
+    // A zoned datetime shifts its wall clock and keeps its offset.
+    assert_eq!(
+        one_value(
+            "RETURN datetime('2024-01-31T10:30:00+05:00') + duration({months: 1, hours: 2}) AS v"
+        ),
+        "2024-02-29T12:30+05:00"
     );
 }

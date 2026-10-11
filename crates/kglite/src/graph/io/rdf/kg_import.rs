@@ -85,7 +85,7 @@ fn title_datatype(kind: ColumnKind) -> Option<&'static str> {
         ColumnKind::Float64 => Some("double"),
         ColumnKind::Boolean => Some("boolean"),
         ColumnKind::DateTime => Some("date"),
-        ColumnKind::Timestamp => Some("dateTime"),
+        ColumnKind::Timestamp | ColumnKind::ZonedDateTime => Some("dateTime"),
         _ => None,
     }
 }

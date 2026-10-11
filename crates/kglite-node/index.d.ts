@@ -132,7 +132,6 @@ export declare class RowStream {
   return(): Promise<IteratorResult<KgMap, undefined>>
 }
 
-/** An open transaction, from `graph.begin()` or passed to the `graph.transaction()` callback. */
 /**
  * A time of day with a UTC offset (whole seconds, within ±18 hours), to the nanosecond.
  * Two times at the same instant of day are equal in the engine whatever their offsets.
@@ -150,6 +149,7 @@ export declare class Time {
   toJSON(): string
 }
 
+/** An open transaction, from `graph.begin()` or passed to the `graph.transaction()` callback. */
 export declare class Transaction {
   /** Run a Cypher statement inside the transaction. */
   run(cypher: string, params?: Params | null, options?: QueryOptions): Promise<QueryResult>
@@ -161,6 +161,30 @@ export declare class Transaction {
   get readOnly(): boolean
   /** Whether the transaction is over: committed, rolled back, or abandoned by `close()`. */
   get finished(): boolean
+}
+
+/**
+ * An instant with the UTC offset it was written in, to the nanosecond. The fields
+ * read the wall clock at that offset. Two datetimes at the same instant are equal
+ * in the engine whatever their offsets.
+ */
+export declare class ZonedDateTime {
+  readonly year: number
+  readonly month: number
+  readonly day: number
+  readonly hour: number
+  readonly minute: number
+  readonly second: number
+  readonly nanosecond: number
+  /** Seconds east of UTC. */
+  readonly offsetSeconds: number
+  /** The wall clock at `offsetSeconds` (default 0, UTC). */
+  constructor(year: number, month: number, day: number, hour?: number | undefined | null, minute?: number | undefined | null, second?: number | undefined | null, nanosecond?: number | undefined | null, offsetSeconds?: number | undefined | null)
+  /** ISO-8601 with the offset: `2024-02-29T12:30:00.5+01:00`, `…Z` for UTC. */
+  toString(): string
+  /** The JS `Date` of this instant; sub-millisecond digits are dropped. */
+  toDate(): Date
+  toJSON(): string
 }
 
 /** What `backup` captured. */
@@ -261,13 +285,13 @@ export interface KgRelationship {
  * Any value a query can return.
  *
  * `Int64` is `number` when exact and `bigint` beyond 2^53 - 1 (`integers: 'bigint'`
- * makes every integer a `bigint`). Dates, datetimes, times of day, durations and points are the
+ * makes every integer a `bigint`). Dates, datetimes (local and zoned), times of day, durations and points are the
  * exported classes; nodes, relationships and paths are plain objects.
  *
  * `JSON.stringify` throws on a `bigint` (a JavaScript rule, not a kglite one): pass a
  * replacer, or define `BigInt.prototype.toJSON`, when a result may hold one.
  */
-export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | LocalTime | Time | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | KgMap
+export type KgValue = null | boolean | number | bigint | string | LocalDate | LocalDateTime | ZonedDateTime | LocalTime | Time | Duration | Point | KgNode | KgRelationship | KgPath | Array<KgValue> | KgMap
 
 /**
  * Who holds a writer lease. `pid`, `since` and `label` are what the holder published
