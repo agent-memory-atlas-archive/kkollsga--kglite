@@ -156,7 +156,7 @@ def _json_scalar(value: Any) -> Any:
         return {"$time" if value.utcoffset() is not None else "$localtime": value.isoformat()}
     raise TypeError(
         f"from_records: a record value of type {type(value).__name__!r} ({value!r}) cannot be "
-        "carried in a JSON records spec"
+        "carried in a JSON records spec; convert it to a string, number, date, datetime, time or timedelta first"
     )
 
 

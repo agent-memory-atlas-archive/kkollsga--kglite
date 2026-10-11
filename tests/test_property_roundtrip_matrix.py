@@ -69,6 +69,7 @@ Notes on the two "known" bugs this suite was seeded from:
 from __future__ import annotations
 
 import datetime
+import decimal
 import warnings
 
 import numpy as np
@@ -494,12 +495,12 @@ def test_bracket_subscript_into_map_works():
 # ── from_records loud-error contract for Python values with no graph type ───
 @pytest.mark.parametrize(
     "val",
-    [datetime.time(3, 4, 5)],
-    ids=["time"],
+    [decimal.Decimal("1.5"), {1, 2}],
+    ids=["decimal", "set"],
 )
 def test_from_records_rejects_untyped_python_values_loudly(val):
-    """A time of day has no graph value: from_records fails loudly rather than
-    storing text. Dates, datetimes and timedeltas load typed (the matrix)."""
+    """A value with no graph type fails loudly rather than being stored as text.
+    Dates, datetimes, times and timedeltas load typed (the matrix)."""
     spec = {"nodes": [{"type": "N", "id_field": "id", "records": [{"id": 1, "p": val}]}]}
     with pytest.raises(TypeError):
         kglite.from_records(spec)

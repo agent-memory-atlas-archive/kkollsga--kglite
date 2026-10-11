@@ -467,18 +467,18 @@ def test_a_negative_positional_sample_count_is_an_argument_error(people):
 
 
 def test_from_records_names_the_value_it_cannot_carry():
-    """A value with no graph type (a time of day) is refused, and the message
-    names the field's value and a way forward — `json.dumps` alone answered
-    "Object of type time is not JSON serializable". Dates, datetimes and
-    durations load typed (see `test_property_roundtrip_matrix.py`)."""
-    import datetime
+    """A value with no graph type is refused, and the message names the field's
+    value and a way forward — `json.dumps` alone answered "Object of type Decimal
+    is not JSON serializable". Dates, datetimes, times and durations load typed
+    (see `test_property_roundtrip_matrix.py`)."""
+    import decimal
 
     spec = {
         "nodes": [
             {
                 "type": "Event",
                 "id_field": "id",
-                "records": [{"id": 1, "at": datetime.time(14, 30, 5)}],
+                "records": [{"id": 1, "at": decimal.Decimal("1430.5")}],
             }
         ]
     }
@@ -486,8 +486,8 @@ def test_from_records_names_the_value_it_cannot_carry():
         kglite.from_records(spec)
     message = str(excinfo.value)
     assert "from_records" in message
-    assert "time" in message
-    assert "14" in message and "30" in message, "the refusal must name the offending value"
+    assert "Decimal" in message
+    assert "1430.5" in message, "the refusal must name the offending value"
     assert "string" in message, "and a way forward"
 
 
