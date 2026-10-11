@@ -173,6 +173,44 @@ def test_threaded_writers_lose_nothing(tmp_path, level):
         assert _ids(reopened) == list(range(threads * per_thread))
 
 
+def test_concurrent_writers_with_readers_never_conflict_at_normal(tmp_path):
+    """Readers holding snapshots force the fork path; writers must queue, not conflict."""
+    s = kglite.open_session(str(tmp_path / "app.kgl"), durable="normal")
+    writers, per_thread, readers = 16, 20, 2
+    errors: list[BaseException] = []
+    done = threading.Event()
+    start = threading.Barrier(writers + readers)
+
+    def write(t: int) -> None:
+        try:
+            start.wait()
+            for i in range(per_thread):
+                s.execute("CREATE (:N {id: $id, v: 1})", params={"id": t * per_thread + i})
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    def read() -> None:
+        try:
+            start.wait()
+            while not done.is_set():
+                s.cypher("MATCH (n:N) RETURN count(n)")
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    pool = [threading.Thread(target=write, args=(t,)) for t in range(writers)]
+    watchers = [threading.Thread(target=read) for _ in range(readers)]
+    for thread in pool + watchers:
+        thread.start()
+    for thread in pool:
+        thread.join(timeout=90)
+    done.set()
+    for thread in watchers:
+        thread.join(timeout=30)
+    assert not errors, errors
+    assert _ids(s) == list(range(writers * per_thread))
+    s.close()
+
+
 def test_readers_never_see_a_partial_write(tmp_path):
     """Each write creates two nodes at once; a count that is ever odd is a torn read."""
     s = kglite.open_session(str(tmp_path / "app.kgl"), durable="full")

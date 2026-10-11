@@ -118,6 +118,9 @@ pub struct Session {
     /// reach the log in publish order, while the `graph` mutex — which readers
     /// take — is held only briefly.
     pub(super) commit_gate: Mutex<()>,
+    /// Serializes auto-commit writers that are not group-committed; see
+    /// [`Session::execute_auto_commit`]. Taken before every other session lock.
+    pub(super) auto_commit_writer: Mutex<()>,
     /// Queue that lets concurrent durable auto-commit statements at `full`
     /// share one barrier; see [`super::group_commit`].
     pub(super) group: super::group_commit::GroupCommit,
@@ -189,6 +192,7 @@ impl Session {
             durable: Mutex::new(None),
             checkpoint_gate: Mutex::new(()),
             commit_gate: Mutex::new(()),
+            auto_commit_writer: Mutex::new(()),
             group: Default::default(),
             in_place_commits: Default::default(),
             forked_commits: Default::default(),

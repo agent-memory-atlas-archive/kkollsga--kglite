@@ -13,7 +13,9 @@
 use super::*;
 
 /// Internal attempts at an auto-commit write that loses an optimistic commit
-/// race. Drivers never retry `session.run`, so the server does.
+/// race to an explicit transaction's commit (core serializes auto-commit
+/// writers against each other). Drivers never retry `session.run`, so the
+/// server does.
 pub(super) const OPTIMISTIC_ATTEMPTS: u32 = 3;
 
 /// Whether `query` writes data or schema, as the executor would run it.

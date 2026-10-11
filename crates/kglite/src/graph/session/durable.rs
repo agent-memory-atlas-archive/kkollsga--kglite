@@ -763,6 +763,7 @@ impl Session {
             durable: Mutex::new(Some(state)),
             checkpoint_gate: Mutex::new(()),
             commit_gate: Mutex::new(()),
+            auto_commit_writer: Mutex::new(()),
             group: Default::default(),
             in_place_commits: Default::default(),
             forked_commits: Default::default(),

@@ -131,6 +131,11 @@ before upgrading.
   - `g.session()` on a durable `KnowledgeGraph` still refuses writes.
 ### Fixed
 
+- **Concurrent auto-commit writes to one session queue instead of conflicting with each other.**
+  - Before: threads calling `Session.execute` on a session opened with `open_session(durable="normal")` raised `TransactionConflictError` against one another whenever a reader held a snapshot. A run of 64 writer threads and 8 readers lost 444 of 2,560 writes. The same race hit non-durable sessions, and statements the group-commit queue does not take at `full` (schema DDL, `CALL`, `UNION`, embedder writes). It also hit Bolt servers started with the optimistic writer mode.
+  - Now: the engine runs those writes one at a time, so they never conflict with each other. A write still conflicts with an explicit `begin()` / `commit()` transaction that publishes first.
+  - Unchanged: plain writes at `full` still share log barriers, and the Node and C bindings already serialized these writes in their own layer.
+
 - **An aggregating or `DISTINCT` `WITH` can order by the expression it grouped on.**
   - Before: `MATCH (a:X) WITH a.n AS n, count(*) AS c ORDER BY a.n RETURN n, c` raised `Undefined variable 'a'`.
   - Now: a sort key that is, in full, a non-aggregate item's expression sorts on that item's alias (`ORDER BY a.n`, `ORDER BY toUpper(a.n) DESC`). The item needs an alias.

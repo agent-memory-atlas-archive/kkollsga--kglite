@@ -653,7 +653,7 @@ unsafe fn execute_mut_impl(
 }
 
 /// Attempts a durable session's auto-committed statement makes while its
-/// commit loses an optimistic race against another writer.
+/// commit loses an optimistic race against an explicit transaction's commit.
 const DURABLE_WRITE_ATTEMPTS: u32 = 3;
 
 unsafe fn run_mut(

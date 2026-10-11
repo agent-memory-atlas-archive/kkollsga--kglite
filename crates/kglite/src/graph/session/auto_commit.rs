@@ -51,6 +51,24 @@ impl Session {
     /// path serializes writers itself, so it never loses an optimistic race
     /// and ignores `attempts`.
     ///
+    /// **Every other auto-commit write queues behind one another.** Statements
+    /// the group-commit queue does not take (every write at `normal` or
+    /// on a non-durable session; at `full`, schema DDL, procedure calls,
+    /// `UNION`, `LOAD CSV`, subqueries and embedder writes) hold a per-session writer mutex across the whole
+    /// statement, in-place or forked. Concurrent auto-commit writers therefore
+    /// run one at a time and never conflict with each other;
+    /// only a commit that bypasses the mutex (an explicit [`Self::begin`] /
+    /// [`Self::commit`] transaction) can still beat a forked write, which is
+    /// what `attempts` bounds. The mutex is the outermost session lock: it is
+    /// taken before the commit gate and the graph lock, and nothing holding
+    /// either takes it. A queued writer waits uninterruptibly for the
+    /// statements ahead of it, each bounded by its own deadline; its own
+    /// `cancel` and `deadline` are then checked when its statement starts, so
+    /// a cancelled or expired writer fails without applying anything. **A
+    /// statement must not call back into the same session's auto-commit path
+    /// from the thread running it** (an embedder callback calling
+    /// `execute_auto_commit` would wait on itself).
+    ///
     /// A lost race published nothing, so re-running on a fresh `begin()` cannot
     /// double-apply. Errors: whatever the statement raised, a
     /// [`KgError::TransactionConflict`] once the attempts are spent, and a
@@ -65,10 +83,14 @@ impl Session {
         opts: &ExecuteOptions<'_>,
         attempts: u32,
     ) -> Result<ExecuteOutcome, KgError> {
-        if let Some(outcome) = self.execute_auto_commit_in_place(query, opts) {
+        if let Some(outcome) = self.execute_grouped(query, opts) {
             return outcome;
         }
-        if let Some(outcome) = self.execute_grouped(query, opts) {
+        let _writer = self
+            .auto_commit_writer
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(outcome) = self.execute_auto_commit_in_place(query, opts) {
             return outcome;
         }
         self.execute_auto_commit_observed(query, opts, attempts, &mut |_| {})

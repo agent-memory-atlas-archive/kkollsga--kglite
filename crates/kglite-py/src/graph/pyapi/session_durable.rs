@@ -33,9 +33,10 @@ use kglite_core::api::session::{
 };
 use kglite_core::api::storage::StorageMode;
 
-/// Attempts a one-shot write makes while it loses an optimistic race. The
-/// grouped and in-place paths never lose one, so this bounds only the fork
-/// path (an embedder, schema DDL, a procedure call).
+/// Attempts a one-shot write makes while it loses an optimistic race. Core
+/// serializes auto-commit writers against each other (group commit at `full`,
+/// a writer mutex otherwise), so only a `begin()`/`commit()` transaction
+/// publishing mid-statement can beat a forked write; this bounds those retries.
 const AUTO_COMMIT_ATTEMPTS: u32 = 8;
 
 /// What a durable `Session` holds beside the core session.

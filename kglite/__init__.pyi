@@ -1056,11 +1056,13 @@ def open_session(
     through the engine entry the Bolt server uses and returns a durable
     ``Session`` that owns the writer lease until :meth:`Session.close`. The log
     is replayed on open, so a crashed session's committed writes reappear
-    through this call or :func:`open`. Writes go through the engine's group
-    commit with the GIL released, so any number of threads may call
-    :meth:`Session.execute` and :meth:`Session.begin` concurrently — at
-    ``"full"`` concurrent writers share log barriers — while readers never wait
-    for an fsync. A second process (or a second open in this one) is refused
+    through this call or :func:`open`. Writes go through the engine's writer
+    queue with the GIL released, so any number of threads may call
+    :meth:`Session.execute` and :meth:`Session.begin` concurrently:
+    concurrent :meth:`Session.execute` writers queue and never raise
+    :class:`TransactionConflictError` against each other (at ``"full"`` they
+    share log barriers), while readers never wait for an fsync. Only a
+    :meth:`Session.begin` transaction can conflict. A second process (or a second open in this one) is refused
     with :class:`WriterLeaseHeldError`. Use :func:`open` instead when one
     thread owns the graph and wants the fluent API.
 
@@ -11091,9 +11093,11 @@ class Session:
     A **durable** session comes from :func:`open_session` with ``durable=``.
     It owns the path's writer lease from open until :meth:`close`, replays the
     write-ahead log on open, and routes :meth:`execute` and :meth:`begin`
-    through the engine's group commit: threads never raise a borrow error, the
-    GIL is released while a write waits for its lock or fsync, and at
-    ``durable="full"`` concurrent writers share log barriers. Readers take a
+    through the engine's writer queue: threads never raise a borrow error, the
+    GIL is released while a write waits for its lock or fsync, concurrent
+    :meth:`execute` writers queue instead of raising
+    :class:`TransactionConflictError`, and at ``durable="full"`` they share
+    log barriers. Readers take a
     snapshot and never wait on a write's fsync. :meth:`save`, :meth:`sync`,
     :meth:`close` and :meth:`begin` work only on a durable session; elsewhere
     they raise :class:`NotDurableError`. A session from
