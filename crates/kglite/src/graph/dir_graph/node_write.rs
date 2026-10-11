@@ -223,7 +223,11 @@ impl DirGraph {
     ///
     /// The common case — every key already registered — costs one hash lookup
     /// per property and allocates nothing.
-    fn register_property_types(&mut self, node_type: &str, properties: &HashMap<String, Value>) {
+    pub(super) fn register_property_types(
+        &mut self,
+        node_type: &str,
+        properties: &HashMap<String, Value>,
+    ) {
         let known = self.node_type_metadata.get(node_type);
         let missing: Vec<(String, String)> = properties
             .iter()

@@ -1097,3 +1097,52 @@ fn concurrent_loads_in_one_process_resolve_their_own_labels() {
         }
     });
 }
+
+/// A load into a graph that already holds a typed node keeps its properties
+/// through a save and reload.
+///
+/// The load stages its nodes with inline properties and consolidates them into
+/// columns at the end. That pass only derived the per-type schemas when the
+/// graph had none, so a graph with any earlier typed node (a Cypher `CREATE`)
+/// left the loaded types without a schema: their nodes stayed uncolumnarised,
+/// and the saved file carried the ids and titles but none of `nid`, `P31` or
+/// the predicate properties.
+#[test]
+fn a_load_into_a_non_empty_graph_keeps_its_properties_across_save_and_reload() {
+    use std::io::Write as _;
+    let mut fixture = tempfile::NamedTempFile::new().unwrap();
+    fixture.write_all(LABELLED_FIXTURE.as_bytes()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("g.kgl").to_string_lossy().into_owned();
+
+    let mut graph = DirGraph::new();
+    graph.insert_node_routed(
+        Value::Int64(1),
+        Value::String("seed".to_string()),
+        "Seed",
+        HashMap::new(),
+    );
+    graph
+        .type_indices
+        .entry_or_default("Seed".to_string())
+        .push(petgraph::graph::NodeIndex::new(0));
+    load_ntriples(&mut graph, fixture.path().to_str().unwrap(), &test_config()).unwrap();
+
+    let mut shared = Arc::new(graph);
+    crate::graph::io::file::save_graph(&mut shared, &path).unwrap();
+    let reloaded = crate::graph::io::file::load_file(&path).unwrap();
+
+    let nid = InternedKey::from_str("nid");
+    let p31 = InternedKey::from_str("P31");
+    let human = reloaded
+        .lookup_by_id_normalized("Human", &Value::UniqueId(1))
+        .expect("Q1 is a Human");
+    assert_eq!(
+        reloaded.graph.get_node_property(human, nid),
+        Some(Value::String("Q1".to_string()))
+    );
+    assert_eq!(
+        reloaded.graph.get_node_property(human, p31),
+        Some(Value::String("Q5".to_string()))
+    );
+}

@@ -493,8 +493,6 @@ ROWS: list[Row] = [
         "load_ntriples",
         ("kg_core.rs::load_ntriples",),
         "(work / 'd.nt').write_text(NT)\ng.load_ntriples(str(work / 'd.nt'), languages=['en'])",
-        known_defect="after any earlier logged write, replay drops the loader's `nid` and predicate properties "
-        "(a lone load recovers them); the id/title/edge columns survive",
     ),
     # --- checkpoint-only metadata: applied live, lost by a crash, kept by save() -------------
     Row(

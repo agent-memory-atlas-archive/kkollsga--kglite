@@ -20,6 +20,11 @@ before upgrading.
 
 ### Fixed
 
+- **`load_ntriples` into a graph that already holds data no longer loses properties on save.**
+  - Affects `nid`, `P31` and every predicate property of the loaded entities, in any graph with at least one earlier typed node (for example a Cypher `CREATE`). It was not specific to `durable` graphs: a durable graph checkpoints after the load, so a crash then recovered the property-less file.
+  - Before: the file kept ids, titles and edges, and every other property read back as null.
+  - Now: the column consolidation that runs on save registers properties staged by the loader. The RDF loader and embedding carry-over shared the gap and are covered too.
+  - A load into an empty graph was unaffected.
 - **Object columns of dates and datetimes load as temporal values, not text.**
   - Affects `add_nodes`, `add_relationships` and their `connection`-named twins.
   - Before: a pandas object column of `datetime.date` or `datetime.datetime` cells was stored as text, and refused under `on_invalid='error'` as a "mixed-type" column.

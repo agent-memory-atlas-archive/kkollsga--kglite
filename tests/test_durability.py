@@ -3237,6 +3237,31 @@ def test_load_ntriples_survives_hard_crash(tmp_path):
     assert expected.cypher(edges).to_list(), "fixture must load at least one edge"
 
 
+@pytest.mark.parametrize("storage", DURABLE_STORAGE_MODES)
+def test_load_ntriples_after_an_earlier_write_keeps_its_properties(tmp_path, storage):
+    """A load into a graph that already holds a typed node keeps `nid` and the
+    predicate properties across a hard exit: the load's column consolidation
+    used to skip the loaded types once any other type had a schema."""
+    nt = tmp_path / "data.nt"
+    nt.write_text(_NT + '<http://www.wikidata.org/entity/Q1> <http://www.wikidata.org/prop/direct/P569> "1900" .\n')
+    _crash_child(
+        tmp_path,
+        f"g = open_durable()\ng.cypher('CREATE (:Seed {{id: 1}})')\ng.load_ntriples({str(nt)!r}, languages=['en'])\n",
+        storage,
+        durable="full",
+    )
+    g = _open(tmp_path / "app.kgl", storage, durable="full")
+    rows = g.cypher(
+        "MATCH (n) WHERE n.nid IS NOT NULL "
+        "RETURN n.nid AS nid, n.title AS t, n.P569 AS born, n.P31 AS p31 ORDER BY nid, t"
+    ).to_list()
+    assert rows == [
+        {"nid": "Q1", "t": "Alpha", "born": None, "p31": None},
+        {"nid": "Q1", "t": "Q1", "born": "1900", "p31": "Q2"},
+        {"nid": "Q2", "t": "Beta", "born": None, "p31": None},
+    ]
+
+
 def test_a_derived_view_refuses_load_ntriples(tmp_path):
     nt = tmp_path / "data.nt"
     nt.write_text(_NT, encoding="utf-8")

@@ -194,6 +194,11 @@ impl DirGraph {
         if self.type_schemas.is_empty() {
             self.rebuild_type_schemas();
         }
+        // A type whose nodes were staged with inline properties (the
+        // N-Triples and RDF loaders, `embedding_carry`) has no schema entry
+        // once any other typed node exists, and the pass below skips a type
+        // without one.
+        self.register_staged_properties();
 
         // Build a ColumnStore per node type
         let mut stores: HashMap<String, ColumnStore> = HashMap::new();
@@ -327,6 +332,40 @@ impl DirGraph {
         // rebuild path and the standalone path could drift on which directory
         // they used and which store they picked first.
         self.maybe_spill_columns();
+    }
+
+    /// Register the property names and value types of every node still holding
+    /// inline (`Map`) properties into its type's metadata and schema, so the
+    /// rebuild gives those properties a column.
+    ///
+    /// One entry per distinct (type, property, value type), so a graph of a
+    /// million alike nodes registers a handful of entries; a type that already
+    /// carries a property costs one lookup.
+    fn register_staged_properties(&mut self) {
+        let mut seen: rustc_hash::FxHashSet<(InternedKey, InternedKey, &'static str)> =
+            rustc_hash::FxHashSet::default();
+        let mut found: Vec<(InternedKey, InternedKey, Value)> = Vec::new();
+        {
+            let _guard = self.graph.begin_query();
+            for idx in self.graph.node_indices() {
+                let Some(node) = self.graph.node_weight(idx) else {
+                    continue;
+                };
+                if let PropertyStorage::Map(map) = &node.properties {
+                    for (&key, value) in map {
+                        if seen.insert((node.node_type, key, value.type_name())) {
+                            found.push((node.node_type, key, value.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        for (node_type, key, value) in found {
+            let type_name = self.interner.resolve(node_type).to_string();
+            let key_name = self.interner.resolve(key).to_string();
+            self.register_property_types(&type_name, &HashMap::from([(key_name, value)]));
+            self.ensure_type_schema_keys(&type_name, &[key]);
+        }
     }
 
     /// Second pass of the rebuild: publish the stores onto the backend and
