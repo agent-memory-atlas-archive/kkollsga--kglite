@@ -3243,7 +3243,10 @@ def test_load_ntriples_after_an_earlier_write_keeps_its_properties(tmp_path, sto
     predicate properties across a hard exit: the load's column consolidation
     used to skip the loaded types once any other type had a schema."""
     nt = tmp_path / "data.nt"
-    nt.write_text(_NT + '<http://www.wikidata.org/entity/Q1> <http://www.wikidata.org/prop/direct/P569> "1900" .\n')
+    nt.write_text(
+        _NT + '<http://www.wikidata.org/entity/Q1> <http://www.wikidata.org/prop/direct/P569> "1900" .\n',
+        encoding="utf-8",
+    )
     _crash_child(
         tmp_path,
         f"g = open_durable()\ng.cypher('CREATE (:Seed {{id: 1}})')\ng.load_ntriples({str(nt)!r}, languages=['en'])\n",

@@ -394,7 +394,10 @@ def test_the_classes_do_not_overlap():
 
 
 def test_the_other_write_classes_are_covered_too():
-    """Transaction and Session expose only Cypher, which has entries above."""
+    """Transaction and Session expose only Cypher, which has entries above.
+
+    A durable session adds ``begin()``; its transaction's writes are covered by
+    ``test_a_durable_session_transaction_is_judged``. The rest is lifecycle."""
     assert {n for n in dir(kglite.Transaction) if not n.startswith("_")} == {
         "commit",
         "cypher",
@@ -403,14 +406,43 @@ def test_the_other_write_classes_are_covered_too():
     }
     assert {n for n in dir(kglite.Session) if not n.startswith("_")} == {
         "backup",
+        "begin",
+        "close",
+        "closed",
         "cursor",
         "cypher",
+        "durability",
         "execute",
         "node_count",
         "node_types",
+        "path",
+        "save",
         "snapshot",
+        "sync",
         "version",
     }
+    assert {n for n in dir(kglite.SessionTransaction) if not n.startswith("_")} == {
+        "active",
+        "commit",
+        "cypher",
+        "rollback",
+    }
+
+
+def test_a_durable_session_transaction_is_judged(tmp_path):
+    path = tmp_path / "g.kgl"
+    make_graph("memory", tmp_path).save(str(path))
+    with kglite.open_session(str(path), durable="full") as session:
+        before = session.node_count()
+
+        def write():
+            with session.begin() as tx:
+                tx.cypher("CREATE (:Person {id: 9})")
+
+        expect_refused(write, "required_property")
+        assert session.node_count() == before
+        expect_refused(lambda: session.execute("CREATE (:Person {id: 9})"), "required_property")
+        assert session.node_count() == before
 
 
 def snapshot(g):

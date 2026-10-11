@@ -655,7 +655,7 @@ def crashed(tmp_path_factory):
         [sys.executable, "-c", _CHILD, str(root)], cwd=REPO_ROOT, capture_output=True, text=True, timeout=100
     )
     assert done.returncode == 0, done.stderr[-2000:]
-    return root, json.loads((root / "results.json").read_text())
+    return root, json.loads((root / "results.json").read_text(encoding="utf-8"))
 
 
 def _reopen_probe(root: Path, row: Row, variant: str) -> dict:
