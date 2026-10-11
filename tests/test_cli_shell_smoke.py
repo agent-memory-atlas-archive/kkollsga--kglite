@@ -544,8 +544,9 @@ def test_mode_csv_preserves_scalar_and_nested_precision():
     )
     assert "f,nested,stamp" in out
     assert "1.23456789" in out
-    assert '[1.23456789, ""2024-01-15T10:30:00.123456789""]' in out
-    assert out.count("2024-01-15T10:30:00.123456789") == 2
+    # datetime() without an offset is a zoned UTC value, so the text ends in Z.
+    assert '[1.23456789, ""2024-01-15T10:30:00.123456789Z""]' in out
+    assert out.count("2024-01-15T10:30:00.123456789Z") == 2
 
 
 def test_schema_dotcommand():

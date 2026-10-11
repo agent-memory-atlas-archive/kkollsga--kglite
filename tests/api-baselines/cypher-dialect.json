@@ -508,7 +508,7 @@
       "id": "function.temporal",
       "syntax": "date() / localtime() / localdatetime() / datetime() / time() / duration()",
       "status": "intentional_divergence",
-      "note": "The temporal functions run on a zoneless value model: a date, a zoneless datetime (Timestamp, nanosecond precision in the engine, microsecond through the Python binding), a local time of day (LocalTime), a time of day with a numeric UTC offset (Time, equal to another Time at the same instant of day) and a months/days/seconds duration. The constructors take the year-month-day, ISO week, ordinal-day and quarter spellings, the ISO 8601 string spellings of those, and the date/time/datetime bases. What the model cannot hold is refused or approximated rather than faked: a named time zone (the timezone key of datetime() is an unknown-key error and time() takes a numeric offset only; an offset in datetime(str) is applied and normalised to UTC). Neo4j returns the zone-bearing type for datetime(), so results of that one differ."
+      "note": "The temporal functions follow the openCypher value model: date(), localdatetime(), datetime() (zoned, UTC when no zone is given, fixed offset or IANA zone with Neo4j DST resolution), localtime(), time() (numeric offset) and duration() with nanoseconds. Zoned values compare by instant; a local datetime meeting a zoned one is read as UTC. The no-arg forms read one clock per statement. Differences: datetime.statement()/.transaction()/.realtime() are not provided; time() and localtime() refuse a named zone, which needs a date to resolve; the Python binding floors sub-microsecond values on read."
     }
   ],
   "extensions": [
