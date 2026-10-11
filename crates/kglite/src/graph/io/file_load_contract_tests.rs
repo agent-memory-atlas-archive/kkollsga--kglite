@@ -3,6 +3,7 @@
 //! Split from file_tests.rs (source-quality line ceiling).
 
 use super::*;
+use crate::graph::io::file::container_test_support::*;
 
 /// A `.kgl` load must never install *fabricated* type-connectivity counts.
 /// `edge_type_counts` is persisted only when its cache happens to be warm, so a
@@ -285,8 +286,7 @@ mod byte_determinism_tests {
     #[test]
     fn the_fixture_populates_every_audited_section() {
         let bytes = save(&build());
-        let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-        let meta: FileMetadata = serde_json::from_slice(&bytes[13..13 + len]).unwrap();
+        let meta: FileMetadata = serde_json::from_slice(metadata_json(&bytes)).unwrap();
         // `CREATE RANGE INDEX` also installs the hash equality index, so each
         // type contributes two property-index keys.
         assert_eq!(meta.property_index_keys.len(), TYPES.len() * 2);
@@ -461,10 +461,77 @@ mod load_error_reporting_tests {
         }
     }
 
+    /// v8's metadata block ends in a CRC32 over the header and the JSON. One
+    /// flipped byte anywhere in what it covers (or in the CRC itself) is a
+    /// corruption refusal that names the checksum, from the byte loader, the
+    /// file loader and the head-only estimator alike; before v8 such a flip was
+    /// parsed (or misparsed) as if it were the writer's intent.
+    #[test]
+    fn a_flipped_metadata_or_header_byte_is_refused_as_corruption() {
+        let bytes = tiny_bytes();
+        let metadata_len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
+        let json = 13..13 + metadata_len - 4;
+        let crc = 13 + metadata_len - 4..13 + metadata_len;
+        let offsets = [
+            ("core data version", 5usize),
+            ("first metadata byte", json.start),
+            (
+                "middle metadata byte",
+                json.start + (json.end - json.start) / 2,
+            ),
+            ("last metadata byte", json.end - 1),
+            ("crc byte", crc.start + 1),
+        ];
+        for (what, offset) in offsets {
+            let mut damaged = bytes.clone();
+            damaged[offset] ^= 0x01;
+            let error = load_kgl_bytes(&damaged)
+                .err()
+                .unwrap_or_else(|| panic!("{what}: a flipped byte must not load"));
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{what}: {error}");
+            // The core-data-version flip is also caught by its own range check
+            // for some values; the checksum must still be the speaker here.
+            assert!(
+                error.to_string().contains("checksum mismatch"),
+                "{what}: {error}"
+            );
+            let from_file = load_bytes_from_file(&damaged);
+            assert!(
+                from_file.to_string().contains("checksum mismatch"),
+                "{what}: {from_file}"
+            );
+            let estimate = estimate_load_memory_bytes(&damaged)
+                .err()
+                .unwrap_or_else(|| panic!("{what}: the estimator must refuse too"));
+            assert!(
+                estimate.to_string().contains("checksum mismatch"),
+                "{what}: {estimate}"
+            );
+        }
+        // A flipped length field is caught the same way (or as a truncation,
+        // never as a successful parse).
+        let mut damaged = bytes.clone();
+        damaged[9] ^= 0x04;
+        assert!(load_kgl_bytes(&damaged).is_err());
+        // The control: the untouched file loads.
+        assert!(load_kgl_bytes(&bytes).is_ok());
+    }
+
+    /// The same flip in a v7 file is not detectable (no CRC) -- the reason the
+    /// check exists. Pinned so the claim "v7 had no metadata check" stays true
+    /// of the reader, and a v7 file with a *valid* body still loads.
+    #[test]
+    fn a_v7_container_has_no_metadata_checksum_and_still_loads() {
+        let v8 = tiny_bytes();
+        let v7 = crate::graph::io::file::container_test_support::as_legacy_container(&v8, V7_MAGIC);
+        assert!(load_kgl_bytes(&v7).is_ok());
+        assert_eq!(v7.len(), v8.len() - 4);
+    }
+
     #[test]
     fn a_container_version_from_the_future_is_invalid_data() {
         let mut bytes = tiny_bytes();
-        bytes[3] = V7_MAGIC[3] + 1;
+        bytes[3] = V8_MAGIC[3] + 1;
         let error = load_bytes_from_file(&bytes);
         assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
         assert!(error.to_string().contains("upgrade kglite"), "{error}");

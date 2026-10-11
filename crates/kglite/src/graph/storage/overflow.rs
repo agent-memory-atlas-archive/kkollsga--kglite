@@ -33,6 +33,13 @@
 //! | 9   | List       | u32 LE length + Postcard(`Vec<Value>`)   |
 //! | 10  | Map        | u32 LE length + Postcard(`BTreeMap`)     |
 //! | 11  | Timestamp  | u32 LE length (12) + i64 LE seconds + u32 LE nanoseconds |
+//! | 12-14 | (reserved) | zoned datetime / local time / time — length-prefixed |
+//! | 15  | Duration   | u32 LE length (20) + i32 months + i32 days + i64 seconds + i32 nanoseconds, all LE |
+//!
+//! Tag 15 (`Duration`) is defensive: the bag is written only by the N-Triples
+//! builder, the streaming subgraph writer and legacy migration, none of which
+//! produces a duration today. Before it existed the encoder wrote a `Duration`
+//! as Null, so any future writer that routed one here would have lost it.
 //!
 //! Tag 7 truncated a timestamp to whole seconds. It is still decoded (a bag an
 //! earlier build wrote keeps its values) but never written: tag 11 carries the
@@ -45,8 +52,7 @@
 //! ## Deliberately non-storable values
 //!
 //! `Node`, `Relationship`, and `Path` are query-result-time values, while
-//! `Duration` and `NodeRef` are query-time-only; the encoder writes them as
-//! the Null tag. `Point` is encoded as its string form `"lat,lon"` (tag 6),
+//! `NodeRef` is query-time-only; the encoder writes it as the Null tag. `Point` is encoded as its string form `"lat,lon"` (tag 6),
 //! matching the legacy writers.
 
 use crate::datatypes::values::{BorrowedValue, Value};
@@ -75,9 +81,24 @@ pub const TAG_MAP_POSTCARD: u8 = 10;
 /// but no longer written.
 pub const TAG_TIMESTAMP_EXACT: u8 = 11;
 
+/// Tags 12-14 are reserved for zoned datetime, local time and time.
+/// A duration with a sub-second part (and every whole-second one): months, days,
+/// seconds, nanoseconds.
+pub const TAG_DURATION: u8 = 15;
+
+/// Length of a [`TAG_DURATION`] payload: `i32` + `i32` + `i64` + `i32`.
+const DURATION_LEN: usize = 20;
+
 /// Highest tag this build knows how to *decode*. Tags above this are
 /// skipped via the length-prefix forward-compat rule (module docs).
-pub const MAX_KNOWN_TAG: u8 = TAG_TIMESTAMP_EXACT;
+pub const MAX_KNOWN_TAG: u8 = TAG_DURATION;
+
+/// Whether `read_value` can decode `tag`. Tags 12-14 are reserved and tag 8 is
+/// retired: they sit inside `..=MAX_KNOWN_TAG` yet must be skipped, not read.
+#[inline]
+fn is_decodable_tag(tag: u8) -> bool {
+    tag <= MAX_KNOWN_TAG && tag != TAG_LIST && !(12..=14).contains(&tag)
+}
 
 // ─── Encoders ────────────────────────────────────────────────────────────────
 
@@ -113,9 +134,14 @@ pub fn encode_value(buf: &mut Vec<u8>, key: InternedKey, value: &Value) {
         // Point is serialized as its "lat,lon" string form (legacy
         // convention — kept for wire-format stability).
         Value::Point { lat, lon } => encode_str(buf, &format!("{},{}", lat, lon)),
-        // NodeRef is transient; Duration is query-time-only (Cluster 2).
-        // Both are written as null.
-        Value::NodeRef(_) | Value::Duration { .. } => buf.push(TAG_NULL),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => encode_duration(buf, *months, *days, *seconds, *nanos),
+        // NodeRef is transient and is written as null.
+        Value::NodeRef(_) => buf.push(TAG_NULL),
         // Lists are persistable property values. Tag 8 is retired and
         // current writes always use the Postcard tag.
         Value::List(items) => encode_list(buf, items),
@@ -160,7 +186,37 @@ pub fn encode_value_borrowed(buf: &mut Vec<u8>, key: InternedKey, value: &Borrow
         BorrowedValue::String(s) => encode_str(buf, s),
         BorrowedValue::List(items) => encode_list(buf, items),
         BorrowedValue::Map(entries) => encode_map(buf, entries),
+        BorrowedValue::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => encode_duration(buf, *months, *days, *seconds, *nanos),
     }
+}
+
+fn encode_duration(buf: &mut Vec<u8>, months: i32, days: i32, seconds: i64, nanos: i32) {
+    buf.push(TAG_DURATION);
+    buf.extend_from_slice(&(DURATION_LEN as u32).to_le_bytes());
+    buf.extend_from_slice(&months.to_le_bytes());
+    buf.extend_from_slice(&days.to_le_bytes());
+    buf.extend_from_slice(&seconds.to_le_bytes());
+    buf.extend_from_slice(&nanos.to_le_bytes());
+}
+
+/// `None` for a payload of the wrong length or a sub-second part outside
+/// `0..1e9`: corrupt, not a value to fabricate.
+fn decode_duration(payload: &[u8]) -> Option<(i32, i32, i64, i32)> {
+    if payload.len() != DURATION_LEN {
+        return None;
+    }
+    let months = i32::from_le_bytes(payload[0..4].try_into().ok()?);
+    let days = i32::from_le_bytes(payload[4..8].try_into().ok()?);
+    let seconds = i64::from_le_bytes(payload[8..16].try_into().ok()?);
+    let nanos = i32::from_le_bytes(payload[16..20].try_into().ok()?);
+    (0..1_000_000_000)
+        .contains(&nanos)
+        .then_some((months, days, seconds, nanos))
 }
 
 /// Length of a [`TAG_TIMESTAMP_EXACT`] payload: seconds (`i64`) + nanoseconds (`u32`).
@@ -299,6 +355,16 @@ pub fn read_value(blob: &[u8], pos: &mut usize, type_tag: u8) -> Option<Value> {
             let bytes = read_len_prefixed(blob, pos)?;
             Some(Value::Timestamp(decode_timestamp_exact(bytes)?))
         }
+        TAG_DURATION => {
+            let bytes = read_len_prefixed(blob, pos)?;
+            let (months, days, seconds, nanos) = decode_duration(bytes)?;
+            Some(Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            })
+        }
         TAG_LIST_POSTCARD => {
             let bytes = read_len_prefixed(blob, pos)?;
             let limits = crate::serde_codec::DecodeLimits::new(u32::MAX as u64, bytes.len() as u64);
@@ -376,7 +442,7 @@ pub fn scan_blob(blob: &[u8], key: InternedKey) -> Option<Value> {
     let target = key.as_u64();
     let mut found = None;
     let _ = for_each_raw(blob, |entry_key, tag, blob, pos| {
-        if entry_key == target && tag <= MAX_KNOWN_TAG && tag != TAG_LIST {
+        if entry_key == target && is_decodable_tag(tag) {
             found = read_value(blob, pos, tag);
             return Some(()); // stop scanning
         }
@@ -394,7 +460,7 @@ pub fn scan_blob(blob: &[u8], key: InternedKey) -> Option<Value> {
 pub fn decode_blob(blob: &[u8]) -> Vec<(InternedKey, Value)> {
     let mut result = Vec::new();
     let _ = for_each_raw(blob, |entry_key, tag, blob, pos| {
-        if tag <= MAX_KNOWN_TAG && tag != TAG_LIST {
+        if is_decodable_tag(tag) {
             match read_value(blob, pos, tag) {
                 Some(val) => result.push((InternedKey::from_u64(entry_key), val)),
                 None => return Some(()), // truncated payload — stop
@@ -526,6 +592,23 @@ where
                     return Some(Ok(()));
                 };
                 if let Err(e) = f(key, BorrowedValue::Timestamp(ts)) {
+                    return Some(Err(e));
+                }
+            }
+            TAG_DURATION => {
+                let Some(bytes) = read_len_prefixed(blob, pos) else {
+                    return Some(Ok(()));
+                };
+                let Some((months, days, seconds, nanos)) = decode_duration(bytes) else {
+                    return Some(Ok(()));
+                };
+                let duration = BorrowedValue::Duration {
+                    months,
+                    days,
+                    seconds,
+                    nanos,
+                };
+                if let Err(e) = f(key, duration) {
                     return Some(Err(e));
                 }
             }
@@ -1040,6 +1123,88 @@ mod tests {
         let mut empty = Vec::new();
         append_filtered_blob(&blob, &mut empty, |_| false);
         assert_eq!(empty, 0u16.to_le_bytes());
+    }
+
+    /// A duration is a persistable value: it used to be written as Null.
+    #[test]
+    fn durations_round_trip_through_every_reader() {
+        let durations = [
+            Value::Duration {
+                months: -1,
+                days: 2,
+                seconds: -3,
+                nanos: 0,
+            },
+            Value::Duration {
+                months: i32::MAX,
+                days: i32::MIN,
+                seconds: i64::MIN,
+                nanos: 999_999_999,
+            },
+        ];
+        for (i, d) in durations.iter().enumerate() {
+            let entries = vec![
+                (key(1), Value::Int64(9)),
+                (key(2), d.clone()),
+                (key(3), Value::Null),
+            ];
+            let blob = blob_of(&entries);
+            assert_eq!(decode_blob(&blob), entries, "case {i}: decode_blob");
+            assert_eq!(
+                scan_blob(&blob, key(2)),
+                Some(d.clone()),
+                "case {i}: scan_blob"
+            );
+            let mut seen = Vec::new();
+            try_for_each_borrowed::<_, ()>(&blob, |k, v| {
+                seen.push((k, v.to_value()));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(seen, entries, "case {i}: borrowed visit");
+            // The borrowed encoder produces the same bytes as the owned one.
+            let mut owned = Vec::new();
+            encode_value(&mut owned, key(2), d);
+            let mut borrowed = Vec::new();
+            encode_value_borrowed(&mut borrowed, key(2), &BorrowedValue::of(d).unwrap());
+            assert_eq!(owned, borrowed, "case {i}");
+            assert_eq!(owned[8], TAG_DURATION);
+            assert_eq!(owned.len(), 8 + 1 + 4 + DURATION_LEN);
+        }
+    }
+
+    /// Tags 12-14 are reserved for zoned datetime / local time / time. They are
+    /// length-prefixed, so a reader that cannot decode them steps over the one
+    /// entry and keeps the rest of the row; tag 15 with a corrupt payload ends
+    /// the scan rather than fabricating a duration.
+    #[test]
+    fn reserved_temporal_tags_are_skipped_and_a_corrupt_duration_is_not_invented() {
+        let keep = [(key(1), Value::Int64(1)), (key(3), Value::Int64(3))];
+        for reserved in 12u8..=14 {
+            let mut blob = blob_of(&[keep[0].clone()]);
+            blob[..2].copy_from_slice(&3u16.to_le_bytes());
+            blob.extend_from_slice(&key(2).as_u64().to_le_bytes());
+            blob.push(reserved);
+            blob.extend_from_slice(&5u32.to_le_bytes());
+            blob.extend_from_slice(b"abcde");
+            encode_value(&mut blob, key(3), &keep[1].1);
+            assert_eq!(decode_blob(&blob), keep, "tag {reserved}");
+            assert_eq!(scan_blob(&blob, key(3)), Some(Value::Int64(3)));
+            assert_eq!(scan_blob(&blob, key(2)), None);
+        }
+        // Wrong-length and out-of-range payloads decode to nothing.
+        for payload in [vec![0u8; 19], {
+            let mut p = vec![0u8; 16];
+            p.extend_from_slice(&1_000_000_000i32.to_le_bytes());
+            p
+        }] {
+            let mut blob = 1u16.to_le_bytes().to_vec();
+            blob.extend_from_slice(&key(1).as_u64().to_le_bytes());
+            blob.push(TAG_DURATION);
+            blob.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            blob.extend_from_slice(&payload);
+            assert_eq!(decode_blob(&blob), vec![]);
+        }
     }
 
     #[test]

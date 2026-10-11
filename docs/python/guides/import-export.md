@@ -21,9 +21,10 @@ atomically renames it over the target. A crash mid-save can't leave a torn
 
 Save files (`.kgl`) use an explicitly versioned binary container.
 
-- Current files use RGF v7, an explicit Postcard codec tag, and core-data version 3.
-- Current readers accept RGF v7, v6 and v5.
-- A v7 file cannot be read by kglite 0.19.0 or earlier.
+- Current files use RGF v8, an explicit Postcard codec tag, and core-data version 3.
+- Current readers accept RGF v8, v7, v6 and v5.
+- A v8 file cannot be read by kglite 0.19.x or earlier; the older reader refuses it by version.
+- A v8 file ends its metadata block with a checksum; a flipped byte in the header or metadata is refused as corruption.
 - RGF v4/bincode and older containers are rejected with an explicit
   migration/rebuild instruction. Use kglite 0.13.4 as the conversion bridge
   described in the

@@ -424,6 +424,7 @@ fn value_cross_variant_rank_ladder_golden() {
             months: 0,
             days: 0,
             seconds: 0,
+            nanos: 0,
         },
         Value::DateTime(NaiveDate::from_ymd_opt(2020, 1, 1).unwrap()),
         s(""),
@@ -470,4 +471,59 @@ fn value_cross_variant_rank_ladder_golden() {
         "Value's ORDER BY rank ladder changed (Value::cmp's `disc`). This is a \
          user-visible sort contract, independent of the serde discriminant."
     );
+}
+
+/// `Eq`, `Hash` and `Ord` agree on `Duration` over a grid that includes the
+/// sub-second part: equal values hash equally, `cmp` is a total order that is
+/// antisymmetric and transitive, and two durations differing only in `nanos`
+/// are neither equal nor tied.
+#[test]
+fn duration_eq_hash_ord_laws_hold_with_nanoseconds() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let hash_of = |v: &Value| {
+        let mut h = DefaultHasher::new();
+        v.hash(&mut h);
+        h.finish()
+    };
+    let mut grid = Vec::new();
+    for months in [-1, 0, 1] {
+        for days in [-1, 0, 1] {
+            for seconds in [-1i64, 0, 1] {
+                for nanos in [0, 1, 999_999_999] {
+                    grid.push(Value::Duration {
+                        months,
+                        days,
+                        seconds,
+                        nanos,
+                    });
+                }
+            }
+        }
+    }
+    for a in &grid {
+        assert_eq!(a.cmp(a), std::cmp::Ordering::Equal);
+        for b in &grid {
+            assert_eq!(a == b, a.cmp(b).is_eq(), "{a:?} {b:?}");
+            assert_eq!(a.cmp(b), b.cmp(a).reverse(), "{a:?} {b:?}");
+            if a == b {
+                assert_eq!(hash_of(a), hash_of(b), "{a:?}");
+            }
+            for c in &grid {
+                if a.cmp(b).is_le() && b.cmp(c).is_le() {
+                    assert!(a.cmp(c).is_le(), "{a:?} {b:?} {c:?}");
+                }
+            }
+        }
+    }
+    let fine = |nanos| Value::Duration {
+        months: 0,
+        days: 0,
+        seconds: 1,
+        nanos,
+    };
+    assert_ne!(fine(0), fine(1));
+    assert!(fine(0) < fine(1));
+    assert_ne!(hash_of(&fine(0)), hash_of(&fine(1)));
 }

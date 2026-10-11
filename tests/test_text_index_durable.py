@@ -50,7 +50,7 @@ assert g.cypher("MATCH (n:Doc) WHERE text_bm25(n, 'body', 'fox') > 0 RETURN n.id
     )
     assert not (tmp_path / "app.kgl").exists()
     wal = (tmp_path / "app.kgl-wal").read_bytes()
-    assert wal[:5] == b"KWAL\x0b", "a log carrying text-index ops is WAL format 11"
+    assert wal[:5] == b"KWAL\x0c", "a log carrying text-index ops is WAL format 12"
 
     g = kglite.open(str(tmp_path / "app.kgl"), durable=True)
     assert g.has_text_index("Doc", "body")

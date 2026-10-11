@@ -255,6 +255,7 @@ mod tests {
                     months: 1,
                     days: 2,
                     seconds: 3,
+                    nanos: 0,
                 },
             ),
             ("point", Value::Point { lat: 1.0, lon: 2.0 }),

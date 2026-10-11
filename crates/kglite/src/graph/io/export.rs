@@ -549,9 +549,19 @@ fn json_value(value: &Value) -> String {
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!(
             "{{\"months\":{},\"days\":{},\"seconds\":{}}}",
             months, days, seconds
+        ),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!(
+            "{{\"months\":{},\"days\":{},\"seconds\":{},\"nanoseconds\":{}}}",
+            months, days, seconds, nanos
         ),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => idx.to_string(),

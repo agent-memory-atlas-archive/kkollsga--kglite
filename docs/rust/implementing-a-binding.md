@@ -92,8 +92,8 @@ invalid UTF-8/null pointers. Do not infer categories from message text.
 ## Storage and persistence
 
 Expose memory/mapped/disk choice without changing semantics. The current `.kgl`
-writer emits RGF v7 with an explicit Postcard codec; the reader also accepts
-RGF v6 and v5. RGF v4/bincode and older containers are rejected with
+writer emits RGF v8 with an explicit Postcard codec; the reader also accepts
+RGF v7, v6 and v5. RGF v4/bincode and older containers are rejected with
 migration/rebuild guidance. A binding
 must not serialize internal structs independently or promise compatibility
 broader than the core reader.

@@ -134,7 +134,7 @@ def test_documented_kgl_metadata_offsets_read_the_actual_container():
     size = int.from_bytes(blob[length_start:length_end], "little")
     end = metadata_start + size
     assert 0 < size and end < len(blob), "documented metadata offsets must fit the actual container"
-    decoded = json.loads(blob[metadata_start:end])
+    decoded = json.loads(blob[metadata_start : end - 4])  # v8: the block ends in a CRC32
     assert decoded["topology_compressed_size"] > 0
     assert decoded["column_sections"]
     core = re.search(r"\[(\d+)\.\.(\d+)\]\s+core_data_version: u32 LE \(currently (\d+)\)", section)

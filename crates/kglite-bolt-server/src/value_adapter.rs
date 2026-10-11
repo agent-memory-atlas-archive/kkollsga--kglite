@@ -108,10 +108,12 @@ pub fn to_bolt(value: &Value) -> Result<BoltValue, BoltError> {
             x: *lon,
             y: *lat,
         })),
+        // T1b: sub-second nanos are not yet carried to Bolt.
         Value::Duration {
             months,
             days,
             seconds,
+            ..
         } => Ok(BoltValue::Duration(BoltDuration {
             months: i64::from(*months),
             days: i64::from(*days),
@@ -397,9 +399,9 @@ pub fn from_bolt(value: &BoltValue) -> Result<Value, BoltError> {
                 BoltError::Protocol(format!("Bolt Duration.days out of i32 range: {}", d.days))
             })?,
             seconds: d.seconds,
-            // kglite's `Value::Duration` carries second precision; if the
-            // driver sent sub-second nanoseconds we silently truncate
-            // them. The asymmetry is documented in the mapping table.
+            // T1b: the driver's nanoseconds are still truncated here; the
+            // engine value can now carry them.
+            nanos: 0,
         }),
         BoltValue::Point2D(p) => {
             // SRID 4326 is WGS84 (geographic lat/lon). Other SRIDs (e.g.
@@ -657,6 +659,7 @@ mod owned_conversion_tests {
                 months: 1,
                 days: 2,
                 seconds: 3,
+                nanos: 0,
             },
             Value::Node(Box::new(node(4))),
             Value::Relationship(Box::new(rel(5, 4, 6))),

@@ -40,19 +40,27 @@ pub(crate) const V5_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x05];
 /// header). Still read; no longer written.
 pub(crate) const V6_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x06];
 
-/// Magic bytes for the v7 columnar format — what this binary writes. The
-/// section layout, metadata schema and codec are v6's. What v7 adds is content
-/// inside the packed column sections: a `"timestamp"` column (microseconds) and
-/// an `Int64` title column where v6 wrote them as `Mixed`. A v6 reader would
-/// misparse those rather than refuse, so the version number turns it away. All
-/// three containers are decoded by the same reader.
+/// Magic bytes for the v7 columnar format. The section layout, metadata schema
+/// and codec are v6's. What v7 adds is content inside the packed column
+/// sections: a `"timestamp"` column (microseconds) and an `Int64` title column
+/// where v6 wrote them as `Mixed`. A v6 reader would misparse those rather than
+/// refuse, so the version number turns it away. Still read; no longer written.
 pub(crate) const V7_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x07];
+
+/// Magic bytes for the v8 columnar format — what this binary writes. The
+/// section layout and codec are v7's. v8 adds a CRC32 trailer inside the
+/// declared metadata block (see `io::file`'s module header), so a flipped byte
+/// in the metadata or in the length fields is refused as corruption instead of
+/// being parsed; and `Value::Duration` may carry a sub-second part (a new
+/// serde tag a v7 reader would reject as a torn payload). All four containers
+/// are decoded by the same reader.
+pub(crate) const V8_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x08];
 
 /// The container version byte this build writes — the number
 /// [`crate::graph::schema::KGL_FORMAT_VERSION`] reports to `graph_info()` and
-/// to the C ABI. Bumping the written container means adding a `V8_MAGIC` and
+/// to the C ABI. Bumping the written container means adding a `V9_MAGIC` and
 /// pointing this at it; nothing else needs to move.
-pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V7_MAGIC[3];
+pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V8_MAGIC[3];
 
 /// Hard-break message for v3 files in a v4 binary. Per the
 /// user decision in docs/history/bolt-implementation.md: no read-compat
@@ -72,7 +80,7 @@ pub(crate) const V3_HARD_BREAK_MSG: &str = "kglite .kgl file format v3 is not su
 pub(crate) fn newer_portable_format_error(version: u8) -> io::Error {
     invalid_data(format!(
         "File uses .kgl container version {version}, but this library only supports up to version {}. Please upgrade kglite.",
-        V7_MAGIC[3]
+        V8_MAGIC[3]
     ))
 }
 
@@ -95,7 +103,7 @@ pub(crate) fn newer_portable_format_error(version: u8) -> io::Error {
 /// `origin` names what was refused (a quoted path, or "the byte buffer") so
 /// the message is actionable when several files are being loaded at once.
 pub(crate) fn unrecognized_magic_error(prefix: &[u8], origin: &str) -> io::Error {
-    if prefix.len() >= 3 && prefix[..3] == V7_MAGIC[..3] {
+    if prefix.len() >= 3 && prefix[..3] == V8_MAGIC[..3] {
         return invalid_data(format!(
             "Unrecognized .kgl container version {} in {origin}. This file was saved with an \
              older version of kglite. Please rebuild the graph with the current version and \

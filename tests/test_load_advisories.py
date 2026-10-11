@@ -5,6 +5,7 @@ against the oldest version that ever wrote the data (``oldest_writer``)."""
 import json
 import struct
 import warnings
+import zlib
 
 import pandas as pd
 import pytest
@@ -20,19 +21,22 @@ def _stamp(path, library_version, oldest_writer=None):
     raw = path.read_bytes()
     head = raw[:9]
     (length,) = struct.unpack("<I", raw[9:13])
-    meta = json.loads(raw[13 : 13 + length])
+    meta = json.loads(raw[13 : 13 + length - 4])  # v8: the block ends in a 4-byte CRC32
     meta["library_version"] = library_version
     meta.pop("oldest_writer", None)
     if oldest_writer is not None:
         meta["oldest_writer"] = oldest_writer
     body = json.dumps(meta, separators=(",", ":")).encode("utf-8")
-    path.write_bytes(head + struct.pack("<I", len(body)) + body + raw[13 + length :])
+    # v8 seals the 13 header bytes plus the JSON with a CRC32 trailer counted in the length.
+    header = head + struct.pack("<I", len(body) + 4)
+    crc = zlib.crc32(body, zlib.crc32(header))
+    path.write_bytes(header + body + struct.pack("<I", crc) + raw[13 + length :])
 
 
 def _metadata(path):
     raw = path.read_bytes()
     (length,) = struct.unpack("<I", raw[9:13])
-    return json.loads(raw[13 : 13 + length])
+    return json.loads(raw[13 : 13 + length - 4])
 
 
 def _load(path):

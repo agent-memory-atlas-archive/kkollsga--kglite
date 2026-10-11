@@ -207,8 +207,17 @@ fn sql_literal(value: &Value) -> String {
             months,
             days,
             seconds,
+            nanos: 0,
         } => quote_text(&format!(
             "{{\"months\":{months},\"days\":{days},\"seconds\":{seconds}}}"
+        )),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => quote_text(&format!(
+            "{{\"months\":{months},\"days\":{days},\"seconds\":{seconds},\"nanoseconds\":{nanos}}}"
         )),
         Value::List(_)
         | Value::Map(_)

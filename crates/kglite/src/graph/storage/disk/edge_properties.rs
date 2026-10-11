@@ -772,6 +772,7 @@ mod tests {
                     months: i32::MIN,
                     days: i32::MAX,
                     seconds: i64::MIN,
+                    nanos: 0,
                 },
                 true,
             ),

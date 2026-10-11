@@ -968,7 +968,14 @@ pub(super) fn value_display_compact(v: &Value, truncate_at: Option<usize>) -> St
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!("dur(M={},D={},S={})", months, days, seconds),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!("dur(M={},D={},S={},N={})", months, days, seconds, nanos),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::Null => String::new(),
         Value::List(_)

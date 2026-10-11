@@ -217,11 +217,16 @@ pub fn write_kgl_to_stamped<W: Write>(
 
     // Header: magic (4B) + codec (1B) + core_data_version (4B) +
     // metadata_length (4B). The codec byte prevents implicit byte sniffing.
-    writer.write_all(&V7_MAGIC)?;
-    writer.write_all(&[codec.tag()])?;
-    writer.write_all(&core_version.to_le_bytes())?;
-    writer.write_all(&(metadata_json.len() as u32).to_le_bytes())?;
+    // `metadata_length` counts the JSON plus its 4-byte CRC32 trailer, so
+    // `13 + metadata_length` still ends the metadata block.
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&V8_MAGIC);
+    header.push(codec.tag());
+    header.extend_from_slice(&core_version.to_le_bytes());
+    header.extend_from_slice(&((metadata_json.len() + 4) as u32).to_le_bytes());
+    writer.write_all(&header)?;
     writer.write_all(&metadata_json)?;
+    writer.write_all(&metadata_checksum(&header, &metadata_json).to_le_bytes())?;
     writer.write_all(&topology)?;
     for section_data in &column_data {
         writer.write_all(section_data)?;

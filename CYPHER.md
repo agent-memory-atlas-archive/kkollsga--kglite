@@ -1530,9 +1530,9 @@ covers declaring intervals and modelling history.
 | `n.d.dayOfWeek`, `n.d.dayOfYear`, `n.d.epochSeconds` | Other temporal field accessors |
 | `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.weekDay`, `d.dayOfQuarter` | Calendar accessors of a date or datetime (`weekDay` is `dayOfWeek`; `week` and `weekYear` are the ISO week and week-year) |
 | `t.hour`, `t.minute`, `t.second`, `t.millisecond`, `t.microsecond`, `t.nanosecond`, `t.epochMillis` | Clock accessors of a datetime; an unknown accessor on a datetime is null |
-| `dur.quarters`, `dur.weeks`, `dur.quartersOfYear`, `dur.monthsOfQuarter`, `dur.monthsOfYear`, `dur.daysOfWeek`, `dur.minutesOfHour`, `dur.secondsOfMinute` | Duration accessors beside `years`, `months`, `days`, `hours`, `minutes`, `seconds`; the sub-second accessors (`milliseconds` and finer) count whole seconds scaled, and the `...OfSecond` ones are 0 |
+| `dur.quarters`, `dur.weeks`, `dur.quartersOfYear`, `dur.monthsOfQuarter`, `dur.monthsOfYear`, `dur.daysOfWeek`, `dur.minutesOfHour`, `dur.secondsOfMinute` | Duration accessors beside `years`, `months`, `days`, `hours`, `minutes`, `seconds`; `milliseconds`, `microseconds` and `nanoseconds` count the whole duration in that unit, and `millisecondsOfSecond`, `microsecondsOfSecond` and `nanosecondsOfSecond` give the sub-second part |
 | `duration({days: N, months: M, ...})` | Build a Duration value (see [Duration semantics](#duration-semantics) below) |
-| `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and remaining seconds are returned as a Duration |
+| `duration.between(d1, d2)` | Difference between two date or timestamp values; whole days and the remaining seconds and nanoseconds are returned as a Duration |
 | `duration.inMonths(d1, d2)`, `duration.inDays(d1, d2)`, `duration.inSeconds(d1, d2)` | The whole months, days or seconds from `d1` to `d2` (dates or datetimes), as a duration holding only that unit; negative when `d2` is earlier |
 | `add_days(date, n)` / `add_months(date, n)` / `add_years(date, n)` | Checked calendar shift; returns NULL when the requested date is outside the representable range |
 | `date_truncate(date, unit)` | Start of `year`, `month`, `week`, or `day` |
@@ -2015,11 +2015,15 @@ A `Duration` value carries three independent components:
 A constructor value may be fractional: a fraction of a month spills into days
 (30.436875 days to the month) and a fraction of a day into seconds, so
 `duration({months: 5, days: 1.5})` is `P5M1DT12H`. `milliseconds`,
-`microseconds` and `nanoseconds` are accepted too. A total that is not a whole
-number of seconds is refused (`duration({seconds: 1.5})`): a duration has no
-sub-second precision. `duration('P14DT16H12M')` reads ISO 8601 text, with
-fractions on any unit, and `toString(d)` writes it back (`PT0S` for zero,
-each component carrying its own sign: `PT-22H`).
+`microseconds` and `nanoseconds` are accepted too. A duration keeps its
+sub-second part to the nanosecond: `duration({seconds: 1.5})` and
+`duration({nanoseconds: 1})` are valid, and a fraction finer than one
+nanosecond rounds to the nearest nanosecond. The sign of the clock part rides on
+`seconds` with the nanoseconds kept non-negative, so `duration({seconds: -0.5})`
+is `-1` second plus `500000000` nanoseconds. `duration('P14DT16H12M')` reads
+ISO 8601 text, with fractions on any unit, and `toString(d)` writes it back
+(`PT0S` for zero, each component carrying its own sign: `PT-22H`; a sub-second
+part prints as a fraction: `PT0.000000001S`, `PT-0.5S`).
 
 **Components stay separate by design.** Calendar arithmetic
 (`+ duration({months: 1})`) is fundamentally different from clock arithmetic

@@ -56,16 +56,25 @@ impl<'a> CypherExecutor<'a> {
                 }
                 // Accepts date() and datetime() operands (and a mix). Whole
                 // days go in `days`; any remaining sub-day delta (when a
-                // Timestamp is involved) is carried in `seconds`.
+                // Timestamp is involved) is carried in `seconds` and `nanos`.
                 match (coerce_naive_datetime(&a), coerce_naive_datetime(&b)) {
                     (Some(start), Some(end)) => {
-                        let total_secs = (end - start).num_seconds();
+                        const DAY_NANOS: i128 = 86_400 * 1_000_000_000;
+                        let delta = end - start;
+                        let total = i128::from(delta.num_seconds()) * 1_000_000_000
+                            + i128::from(delta.subsec_nanos());
+                        // `/` and `%` truncate toward zero, so days and the
+                        // remainder share the delta's sign, as before.
+                        let (seconds, nanos) =
+                            crate::graph::core::value_operations::split_clock(total % DAY_NANOS)
+                                .ok_or("duration.between() delta exceeds the supported range")?;
                         Ok(Value::Duration {
                             months: 0,
-                            days: i32::try_from(total_secs / 86_400).map_err(|_| {
+                            days: i32::try_from(total / DAY_NANOS).map_err(|_| {
                                 "duration.between() day component exceeds the supported i32 range"
                             })?,
-                            seconds: total_secs % 86_400,
+                            seconds,
+                            nanos,
                         })
                     }
                     _ => Err("duration.between() arguments must be datetime values".into()),

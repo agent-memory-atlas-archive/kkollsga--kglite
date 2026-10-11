@@ -272,6 +272,7 @@ fn duration(months: i32, days: i32, seconds: i64) -> Value {
         months,
         days,
         seconds,
+        nanos: 0,
     }
 }
 
@@ -305,9 +306,6 @@ fn duration_components_spill_fractions_and_parse_text() {
         assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
     }
     for query in [
-        "RETURN duration({months: 0.75})",
-        "RETURN duration({seconds: 1, milliseconds: 1})",
-        "RETURN duration({days: 14, nanoseconds: 1})",
         "RETURN duration('P1.5S')",
         "RETURN duration('14D')",
         "RETURN duration('P1D1Y')",
@@ -396,4 +394,173 @@ fn component_accessors() {
         cell("RETURN localdatetime('2015-07-21T21:40:32').nothing"),
         Value::Null
     );
+}
+
+fn fine(months: i32, days: i32, seconds: i64, nanos: i32) -> Value {
+    Value::Duration {
+        months,
+        days,
+        seconds,
+        nanos,
+    }
+}
+
+#[test]
+fn sub_second_durations_keep_every_nanosecond() {
+    for (query, expected) in [
+        ("duration({nanoseconds: 1})", fine(0, 0, 0, 1)),
+        ("duration({microseconds: 1})", fine(0, 0, 0, 1_000)),
+        ("duration({milliseconds: 1})", fine(0, 0, 0, 1_000_000)),
+        (
+            "duration({seconds: 1, milliseconds: 1})",
+            fine(0, 0, 1, 1_000_000),
+        ),
+        ("duration({days: 14, nanoseconds: 1})", fine(0, 14, 0, 1)),
+        ("duration({seconds: 1.5})", fine(0, 0, 1, 500_000_000)),
+        // Neo4j normalisation: the sign rides on `seconds`, nanos stay >= 0.
+        ("duration({seconds: -0.5})", fine(0, 0, -1, 500_000_000)),
+        ("duration({nanoseconds: -1})", fine(0, 0, -1, 999_999_999)),
+        (
+            "duration({milliseconds: 1500, microseconds: 7})",
+            fine(0, 0, 1, 500_007_000),
+        ),
+        ("duration('PT0.000000001S')", fine(0, 0, 0, 1)),
+        ("duration('PT1.5S')", fine(0, 0, 1, 500_000_000)),
+        ("duration('PT-0.5S')", fine(0, 0, -1, 500_000_000)),
+        ("duration('P1DT0.25S')", fine(0, 1, 0, 250_000_000)),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
+}
+
+#[test]
+fn sub_second_duration_to_string_is_iso_8601() {
+    for (query, expected) in [
+        ("duration({nanoseconds: 1})", "PT0.000000001S"),
+        ("duration({milliseconds: 1500})", "PT1.5S"),
+        ("duration({seconds: -0.5})", "PT-0.5S"),
+        ("duration({minutes: -1, seconds: -30.75})", "PT-1M-30.75S"),
+        (
+            "duration({days: 2, hours: 1, milliseconds: 40})",
+            "P2DT1H0.04S",
+        ),
+    ] {
+        assert_eq!(
+            cell(&format!("RETURN toString({query})")),
+            text(expected),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn sub_second_duration_arithmetic_carries_nanoseconds() {
+    let stamp = |nanos| local_datetime(2015, 7, 21, 21, 40, 32, nanos);
+    for (query, expected) in [
+        (
+            "localdatetime('2015-07-21T21:40:32.142') + duration({nanoseconds: 1})",
+            stamp(142_000_001),
+        ),
+        (
+            "duration({nanoseconds: 1}) + localdatetime('2015-07-21T21:40:32.142')",
+            stamp(142_000_001),
+        ),
+        (
+            "localdatetime('2015-07-21T21:40:32.142') - duration({milliseconds: 142})",
+            stamp(0),
+        ),
+        (
+            "localdatetime('2015-07-21T21:40:32.142') + duration({milliseconds: 900})",
+            local_datetime(2015, 7, 21, 21, 40, 33, 42_000_000),
+        ),
+        (
+            "localdatetime('2015-07-21T21:40:32.142') - duration({milliseconds: 900})",
+            local_datetime(2015, 7, 21, 21, 40, 31, 242_000_000),
+        ),
+        (
+            "duration({nanoseconds: 600000000}) + duration({nanoseconds: 600000000})",
+            fine(0, 0, 1, 200_000_000),
+        ),
+        (
+            "duration({seconds: 1}) - duration({nanoseconds: 1})",
+            fine(0, 0, 0, 999_999_999),
+        ),
+        (
+            "duration({nanoseconds: 400000000}) * 3",
+            fine(0, 0, 1, 200_000_000),
+        ),
+        (
+            "3 * duration({days: 1, nanoseconds: 400000000})",
+            fine(0, 3, 1, 200_000_000),
+        ),
+        (
+            "localdatetime('2015-07-21T21:40:32.142') - localdatetime('2015-07-21T21:40:31.141')",
+            fine(0, 0, 1, 1_000_000),
+        ),
+        (
+            "localdatetime('2015-07-21T21:40:31.141') - localdatetime('2015-07-21T21:40:32.142')",
+            fine(0, 0, -2, 999_000_000),
+        ),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
+    // A date has no time of day, so a sub-second duration does not move it.
+    assert_eq!(
+        cell("RETURN date('2015-07-21') + duration({nanoseconds: 5})"),
+        date(2015, 7, 21)
+    );
+    assert!(run("RETURN duration({seconds: 9223372036854775807, nanoseconds: 999999999}) + duration({nanoseconds: 1})").is_err());
+}
+
+#[test]
+fn sub_second_duration_equality_accessors_and_between() {
+    assert_eq!(
+        cell("RETURN duration({nanoseconds: 1}) = duration({nanoseconds: 1})"),
+        Value::Boolean(true)
+    );
+    assert_eq!(
+        cell("RETURN duration({nanoseconds: 1}) = duration({nanoseconds: 2})"),
+        Value::Boolean(false)
+    );
+    assert_eq!(
+        cell("RETURN duration({seconds: 1}) = duration({seconds: 1, nanoseconds: 1})"),
+        Value::Boolean(false)
+    );
+    let ints = |query: &str| -> Vec<i64> {
+        match cell(query) {
+            Value::List(items) => items
+                .into_iter()
+                .map(|v| match v {
+                    Value::Int64(n) => n,
+                    other => panic!("{query}: {other:?}"),
+                })
+                .collect(),
+            other => panic!("{query}: {other:?}"),
+        }
+    };
+    assert_eq!(
+        ints("WITH duration({seconds: 2, nanoseconds: 345678901}) AS d RETURN [d.seconds, d.milliseconds, d.microseconds, d.nanoseconds, d.millisecondsOfSecond, d.microsecondsOfSecond, d.nanosecondsOfSecond]"),
+        [2, 2345, 2_345_678, 2_345_678_901, 345, 345_678, 345_678_901]
+    );
+    // -0.5 s is (-1 s, +500_000_000 ns): `.seconds` is the floor, the unit totals are exact.
+    assert_eq!(
+        ints("WITH duration({seconds: -0.5}) AS d RETURN [d.seconds, d.milliseconds, d.nanoseconds, d.nanosecondsOfSecond]"),
+        [-1, -500, -500_000_000, 500_000_000]
+    );
+    for (query, expected) in [
+        (
+            "duration.between(localdatetime('2015-07-21T21:40:32.142'), localdatetime('2015-07-22T21:40:32.143'))",
+            fine(0, 1, 0, 1_000_000),
+        ),
+        (
+            "duration.inSeconds(localdatetime('2015-07-21T21:40:32.142'), localdatetime('2015-07-21T21:40:33.000'))",
+            fine(0, 0, 0, 858_000_000),
+        ),
+        (
+            "duration.inSeconds(localdatetime('2015-07-21T21:40:33.000'), localdatetime('2015-07-21T21:40:32.142'))",
+            fine(0, 0, -1, 142_000_000),
+        ),
+    ] {
+        assert_eq!(cell(&format!("RETURN {query}")), expected, "{query}");
+    }
 }

@@ -698,6 +698,7 @@ pub(crate) fn delta_to_duration(delta: &Bound<'_, PyDelta>) -> Result<Value, Str
         months: 0,
         days,
         seconds: total % 86_400,
+        nanos: 0,
     })
 }
 

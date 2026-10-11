@@ -164,7 +164,14 @@ const WAL_HEADER_LEN: u64 = (WAL_MAGIC.len() + 1) as u64;
 /// v10 reader refuses a v11 log instead of treating tag 23 as a torn tail and
 /// silently dropping a committed index declaration; until the next checkpoint
 /// truncates the log, an older binary cannot open a log this build wrote.
-pub const WAL_FORMAT_VERSION: u8 = 11;
+///
+/// **v11 → v12** adds no [`MutationOp`] tag. It records that a frame's
+/// [`Value`]s may now use the appended sub-second `Duration` serde tag (a
+/// `Value::Duration` with `nanos != 0`; `nanos == 0` still writes the original
+/// bytes, so every older WAL stays a strict subset read exactly). The header
+/// moves because a v11 reader meeting that tag cannot decode the frame and
+/// would treat it as a torn tail, silently dropping committed work.
+pub const WAL_FORMAT_VERSION: u8 = 12;
 
 /// Oldest WAL format this build can replay. Frames from any version in
 /// `MIN_READABLE_WAL_FORMAT_VERSION..=WAL_FORMAT_VERSION` decode with the

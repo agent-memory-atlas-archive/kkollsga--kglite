@@ -1,13 +1,14 @@
 // Versioned binary format for KnowledgeGraph persistence.
 //
-// File format v7 layout (v5 and v6 are identical apart from the magic and the
-// per-column encodings noted below, and are still read):
-//   [0..4]     Magic: b"RGF\x07" (Rusty Graph Format, version 7)
+// File format v8 layout (v5, v6 and v7 are identical apart from the magic, the
+// per-column encodings and the metadata trailer noted below, and are still read):
+//   [0..4]     Magic: b"RGF\x08" (Rusty Graph Format, version 8)
 //   [4]        Codec tag: 2 (Postcard v1)
 //   [5..9]     core_data_version: u32 LE
-//   [9..13]    metadata_length: u32 LE
+//   [9..13]    metadata_length: u32 LE (v8: the JSON plus its 4-byte CRC32)
 //   [13..13+N] JSON metadata (column schemas, section sizes, section
-//              integrity digests, all config)
+//              integrity digests, all config); v8 appends a CRC32 (LE) over
+//              bytes [0..13] and the JSON, counted in N
 //   [section]  topology.zst — graph structure WITHOUT node properties
 //   [section]  columns_<Type>.zst — one per node type, packed column data
 //   [section]  embeddings.zst (optional)
@@ -32,7 +33,16 @@
 // v7 adds is content inside the packed column sections: a `"timestamp"` column
 // (microseconds) and an `Int64` title column where v6 wrote them as `Mixed`.
 // A v6 reader would misparse those, so it refuses a v7 file by version number
-// ("Please upgrade kglite"). This writer emits v7 only; v5 and v6 are still read.
+// ("Please upgrade kglite").
+//
+// v8 vs v7: the section layout and codec are unchanged. v8 adds the metadata
+// CRC32 trailer — before it, one flipped byte in the metadata JSON or the length
+// fields was parsed (or misparsed) rather than detected — and allows a
+// `Value::Duration` with a sub-second part, written under a serde tag a v7
+// reader rejects. Section payloads keep their own per-section digests. This
+// writer emits v8 only; v5, v6 and v7 are still read, and a v7 reader refuses a
+// v8 file by version number (the shipped 0.19.x wording says "older version",
+// wrong in direction — see CHANGELOG).
 //
 // Pre-v5 magic values are retained only for explicit rejection and migration
 // guidance; their payloads are never decoded by the current reader.
@@ -67,7 +77,7 @@ use std::sync::Arc;
 use crate::graph::io::columns_meta;
 use crate::graph::io::magic::{
     newer_portable_format_error, unrecognized_magic_error, V3_HARD_BREAK_MSG, V3_MAGIC, V4_MAGIC,
-    V5_MAGIC, V6_MAGIC, V7_MAGIC,
+    V5_MAGIC, V6_MAGIC, V7_MAGIC, V8_MAGIC,
 };
 use crate::serde_codec;
 
@@ -989,7 +999,7 @@ pub fn write_kgl_with_stamp(
 /// and durably (temp + fsync + rename — see [`write_kgl_with`]). Heavy
 /// I/O, safe to run without the GIL.
 ///
-/// The bytes are the v7 container: `V7_MAGIC`, an explicit Postcard codec
+/// The bytes are the v8 container: `V8_MAGIC`, an explicit Postcard codec
 /// tag, and `CURRENT_CORE_DATA_VERSION`.
 ///
 /// The graph MUST have columnar storage enabled before calling this function;
@@ -1199,7 +1209,9 @@ pub(crate) fn io_context(operation: &str, path: impl AsRef<Path>, error: io::Err
 /// "too small to be a `.kgl`" is phrased in terms of what the caller was
 /// handed (a file, a buffer).
 fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static str> {
-    if prefix[..4] == V7_MAGIC {
+    if prefix[..4] == V8_MAGIC {
+        Ok("v8")
+    } else if prefix[..4] == V7_MAGIC {
         Ok("v7")
     } else if prefix[..4] == V6_MAGIC {
         Ok("v6")
@@ -1209,7 +1221,7 @@ fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static
         Err(pre_014_bincode_error(".kgl container v4"))
     } else if prefix[..4] == V3_MAGIC {
         Err(invalid_data(V3_HARD_BREAK_MSG))
-    } else if prefix[..3] == V7_MAGIC[..3] && prefix[3] > V7_MAGIC[3] {
+    } else if prefix[..3] == V8_MAGIC[..3] && prefix[3] > V8_MAGIC[3] {
         Err(newer_portable_format_error(prefix[3]))
     } else {
         Err(unrecognized_magic_error(&prefix[..4], origin))
@@ -1772,7 +1784,7 @@ fn apply_disk_metadata(dir: &std::path::Path, graph: &mut DirGraph) -> io::Resul
     Ok(())
 }
 
-/// Decode a v5, v6 or v7 container. They share a header, a codec and a section
+/// Decode a v5, v6, v7 or v8 container. They share a header, a codec and a section
 /// layout; they differ only in which per-column encodings the column sections
 /// may use, and the column reader dispatches on the section's own type tags.
 /// `format_name` is the version the caller matched, and appears in errors.
@@ -1839,7 +1851,7 @@ fn parse_portable_metadata<'a>(
             "{format_name} file is truncated — metadata incomplete"
         ))
     })?;
-    let metadata = decode_metadata_json(metadata_bytes, format_name)?;
+    let metadata = decode_metadata_json(&buf[..metadata_start], metadata_bytes, format_name)?;
     let digests = metadata.section_digests.clone();
     Ok((metadata, SectionCursor::new(buf, metadata_end, digests)?))
 }
@@ -1850,7 +1862,37 @@ fn parse_portable_metadata<'a>(
 /// [`estimate_load_memory`] so the two cannot disagree about which metadata is
 /// acceptable — an estimate that parsed a block the load then rejects would put
 /// a number on a file that never opens.
-fn decode_metadata_json(metadata_bytes: &[u8], format_name: &str) -> io::Result<FileMetadata> {
+///
+/// `header` is the container's 13 fixed bytes and `metadata_block` the
+/// `metadata_length` bytes after them. A v8 block ends in a CRC32 over the
+/// header and the JSON; it is verified before the JSON is parsed, so a flipped
+/// byte in the metadata or in the length fields is refused as corruption rather
+/// than misread.
+fn decode_metadata_json(
+    header: &[u8],
+    metadata_block: &[u8],
+    format_name: &str,
+) -> io::Result<FileMetadata> {
+    let metadata_bytes = if format_name == "v8" {
+        let split = metadata_block.len().checked_sub(4).ok_or_else(|| {
+            invalid_data(format!(
+                "{format_name} metadata is too short to hold its checksum — the file is corrupt"
+            ))
+        })?;
+        let (json, trailer) = metadata_block.split_at(split);
+        let stored = u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
+        let actual = metadata_checksum(header, json);
+        if stored != actual {
+            return Err(invalid_data(format!(
+                "{format_name} header/metadata checksum mismatch (stored {stored:#010x}, \
+                 computed {actual:#010x}) — the file is corrupt. Restore it from a backup or \
+                 rebuild the graph from its source."
+            )));
+        }
+        json
+    } else {
+        metadata_block
+    };
     let metadata: FileMetadata = serde_json::from_slice(metadata_bytes)
         .map_err(|e| invalid_data(format!("failed to parse {format_name} metadata: {e}")))?;
     if metadata.column_sections.len() > 1_000_000 {
@@ -1859,6 +1901,17 @@ fn decode_metadata_json(metadata_bytes: &[u8], format_name: &str) -> io::Result<
         )));
     }
     Ok(metadata)
+}
+
+/// CRC32 over a v8 container's fixed 13-byte header and its metadata JSON —
+/// the magic, codec tag, core-data version, the metadata length and every
+/// metadata byte. Stored little-endian as the last 4 bytes of the metadata
+/// block.
+pub(crate) fn metadata_checksum(header: &[u8], json: &[u8]) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(header);
+    hasher.update(json);
+    hasher.finalize()
 }
 
 fn load_portable_column_section(
@@ -2041,7 +2094,7 @@ fn load_memory_refusal(
     io::Error::new(io::ErrorKind::OutOfMemory, message)
 }
 
-/// The fields [`load_portable_container`] reads out of a v5/v6/v7 container's
+/// The fields [`load_portable_container`] reads out of a v5-v8 container's
 /// fixed-size header, carried as one value so the loader's signature does not
 /// grow a parameter per header field.
 struct PortableHeader {
@@ -2202,6 +2255,10 @@ use text_index_persistence::{
     decode_edge_text_indexes, decode_text_indexes_after_normalization,
     encode_edge_text_index_section, encode_text_indexes, EDGE_TEXT_INDEX_SECTION,
 };
+
+#[cfg(test)]
+#[path = "file/container_test_support.rs"]
+pub(crate) mod container_test_support;
 
 #[cfg(test)]
 #[path = "file/edge_embedding_persistence_tests.rs"]

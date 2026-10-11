@@ -30,7 +30,7 @@ pub enum FilterCondition {
     All(Vec<FilterCondition>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum Value {
     UniqueId(u32),
     Int64(i64),
@@ -48,29 +48,28 @@ pub enum Value {
     /// SET can store this physical-slot reference in properties; persistence
     /// does not make it stable across slot reuse or node remapping.
     NodeRef(u32),
-    /// Calendar duration: months + days + seconds (Neo4j shape).
+    /// Calendar duration: months + days + seconds + nanoseconds (Neo4j shape).
     /// Calendar units (months, years) and clock units (days, hours,
     /// minutes, seconds) are kept separate so
     /// `duration({months: 1, days: 5}).months` returns 1, not 35.
-    /// Sub-day precision is wired in seconds, but `Value::DateTime` is
-    /// still a `NaiveDate`, so DateTime + Duration discards the seconds
-    /// component.
     ///
-    /// Field widths (months/days as i32) sized to keep Duration's
-    /// payload at 16 bytes (matching Point's 2×f64). months/days are
-    /// bounded around ±2e9 — 178 M years / 5.8 M years respectively
-    /// — far past anything the user can reasonably need.
+    /// `nanos` is the sub-second part, always in `0..1_000_000_000`; the sign
+    /// of the whole clock part lives in `seconds` (Neo4j normalisation:
+    /// `-0.5 s` is `seconds: -1, nanos: 500_000_000`).
     ///
-    /// **Layout note**: Duration was the LAST variant in `.kgl` v3.
-    /// Node/Relationship/Path/List/Map append after it and bump the
-    /// `.kgl` format to v4 — a hard break; v3 files do not load with
-    /// v4 binaries. Discriminants 0..=9 (UniqueId .. NodeRef,
-    /// Duration) stay stable; 10..=14 are the new collection /
-    /// graph-entity variants.
+    /// Field widths (months/days as i32) are bounded around ±2e9 — 178 M
+    /// years / 5.8 M years respectively — far past anything the user can
+    /// reasonably need.
+    ///
+    /// **Wire shape**: serde is hand-written ([`WireRef`]). `nanos == 0`
+    /// writes the original tag-9 three-field form, byte-identical to every
+    /// file written before sub-second durations existed; `nanos != 0` writes
+    /// the appended `DurationFine` tag. Tags 0..=9 never move.
     Duration {
         months: i32,
         days: i32,
         seconds: i64,
+        nanos: i32,
     },
     /// A materialised graph node — the projection result for `RETURN n`.
     /// Boxed because [`NodeValue`] is large (id + labels + props map)
@@ -124,6 +123,175 @@ pub enum Value {
 // 32 B is load-bearing for `Mixed` columns and row buffers; a new temporal
 // payload must fit in 24 B beside the tag.
 const _: () = assert!(std::mem::size_of::<Value>() == 32);
+
+// ---------------------------------------------------------------------------
+// Wire form
+// ---------------------------------------------------------------------------
+//
+// `Value`'s serde tag is the *declaration index* of the mirror enums below, so
+// their order is the file format: tags 0..=15 are frozen, and a new variant
+// appends. The mirrors exist because `Duration` is one in-memory variant with
+// two wire shapes (a struct variant cannot gain a trailing field in postcard):
+// `nanos == 0` keeps the original three-field tag 9 so every older file, WAL
+// frame and golden stays byte-identical, and a sub-second value takes the
+// appended `DurationFine` tag, which an older reader rejects as an unknown
+// variant instead of misreading. Variant and field names equal the derived
+// ones so self-describing encodings (JSON) of `nanos == 0` values are unchanged.
+
+#[derive(Serialize)]
+#[serde(rename = "Value")]
+enum WireRef<'a> {
+    UniqueId(&'a u32),
+    Int64(&'a i64),
+    Float64(&'a f64),
+    String(&'a String),
+    Boolean(&'a bool),
+    DateTime(&'a NaiveDate),
+    Point {
+        lat: &'a f64,
+        lon: &'a f64,
+    },
+    Null,
+    NodeRef(&'a u32),
+    Duration {
+        months: &'a i32,
+        days: &'a i32,
+        seconds: &'a i64,
+    },
+    Node(&'a NodeValue),
+    Relationship(&'a RelValue),
+    Path(&'a PathValue),
+    List(&'a Vec<Value>),
+    Map(&'a PropMap),
+    Timestamp(&'a NaiveDateTime),
+    DurationFine {
+        months: &'a i32,
+        days: &'a i32,
+        seconds: &'a i64,
+        nanos: &'a i32,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename = "Value")]
+enum Wire {
+    UniqueId(u32),
+    Int64(i64),
+    Float64(f64),
+    String(String),
+    Boolean(bool),
+    DateTime(NaiveDate),
+    Point {
+        lat: f64,
+        lon: f64,
+    },
+    Null,
+    NodeRef(u32),
+    Duration {
+        months: i32,
+        days: i32,
+        seconds: i64,
+    },
+    Node(Box<NodeValue>),
+    Relationship(Box<RelValue>),
+    Path(Box<PathValue>),
+    List(Vec<Value>),
+    Map(PropMap),
+    Timestamp(NaiveDateTime),
+    DurationFine {
+        months: i32,
+        days: i32,
+        seconds: i64,
+        nanos: i32,
+    },
+}
+
+impl Serialize for Value {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Value::UniqueId(v) => WireRef::UniqueId(v),
+            Value::Int64(v) => WireRef::Int64(v),
+            Value::Float64(v) => WireRef::Float64(v),
+            Value::String(v) => WireRef::String(v),
+            Value::Boolean(v) => WireRef::Boolean(v),
+            Value::DateTime(v) => WireRef::DateTime(v),
+            Value::Point { lat, lon } => WireRef::Point { lat, lon },
+            Value::Null => WireRef::Null,
+            Value::NodeRef(v) => WireRef::NodeRef(v),
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos: 0,
+            } => WireRef::Duration {
+                months,
+                days,
+                seconds,
+            },
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            } => WireRef::DurationFine {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
+            Value::Node(v) => WireRef::Node(v),
+            Value::Relationship(v) => WireRef::Relationship(v),
+            Value::Path(v) => WireRef::Path(v),
+            Value::List(v) => WireRef::List(v),
+            Value::Map(v) => WireRef::Map(v),
+            Value::Timestamp(v) => WireRef::Timestamp(v),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::UniqueId(v) => Value::UniqueId(v),
+            Wire::Int64(v) => Value::Int64(v),
+            Wire::Float64(v) => Value::Float64(v),
+            Wire::String(v) => Value::String(v),
+            Wire::Boolean(v) => Value::Boolean(v),
+            Wire::DateTime(v) => Value::DateTime(v),
+            Wire::Point { lat, lon } => Value::Point { lat, lon },
+            Wire::Null => Value::Null,
+            Wire::NodeRef(v) => Value::NodeRef(v),
+            Wire::Duration {
+                months,
+                days,
+                seconds,
+            } => Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos: 0,
+            },
+            Wire::DurationFine {
+                months,
+                days,
+                seconds,
+                nanos,
+            } => Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
+            Wire::Node(v) => Value::Node(v),
+            Wire::Relationship(v) => Value::Relationship(v),
+            Wire::Path(v) => Value::Path(v),
+            Wire::List(v) => Value::List(v),
+            Wire::Map(v) => Value::Map(v),
+            Wire::Timestamp(v) => Value::Timestamp(v),
+        })
+    }
+}
 
 impl Value {
     pub(crate) fn clear_relationship_incarnations(&mut self) {
@@ -340,11 +508,19 @@ pub enum BorrowedValue<'a> {
     /// mixed columns and the overflow property bag, so borrowing the map
     /// lets streaming-disk saves preserve them without cloning first.
     Map(&'a PropMap),
+    /// Mirrors [`Value::Duration`] (all-`Copy` payload), so a duration read
+    /// from the overflow bag survives the streaming paths.
+    Duration {
+        months: i32,
+        days: i32,
+        seconds: i64,
+        nanos: i32,
+    },
 }
 
 impl<'a> BorrowedValue<'a> {
     /// Borrow `value`, or `None` for a kind with no borrowed form (Point,
-    /// graph entities, Duration, NodeRef).
+    /// graph entities, NodeRef).
     pub(crate) fn of(value: &'a Value) -> Option<Self> {
         Some(match value {
             Value::Null => BorrowedValue::Null,
@@ -357,6 +533,17 @@ impl<'a> BorrowedValue<'a> {
             Value::Timestamp(t) => BorrowedValue::Timestamp(*t),
             Value::List(items) => BorrowedValue::List(items),
             Value::Map(entries) => BorrowedValue::Map(entries),
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            } => BorrowedValue::Duration {
+                months: *months,
+                days: *days,
+                seconds: *seconds,
+                nanos: *nanos,
+            },
             _ => return None,
         })
     }
@@ -391,6 +578,17 @@ impl<'a> BorrowedValue<'a> {
             BorrowedValue::Timestamp(t) => Value::Timestamp(t),
             BorrowedValue::List(items) => Value::List(items.to_vec()),
             BorrowedValue::Map(entries) => Value::Map(entries.clone()),
+            BorrowedValue::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            } => Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            },
         }
     }
 }
@@ -447,13 +645,15 @@ impl PartialEq for Value {
                     months: am,
                     days: ad,
                     seconds: as_,
+                    nanos: an,
                 },
                 Value::Duration {
                     months: bm,
                     days: bd,
                     seconds: bs,
+                    nanos: bn,
                 },
-            ) => am == bm && ad == bd && as_ == bs,
+            ) => am == bm && ad == bd && as_ == bs && an == bn,
             // Recursive through this same impl, so a NaN nested in a list, a
             // map or an entity's properties folds identically.
             (Value::List(a), Value::List(b)) => a == b,
@@ -546,13 +746,19 @@ impl Ord for Value {
                     months: am,
                     days: ad,
                     seconds: as_,
+                    nanos: an,
                 },
                 Value::Duration {
                     months: bm,
                     days: bd,
                     seconds: bs,
+                    nanos: bn,
                 },
-            ) => am.cmp(bm).then(ad.cmp(bd)).then(as_.cmp(bs)),
+            ) => am
+                .cmp(bm)
+                .then(ad.cmp(bd))
+                .then(as_.cmp(bs))
+                .then(an.cmp(bn)),
             (Value::List(a), Value::List(b)) => a.cmp(b),
             (Value::Map(a), Value::Map(b)) => a.cmp(b),
             (Value::Node(a), Value::Node(b)) => a.cmp(b),
@@ -599,10 +805,12 @@ impl Hash for Value {
                 months,
                 days,
                 seconds,
+                nanos,
             } => {
                 months.hash(state);
                 days.hash(state);
                 seconds.hash(state);
+                nanos.hash(state);
             }
             Value::Null => 0.hash(state),
             Value::NodeRef(v) => v.hash(state),
@@ -765,7 +973,7 @@ pub enum ColumnData {
     Map(Vec<Option<PropMap>>),
     /// One `(months, days, seconds)` per cell (None = null), materialised as
     /// `Value::Duration`.
-    Duration(Vec<Option<(i32, i32, i64)>>),
+    Duration(Vec<Option<(i32, i32, i64, i32)>>),
 }
 
 #[derive(Debug)]
@@ -788,10 +996,11 @@ impl Column {
             ColumnData::Map(vec) => vec.get(row_idx)?.as_ref().map(|m| Value::Map(m.clone())),
             ColumnData::Duration(vec) => {
                 vec.get(row_idx)?
-                    .map(|(months, days, seconds)| Value::Duration {
+                    .map(|(months, days, seconds, nanos)| Value::Duration {
                         months,
                         days,
                         seconds,
+                        nanos,
                     })
             }
         }
@@ -1179,7 +1388,8 @@ impl DataFrame {
                             months,
                             days,
                             seconds,
-                        } => vec.push(Some((months, days, seconds))),
+                            nanos,
+                        } => vec.push(Some((months, days, seconds, nanos))),
                         // Durations mix with nothing but nulls (anything else
                         // promotes to String), so only Null/NodeRef reach here.
                         _ => vec.push(None),
@@ -1546,7 +1756,17 @@ pub fn raw_string(value: &Value) -> String {
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!("duration(M={}, D={}, S={})", months, days, seconds),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!(
+            "duration(M={}, D={}, S={}, N={})",
+            months, days, seconds, nanos
+        ),
         Value::Null => String::new(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         Value::List(_)
@@ -1589,9 +1809,19 @@ fn format_value_with_timestamp(value: &Value, timestamp_format: &str) -> String 
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!(
             "duration(months={}, days={}, seconds={})",
             months, days, seconds
+        ),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!(
+            "duration(months={}, days={}, seconds={}, nanos={})",
+            months, days, seconds, nanos
         ),
         // Cypher-ish surface syntax for the collection / graph-entity
         // variants. This grammar is not round-trip-parseable; semantic
@@ -2151,6 +2381,7 @@ mod tests {
                 months: 1,
                 days: 2,
                 seconds: 3,
+                nanos: 0,
             },
             Value::List(vec![Value::Int64(1)]),
             Value::Map(PropMap::new()),

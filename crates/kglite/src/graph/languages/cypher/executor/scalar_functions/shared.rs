@@ -34,8 +34,9 @@ pub(super) fn to_string_or_null(value: Value) -> Value {
             months,
             days,
             seconds,
+            nanos,
         } => Value::String(super::temporal_duration::format_duration_iso(
-            months, days, seconds,
+            months, days, seconds, nanos,
         )),
         other => Value::String(format_value_compact(&other)),
     }

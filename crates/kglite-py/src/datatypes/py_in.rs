@@ -281,6 +281,9 @@ fn object_cells<T>(
     Ok(cells)
 }
 
+/// months, days, seconds, nanoseconds of one duration cell.
+type DurationCell = (i32, i32, i64, i32);
+
 /// A duration column's cells: each `timedelta` (or `pd.Timedelta`) as
 /// `(months, days, seconds)`. A cell with a sub-second part, or one that is not
 /// a timedelta, is stored as null and reported under `on_invalid` — a duration
@@ -290,7 +293,7 @@ fn duration_cells(
     null_mask: &[bool],
     col_name: &str,
     on_invalid: OnInvalid,
-) -> PyResult<Vec<Option<(i32, i32, i64)>>> {
+) -> PyResult<Vec<Option<DurationCell>>> {
     let mut cells = Vec::with_capacity(null_mask.len());
     let (mut rejected, mut first) = (0usize, None);
     for (row, &is_null) in null_mask.iter().enumerate() {
@@ -308,7 +311,8 @@ fn duration_cells(
                 months,
                 days,
                 seconds,
-            }) => cells.push(Some((months, days, seconds))),
+                nanos,
+            }) => cells.push(Some((months, days, seconds, nanos))),
             Ok(_) | Err(_) => {
                 rejected += 1;
                 first.get_or_insert_with(|| {

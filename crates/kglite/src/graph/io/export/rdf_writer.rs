@@ -269,14 +269,27 @@ impl<'a> Emitter<'a> {
                 &self.xsd_date_time,
             ),
             Value::Point { lat, lon } => typed(format!("POINT({lon} {lat})"), &self.geo_wkt),
+            // A sub-second part always takes the lossless `kg:duration` form: the
+            // normalised sign split (negative seconds, positive nanos) has no
+            // single-sign `xsd:duration` spelling.
             Value::Duration {
                 months,
                 days,
                 seconds,
+                nanos: 0,
             } => match duration_lexical(*months, *days, *seconds) {
                 Some(text) => typed(text, &self.xsd_duration),
                 None => typed(format!("{months},{days},{seconds}"), &self.kg_duration),
             },
+            Value::Duration {
+                months,
+                days,
+                seconds,
+                nanos,
+            } => typed(
+                format!("{months},{days},{seconds},{nanos}"),
+                &self.kg_duration,
+            ),
             Value::List(_) | Value::Map(_) => typed(to_json(value).to_string(), &self.kg_json),
             other => Literal::new_simple_literal(raw_string(other)),
         })

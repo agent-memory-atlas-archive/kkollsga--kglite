@@ -1707,6 +1707,7 @@ pub fn get_children_properties(
                                 months,
                                 days,
                                 seconds,
+                                nanos: 0,
                             }) => format!(
                                 "duration(months={}, days={}, seconds={})",
                                 months, days, seconds

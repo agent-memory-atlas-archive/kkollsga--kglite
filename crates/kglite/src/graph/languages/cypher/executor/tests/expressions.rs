@@ -656,8 +656,8 @@ fn test_match_map_negative_literal_no_false_positives() {
 }
 
 /// A `duration()` component is a number: fractions of a larger unit spill into
-/// the next smaller one, a total that lands between two seconds is refused,
-/// and a non-number names what it got.
+/// the next smaller one (down to the nanosecond), and a non-number names what
+/// it got.
 #[test]
 fn duration_names_a_fractional_or_non_numeric_component() {
     let graph = DirGraph::new();
@@ -667,9 +667,15 @@ fn duration_names_a_fractional_or_non_numeric_component() {
         CypherExecutor::with_params(&graph, &params, None).execute(&parsed)
     };
     assert_eq!(
-        run("RETURN duration({seconds: 1.5}) AS d").unwrap_err(),
-        "duration(): the components include a fraction of 0.5 seconds; sub-second durations are not supported"
+        run("RETURN duration({seconds: 1.5}) AS d").unwrap().rows[0][0],
+        Value::Duration {
+            months: 0,
+            days: 0,
+            seconds: 1,
+            nanos: 500_000_000
+        }
     );
+    assert!(run("RETURN duration({seconds: 1.0e300}) AS d").is_err());
     assert_eq!(
         run("RETURN duration({hours: 0.25}).seconds AS s")
             .unwrap()

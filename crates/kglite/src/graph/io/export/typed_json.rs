@@ -68,9 +68,10 @@ pub(crate) fn to_json(value: &Value) -> Json {
             months,
             days,
             seconds,
+            nanos,
         } => tagged(
             "$duration",
-            json!({"months": months, "days": days, "seconds": seconds}),
+            duration_fields(*months, *days, *seconds, *nanos),
         ),
         Value::List(items) => Json::Array(items.iter().map(to_json).collect()),
         Value::Map(map) => {
@@ -86,6 +87,16 @@ pub(crate) fn to_json(value: &Value) -> Json {
         }
         other => json!(raw_string(other)),
     }
+}
+
+/// The `$duration` payload; `nanoseconds` is omitted at 0 so whole-second
+/// durations keep their original three-key shape.
+pub(crate) fn duration_fields(months: i32, days: i32, seconds: i64, nanos: i32) -> Json {
+    let mut fields = json!({"months": months, "days": days, "seconds": seconds});
+    if nanos != 0 {
+        fields["nanoseconds"] = json!(nanos);
+    }
+    fields
 }
 
 fn decode_tagged(object: &Map<String, Json>) -> Option<Value> {
@@ -109,6 +120,12 @@ fn decode_tagged(object: &Map<String, Json>) -> Option<Value> {
                 months: i32::try_from(field("months")?).ok()?,
                 days: i32::try_from(field("days")?).ok()?,
                 seconds: field("seconds")?,
+                nanos: match fields.get("nanoseconds") {
+                    None => 0,
+                    Some(n) => i32::try_from(n.as_i64()?)
+                        .ok()
+                        .filter(|n| (0..1_000_000_000).contains(n))?,
+                },
             })
         }
         "$point" => {
@@ -177,6 +194,7 @@ mod tests {
             months: -1,
             days: 2,
             seconds: -3,
+            nanos: 0,
         };
         let point = Value::Point {
             lat: 60.5,

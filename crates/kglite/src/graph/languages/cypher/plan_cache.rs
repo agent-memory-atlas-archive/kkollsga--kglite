@@ -217,7 +217,8 @@ pub fn param_fingerprint(params: &HashMap<String, crate::datatypes::Value>) -> O
                 months,
                 days,
                 seconds,
-            } => (7u8, months, days, seconds).hash(h),
+                nanos,
+            } => (7u8, months, days, seconds, nanos).hash(h),
             V::List(items) => {
                 (8u8, items.len()).hash(h);
                 return items.iter().all(|item| feed(item, h));

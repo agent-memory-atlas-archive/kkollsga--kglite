@@ -31,8 +31,8 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | **`List(Vec<Value>)`** | ordered heterogeneous list | LIST (sized) |
 | **`Map(BTreeMap<String, Value>)`** | string-keyed map (deterministic order) | MAP (sized) |
 
-Persistence uses the explicitly versioned RGF v7/Postcard container. The
-current reader accepts v7, v6 and v5. It rejects v4/bincode and older containers
+Persistence uses the explicitly versioned RGF v8/Postcard container. The
+current reader accepts v8, v7, v6 and v5. It rejects v4/bincode and older containers
 with a clear migration/rebuild error.
 
 ### Timestamps and dates
@@ -279,14 +279,15 @@ returning data.
 
 ## In `.kgl` files
 
-The current `.kgl` format is an RGF v7 binary container:
+The current `.kgl` format is an RGF v8 binary container:
 
 ```
-[0..4]    Magic: b"RGF\x07"
+[0..4]    Magic: b"RGF\x08"
 [4]       codec tag: 2 (Postcard)
 [5..9]    core_data_version: u32 LE (currently 3)
-[9..13]   metadata_length: u32 LE
-[13..N]   JSON metadata (column schemas, section sizes, persisted graph config)
+[9..13]   metadata_length: u32 LE (the JSON plus its 4-byte CRC32 trailer)
+[13..N]   JSON metadata (column schemas, section sizes, persisted graph config),
+          then a CRC32 over bytes [0..13] and the JSON
 [section] topology.zst — graph structure without node properties
 [section] columns_<Type>.zst — packed property columns per type
 [section] embeddings.zst (optional)
@@ -299,12 +300,15 @@ Byte ranges are half-open; `N = 13 + metadata_length`.
 `Value` serialises via `serde` with a discriminant tagged by variant position. The
 order in `crates/kglite/src/datatypes/values.rs` is intentionally stable for the
 first 10 variants (UniqueId=0 .. Duration=9; Null=7, NodeRef=8), so future enum
-changes append at the end (Timestamp is discriminant 15).
+changes append at the end (Timestamp is discriminant 15). A duration with a
+sub-second part is the one value with two wire shapes: whole-second durations keep
+discriminant 9 and their original bytes, and a duration with nanoseconds is written
+under the appended discriminant 16.
 
 Compatibility is explicit:
 
 - The container and codec tags make compatibility explicit. The current reader
-  selects v7, v6 or v5/Postcard by header and refuses v4/bincode or older
+  selects v8, v7, v6 or v5/Postcard by header and refuses v4/bincode or older
   containers rather than guessing.
 - Kglite 0.13.4 is the conversion bridge for pre-0.14 artifacts.
 

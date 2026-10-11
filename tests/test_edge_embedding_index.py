@@ -409,7 +409,7 @@ def _index_status(graph: KnowledgeGraph) -> list[dict]:
 
 def _kgl_metadata(blob: bytes) -> dict:
     size = int.from_bytes(blob[9:13], "little")
-    return json.loads(blob[13 : 13 + size])
+    return json.loads(blob[13 : 13 + size - 4])  # v8: minus the CRC32 trailer
 
 
 @pytest.mark.parametrize("storage", ["memory", "mapped"])

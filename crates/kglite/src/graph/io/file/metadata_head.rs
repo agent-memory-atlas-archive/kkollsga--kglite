@@ -46,7 +46,7 @@ pub(crate) fn read_metadata_head(buf: &[u8], origin: &str) -> io::Result<FileMet
                 "{format_name} file is truncated — metadata incomplete"
             ))
         })?;
-    decode_metadata_json(metadata_bytes, format_name)
+    decode_metadata_json(&buf[..PORTABLE_HEADER_BYTES], metadata_bytes, format_name)
 }
 
 /// [`read_metadata_head`] against a file, reading only the header and the

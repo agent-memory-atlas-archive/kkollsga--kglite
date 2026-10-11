@@ -88,13 +88,19 @@ fn decode_point(payload: &serde_json::Value) -> Option<Value> {
 
 pub(super) fn decode_duration(payload: &serde_json::Value) -> Option<Value> {
     let fields = payload.as_object()?;
-    let (mut months, mut days, mut seconds) = (0i32, 0i32, 0i64);
+    let (mut months, mut days, mut seconds, mut nanos) = (0i32, 0i32, 0i64, 0i32);
     for (name, value) in fields {
         let value = value.as_i64()?;
         match name.as_str() {
             "months" => months = i32::try_from(value).ok()?,
             "days" => days = i32::try_from(value).ok()?,
             "seconds" => seconds = value,
+            // Sub-second part, always non-negative (the sign lives in seconds).
+            "nanoseconds" => {
+                nanos = i32::try_from(value)
+                    .ok()
+                    .filter(|n| (0..1_000_000_000).contains(n))?
+            }
             _ => return None,
         }
     }
@@ -102,6 +108,7 @@ pub(super) fn decode_duration(payload: &serde_json::Value) -> Option<Value> {
         months,
         days,
         seconds,
+        nanos,
     })
 }
 

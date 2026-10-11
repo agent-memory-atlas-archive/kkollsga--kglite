@@ -175,6 +175,7 @@ fn exact_typed_identity_title_properties_and_null_roundtrip_on_memory_and_mapped
             months: 1,
             days: 2,
             seconds: 3,
+            nanos: 0,
         },
         Value::Int64(7),
         Value::String("seven".into()),

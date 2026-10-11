@@ -50,7 +50,7 @@ def _builder():
 def _metadata_text(path: Path) -> str:
     raw = path.read_bytes()
     (length,) = struct.unpack_from("<I", raw, 9)
-    return raw[13 : 13 + length].decode()
+    return raw[13 : 13 + length - 4].decode()  # v8: minus the CRC32 trailer
 
 
 def _raw_key(metadata: str, name: str) -> str | None:

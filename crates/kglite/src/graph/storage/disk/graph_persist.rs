@@ -80,8 +80,12 @@ struct DiskGraphMeta {
 }
 
 /// The directory layout this build writes and the newest it reads. 2 = the
-/// `columns_meta` envelope and `id_indices.bin` version 3.
-pub(crate) const CURRENT_DISK_FORMAT: u8 = 2;
+/// `columns_meta` envelope and `id_indices.bin` version 3. 3 = the overflow bag
+/// may hold a `Duration` (tag 15) and, later, the other temporal kinds
+/// (tags 12-14): overflow tags are length-prefixed, so a format-2 reader would
+/// skip a tag it does not know and silently drop the value — only the version
+/// number refuses it. Format 2 directories still load.
+pub(crate) const CURRENT_DISK_FORMAT: u8 = 3;
 
 fn default_has_tombstones() -> bool {
     true
@@ -1721,6 +1725,15 @@ mod disk_format_tests {
         validate_disk_format(&meta).unwrap();
     }
 
+    /// Format 2 is what 0.19.1 through 0.19.7 wrote; format 3 only widened the
+    /// overflow-bag tag set, so a format-2 directory loads unchanged.
+    #[test]
+    fn a_format_2_directory_is_still_readable() {
+        let meta = meta_with(r#","disk_format":2"#);
+        validate_disk_format(&meta).unwrap();
+        assert_eq!(CURRENT_DISK_FORMAT, 3);
+    }
+
     #[test]
     fn the_current_format_is_readable() {
         let meta = meta_with(&format!(r#","disk_format":{CURRENT_DISK_FORMAT}"#));
@@ -1729,7 +1742,7 @@ mod disk_format_tests {
 
     #[test]
     fn a_newer_format_is_refused_by_name_before_anything_else_is_checked() {
-        // A format-3 directory may also change the codec or the edge-property
+        // A newer directory may also change the codec or the edge-property
         // framing; the format check must be the one that speaks.
         let mut meta = meta_with(&format!(r#","disk_format":{}"#, CURRENT_DISK_FORMAT + 1));
         meta.serde_codec_version = 9;
@@ -1737,8 +1750,8 @@ mod disk_format_tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         let message = error.to_string();
         assert!(
-            message.contains("on-disk format 3")
-                && message.contains("up to format 2")
+            message.contains(&format!("on-disk format {}", CURRENT_DISK_FORMAT + 1))
+                && message.contains(&format!("up to format {CURRENT_DISK_FORMAT}"))
                 && message.contains("Please upgrade kglite"),
             "{message}"
         );

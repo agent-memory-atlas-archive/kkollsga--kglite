@@ -501,16 +501,20 @@ fn value_to_json(v: &Value, mode: Encoding) -> serde_json::Value {
             months,
             days,
             seconds,
+            nanos,
         } => {
-            let fields = J::Object(
-                [
-                    ("months".to_string(), J::Number((*months).into())),
-                    ("days".to_string(), J::Number((*days).into())),
-                    ("seconds".to_string(), J::Number((*seconds).into())),
-                ]
-                .into_iter()
-                .collect(),
-            );
+            let mut object: serde_json::Map<String, J> = [
+                ("months".to_string(), J::Number((*months).into())),
+                ("days".to_string(), J::Number((*days).into())),
+                ("seconds".to_string(), J::Number((*seconds).into())),
+            ]
+            .into_iter()
+            .collect();
+            // Omitted at 0 so whole-second durations render as they always did.
+            if *nanos != 0 {
+                object.insert("nanoseconds".to_string(), J::Number((*nanos).into()));
+            }
+            let fields = J::Object(object);
             match mode {
                 Encoding::Natural => fields,
                 Encoding::Tagged => tag("$duration", fields),
@@ -554,7 +558,14 @@ pub fn kglite_value_to_csv_text(v: &Value) -> String {
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!("duration(M={months}, D={days}, S={seconds})"),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!("duration(M={months}, D={days}, S={seconds}, N={nanos})"),
         Value::List(items) => format!(
             "[{}]",
             items
@@ -910,6 +921,7 @@ mod tests {
                 months: 1,
                 days: 2,
                 seconds: 30,
+                nanos: 0,
             }),
             serde_json::json!({"months": 1, "days": 2, "seconds": 30})
         );
@@ -949,6 +961,7 @@ mod tests {
                 months: 1,
                 days: 1,
                 seconds: 1,
+                nanos: 0,
             },
             Value::List(vec![Value::Int64(1)]),
             Value::Map(crate::datatypes::PropMap::new()),

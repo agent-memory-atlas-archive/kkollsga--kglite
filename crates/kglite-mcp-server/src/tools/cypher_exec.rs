@@ -870,8 +870,20 @@ pub(crate) fn push_value_repr(out: &mut String, val: &Value) {
             months,
             days,
             seconds,
+            nanos: 0,
         } => {
             let _ = write!(out, "duration(M={months}, D={days}, S={seconds})");
+        }
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => {
+            let _ = write!(
+                out,
+                "duration(M={months}, D={days}, S={seconds}, N={nanos})"
+            );
         }
         Value::NodeRef(idx) => {
             let _ = write!(out, "node[{idx}]");

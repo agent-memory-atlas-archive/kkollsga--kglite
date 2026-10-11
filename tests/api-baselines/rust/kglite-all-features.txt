@@ -2543,7 +2543,7 @@ pub mod kglite::api::mutation
 pub enum kglite::api::mutation::ColumnData
 pub kglite::api::mutation::ColumnData::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
 pub kglite::api::mutation::ColumnData::DateTime(alloc::vec::Vec<core::option::Option<chrono::naive::date::NaiveDate>>)
-pub kglite::api::mutation::ColumnData::Duration(alloc::vec::Vec<core::option::Option<(i32, i32, i64)>>)
+pub kglite::api::mutation::ColumnData::Duration(alloc::vec::Vec<core::option::Option<(i32, i32, i64, i32)>>)
 pub kglite::api::mutation::ColumnData::Float64(alloc::vec::Vec<core::option::Option<f64>>)
 pub kglite::api::mutation::ColumnData::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub kglite::api::mutation::ColumnData::List(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<kglite::datatypes::values::Value>>>)
@@ -4501,6 +4501,7 @@ pub kglite::api::Value::DateTime(chrono::naive::date::NaiveDate)
 pub kglite::api::Value::Duration
 pub kglite::api::Value::Duration::days: i32
 pub kglite::api::Value::Duration::months: i32
+pub kglite::api::Value::Duration::nanos: i32
 pub kglite::api::Value::Duration::seconds: i64
 pub kglite::api::Value::Float64(f64)
 pub kglite::api::Value::Int64(i64)
@@ -4536,9 +4537,9 @@ pub fn kglite::datatypes::values::Value::fmt(&self, &mut core::fmt::Formatter<'_
 impl core::hash::Hash for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::hash<H: core::hash::Hasher>(&self, &mut H)
 impl serde_core::ser::Serialize for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn kglite::datatypes::values::Value::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn kglite::datatypes::values::Value::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct kglite::api::CardinalityDecl
 pub kglite::api::CardinalityDecl::max: core::option::Option<u64>
 pub kglite::api::CardinalityDecl::min: core::option::Option<u64>
@@ -5979,6 +5980,11 @@ pub mod kglite::datatypes::values
 pub enum kglite::datatypes::values::BorrowedValue<'a>
 pub kglite::datatypes::values::BorrowedValue::Boolean(bool)
 pub kglite::datatypes::values::BorrowedValue::DateTime(chrono::naive::date::NaiveDate)
+pub kglite::datatypes::values::BorrowedValue::Duration
+pub kglite::datatypes::values::BorrowedValue::Duration::days: i32
+pub kglite::datatypes::values::BorrowedValue::Duration::months: i32
+pub kglite::datatypes::values::BorrowedValue::Duration::nanos: i32
+pub kglite::datatypes::values::BorrowedValue::Duration::seconds: i64
 pub kglite::datatypes::values::BorrowedValue::Float64(f64)
 pub kglite::datatypes::values::BorrowedValue::Int64(i64)
 pub kglite::datatypes::values::BorrowedValue::List(&'a [kglite::datatypes::values::Value])
@@ -5997,7 +6003,7 @@ impl<'a> core::marker::Copy for kglite::datatypes::values::BorrowedValue<'a>
 pub enum kglite::datatypes::values::ColumnData
 pub kglite::datatypes::values::ColumnData::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
 pub kglite::datatypes::values::ColumnData::DateTime(alloc::vec::Vec<core::option::Option<chrono::naive::date::NaiveDate>>)
-pub kglite::datatypes::values::ColumnData::Duration(alloc::vec::Vec<core::option::Option<(i32, i32, i64)>>)
+pub kglite::datatypes::values::ColumnData::Duration(alloc::vec::Vec<core::option::Option<(i32, i32, i64, i32)>>)
 pub kglite::datatypes::values::ColumnData::Float64(alloc::vec::Vec<core::option::Option<f64>>)
 pub kglite::datatypes::values::ColumnData::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub kglite::datatypes::values::ColumnData::List(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<kglite::datatypes::values::Value>>>)
@@ -6054,6 +6060,7 @@ pub kglite::datatypes::values::Value::DateTime(chrono::naive::date::NaiveDate)
 pub kglite::datatypes::values::Value::Duration
 pub kglite::datatypes::values::Value::Duration::days: i32
 pub kglite::datatypes::values::Value::Duration::months: i32
+pub kglite::datatypes::values::Value::Duration::nanos: i32
 pub kglite::datatypes::values::Value::Duration::seconds: i64
 pub kglite::datatypes::values::Value::Float64(f64)
 pub kglite::datatypes::values::Value::Int64(i64)
@@ -6089,9 +6096,9 @@ pub fn kglite::datatypes::values::Value::fmt(&self, &mut core::fmt::Formatter<'_
 impl core::hash::Hash for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::hash<H: core::hash::Hasher>(&self, &mut H)
 impl serde_core::ser::Serialize for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn kglite::datatypes::values::Value::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn kglite::datatypes::values::Value::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct kglite::datatypes::values::Column
 impl core::fmt::Debug for kglite::datatypes::values::Column
 pub fn kglite::datatypes::values::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -6190,6 +6197,7 @@ pub kglite::datatypes::Value::DateTime(chrono::naive::date::NaiveDate)
 pub kglite::datatypes::Value::Duration
 pub kglite::datatypes::Value::Duration::days: i32
 pub kglite::datatypes::Value::Duration::months: i32
+pub kglite::datatypes::Value::Duration::nanos: i32
 pub kglite::datatypes::Value::Duration::seconds: i64
 pub kglite::datatypes::Value::Float64(f64)
 pub kglite::datatypes::Value::Int64(i64)
@@ -6225,9 +6233,9 @@ pub fn kglite::datatypes::values::Value::fmt(&self, &mut core::fmt::Formatter<'_
 impl core::hash::Hash for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::hash<H: core::hash::Hasher>(&self, &mut H)
 impl serde_core::ser::Serialize for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn kglite::datatypes::values::Value::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::Value
-pub fn kglite::datatypes::values::Value::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn kglite::datatypes::values::Value::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct kglite::datatypes::DataFrame
 impl kglite::datatypes::values::DataFrame
 pub fn kglite::datatypes::values::DataFrame::add_column(&mut self, alloc::string::String, kglite::datatypes::values::ColumnType, kglite::datatypes::values::ColumnData) -> core::result::Result<(), alloc::string::String>

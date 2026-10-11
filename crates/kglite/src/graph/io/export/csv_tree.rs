@@ -136,8 +136,9 @@ fn encode_cell(value: &Value, kind: ColumnKind) -> Option<String> {
                 months,
                 days,
                 seconds,
+                nanos,
             },
-        ) => json!({"months": months, "days": days, "seconds": seconds}).to_string(),
+        ) => super::typed_json::duration_fields(*months, *days, *seconds, *nanos).to_string(),
         (ColumnKind::Point, Value::Point { lat, lon }) => format!("point({lat}, {lon})"),
         (ColumnKind::List | ColumnKind::Map, v @ (Value::List(_) | Value::Map(_))) => {
             to_json(v).to_string()

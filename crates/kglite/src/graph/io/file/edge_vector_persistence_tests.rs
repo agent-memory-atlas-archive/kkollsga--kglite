@@ -8,6 +8,7 @@ use crate::graph::edge_embeddings::vector_index::{
     EdgeVectorIndexOptions, EdgeVectorQueryOptions,
 };
 use crate::graph::edge_embeddings::{edge_store_key, upsert_edge_embeddings};
+use crate::graph::io::file::container_test_support::*;
 use crate::graph::schema::{DirGraph, EdgeData, NodeData};
 use crate::graph::storage::GraphWrite;
 use petgraph::graph::EdgeIndex;
@@ -129,8 +130,7 @@ fn no_relationship_index_means_no_section_and_no_metadata_key() {
     // section or its key, or node-only files would change bytes.
     let (unindexed, _) = graph_with_store(&["CLAIMS"], 4);
     for bytes in [encode(DirGraph::new()), encode(unindexed)] {
-        let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes[13..13 + len]).unwrap();
+        let metadata: serde_json::Value = serde_json::from_slice(metadata_json(&bytes)).unwrap();
         assert!(metadata.get("edge_vector_index_compressed_size").is_none());
         assert!(metadata["section_digests"]
             .get(EDGE_VECTOR_INDEX_SECTION)

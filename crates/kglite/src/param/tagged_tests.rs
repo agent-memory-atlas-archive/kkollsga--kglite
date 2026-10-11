@@ -48,7 +48,8 @@ fn duration_tag_takes_the_result_encoding_object() {
         Value::Duration {
             months: 1,
             days: 2,
-            seconds: 3
+            seconds: 3,
+            nanos: 0,
         }
     );
     assert_eq!(
@@ -56,7 +57,8 @@ fn duration_tag_takes_the_result_encoding_object() {
         Value::Duration {
             months: 0,
             days: 7,
-            seconds: 0
+            seconds: 0,
+            nanos: 0,
         }
     );
 }
@@ -78,6 +80,7 @@ fn result_encoding_round_trips_through_the_tag() {
                 months: -2,
                 days: 40,
                 seconds: -7,
+                nanos: 0,
             },
         ),
     ];
@@ -224,6 +227,7 @@ fn typed_values() -> Vec<Value> {
             months: -1,
             days: 2,
             seconds: -3,
+            nanos: 0,
         },
         Value::Point {
             lat: 60.5,

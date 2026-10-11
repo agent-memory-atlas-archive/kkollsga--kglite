@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 
 V7_HEADER = b"RGF\x07\x02"
+V8_HEADER = b"RGF\x08\x02"
 
 
 def expected_answers(fixtures: Path, name: str) -> dict:

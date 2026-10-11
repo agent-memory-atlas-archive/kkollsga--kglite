@@ -34,7 +34,7 @@ import pandas as pd
 import pytest
 
 import kglite
-from tests.fixtures.compat_helpers import V7_HEADER, copy_fixture, expected_answers, generator_queries
+from tests.fixtures.compat_helpers import V8_HEADER, copy_fixture, expected_answers, generator_queries
 
 FIXTURES = Path(__file__).parent / "fixtures" / "kgl_v5"
 GENERATOR = FIXTURES.parent / "build_v5_compat_fixtures.py"
@@ -98,7 +98,7 @@ def test_v6_round_trips_every_value_shape(tmp_path):
 
     path = tmp_path / "values.kgl"
     graph.save(str(path))
-    assert path.read_bytes()[:5] == V7_HEADER
+    assert path.read_bytes()[:5] == V8_HEADER
     assert kglite.load(str(path)).cypher(VALUE_QUERY).to_list() == before
 
 
@@ -191,7 +191,7 @@ def test_v5_resaves_as_v7(tmp_path):
     graph = kglite.load(str(path))
     out = tmp_path / "migrated.kgl"
     graph.save(str(out))
-    assert out.read_bytes()[:5] == V7_HEADER
+    assert out.read_bytes()[:5] == V8_HEADER
     _assert_matches(
         kglite.load(str(out)),
         generator_queries(GENERATOR, "QUERIES"),
@@ -203,9 +203,8 @@ def test_v5_resaves_as_v7(tmp_path):
 def test_v5_durable_directory_recovers(tmp_path):
     """A 0.15.14 durable session that crashed mid-log opens and replays here.
 
-    The WAL format did not change with the container, so this is the pin that
-    says so: checkpoint written by 0.15.14, five frames logged after it, and no
-    clean close.
+    A log written by 0.15.14 still replays under the current schema (WAL 12 reads v2-v11):
+    checkpoint written by 0.15.14, five frames logged after it, and no clean close.
     """
     directory = copy_fixture(FIXTURES / "durable", tmp_path)
     graph = kglite.open(str(directory / "app.kgl"), durable=True)
@@ -225,17 +224,18 @@ def test_v5_durable_directory_recovers(tmp_path):
 
 def test_a_newer_container_is_refused_by_name_and_number(tmp_path):
     """What an older binary sees. Every reader since 0.15.14 rejects a container
-    above the one it knows with this sentence (0.15.14 above 5, 0.19.0 above 6);
+    above the one it knows with this sentence (0.15.14 above 5, 0.19.0 above 6,
+    0.19.7 above 7: verified against the published 0.19.7 wheel loading a v8 file);
     it is reproduced here because we cannot change what those binaries do, only
     make sure the sentence they print is the one users are told to expect.
-    Asserted through this build's own reader on a v8 buffer, which takes the
+    Asserted through this build's own reader on a v9 buffer, which takes the
     identical branch.
     """
     forged = tmp_path / "future.kgl"
-    forged.write_bytes(b"RGF\x08\x02" + b"\x00" * 40)
+    forged.write_bytes(b"RGF\x09\x02" + b"\x00" * 40)
     with pytest.raises(kglite.FileFormatError) as excinfo:
         kglite.load(str(forged))
     message = str(excinfo.value)
-    assert "container version 8" in message
-    assert "only supports up to version 7" in message
+    assert "container version 9" in message
+    assert "only supports up to version 8" in message
     assert "Please upgrade kglite" in message

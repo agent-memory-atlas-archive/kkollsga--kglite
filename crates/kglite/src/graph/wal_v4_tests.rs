@@ -376,6 +376,7 @@ fn v4_group_snapshot_keeps_exact_nested_values_and_equal_map_count() {
             months: 1,
             days: 2,
             seconds: 3,
+            nanos: 0,
         },
         Value::Null,
     ]);

@@ -221,6 +221,7 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds: _,
+                nanos: _,
             },
         )
         | (
@@ -228,6 +229,7 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds: _,
+                nanos: _,
             },
             Value::DateTime(date),
         ) => Ok(shift_date(*date, i64::from(*months), i64::from(*days))
@@ -238,6 +240,7 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds,
+                nanos,
             },
         )
         | (
@@ -245,34 +248,44 @@ pub fn arithmetic_add_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds,
+                nanos,
             },
             Value::Timestamp(timestamp),
-        ) => Ok(
-            shift_timestamp(*timestamp, i64::from(*months), i64::from(*days), *seconds)
-                .map_or(Value::Null, Value::Timestamp),
-        ),
+        ) => Ok(shift_timestamp(
+            *timestamp,
+            i64::from(*months),
+            i64::from(*days),
+            *seconds,
+            *nanos,
+        )
+        .map_or(Value::Null, Value::Timestamp)),
         (
             Value::Duration {
                 months: am,
                 days: ad,
                 seconds: as_,
+                nanos: an,
             },
             Value::Duration {
                 months: bm,
                 days: bd,
                 seconds: bs,
+                nanos: bn,
             },
-        ) => Ok(Value::Duration {
-            months: am
-                .checked_add(*bm)
-                .ok_or("Duration month component overflow during addition")?,
-            days: ad
-                .checked_add(*bd)
-                .ok_or("Duration day component overflow during addition")?,
-            seconds: as_
-                .checked_add(*bs)
-                .ok_or("Duration second component overflow during addition")?,
-        }),
+        ) => {
+            let (seconds, nanos) = add_clock(*as_, *an, *bs, *bn)
+                .ok_or("Duration second component overflow during addition")?;
+            Ok(Value::Duration {
+                months: am
+                    .checked_add(*bm)
+                    .ok_or("Duration month component overflow during addition")?,
+                days: ad
+                    .checked_add(*bd)
+                    .ok_or("Duration day component overflow during addition")?,
+                seconds,
+                nanos,
+            })
+        }
         _ => arithmetic_add_fallback(a, b),
     }
 }
@@ -285,12 +298,21 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
             days: i32::try_from((*left - *right).num_days())
                 .map_err(|_| "Date difference exceeds the supported Duration day range")?,
             seconds: 0,
+            nanos: 0,
         }),
-        (Value::Timestamp(left), Value::Timestamp(right)) => Ok(Value::Duration {
-            months: 0,
-            days: 0,
-            seconds: (*left - *right).num_seconds(),
-        }),
+        (Value::Timestamp(left), Value::Timestamp(right)) => {
+            let delta = *left - *right;
+            let (seconds, nanos) = split_clock(
+                i128::from(delta.num_seconds()) * NANOS + i128::from(delta.subsec_nanos()),
+            )
+            .ok_or("Timestamp difference exceeds the supported Duration range")?;
+            Ok(Value::Duration {
+                months: 0,
+                days: 0,
+                seconds,
+                nanos,
+            })
+        }
         (Value::DateTime(date), Value::Int64(days)) => Ok(checked_days(*days)
             .and_then(|delta| date.checked_sub_signed(delta))
             .map_or(Value::Null, Value::DateTime)),
@@ -303,6 +325,7 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds: _,
+                nanos: _,
             },
         ) => Ok(shift_date(*date, -i64::from(*months), -i64::from(*days))
             .map_or(Value::Null, Value::DateTime)),
@@ -312,11 +335,17 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months,
                 days,
                 seconds,
+                nanos,
             },
-        ) => Ok(seconds
-            .checked_neg()
-            .and_then(|negated| {
-                shift_timestamp(*timestamp, -i64::from(*months), -i64::from(*days), negated)
+        ) => Ok(negate_clock(*seconds, *nanos)
+            .and_then(|(negated, negated_nanos)| {
+                shift_timestamp(
+                    *timestamp,
+                    -i64::from(*months),
+                    -i64::from(*days),
+                    negated,
+                    negated_nanos,
+                )
             })
             .map_or(Value::Null, Value::Timestamp)),
         (
@@ -324,23 +353,29 @@ pub fn arithmetic_sub_checked(a: &Value, b: &Value) -> Result<Value, String> {
                 months: am,
                 days: ad,
                 seconds: as_,
+                nanos: an,
             },
             Value::Duration {
                 months: bm,
                 days: bd,
                 seconds: bs,
+                nanos: bn,
             },
-        ) => Ok(Value::Duration {
-            months: am
-                .checked_sub(*bm)
-                .ok_or("Duration month component overflow during subtraction")?,
-            days: ad
-                .checked_sub(*bd)
-                .ok_or("Duration day component overflow during subtraction")?,
-            seconds: as_
-                .checked_sub(*bs)
-                .ok_or("Duration second component overflow during subtraction")?,
-        }),
+        ) => {
+            let (seconds, nanos) = negate_clock(*bs, *bn)
+                .and_then(|(neg_s, neg_n)| add_clock(*as_, *an, neg_s, neg_n))
+                .ok_or("Duration second component overflow during subtraction")?;
+            Ok(Value::Duration {
+                months: am
+                    .checked_sub(*bm)
+                    .ok_or("Duration month component overflow during subtraction")?,
+                days: ad
+                    .checked_sub(*bd)
+                    .ok_or("Duration day component overflow during subtraction")?,
+                seconds,
+                nanos,
+            })
+        }
         _ => arithmetic_sub_fallback(a, b),
     }
 }
@@ -357,10 +392,16 @@ pub fn arithmetic_mul_checked(a: &Value, b: &Value) -> Result<Value, String> {
         months,
         days,
         seconds,
+        nanos,
     } = duration
     else {
         unreachable!()
     };
+    // The clock part scales as one quantity so nanosecond carries propagate.
+    let (seconds, nanos) = clock_total(*seconds, *nanos)
+        .checked_mul(i128::from(factor))
+        .and_then(split_clock)
+        .ok_or("Duration second component overflow during multiplication")?;
     Ok(Value::Duration {
         months: i64::from(*months)
             .checked_mul(factor)
@@ -370,10 +411,31 @@ pub fn arithmetic_mul_checked(a: &Value, b: &Value) -> Result<Value, String> {
             .checked_mul(factor)
             .and_then(|value| i32::try_from(value).ok())
             .ok_or("Duration day component overflow during multiplication")?,
-        seconds: seconds
-            .checked_mul(factor)
-            .ok_or("Duration second component overflow during multiplication")?,
+        seconds,
+        nanos,
     })
+}
+
+const NANOS: i128 = 1_000_000_000;
+
+/// A Duration's clock part as signed nanoseconds. `nanos` is the non-negative
+/// sub-second remainder, so `-0.5 s` is `(-1, 500_000_000)`.
+pub(crate) fn clock_total(seconds: i64, nanos: i32) -> i128 {
+    i128::from(seconds) * NANOS + i128::from(nanos)
+}
+
+/// Inverse of [`clock_total`]: `None` when the seconds leave `i64`.
+pub(crate) fn split_clock(total: i128) -> Option<(i64, i32)> {
+    let seconds = i64::try_from(total.div_euclid(NANOS)).ok()?;
+    Some((seconds, total.rem_euclid(NANOS) as i32))
+}
+
+fn add_clock(a_s: i64, a_n: i32, b_s: i64, b_n: i32) -> Option<(i64, i32)> {
+    split_clock(clock_total(a_s, a_n) + clock_total(b_s, b_n))
+}
+
+fn negate_clock(seconds: i64, nanos: i32) -> Option<(i64, i32)> {
+    split_clock(-clock_total(seconds, nanos))
 }
 
 #[inline]
@@ -404,13 +466,14 @@ fn shift_date(date: chrono::NaiveDate, months: i64, days: i64) -> Option<chrono:
     checked_shift_months(date, months)?.checked_add_signed(checked_days(days)?)
 }
 
-/// `datetime + duration`: calendar months, then days, then seconds, the time
-/// of day carried through the month shift.
+/// `datetime + duration`: calendar months, then days, then seconds and
+/// nanoseconds, the time of day carried through the month shift.
 fn shift_timestamp(
     timestamp: chrono::NaiveDateTime,
     months: i64,
     days: i64,
     seconds: i64,
+    nanos: i32,
 ) -> Option<chrono::NaiveDateTime> {
     let magnitude = u32::try_from(months.unsigned_abs()).ok()?;
     let by_months = if months >= 0 {
@@ -420,7 +483,7 @@ fn shift_timestamp(
     }?;
     by_months
         .checked_add_signed(checked_days(days)?)?
-        .checked_add_signed(chrono::TimeDelta::try_seconds(seconds)?)
+        .checked_add_signed(chrono::TimeDelta::new(seconds, u32::try_from(nanos).ok()?)?)
 }
 
 // Test-only value-returning adapters keep the long-standing numeric helper
@@ -523,7 +586,17 @@ pub fn format_value_compact(val: &Value) -> String {
             months,
             days,
             seconds,
+            nanos: 0,
         } => format!("duration(M={}, D={}, S={})", months, days, seconds),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => format!(
+            "duration(M={}, D={}, S={}, N={})",
+            months, days, seconds, nanos
+        ),
         Value::Null => "null".to_string(),
         Value::NodeRef(idx) => format!("node#{}", idx),
         // Keep the existing collection grammar while retaining timestamp fractions.
@@ -570,7 +643,19 @@ pub fn format_value_compact_into(buf: &mut String, val: &Value) {
             months,
             days,
             seconds,
+            nanos: 0,
         } => write!(buf, "duration(M={}, D={}, S={})", months, days, seconds).unwrap(),
+        Value::Duration {
+            months,
+            days,
+            seconds,
+            nanos,
+        } => write!(
+            buf,
+            "duration(M={}, D={}, S={}, N={})",
+            months, days, seconds, nanos
+        )
+        .unwrap(),
         Value::Null => buf.push_str("null"),
         Value::NodeRef(idx) => write!(buf, "node#{}", idx).unwrap(),
         // Same collection grammar as the allocating compact formatter.
@@ -724,17 +809,20 @@ mod tests {
             months: i32::MAX,
             days: i32::MAX,
             seconds: i64::MAX,
+            nanos: 0,
         };
         let one = Value::Duration {
             months: 1,
             days: 1,
             seconds: 1,
+            nanos: 0,
         };
         assert!(arithmetic_add_checked(&max, &one).is_err());
         let min = Value::Duration {
             months: i32::MIN,
             days: i32::MIN,
             seconds: i64::MIN,
+            nanos: 0,
         };
         assert!(arithmetic_sub_checked(&min, &one).is_err());
     }

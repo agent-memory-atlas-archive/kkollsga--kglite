@@ -268,10 +268,12 @@ impl ToJs {
             Value::UniqueId(n) | Value::NodeRef(n) => self.number(f64::from(*n)),
             Value::DateTime(d) => self.class(LocalDate::from_naive(*d)),
             Value::Timestamp(t) => self.class(LocalDateTime::from_naive(*t)),
+            // T1b: the JS Duration class has no nanoseconds yet.
             Value::Duration {
                 months,
                 days,
                 seconds,
+                ..
             } => self.class(Duration {
                 months: *months,
                 days: *days,
@@ -637,6 +639,8 @@ impl FromJs {
                 months: d.months,
                 days: d.days,
                 seconds: d.seconds,
+                // T1b: the JS Duration class has no nanoseconds yet.
+                nanos: 0,
             });
         }
         if let Some(p) = self.unwrap_class::<Point>(v) {

@@ -1497,6 +1497,7 @@ impl KnowledgeGraph {
                             months,
                             days,
                             seconds,
+                            nanos: 0,
                         }) => format!("duration(M={},D={},S={})", months, days, seconds),
                         Some(Value::NodeRef(idx)) => format!("node#{}", idx),
                         Some(Value::Null) | None => "null".to_string(),

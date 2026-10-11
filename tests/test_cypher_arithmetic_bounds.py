@@ -177,14 +177,15 @@ def test_duration_addition_and_multiplication_are_checked(
         graph.cypher("RETURN duration({months: -2147483648}) - duration({months: 1}) AS d")
 
 
-def test_duration_rejects_fractional_or_non_finite_components(
+def test_duration_rejects_non_finite_components_and_keeps_fractions(
     graph: kglite.KnowledgeGraph,
 ) -> None:
-    for value in (1.5, float("inf"), float("nan")):
-        with pytest.raises(kglite.CypherExecutionError, match="whole number of seconds|sub-second durations") as err:
+    for value in (float("inf"), float("nan")):
+        with pytest.raises(kglite.CypherExecutionError, match="whole number of seconds"):
             graph.cypher("RETURN duration({seconds: $value}) AS d", params={"value": value})
-        # The sub-second explanation belongs to a finite fraction only.
-        assert ("sub-second" in str(err.value)) == (value == 1.5), str(err.value)
+    # A finite fraction is a sub-second duration, kept to the nanosecond.
+    rows = graph.cypher("RETURN toString(duration({seconds: $value})) AS d", params={"value": 1.5}).to_list()
+    assert rows == [{"d": "PT1.5S"}]
 
 
 def test_date_and_timestamp_arithmetic_return_null_on_unrepresentable_shift(

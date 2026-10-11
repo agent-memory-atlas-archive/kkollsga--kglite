@@ -488,7 +488,6 @@ fn immediately_pre_index_headers_remain_readable() {
 /// and all: tag 22 only extends the enum, so a v9 log is a strict subset.
 #[test]
 fn format_before_temporal_declarations_remains_readable() {
-    assert_eq!(WAL_FORMAT_VERSION, 11);
     let frames = vec![
         frame(1),
         WalFrame {
@@ -540,9 +539,64 @@ fn v10_logs_remain_readable_and_text_index_ops_round_trip() {
     assert_eq!(v10[4], 10);
     assert_eq!(read_frames_all(v10).unwrap(), v10_frames);
 
-    let v11 = write_wal(&frames);
-    assert_eq!(v11[4], 11, "a new log advertises v11");
+    let v11 = write_wal_version(&frames, 11);
+    assert_eq!(v11[4], 11);
     assert_eq!(read_frames_all(v11).unwrap(), frames);
+}
+
+/// v12 adds no op: it marks logs whose frames may carry the sub-second
+/// `Duration` serde tag. A new log advertises it; a v11 log (whole-second
+/// durations only, byte-identical to v12 for them) still reads; and a frame
+/// holding a fine duration round-trips exactly.
+#[test]
+fn v12_logs_carry_sub_second_durations_and_v11_logs_still_read() {
+    let fine = Value::Duration {
+        months: 0,
+        days: 1,
+        seconds: -1,
+        nanos: 500_000_000,
+    };
+    let whole = Value::Duration {
+        months: 1,
+        days: 2,
+        seconds: 3,
+        nanos: 0,
+    };
+    let frames = vec![WalFrame {
+        lsn: 1,
+        ops: vec![MutationOp::UpsertNode {
+            node_type: "Run".into(),
+            id: Value::Int64(1),
+            title: Value::String("r".into()),
+            properties: vec![("fine".into(), fine), ("whole".into(), whole)],
+        }],
+    }];
+    assert_eq!(WAL_FORMAT_VERSION, 12, "this test pins the v12 header");
+    let v12 = write_wal(&frames);
+    assert_eq!(v12[4], 12, "a new log advertises v12");
+    assert_eq!(read_frames_all(v12).unwrap(), frames);
+
+    // A v11 header over whole-second durations is exactly what 0.19.7 wrote.
+    let v11_frames = vec![WalFrame {
+        lsn: 1,
+        ops: vec![MutationOp::UpsertNode {
+            node_type: "Run".into(),
+            id: Value::Int64(1),
+            title: Value::String("r".into()),
+            properties: vec![(
+                "whole".into(),
+                Value::Duration {
+                    months: 1,
+                    days: 2,
+                    seconds: 3,
+                    nanos: 0,
+                },
+            )],
+        }],
+    }];
+    let v11 = write_wal_version(&v11_frames, 11);
+    assert_eq!(v11[4], 11);
+    assert_eq!(read_frames_all(v11).unwrap(), v11_frames);
 }
 
 /// A temporal declaration survives the codec byte for byte, JSON included.

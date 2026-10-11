@@ -1,8 +1,8 @@
 //! Durations: building one from component maps (fractions of a larger unit
 //! spill into the next smaller one, as in Neo4j) and from ISO 8601 text, and
 //! rendering one as ISO 8601 text. A duration is whole months, whole days and
-//! whole seconds, so a component set that lands between two seconds is
-//! refused rather than rounded.
+//! seconds with a nanosecond remainder; a fraction finer than one nanosecond
+//! is rounded to the nearest nanosecond, as Neo4j does.
 use super::super::*;
 use super::shared::coerce_naive_datetime;
 use crate::datatypes::values::Value;
@@ -112,33 +112,28 @@ impl Components {
         let whole_days = self.days_fraction.trunc();
         checked_scaled_add(&mut self.days, whole_days as i64, 1, "days")?;
         self.seconds_fraction += (self.days_fraction - whole_days) * 86_400.0;
-        let whole_nanos = self.nanos.div_euclid(1_000_000_000);
-        let loose_nanos = self.nanos.rem_euclid(1_000_000_000);
-        if loose_nanos != 0 {
-            return Err(format!(
-                "duration(): the components include {loose_nanos} nanoseconds past a whole second; sub-second durations are not supported"
-            ));
+        // Fractional seconds are f64 noise-prone past the nanosecond, so they
+        // join the exact integer nanoseconds only after rounding to one.
+        let fraction_nanos = (self.seconds_fraction * 1e9).round();
+        if !fraction_nanos.is_finite() || fraction_nanos.abs() > 1e24 {
+            return Err("duration() seconds component overflow".to_string());
         }
+        let total_nanos = self.nanos + fraction_nanos as i128;
+        let whole_nanos = total_nanos.div_euclid(1_000_000_000);
+        let nanos = total_nanos.rem_euclid(1_000_000_000) as i32;
         checked_scaled_add(
             &mut self.seconds,
             i64::try_from(whole_nanos).map_err(|_| "duration() seconds component overflow")?,
             1,
             "seconds",
         )?;
-        let rounded = self.seconds_fraction.round();
-        if (self.seconds_fraction - rounded).abs() > 1e-6 {
-            return Err(format!(
-                "duration(): the components include a fraction of {} seconds; sub-second durations are not supported",
-                self.seconds_fraction
-            ));
-        }
-        checked_scaled_add(&mut self.seconds, rounded as i64, 1, "seconds")?;
         Ok(Value::Duration {
             months: i32::try_from(self.months)
                 .map_err(|_| "duration() calendar months exceed the supported i32 range")?,
             days: i32::try_from(self.days)
                 .map_err(|_| "duration() calendar days exceed the supported i32 range")?,
             seconds: self.seconds,
+            nanos,
         })
     }
 }
@@ -242,14 +237,23 @@ fn alternative_form(body: &str, parts: &mut Components) -> Result<Option<bool>, 
     Ok(Some(true))
 }
 
-/// ISO 8601 text for a duration: `P1Y2M3DT4H5M6S`, each component carrying its
-/// own sign, `PT0S` for the zero duration.
-pub(crate) fn format_duration_iso(months: i32, days: i32, seconds: i64) -> String {
+/// ISO 8601 text for a duration: `P1Y2M3DT4H5M6.5S`, each component carrying
+/// its own sign, `PT0S` for the zero duration. The clock part (seconds plus
+/// nanoseconds) is one signed quantity, so `-0.5 s` renders `PT-0.5S`; the
+/// fraction keeps only the digits it needs.
+pub(crate) fn format_duration_iso(months: i32, days: i32, seconds: i64, nanos: i32) -> String {
+    use crate::graph::core::value_operations::clock_total;
+    const NANOS: u128 = 1_000_000_000;
     let years = months / 12;
     let months = months % 12;
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
+    let total = clock_total(seconds, nanos);
+    let sign = if total < 0 { -1i128 } else { 1 };
+    let abs = total.unsigned_abs();
+    let hours = (abs / (3600 * NANOS)) as i128 * sign;
+    let minutes = ((abs / (60 * NANOS)) % 60) as i128 * sign;
+    let in_minute = abs % (60 * NANOS);
+    let secs = (in_minute / NANOS) as i128 * sign;
+    let fraction = in_minute % NANOS;
     let mut out = String::from("P");
     for (n, unit) in [
         (years as i64, 'Y'),
@@ -260,12 +264,24 @@ pub(crate) fn format_duration_iso(months: i32, days: i32, seconds: i64) -> Strin
             out.push_str(&format!("{n}{unit}"));
         }
     }
-    if hours != 0 || minutes != 0 || secs != 0 {
+    if hours != 0 || minutes != 0 || secs != 0 || fraction != 0 {
         out.push('T');
-        for (n, unit) in [(hours, 'H'), (minutes, 'M'), (secs, 'S')] {
+        for (n, unit) in [(hours, 'H'), (minutes, 'M')] {
             if n != 0 {
                 out.push_str(&format!("{n}{unit}"));
             }
+        }
+        if secs != 0 || fraction != 0 {
+            if sign < 0 && secs == 0 {
+                out.push('-');
+            }
+            out.push_str(&secs.to_string());
+            if fraction != 0 {
+                let digits = format!("{fraction:09}");
+                out.push('.');
+                out.push_str(digits.trim_end_matches('0'));
+            }
+            out.push('S');
         }
     }
     if out == "P" {
@@ -313,7 +329,8 @@ impl CypherExecutor<'_> {
         else {
             return Err(format!("{name}() arguments must be dates or datetimes"));
         };
-        let seconds = (end - start).num_seconds();
+        let delta = end - start;
+        let seconds = delta.num_seconds();
         let narrow = |n: i64| {
             i32::try_from(n).map_err(|_| format!("{name}() result exceeds the supported range"))
         };
@@ -322,17 +339,28 @@ impl CypherExecutor<'_> {
                 months: narrow(whole_months_between(start, end))?,
                 days: 0,
                 seconds: 0,
+                nanos: 0,
             },
             "duration.indays" => Value::Duration {
                 months: 0,
                 days: narrow(seconds / 86_400)?,
                 seconds: 0,
+                nanos: 0,
             },
-            _ => Value::Duration {
-                months: 0,
-                days: 0,
-                seconds,
-            },
+            _ => {
+                // `num_seconds` truncates toward zero and `subsec_nanos` shares
+                // its sign; fold both into the non-negative-nanos form.
+                let (seconds, nanos) = crate::graph::core::value_operations::split_clock(
+                    i128::from(seconds) * 1_000_000_000 + i128::from(delta.subsec_nanos()),
+                )
+                .ok_or_else(|| format!("{name}() result exceeds the supported range"))?;
+                Value::Duration {
+                    months: 0,
+                    days: 0,
+                    seconds,
+                    nanos,
+                }
+            }
         })
     }
 }
@@ -347,6 +375,7 @@ mod tests {
                 months,
                 days,
                 seconds,
+                nanos: 0,
             } => (months, days, seconds),
             other => panic!("{other:?}"),
         }
@@ -360,16 +389,40 @@ mod tests {
         assert_eq!(dur("P2.5W"), (0, 17, 43200));
         assert_eq!(dur("P12Y5M14DT16H12M70S"), (149, 14, 58390));
         assert_eq!(dur("P2012-02-02T14:37:21"), (2012 * 12 + 2, 2, 52641));
-        for bad in ["14D", "P", "PT", "P1D1Y", "P1.5S", "P0.75M", "PXD", "P1H"] {
+        for bad in ["14D", "P", "PT", "P1D1Y", "P1.5S", "PXD", "P1H"] {
             assert!(duration_from_text(bad).is_err(), "{bad}");
         }
     }
 
     #[test]
+    fn sub_second_components_keep_every_nanosecond() {
+        let build = |text: &str| match duration_from_text(text).unwrap() {
+            Value::Duration { seconds, nanos, .. } => (seconds, nanos),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(build("PT0.000000001S"), (0, 1));
+        assert_eq!(build("PT1.5S"), (1, 500_000_000));
+        assert_eq!(build("PT-0.5S"), (-1, 500_000_000));
+        assert_eq!(build("PT0.1M"), (6, 0));
+    }
+
+    #[test]
     fn iso_rendering() {
-        assert_eq!(format_duration_iso(149, 14, 58390), "P12Y5M14DT16H13M10S");
-        assert_eq!(format_duration_iso(0, 0, -79200), "PT-22H");
-        assert_eq!(format_duration_iso(0, 0, 0), "PT0S");
-        assert_eq!(format_duration_iso(0, 0, 91), "PT1M31S");
+        assert_eq!(
+            format_duration_iso(149, 14, 58390, 0),
+            "P12Y5M14DT16H13M10S"
+        );
+        assert_eq!(format_duration_iso(0, 0, -79200, 0), "PT-22H");
+        assert_eq!(format_duration_iso(0, 0, 0, 0), "PT0S");
+        assert_eq!(format_duration_iso(0, 0, 91, 0), "PT1M31S");
+        assert_eq!(format_duration_iso(0, 0, 0, 1), "PT0.000000001S");
+        assert_eq!(format_duration_iso(0, 0, 1, 500_000_000), "PT1.5S");
+        // Normalised -0.5 s is (-1 s, +500_000_000 ns).
+        assert_eq!(format_duration_iso(0, 0, -1, 500_000_000), "PT-0.5S");
+        assert_eq!(format_duration_iso(0, 0, -91, 250_000_000), "PT-1M-30.75S");
+        assert_eq!(
+            format_duration_iso(1, 2, 3723, 40_000_000),
+            "P1M2DT1H2M3.04S"
+        );
     }
 }

@@ -36,7 +36,11 @@ fn datetime_part(t: NaiveDateTime, property: &str) -> Option<i64> {
     })
 }
 
-fn duration_part(months: i32, days: i32, seconds: i64, property: &str) -> Option<i64> {
+/// `nanos` is the non-negative sub-second remainder; the unit totals
+/// (`milliseconds`..) floor over `seconds * 1e9 + nanos`, so `-0.5 s`
+/// (`seconds = -1`) reads `-500` milliseconds.
+fn duration_part(months: i32, days: i32, seconds: i64, nanos: i32, property: &str) -> Option<i64> {
+    let total = crate::graph::core::value_operations::clock_total(seconds, nanos);
     let (months, days) = (months as i64, days as i64);
     Some(match property {
         "years" => months / 12,
@@ -47,16 +51,18 @@ fn duration_part(months: i32, days: i32, seconds: i64, property: &str) -> Option
         "hours" => seconds / 3600,
         "minutes" => seconds / 60,
         "seconds" => seconds,
-        "milliseconds" => seconds.checked_mul(1_000)?,
-        "microseconds" => seconds.checked_mul(1_000_000)?,
-        "nanoseconds" => seconds.checked_mul(1_000_000_000)?,
+        "milliseconds" => i64::try_from(total.div_euclid(1_000_000)).ok()?,
+        "microseconds" => i64::try_from(total.div_euclid(1_000)).ok()?,
+        "nanoseconds" => i64::try_from(total).ok()?,
         "quartersOfYear" => (months % 12) / 3,
         "monthsOfQuarter" => months % 3,
         "monthsOfYear" => months % 12,
         "daysOfWeek" => days % 7,
         "minutesOfHour" => (seconds / 60) % 60,
         "secondsOfMinute" => seconds % 60,
-        "millisecondsOfSecond" | "microsecondsOfSecond" | "nanosecondsOfSecond" => 0,
+        "millisecondsOfSecond" => i64::from(nanos / 1_000_000),
+        "microsecondsOfSecond" => i64::from(nanos / 1_000),
+        "nanosecondsOfSecond" => i64::from(nanos),
         _ => return None,
     })
 }
@@ -83,7 +89,8 @@ pub(in crate::graph::languages::cypher::executor) fn temporal_property(
             months,
             days,
             seconds,
-        } => duration_part(*months, *days, *seconds, property),
+            nanos,
+        } => duration_part(*months, *days, *seconds, *nanos, property),
         _ => return None,
     };
     Some(part.map_or(Value::Null, Value::Int64))

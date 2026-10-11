@@ -64,6 +64,20 @@ def test_committed_files_carry_the_pinned_format_bytes(name):
 
 
 @pytest.mark.parametrize("name", NAMES)
+def test_recovering_an_old_log_then_writing_advertises_the_current_wal_format(name, tmp_path):
+    """The fixtures stay at 10 on disk (they prove old logs replay); a build that
+    appends to such a log rewrites its header to 12, because the frames it adds may
+    use the sub-second duration tag a 10 reader cannot decode."""
+    path = _copy(name, tmp_path)
+    graph = kglite.open(str(path), durable=SCENARIOS[name]["level"])
+    try:
+        graph.cypher("CREATE (:FormatProbe {id: 1, d: duration({seconds: 1, nanoseconds: 5})})")
+        assert (path.parent / "app.kgl-wal").read_bytes()[:5] == b"KWAL\x0c"
+    finally:
+        del graph
+
+
+@pytest.mark.parametrize("name", NAMES)
 def test_the_log_is_what_carries_the_graph(name, tmp_path):
     """Non-vacuity: without its log a scenario must not reproduce the expectation."""
     path = _copy(name, tmp_path)

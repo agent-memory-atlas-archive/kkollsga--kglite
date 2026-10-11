@@ -12,6 +12,7 @@ use super::super::{
 };
 use super::*;
 use crate::datatypes::{DataFrame, Value};
+use crate::graph::io::file::container_test_support::*;
 use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 use crate::graph::storage::GraphRead;
 use crate::graph::text_indexes::{build_text_index, index_key, TextIndexStore};
@@ -280,8 +281,7 @@ fn a_file_without_the_section_loads_with_no_index() {
     let mut buf: Vec<u8> = Vec::new();
     write_kgl_to(&arc, &mut buf).unwrap();
 
-    let metadata_len = u32::from_le_bytes([buf[9], buf[10], buf[11], buf[12]]) as usize;
-    let metadata: serde_json::Value = serde_json::from_slice(&buf[13..13 + metadata_len]).unwrap();
+    let metadata: serde_json::Value = serde_json::from_slice(metadata_json(&buf)).unwrap();
     assert!(
         metadata.get("text_index_compressed_size").is_none(),
         "an unindexed graph must write the bytes it wrote before this field existed"
@@ -389,9 +389,7 @@ fn a_saved_file_with_an_unknown_payload_version_still_loads() {
 /// Rewrite the trailing text-index section of a `.kgl` buffer with `payload`,
 /// fixing up the metadata size and digest so only the *payload* is unusual.
 fn replace_text_section(buf: &[u8], payload: &[u8]) -> Vec<u8> {
-    let metadata_len = u32::from_le_bytes([buf[9], buf[10], buf[11], buf[12]]) as usize;
-    let mut metadata: serde_json::Value =
-        serde_json::from_slice(&buf[13..13 + metadata_len]).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(metadata_json(buf)).unwrap();
     let old_size = metadata["text_index_compressed_size"].as_u64().unwrap() as usize;
     let compressed = zstd_compress(payload).unwrap();
     metadata["text_index_compressed_size"] = serde_json::Value::from(compressed.len() as u64);
@@ -399,11 +397,8 @@ fn replace_text_section(buf: &[u8], payload: &[u8]) -> Vec<u8> {
         serde_json::Value::from(section_digest(&compressed));
     let metadata_json = serde_json::to_vec(&metadata).unwrap();
 
-    let mut out = Vec::new();
-    out.extend_from_slice(&buf[..9]);
-    out.extend_from_slice(&(metadata_json.len() as u32).to_le_bytes());
-    out.extend_from_slice(&metadata_json);
-    out.extend_from_slice(&buf[13 + metadata_len..buf.len() - old_size]);
+    let mut out = sealed_metadata(&buf[..9], &metadata_json);
+    out.extend_from_slice(&after_metadata(buf)[..after_metadata(buf).len() - old_size]);
     out.extend_from_slice(&compressed);
     out
 }

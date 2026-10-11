@@ -292,13 +292,13 @@ class TestKglRoundtrip:
         assert names == ["Charlie", "Eve"]
 
     def test_current_magic_and_codec_bytes(self, person_graph, tmp_path):
-        """v7 starts with RGF\\x07 and explicitly selects Postcard (tag 2)."""
+        """v8 starts with RGF\\x08 and explicitly selects Postcard (tag 2)."""
         fp = str(tmp_path / "magic.kgl")
         person_graph.save(fp)
 
         with open(fp, "rb") as f:
             header = f.read(5)
-        assert header == b"RGF\x07\x02"
+        assert header == b"RGF\x08\x02"
 
     def test_save_does_not_change_the_storage_shape(self, person_graph, tmp_path):
         """A graph is columnar before its first save, after it, and on reload.
@@ -447,9 +447,10 @@ class TestIdTitleSentinel:
 
         with open(path, "rb") as f:
             b = f.read()
-        assert b[:5] == b"RGF\x07\x02"
+        assert b[:5] == b"RGF\x08\x02"
         mlen = struct.unpack_from("<I", b, 9)[0]
-        meta = json.loads(b[13 : 13 + mlen])
+        # v8: the declared metadata length ends in a 4-byte CRC32 trailer.
+        meta = json.loads(b[13 : 13 + mlen - 4])
         start = 13 + mlen
         return b[start : start + meta["topology_compressed_size"]]
 

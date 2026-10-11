@@ -11,6 +11,19 @@ before upgrading.
 
 ### Breaking changes and migration
 
+- **Files and logs written by this build cannot be opened by 0.19.x or older.**
+  - Formats that move: `.kgl` container v7 → v8, write-ahead log 11 → 12, disk-graph directory format 2 → 3.
+  - Every file this build writes uses the new numbers, whether or not it holds a sub-second duration.
+  - An older binary refuses them by version and never misreads them. The published 0.19.7 reports, for the `.kgl` file, `container version 8, but this library only supports up to version 7. Please upgrade kglite.`; for the log, `unsupported WAL format version 12 (this build reads v2-v11)`; and for the directory, `disk graph uses on-disk format 3, but this library only supports up to format 2. Please upgrade kglite.`
+  - This build still reads `.kgl` v5, v6 and v7, logs 2 through 11 and format-2 directories. Opening an old log and writing to it moves its header to 12.
+  - Downgrading is not possible. Before upgrading, keep a 0.19.x copy of any file an older consumer still reads; `export_csv()` output is format-stable.
+  - Migration: upgrade every reader of a shared file (for example the `kglite` wheel and any Rust consumer) together.
+- **A `.kgl` v8 file carries a checksum over its header and metadata.**
+  - Before: one flipped byte in the metadata JSON or the length fields was parsed, or misparsed, as if the writer had meant it.
+  - Now: the load fails with `header/metadata checksum mismatch ... the file is corrupt`, from `load`, `from_bytes` and the load estimate alike.
+  - Section payloads keep their own digests.
+- **The `.kgl` byte digests in `value_byte_identity_tests` moved with the container version.** The value bytes did not: every whole-second duration serialises to the bytes it always did (pinned by the golden table).
+
 - **`on_invalid` defaults to `'error'` on every bulk loader.**
   - Affects `add_nodes`, `add_relationships` and their `connection`-named twins.
   - Before: a row with a null or unstorable ID was skipped with a `UserWarning`, and the rest loaded.
@@ -20,6 +33,15 @@ before upgrading.
 
 ### Added
 
+- **Durations keep sub-second precision to the nanosecond in Cypher.**
+  - `duration({milliseconds: 1})`, `duration({nanoseconds: 1})`, `duration({seconds: 1.5})` and ISO text such as `duration('PT0.000000001S')` build exact values. Before, any total between two whole seconds raised `sub-second durations are not supported`.
+  - A fraction finer than one nanosecond rounds to the nearest nanosecond.
+  - Arithmetic carries the nanoseconds: `datetime ± duration`, `duration ± duration`, `duration * integer`, and `datetime - datetime`, which no longer drops the sub-second part.
+  - `toString(d)` prints the fraction (`PT0.000000001S`, `PT-0.5S`). `d.nanoseconds`, `d.milliseconds` and `d.microseconds` count the whole duration; `d.nanosecondsOfSecond` and its two siblings give the sub-second part.
+  - `duration.between` and `duration.inSeconds` keep the sub-second part. `inDays` and `inMonths` stay whole.
+  - Two durations that differ only in nanoseconds are not equal. A duration with nanoseconds JSON-encodes with an extra `nanoseconds` key; whole-second durations render as before.
+  - Python, Node, Java, Bolt and the C ABI still convert a duration to whole seconds. A sub-second duration read through them loses its nanoseconds until the binding work lands.
+- **Rust: `Value::Duration` gains `nanos: i32`** (`0..1_000_000_000`; the sign rides on `seconds`). `BorrowedValue` gains a matching `Duration` variant.
 - **`kglite.open_session(path, durable=...)` opens a durable, thread-safe `Session`.**
   - Use it for a threaded server: any number of threads call `execute()` and `begin()` on one session, with no borrow error.
   - `durable` is `"full"`, `"normal"`, `"off"` or a bool. Passing it selects this form; without it `open_session(path)` is the read-only load, unchanged.

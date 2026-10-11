@@ -483,16 +483,19 @@ pub fn total_order(a: &Value, b: &Value) -> std::cmp::Ordering {
                 months: am,
                 days: ad,
                 seconds: asec,
+                nanos: an,
             },
             Value::Duration {
                 months: bm,
                 days: bd,
                 seconds: bsec,
+                nanos: bn,
             },
         ) => am
             .cmp(bm)
             .then_with(|| ad.cmp(bd))
-            .then_with(|| asec.cmp(bsec)),
+            .then_with(|| asec.cmp(bsec))
+            .then_with(|| an.cmp(bn)),
         (
             Value::Point {
                 lat: alat,

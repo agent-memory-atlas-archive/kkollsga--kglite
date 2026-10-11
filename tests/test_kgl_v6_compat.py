@@ -32,13 +32,14 @@ import struct
 import pytest
 
 import kglite
-from tests.fixtures.compat_helpers import V7_HEADER, copy_fixture, expected_answers, generator_queries
+from tests.fixtures.compat_helpers import V8_HEADER, copy_fixture, expected_answers, generator_queries
 from tests.fixtures.disk_generation import current_generation
 
 FIXTURES = Path(__file__).parent / "fixtures" / "kgl_v6"
 GENERATOR = FIXTURES.parent / "build_v6_compat_fixtures.py"
 V6_HEADER = b"RGF\x06\x02"
-DISK_FORMAT = 2
+DISK_FORMAT = 3
+COLUMNS_META_FORMAT = 2  # the columns_meta envelope is versioned separately from the directory
 
 
 def _capture(graph, queries: dict[str, str]) -> dict:
@@ -96,8 +97,8 @@ def test_this_build_writes_v7(tmp_path):
     graph.cypher("CREATE (:Item {id: 1, name: 'x'})")
     path = tmp_path / "written.kgl"
     graph.save(str(path))
-    assert path.read_bytes()[:5] == V7_HEADER
-    assert graph.graph_info()["format_version"] == 7
+    assert path.read_bytes()[:5] == V8_HEADER
+    assert graph.graph_info()["format_version"] == 8
 
 
 def test_v6_file_loads_with_pinned_answers(tmp_path):
@@ -121,7 +122,7 @@ def test_v6_resaves_as_v7_with_identical_answers(tmp_path):
     graph = kglite.load(str(path))
     out = tmp_path / "migrated.kgl"
     graph.save(str(out))
-    assert out.read_bytes()[:5] == V7_HEADER
+    assert out.read_bytes()[:5] == V8_HEADER
     _assert_matches(
         kglite.load(str(out)),
         generator_queries(GENERATOR, "QUERIES"),
@@ -154,7 +155,7 @@ def test_v6_durable_directory_recovers_and_checkpoints_as_v7(tmp_path):
         graph, generator_queries(GENERATOR, "DURABLE_QUERIES"), expected_answers(FIXTURES, "durable"), "v6 recovery"
     )
     graph.save(str(directory / "app.kgl"))
-    assert (directory / "app.kgl").read_bytes()[:5] == V7_HEADER
+    assert (directory / "app.kgl").read_bytes()[:5] == V8_HEADER
 
 
 # ── disk directories: 0.19.0 layout read, format 2 written ───────────────────
@@ -187,7 +188,7 @@ def test_disk_directory_from_0_19_0_resaves_into_format_2_and_reopens_identicall
     for path in envelopes:
         body = json.loads(path.read_text(encoding="utf-8"))
         assert isinstance(body, dict), f"{path} is still a bare array — an older reader would not be stopped"
-        assert body["format"] == DISK_FORMAT
+        assert body["format"] == COLUMNS_META_FORMAT
         assert {t["type_name"] for t in body["types"]} >= {"Tag", "Unit"}
     assert not _sidecars(directory, "columns_meta.bin.zst"), "the legacy binary sidecar name must not be reused"
 
@@ -227,7 +228,7 @@ def test_int_title_type_moves_from_its_sidecar_into_a_column_file_and_reopens_id
 
     (envelope,) = _sidecars(directory, "columns_meta.json")
     body = json.loads(envelope.read_text(encoding="utf-8"))
-    assert body["format"] == DISK_FORMAT
+    assert body["format"] == COLUMNS_META_FORMAT
     (entry,) = [t for t in body["types"] if t["type_name"] == "Badge"]
     assert entry["title_offsets"]["len"] == 0 and entry["title_data"]["len"] == 5 * 8, "the title is a bare i64 region"
     column_file = envelope.parent / body["files"]["Badge"]
@@ -265,7 +266,7 @@ def test_fresh_disk_build_writes_the_forward_guards(tmp_path):
     meta = json.loads((current_generation(directory) / "disk_graph_meta.json").read_text(encoding="utf-8"))
     assert meta["disk_format"] == DISK_FORMAT
     bodies = [json.loads(p.read_text(encoding="utf-8")) for p in _sidecars(directory, "columns_meta.json")]
-    assert bodies and all(isinstance(b, dict) and b["format"] == DISK_FORMAT for b in bodies)
+    assert bodies and all(isinstance(b, dict) and b["format"] == COLUMNS_META_FORMAT for b in bodies)
     for path in _sidecars(directory, "id_indices.bin"):
         assert path.read_bytes()[8:12] == struct.pack("<I", 3)
 
@@ -342,7 +343,7 @@ def test_a_newer_columns_metadata_format_is_refused_by_name(tmp_path):
     for path in _sidecars(directory, "columns_meta.json") + _sidecars(directory, "columns_meta.v2.bin.zst"):
         if path.suffix == ".json":
             body = json.loads(path.read_text(encoding="utf-8"))
-            body["format"] = DISK_FORMAT + 1
+            body["format"] = COLUMNS_META_FORMAT + 1
             path.write_text(json.dumps(body), encoding="utf-8")
         else:
             path.unlink()  # the JSON is then the only sidecar a reader can find

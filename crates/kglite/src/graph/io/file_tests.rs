@@ -1,6 +1,7 @@
 //! Persistence regression tests extracted from file.rs.
 
 use super::*;
+use crate::graph::io::file::container_test_support::*;
 
 #[cfg(test)]
 mod atomic_save_tests {
@@ -210,7 +211,7 @@ mod atomic_save_tests {
     /// neither matched the container actually on disk.
     #[test]
     fn format_version_is_the_container_version_on_both_sides_of_a_roundtrip() {
-        let expected = u32::from(V7_MAGIC[3]);
+        let expected = u32::from(V8_MAGIC[3]);
         assert_eq!(
             crate::graph::schema::KGL_FORMAT_VERSION,
             expected,
@@ -235,11 +236,11 @@ mod atomic_save_tests {
         let g = tiny_graph(4);
         let mut buf: Vec<u8> = Vec::new();
         write_kgl_to(&g, &mut buf).unwrap();
-        assert_eq!(&buf[..4], &V7_MAGIC, "buffer must carry the v7 magic");
+        assert_eq!(&buf[..4], &V8_MAGIC, "buffer must carry the v8 magic");
         assert_eq!(
             buf[4],
             serde_codec::CodecVersion::PostcardV1.tag(),
-            "v7 header must select Postcard explicitly"
+            "v8 header must select Postcard explicitly"
         );
         let loaded = load_kgl_bytes(&buf).unwrap();
         assert_eq!(loaded.graph.node_count(), g.graph.node_count());
@@ -254,9 +255,9 @@ mod atomic_save_tests {
         let g = tiny_graph(4);
         let mut buf: Vec<u8> = Vec::new();
         write_kgl_to(&g, &mut buf).unwrap();
-        for magic in [V5_MAGIC, V6_MAGIC] {
-            buf[3] = magic[3];
-            let loaded = load_kgl_bytes(&buf).unwrap();
+        for magic in [V5_MAGIC, V6_MAGIC, V7_MAGIC] {
+            let legacy = as_legacy_container(&buf, magic);
+            let loaded = load_kgl_bytes(&legacy).unwrap();
             assert_eq!(loaded.graph.node_count(), g.graph.node_count());
         }
     }
@@ -271,17 +272,17 @@ mod atomic_save_tests {
 
     #[test]
     fn newer_container_and_invalid_codec_are_rejected_clearly() {
-        let newer = [b'R', b'G', b'F', 8];
+        let newer = [b'R', b'G', b'F', 9];
         let error = load_kgl_bytes(&newer).err().unwrap().to_string();
         assert!(
-            error.contains("version 8")
-                && error.contains("up to version 7")
+            error.contains("version 9")
+                && error.contains("up to version 8")
                 && error.contains("upgrade kglite"),
             "{error}"
         );
 
         // Both readable containers validate the codec byte the same way.
-        for version in [5u8, 6u8, 7u8] {
+        for version in [5u8, 6u8, 7u8, 8u8] {
             let mut invalid = vec![b'R', b'G', b'F', version, 99];
             invalid.extend_from_slice(&CURRENT_CORE_DATA_VERSION.to_le_bytes());
             invalid.extend_from_slice(&0u32.to_le_bytes());
@@ -769,17 +770,9 @@ mod atomic_save_tests {
     }
 
     fn rewrite_metadata(buf: &[u8], mutate: impl FnOnce(&mut FileMetadata)) -> Vec<u8> {
-        assert_eq!(&buf[..4], &V7_MAGIC);
-        let old_len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
-        let mut metadata: FileMetadata = serde_json::from_slice(&buf[13..13 + old_len]).unwrap();
+        let mut metadata: FileMetadata = serde_json::from_slice(metadata_json(buf)).unwrap();
         mutate(&mut metadata);
-        let encoded = serde_json::to_vec(&metadata).unwrap();
-        let mut rewritten = Vec::with_capacity(buf.len() - old_len + encoded.len());
-        rewritten.extend_from_slice(&buf[..9]);
-        rewritten.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
-        rewritten.extend_from_slice(&encoded);
-        rewritten.extend_from_slice(&buf[13 + old_len..]);
-        rewritten
+        with_metadata_json(buf, &serde_json::to_vec(&metadata).unwrap())
     }
 
     fn assert_invalid_without_panic(bytes: &[u8]) {
@@ -1032,18 +1025,10 @@ mod atomic_save_tests {
     /// and would re-add any key it knows about; this simulates a file written
     /// by a build whose `FileMetadata` never had the field at all.
     fn rewrite_metadata_json(buf: &[u8], mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
-        assert_eq!(&buf[..4], &V7_MAGIC);
-        let old_len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
         let mut raw: serde_json::Value =
-            serde_json::from_slice(&buf[13..13 + old_len]).expect("metadata is JSON");
+            serde_json::from_slice(metadata_json(buf)).expect("metadata is JSON");
         mutate(&mut raw);
-        let encoded = serde_json::to_vec(&raw).unwrap();
-        let mut out = Vec::with_capacity(buf.len() - old_len + encoded.len());
-        out.extend_from_slice(&buf[..9]);
-        out.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
-        out.extend_from_slice(&encoded);
-        out.extend_from_slice(&buf[13 + old_len..]);
-        out
+        with_metadata_json(buf, &serde_json::to_vec(&raw).unwrap())
     }
 
     #[test]
@@ -1070,8 +1055,7 @@ mod atomic_save_tests {
         let mut bytes = Vec::new();
         write_kgl_to(&graph, &mut bytes).unwrap();
 
-        let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-        let raw: serde_json::Value = serde_json::from_slice(&bytes[13..13 + len]).unwrap();
+        let raw: serde_json::Value = serde_json::from_slice(metadata_json(&bytes)).unwrap();
         assert!(
             raw.get("user_schema_version").is_none(),
             "an unstamped graph must not emit the key at all, got {raw}"
@@ -1118,9 +1102,7 @@ mod atomic_save_tests {
     /// Parse the metadata JSON out of a v7 buffer, so a test can assert on the
     /// bytes actually written rather than on a round-tripped struct.
     fn metadata_json_of(buf: &[u8]) -> serde_json::Value {
-        assert_eq!(&buf[..4], &V7_MAGIC);
-        let len = u32::from_le_bytes(buf[9..13].try_into().unwrap()) as usize;
-        serde_json::from_slice(&buf[13..13 + len]).expect("metadata is JSON")
+        serde_json::from_slice(metadata_json(buf)).expect("metadata is JSON")
     }
 
     fn tiny_graph_in_mode(mode: crate::graph::storage::mode::StorageMode, n: i64) -> Arc<DirGraph> {
@@ -2141,8 +2123,7 @@ mod section_integrity_tests {
     }
 
     fn parsed_metadata(bytes: &[u8]) -> serde_json::Value {
-        let end = section_start(bytes);
-        serde_json::from_slice(&bytes[13..end]).unwrap()
+        serde_json::from_slice(metadata_json(bytes)).unwrap()
     }
 
     /// Rewrite the container with `section_digests` removed — the shape of a
@@ -2157,13 +2138,7 @@ mod section_integrity_tests {
                 .is_some(),
             "fixture should carry section digests"
         );
-        let json = serde_json::to_vec(&metadata).unwrap();
-        let mut out = Vec::with_capacity(bytes.len());
-        out.extend_from_slice(&bytes[..9]);
-        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
-        out.extend_from_slice(&json);
-        out.extend_from_slice(&bytes[section_start(bytes)..]);
-        out
+        with_metadata_json(bytes, &serde_json::to_vec(&metadata).unwrap())
     }
 
     /// `DirGraph` is not `Debug`, so `unwrap_err` is unavailable; a damaged

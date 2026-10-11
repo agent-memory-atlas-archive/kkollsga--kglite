@@ -2,6 +2,7 @@
 //! entries, the legacy keys an older build reads, and files that carry only
 //! the legacy keys.
 
+use crate::graph::io::file::container_test_support::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -63,8 +64,7 @@ fn encode(graph: DirGraph) -> Vec<u8> {
 
 /// The metadata block's JSON text.
 fn metadata(bytes: &[u8]) -> String {
-    let len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-    String::from_utf8(bytes[13..13 + len].to_vec()).unwrap()
+    String::from_utf8(metadata_json(bytes).to_vec()).unwrap()
 }
 
 /// The raw JSON text of one top-level metadata key, `None` when absent.

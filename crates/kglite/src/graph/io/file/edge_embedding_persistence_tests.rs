@@ -4,6 +4,7 @@ use super::*;
 use crate::graph::edge_embeddings::{
     edge_store_key, remove_edge_embeddings, upsert_edge_embeddings,
 };
+use crate::graph::io::file::container_test_support::*;
 use crate::graph::schema::{EdgeData, NodeData};
 use crate::graph::storage::GraphWrite;
 use petgraph::graph::EdgeIndex;
@@ -80,16 +81,9 @@ fn encode(mut graph: Arc<DirGraph>) -> Vec<u8> {
 }
 
 fn rewrite_metadata(bytes: &[u8], mutate: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
-    let old_len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-    let mut metadata: serde_json::Value = serde_json::from_slice(&bytes[13..13 + old_len]).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(metadata_json(bytes)).unwrap();
     mutate(&mut metadata);
-    let encoded = serde_json::to_vec(&metadata).unwrap();
-    let mut rebuilt = Vec::with_capacity(bytes.len() - old_len + encoded.len());
-    rebuilt.extend_from_slice(&bytes[..9]);
-    rebuilt.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
-    rebuilt.extend_from_slice(&encoded);
-    rebuilt.extend_from_slice(&bytes[13 + old_len..]);
-    rebuilt
+    with_metadata_json(bytes, &serde_json::to_vec(&metadata).unwrap())
 }
 
 #[derive(Serialize)]
@@ -107,8 +101,7 @@ fn replace_edge_section(
     payload: &BTreeMap<(String, String), PersistedFixture>,
 ) -> Vec<u8> {
     let old_metadata_len = u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;
-    let mut metadata: serde_json::Value =
-        serde_json::from_slice(&bytes[13..13 + old_metadata_len]).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(metadata_json(bytes)).unwrap();
     let old_edge_len = metadata["edge_embeddings_compressed_size"]
         .as_u64()
         .unwrap() as usize;
@@ -126,10 +119,7 @@ fn replace_edge_section(
     metadata["edge_embeddings_compressed_size"] = (compressed.len() as u64).into();
     metadata["section_digests"][EDGE_EMBEDDINGS_SECTION] = section_digest(&compressed).into();
     let encoded_metadata = serde_json::to_vec(&metadata).unwrap();
-    let mut rebuilt = Vec::new();
-    rebuilt.extend_from_slice(&bytes[..9]);
-    rebuilt.extend_from_slice(&(encoded_metadata.len() as u32).to_le_bytes());
-    rebuilt.extend_from_slice(&encoded_metadata);
+    let mut rebuilt = sealed_metadata(&bytes[..9], &encoded_metadata);
     rebuilt.extend_from_slice(&bytes[13 + old_metadata_len..old_edge_start]);
     rebuilt.extend_from_slice(&compressed);
     rebuilt.extend_from_slice(&bytes[old_edge_start + old_edge_len..]);

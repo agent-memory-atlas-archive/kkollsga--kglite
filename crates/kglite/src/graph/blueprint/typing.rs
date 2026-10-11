@@ -417,7 +417,7 @@ fn build_column_data(
 /// A cell declared `duration`: the `{"months", "days", "seconds"}` object a
 /// duration renders as (each field optional). Anything else is null, as an
 /// unparseable int cell is.
-fn parse_duration_cell(text: &str, is_null: bool) -> Option<(i32, i32, i64)> {
+fn parse_duration_cell(text: &str, is_null: bool) -> Option<(i32, i32, i64, i32)> {
     if is_null {
         return None;
     }
@@ -427,7 +427,8 @@ fn parse_duration_cell(text: &str, is_null: bool) -> Option<(i32, i32, i64)> {
             months,
             days,
             seconds,
-        } => Some((months, days, seconds)),
+            nanos,
+        } => Some((months, days, seconds, nanos)),
         _ => None,
     }
 }

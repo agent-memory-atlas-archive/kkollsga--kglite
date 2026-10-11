@@ -94,17 +94,27 @@ fn json_to_value(value: &str) -> Value {
     }
 }
 
-/// A `kg:duration` literal, `months,days,seconds`; malformed text stays a string.
+/// A `kg:duration` literal, `months,days,seconds` with an optional trailing
+/// `,nanos` (0..1e9); malformed text stays a string.
 fn kg_duration_to_value(value: &str) -> Value {
     let mut parts = value.split(',');
     let parsed = (|| {
         let months = parts.next()?.trim().parse().ok()?;
         let days = parts.next()?.trim().parse().ok()?;
         let seconds = parts.next()?.trim().parse().ok()?;
+        let nanos: i32 = match parts.next() {
+            None => 0,
+            Some(n) => n
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| (0..1_000_000_000).contains(n))?,
+        };
         parts.next().is_none().then_some(Value::Duration {
             months,
             days,
             seconds,
+            nanos,
         })
     })();
     parsed.unwrap_or_else(|| Value::String(value.to_string()))
@@ -173,6 +183,7 @@ fn parse_xsd_duration(value: &str) -> Option<Value> {
         months: i32::try_from(months * sign).ok()?,
         days: i32::try_from(days * sign).ok()?,
         seconds: seconds * sign,
+        nanos: 0,
     })
 }
 
@@ -428,7 +439,8 @@ mod tests {
             Value::Duration {
                 months: 18,
                 days: 2,
-                seconds: 10800
+                seconds: 10800,
+                nanos: 0
             }
         );
         assert_eq!(
@@ -436,7 +448,8 @@ mod tests {
             Value::Duration {
                 months: 0,
                 days: 0,
-                seconds: -90
+                seconds: -90,
+                nanos: 0
             }
         );
         // Malformed or fractional forms keep their text.

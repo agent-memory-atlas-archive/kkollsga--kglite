@@ -679,6 +679,7 @@ mod tests {
                 months: 0,
                 days: 1,
                 seconds: 0,
+                nanos: 0,
             },
             Value::Point { lat: 1.0, lon: 2.0 },
             Value::String("s".into()),

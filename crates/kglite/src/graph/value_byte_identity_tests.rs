@@ -187,6 +187,7 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                 months: 1,
                 days: -5,
                 seconds: 3600,
+                nanos: 0,
             },
         ),
         (
@@ -250,6 +251,7 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                 months: 0,
                 days: 0,
                 seconds: 0,
+                nanos: 0,
             },
         ),
         (
@@ -258,6 +260,7 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                 months: i32::MIN,
                 days: i32::MAX,
                 seconds: i64::MIN,
+                nanos: 0,
             },
         ),
         (
@@ -277,6 +280,7 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                     months: 0,
                     days: 1,
                     seconds: 2,
+                    nanos: 0,
                 },
                 Value::Point { lat: 1.0, lon: 2.0 },
                 Value::NodeRef(3),
@@ -293,6 +297,7 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                         months: 2,
                         days: 0,
                         seconds: -1,
+                        nanos: 0,
                     },
                 ),
                 (
@@ -300,6 +305,44 @@ fn value_fixtures() -> Vec<(&'static str, Value)> {
                     Value::Timestamp(date.and_hms_opt(23, 59, 59).unwrap()),
                 ),
             ])),
+        ),
+        // Sub-second durations: the appended `DurationFine` tag (16). A
+        // `nanos == 0` duration above must keep tag 9; these must not.
+        (
+            "duration_fine_one_nano",
+            Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: 0,
+                nanos: 1,
+            },
+        ),
+        (
+            "duration_fine",
+            Value::Duration {
+                months: 1,
+                days: -2,
+                seconds: -3,
+                nanos: 500,
+            },
+        ),
+        (
+            "duration_fine_extremes",
+            Value::Duration {
+                months: i32::MIN,
+                days: i32::MAX,
+                seconds: i64::MIN,
+                nanos: 999_999_999,
+            },
+        ),
+        (
+            "list_fine_duration",
+            Value::List(vec![Value::Duration {
+                months: 0,
+                days: 0,
+                seconds: 0,
+                nanos: 5,
+            }]),
         ),
     ]
 }
@@ -341,6 +384,10 @@ const VALUE_BYTE_GOLDEN: &[(&str, &str)] = &[
     ("noderef_zero", "0800"),
     ("list_temporal", "0d06050a323032342d30332d31350f1a323032342d30332d31355430313a30323a30332e3030303030340900020406000000000000f03f0000000000000040080307"),
     ("map_temporal", "0e030164050a323032342d30332d313503647572090400010274730f13323032342d30332d31355432333a35393a3539"),
+    ("duration_fine_one_nano", "1000000002"),
+    ("duration_fine", "10020305e807"),
+    ("duration_fine_extremes", "10ffffffff0ffeffffff0fffffffffffffffffff01fea7d6b907"),
+    ("list_fine_duration", "0d01100000000a"),
 ];
 
 /// Standalone struct encodings — the projection-boundary types serialized on
@@ -564,13 +611,17 @@ fn mask_version_fields(bytes: &[u8], version: &[u8]) -> Vec<u8> {
     const METADATA_LEN_START: usize = 4 + 1 + std::mem::size_of::<u32>();
     const METADATA_LEN_END: usize = METADATA_LEN_START + std::mem::size_of::<u32>();
 
-    assert!(bytes.starts_with(&crate::graph::io::magic::V7_MAGIC));
+    assert!(bytes.starts_with(&crate::graph::io::magic::V8_MAGIC));
     let mut normalized = bytes.to_vec();
     let metadata_len = u32::from_le_bytes(
         normalized[METADATA_LEN_START..METADATA_LEN_END]
             .try_into()
             .unwrap(),
     );
+    // The metadata block ends in a CRC32 over the header and the JSON, so it
+    // moves with the version string exactly as the JSON does; blank it.
+    let crc_end = METADATA_LEN_END + metadata_len as usize;
+    normalized[crc_end - 4..crc_end].copy_from_slice(&[0; 4]);
     let normalized_len = metadata_len
         .checked_sub(version.len() as u32)
         .and_then(|len| len.checked_add(PINNED_VERSION_WIDTH))
@@ -597,15 +648,107 @@ fn mask_version_fields(bytes: &[u8], version: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `Value`'s serde form is hand-written (`WireRef`/`Wire`): a whole-second
+/// duration must keep tag 9 and decode from today's bytes, a sub-second one takes
+/// the appended tag, and a reader that predates that tag must refuse it instead
+/// of misreading.
+#[test]
+fn duration_wire_forms_round_trip_and_an_old_reader_refuses_the_fine_tag() {
+    let whole = Value::Duration {
+        months: 1,
+        days: -2,
+        seconds: -3,
+        nanos: 0,
+    };
+    let fine = Value::Duration {
+        months: 1,
+        days: -2,
+        seconds: -3,
+        nanos: 500,
+    };
+    let whole_bytes = postcard::to_stdvec(&whole).unwrap();
+    let fine_bytes = postcard::to_stdvec(&fine).unwrap();
+    assert_eq!(hex(&whole_bytes), "09020305");
+    assert_eq!(hex(&fine_bytes), "10020305e807");
+    assert_eq!(postcard::from_bytes::<Value>(&whole_bytes).unwrap(), whole);
+    assert_eq!(postcard::from_bytes::<Value>(&fine_bytes).unwrap(), fine);
+
+    // The shape of `Value` as 0.19.x declared it: sixteen variants, tags 0..=15.
+    // The variants are decode targets only: the test reads the Result, never the payload.
+    #[derive(serde::Deserialize, Debug)]
+    #[allow(dead_code)]
+    enum Shipped {
+        UniqueId(u32),
+        Int64(i64),
+        Float64(f64),
+        String(String),
+        Boolean(bool),
+        DateTime(String),
+        Point {
+            lat: f64,
+            lon: f64,
+        },
+        Null,
+        NodeRef(u32),
+        Duration {
+            months: i32,
+            days: i32,
+            seconds: i64,
+        },
+        Node(u8),
+        Relationship(u8),
+        Path(u8),
+        List(Vec<Shipped>),
+        Map(u8),
+        Timestamp(String),
+    }
+    assert!(postcard::from_bytes::<Shipped>(&whole_bytes).is_ok());
+    assert!(postcard::from_bytes::<Shipped>(&fine_bytes).is_err());
+    let nested = postcard::to_stdvec(&Value::List(vec![Value::Null, fine])).unwrap();
+    assert!(postcard::from_bytes::<Shipped>(&nested).is_err());
+}
+
+/// The self-describing (JSON) encoding of `Value` is reachable through the
+/// export paths that serialise collections directly. A whole-second duration
+/// must keep the shape the derived impl wrote.
+#[test]
+fn value_json_encoding_of_a_whole_second_duration_is_unchanged() {
+    let whole = Value::Duration {
+        months: 1,
+        days: -2,
+        seconds: -3,
+        nanos: 0,
+    };
+    assert_eq!(
+        serde_json::to_string(&whole).unwrap(),
+        r#"{"Duration":{"months":1,"days":-2,"seconds":-3}}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(r#"{"Duration":{"months":1,"days":-2,"seconds":-3}}"#)
+            .unwrap(),
+        whole
+    );
+    let fine = Value::Duration {
+        months: 0,
+        days: 0,
+        seconds: 0,
+        nanos: 7,
+    };
+    let text = serde_json::to_string(&fine).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), fine);
+}
+
 #[test]
 fn version_mask_is_independent_of_the_version_string_length() {
     fn container(version: &str) -> Vec<u8> {
         let metadata = format!(r#"{{"library_version":"{version}"}}"#);
-        let mut bytes = crate::graph::io::magic::V7_MAGIC.to_vec();
+        let mut bytes = crate::graph::io::magic::V8_MAGIC.to_vec();
         bytes.push(CURRENT_CODEC.tag());
         bytes.extend_from_slice(&0_u32.to_le_bytes());
-        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(metadata.len() as u32 + 4).to_le_bytes());
         bytes.extend_from_slice(metadata.as_bytes());
+        // A CRC that differs with the version string, as a real one does.
+        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
         bytes.extend_from_slice(b"same section payload");
         bytes
     }
@@ -996,9 +1139,10 @@ fn kgl_reload_preserves_column_slot_order() {
 
 /// sha256 of the `.kgl` bytes for [`kgl_fixture_bytes`]. Regenerate only via
 /// `KGLITE_REGEN_VALUE_BYTE_GOLDEN=1`, and only for a deliberate format change.
-const KGL_FIXTURE_DIGEST: &str = "837dacc48fd0e372b70e5d168e290541b5135c80893d6d139d9b9aa0878ba219";
+/// Last moved by the `.kgl` v8 container (metadata CRC32 trailer).
+const KGL_FIXTURE_DIGEST: &str = "f930a12f2cc4b3b6954286091978cd276a7943475c107a13b145d91c29b90b08";
 
 /// sha256 of the `.kgl` bytes for [`kgl_int_title_fixture_bytes`]; same
 /// regeneration rule as [`KGL_FIXTURE_DIGEST`].
 const KGL_INT_TITLE_DIGEST: &str =
-    "bbafe1092de0a69b86fe8a544205a48a3ccdce6d5988d5a34f8ad2fc841fd798";
+    "0162f15f7550fbd1a279ce687a06ce4eadfce697c219bbcc7465238925253f80";
