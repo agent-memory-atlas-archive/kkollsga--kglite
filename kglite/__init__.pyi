@@ -1022,15 +1022,32 @@ def open_session(
     storage: str | None = None,
     defer_index_rebuild: bool | None = None,
     max_load_mb: int | None = None,
+    durable: bool | Literal["full", "normal", "off"] | None = None,
+    auto_checkpoint_wal_mib: int | None = None,
 ) -> "Session":
-    """Load a saved graph at ``path`` directly as a thread-safe :class:`Session`.
+    """Open a graph as a thread-safe :class:`Session`.
 
-    The one-call shortcut for the concurrent-serving case — equivalent to
-    ``kglite.load(path).session()``. Share the returned ``Session`` across a
-    thread pool: :meth:`Session.cypher` reads run lock-free,
-    :meth:`Session.execute` writes serialize and compose, and
-    :meth:`Session.cursor` hands each thread its own per-thread fluent handle.
-    The file must already exist.
+    Two forms, chosen by ``durable``.
+
+    **Without ``durable``** (the default): the read-only load. Loads the saved
+    graph at ``path`` (which must exist) — equivalent to
+    ``kglite.load(path).session()`` — taking no writer lease and reading no
+    write-ahead log. Share the returned ``Session`` across a thread pool:
+    :meth:`Session.cypher` reads run lock-free, :meth:`Session.execute` writes
+    serialize and compose, and :meth:`Session.cursor` hands each thread its own
+    per-thread fluent handle. Those writes are not logged.
+
+    **With ``durable``**: the server entry point. Opens (or creates) ``path``
+    through the engine entry the Bolt server uses and returns a durable
+    ``Session`` that owns the writer lease until :meth:`Session.close`. The log
+    is replayed on open, so a crashed session's committed writes reappear
+    through this call or :func:`open`. Writes go through the engine's group
+    commit with the GIL released, so any number of threads may call
+    :meth:`Session.execute` and :meth:`Session.begin` concurrently — at
+    ``"full"`` concurrent writers share log barriers — while readers never wait
+    for an fsync. A second process (or a second open in this one) is refused
+    with :class:`WriterLeaseHeldError`. Use :func:`open` instead when one
+    thread owns the graph and wants the fluent API.
 
     For embedding-backed semantic search over a query string, register the
     model on the ``KnowledgeGraph`` first::
@@ -1040,11 +1057,33 @@ def open_session(
         s = g.session()
 
     Args:
-        path: Path to the ``.kgl`` file.
-        storage: As on :func:`load`.
-        defer_index_rebuild: As on :func:`load`. Well suited to this entry
-            point: a session that only reads never pays the deferred build.
-        max_load_mb: As on :func:`load` — a ceiling in **megabytes**.
+        path: Path to the ``.kgl`` file (or disk-mode directory).
+        storage: ``"memory"``, ``"mapped"`` or ``"disk"``. As on :func:`load`
+            for the read-only form. With ``durable``, a missing path is created
+            in this mode (default ``"memory"``) and an existing graph is
+            converted to it; omit it to keep the checkpoint's own mode.
+        defer_index_rebuild: As on :func:`load`. Read-only form only.
+        max_load_mb: As on :func:`load` — a ceiling in **megabytes**. Read-only
+            form only.
+        durable: ``"full"`` (every commit survives power loss), ``"normal"``
+            (survives the process dying, not an OS crash), ``"off"`` (no log;
+            persistence is :meth:`Session.save` and :meth:`Session.close`), or
+            a bool (``True`` is ``"full"``, ``False`` is ``"off"``). Unlike
+            :func:`open` there is no implicit level: passing ``durable``
+            selects this form. ``storage="disk"`` supports only ``"off"``.
+        auto_checkpoint_wal_mib: Log size, in MiB, that triggers an automatic
+            online checkpoint on a background thread; ``0`` disables it. As on
+            :func:`open`. Durable form only.
+
+    Raises:
+        ValueError: ``durable`` is not a valid level, a disk graph was asked to
+            log, an argument applies only to the other form, or ``durable="off"``
+            was passed over a log holding commits the checkpoint lacks (reopen
+            with ``"full"`` or ``"normal"`` to replay them first).
+        WriterLeaseHeldError: Another owner holds the path (durable form).
+        OSError: The log could not be read or opened for append.
+        RuntimeError: The log could not be replayed onto the checkpoint.
+        FileError: The read-only form's file does not exist.
     """
     ...
 
@@ -10990,6 +11029,19 @@ class Session:
     ``Session`` as the live store after creating it. Its embedding-model binding
     is captured at creation and inherited by snapshots and cursors. The binding
     is runtime-only and is not serialized with graph data.
+
+    A **durable** session comes from :func:`open_session` with ``durable=``.
+    It owns the path's writer lease from open until :meth:`close`, replays the
+    write-ahead log on open, and routes :meth:`execute` and :meth:`begin`
+    through the engine's group commit: threads never raise a borrow error, the
+    GIL is released while a write waits for its lock or fsync, and at
+    ``durable="full"`` concurrent writers share log barriers. Readers take a
+    snapshot and never wait on a write's fsync. :meth:`save`, :meth:`sync`,
+    :meth:`close` and :meth:`begin` work only on a durable session; elsewhere
+    they raise :class:`NotDurableError`. A session from
+    :meth:`KnowledgeGraph.session` keeps its non-durable behaviour: it never
+    logs, and refuses writes when its source is a durable graph. A durable
+    session has no embedding-model binding.
     """
 
     def cypher(
@@ -11174,7 +11226,10 @@ class Session:
         graph loaded from a file, backing up onto that file is refused.
         ``path`` may be any location the process can write; an existing file is
         replaced atomically. Disk-mode graphs are refused. A Session does not
-        carry a write-ahead log, so ``lsn`` is ``None``.
+        carry a write-ahead log, so ``lsn`` is ``None``; a durable session
+        reports the last log sequence number the backup includes. On a durable
+        session, backing up onto its own checkpoint or log is refused, and a
+        closed session raises :class:`FileIoError`.
 
         Args:
             path: Destination file, typically ``*.kgl``.
@@ -11210,6 +11265,98 @@ class Session:
     @property
     def node_types(self) -> list[str]:
         """Node type names present in the current snapshot."""
+        ...
+
+    def begin(self) -> SessionTransaction:
+        """Begin a read-write transaction on a durable session.
+
+        Snapshot isolation with optimistic concurrency, as
+        :meth:`KnowledgeGraph.begin`: the transaction reads and writes a private
+        working copy, and :meth:`SessionTransaction.commit` publishes it as one
+        log frame. Several transactions may be open at once; the first to
+        commit wins and the others raise :class:`TransactionConflictError`.
+
+        Raises:
+            NotDurableError: This session was not opened with ``durable=``.
+            FileIoError: The session is closed.
+        """
+        ...
+
+    def save(self, path: str | Path | None = None) -> None:
+        """Write a checkpoint of the live graph to this session's own path.
+
+        At ``durable="off"`` this is the only persistence; at ``"full"`` and
+        ``"normal"`` it also folds the log into the checkpoint. Writers wait
+        for the checkpoint's brief snapshot and trim, not for the file write.
+        ``path`` exists for symmetry with :meth:`KnowledgeGraph.save`: naming
+        the session's own checkpoint is allowed, any other path raises
+        ``ValueError`` — use :meth:`backup` for a copy elsewhere.
+
+        Raises:
+            NotDurableError: This session was not opened with ``durable=``.
+            ValueError: ``path`` is not the session's checkpoint.
+            FileIoError: The session is closed, or the write failed.
+        """
+        ...
+
+    def sync(self) -> None:
+        """Flush every committed log frame to stable storage.
+
+        The barrier ``durable="full"`` takes on every commit, taken on demand,
+        so a ``"normal"`` session can reach a power-safe point at the end of a
+        request without a full checkpoint. A no-op at ``"full"``.
+
+        Raises:
+            NotDurableError: This session has no log (not opened with
+                ``durable=``, or ``durable="off"``).
+            FileIoError: The session is closed, or the flush failed.
+        """
+        ...
+
+    def close(self) -> None:
+        """Checkpoint if anything changed, release the writer lease and close the session.
+
+        After ``close()`` every write, :meth:`begin`, :meth:`save` and
+        :meth:`SessionTransaction.commit` raises :class:`FileIoError`
+        (``code`` ``'DurabilityFailed'``); reads keep answering from the last
+        state. Idempotent. A failed checkpoint leaves the session open and the
+        lease held, so the call can be retried. A session dropped without
+        ``close()`` keeps what its level promises: ``"full"`` and ``"normal"``
+        recover from the log on the next open, ``"off"`` loses whatever was
+        never saved.
+
+        Raises:
+            NotDurableError: This session was not opened with ``durable=``.
+            FileIoError: The checkpoint failed.
+        """
+        ...
+
+    def __enter__(self) -> Session: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any | None,
+    ) -> bool:
+        """Close the session; a clean exit checkpoints, an exception does not.
+
+        Committed log frames survive either way at ``"full"`` and ``"normal"``.
+        A non-durable session ignores the exit."""
+        ...
+
+    @property
+    def closed(self) -> bool:
+        """Whether :meth:`close` has completed. Always ``False`` on a non-durable session."""
+        ...
+
+    @property
+    def path(self) -> str | None:
+        """The path a durable session owns, or ``None``."""
+        ...
+
+    @property
+    def durability(self) -> Literal["full", "normal", "off"] | None:
+        """The durability level in force, or ``None`` on a non-durable session."""
         ...
 
 class FrozenGraph:
@@ -11409,6 +11556,66 @@ class Transaction:
         ...
 
     def __enter__(self) -> Transaction: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any | None,
+    ) -> bool: ...
+
+class SessionTransaction:
+    """A read-write transaction on a durable :class:`Session`, from :meth:`Session.begin`.
+
+    Snapshot isolation: reads and writes go to a private working copy and become
+    visible, and durable, only at :meth:`commit`, which logs the whole
+    transaction as one frame. A context manager commits on a clean exit and
+    rolls back on an exception. A transaction is single-owner; share the
+    :class:`Session`, not one transaction.
+    """
+
+    def cypher(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        to_df: bool = False,
+        timeout_ms: int | None = None,
+        max_work_units: int | None = None,
+        row_limit: int | None = None,
+    ) -> Any:
+        """Run a Cypher query, read or write, against this transaction's working copy.
+
+        Reads see the transaction's own uncommitted writes. Options are those of
+        :meth:`Session.cypher`.
+
+        Raises:
+            ArgumentError: The transaction was already committed or rolled back.
+        """
+        ...
+
+    def commit(self) -> None:
+        """Publish the transaction as one log frame.
+
+        An empty transaction is a no-op.
+
+        Raises:
+            TransactionConflictError: Another commit landed since ``begin()``.
+            OntologyViolationError: The end state breaks an ``error``-level rule.
+            FileIoError: The session closed, or the log refused the frame
+                (``code`` ``'DurabilityFailed'``); nothing was published.
+            ArgumentError: Already committed or rolled back.
+        """
+        ...
+
+    def rollback(self) -> None:
+        """Discard the transaction's changes. It cannot be used again."""
+        ...
+
+    @property
+    def active(self) -> bool:
+        """``True`` until the transaction is committed or rolled back."""
+        ...
+
+    def __enter__(self) -> SessionTransaction: ...
     def __exit__(
         self,
         exc_type: type[BaseException] | None,

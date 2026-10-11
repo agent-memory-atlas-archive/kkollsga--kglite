@@ -245,6 +245,18 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/session_durable.rs::fn:cypher:fn cypher( &mut self, py: Python<'_>, query: &str, params: Option<&Bound<'_, PyDict>>, to_df: bool, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/session_durable.rs::fn:cypher:fn cypher( &mut self, py: Python<'_>, query: &str, params: Option<&Bound<'_, PyDict>>, to_df: bool, timeout_ms: Option<u64>, max_work_units: Option<usize>, row_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/session_durable.rs::fn:run_durable_write:pub(super) fn run_durable_write( &self, py: Python<'_>, durable: &Arc<DurableHandle>, query: &str, param_map: HashMap<String, Value>, qopts: QueryOpts, ) -> PyResult<Py<PyAny>>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/timeseries.rs::fn:add_timeseries:fn add_timeseries( &mut self, py: Python<'_>, node_type: String, data: &Bound<'_, PyAny>, fk: String, time_key: Vec<String>, channels: &Bound<'_, PyAny>, resolution: Option<String>, units: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },

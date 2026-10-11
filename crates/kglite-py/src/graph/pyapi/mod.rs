@@ -25,6 +25,7 @@ pub mod relationship_vectors;
 pub mod result_table;
 pub mod result_view;
 pub mod session;
+pub(crate) mod session_durable;
 pub mod skills;
 pub mod spatial;
 pub mod tables;

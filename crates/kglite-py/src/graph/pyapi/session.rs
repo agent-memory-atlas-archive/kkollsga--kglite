@@ -69,9 +69,9 @@ use kglite_core::api::GraphRead;
 /// The source embedder binding is captured at Session creation.
 #[pyclass(module = "kglite", frozen)]
 pub struct Session {
-    defaults: QueryDefaults,
+    pub(super) defaults: QueryDefaults,
     source_authority: Option<super::lifecycle::SourceAuthority>,
-    pub(crate) inner: CoreSession,
+    pub(crate) inner: Arc<CoreSession>,
     /// The file the seeding graph was loaded from, so a backup over it is refused.
     live_path: Option<std::path::PathBuf>,
     pub(crate) embedder: Option<Arc<dyn crate::graph::embedder::Embedder>>,
@@ -79,6 +79,9 @@ pub struct Session {
     /// concurrent `execute()` calls compose (each sees prior commits) instead
     /// of racing into a lost update. Readers never touch it.
     pub(crate) write_lock: Mutex<()>,
+    /// Present on a session from `kglite.open_session(path, durable=...)`: it
+    /// owns the path's writer lease and writes through the core's auto-commit.
+    pub(super) durable: Option<Arc<super::session_durable::DurableHandle>>,
 }
 
 thread_local! {
@@ -119,7 +122,9 @@ impl Drop for CallbackWriteGuard {
 
 /// Decode an optional Python params dict into a native param map under the
 /// GIL (must happen before any `py.detach`).
-fn decode_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<String, Value>> {
+pub(super) fn decode_params(
+    params: Option<&Bound<'_, PyDict>>,
+) -> PyResult<HashMap<String, Value>> {
     let mut map = HashMap::new();
     if let Some(params_dict) = params {
         for (key, val) in params_dict.iter() {
@@ -149,17 +154,17 @@ fn may_invoke_embedder(parsed: &mut cypher::CypherQuery, params: &HashMap<String
 }
 
 /// Decoded per-call query options shared by the read and write paths.
-struct QueryOpts {
-    to_df: bool,
-    deadline: Option<std::time::Instant>,
-    deadline_origin: Option<std::time::Instant>,
-    max_work_units: Option<usize>,
-    row_limit: Option<usize>,
-    output_csv: bool,
+pub(super) struct QueryOpts {
+    pub(super) to_df: bool,
+    pub(super) deadline: Option<std::time::Instant>,
+    pub(super) deadline_origin: Option<std::time::Instant>,
+    pub(super) max_work_units: Option<usize>,
+    pub(super) row_limit: Option<usize>,
+    pub(super) output_csv: bool,
     /// Role-scoped write whitelist; only consulted on the write path.
-    write_scope: Option<std::collections::HashSet<String>>,
-    git_sha: Option<String>,
-    modified_by: Option<String>,
+    pub(super) write_scope: Option<std::collections::HashSet<String>>,
+    pub(super) git_sha: Option<String>,
+    pub(super) modified_by: Option<String>,
 }
 
 impl QueryOpts {
@@ -217,10 +222,29 @@ impl Session {
         Session {
             defaults,
             source_authority,
-            inner: CoreSession::from_arc(inner),
+            inner: Arc::new(CoreSession::from_arc(inner)),
             live_path: None,
             embedder,
             write_lock: Mutex::new(()),
+            durable: None,
+        }
+    }
+
+    /// The session `kglite.open_session(path, durable=...)` returns: the core
+    /// session `open_path` built, with the lease and lifecycle state beside it.
+    pub(super) fn durable_owner(
+        inner: CoreSession,
+        durable: Arc<super::session_durable::DurableHandle>,
+        live_path: std::path::PathBuf,
+    ) -> Self {
+        Session {
+            defaults: QueryDefaults::default(),
+            source_authority: None,
+            inner: Arc::new(inner),
+            live_path: Some(live_path),
+            embedder: None,
+            write_lock: Mutex::new(()),
+            durable: Some(durable),
         }
     }
 
@@ -398,7 +422,7 @@ impl Session {
 
 /// Marshal a `CypherResult` into the Python return shape (CSV string / pandas
 /// DataFrame / `ResultView`).
-fn marshal_result(
+pub(super) fn marshal_result(
     py: Python<'_>,
     result: cypher::CypherResult,
     to_df: bool,
@@ -556,6 +580,9 @@ impl Session {
             modified_by,
         );
         if is_mutation {
+            if let Some(durable) = &self.durable {
+                return self.run_durable_write(py, durable, query, param_map, qopts);
+            }
             self.run_write(py, query, param_map, qopts, callback_capable)
         } else {
             self.run_read(py, query, param_map, qopts)
@@ -620,6 +647,11 @@ impl Session {
         let opts = kglite_core::api::session::BackupOptions {
             live_path: self.live_path.clone(),
         };
+        if self.durable.as_ref().is_some_and(|d| d.is_closed()) {
+            return Err(crate::error_py::kg_to_pyerr(KgError::DurabilityFailed {
+                message: "this session is closed, so it no longer accepts backups".to_string(),
+            }));
+        }
         let report = py
             .detach(|| self.inner.backup(&path, &opts))
             .map_err(super::kg_core::save_error_to_pyerr)?;

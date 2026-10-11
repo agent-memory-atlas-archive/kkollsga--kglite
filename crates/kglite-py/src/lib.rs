@@ -162,7 +162,8 @@ fn load_request_err_to_pyerr(e: std::io::Error, path: Option<&str>) -> PyErr {
 /// Warn — never raise — when `path`'s write-ahead sidecar holds commits the
 /// checkpoint just loaded does not contain.
 ///
-/// The log-less entry points (`kglite.load`, `kglite.open_session`) read the
+/// The log-less entry points (`kglite.load`, `kglite.open_session` without
+/// `durable`) read the
 /// `.kgl` alone, so they hand back a graph silently missing committed writes.
 /// `kglite.open` refuses that outright, but these two must not: reading a
 /// checkpoint while another process writes the path durably is the documented
@@ -392,39 +393,57 @@ fn load_rdf(
     Ok(KnowledgeGraph::from_arc(std::sync::Arc::new(graph)))
 }
 
-/// Load a saved graph at `path` directly as a thread-safe [`Session`] — the
-/// one-call shortcut for the concurrent-serving case (equivalent to
-/// `kglite.load(path).session()`).
+/// Open a graph as a thread-safe `Session`: a read-only load by default, or a
+/// durable, writable session with `durable=`.
 ///
-/// Share the returned `Session` across a thread pool: `cypher()` reads run
-/// lock-free, `execute()` writes serialize (and compose), and `cursor()` hands
-/// each thread its own per-thread fluent handle. The file must already exist.
+/// Without `durable`, this loads the saved graph at `path` (which must exist)
+/// and wraps it in a `Session` that takes no lease and reads no write-ahead log
+/// (equivalent to `kglite.load(path).session()`). With `durable`, it opens or
+/// creates `path` through the same core entry the servers use: the session
+/// owns the writer lease, replays the log, and routes `execute()` writes
+/// through group commit with the GIL released.
 ///
-/// For embedding-backed semantic search (`text_score()` over a query string),
-/// register the model first via the `KnowledgeGraph` path:
-/// `g = kglite.load(path); g.set_embedder(model); s = g.session()`.
-///
-/// `storage`, `defer_index_rebuild` and `max_load_mb` mean exactly what they
-/// mean on `kglite.load` — a session is a load plus a thread-safe handle over
-/// it.
-/// Deferral suits this entry point especially: a session that only reads never
-/// pays the build at all.
+/// `defer_index_rebuild` and `max_load_mb` apply to the load form only;
+/// `auto_checkpoint_wal_mib` to the durable form only.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, durable=None, auto_checkpoint_wal_mib=None))]
 fn open_session(
     py: Python<'_>,
     path: String,
     storage: Option<&str>,
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
+    durable: Option<Bound<'_, PyAny>>,
+    auto_checkpoint_wal_mib: Option<u64>,
 ) -> PyResult<Session> {
-    let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb)?;
-    let inner = py
-        .detach(|| kglite_core::api::io::load_file_with(&path, &options))
-        .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
-    warn_if_sidecar_runs_ahead(py, &path, inner.checkpoint_lsn);
-    warn_data_advisories(py, &inner);
-    Ok(Session::from_arc(inner, None))
+    let Some(durable) = durable else {
+        if auto_checkpoint_wal_mib.is_some() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "auto_checkpoint_wal_mib applies only to a durable session; pass durable= too.",
+            ));
+        }
+        let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb)?;
+        let inner = py
+            .detach(|| kglite_core::api::io::load_file_with(&path, &options))
+            .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
+        warn_if_sidecar_runs_ahead(py, &path, inner.checkpoint_lsn);
+        warn_data_advisories(py, &inner);
+        return Ok(Session::from_arc(inner, None));
+    };
+    if defer_index_rebuild.is_some() || max_load_mb.is_some() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "defer_index_rebuild and max_load_mb apply to the read-only load form; a durable \
+             session (durable=...) opens through the writer path, which takes neither.",
+        ));
+    }
+    let level = durable_level_from_arg(&durable)?;
+    graph::pyapi::session_durable::open_durable_session(
+        py,
+        path,
+        storage,
+        level,
+        auto_checkpoint_wal_mib,
+    )
 }
 
 /// Load an in-memory graph from a `.kgl` byte buffer produced by
@@ -598,30 +617,7 @@ fn open(
                     std::time::Duration::ZERO,
                 )
             })
-            .map_err(|refusal| {
-                // Contention converts to `KgError::WriterLeaseHeld` (the holder
-                // structured); any other refusal is a genuine I/O failure whose
-                // message already names path and fault, with no second process
-                // to route around.
-                match crate::error::KgError::from(refusal) {
-                    crate::error::KgError::WriterLeaseHeld { message, holder } => {
-                        // The engine's message is binding-neutral by design, so
-                        // the Python-specific way out is appended here rather
-                        // than baked into core: most callers who hit this
-                        // wanted to *read* a graph someone else is writing.
-                        crate::error_py::kg_to_pyerr(crate::error::KgError::WriterLeaseHeld {
-                            message: format!(
-                                "{message} To read this graph while another process writes it, \
-                                 use kglite.load(path) or kglite.open_session(path), which take \
-                                 no lease. Pass kglite.open(..., lock=False) only if you are \
-                                 coordinating writers yourself.",
-                            ),
-                            holder,
-                        })
-                    }
-                    other => crate::error_py::kg_to_pyerr(other),
-                }
-            })?,
+            .map_err(lease_refusal_to_pyerr)?,
         )
     } else {
         None
@@ -690,6 +686,34 @@ fn open(
     // about the path's *data*. See `setup_durable`.
     setup_durable(&mut kg, &path, level, auto_checkpoint_wal_mib)?;
     Ok(kg)
+}
+
+/// Map a refused writer lease to the wheel's exception: contention becomes
+/// `WriterLeaseHeldError` (holder structured), anything else a genuine I/O
+/// failure whose message already names path and fault. Shared by `open` and
+/// `open_session(durable=...)`.
+fn lease_refusal_to_pyerr(refusal: kglite_core::api::io::LeaseRefusal) -> PyErr {
+    // Contention converts to `KgError::WriterLeaseHeld` (the holder
+    // structured); any other refusal is a genuine I/O failure whose message
+    // already names path and fault, with no second process to route around.
+    match crate::error::KgError::from(refusal) {
+        crate::error::KgError::WriterLeaseHeld { message, holder } => {
+            // The engine's message is binding-neutral by design, so the
+            // Python-specific way out is appended here rather than baked into
+            // core: most callers who hit this wanted to *read* a graph someone
+            // else is writing.
+            crate::error_py::kg_to_pyerr(crate::error::KgError::WriterLeaseHeld {
+                message: format!(
+                    "{message} To read this graph while another process writes it, \
+                     use kglite.load(path) or kglite.open_session(path), which take \
+                     no lease. Pass kglite.open(..., lock=False) only if you are \
+                     coordinating writers yourself.",
+                ),
+                holder,
+            })
+        }
+        other => crate::error_py::kg_to_pyerr(other),
+    }
 }
 
 /// Classify the `io::Error` `open_or_create_graph_in_mode` returns into the
@@ -1003,6 +1027,7 @@ fn kglite(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FrozenGraph>()?;
     m.add_class::<Session>()?;
     m.add_class::<Transaction>()?;
+    m.add_class::<graph::pyapi::session_durable::SessionTransaction>()?;
     m.add_class::<ResultView>()?;
     m.add_class::<ResultIter>()?;
     error_py::register(py, m)?;

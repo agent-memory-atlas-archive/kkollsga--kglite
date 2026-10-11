@@ -62,7 +62,7 @@ pub(crate) use self::noderefs::{
 pub use self::noderefs::{resolve_noderef_value, resolve_noderefs};
 pub use self::online_checkpoint::{OnlineCheckpointReport, DEFAULT_AUTO_CHECKPOINT_WAL_BYTES};
 pub use self::open_path::{
-    open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
+    open_path, open_path_observed, LogOpenFailure, OpenError, OpenSpec, OpenStep, OpenedSession,
 };
 pub use self::query_defaults::{
     deadline_from, deadline_span, QueryDefaults, ResolvedQueryOptions, DEFAULT_TIMEOUT_MS,

@@ -2970,11 +2970,25 @@ pub fn kglite::api::recipes::validate_identifier(&str, &str) -> kglite::api::rec
 pub type kglite::api::recipes::CatalogResult<T> = core::result::Result<T, kglite::api::recipes::RecipeCatalogError>
 pub mod kglite::api::session
 pub mod kglite::api::session::open_path
+pub enum kglite::api::session::open_path::LogOpenFailure
+pub kglite::api::session::open_path::LogOpenFailure::Io
+pub kglite::api::session::open_path::LogOpenFailure::Refused
+pub kglite::api::session::open_path::LogOpenFailure::Replay
+impl core::clone::Clone for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::clone(&self) -> kglite::api::session::LogOpenFailure
+impl core::cmp::Eq for kglite::api::session::LogOpenFailure
+impl core::cmp::PartialEq for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::eq(&self, &kglite::api::session::LogOpenFailure) -> bool
+impl core::fmt::Debug for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::session::LogOpenFailure
+impl core::marker::StructuralPartialEq for kglite::api::session::LogOpenFailure
 pub enum kglite::api::session::open_path::OpenError
 pub kglite::api::session::open_path::OpenError::Lease(kglite::api::io::LeaseRefusal)
 pub kglite::api::session::open_path::OpenError::Open(core::io::error::Error)
 pub kglite::api::session::open_path::OpenError::Session
 pub kglite::api::session::open_path::OpenError::Session::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::open_path::OpenError::Session::failure: kglite::api::session::LogOpenFailure
 pub kglite::api::session::open_path::OpenError::Session::message: alloc::string::String
 impl core::error::Error for kglite::api::session::OpenError
 pub fn kglite::api::session::OpenError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
@@ -3057,11 +3071,25 @@ pub fn kglite::api::session::CsvImportPolicy::default() -> kglite::api::session:
 impl core::fmt::Debug for kglite::api::session::CsvImportPolicy
 pub fn kglite::api::session::CsvImportPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::session::CsvImportPolicy
+pub enum kglite::api::session::LogOpenFailure
+pub kglite::api::session::LogOpenFailure::Io
+pub kglite::api::session::LogOpenFailure::Refused
+pub kglite::api::session::LogOpenFailure::Replay
+impl core::clone::Clone for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::clone(&self) -> kglite::api::session::LogOpenFailure
+impl core::cmp::Eq for kglite::api::session::LogOpenFailure
+impl core::cmp::PartialEq for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::eq(&self, &kglite::api::session::LogOpenFailure) -> bool
+impl core::fmt::Debug for kglite::api::session::LogOpenFailure
+pub fn kglite::api::session::LogOpenFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::session::LogOpenFailure
+impl core::marker::StructuralPartialEq for kglite::api::session::LogOpenFailure
 pub enum kglite::api::session::OpenError
 pub kglite::api::session::OpenError::Lease(kglite::api::io::LeaseRefusal)
 pub kglite::api::session::OpenError::Open(core::io::error::Error)
 pub kglite::api::session::OpenError::Session
 pub kglite::api::session::OpenError::Session::durability: kglite::api::durable::DurabilityLevel
+pub kglite::api::session::OpenError::Session::failure: kglite::api::session::LogOpenFailure
 pub kglite::api::session::OpenError::Session::message: alloc::string::String
 impl core::error::Error for kglite::api::session::OpenError
 pub fn kglite::api::session::OpenError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>

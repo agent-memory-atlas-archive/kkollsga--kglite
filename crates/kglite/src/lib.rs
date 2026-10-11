@@ -990,7 +990,8 @@ pub mod api {
         /// data. A binding that serves a path (Bolt, the Node binding) calls
         /// this rather than re-sequencing the four steps.
         pub use crate::graph::session::{
-            open_path, open_path_observed, OpenError, OpenSpec, OpenStep, OpenedSession,
+            open_path, open_path_observed, LogOpenFailure, OpenError, OpenSpec, OpenStep,
+            OpenedSession,
         };
         /// `Session::checkpoint_online`'s result and the automatic-checkpoint
         /// default every surface shares.

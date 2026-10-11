@@ -1,7 +1,10 @@
 //! `open_path`: the lease-before-open order, the degrade rule, conversion
 //! reporting and recovery advisories.
 
-use super::open_path::{open_path, open_path_observed, OpenError, OpenSpec, OpenStep};
+use super::execute::ExecuteOptions;
+use super::open_path::{
+    open_path, open_path_observed, LogOpenFailure, OpenError, OpenSpec, OpenStep,
+};
 use crate::graph::io::open::OpenDisposition;
 use crate::graph::storage::mode::StorageMode;
 use crate::graph::wal::DurabilityLevel;
@@ -101,7 +104,16 @@ fn a_default_logging_level_degrades_on_disk_but_an_explicit_one_is_refused() {
     let err = open_path(&dir.path().join("b"), &explicit)
         .err()
         .expect("explicit level on disk");
-    assert!(matches!(err, OpenError::Session { .. }), "{err}");
+    assert!(
+        matches!(
+            err,
+            OpenError::Session {
+                failure: LogOpenFailure::Refused,
+                ..
+            }
+        ),
+        "{err}"
+    );
     assert!(err.to_string().contains("disk"), "{err}");
 }
 
@@ -120,4 +132,39 @@ fn a_conversion_is_reported() {
     assert_eq!(converted.converted_from, Some(StorageMode::Memory));
     assert_eq!(converted.live_mode, StorageMode::Mapped);
     assert_eq!(converted.disposition, OpenDisposition::Opened);
+}
+
+#[test]
+fn unreplayed_frames_at_off_are_a_refused_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("g.kgl");
+    let spec = OpenSpec {
+        durability: DurabilityLevel::Full,
+        ..OpenSpec::writer()
+    };
+    let opened = open_path(&path, &spec).unwrap();
+    opened.session.save(&path.to_string_lossy(), true).unwrap();
+    let params = std::collections::HashMap::new();
+    opened
+        .session
+        .execute_auto_commit("CREATE (:A)", &ExecuteOptions::eager(&params), 1)
+        .unwrap();
+    drop(opened);
+    let off = OpenSpec {
+        durability: DurabilityLevel::Off,
+        storage: None,
+        ..OpenSpec::writer()
+    };
+    let err = open_path(&path, &off).err().expect("frames not replayed");
+    let OpenError::Open(io) = &err else {
+        panic!("expected the open to refuse, got {err}");
+    };
+    assert!(
+        matches!(
+            io.get_ref()
+                .and_then(|e| e.downcast_ref::<crate::graph::durability::DurableOpenError>()),
+            Some(crate::graph::durability::DurableOpenError::Refused(_))
+        ),
+        "{err}"
+    );
 }

@@ -26,7 +26,7 @@ STUB_INTERNAL = {
     "_run_cli",
     "_run_mcp_server",
 }
-NONCONSTRUCTIBLE = {"FrozenGraph", "ResultIter", "ResultView", "Session", "Transaction"}
+NONCONSTRUCTIBLE = {"FrozenGraph", "ResultIter", "ResultView", "Session", "SessionTransaction", "Transaction"}
 
 
 def test_runtime_python_api_matches_reviewed_baseline():

@@ -5,6 +5,7 @@
     "KnowledgeGraph",
     "FrozenGraph",
     "Transaction",
+    "SessionTransaction",
     "Session",
     "ResultView",
     "ResultIter",
@@ -1698,9 +1699,29 @@
       "constructor": "()",
       "kind": "class",
       "members": {
+        "__enter__": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "__exit__": {
+          "kind": "method",
+          "signature": "(self, /, exc_type, _exc_value, _traceback)"
+        },
         "backup": {
           "kind": "method",
           "signature": "(self, /, path)"
+        },
+        "begin": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "close": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "closed": {
+          "kind": "attribute",
+          "type": "getset_descriptor"
         },
         "cursor": {
           "kind": "method",
@@ -1709,6 +1730,10 @@
         "cypher": {
           "kind": "method",
           "signature": "(self, /, query, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, valid_at=None)"
+        },
+        "durability": {
+          "kind": "attribute",
+          "type": "getset_descriptor"
         },
         "execute": {
           "kind": "method",
@@ -1722,11 +1747,58 @@
           "kind": "attribute",
           "type": "getset_descriptor"
         },
+        "path": {
+          "kind": "attribute",
+          "type": "getset_descriptor"
+        },
+        "save": {
+          "kind": "method",
+          "signature": "(self, /, path=None)"
+        },
         "snapshot": {
           "kind": "method",
           "signature": "(self, /, *, valid_at=None)"
         },
+        "sync": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
         "version": {
+          "kind": "method",
+          "signature": "(self, /)"
+        }
+      },
+      "module": "kglite"
+    },
+    "SessionTransaction": {
+      "bases": [
+        "object"
+      ],
+      "constructible": true,
+      "constructor": "()",
+      "kind": "class",
+      "members": {
+        "__enter__": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "__exit__": {
+          "kind": "method",
+          "signature": "(self, /, exc_type, _exc_val, _exc_tb)"
+        },
+        "active": {
+          "kind": "attribute",
+          "type": "getset_descriptor"
+        },
+        "commit": {
+          "kind": "method",
+          "signature": "(self, /)"
+        },
+        "cypher": {
+          "kind": "method",
+          "signature": "(self, /, query, params=None, to_df=False, timeout_ms=None, max_work_units=None, row_limit=None)"
+        },
+        "rollback": {
           "kind": "method",
           "signature": "(self, /)"
         }
@@ -1902,7 +1974,7 @@
     },
     "open_session": {
       "kind": "function",
-      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None)"
+      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, durable=None, auto_checkpoint_wal_mib=None)"
     },
     "outline": {
       "kind": "function",

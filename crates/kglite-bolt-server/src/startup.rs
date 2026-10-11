@@ -130,6 +130,7 @@ pub(crate) fn start_graph(
         OpenError::Session {
             durability,
             message,
+            ..
         } => anyhow::anyhow!(
             "opening {} at --durability {}: {message}",
             path.display(),

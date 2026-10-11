@@ -703,7 +703,9 @@ fn open_or_create_graph_logged(
 fn unrecovered_sidecar_check(path: &Path, checkpoint_lsn: u64) -> io::Result<()> {
     crate::graph::durability::ensure_recovered(path, checkpoint_lsn).map_err(|e| match e {
         crate::graph::durability::DurableOpenError::Io(message) => io::Error::other(message),
-        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
+        // The category rides along as the error's source, so a binding can
+        // downcast `get_ref()` to `DurableOpenError` instead of reading prose.
+        other => io::Error::new(io::ErrorKind::InvalidData, other),
     })
 }
 

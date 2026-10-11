@@ -18,6 +18,20 @@ before upgrading.
   - Clean input is unaffected.
   - Migration: pass `on_invalid='warn'` for the old behaviour, or `on_invalid='skip'` for the same without the warning.
 
+### Added
+
+- **`kglite.open_session(path, durable=...)` opens a durable, thread-safe `Session`.**
+  - Use it for a threaded server: any number of threads call `execute()` and `begin()` on one session, with no borrow error.
+  - `durable` is `"full"`, `"normal"`, `"off"` or a bool. Passing it selects this form; without it `open_session(path)` is the read-only load, unchanged.
+  - Opens through the same engine entry as the Bolt server, so the writer lease, log replay and open errors match `kglite.open`. A crash then reopen through either entry point replays every committed write. A second owner raises `WriterLeaseHeldError`.
+  - Writes group-commit with the GIL released. At `"full"`, concurrent writers share log barriers, and readers never wait for an fsync.
+  - New on `Session`: `begin()` (returns the new `SessionTransaction`), `save()`, `sync()`, `close()`, the context manager, and `closed`, `path` and `durability`. They need a durable session and raise `NotDurableError` elsewhere.
+  - `close()` checkpoints, then releases the lease. Afterwards every write, `begin()` and `commit()` raises `FileIoError`; reads still answer.
+  - `auto_checkpoint_wal_mib` folds the log into the checkpoint on a background thread, as on `kglite.open`.
+  - A durable session has no embedding-model binding.
+  - `g.session()` on a durable `KnowledgeGraph` still refuses writes.
+- **Rust: `OpenError::Session` carries `failure: LogOpenFailure`.** A binding maps an unreadable log, a failed replay and a refused open to different error classes without reading the message.
+
 ### Fixed
 
 - **`load_ntriples` into a graph that already holds data no longer loses properties on save.**

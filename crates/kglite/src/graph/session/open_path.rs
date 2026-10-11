@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use super::transaction::Session;
 use crate::graph::advisories::{data_advisories, DataAdvisory};
+use crate::graph::durability::DurableOpenError;
 use crate::graph::features::temporal::ValidTimeDefault;
 use crate::graph::io::open::{
     open_or_create_graph_in_mode, GraphWriterLease, LeaseRefusal, OpenDisposition,
@@ -109,11 +110,28 @@ pub enum OpenError {
     Lease(LeaseRefusal),
     /// The graph could not be opened, created or converted.
     Open(io::Error),
-    /// The session (and its write-ahead log) could not be opened.
+    /// The session (and its write-ahead log) could not be opened. `failure`
+    /// keeps the category so a binding maps an unreadable log, a failed replay
+    /// and a refused open to different error classes without parsing `message`.
     Session {
         durability: DurabilityLevel,
+        failure: LogOpenFailure,
         message: String,
     },
+}
+
+/// Why the write-ahead log could not be attached; the category of
+/// [`crate::graph::durability::DurableOpenError`] without its message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogOpenFailure {
+    /// The sidecar could not be read, or could not be opened for append.
+    Io,
+    /// The recovered frames could not be applied to the checkpoint.
+    Replay,
+    /// The open is structurally unsafe and was refused: unreplayed frames at
+    /// level `off`, another durability owner, a disk graph at a logging level,
+    /// or duplicate exact logical node IDs.
+    Refused,
 }
 
 impl fmt::Display for OpenError {
@@ -185,11 +203,17 @@ pub fn open_path_observed(
     // `opened.graph` is the only reference, which `open_durable` requires: a
     // shared Arc would be deep-cloned and the other holder would keep mutating
     // an unlogged copy.
-    let session = Session::open_durable(opened.graph, &path.to_string_lossy(), durability)
-        .map_err(|message| OpenError::Session {
+    let session = Session::attach_log(opened.graph, &path.to_string_lossy(), durability).map_err(
+        |error| OpenError::Session {
             durability,
-            message,
-        })?;
+            failure: match error {
+                DurableOpenError::Io(_) => LogOpenFailure::Io,
+                DurableOpenError::Replay(_) => LogOpenFailure::Replay,
+                DurableOpenError::Refused(_) => LogOpenFailure::Refused,
+            },
+            message: error.to_string(),
+        },
+    )?;
     observe(OpenStep::SessionOpened);
     let advisories = data_advisories(&session.snapshot())
         .into_iter()
