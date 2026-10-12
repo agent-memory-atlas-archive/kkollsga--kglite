@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-12
+
 ### Breaking changes and migration
 
 - **Files and logs written by this build cannot be opened by 0.19.x or older.**
@@ -58,6 +60,10 @@ before upgrading.
   - Do: update inside Cypher (`SET n.t = n.t + duration({hours: 1})`, `SET n.t = localtime('10:00:00.123456789')`) when digits below the microsecond matter.
   - Do: read `toString(n.t)` when you need the exact digits in Python.
   - Durations are not floored: they carry `nanoseconds`.
+- **Rust: public enums gain variants and fields, so exhaustive matches stop compiling.**
+  - `Value`, `BorrowedValue`, `ColumnType` and `ColumnData` gain the new temporal variants listed under Rust API.
+  - `Value::Duration` gains `nanos`, and `OpenError::Session` gains `failure`. A pattern or constructor that names every field needs the new one, or `..`.
+  - Migration: add arms for the new variants, or a wildcard arm.
 
 ### Added
 

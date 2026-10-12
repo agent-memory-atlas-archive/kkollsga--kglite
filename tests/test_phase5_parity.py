@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (28_868_960, "0.19.7"),  # host release build
-    "linux": (35_136_312, "0.19.6"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (30_289_904, "0.20.0"),  # host release build
+    "linux": (35_471_352, "0.19.7"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.19.6-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "63ae6353e8f58ad0a67727144cf0c5173e97ac9cdb85871f257d0a41691678c0"
+LINUX_SIZE_WHEEL = "kglite-0.19.7-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "a76762971ded29bbc37f71b5136c620be5b5ce2dc445efc54df42048142be543"
 
 
 @pytest.mark.binary_size
@@ -642,6 +642,13 @@ def test_binary_size_regression():
         temporal TCK cluster, WAL-recorded text indexes, the non-aggregating
         WITH scope rule, the per-value parameterised plan cache and the
         UNWIND/WITH key pushdown into patterns.
+
+      - 0.20.0:       30,289,904 bytes (≈28.9 MB), +1,420,944 (+4.9%) over
+        0.19.7: the temporal value model (local and zoned times, zoned
+        datetimes with fixed offsets and IANA zones through chrono-tz's
+        embedded tz database, nanosecond durations, their parsers, accessors
+        and arithmetic), the .kgl v8 header checksum, the durable Python
+        `open_session` and its session classes, and the per-statement clock.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

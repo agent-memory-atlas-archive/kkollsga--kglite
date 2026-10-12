@@ -204,10 +204,16 @@
       "sha256": "fb3bc1877c056672f23260612dee9d80268cb1848796c177e8f8d8186b1b9751",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-11 07:01-07:03 local on Mac16,10 (M4, 16 GiB), load average 3.6-5.7 (an unrelated cargo release build of another project on ~2 cores). A first capture at 06:55-07:00 (load 6-10, same build) read return_id_10k +31% / return_node_10k +26% with khop controls +10%; it was discarded. vs accepted 0_19_6.json, min: controls var_length_1_8 -0.3%, cypher_match +0.0%, khop3_unwind -0.2%, shortest_path -3.1%, khop3_in_list -0.5% (no uniform shift). Highest cell save_kgl +10.0% (below the gate). Same-interpreter (3.14.3) ABAB A/B vs the published 0.19.6 wheel on RETURN id(n)/n/n.name over 10k nodes: flat (min 0.903-0.926 vs 0.851-0.937 ms; 2.178-2.236 vs 2.173-2.206 ms).",
+    "0_20_0.json": {
+      "evidence": "Release capture 2026-10-12 07:36-07:38 local on Mac16,10 (M4, 16 GiB), load average falling 28->8 after another session's burst (CPU idle at start). Two earlier captures the same morning (load ~6, and during a load-47 burst) were discarded. vs accepted 0_19_7.json, min: median +0.2% over 43 cells; controls var_length_1_8 +0.3%, cypher_match +2.6%, khop3_unwind -0.5%, khop3_in_list -0.2%, shortest_path +0.3%. Highest cell cypher_match_materialized +19.5%, reproduced in all three captures against the 0_19_7 file but +0.8%/+4.6% in a same-interpreter (3.14.3) ABBA of the whole core file against the published 0.19.7 wheel (median +0.9%); isolated retakes -0.6%/-0.4%: the 0_19_7 reference reads that cell fast, not a code change. Write-path cells add_nodes/add_connections +6-10% in both ABBA pairs (below the gate).",
       "platform": "Darwin/arm64",
-      "sha256": "fb3bc1877c056672f23260612dee9d80268cb1848796c177e8f8d8186b1b9751",
+      "sha256": "d891d364c4ca70d5d22d9ce05bdd4a42f7f9f12056169b005d696c954cb08a9c",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-12 07:36-07:38 local on Mac16,10 (M4, 16 GiB), load average falling 28->8 after another session's burst (CPU idle at start). Two earlier captures the same morning (load ~6, and during a load-47 burst) were discarded. vs accepted 0_19_7.json, min: median +0.2% over 43 cells; controls var_length_1_8 +0.3%, cypher_match +2.6%, khop3_unwind -0.5%, khop3_in_list -0.2%, shortest_path +0.3%. Highest cell cypher_match_materialized +19.5%, reproduced in all three captures against the 0_19_7 file but +0.8%/+4.6% in a same-interpreter (3.14.3) ABBA of the whole core file against the published 0.19.7 wheel (median +0.9%); isolated retakes -0.6%/-0.4%: the 0_19_7 reference reads that cell fast, not a code change. Write-path cells add_nodes/add_connections +6-10% in both ABBA pairs (below the gate).",
+      "platform": "Darwin/arm64",
+      "sha256": "d891d364c4ca70d5d22d9ce05bdd4a42f7f9f12056169b005d696c954cb08a9c",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -284,7 +290,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_19_7.json",
+    "Darwin/arm64": "0_20_0.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1
