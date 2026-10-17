@@ -436,6 +436,11 @@ fn open_session(
              session (durable=...) opens through the writer path, which takes neither.",
         ));
     }
+    // Durability is a separate Session rather than KnowledgeGraph writes routed
+    // through core Session, by measurement (2026-10-11): that route forks on
+    // every write, making add_nodes 1.34x slower at 100k and 1.6x at 1M, and
+    // single-item fluent loops 1.35-1.67x. Group commit's threaded `full` gain
+    // (14.6x at 16 threads) is kept here without taxing the in-place engine.
     let level = durable_level_from_arg(&durable)?;
     graph::pyapi::session_durable::open_durable_session(
         py,
