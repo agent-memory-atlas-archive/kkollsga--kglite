@@ -761,11 +761,11 @@ impl DiskGraph {
         let props = if let Some(staged) = self.staged_edge(edge_idx) {
             staged.properties.clone()
         } else if self.edge_properties.is_empty() {
-            Vec::new()
+            Default::default()
         } else {
             self.edge_properties
                 .get(edge_idx)
-                .map(|cow| cow.into_owned())
+                .map(|cow| cow.iter().cloned().collect())
                 .unwrap_or_default()
         };
         debug_assert_arena_guard_active(self, "materialize_edge");
@@ -1405,7 +1405,8 @@ impl DiskGraph {
             if edge_data.properties.is_empty() {
                 self.edge_properties.remove(edge_idx);
             } else {
-                self.edge_properties.insert(edge_idx, edge_data.properties);
+                self.edge_properties
+                    .insert(edge_idx, edge_data.properties.into_iter().collect());
             }
         }
         self.flush_node_mut_cache();
@@ -1640,7 +1641,7 @@ impl DiskGraph {
         let props = self
             .edge_properties
             .get(ei as u32)
-            .map(|cow| cow.into_owned())
+            .map(|cow| cow.iter().cloned().collect())
             .unwrap_or_default();
         self.edge_mut_cache.entry(ei as u32).or_insert(EdgeData {
             connection_type: ct,
@@ -1678,7 +1679,8 @@ impl DiskGraph {
         let ct = data.connection_type;
 
         if !data.properties.is_empty() {
-            self.edge_properties.insert(edge_idx, data.properties);
+            self.edge_properties
+                .insert(edge_idx, data.properties.into_iter().collect());
         }
 
         let src = a.index() as u32;
@@ -1722,7 +1724,8 @@ impl DiskGraph {
         self.pending_edges.get_mut().try_push(pending)?;
 
         if !data.properties.is_empty() {
-            self.edge_properties.insert(edge_idx, data.properties);
+            self.edge_properties
+                .insert(edge_idx, data.properties.into_iter().collect());
         }
         self.next_edge_idx += 1;
         self.edge_count += 1;
@@ -1741,7 +1744,11 @@ impl DiskGraph {
         }
 
         let ct = InternedKey::from_u64(ep.connection_type);
-        let props = self.edge_properties.take(ei as u32).unwrap_or_default();
+        let props = self
+            .edge_properties
+            .take(ei as u32)
+            .map(|props| props.into_iter().collect())
+            .unwrap_or_default();
         let result = EdgeData {
             connection_type: ct,
             properties: props,

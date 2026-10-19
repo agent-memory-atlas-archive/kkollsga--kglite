@@ -61,8 +61,8 @@ fn push_snapshotted_property(
 
 fn snapshot_edge_properties(
     source: &DirGraph,
-    mut properties: Vec<(InternedKey, Value)>,
-) -> Vec<(InternedKey, Value)> {
+    mut properties: thin_vec::ThinVec<(InternedKey, Value)>,
+) -> thin_vec::ThinVec<(InternedKey, Value)> {
     crate::graph::session::snapshot_property_values(
         &source.graph,
         properties.iter_mut().map(|(_, value)| value),
@@ -895,7 +895,7 @@ fn stream_subset_edges(
             rel_types.insert(conn_type);
             let props = sdg
                 .edge_properties_at(edge_idx as u32)
-                .map(|cow| cow.into_owned())
+                .map(|cow| cow.iter().cloned().collect())
                 .unwrap_or_default();
             let props = snapshot_edge_properties(source, props);
             let edge_data = EdgeData::new_interned(conn_type, props);

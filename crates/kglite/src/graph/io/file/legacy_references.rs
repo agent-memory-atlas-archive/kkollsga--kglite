@@ -497,7 +497,7 @@ mod tests {
             .graph
             .edge_weight_mut(EdgeIndex::new(0))
             .unwrap()
-            .properties = vec![(scalar, Value::NodeRef(1))];
+            .properties = vec![(scalar, Value::NodeRef(1))].into();
         graph.graph.flush_pending_writes();
         graph
     }

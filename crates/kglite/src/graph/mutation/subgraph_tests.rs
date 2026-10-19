@@ -161,7 +161,7 @@ fn the_gathered_copy_reads_back_what_the_per_node_copy_does_in_every_mode() {
                         map(e.source())?.index(),
                         map(e.target())?.index(),
                         e.weight().connection_type_str(&g.interner).to_string(),
-                        e.weight().properties.clone(),
+                        e.weight().properties.to_vec(),
                     ))
                 })
                 .collect();

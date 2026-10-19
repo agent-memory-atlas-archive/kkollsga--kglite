@@ -147,7 +147,7 @@ impl<G: GraphRead> RecordingGraph<G> {
         let mut base_members = if self.capture_edge_embedding_bases {
             group_members(&self.inner, source, target, kind)
                 .into_iter()
-                .map(|edge| (edge.id(), edge.weight().properties.clone()))
+                .map(|edge| (edge.id(), edge.weight().properties.to_vec()))
                 .collect()
         } else {
             Vec::new()

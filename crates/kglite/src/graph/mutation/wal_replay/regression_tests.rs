@@ -618,7 +618,7 @@ fn relationship_legacy_invalid_value_is_preserved_but_new_value_or_incarnation_r
     apply(&mut graph, vec![edge_with(Value::Int64(1))]).unwrap();
     let idx = graph.graph.edge_indices().next().unwrap();
     graph.graph.edge_weight_mut(idx).unwrap().properties =
-        vec![(InternedKey::from_str("n"), Value::String("legacy".into()))];
+        vec![(InternedKey::from_str("n"), Value::String("legacy".into()))].into();
     graph.graph.flush_pending_writes();
     apply(&mut graph, vec![edge_with(Value::String("legacy".into()))]).unwrap();
     assert!(apply(

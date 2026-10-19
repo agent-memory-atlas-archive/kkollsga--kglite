@@ -662,7 +662,7 @@ impl<G: GraphRead> RecordingGraph<G> {
         let edge = self.inner.edge_weight(idx)?;
         Some(Box::new(BeforeImage {
             title: Value::Null,
-            properties: edge.properties.clone(),
+            properties: edge.properties.to_vec(),
             labels: None,
         }))
     }

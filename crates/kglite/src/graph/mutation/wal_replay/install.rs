@@ -274,7 +274,7 @@ fn apply_edges(
                     .collect();
                 if let Some(idx) = existing {
                     if let Some(edge) = graph.graph.edge_weight_mut(idx) {
-                        edge.properties = properties;
+                        edge.properties = properties.into();
                     }
                     crate::graph::index_freshness::write_hooks::note_edge_property_written(
                         graph, idx, None,
@@ -377,7 +377,7 @@ fn replace_group(
             .edges_connecting(source, target)
             .filter(|e| e.connection_type() == kind)
         {
-            let mut properties = edge.weight().properties.clone();
+            let mut properties = edge.weight().properties.to_vec();
             properties.sort_unstable_by_key(|(key, _)| key.as_u64());
             existing.entry(properties).or_default().push(edge.id());
         }

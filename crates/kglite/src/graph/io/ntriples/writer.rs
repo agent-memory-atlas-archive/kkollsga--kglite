@@ -280,7 +280,7 @@ pub(super) fn create_edges_compact(
                 }
                 let edge_data = EdgeData {
                     connection_type: pred_key,
-                    properties: Vec::new(),
+                    properties: thin_vec::ThinVec::new(),
                 };
                 GraphWrite::add_edge(&mut graph.graph, src, tgt, edge_data);
                 stats.edges_created += 1;

@@ -2143,7 +2143,7 @@ impl DirGraph {
             };
             let vacated = EdgeData {
                 connection_type: slot.connection_type,
-                properties: Vec::new(),
+                properties: thin_vec::ThinVec::new(),
             };
             let edge_data = std::mem::replace(slot, vacated);
             let new_edge_idx = new_graph.add_edge(

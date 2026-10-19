@@ -5030,12 +5030,12 @@ impl core::ops::drop::Drop for kglite::api::DiskQueryGuard
 pub fn kglite::api::DiskQueryGuard::drop(&mut self)
 pub struct kglite::api::EdgeData
 pub kglite::api::EdgeData::connection_type: kglite::api::InternedKey
-pub kglite::api::EdgeData::properties: alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>
+pub kglite::api::EdgeData::properties: thin_vec::ThinVec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>
 impl kglite::api::EdgeData
 pub fn kglite::api::EdgeData::connection_type_str<'a>(&self, &'a kglite::api::StringInterner) -> &'a str
 pub fn kglite::api::EdgeData::get_property(&self, &str) -> core::option::Option<&kglite::datatypes::values::Value>
 pub fn kglite::api::EdgeData::new(alloc::string::String, std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>, &mut kglite::api::StringInterner) -> Self
-pub fn kglite::api::EdgeData::new_interned(kglite::api::InternedKey, alloc::vec::Vec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>) -> Self
+pub fn kglite::api::EdgeData::new_interned(kglite::api::InternedKey, impl core::convert::Into<thin_vec::ThinVec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>>) -> Self
 pub fn kglite::api::EdgeData::properties_cloned(&self, &kglite::api::StringInterner) -> std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>
 pub fn kglite::api::EdgeData::property_count(&self) -> usize
 pub fn kglite::api::EdgeData::property_iter<'a>(&'a self, &'a kglite::api::StringInterner) -> impl core::iter::traits::iterator::Iterator<Item = (&'a str, &'a kglite::datatypes::values::Value)>

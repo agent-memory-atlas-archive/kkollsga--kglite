@@ -84,6 +84,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use thin_vec::ThinVec;
 
 /// Reserved property name marking an auto-vivified stub node — one
 /// created to satisfy an edge whose endpoint had no row of its own.
@@ -2050,7 +2051,9 @@ impl NodeData {
 
 pub struct EdgeData {
     pub connection_type: InternedKey,
-    pub properties: Vec<(InternedKey, Value)>,
+    /// A `ThinVec` is one pointer wide (and null-niched), which keeps
+    /// `Option<EdgeData>` at 16 B so a petgraph edge entry is 32 B.
+    pub properties: ThinVec<(InternedKey, Value)>,
 }
 
 // Stable Serde struct shape: connection_type as an InternedKey (auto-resolves
@@ -2112,7 +2115,7 @@ impl EdgeData {
         interner: &mut StringInterner,
     ) -> Self {
         let ct_key = interner.get_or_intern(&connection_type);
-        let interned_props: Vec<(InternedKey, Value)> = properties
+        let interned_props: ThinVec<(InternedKey, Value)> = properties
             .into_iter()
             .map(|(k, v)| {
                 let key = interner.get_or_intern(&k);
@@ -2127,11 +2130,11 @@ impl EdgeData {
 
     pub fn new_interned(
         connection_type: InternedKey,
-        properties: Vec<(InternedKey, Value)>,
+        properties: impl Into<ThinVec<(InternedKey, Value)>>,
     ) -> Self {
         EdgeData {
             connection_type,
-            properties,
+            properties: properties.into(),
         }
     }
 

@@ -1514,7 +1514,7 @@ fn seal_round_trip_auxiliary_indexes() {
         let weight_key = interner.get_or_intern("weight");
         let ed = crate::graph::schema::EdgeData {
             connection_type: interner.get_or_intern("U"),
-            properties: vec![(weight_key, Value::Float64(2.5))],
+            properties: vec![(weight_key, Value::Float64(2.5))].into(),
         };
         dg.add_edge(n3, n3, ed)
     };
@@ -1800,7 +1800,8 @@ fn conversion_streams_edge_properties_into_the_mapped_base() {
             properties: vec![
                 (weight, Value::Float64(2.5)),
                 (note, Value::String("first".to_string())),
-            ],
+            ]
+            .into(),
         },
     );
     source.add_edge(nodes[1], nodes[2], seal_test_edge(&mut interner, "LINKS"));
@@ -1809,7 +1810,7 @@ fn conversion_streams_edge_properties_into_the_mapped_base() {
         nodes[3],
         EdgeData {
             connection_type: links,
-            properties: vec![(weight, Value::Float64(-0.75))],
+            properties: vec![(weight, Value::Float64(-0.75))].into(),
         },
     );
 

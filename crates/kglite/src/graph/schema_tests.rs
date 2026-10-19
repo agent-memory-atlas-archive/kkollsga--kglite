@@ -1636,3 +1636,78 @@ mod soft_alias_names_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod edge_footprint_tests {
+    use super::*;
+    use crate::test_alloc::peak_during;
+    use petgraph::stable_graph::StableDiGraph;
+
+    #[test]
+    fn edge_wire_shape_does_not_depend_on_the_property_container() {
+        use crate::serde_codec::{decode_exact_with, encode_versioned, CodecVersion, DecodeLimits};
+        use std::collections::BTreeMap;
+        // The persisted shape: a struct of the type key and a key-sorted map.
+        #[derive(serde::Serialize)]
+        struct Wire {
+            connection_type: InternedKey,
+            properties: BTreeMap<InternedKey, Value>,
+        }
+        let mut interner = StringInterner::new();
+        let (kind, a, b) = (
+            interner.get_or_intern("T"),
+            interner.get_or_intern("a"),
+            interner.get_or_intern("b"),
+        );
+        let props = vec![(b, Value::Int64(2)), (a, Value::String("x".into()))];
+        let edge = EdgeData::new_interned(kind, props.clone());
+        let wire = Wire {
+            connection_type: kind,
+            properties: props.into_iter().collect(),
+        };
+        let guard = SerdeSerializeGuard::new(&interner);
+        let ours = encode_versioned(CodecVersion::PostcardV1, &edge, u64::MAX).unwrap();
+        let expected = encode_versioned(CodecVersion::PostcardV1, &wire, u64::MAX).unwrap();
+        assert_eq!(ours, expected);
+        drop(guard);
+        let _guard = SerdeDeserializeGuard::new(&mut interner);
+        let limits = DecodeLimits::new(u64::MAX, u64::MAX);
+        let back: EdgeData = decode_exact_with(CodecVersion::PostcardV1, &ours, 0, limits).unwrap();
+        assert_eq!(back.connection_type, kind);
+        let mut got: Vec<_> = back.properties.iter().cloned().collect();
+        got.sort_by_key(|(k, _)| *k);
+        let mut want = edge.properties.to_vec();
+        want.sort_by_key(|(k, _)| *k);
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn edge_weight_keeps_its_niche() {
+        assert_eq!(std::mem::size_of::<EdgeData>(), 16);
+        // The stored weight is `Option<EdgeData>`; a 16 B option is what makes
+        // petgraph's edge entry (weight + two u32 links + two u32 endpoints) 32 B.
+        assert_eq!(std::mem::size_of::<Option<EdgeData>>(), 16);
+    }
+
+    #[test]
+    fn a_property_less_edge_costs_32_bytes_of_heap() {
+        // 2^17 edges fill the edge vector's power-of-two capacity exactly, so
+        // the measured heap is the entry size and not a growth remainder.
+        const EDGES: usize = 1 << 17;
+        let mut g: StableDiGraph<(), EdgeData> = StableDiGraph::new();
+        let a = g.add_node(());
+        let b = g.add_node(());
+        let kind = InternedKey::from_str("T");
+        let ((), peak) = peak_during(|| {
+            for _ in 0..EDGES {
+                g.add_edge(a, b, EdgeData::new_interned(kind, Vec::new()));
+            }
+        });
+        let per_edge = peak as f64 / EDGES as f64;
+        // 32 B with a thin property vector; the former 24 B `Vec` made 48 B.
+        assert!(
+            per_edge < 40.0,
+            "{per_edge:.1} heap bytes per property-less edge"
+        );
+    }
+}

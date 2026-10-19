@@ -409,7 +409,7 @@ fn reinstall_edge_embedding_group(
         crate::graph::edge_embeddings::remove_edge_with_embeddings(graph, edge);
     }
     for (member, properties) in group.properties.iter().enumerate() {
-        let properties = properties
+        let properties: thin_vec::ThinVec<_> = properties
             .iter()
             .map(|(name, value)| (graph.interner.get_or_intern(name), value.clone()))
             .collect();

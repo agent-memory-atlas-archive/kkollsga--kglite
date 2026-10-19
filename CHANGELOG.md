@@ -9,6 +9,21 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- **Rust API: `EdgeData.properties` is a `thin_vec::ThinVec`, not a `Vec`.**
+  - Reads (`iter`, indexing, `len`) and `push`/`retain` compile unchanged: `ThinVec` derefs to a slice.
+  - Assigning a `Vec` to the field no longer compiles; use `.into()`.
+  - `EdgeData::new_interned` accepts either a `Vec` or a `ThinVec`.
+  - Python, the C ABI and saved files are unaffected.
+
+### Changed
+
+- **In-memory relationships take 32 bytes of graph structure instead of 48.**
+  - A graph with 8 million relationships saves about 128 MB of RAM.
+  - Applies to the default and mapped storage modes.
+  - Saved files and query results are unchanged.
+
 ## [0.20.0] - 2026-10-12
 
 ### Breaking changes and migration

@@ -231,7 +231,7 @@ fn placeholder_node() -> NodeData {
 fn placeholder_edge() -> EdgeData {
     EdgeData {
         connection_type: InternedKey::default(),
-        properties: Vec::new(),
+        properties: thin_vec::ThinVec::new(),
     }
 }
 
