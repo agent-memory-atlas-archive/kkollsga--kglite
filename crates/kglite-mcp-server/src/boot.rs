@@ -48,7 +48,7 @@ pub(crate) fn response_preview_guidance(
         serde_json::Value::String(text.chars().take(NAVIGATION_TEXT_LIMIT).collect())
     };
     let identity = payload.get("identity").map(|value| {
-        let field = |name| value.get(name).map(&shorten).unwrap_or(serde_json::Value::Null);
+        let field = |name| value.get(name).map(shorten).unwrap_or(serde_json::Value::Null);
         serde_json::json!({
             "footer": field("footer"),
             "rebuild_warning": field("rebuild_warning"),

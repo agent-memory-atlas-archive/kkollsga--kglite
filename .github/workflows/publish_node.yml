@@ -41,9 +41,9 @@ concurrency:
 permissions:
   contents: read
 
-# The published natives build on the toolchain CI tests; bump with ci.yml's pin.
+# The published natives build on the toolchain CI tests; keep equal to ci.yml's.
 env:
-  RUST_STABLE: "1.98.0"
+  RUST_STABLE: "stable"
 
 jobs:
   version-check:

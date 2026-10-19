@@ -15,12 +15,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Single-source pin for every stable-toolchain job in this workflow. Local
-  # dev verifies against it via `make check-toolchain-pin` (part of
-  # gate-push): floating `@stable` on both sides meant clippy verdicts
-  # diverged whenever either side updated first. Bump deliberately, together
-  # with the local toolchain.
-  RUST_STABLE: "1.98.0"
+  # Single source for every stable-toolchain job in this workflow: the latest
+  # stable release, by policy (2026-10-19). Local dev stays on latest too —
+  # `make check-toolchain-fresh` (part of gate-push) fails when rustup has a
+  # newer stable, because clippy verdicts diverge when one side updates first.
+  # To hold a release back, set an exact version here and in every workflow
+  # that reads it (tests/test_ci_workflow.py enforces they agree).
+  RUST_STABLE: "stable"
   CARGO_TERM_COLOR: always
 
 jobs:

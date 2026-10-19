@@ -31,11 +31,12 @@ on:
       - 'docs/**'
   workflow_dispatch:
 
-# The shipped artifacts build on the toolchain CI tests. A floating `stable`
-# let 0.19.3 ship from rustc 1.99 while every CI job ran 1.98. Bump this pin
-# together with ci.yml's (tests/test_ci_workflow.py checks both).
+# The shipped artifacts build on the toolchain CI tests: both read one value,
+# the latest stable (ci.yml explains the policy). 0.19.3 shipped from rustc
+# 1.99 while CI ran 1.98 because the two were set separately;
+# tests/test_ci_workflow.py keeps them equal.
 env:
-  RUST_STABLE: "1.98.0"
+  RUST_STABLE: "stable"
 
 jobs:
   version-check:

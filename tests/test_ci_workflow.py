@@ -2234,31 +2234,29 @@ def test_helper_java_platform_derivations_can_fail(tmp_path: Path) -> None:
     assert "MavenCentral" not in _step_text({"run": "gradle build"})
 
 
-def test_ci_stable_toolchain_is_pinned() -> None:
-    """Floating `@stable` on CI while local floats independently produced
-    clippy-verdict skew whenever either side updated first (ontology train,
-    2026-08). Every stable job pins through the single RUST_STABLE env, which
-    `make check-toolchain-pin` verifies locally."""
-    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-    assert 'RUST_STABLE: "' in text, "workflow-level RUST_STABLE pin missing"
+def test_ci_stable_toolchain_tracks_latest() -> None:
+    """Every stable job reads one RUST_STABLE value, and by policy (2026-10-19)
+    that value is the latest stable. Floating each job on its own `@stable`
+    would scatter the knob; holding a release back means setting an exact
+    version in that one place. `make check-toolchain-fresh` keeps local on the
+    same toolchain, since clippy verdicts diverge when one side updates first."""
+    ci_value = CI.get("env", {}).get("RUST_STABLE")
+    assert ci_value == "stable", f"ci.yml env.RUST_STABLE is {ci_value!r}; policy is the latest stable"
     toolchain_steps = [step for job in CI["jobs"].values() for step in _steps_using(job, "dtolnay/rust-toolchain")]
     assert toolchain_steps, "no Rust toolchain installs found"
     for step in toolchain_steps:
         toolchain = step.get("with", {}).get("toolchain")
-        assert toolchain and toolchain != "stable", "a job floats on stable instead of the RUST_STABLE pin"
-    # `env` is per workflow file. scheduled.yml referenced the pin without
+        assert toolchain and toolchain != "stable", "a job names `stable` itself instead of reading RUST_STABLE"
+    # `env` is per workflow file. scheduled.yml referenced RUST_STABLE without
     # defining it after the 2026-08-26 split, and both stable jobs failed at
     # toolchain install ("'toolchain' is a required input") on every weekly
-    # run until 2026-09-14. Any workflow that reads the pin must define it,
-    # and at the same version, or local `check-toolchain-pin` (ci.yml only)
-    # silently stops covering it.
-    ci_pin = CI.get("env", {}).get("RUST_STABLE")
-    assert ci_pin, "ci.yml env.RUST_STABLE unreadable"
+    # run until 2026-09-14. Any workflow that reads it must define it, and to
+    # ci.yml's value, or a hold-back set in ci.yml silently misses it.
     for path in sorted(WORKFLOWS.glob("*.yml")):
         if "env.RUST_STABLE" not in path.read_text(encoding="utf-8"):
             continue
-        pin = yaml.safe_load(path.read_text(encoding="utf-8")).get("env", {}).get("RUST_STABLE")
-        assert pin == ci_pin, f"{path.name} reads env.RUST_STABLE but defines {pin!r}; ci.yml pins {ci_pin!r}"
+        value = yaml.safe_load(path.read_text(encoding="utf-8")).get("env", {}).get("RUST_STABLE")
+        assert value == ci_value, f"{path.name} reads env.RUST_STABLE but defines {value!r}; ci.yml has {ci_value!r}"
 
 
 def test_dedup_gates_are_consistent() -> None:
@@ -2312,18 +2310,18 @@ def test_parity_execution_guard_rejects_missing_owner_or_target(monkeypatch, rem
 
 
 #: Workflows whose output is a published artifact. Their Rust toolchain must be
-#: the one CI tests: a floating `stable` let 0.19.3 ship from rustc 1.99 while
-#: every CI job ran 1.98.
+#: the one CI tests, read from the same RUST_STABLE value: 0.19.3 shipped from
+#: rustc 1.99 while every CI job ran 1.98 because the two were set separately.
 SHIPPING_WORKFLOWS = ("release.yml", "publish_java.yml", "publish_node.yml")
 PINNED_TOOLCHAIN = "${{ env.RUST_STABLE }}"
 
 
-def test_shipped_artifacts_build_on_the_pinned_toolchain() -> None:
+def test_shipped_artifacts_build_on_the_ci_toolchain() -> None:
     ci_pin = CI.get("env", {}).get("RUST_STABLE")
     checked = 0
     for name in SHIPPING_WORKFLOWS:
         workflow = _load_workflow(WORKFLOWS / name)
-        assert workflow.get("env", {}).get("RUST_STABLE") == ci_pin, f"{name} does not pin RUST_STABLE={ci_pin!r}"
+        assert workflow.get("env", {}).get("RUST_STABLE") == ci_pin, f"{name} does not set RUST_STABLE={ci_pin!r}"
         for job_name, job in workflow["jobs"].items():
             for step in job.get("steps", []):
                 uses = step.get("uses", "")

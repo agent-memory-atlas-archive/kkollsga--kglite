@@ -354,17 +354,22 @@ lint-policy: check-lint-allowances source-quality rustsec-policy
 gate-push: gate check-lint-allowances source-quality
 	python3 scripts/rust_api_profiles.py check
 	cargo clippy --all-targets -- -D warnings
-	@$(MAKE) --no-print-directory check-toolchain-pin
+	@$(MAKE) --no-print-directory check-toolchain-fresh
 
-## Local stable must match the version CI's stable jobs pin (RUST_STABLE in
-## ci.yml), or clippy/test verdicts diverge between the two sides.
-check-toolchain-pin:
+## CI's stable jobs run the latest stable (RUST_STABLE in ci.yml), so local
+## must too, or clippy/test verdicts diverge. Fails when rustup reports a newer
+## stable; warns (does not fail) when rustup cannot reach the network.
+check-toolchain-fresh:
 	@PIN=$$(grep -m1 'RUST_STABLE:' .github/workflows/ci.yml | sed 's/.*"\(.*\)".*/\1/'); \
 	LOCAL=$$(rustc --version | awk '{print $$2}'); \
-	if [ -z "$$PIN" ]; then echo "toolchain pin: RUST_STABLE not found in ci.yml"; exit 1; fi; \
-	if [ "$$PIN" != "$$LOCAL" ]; then \
-	  echo "toolchain pin: local rustc $$LOCAL != CI pin $$PIN (rustup install $$PIN; or bump RUST_STABLE)"; exit 1; \
-	else echo "toolchain pin: local rustc $$LOCAL matches CI"; fi
+	if [ "$$PIN" != "stable" ]; then \
+	  if [ "$$PIN" != "$$LOCAL" ]; then echo "toolchain: CI holds $$PIN, local rustc is $$LOCAL"; exit 1; fi; \
+	  echo "toolchain: local rustc $$LOCAL matches CI's held $$PIN"; exit 0; fi; \
+	CHECK=$$(rustup check 2>/dev/null | grep '^stable'); \
+	if [ -z "$$CHECK" ]; then echo "toolchain: rustup check unavailable; local rustc $$LOCAL (warning only)"; \
+	elif echo "$$CHECK" | grep -q 'Update available'; then \
+	  echo "toolchain: $$CHECK — run \`rustup update stable\` (CI uses the latest)"; exit 1; \
+	else echo "toolchain: local rustc $$LOCAL is the latest stable"; fi
 
 ## Explicit CI-equivalent lint sweep. Not part of routine local development.
 lint-full: gate lint-policy

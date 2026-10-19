@@ -267,11 +267,19 @@ impl ExecutionBudget {
         unit: &str,
         operator: &str,
     ) -> Result<(), String> {
-        let previous = counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(additional)
-            })
-            .map_err(|_| format!("Query {unit} overflow while executing {operator}"))?;
+        // A CAS loop rather than `fetch_update`: rustc 1.99 deprecates that
+        // name for `try_update`, which the 1.88 MSRV does not have.
+        let mut current = counter.load(Ordering::Relaxed);
+        let previous = loop {
+            let next = current
+                .checked_add(additional)
+                .ok_or_else(|| format!("Query {unit} overflow while executing {operator}"))?;
+            match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(previous) => break previous,
+                Err(actual) => current = actual,
+            }
+        };
         let total = previous
             .checked_add(additional)
             .ok_or_else(|| format!("Query {unit} overflow while executing {operator}"))?;
