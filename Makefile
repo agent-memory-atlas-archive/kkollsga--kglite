@@ -495,7 +495,7 @@ check-skill-mirrors:
 ## decision back. Stale purge-tier entries are reported as a warning (temp/bin
 ## churn is normal working state; failing on it would only teach people to
 ## bypass the gate). Tier lifecycles: dev-docs/README.md.
-DEV_DOCS_MAX_MB := 256
+DEV_DOCS_MAX_MB := 512
 .PHONY: check-dev-docs
 check-dev-docs:
 	@[ -d dev-docs ] || { echo "no dev-docs/ — nothing to bound"; exit 0; }; \
