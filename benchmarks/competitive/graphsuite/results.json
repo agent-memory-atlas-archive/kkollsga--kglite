@@ -40432,7 +40432,7 @@
     },
     {
       "library": "kglite-cypher",
-      "version": "0.20.0",
+      "version": "0.20.1",
       "run_date": "2026-10-19T21:51:49+02:00",
       "dataset": {
         "scale": "medium",
@@ -40685,7 +40685,7 @@
     },
     {
       "library": "kglite-mapped",
-      "version": "0.20.0",
+      "version": "0.20.1",
       "run_date": "2026-10-19T21:51:50+02:00",
       "dataset": {
         "scale": "medium",
@@ -40938,7 +40938,7 @@
     },
     {
       "library": "kglite-disk",
-      "version": "0.20.0",
+      "version": "0.20.1",
       "run_date": "2026-10-19T21:51:52+02:00",
       "dataset": {
         "scale": "medium",
@@ -41191,7 +41191,7 @@
     },
     {
       "library": "kglite-fluent",
-      "version": "0.20.0",
+      "version": "0.20.1",
       "run_date": "2026-10-19T21:51:53+02:00",
       "dataset": {
         "scale": "medium",
@@ -41428,7 +41428,7 @@
     },
     {
       "library": "kglite-bolt",
-      "version": "0.20.0",
+      "version": "0.20.1",
       "run_date": "2026-10-19T21:51:57+02:00",
       "dataset": {
         "scale": "medium",

@@ -87,7 +87,7 @@ Each query group records the minimum observed wall time from an adaptive 1–5 r
 
 Versions used for the selected rows:
 
-_kglite 0.20.0, DuckDB 1.5.5, igraph 1.0.0, LadybugDB 0.17.0, Neo4j (native) 2026.02.3, NetworkX 3.6.1, rustworkx 0.18.1_
+_kglite 0.20.1, DuckDB 1.5.5, igraph 1.0.0, LadybugDB 0.17.0, Neo4j (native) 2026.02.3, NetworkX 3.6.1, rustworkx 0.18.1_
 
 Run on macOS-27.0.1-arm64-arm-64bit-Mach-O · Python 3.14.3.
 
