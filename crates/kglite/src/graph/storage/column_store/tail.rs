@@ -49,6 +49,14 @@ use std::sync::Arc;
 /// the store's reads through a tail.
 pub(crate) const HEAP_TAIL_MIN_ROWS: u32 = 16_384;
 
+/// Heap a tail may hold before the spill pass moves it to files. The overlay's
+/// writer folds its tail into the store's own columns at the next commit, so a
+/// tail below this is gone before its files would be read; spilling it every
+/// statement is a directory plus a few files created, synced and unlinked per
+/// fork for rows that live a few milliseconds. A tail held open by a long
+/// reader still reaches the floor and spills, so the heap bound holds.
+pub(crate) const HEAP_TAIL_SPILL_FLOOR: usize = 1 << 20;
+
 /// The kind of an identity column whose base part has kind `base` and whose
 /// tail has kind `tail`, as one column holding both parts' values would have
 /// it: a `UniqueId` part beside an `Int64` part widens to `Int64`
@@ -430,6 +438,20 @@ impl ColumnStore {
             .get(row_id as usize)
             .copied()
             .unwrap_or(false)
+    }
+
+    /// The tail, once it holds enough heap for the spill pass to take
+    /// ([`HEAP_TAIL_SPILL_FLOOR`]); a smaller one waits for the fold.
+    pub(super) fn spillable_tail(&self) -> Option<&Arc<ColumnStore>> {
+        self.tail
+            .as_ref()
+            .filter(|tail| tail.spillable_heap_bytes() >= HEAP_TAIL_SPILL_FLOOR)
+    }
+
+    pub(super) fn spillable_tail_mut(&mut self) -> Option<&mut Arc<ColumnStore>> {
+        self.tail
+            .as_mut()
+            .filter(|tail| tail.spillable_heap_bytes() >= HEAP_TAIL_SPILL_FLOOR)
     }
 
     /// Whether this is a heap store with a tail ([`Self::fold_heap_tail`]).

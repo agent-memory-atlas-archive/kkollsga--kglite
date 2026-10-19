@@ -336,3 +336,90 @@ fn a_forked_mapped_graph_keeps_spilling_and_reads_back() {
         "the overlay's spill pass must leave its stores mmap-backed"
     );
 }
+
+fn spill_entries(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    1 + entry.file_type().map_or(0, |t| {
+                        if t.is_dir() {
+                            spill_entries(&entry.path())
+                        } else {
+                            0
+                        }
+                    })
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// A writer overlay appends to a heap tail until it folds. At `Mapped`'s zero
+/// memory limit the spill pass used to move that tail to fresh column files
+/// after every statement: a directory plus a file per column created, synced
+/// and unlinked per fork for rows that live until the next commit. A tail below
+/// the spill floor stays on the heap, and the fold appends it to the store's
+/// mapped columns.
+#[test]
+fn a_small_overlay_tail_is_not_spilled_to_files_each_statement() {
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    use crate::graph::mutation::maintain::add_nodes;
+
+    let mut graph = new_dir_graph_in_mode(StorageMode::Mapped, None).expect("mapped graph");
+    // Past `HEAP_TAIL_MIN_ROWS` (16,384), where an overlay append starts a tail.
+    let rows = 17_500;
+    let mut df = DataFrame::new(Vec::new());
+    df.add_column(
+        "id".to_string(),
+        ColumnType::String,
+        ColumnData::String((0..rows).map(|i| Some(format!("n{i}"))).collect()),
+    )
+    .expect("id column");
+    df.add_column(
+        "body".to_string(),
+        ColumnType::String,
+        ColumnData::String((0..rows).map(|_| Some("x".repeat(16))).collect()),
+    )
+    .expect("body column");
+    add_nodes(
+        &mut graph,
+        df,
+        "Doc".to_string(),
+        "id".to_string(),
+        None,
+        None,
+    )
+    .expect("add nodes");
+
+    let mut arc = Arc::new(graph);
+    let reader = Arc::clone(&arc);
+    let graph = make_dir_graph_mut(&mut arc);
+    assert!(graph.graph.is_forked(), "precondition: forked");
+    let spill_dir = graph
+        .spill_dir
+        .clone()
+        .expect("precondition: the load spilled");
+    let before = spill_entries(&spill_dir);
+    for i in 0..20 {
+        run(
+            graph,
+            &format!("CREATE (:Doc {{id: 'fresh{i}', body: 'new'}})"),
+        );
+    }
+    assert!(
+        graph
+            .graph
+            .column_stores_iter()
+            .any(|(_, store)| store.has_heap_tail()),
+        "precondition: the appends went to a heap tail"
+    );
+    assert_eq!(
+        spill_entries(&spill_dir),
+        before,
+        "twenty one-row appends under a held reader must not create spill files"
+    );
+    assert_eq!(graph.graph.node_count(), rows + 20);
+    assert_eq!(reader.graph.node_count(), rows);
+}

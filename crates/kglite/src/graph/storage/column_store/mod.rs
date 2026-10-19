@@ -1468,7 +1468,7 @@ impl ColumnStore {
     /// Files are named by slot ([`spill_stem`]), never by property name: a
     /// property called `../../x` must not choose where its file is written.
     pub fn materialize_to_files(&mut self, dir: &Path) -> io::Result<()> {
-        if let Some(tail) = self.tail.as_mut() {
+        if let Some(tail) = self.spillable_tail_mut() {
             Arc::make_mut(tail).materialize_to_files(dir)?;
         }
         // One directory per *store instance*, not per type: two stores of the
@@ -1611,8 +1611,7 @@ impl ColumnStore {
             + id_bytes
             + title_bytes
             + self
-                .tail
-                .as_ref()
+                .spillable_tail()
                 .map_or(0, |tail| tail.spillable_heap_bytes())
     }
 
@@ -1630,8 +1629,7 @@ impl ColumnStore {
     pub fn may_have_grown_spillable_heap(&self) -> bool {
         self.spillable_growth
             || self
-                .tail
-                .as_ref()
+                .spillable_tail()
                 .is_some_and(|tail| tail.may_have_grown_spillable_heap())
     }
 

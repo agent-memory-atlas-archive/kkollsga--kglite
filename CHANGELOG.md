@@ -35,7 +35,7 @@ before upgrading.
 - **Mapped mode no longer copies the whole graph on the first write after `freeze()` or while a snapshot is held.**
   - The write now forks through the same copy-on-write overlay as the default mode, so it copies only what it changes.
   - Previously the first such write deep-copied every node and relationship (about 552 MB and 99 ms at 1 million nodes and 8 million relationships, measured on a release wheel).
-  - Durable mapped sessions that run a concurrent reader no longer pay that copy on each transaction.
+  - A durable mapped session with three writers and a concurrent reader on that graph sustains about 38,000 transactions per second, against about 9,000 on 0.20.0 (release wheels, one-event transactions).
   - Query results, saved files and storage-mode reporting are unchanged.
 - **A disk graph built in the same process gives its edge buffers back after `compact()` or `save()`.**
   - Before, the buffers that held freshly added relationships kept their full size until the graph was dropped.
