@@ -210,10 +210,16 @@
       "sha256": "d891d364c4ca70d5d22d9ce05bdd4a42f7f9f12056169b005d696c954cb08a9c",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-12 07:36-07:38 local on Mac16,10 (M4, 16 GiB), load average falling 28->8 after another session's burst (CPU idle at start). Two earlier captures the same morning (load ~6, and during a load-47 burst) were discarded. vs accepted 0_19_7.json, min: median +0.2% over 43 cells; controls var_length_1_8 +0.3%, cypher_match +2.6%, khop3_unwind -0.5%, khop3_in_list -0.2%, shortest_path +0.3%. Highest cell cypher_match_materialized +19.5%, reproduced in all three captures against the 0_19_7 file but +0.8%/+4.6% in a same-interpreter (3.14.3) ABBA of the whole core file against the published 0.19.7 wheel (median +0.9%); isolated retakes -0.6%/-0.4%: the 0_19_7 reference reads that cell fast, not a code change. Write-path cells add_nodes/add_connections +6-10% in both ABBA pairs (below the gate).",
+    "0_20_1.json": {
+      "evidence": "Release capture 2026-10-19 23:40-23:47 local on Mac16,10 (M4, 16 GiB), load average 4.9-8.5 (other sessions active, captured under load per protocol item 9). vs accepted 0_20_0.json, min: median +0.9% over 43 cells; controls var_length_1_8 -1.7%, cypher_match +6.9%, khop3_unwind -1.9%, khop3_in_list -3.7%, shortest_path 0.0%. Highest cell exists_var_length_witness +9.9% (below gate); best hop1_deg3_expand_memory -20.5%, cypher_match_materialized -15.8%, var_length_2_2 -10.9%. Cross-check: same-interpreter (3.12) interleaved A/B of the whole core file vs the published 0.20.0 wheel, 2 rounds, HEAD 4de6f262 engine: no cell > +10% in both rounds, worst +2-5%.",
       "platform": "Darwin/arm64",
-      "sha256": "d891d364c4ca70d5d22d9ce05bdd4a42f7f9f12056169b005d696c954cb08a9c",
+      "sha256": "7151186819039d97a50afdd3e009cb34ada1de60c38198870e6e67d7ad0c4e8d",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-19 23:40-23:47 local on Mac16,10 (M4, 16 GiB), load average 4.9-8.5 (other sessions active, captured under load per protocol item 9). vs accepted 0_20_0.json, min: median +0.9% over 43 cells; controls var_length_1_8 -1.7%, cypher_match +6.9%, khop3_unwind -1.9%, khop3_in_list -3.7%, shortest_path 0.0%. Highest cell exists_var_length_witness +9.9% (below gate); best hop1_deg3_expand_memory -20.5%, cypher_match_materialized -15.8%, var_length_2_2 -10.9%. Cross-check: same-interpreter (3.12) interleaved A/B of the whole core file vs the published 0.20.0 wheel, 2 rounds, HEAD 4de6f262 engine: no cell > +10% in both rounds, worst +2-5%.",
+      "platform": "Darwin/arm64",
+      "sha256": "7151186819039d97a50afdd3e009cb34ada1de60c38198870e6e67d7ad0c4e8d",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -290,7 +296,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_20_0.json",
+    "Darwin/arm64": "0_20_1.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1

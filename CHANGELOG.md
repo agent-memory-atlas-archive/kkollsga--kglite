@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-19
+
 ### Breaking changes and migration
 
 - **Rust API: `EdgeData.properties` is a `thin_vec::ThinVec`, not a `Vec`.**
@@ -42,7 +44,11 @@ before upgrading.
   - The write now forks through the same copy-on-write overlay as the default mode, so it copies only what it changes.
   - Previously the first such write deep-copied every node and relationship (about 552 MB and 99 ms at 1 million nodes and 8 million relationships, measured on a release wheel).
   - A durable mapped session with three writers and a concurrent reader on that graph sustains about 38,000 transactions per second, against about 9,000 on 0.20.0 (release wheels, one-event transactions).
+  - While a snapshot is held, small in-memory column copies stay off the mapped spill pass until they reach 1 MiB. At 5,000 tx/s the writer's 95th-percentile transaction time is 0.13-0.18 ms, the same as the default mode; the worst case is 12-39 ms, against 96-106 ms on 0.20.0.
   - Query results, saved files and storage-mode reporting are unchanged.
+- **Variable-length path queries hold less memory at their peak.**
+  - Each expanded row reserves exactly the bindings its hop adds, instead of reallocating to four slots.
+  - On a 3-hop `count(DISTINCT …)` over 50 seeds, peak heap drops from 62.5 MB to 37.2 MB.
 - **A disk graph built in the same process gives its edge buffers back after `compact()` or `save()`.**
   - Before, the buffers that held freshly added relationships kept their full size until the graph was dropped.
   - Byte accounting in a debug test (4,000 nodes, 60,000 relationships) shows those buffers going from 2.5 MB to 0 after `save()`, the same as the reopened directory.
