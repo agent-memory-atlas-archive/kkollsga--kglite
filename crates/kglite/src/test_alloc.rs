@@ -64,3 +64,8 @@ pub(crate) fn peak_during<R>(f: impl FnOnce() -> R) -> (R, usize) {
     let peak = PEAK.with(Cell::get);
     (result, (peak - start).max(0) as usize)
 }
+
+/// Heap this thread holds right now, net of everything it freed.
+pub(crate) fn live_now() -> isize {
+    LIVE.with(Cell::get)
+}

@@ -79,8 +79,8 @@ impl DiskGraph {
             artifacts.in_edges,
             artifacts.edge_endpoints,
         )?;
-        self.appended_edge_endpoints.clear();
-        self.removed_edges.clear();
+        self.appended_edge_endpoints = Default::default();
+        self.removed_edges = Default::default();
         self.csr_sorted_by_type = true;
         self.edge_type_counts_raw = Some(artifacts.edge_type_counts);
 
@@ -323,8 +323,8 @@ impl DiskGraph {
             in_edges,
             edge_endpoints_vec,
         )?;
-        self.appended_edge_endpoints.clear();
-        self.removed_edges.clear();
+        self.appended_edge_endpoints = Default::default();
+        self.removed_edges = Default::default();
         self.csr_sorted_by_type = true;
         self.edge_type_counts_raw = Some(edge_type_counts);
 

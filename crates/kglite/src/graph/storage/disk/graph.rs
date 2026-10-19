@@ -1995,9 +1995,11 @@ impl DiskGraph {
         }
         drop(old_props);
 
-        self.overflow_out.clear();
-        self.overflow_in.clear();
-        self.free_edge_slots.clear();
+        // Reassign, not `.clear()`: clear keeps the capacity, ~32 B per edge for
+        // a bulk-built graph, until the handle drops.
+        self.overflow_out = Default::default();
+        self.overflow_in = Default::default();
+        self.free_edge_slots = Default::default();
 
         self.edge_count = live_count;
         self.next_edge_idx = live_count as u32;

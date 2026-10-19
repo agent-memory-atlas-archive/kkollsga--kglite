@@ -186,10 +186,12 @@ impl DiskGraph {
         // every overlay into them — so the overlays must be dropped or their
         // entries would be counted twice. Same discipline as `flush_node_slots`
         // and the post-`swap_csr_files` reset in `build_csr_partitioned`.
-        self.node_slot_updates.clear();
-        self.appended_node_slots.clear();
-        self.appended_edge_endpoints.clear();
-        self.removed_edges.clear();
+        // Reassign, not `.clear()`: clear keeps the capacity, ~32 B per edge for
+        // a bulk-built graph, until the handle drops.
+        self.node_slot_updates = Default::default();
+        self.appended_node_slots = Default::default();
+        self.appended_edge_endpoints = Default::default();
+        self.removed_edges = Default::default();
         // Pending edges were folded into the CSR by the save; whatever handle
         // is left points into the workspace we are about to remove.
         *self.pending_edges.get_mut() = MmapOrVec::new();

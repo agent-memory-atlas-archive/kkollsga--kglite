@@ -67,3 +67,5 @@ mod flush_tests;
 mod index_freshness_tests;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod overflow_release_tests;

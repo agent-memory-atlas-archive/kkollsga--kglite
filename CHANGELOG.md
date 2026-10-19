@@ -32,6 +32,12 @@ before upgrading.
   - Previously the first such write deep-copied every node and relationship (about 552 MB and 99 ms at 1 million nodes and 8 million relationships, measured on a release wheel).
   - Durable mapped sessions that run a concurrent reader no longer pay that copy on each transaction.
   - Query results, saved files and storage-mode reporting are unchanged.
+- **A disk graph built in the same process gives its edge buffers back after `compact()` or `save()`.**
+  - Before, the buffers that held freshly added relationships kept their full size until the graph was dropped.
+  - Byte accounting in a debug test (4,000 nodes, 60,000 relationships) shows those buffers going from 2.5 MB to 0 after `save()`, the same as the reopened directory.
+  - After `compact()`, 64 KB of node-slot overlay remains until the next `save()`.
+  - A write after `freeze()` on a compacted graph copied 66 KB of overlay in the same test, against 2.5 MB before compaction.
+  - Query results and saved files are unchanged.
 
 ## [0.20.0] - 2026-10-12
 

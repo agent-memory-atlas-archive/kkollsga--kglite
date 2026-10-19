@@ -225,8 +225,8 @@ impl DiskGraph {
                 super::generation::sync_directory(parent)?;
             }
             self.node_slots = MmapOrVec::load_mapped(path, logical_len)?;
-            self.node_slot_updates.clear();
-            self.appended_node_slots.clear();
+            self.node_slot_updates = Default::default();
+            self.appended_node_slots = Default::default();
         }
         Ok(())
     }
@@ -255,8 +255,8 @@ impl DiskGraph {
         if self.node_slots.file_path() != Some(path.as_path()) {
             let logical_len = self.node_slot_len();
             self.node_slots = MmapOrVec::load_mapped(&path, logical_len)?;
-            self.node_slot_updates.clear();
-            self.appended_node_slots.clear();
+            self.node_slot_updates = Default::default();
+            self.appended_node_slots = Default::default();
         }
         Ok(())
     }
@@ -302,8 +302,8 @@ impl DiskGraph {
                 super::generation::sync_directory(parent)?;
             }
             self.edge_endpoints = MmapOrVec::load_mapped(path, logical_len)?;
-            self.appended_edge_endpoints.clear();
-            self.removed_edges.clear();
+            self.appended_edge_endpoints = Default::default();
+            self.removed_edges = Default::default();
         }
         Ok(())
     }
