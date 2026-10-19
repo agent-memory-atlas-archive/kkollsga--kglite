@@ -270,6 +270,18 @@ pub(super) fn estimate_node_selectivity(
                             }
                             let unique: HashSet<_> = vals.iter().collect();
                             if let Some(node_type) = np.node_type.as_deref() {
+                                // Counting hits probes the id index, and a probe
+                                // against an unbuilt index scans the whole type to
+                                // build it. Planning must not pay that: without an
+                                // index the list length, capped by the type's size,
+                                // bounds the answer.
+                                if !graph.id_indices.contains_key(node_type) {
+                                    let primary = type_count.saturating_sub(secondary_count);
+                                    return unique
+                                        .len()
+                                        .min(primary)
+                                        .saturating_add(secondary_count);
+                                }
                                 let hits: HashSet<_> = unique
                                     .into_iter()
                                     .filter_map(|value| {

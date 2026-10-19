@@ -1,11 +1,13 @@
 //! `optimize_pattern_start_node`: a point-anchored endpoint — a variable
 //! bound earlier, or an `id` / index equality whose value is known per input
 //! row — starts the pattern even when the other end's candidate estimate ties
-//! it (a one-node hub type), whichever end it was written on.
+//! it (a one-node hub type), whichever end it was written on. Also pins that
+//! the `id IN [...]` estimate does not build an id index.
 
 use super::*;
-use crate::graph::core::pattern_matching::PatternElement;
+use crate::graph::core::pattern_matching::{PatternElement, PropertyMatcher};
 use crate::graph::languages::cypher::parser::parse_cypher;
+use crate::graph::session::execute::{execute_mut, ExecuteOptions};
 
 /// One `Hub` node and 100 `Doc` nodes — the hub type's candidate count (1)
 /// ties a point lookup, which is exactly the shape the tie-break decides.
@@ -248,5 +250,71 @@ fn a_literal_context_instant_anchors_on_the_label_nearly_empty_at_it() {
     assert_eq!(
         versioned_start(&format!("FOR VALID_TIME AS OF date() {pattern}")),
         a
+    );
+}
+
+// ---- `id IN [...]` selectivity: no index build, exact hit count once one exists ----
+
+fn leaf_graph() -> DirGraph {
+    let mut graph = DirGraph::new();
+    let params = HashMap::new();
+    for i in 0..40 {
+        execute_mut(
+            &mut graph,
+            &format!("CREATE (:Leaf {{id: {i}}})"),
+            &ExecuteOptions::eager(&params),
+        )
+        .unwrap();
+    }
+    graph
+}
+
+fn id_in(values: &[i64]) -> crate::graph::core::pattern_matching::NodePattern {
+    let query = parse_cypher("MATCH (n:Leaf) RETURN n").unwrap();
+    let Clause::Match(match_clause) = &query.clauses[0] else {
+        panic!("expected MATCH clause");
+    };
+    let PatternElement::Node(node) = &match_clause.patterns[0].elements[0] else {
+        panic!("expected node pattern");
+    };
+    let mut node = node.clone();
+    node.properties = Some(HashMap::from([(
+        "id".to_string(),
+        PropertyMatcher::In(values.iter().map(|v| Value::Int64(*v)).collect()),
+    )]));
+    node
+}
+
+#[test]
+fn estimating_id_in_against_an_unbuilt_index_does_not_scan_the_type() {
+    let graph = leaf_graph();
+    assert!(!graph.id_indices.contains_key("Leaf"));
+    let scans = crate::graph::dir_graph::id_index_scans();
+
+    // Three listed ids, one of which does not exist: bounded by the list.
+    let estimate = join_order::estimate_node_selectivity(&id_in(&[1, 2, 999]), &graph, None);
+    assert_eq!(estimate, 3);
+    // A list longer than the type is bounded by the type.
+    let all: Vec<i64> = (0..500).collect();
+    assert_eq!(
+        join_order::estimate_node_selectivity(&id_in(&all), &graph, None),
+        40
+    );
+
+    assert_eq!(crate::graph::dir_graph::id_index_scans(), scans);
+    assert!(
+        !graph.id_indices.contains_key("Leaf"),
+        "planning must leave the index unbuilt"
+    );
+}
+
+#[test]
+fn estimating_id_in_against_a_built_index_counts_the_hits() {
+    let mut graph = leaf_graph();
+    graph.build_id_index("Leaf");
+    let estimate = join_order::estimate_node_selectivity(&id_in(&[1, 2, 999]), &graph, None);
+    assert_eq!(
+        estimate, 2,
+        "the missing id is not counted once it can be known"
     );
 }
