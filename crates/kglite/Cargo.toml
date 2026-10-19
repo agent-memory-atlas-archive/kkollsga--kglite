@@ -133,7 +133,7 @@ rayon = "1.12"
 # dependency, disappears.
 crc32fast = "1.5"
 # 1.1 is the tight floor for the workspace-unified tree, not the engine's
-# own need: with the `xlsx` feature on, calamine 0.36 pulls zip 8.6, which
+# own need: with the `xlsx` feature on, calamine 0.37 pulls zip 9, which
 # requires flate2 ^1.1 (ureq 3, under `fastembed`, needs ^1.0.30). Cargo
 # unifies flate2 across the tree, so a lower floor makes the whole
 # workspace unresolvable under direct-minimal-versions.
@@ -204,9 +204,9 @@ oxrdf = { version = "0.3", optional = true, features = ["rdf-12"] }
 # exist, i.e. the difference between a date cell and a floating-point serial
 # number. It resolves to the `chrono` this crate already depends on, so it
 # costs no package. `picture` (embedded images) is deliberately off.
-# 0.36.1 is the floor because it is the current release and calamine 0.36 is
-# the first series whose MSRV (1.88) this workspace already meets.
-calamine = { version = "0.36.1", default-features = false, features = ["dates"], optional = true }
+# 0.37.0 is the floor: the first release on zip 9, which fixes the zip 8
+# extraction advisories (RUSTSEC-2026-0367/0368/0369); its MSRV is 1.88.
+calamine = { version = "0.37.0", default-features = false, features = ["dates"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # 1.0.4, not "1": ignore 0.4.15 (via mcp-methods) requires same-file

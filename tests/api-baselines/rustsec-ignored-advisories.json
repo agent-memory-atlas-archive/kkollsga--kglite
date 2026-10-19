@@ -12,6 +12,12 @@
       "reason": "paste is a compile-time transitive dependency of the optional fastembed/tokenizers stack; the notice reports maintenance status, not a vulnerability, and no compatible upstream replacement is available here.",
       "reviewed": "2026-10-12",
       "expires": "2027-01-10"
+    },
+    {
+      "id": "RUSTSEC-2024-0449",
+      "reason": "unsafe-libyaml reaches the tree only through serde_yaml 0.9 inside the sibling mcp-methods crate (kglite-cli and kglite-mcp-server), which parses the operator's own manifest files; the notice reports maintenance status, not a vulnerability. Retire once mcp-methods moves off serde_yaml.",
+      "reviewed": "2026-10-19",
+      "expires": "2027-01-17"
     }
   ]
 }
