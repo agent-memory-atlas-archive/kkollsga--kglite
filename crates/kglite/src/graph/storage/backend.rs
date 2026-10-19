@@ -6,7 +6,7 @@
 
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
-use crate::graph::storage::fork_base::can_fork;
+use crate::graph::storage::fork_base::{can_fork, Folded};
 use crate::graph::storage::forked::ForkedGraph;
 use crate::graph::storage::recording::{RecordingGraph, RecordingState};
 use crate::graph::storage::undo::UndoJournal;
@@ -513,7 +513,7 @@ impl GraphBackend {
             GraphBackend::Recording(rg) => rg.inner_mut().try_compact(),
             GraphBackend::Forked(forked) => {
                 if let Some(folded) = forked.fold_in_place() {
-                    *self = folded.into_backend();
+                    *self = GraphBackend::from(folded);
                 }
             }
             _ => {}
@@ -548,7 +548,7 @@ impl GraphBackend {
         // leaves this backend serving the intact overlay rather than an empty
         // placeholder whose indexes point at nothing (issue #195).
         match forked.materialise() {
-            Ok(folded) => *self = folded.into_backend(),
+            Ok(folded) => *self = GraphBackend::from(folded),
             Err(reason) => panic!(
                 "cannot collapse the copy-on-write overlay: {reason}; the overlay \
                  is left intact (see storage/forked.rs)"
@@ -1054,6 +1054,16 @@ impl std::ops::Index<EdgeIndex> for GraphBackend {
     }
 }
 
+/// The backend variant that matches the base an overlay was folded from.
+impl From<Folded> for GraphBackend {
+    fn from(folded: Folded) -> Self {
+        match folded {
+            Folded::Memory(g) => GraphBackend::Memory(Arc::new(g)),
+            Folded::Mapped(g) => GraphBackend::Mapped(Arc::new(g)),
+        }
+    }
+}
+
 impl Clone for GraphBackend {
     fn clone(&self) -> Self {
         #[cfg(test)]
@@ -1096,7 +1106,7 @@ impl Clone for GraphBackend {
                     if let Ok(folded) = g.to_folded_graph() {
                         #[cfg(test)]
                         note_nodes_copied(folded.node_count());
-                        return folded.into_backend();
+                        return GraphBackend::from(folded);
                     }
                 }
                 #[cfg(test)]

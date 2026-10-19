@@ -15,7 +15,7 @@ use petgraph::stable_graph::StableDiGraph;
 use rustc_hash::FxHashMap;
 use serde::{Serialize, Serializer};
 
-use crate::graph::schema::{EdgeData, GraphBackend, InternedKey, NodeData};
+use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
 use crate::graph::storage::slot_mirror::SlotMirror;
 use crate::graph::storage::undo::UndoJournal;
@@ -246,14 +246,6 @@ impl Folded {
         match self {
             Self::Memory(g) => g.inner().node_count(),
             Self::Mapped(g) => g.inner().node_count(),
-        }
-    }
-
-    /// The backend variant that matches the base this was folded from.
-    pub(crate) fn into_backend(self) -> GraphBackend {
-        match self {
-            Self::Memory(g) => GraphBackend::Memory(Arc::new(g)),
-            Self::Mapped(g) => GraphBackend::Mapped(Arc::new(g)),
         }
     }
 }
