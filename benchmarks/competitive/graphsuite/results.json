@@ -40429,6 +40429,2681 @@
           "digest": "fffb8e85796e"
         }
       }
+    },
+    {
+      "library": "kglite-cypher",
+      "version": "0.20.0",
+      "run_date": "2026-10-19T21:51:49+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.04756504204124212,
+          "median_s": 0.086138958518859,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0020940419053658843,
+          "median_s": 0.0020981659181416035,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.0005032499320805073,
+          "median_s": 0.000507500022649765,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 1.2919772416353226e-06,
+          "median_s": 1.4168908819556236e-06,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.00024570897221565247,
+          "median_s": 0.0002479169052094221,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.000982375000603497,
+          "median_s": 0.0009991669794544578,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.001437708968296647,
+          "median_s": 0.001474624965339899,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0011004999978467822,
+          "median_s": 0.0011181669542565942,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.0008374999742954969,
+          "median_s": 0.0008555419044569135,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.0037136669270694256,
+          "median_s": 0.004208125057630241,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.010223416960798204,
+          "median_s": 0.010350125026889145,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0004305839538574219,
+          "median_s": 0.0004332080716267228,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.00014258408918976784,
+          "median_s": 0.00014566699974238873,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0007192500634118915,
+          "median_s": 0.0007258340483531356,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.00027487496845424175,
+          "median_s": 0.00028924993239343166,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.004017250030301511,
+          "median_s": 0.004065791959874332,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 5.5582961067557335e-05,
+          "median_s": 5.891697946935892e-05,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.002064167056232691,
+          "median_s": 0.0020731660770252347,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0056172499898821115,
+          "median_s": 0.005778791033662856,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.00344887503888458,
+          "median_s": 0.003501832950860262,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 0.14187641604803503,
+          "median_s": 0.14504933403804898,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.007649041945114732,
+          "median_s": 0.007744041969999671,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "ok",
+          "min_s": 0.004369041998870671,
+          "median_s": 0.004701957921497524,
+          "reps": 5,
+          "sanity": 10,
+          "digest": "1c73d0b19bd6"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 1.2499978765845299e-05,
+          "median_s": 1.3999990187585354e-05,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.000327541958540678,
+          "median_s": 0.0003298750380054116,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.0034376250114291906,
+          "median_s": 0.0035842920187860727,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
+    },
+    {
+      "library": "kglite-mapped",
+      "version": "0.20.0",
+      "run_date": "2026-10-19T21:51:50+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.053547791903838515,
+          "median_s": 0.15574266691692173,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.002089582965709269,
+          "median_s": 0.0021260420326143503,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.0004959579091519117,
+          "median_s": 0.0004978750366717577,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 1.834006980061531e-06,
+          "median_s": 2.00001522898674e-06,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.00024654099252074957,
+          "median_s": 0.00025112496223300695,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0009507499635219574,
+          "median_s": 0.0009547920199111104,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0013669169275090098,
+          "median_s": 0.0014075000071898103,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0009864589665085077,
+          "median_s": 0.0010099170031026006,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.000840415945276618,
+          "median_s": 0.0008509999606758356,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.00422462506685406,
+          "median_s": 0.0043873750837519765,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.010497207986190915,
+          "median_s": 0.011076750000938773,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.00043158303014934063,
+          "median_s": 0.0004344999324530363,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.0001431669807061553,
+          "median_s": 0.00014729099348187447,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0006904579931870103,
+          "median_s": 0.0007290421053767204,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.00028154102619737387,
+          "median_s": 0.0002980420831590891,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.004075291915796697,
+          "median_s": 0.0041550410678610206,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 5.208409857004881e-05,
+          "median_s": 5.6416960433125496e-05,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.00201795797329396,
+          "median_s": 0.0021121250465512276,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.011579000041820109,
+          "median_s": 0.011971083004027605,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.0035065000411123037,
+          "median_s": 0.003544542007148266,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 0.14236154197715223,
+          "median_s": 0.14705599995795637,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.01124979101587087,
+          "median_s": 0.011521958047524095,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "ok",
+          "min_s": 0.004673082963563502,
+          "median_s": 0.004733499954454601,
+          "reps": 5,
+          "sanity": 10,
+          "digest": "1c73d0b19bd6"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 1.3165990822017193e-05,
+          "median_s": 1.6707926988601685e-05,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.00032404204830527306,
+          "median_s": 0.00032700004521757364,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.0035290420055389404,
+          "median_s": 0.005373729509301484,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
+    },
+    {
+      "library": "kglite-disk",
+      "version": "0.20.0",
+      "run_date": "2026-10-19T21:51:52+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.10236862499732524,
+          "median_s": 0.10651702049653977,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0037865840131416917,
+          "median_s": 0.004189542029052973,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.0005830839509144425,
+          "median_s": 0.0005885841092094779,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 1.375097781419754e-06,
+          "median_s": 1.8329592421650887e-06,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.000795625033788383,
+          "median_s": 0.000820250017568469,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0017885830020532012,
+          "median_s": 0.0018039579736068845,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0026160409906879067,
+          "median_s": 0.0026498750085011125,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0020626250188797712,
+          "median_s": 0.002073582960292697,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.0009308329317718744,
+          "median_s": 0.000977708026766777,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.004751125001348555,
+          "median_s": 0.00508420797996223,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.012683333014138043,
+          "median_s": 0.013078999938443303,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0005866249557584524,
+          "median_s": 0.0006046249764040112,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.0001832909183576703,
+          "median_s": 0.00018562504556030035,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0009591249981895089,
+          "median_s": 0.0009707090212032199,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.00031070795375853777,
+          "median_s": 0.0003232080489397049,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.003770790994167328,
+          "median_s": 0.003899291972629726,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.00011170795187354088,
+          "median_s": 0.00011870800517499447,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.004207291989587247,
+          "median_s": 0.004371959017589688,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.006341792060993612,
+          "median_s": 0.006500208983197808,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.00360829196870327,
+          "median_s": 0.003644749987870455,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 0.14327866700477898,
+          "median_s": 0.1516017090762034,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.008001000038348138,
+          "median_s": 0.008169790962710977,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "ok",
+          "min_s": 0.012910249992273748,
+          "median_s": 0.013210667064413428,
+          "reps": 5,
+          "sanity": 10,
+          "digest": "1c73d0b19bd6"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 2.0541949197649956e-05,
+          "median_s": 2.2249994799494743e-05,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.001417415915057063,
+          "median_s": 0.0015390000771731138,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.008144999970681965,
+          "median_s": 0.008183416968677193,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
+    },
+    {
+      "library": "kglite-fluent",
+      "version": "0.20.0",
+      "run_date": "2026-10-19T21:51:53+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.0460475409636274,
+          "median_s": 0.046206770464777946,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 4.00003045797348e-06,
+          "median_s": 4.790956154465675e-06,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.0004957499913871288,
+          "median_s": 0.0005014589987695217,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "skip",
+          "reason": "no fluent edge-scan primitive; label_pair_counts() is a cached cardinality snapshot, not a scan"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.0009788330644369125,
+          "median_s": 0.0010024589719250798,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0009833750082179904,
+          "median_s": 0.001012332970276475,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.001961292000487447,
+          "median_s": 0.0019636249635368586,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.001453750068321824,
+          "median_s": 0.001465250039473176,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.013844541041180491,
+          "median_s": 0.013887666980735958,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.004905457957647741,
+          "median_s": 0.004935499979183078,
+          "reps": 5,
+          "sanity": 10186,
+          "digest": "4a0953c4ade9"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.003831499954685569,
+          "median_s": 0.003940250026062131,
+          "reps": 5,
+          "sanity": 17574,
+          "digest": "96f6c214560e"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.012991833034902811,
+          "median_s": 0.013774832943454385,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.0005169590003788471,
+          "median_s": 0.0005190829979255795,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.013039457960985601,
+          "median_s": 0.013080416014418006,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.022430457989685237,
+          "median_s": 0.022559166071005166,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.04544649994932115,
+          "median_s": 0.047476124949753284,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 7.416598964482546e-05,
+          "median_s": 7.475004531443119e-05,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "skip",
+          "reason": "traverse() yields a node set, not the multi-type path rows the join counts"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0006177499890327454,
+          "median_s": 0.0006187499966472387,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "skip",
+          "reason": "connected_components() takes no node-type/edge-type scope; to_subgraph() would time a graph copy"
+        },
+        "louvain": {
+          "status": "skip",
+          "reason": "louvain_communities() takes no node-type scope; to_subgraph() would time a graph copy"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.00543675001244992,
+          "median_s": 0.00549691601190716,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "ok",
+          "min_s": 0.0001270420616492629,
+          "median_s": 0.00013950001448392868,
+          "reps": 5,
+          "sanity": 10,
+          "digest": "1c73d0b19bd6"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 1.5042023733258247e-05,
+          "median_s": 1.633400097489357e-05,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.03069370798766613,
+          "median_s": 0.03118725004605949,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.06433312501758337,
+          "median_s": 0.0655288125271909,
+          "reps": 2,
+          "sanity": 1000,
+          "digest": "e3cbba8883fe"
+        }
+      }
+    },
+    {
+      "library": "kglite-bolt",
+      "version": "0.20.0",
+      "run_date": "2026-10-19T21:51:57+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.25488775002304465,
+          "median_s": 0.25488775002304465,
+          "reps": 1,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.1177965410752222,
+          "median_s": 0.11842008400708437,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.05843800003640354,
+          "median_s": 0.05933841597288847,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 0.00010783295147120953,
+          "median_s": 0.00012283306568861008,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.0006819999543949962,
+          "median_s": 0.0006828330224379897,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.023859916953369975,
+          "median_s": 0.02434629190247506,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0031463750638067722,
+          "median_s": 0.003212957992218435,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0014332500286400318,
+          "median_s": 0.0014555830275639892,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.01818204205483198,
+          "median_s": 0.018685290939174592,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.06323908397462219,
+          "median_s": 0.06359833397436887,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.11345108400564641,
+          "median_s": 0.11578416707925498,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0039130839286372066,
+          "median_s": 0.003951749997213483,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.00188362505286932,
+          "median_s": 0.001914125052280724,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.009532583993859589,
+          "median_s": 0.009567791013978422,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.003082458977587521,
+          "median_s": 0.0033004169818013906,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.00475750002078712,
+          "median_s": 0.004799458081834018,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.00025770801585167646,
+          "median_s": 0.00026050000451505184,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.002654541051015258,
+          "median_s": 0.0027867910685017705,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.006526250042952597,
+          "median_s": 0.006753541063517332,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.004230040940456092,
+          "median_s": 0.004426041967235506,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 0.14722254197113216,
+          "median_s": 0.15086958406027406,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.013655624934472144,
+          "median_s": 0.015112292021512985,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "ok",
+          "min_s": 0.0057302090572193265,
+          "median_s": 0.006188999977894127,
+          "reps": 5,
+          "sanity": 10,
+          "digest": "1c73d0b19bd6"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 0.00026670796796679497,
+          "median_s": 0.0002776249311864376,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.0013943749945610762,
+          "median_s": 0.0014888748992234468,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.01798633299767971,
+          "median_s": 0.018288146005943418,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
+    },
+    {
+      "library": "ladybug",
+      "version": "0.17.0",
+      "run_date": "2026-10-19T21:52:34+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.48925895895808935,
+          "median_s": 0.6549355210154317,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0009774169884622097,
+          "median_s": 0.0010187079897150397,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.003190833027474582,
+          "median_s": 0.0032755000283941627,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 0.00017729203682392836,
+          "median_s": 0.00019745901226997375,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.0008108749752864242,
+          "median_s": 0.0008752919966354966,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0005067499587312341,
+          "median_s": 0.0005372909363359213,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.001348291989415884,
+          "median_s": 0.0014115830417722464,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0005919589893892407,
+          "median_s": 0.0006525421049445868,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.011233084020204842,
+          "median_s": 0.011317291995510459,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 1.8820520419394597,
+          "median_s": 1.8849552294705063,
+          "reps": 2,
+          "sanity": 10186,
+          "digest": "4a0953c4ade9"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 28.27689954196103,
+          "median_s": 28.27689954196103,
+          "reps": 1,
+          "sanity": 17574,
+          "digest": "96f6c214560e"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.009364416007883847,
+          "median_s": 0.009579667006619275,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.2766052499646321,
+          "median_s": 0.28066987497732043,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.010927833965979517,
+          "median_s": 0.011151165934279561,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.21081458299886435,
+          "median_s": 0.2129008750198409,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.0027889159973710775,
+          "median_s": 0.002799667068757117,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.0004742080345749855,
+          "median_s": 0.0004968330031260848,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.0004158340161666274,
+          "median_s": 0.00045070797204971313,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0044183749705553055,
+          "median_s": 0.004530000034719706,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "skip",
+          "reason": "WCC was not exercised by this adapter profile"
+        },
+        "louvain": {
+          "status": "skip",
+          "reason": "louvain"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.006111416965723038,
+          "median_s": 0.0061521659372374415,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 0.00028449995443224907,
+          "median_s": 0.00031041691545397043,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.007028750027529895,
+          "median_s": 0.007926875026896596,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.114548834040761,
+          "median_s": 0.11498287552967668,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
+    },
+    {
+      "library": "networkx",
+      "version": "3.6.1",
+      "run_date": "2026-10-19T21:52:47+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.25065987498965114,
+          "median_s": 0.2618513749912381,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0011841671075671911,
+          "median_s": 0.0012127499794587493,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 3.0791969038546085e-05,
+          "median_s": 3.087497316300869e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 0.0015554169658571482,
+          "median_s": 0.001729999901726842,
+          "reps": 5,
+          "sanity": 159950,
+          "digest": "f83e0c8e53e6"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.001017542090266943,
+          "median_s": 0.001021042000502348,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.001044000033289194,
+          "median_s": 0.001056124921888113,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0018237499753013253,
+          "median_s": 0.0018387919990345836,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0018087499774992466,
+          "median_s": 0.0018317500362172723,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 9.929202497005463e-05,
+          "median_s": 0.00010683294385671616,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.002017082995735109,
+          "median_s": 0.0020576659590005875,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.005527583998627961,
+          "median_s": 0.005551000009290874,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0003524160711094737,
+          "median_s": 0.00036349997390061617,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.00015095900744199753,
+          "median_s": 0.00015750003512948751,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.00042654096614569426,
+          "median_s": 0.00043454195838421583,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.0005103748990222812,
+          "median_s": 0.000532084028236568,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.06133391696494073,
+          "median_s": 0.06265400000847876,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.0005641669267788529,
+          "median_s": 0.0005834579933434725,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.05757537507452071,
+          "median_s": 0.05810258397832513,
+          "reps": 5,
+          "sanity": 99979,
+          "digest": "7ccc576834f1"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0023673330433666706,
+          "median_s": 0.002565832925029099,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.005634750006720424,
+          "median_s": 0.005689791985787451,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 11.713038709014654,
+          "median_s": 11.713038709014654,
+          "reps": 1,
+          "sanity": 2,
+          "digest": "ce853a5bc028"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.0016754580428823829,
+          "median_s": 0.0018427500035613775,
+          "reps": 5,
+          "sanity": 13251,
+          "digest": "7d14bdcfbc56"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "skip",
+          "reason": "geo_within"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 5.8999983593821526e-05,
+          "median_s": 5.9542013332247734e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.0006569160614162683,
+          "median_s": 0.0007520415238104761,
+          "reps": 2,
+          "sanity": 1000,
+          "digest": "e3cbba8883fe"
+        }
+      }
+    },
+    {
+      "library": "duckdb",
+      "version": "1.5.5",
+      "run_date": "2026-10-19T21:52:48+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.10271145903971046,
+          "median_s": 0.108804291987326,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0011223340407013893,
+          "median_s": 0.0011438330402597785,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.0004783329786732793,
+          "median_s": 0.0005531660281121731,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 6.812508217990398e-05,
+          "median_s": 7.650000043213367e-05,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.00019220798276364803,
+          "median_s": 0.00020883302204310894,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0004414579598233104,
+          "median_s": 0.00046629097778350115,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0005425410345196724,
+          "median_s": 0.0006292080506682396,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.00013158400543034077,
+          "median_s": 0.00014395802281796932,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.0014547909377142787,
+          "median_s": 0.0015308749862015247,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.0030237080063670874,
+          "median_s": 0.003034417051821947,
+          "reps": 5,
+          "sanity": 10186,
+          "digest": "4a0953c4ade9"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.004363166983239353,
+          "median_s": 0.004580124979838729,
+          "reps": 5,
+          "sanity": 17574,
+          "digest": "96f6c214560e"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0013407920487225056,
+          "median_s": 0.0013987909769639373,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.0012282499810680747,
+          "median_s": 0.0012764160055667162,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0017903749831020832,
+          "median_s": 0.0018346250290051103,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "skip",
+          "reason": "single-pair shortest path is impractical in pure SQL"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.0012701249215751886,
+          "median_s": 0.0013480420457199216,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.00019454106222838163,
+          "median_s": 0.00021145888604223728,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.00041866698302328587,
+          "median_s": 0.00043829099740833044,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0016638750676065683,
+          "median_s": 0.0017380419885739684,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "skip",
+          "reason": "weakly-connected-components is impractical in pure SQL"
+        },
+        "louvain": {
+          "status": "skip",
+          "reason": "louvain"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.001641458016820252,
+          "median_s": 0.0016967089613899589,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 7.229193579405546e-05,
+          "median_s": 7.433304563164711e-05,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.0007670419290661812,
+          "median_s": 0.0008378330385312438,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.0016572499880567193,
+          "median_s": 0.0017583750304766,
+          "reps": 2,
+          "sanity": 1000,
+          "digest": "e3cbba8883fe"
+        }
+      }
+    },
+    {
+      "library": "rustworkx",
+      "version": "0.18.1",
+      "run_date": "2026-10-19T21:52:49+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.019287041970528662,
+          "median_s": 0.028754229482728988,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0003237080527469516,
+          "median_s": 0.00033187505323439837,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 2.2833002731204033e-05,
+          "median_s": 2.37500062212348e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 1.6600824892520905e-07,
+          "median_s": 1.6705598682165146e-07,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.000712667009793222,
+          "median_s": 0.000718125025741756,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0007345420308411121,
+          "median_s": 0.0007421249756589532,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0014194159302860498,
+          "median_s": 0.0014716660371050239,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0012822500430047512,
+          "median_s": 0.0013495839666575193,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.00046479201409965754,
+          "median_s": 0.0005033749621361494,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.001993665937334299,
+          "median_s": 0.002059540944173932,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.00506312504876405,
+          "median_s": 0.005119832931086421,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.00026283308397978544,
+          "median_s": 0.0002673330018296838,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 4.395795986056328e-05,
+          "median_s": 4.7666020691394806e-05,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.0003873750101774931,
+          "median_s": 0.0004077500198036432,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.090118124964647,
+          "median_s": 0.09068995900452137,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "skip",
+          "reason": "rustworkx has no relational pattern-match surface"
+        },
+        "industry_aggregation": {
+          "status": "skip",
+          "reason": "industry_aggregation"
+        },
+        "two_step_join": {
+          "status": "skip",
+          "reason": "two_step_join"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0029934580670669675,
+          "median_s": 0.0030550420051440597,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.0030355420894920826,
+          "median_s": 0.003055207896977663,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "skip",
+          "reason": "louvain"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.002300957916304469,
+          "median_s": 0.002321832929737866,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "skip",
+          "reason": "geo_within"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 2.4124979972839355e-05,
+          "median_s": 2.5290995836257935e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.00010349997319281101,
+          "median_s": 0.0001172710326500237,
+          "reps": 2,
+          "sanity": 1000,
+          "digest": "e3cbba8883fe"
+        }
+      }
+    },
+    {
+      "library": "igraph",
+      "version": "1.0.0",
+      "run_date": "2026-10-19T21:52:52+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 0.017339250072836876,
+          "median_s": 0.017534125014208257,
+          "reps": 2,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 8.300412446260452e-08,
+          "median_s": 2.0791776478290558e-07,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 1.5708967112004757e-05,
+          "median_s": 1.6459031030535698e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 8.300412446260452e-08,
+          "median_s": 1.25030055642128e-07,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.0010125410044565797,
+          "median_s": 0.001048290985636413,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.0006021660519763827,
+          "median_s": 0.0006096250144764781,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.0011771669378504157,
+          "median_s": 0.0011882090475410223,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "7da826a73390"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.0012978330487385392,
+          "median_s": 0.001319000031799078,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.00021691701840609312,
+          "median_s": 0.00022970896679908037,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.0007521669613197446,
+          "median_s": 0.0007903340738266706,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.0014643329195678234,
+          "median_s": 0.0014859579969197512,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.00017154100351035595,
+          "median_s": 0.00017791602294892073,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 3.958307206630707e-05,
+          "median_s": 4.583294503390789e-05,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.00030212500132620335,
+          "median_s": 0.00031508307438343763,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.02312820788938552,
+          "median_s": 0.023252167040482163,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "skip",
+          "reason": "igraph has no relational pattern-match surface"
+        },
+        "industry_aggregation": {
+          "status": "skip",
+          "reason": "industry_aggregation"
+        },
+        "two_step_join": {
+          "status": "skip",
+          "reason": "two_step_join"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.0010785830672830343,
+          "median_s": 0.0010990420123562217,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "ok",
+          "min_s": 0.0005980420392006636,
+          "median_s": 0.0006070419913157821,
+          "reps": 5,
+          "sanity": 2,
+          "digest": "7e24177f74b9"
+        },
+        "louvain": {
+          "status": "ok",
+          "min_s": 1.2341624159598723,
+          "median_s": 1.5416627914528362,
+          "reps": 2,
+          "sanity": 2,
+          "digest": "e46c0967ab96"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.000349957961589098,
+          "median_s": 0.0003544159699231386,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "skip",
+          "reason": "geo_within"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 2.295803278684616e-05,
+          "median_s": 2.3999949917197227e-05,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.006731500034220517,
+          "median_s": 0.0067871250212192535,
+          "reps": 2,
+          "sanity": 1000,
+          "digest": "e3cbba8883fe"
+        }
+      }
+    },
+    {
+      "library": "neo4j-native",
+      "version": "2026.02.3",
+      "run_date": "2026-10-19T21:53:06+02:00",
+      "dataset": {
+        "scale": "medium",
+        "seed": 1234,
+        "signature": "medium-s1234-n25333-e280774",
+        "n_nodes": 25333,
+        "n_edges": 280774
+      },
+      "machine": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "system": "Darwin",
+        "release": "27.0.0",
+        "machine": "arm64",
+        "python": "3.14.3",
+        "python_implementation": "CPython"
+      },
+      "provenance": {
+        "harness_version": 3,
+        "capture_id": "2a2274bc45f1435cbd491095843af0bf",
+        "origin": "manual",
+        "source_commit": "4de6f262c5e59db9d4f049c483998f6c9fb7851f",
+        "source_dirty": false,
+        "base_repeats": 5,
+        "requested_libraries": [
+          "kglite-cypher",
+          "kglite-mapped",
+          "kglite-disk",
+          "kglite-fluent",
+          "kglite-bolt",
+          "ladybug",
+          "networkx",
+          "duckdb",
+          "rustworkx",
+          "igraph",
+          "neo4j-native"
+        ],
+        "publication_qualified": true
+      },
+      "groups": {
+        "build": {
+          "status": "ok",
+          "min_s": 5.118481500074267,
+          "median_s": 5.118481500074267,
+          "reps": 1,
+          "sanity": 306107,
+          "digest": "0e33c82ed3a2"
+        },
+        "node_scan": {
+          "status": "ok",
+          "min_s": 0.0007716669933870435,
+          "median_s": 0.0011461670510470867,
+          "reps": 5,
+          "sanity": 20000,
+          "digest": "352bc7d47dec"
+        },
+        "point_lookup": {
+          "status": "ok",
+          "min_s": 0.003000624943524599,
+          "median_s": 0.0032245839247480035,
+          "reps": 5,
+          "sanity": 495,
+          "digest": "f1e75747bc4c"
+        },
+        "edge_scan": {
+          "status": "ok",
+          "min_s": 0.0009328749729320407,
+          "median_s": 0.001508791116066277,
+          "reps": 5,
+          "sanity": 160000,
+          "digest": "2b08952a5fda"
+        },
+        "property_filter": {
+          "status": "ok",
+          "min_s": 0.01168995804619044,
+          "median_s": 0.01233216596301645,
+          "reps": 5,
+          "sanity": 55,
+          "digest": "b03f7a9543db"
+        },
+        "range_filter": {
+          "status": "ok",
+          "min_s": 0.03556583391036838,
+          "median_s": 0.040043459041044116,
+          "reps": 5,
+          "sanity": 3999,
+          "digest": "a17166ad409f"
+        },
+        "group_aggregation": {
+          "status": "ok",
+          "min_s": 0.009716583997942507,
+          "median_s": 0.01053474994841963,
+          "reps": 5,
+          "sanity": 200,
+          "digest": "40122749552d"
+        },
+        "year_aggregation": {
+          "status": "ok",
+          "min_s": 0.005172208999283612,
+          "median_s": 0.0054033329943194985,
+          "reps": 5,
+          "sanity": 26,
+          "digest": "b7dbe1b21817"
+        },
+        "one_hop": {
+          "status": "ok",
+          "min_s": 0.024731333018280566,
+          "median_s": 0.028708792058750987,
+          "reps": 5,
+          "sanity": 2952,
+          "digest": "ee9f78f15c76"
+        },
+        "two_hop": {
+          "status": "ok",
+          "min_s": 0.08166766702197492,
+          "median_s": 0.08482899994123727,
+          "reps": 5,
+          "sanity": 10151,
+          "digest": "a3a130f8c35a"
+        },
+        "three_hop": {
+          "status": "ok",
+          "min_s": 0.14468720799777657,
+          "median_s": 0.14768045803066343,
+          "reps": 5,
+          "sanity": 17571,
+          "digest": "75c64035b2b0"
+        },
+        "filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.006277915905229747,
+          "median_s": 0.006729291984811425,
+          "reps": 5,
+          "sanity": 562,
+          "digest": "fc5e12e24ec3"
+        },
+        "deep_traversal": {
+          "status": "ok",
+          "min_s": 0.003414332983084023,
+          "median_s": 0.0036766669945791364,
+          "reps": 5,
+          "sanity": 274,
+          "digest": "3de7eb7d4d6a"
+        },
+        "score_filtered_traversal": {
+          "status": "ok",
+          "min_s": 0.012743875035084784,
+          "median_s": 0.013218292035162449,
+          "reps": 5,
+          "sanity": 1482,
+          "digest": "eaf9ccd2ef60"
+        },
+        "shortest_path": {
+          "status": "ok",
+          "min_s": 0.014444165979512036,
+          "median_s": 0.01572004205081612,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "a86578270fd0"
+        },
+        "pattern_match": {
+          "status": "ok",
+          "min_s": 0.018856208072975278,
+          "median_s": 0.01992425008211285,
+          "reps": 5,
+          "sanity": 40,
+          "digest": "af3e133428b9"
+        },
+        "industry_aggregation": {
+          "status": "ok",
+          "min_s": 0.000895833014510572,
+          "median_s": 0.00109270797111094,
+          "reps": 5,
+          "sanity": 8,
+          "digest": "3fcae8258dad"
+        },
+        "two_step_join": {
+          "status": "ok",
+          "min_s": 0.007326124934479594,
+          "median_s": 0.007969499914906919,
+          "reps": 5,
+          "sanity": 100000,
+          "digest": "409e9519c662"
+        },
+        "degree_topk": {
+          "status": "ok",
+          "min_s": 0.02083750010933727,
+          "median_s": 0.024248332949355245,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "57c1f7b07604"
+        },
+        "connected_components": {
+          "status": "skip",
+          "reason": "WCC needs the Neo4j GDS plugin"
+        },
+        "louvain": {
+          "status": "skip",
+          "reason": "louvain"
+        },
+        "degree_filter": {
+          "status": "ok",
+          "min_s": 0.020563541911542416,
+          "median_s": 0.021368541987612844,
+          "reps": 5,
+          "sanity": 13260,
+          "digest": "7e0845b0c0fc"
+        },
+        "vector_knn": {
+          "status": "skip",
+          "reason": "vector_knn"
+        },
+        "geo_within": {
+          "status": "ok",
+          "min_s": 0.0006976251024752855,
+          "median_s": 0.0007826669607311487,
+          "reps": 5,
+          "sanity": 20,
+          "digest": "e93dc4915303"
+        },
+        "bulk_update": {
+          "status": "ok",
+          "min_s": 0.0058926669880747795,
+          "median_s": 0.007922624936327338,
+          "reps": 5,
+          "sanity": 500,
+          "digest": "f83a383c0fa8"
+        },
+        "mutations": {
+          "status": "ok",
+          "min_s": 0.05588479095604271,
+          "median_s": 0.09092535398667678,
+          "reps": 2,
+          "sanity": 334,
+          "digest": "fffb8e85796e"
+        }
+      }
     }
   ]
 }
