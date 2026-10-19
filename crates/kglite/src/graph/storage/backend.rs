@@ -6,7 +6,8 @@
 
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
-use crate::graph::storage::forked::{can_fork, ForkedGraph};
+use crate::graph::storage::fork_base::can_fork;
+use crate::graph::storage::forked::ForkedGraph;
 use crate::graph::storage::recording::{RecordingGraph, RecordingState};
 use crate::graph::storage::undo::UndoJournal;
 use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
@@ -68,7 +69,7 @@ pub(crate) fn note_nodes_copied(n: usize) {
 /// `Arc::make_mut` is the fallback for a path that bypasses write entry: it
 /// deep-copies rather than mutating a backend someone is reading, i.e. it fails
 /// **slow, never wrong** — the direction `rollback::journal_covers` and
-/// `forked::can_fork` also take. A panic here would have been a user-visible
+/// `fork_base::can_fork` also take. A panic here would have been a user-visible
 /// crash for a cost problem.
 #[inline(always)]
 pub(crate) fn unique_heap_backend<T: Clone>(handle: &mut Arc<T>) -> &mut T {
@@ -76,7 +77,7 @@ pub(crate) fn unique_heap_backend<T: Clone>(handle: &mut Arc<T>) -> &mut T {
 }
 
 /// Graph storage backend. Five variants — heap-resident memory, a
-/// copy-on-write overlay over a shared memory base, mmap-columnar-spilled
+/// copy-on-write overlay over a shared memory or mapped base, mmap-columnar-spilled
 /// mapped, CSR-on-disk, and a write-capture wrapper. `MappedGraph` is a
 /// distinct struct rather than a type alias, so each backend owns its own
 /// [`GraphRead`] / [`GraphWrite`] impl — Memory/Mapped/Disk in
@@ -97,13 +98,15 @@ pub enum GraphBackend {
     Memory(Arc<MemoryGraph>),
     /// **A writer's copy-on-write overlay over a base a reader still holds.**
     /// Produced by `Clone` in place of a deep copy whenever the base qualifies
-    /// (`forked::can_fork`), and collapsed back to `Memory` by
+    /// (`fork_base::can_fork`), over a `Memory` or a `Mapped` base, and
+    /// collapsed back to the variant it forked from by
     /// [`try_compact`](Self::try_compact) the moment the reader drops.
     ///
-    /// Every predicate below treats it as memory storage, because it *is* one:
-    /// `is_memory`, `supports_undo_journal` and
-    /// `supports_checkpoint_free_mutation` answer exactly as the `Memory` arm it
-    /// was forked from would. Answering `false` to `supports_undo_journal` would
+    /// `is_mapped`, `supports_undo_journal` and
+    /// `supports_checkpoint_free_mutation` answer exactly as the `Memory` or
+    /// `Mapped` arm it was forked from would. `is_memory` answers `false` for
+    /// every fork, so memory-only executor routes take their generic path
+    /// while a view is held. Answering `false` to `supports_undo_journal` would
     /// send every statement taken while a view is held to
     /// `StatementCheckpoint::Clone` — an O(V+E) clone *per statement*, a worse
     /// cliff than the defect this variant removes.
@@ -353,10 +356,15 @@ impl GraphBackend {
     /// [`supports_checkpoint_free_delete`](Self::supports_checkpoint_free_delete).
     #[inline]
     pub(crate) fn supports_checkpoint_free_mutation(&self) -> bool {
-        // `Forked` answers as the `Memory` it forked from — see the variant
-        // doc. Pinned by
+        // `Forked` answers as the backend it forked from — see the variant
+        // doc — so an overlay over `Mapped` keeps `Mapped`'s full checkpoint.
+        // Pinned by
         // `rollback_tests::forked_statements_copy_zero_nodes_except_one_flatten`.
-        matches!(self, GraphBackend::Memory(_) | GraphBackend::Forked(_))
+        match self {
+            GraphBackend::Memory(_) => true,
+            GraphBackend::Forked(g) => !g.base_is_mapped(),
+            _ => false,
+        }
     }
 
     /// [`supports_checkpoint_free_mutation`](Self::supports_checkpoint_free_mutation)
@@ -436,8 +444,8 @@ impl GraphBackend {
         }
     }
 
-    /// Make this backend safe to mutate in place, given that a `Memory` arm's
-    /// `Arc` can be shared — as the *base* of somebody else's overlay.
+    /// Make this backend safe to mutate in place, given that a `Memory` or
+    /// `Mapped` arm's `Arc` can be shared — as the *base* of somebody else's overlay.
     ///
     /// The shape that needs it: `g.copy()` (or a transaction snapshot) forks
     /// **from** `g`, so the fork's `base` and `g`'s own `Memory(_)` are now the
@@ -471,7 +479,7 @@ impl GraphBackend {
         }
         match std::mem::replace(self, GraphBackend::new()) {
             GraphBackend::Memory(base) => {
-                *self = if can_fork(&base) {
+                *self = if can_fork(&*base) {
                     GraphBackend::Forked(Box::new(ForkedGraph::new(base)))
                 } else {
                     #[cfg(test)]
@@ -480,12 +488,13 @@ impl GraphBackend {
                 };
             }
             GraphBackend::Mapped(base) => {
-                // Mapped deliberately keeps the deep copy rather than
-                // half-adopting the overlay; `mapped_statements_copy_zero_nodes`
-                // pins its cost.
-                #[cfg(test)]
-                note_nodes_copied(base.inner().node_count());
-                *self = GraphBackend::Mapped(Arc::new(base.deep_clone()));
+                *self = if can_fork(&*base) {
+                    GraphBackend::Forked(Box::new(ForkedGraph::new(base)))
+                } else {
+                    #[cfg(test)]
+                    note_nodes_copied(base.inner().node_count());
+                    GraphBackend::Mapped(Arc::new(base.deep_clone()))
+                };
             }
             other => *self = other,
         }
@@ -503,15 +512,15 @@ impl GraphBackend {
         match self {
             GraphBackend::Recording(rg) => rg.inner_mut().try_compact(),
             GraphBackend::Forked(forked) => {
-                if let Some(memory) = forked.fold_in_place() {
-                    *self = GraphBackend::Memory(Arc::new(memory));
+                if let Some(folded) = forked.fold_in_place() {
+                    *self = folded.into_backend();
                 }
             }
             _ => {}
         }
     }
 
-    /// Collapse an overlay to a plain `Memory` backend **unconditionally**,
+    /// Collapse an overlay to a plain `Memory` or `Mapped` backend **unconditionally**,
     /// deep-copying the base if a reader still holds it.
     ///
     /// No write needs it: node and adjacency edits alike land in the overlay.
@@ -539,7 +548,7 @@ impl GraphBackend {
         // leaves this backend serving the intact overlay rather than an empty
         // placeholder whose indexes point at nothing (issue #195).
         match forked.materialise() {
-            Ok(memory) => *self = GraphBackend::Memory(Arc::new(memory)),
+            Ok(folded) => *self = folded.into_backend(),
             Err(reason) => panic!(
                 "cannot collapse the copy-on-write overlay: {reason}; the overlay \
                  is left intact (see storage/forked.rs)"
@@ -1052,7 +1061,8 @@ impl Clone for GraphBackend {
         match self {
             // **The fork site.** Instead of deep-copying every node and edge,
             // hand the writer an overlay over the same base; the reader's
-            // `Arc<MemoryGraph>` is left byte-for-byte untouched. `can_fork` is
+            // `Arc<MemoryGraph>` (or `Arc<MappedGraph>`) is left byte-for-byte
+            // untouched. `can_fork` is
             // the slot-identity precondition (a slot mirror that knows the free
             // list, so the overlay allocates what the fold-back's `add_node`
             // will); a base that fails it keeps the deep copy — slower, never
@@ -1062,13 +1072,16 @@ impl Clone for GraphBackend {
             // `Arc` handle, so `.clone()` on it is a refcount bump — one
             // character away, and it would share a backend that every later
             // write mutates in place under the reader.
-            GraphBackend::Memory(g) if can_fork(g) => {
+            GraphBackend::Memory(g) if can_fork(&**g) => {
                 GraphBackend::Forked(Box::new(ForkedGraph::new(Arc::clone(g))))
             }
             GraphBackend::Memory(g) => {
                 #[cfg(test)]
                 note_nodes_copied(g.inner().node_count());
                 GraphBackend::Memory(Arc::new(g.deep_clone()))
+            }
+            GraphBackend::Mapped(g) if can_fork(&**g) => {
+                GraphBackend::Forked(Box::new(ForkedGraph::new(Arc::clone(g))))
             }
             GraphBackend::Mapped(g) => {
                 #[cfg(test)]
@@ -1080,10 +1093,10 @@ impl Clone for GraphBackend {
             // copying it again at every later fork.
             GraphBackend::Forked(g) => {
                 if g.delta_exceeds_clone_cap() {
-                    if let Ok(memory) = g.to_memory_graph() {
+                    if let Ok(folded) = g.to_folded_graph() {
                         #[cfg(test)]
-                        note_nodes_copied(memory.inner().node_count());
-                        return GraphBackend::Memory(Arc::new(memory));
+                        note_nodes_copied(folded.node_count());
+                        return folded.into_backend();
                     }
                 }
                 #[cfg(test)]
@@ -1111,7 +1124,7 @@ impl Serialize for GraphBackend {
             // folded into a throwaway copy. O(V+E) — but so is writing the file,
             // and the bytes are identical to the unforked graph's.
             GraphBackend::Forked(g) => g
-                .to_memory_graph()
+                .to_folded_graph()
                 .map_err(serde::ser::Error::custom)?
                 .serialize(serializer),
             GraphBackend::Disk(_) => Err(serde::ser::Error::custom(
@@ -1266,6 +1279,7 @@ impl GraphRead for GraphBackend {
     fn is_mapped(&self) -> bool {
         match self {
             Self::Mapped(_) => true,
+            Self::Forked(g) => g.base_is_mapped(),
             Self::Recording(rg) => GraphRead::is_mapped(rg.as_ref()),
             _ => false,
         }

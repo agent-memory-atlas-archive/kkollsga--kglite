@@ -257,7 +257,7 @@ either.** `unique_indices` holds one entry per node of every constrained type;
 d=384, and more once an HNSW index exists, whose `links` allocate per node per
 layer. A graph carrying those still pays them on every fork.
 
-**`Mapped` stays on the deep-clone path**, explicitly. **`Disk` never forks this way**: it forks through remapped immutable bases and its own mutation overlay, and none of this applies.
+**`Mapped` forks through the same overlay** as `Memory` (`ForkBase::Mapped`), under the same `can_fork` precondition and with the same fold-back. The fold also drops the base's lazy type and property indexes, which a fold rewrites without the `GraphWrite` hooks that normally clear them. **`Disk` never forks this way**: it forks through remapped immutable bases and its own mutation overlay, and none of this applies.
 
 **The rollback pre-image clone is a different cost and is unchanged by this
 work.** It is not the fork: it fires once per write *statement* on a columnar

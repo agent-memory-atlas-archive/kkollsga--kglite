@@ -82,7 +82,7 @@ fn assert_indexes_agree(graph: &DirGraph, context: &str) {
 }
 
 /// Whether a write taken while a reader holds `graph` lands on an overlay —
-/// the observable result of `forked::can_fork` on the shared base.
+/// the observable result of `fork_base::can_fork` on the shared base.
 fn forks_under_a_reader(graph: DirGraph) -> bool {
     let mut writer = Arc::new(graph);
     let _reader = Arc::clone(&writer);

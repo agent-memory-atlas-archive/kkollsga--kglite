@@ -76,6 +76,27 @@ def test_freeze_is_stable_under_source_mutation():
     assert _count(g, "MATCH (n:Doc) RETURN count(n) AS c") == 5
 
 
+def test_mapped_write_after_freeze_isolates_the_snapshot_and_stays_mapped():
+    g = kglite.KnowledgeGraph(storage="mapped")
+    g.add_nodes(pd.DataFrame({"id": [0, 1, 2], "title": ["d0", "d1", "d2"]}), "Doc", "id", "title")
+    fz = g.freeze()
+    g.cypher("CREATE (:Doc {id: 100, title: 'new'})")
+    g.cypher("MATCH (n:Doc {id: 1}) SET n.title = 'changed'")
+    # The write forked rather than copying, and the snapshot did not move.
+    assert kglite._backend_is_forked(g)
+    assert _count(fz, "MATCH (n:Doc) RETURN count(n) AS c") == 3
+    assert _count(g, "MATCH (n:Doc) RETURN count(n) AS c") == 4
+    assert _count(fz, "MATCH (n:Doc {title: 'changed'}) RETURN count(n) AS c") == 0
+    assert _count(g, "MATCH (n:Doc {title: 'changed'}) RETURN count(n) AS c") == 1
+    assert g.graph_info()["storage_mode"] == "mapped"
+    # Once the snapshot is gone the overlay folds back and the graph is still mapped.
+    del fz
+    g.cypher("CREATE (:Doc {id: 101, title: 'after'})")
+    assert not kglite._backend_is_forked(g)
+    assert g.graph_info()["storage_mode"] == "mapped"
+    assert _count(g, "MATCH (n:Doc) RETURN count(n) AS c") == 5
+
+
 @pytest.mark.parametrize(
     "hold_snapshot",
     [lambda graph: graph.freeze(), lambda graph: graph.select("Doc")],

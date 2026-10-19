@@ -24,13 +24,13 @@ use crate::graph::schema::NodeData;
 use crate::graph::session::{execute_mut, execute_read, ExecuteOptions};
 use crate::graph::storage::{GraphRead, GraphWrite};
 
-fn run(graph: &mut DirGraph, query: &str) {
+pub(super) fn run(graph: &mut DirGraph, query: &str) {
     let params = HashMap::new();
     let opts = ExecuteOptions::eager(&params);
     execute_mut(graph, query, &opts).unwrap_or_else(|e| panic!("query failed: {query}: {e}"));
 }
 
-fn ids(graph: &DirGraph, query: &str) -> Vec<Value> {
+pub(super) fn ids(graph: &DirGraph, query: &str) -> Vec<Value> {
     let params = HashMap::new();
     let opts = ExecuteOptions::eager(&params);
     execute_read(graph, query, &opts)
@@ -43,7 +43,7 @@ fn ids(graph: &DirGraph, query: &str) -> Vec<Value> {
 }
 
 /// `n` row-storage `Person` nodes on a `Mapped` backend, `name` = `name-<i>`.
-fn mapped_row_storage_people(n: i64) -> DirGraph {
+pub(super) fn mapped_row_storage_people(n: i64) -> DirGraph {
     let mut g = crate::graph::storage::mode::new_dir_graph_in_mode(
         crate::graph::storage::mode::StorageMode::Mapped,
         None,

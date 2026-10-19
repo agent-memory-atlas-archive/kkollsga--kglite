@@ -17,6 +17,9 @@
 //!   same free lists: its slot mirror is compared outright, and a probe batch
 //!   of adds must land on the same slots in both.
 //!
+//! Every case runs twice, once over a `Memory` base and once over a `Mapped`
+//! one: the overlay's slot arithmetic is shared, but the fold target differs.
+//!
 //! The generator is a fixed-seed xorshift, so a failure names its case and
 //! replays exactly.
 
@@ -28,9 +31,62 @@ use petgraph::Direction;
 
 use crate::datatypes::Value;
 use crate::graph::schema::{EdgeData, NodeData};
+use crate::graph::storage::fork_base::{FoldTarget, Folded, ForkBase};
 use crate::graph::storage::forked::ForkedGraph;
 use crate::graph::storage::interner::StringInterner;
-use crate::graph::storage::{GraphRead, GraphWrite, MemoryGraph};
+use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
+
+/// What the model needs from a base beyond [`FoldTarget`]: construction, a
+/// deep copy, and the way back out of a [`Folded`].
+trait Base: FoldTarget + GraphRead + GraphWrite + 'static {
+    fn fresh() -> Self;
+    fn deep(&self) -> Self;
+    fn share(base: Arc<Self>) -> ForkBase;
+    fn unfold(folded: Folded) -> Self;
+    fn mirror_text(&self) -> String;
+}
+
+impl Base for MemoryGraph {
+    fn fresh() -> Self {
+        MemoryGraph::new()
+    }
+    fn deep(&self) -> Self {
+        self.deep_clone()
+    }
+    fn share(base: Arc<Self>) -> ForkBase {
+        ForkBase::Memory(base)
+    }
+    fn unfold(folded: Folded) -> Self {
+        match folded {
+            Folded::Memory(g) => g,
+            Folded::Mapped(_) => panic!("a memory base folded into a mapped graph"),
+        }
+    }
+    fn mirror_text(&self) -> String {
+        format!("{:?}", self.slot_mirror)
+    }
+}
+
+impl Base for MappedGraph {
+    fn fresh() -> Self {
+        MappedGraph::new()
+    }
+    fn deep(&self) -> Self {
+        self.deep_clone()
+    }
+    fn share(base: Arc<Self>) -> ForkBase {
+        ForkBase::Mapped(base)
+    }
+    fn unfold(folded: Folded) -> Self {
+        match folded {
+            Folded::Mapped(g) => g,
+            Folded::Memory(_) => panic!("a mapped base folded into a memory graph"),
+        }
+    }
+    fn mirror_text(&self) -> String {
+        format!("{:?}", self.slot_mirror)
+    }
+}
 
 struct Rng(u64);
 
@@ -166,18 +222,18 @@ fn assert_same(left: &str, right: &str, context: impl std::fmt::Display) {
     }
 }
 
-fn live_nodes(g: &MemoryGraph) -> Vec<NodeIndex> {
+fn live_nodes(g: &impl GraphRead) -> Vec<NodeIndex> {
     GraphRead::node_indices(g).collect()
 }
 
-fn live_edges(g: &MemoryGraph) -> Vec<EdgeIndex> {
+fn live_edges(g: &impl GraphRead) -> Vec<EdgeIndex> {
     GraphRead::edge_indices(g).collect()
 }
 
 /// A base with holes in both free lists, built through the write seam so its
 /// slot mirror is synced.
-fn holey_base(rng: &mut Rng, maker: &mut Maker) -> MemoryGraph {
-    let mut g = MemoryGraph::new();
+fn holey_base<B: Base>(rng: &mut Rng, maker: &mut Maker) -> B {
+    let mut g = B::fresh();
     let nodes = 3 + rng.below(10);
     for _ in 0..nodes {
         GraphWrite::add_node(&mut g, maker.node());
@@ -207,11 +263,11 @@ fn holey_base(rng: &mut Rng, maker: &mut Maker) -> MemoryGraph {
 
 /// One random operation, applied to both graphs; every observable result must
 /// match. Returns a label for the failure message.
-fn step(
+fn step<B: Base>(
     rng: &mut Rng,
     maker: &mut Maker,
     fork: &mut ForkedGraph,
-    flat: &mut MemoryGraph,
+    flat: &mut B,
 ) -> &'static str {
     let live = live_nodes(flat);
     let edges = live_edges(flat);
@@ -303,15 +359,15 @@ impl<G: GraphWrite> FnMutWeight for G {
 }
 
 /// The fold's result must be the flat graph, free lists included.
-fn assert_folded_like_flat(folded: &mut MemoryGraph, flat: &mut MemoryGraph, label: &str) {
+fn assert_folded_like_flat<B: Base>(folded: &mut B, flat: &mut B, label: &str) {
     assert_same(
         &dump(folded),
         &dump(flat),
         format!("{label}: folded graph reads differently"),
     );
     assert_eq!(
-        format!("{:?}", folded.slot_mirror),
-        format!("{:?}", flat.slot_mirror),
+        folded.mirror_text(),
+        flat.mirror_text(),
         "{label}: the folded free lists differ from the flat graph's"
     );
     // The mirror could be wrong on both sides; the probe asks petgraph.
@@ -339,19 +395,19 @@ fn assert_folded_like_flat(folded: &mut MemoryGraph, flat: &mut MemoryGraph, lab
     }
 }
 
-fn run_case(case: u64, steps: usize) -> (usize, usize) {
+fn run_case<B: Base>(case: u64, steps: usize) -> (usize, usize) {
     let mut rng = Rng::new(case);
     let mut maker = Maker {
         interner: StringInterner::new(),
         serial: 0,
     };
-    let base = holey_base(&mut rng, &mut maker);
-    let mut flat = base.deep_clone();
+    let base: B = holey_base(&mut rng, &mut maker);
+    let mut flat = base.deep();
     let reader = case.is_multiple_of(2);
     let shared = Arc::new(base);
     let reader_dump = dump(&*shared);
     let held = reader.then(|| Arc::clone(&shared));
-    let mut fork = ForkedGraph::new(shared);
+    let mut fork = ForkedGraph::new(B::share(shared));
     assert_same(
         &dump(&fork),
         &dump(&flat),
@@ -384,14 +440,11 @@ fn run_case(case: u64, steps: usize) -> (usize, usize) {
 
     // Both ways out of a fork: a copy folded into a deep clone while the
     // reader is held, and the in-place fold once it has gone.
-    let mut copied = fork
-        .to_memory_graph()
-        .unwrap_or_else(|e| panic!("case {case}: to_memory_graph: {e}"));
-    assert_folded_like_flat(
-        &mut copied,
-        &mut flat.deep_clone(),
-        &format!("case {case} copy"),
+    let mut copied = B::unfold(
+        fork.to_folded_graph()
+            .unwrap_or_else(|e| panic!("case {case}: to_folded_graph: {e}")),
     );
+    assert_folded_like_flat(&mut copied, &mut flat.deep(), &format!("case {case} copy"));
     if held.is_some() {
         assert!(
             fork.fold_in_place().is_none(),
@@ -399,21 +452,31 @@ fn run_case(case: u64, steps: usize) -> (usize, usize) {
         );
         drop(held);
     }
-    let mut folded = fork
-        .fold_in_place()
-        .unwrap_or_else(|| panic!("case {case}: the in-place fold was refused after {trace:?}"));
+    let mut folded =
+        B::unfold(fork.fold_in_place().unwrap_or_else(|| {
+            panic!("case {case}: the in-place fold was refused after {trace:?}")
+        }));
     assert_folded_like_flat(&mut folded, &mut flat, &format!("case {case} fold"));
     (steps, removals)
 }
 
-#[test]
-fn random_topology_operations_match_a_graph_that_never_forks() {
+fn model_over<B: Base>(label: &str) {
     let (mut ops, mut removals) = (0, 0);
     for case in 0..12_000 {
-        let (steps, removed) = run_case(case, 20 + (case as usize % 50));
+        let (steps, removed) = run_case::<B>(case, 20 + (case as usize % 50));
         ops += steps;
         removals += removed;
     }
     assert!(removals > ops / 10, "the generator rarely removes: vacuous");
-    eprintln!("forked model test: 12000 cases, {ops} operations, {removals} removals");
+    eprintln!("forked model test ({label}): 12000 cases, {ops} operations, {removals} removals");
+}
+
+#[test]
+fn random_topology_operations_match_a_graph_that_never_forks() {
+    model_over::<MemoryGraph>("memory base");
+}
+
+#[test]
+fn random_topology_operations_match_a_graph_that_never_forks_over_a_mapped_base() {
+    model_over::<MappedGraph>("mapped base");
 }

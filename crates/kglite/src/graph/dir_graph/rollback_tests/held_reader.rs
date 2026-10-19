@@ -156,7 +156,7 @@ fn a_rolled_back_detach_delete_under_a_held_reader_restores_the_overlay() {
 /// forked, so a write taken while a reader holds it must deep-copy — and be
 /// correct.
 ///
-/// `forked::can_fork` is the predicate, pinned on its own by
+/// `fork_base::can_fork` is the predicate, pinned on its own by
 /// `forked_free_list::a_graph_forks_unless_its_free_list_order_is_unknown`.
 /// This test covers what the `DirGraph` above it then *does*: every other
 /// held-reader test in this file seeds a graph that has never deleted anything,

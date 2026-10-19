@@ -1367,7 +1367,7 @@ mod atomic_save_tests {
 
 /// Saving **while a lazy view holds the graph** — the `GraphBackend::Forked`
 /// arm of `Serialize`, which is the only caller of
-/// `ForkedGraph::to_memory_graph`.
+/// `ForkedGraph::to_folded_graph`.
 ///
 /// Nothing exercised it before 2026-08-15: every save test in this file owns
 /// its graph outright, so the serializer always took the `Memory` arm. The
@@ -1416,7 +1416,7 @@ mod save_while_forked_tests {
     /// Both halves matter and neither implies the other. An overlay dropped on
     /// the floor writes the *view's* graph under the writer's name (lost
     /// writes); an overlay folded into the shared base instead of a copy
-    /// writes the right file and corrupts the view (`to_memory_graph`'s
+    /// writes the right file and corrupts the view (`to_folded_graph`'s
     /// `deep_clone` is what separates them, and it is one word away from
     /// `Arc::clone`).
     #[test]
@@ -1480,7 +1480,7 @@ mod save_while_forked_tests {
         assert_eq!(
             items(&writer),
             want,
-            "the save must not consume the overlay it serialized — `to_memory_graph` \
+            "the save must not consume the overlay it serialized — `to_folded_graph` \
              folds into a *copy*, and folding in place (the tempting way to skip that \
              copy) would empty the live writer as a side effect of saving it"
         );

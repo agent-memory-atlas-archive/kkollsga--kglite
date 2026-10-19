@@ -18,6 +18,7 @@
 pub mod backend;
 pub mod column_store;
 pub mod disk;
+pub(crate) mod fork_base;
 pub(crate) mod forked;
 pub(crate) mod forked_edge_iters;
 pub(crate) mod forked_edges;
@@ -697,6 +698,9 @@ mod column_ownership_tests;
 #[cfg(test)]
 #[path = "mapped_property_index_tests.rs"]
 mod mapped_property_index_tests;
+
+#[cfg(test)]
+mod mapped_fork_tests;
 
 // Recording backend — re-exported so downstream consumers can
 // construct it without reaching into `storage::recording::`. DO NOT REMOVE

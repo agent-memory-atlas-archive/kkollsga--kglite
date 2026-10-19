@@ -27,6 +27,11 @@ before upgrading.
   - A graph with 8 million relationships saves about 128 MB of RAM.
   - Applies to the default and mapped storage modes.
   - Saved files and query results are unchanged.
+- **Mapped mode no longer copies the whole graph on the first write after `freeze()` or while a snapshot is held.**
+  - The write now forks through the same copy-on-write overlay as the default mode, so it copies only what it changes.
+  - Previously the first such write deep-copied every node and relationship (about 552 MB and 99 ms at 1 million nodes and 8 million relationships, measured on a release wheel).
+  - Durable mapped sessions that run a concurrent reader no longer pay that copy on each transaction.
+  - Query results, saved files and storage-mode reporting are unchanged.
 
 ## [0.20.0] - 2026-10-12
 

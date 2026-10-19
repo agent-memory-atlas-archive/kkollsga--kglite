@@ -655,7 +655,8 @@ pub fn make_dir_graph_mut_preserving_lineage(arc: &mut Arc<DirGraph>) -> &mut Di
 ///   shared index levels. A graph whose slot state fails the `can_fork`
 ///   precondition retains the deep-copy fallback. See
 ///   `docs/rust/structural-sharing.md` and `held_reference_clone_tests` below.
-/// * **Mapped mode** clones its owned graph state and derived-index shells but
+/// * **Mapped mode** forks the same way, over a mapped base. A graph that fails
+///   `can_fork` clones its owned graph state and derived-index shells and
 ///   shares column stores through `Arc`.
 /// * **Disk mode** remaps published immutable mmap arrays and copies mutation
 ///   overlays. Arrays still backed by heap vectors clone their contents.
