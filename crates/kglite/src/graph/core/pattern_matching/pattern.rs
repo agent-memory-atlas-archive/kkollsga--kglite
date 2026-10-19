@@ -604,6 +604,23 @@ pub struct PatternMatch {
     pub exact_path: Option<Box<(NodeIndex, Vec<PathHop>)>>,
 }
 
+impl PatternMatch {
+    /// A copy whose bindings have room for `spare` more entries and no more.
+    ///
+    /// `Vec::clone` is exact-fit, so the first `push` onto it reallocates to
+    /// the amortised minimum of four `(String, MatchBinding)` slots (160 B
+    /// each): a 160 B block is allocated, then freed for a 640 B one, per
+    /// expanded row, when one or two slots were all the hop needed.
+    pub(crate) fn clone_with_spare(&self, spare: usize) -> Self {
+        let mut bindings = Vec::with_capacity(self.bindings.len() + spare);
+        bindings.extend(self.bindings.iter().cloned());
+        PatternMatch {
+            bindings,
+            exact_path: self.exact_path.clone(),
+        }
+    }
+}
+
 /// One exact hop in a matched path.
 ///
 /// Node identity alone is insufficient because a graph may contain parallel

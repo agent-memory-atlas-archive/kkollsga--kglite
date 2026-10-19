@@ -2290,3 +2290,7 @@ mod property_index_tests;
 #[cfg(test)]
 #[path = "matcher_zero_length_tests.rs"]
 mod zero_length_tests;
+
+#[cfg(test)]
+#[path = "matcher_row_heap_tests.rs"]
+mod row_heap_tests;

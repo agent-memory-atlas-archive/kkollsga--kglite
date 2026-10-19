@@ -898,7 +898,9 @@ impl<'a> PatternExecutor<'a> {
         edge_binding: MatchBinding,
         target_idx: NodeIndex,
     ) -> PatternMatch {
-        let mut new_match = current_match.clone();
+        let added = usize::from(hop.edge.variable.is_some() || hop.anonymous_path_var.is_some())
+            + usize::from(hop.node.variable.is_some());
+        let mut new_match = current_match.clone_with_spare(added);
         if hop.track_fixed_trail {
             extend_fixed_trail(&mut new_match, &edge_binding);
         }
