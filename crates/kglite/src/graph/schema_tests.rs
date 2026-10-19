@@ -1711,3 +1711,163 @@ mod edge_footprint_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod node_footprint_tests {
+    use super::*;
+    use crate::graph::storage::property_storage::ColumnarRow;
+    use crate::graph::storage::{GraphRead, GraphWrite};
+    use crate::serde_codec::{decode_exact_with, encode_versioned, CodecVersion, DecodeLimits};
+    use crate::test_alloc::peak_during;
+    use petgraph::stable_graph::StableDiGraph;
+
+    /// The persisted node shape: the positional `(id, title, node_type,
+    /// properties)` tuple every `.kgl` topology section carries.
+    #[derive(serde::Serialize)]
+    struct WireNode {
+        id: Value,
+        title: Value,
+        node_type: InternedKey,
+        properties: HashMap<InternedKey, Value>,
+    }
+
+    fn roundtrip(node: &NodeData, wire: &WireNode, interner: &mut StringInterner) -> NodeData {
+        let guard = SerdeSerializeGuard::new(interner);
+        let ours = encode_versioned(CodecVersion::PostcardV1, node, u64::MAX).unwrap();
+        let expected = encode_versioned(CodecVersion::PostcardV1, wire, u64::MAX).unwrap();
+        assert_eq!(ours, expected);
+        drop(guard);
+        let _guard = SerdeDeserializeGuard::new(interner);
+        let limits = DecodeLimits::new(u64::MAX, u64::MAX);
+        decode_exact_with(CodecVersion::PostcardV1, &ours, 0, limits).unwrap()
+    }
+
+    #[test]
+    fn node_sizes_are_pinned() {
+        assert_eq!(std::mem::size_of::<NodeData>(), 32);
+        assert!(std::mem::size_of::<PropertyStorage>() <= 16);
+        // The stored weight is `Option<NodeData>`; keeping its niche is what
+        // makes petgraph's node entry (weight + two u32 links) 40 B.
+        assert_eq!(std::mem::size_of::<Option<NodeData>>(), 32);
+    }
+
+    #[test]
+    fn node_wire_shape_does_not_depend_on_the_ident_box() {
+        let mut interner = StringInterner::new();
+        let (kind, key) = (interner.get_or_intern("T"), interner.get_or_intern("k"));
+        let props: HashMap<_, _> = [(key, Value::Int64(7))].into_iter().collect();
+        for (id, title) in [
+            (Value::Null, Value::Null),
+            (Value::Int64(5), Value::String("t".into())),
+            (Value::Null, Value::String("only title".into())),
+            (Value::String("only id".into()), Value::Null),
+        ] {
+            let node = NodeData::new_preinterned(
+                id.clone(),
+                title.clone(),
+                kind,
+                props.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            );
+            let wire = WireNode {
+                id: id.clone(),
+                title: title.clone(),
+                node_type: kind,
+                properties: props.clone(),
+            };
+            let back = roundtrip(&node, &wire, &mut interner);
+            assert_eq!(back, node);
+            assert_eq!(back.id().into_owned(), id);
+            assert_eq!(back.title().into_owned(), title);
+            let sentinel = matches!(id, Value::Null) && matches!(title, Value::Null);
+            assert_eq!(back.ident.is_none(), sentinel);
+        }
+    }
+
+    #[test]
+    fn a_node_written_with_inline_id_and_title_still_loads() {
+        // Files written before the boxed layout carry a real inline pair on
+        // nodes that were never consolidated into a column store.
+        let mut interner = StringInterner::new();
+        let kind = interner.get_or_intern("Legacy");
+        let wire = WireNode {
+            id: Value::UniqueId(42),
+            title: Value::String("old title".into()),
+            node_type: kind,
+            properties: HashMap::new(),
+        };
+        let guard = SerdeSerializeGuard::new(&interner);
+        let bytes = encode_versioned(CodecVersion::PostcardV1, &wire, u64::MAX).unwrap();
+        drop(guard);
+        let _guard = SerdeDeserializeGuard::new(&mut interner);
+        let limits = DecodeLimits::new(u64::MAX, u64::MAX);
+        let node: NodeData =
+            decode_exact_with(CodecVersion::PostcardV1, &bytes, 0, limits).unwrap();
+        assert_eq!(node.id().into_owned(), Value::UniqueId(42));
+        assert_eq!(node.title().into_owned(), Value::String("old title".into()));
+        assert_eq!(node.node_type, kind);
+    }
+
+    #[test]
+    fn a_null_pair_collapses_to_no_ident() {
+        let mut node = NodeData::new_preinterned(
+            Value::Int64(1),
+            Value::Null,
+            InternedKey::from_str("T"),
+            Vec::new(),
+        );
+        assert!(node.ident.is_some());
+        node.set_ident(Value::Null, Value::Null);
+        assert!(node.ident.is_none());
+        node.set_title(Value::String("x".into()));
+        assert_eq!(node.title().into_owned(), Value::String("x".into()));
+        assert_eq!(node.id().into_owned(), Value::Null);
+        node.set_title(Value::Null);
+        assert!(node.ident.is_none());
+    }
+
+    #[test]
+    fn set_node_title_falls_back_inline_for_a_type_without_a_store() {
+        let mut graph = DirGraph::new();
+        let mut interner = StringInterner::new();
+        let node = NodeData::new(
+            Value::Int64(1),
+            Value::Null,
+            "NoStore".to_string(),
+            HashMap::new(),
+            &mut interner,
+        );
+        let idx = GraphWrite::add_node(&mut graph.graph, node);
+        GraphWrite::set_node_title(&mut graph.graph, idx, Value::String("kept".into()));
+        let stored = graph.graph.node_weight(idx).unwrap();
+        assert_eq!(stored.title().into_owned(), Value::String("kept".into()));
+        assert_eq!(stored.id().into_owned(), Value::Int64(1));
+        GraphWrite::set_node_title(&mut graph.graph, idx, Value::Null);
+        let stored = graph.graph.node_weight(idx).unwrap();
+        assert_eq!(stored.title().into_owned(), Value::Null);
+        assert_eq!(stored.id().into_owned(), Value::Int64(1));
+    }
+
+    #[test]
+    fn a_columnar_node_costs_40_bytes_of_heap() {
+        // 2^17 nodes fill the node vector's power-of-two capacity exactly, so
+        // the measured heap is the entry size and not a growth remainder.
+        const NODES: usize = 1 << 17;
+        let mut g: StableDiGraph<NodeData, EdgeData> = StableDiGraph::new();
+        let kind = InternedKey::from_str("T");
+        let ((), peak) = peak_during(|| {
+            for row in 0..NODES {
+                g.add_node(NodeData {
+                    node_type: kind,
+                    ident: None,
+                    properties: PropertyStorage::Columnar(ColumnarRow::new(row as u32)),
+                });
+            }
+        });
+        let per_node = peak as f64 / NODES as f64;
+        // 40 B at 32 B per `NodeData`; the former 120 B layout made 128 B.
+        assert!(
+            per_node < 48.0,
+            "{per_node:.1} heap bytes per columnar node"
+        );
+    }
+}

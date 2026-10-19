@@ -289,7 +289,7 @@ fn saved_disk_title_clear_preserves_sentinels_snapshots_rollback_and_save() {
         let graph = Arc::make_mut(&mut handle);
         let scratch = GraphWrite::node_weight_mut(&mut graph.graph, first).unwrap();
         scratch.properties = PropertyStorage::Columnar(ColumnarRow::new(0));
-        scratch.title = Value::Null;
+        scratch.set_title(Value::Null);
         GraphWrite::flush_pending_writes(&mut graph.graph);
         assert_eq!(
             graph.graph.get_node_title(first),

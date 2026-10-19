@@ -250,8 +250,7 @@ impl BatchProcessor {
             // id/title live in the store's reserved columns; the inline fields
             // carry the `Null` sentinel every columnar producer leaves.
             let node_data = NodeData {
-                id: Value::Null,
-                title: Value::Null,
+                ident: None,
                 node_type: type_key,
                 properties: PropertyStorage::Columnar(ColumnarRow::new(row_id)),
             };

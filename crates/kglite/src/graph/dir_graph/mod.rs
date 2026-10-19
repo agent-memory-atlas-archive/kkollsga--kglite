@@ -2112,12 +2112,11 @@ impl DirGraph {
                 continue;
             };
             let vacated = NodeData {
-                id: Value::Null,
-                title: Value::Null,
+                ident: None,
                 node_type: slot.node_type,
                 // `HashMap::new` does not allocate, so the placeholder left
                 // in the discarded graph costs nothing to build or drop.
-                properties: PropertyStorage::Map(HashMap::new()),
+                properties: PropertyStorage::Map(Box::default()),
             };
             let node_data = std::mem::replace(slot, vacated);
             let new_idx = new_graph.add_node(node_data);

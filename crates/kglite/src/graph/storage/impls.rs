@@ -549,13 +549,13 @@ macro_rules! impl_heap_column_writes {
             });
             let Some((type_key, row_id)) = columnar else {
                 if let Some(nd) = self.inner.node_weight_mut(idx) {
-                    nd.title = value;
+                    nd.set_title(value);
                 }
                 return;
             };
             if !self.column_stores.contains_key(&type_key) {
                 if let Some(nd) = self.inner.node_weight_mut(idx) {
-                    nd.title = value;
+                    nd.set_title(value);
                 }
                 return;
             }
@@ -577,7 +577,7 @@ macro_rules! impl_heap_column_writes {
                 // that cannot hold the write. Fall back through the recorded,
                 // journalled node path rather than dropping it.
                 if let Some(nd) = GraphWrite::node_weight_mut(self, idx) {
-                    nd.title = value;
+                    nd.set_title(value);
                 }
             }
         }

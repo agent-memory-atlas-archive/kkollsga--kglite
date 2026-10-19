@@ -710,8 +710,7 @@ pub fn save_subset_streaming_disk(
                 // on the disk path, so `id`/`title` can be Null — later reads
                 // resolve through `dest.column_stores[type]`, which sees what
                 // `push_row_borrowed` wrote.
-                id: Value::Null,
-                title: Value::Null,
+                ident: None,
                 node_type: type_key,
                 properties: PropertyStorage::Columnar(ColumnarRow::new(dest_row_id)),
             };

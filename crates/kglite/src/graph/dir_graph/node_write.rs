@@ -116,8 +116,7 @@ impl DirGraph {
         // serialize every id and title twice (~27 B/node) and would make
         // `enable_columnar`'s drift check see a title override on every node.
         let node_data = NodeData {
-            id: Value::Null,
-            title: Value::Null,
+            ident: None,
             node_type: node_type_key,
             properties: PropertyStorage::Columnar(ColumnarRow::new(row_id)),
         };

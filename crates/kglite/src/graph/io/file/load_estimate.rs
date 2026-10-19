@@ -59,6 +59,9 @@ use super::{FileMetadata, PortableColumnSection};
 //   codebase        23,142    663,202    27.8 MB      15.6 MB   0.56×
 //   *_500k         500,000  2,500,000    86.6 MB     108.0 MB   1.25×
 //
+// (Both the measured and the model columns were taken with a 128 B node slot
+// and `NODE_ROW_BYTES = 64`; the slot is 40 B now — see that constant.)
+//
 // **That 0.56×–1.30× band is the error bar, and it is not noise** — it is the
 // spread between corpora. `codebase` holds long strings (code signatures,
 // doc text) at 1,201 B/node; the 500k fixture holds short generated ones at
@@ -66,10 +69,17 @@ use super::{FileMetadata, PortableColumnSection};
 // metadata does not record string lengths, so a tighter model would need to
 // read the payload — which is exactly the cost this function exists to avoid.
 
-/// Per node, independent of its properties: the petgraph slot, `NodeData`'s
-/// header, its interned type key, and its id/title strings (which live in node
-/// slots rather than in any column section, so no cell below counts them).
-const NODE_ROW_BYTES: u64 = 64;
+/// Per node, independent of its properties: the petgraph slot, which is
+/// `NodeData` (32 B) plus two `u32` links. Measured at 40.0 heap bytes per
+/// columnar node by `a_columnar_node_costs_40_bytes_of_heap` (the former
+/// 120 B `NodeData` measured 136.0). id/title live in the type's column
+/// store, so no inline string is counted here.
+///
+/// This replaces a fitted 64. The three fixtures above were measured at the
+/// 128 B slot and have not been re-measured, so against today's slot the
+/// section term errs high on all of them (about +88 B per node). Re-measure
+/// before narrowing the band.
+const NODE_ROW_BYTES: u64 = 40;
 
 /// Per string/mixed cell: the `Option<String>`-shaped slot plus the mean
 /// content that survives into the store. Strings that reach the 256 KB

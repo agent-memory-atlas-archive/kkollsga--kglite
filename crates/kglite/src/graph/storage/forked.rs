@@ -221,10 +221,9 @@ struct Overlay<'a> {
 /// weights are written after the replay, so only the slot matters here.
 fn placeholder_node() -> NodeData {
     NodeData {
-        id: Value::Null,
-        title: Value::Null,
+        ident: None,
         node_type: InternedKey::default(),
-        properties: PropertyStorage::Map(HashMap::new()),
+        properties: PropertyStorage::Map(Box::default()),
     }
 }
 
@@ -1359,7 +1358,7 @@ impl GraphWrite for ForkedGraph {
             }
         }
         if let Some(nd) = self.cow_node(idx) {
-            nd.title = value;
+            nd.set_title(value);
         }
     }
 

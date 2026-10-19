@@ -1958,16 +1958,24 @@ pub fn soft_alias_fallback(resolved: &str) -> Option<SoftAliasFallback> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A node's identity, type and staged properties — 32 bytes, so a petgraph
+/// node entry is 40 B.
+///
+/// `id` and `title` are not fields: on every steady-state node they are the
+/// `Value::Null` sentinel (the values live in the type's `ColumnStore`), so
+/// they sit behind `ident`, which is `None` for the sentinel pair. Only the
+/// staging paths (RDF / N-Triples loaders, the `set_node_title` fallback,
+/// pre-column `.kgl` files, vacuum and fork placeholders) hold a `Some`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeData {
-    /// **Not public, deliberately.** Holds the `Value::Null` *sentinel* on the
-    /// memory and mapped backends; [`NodeData::id`] carries the full contract
-    /// and the resolving reads to use instead. Same for [`NodeData::title`].
-    pub(crate) id: Value,
-    pub(crate) title: Value,
     pub node_type: InternedKey,
+    /// `(id, title)`; never a `(Null, Null)` pair — [`NodeData::set_ident`]
+    /// collapses that back to `None`.
+    pub(crate) ident: Option<Box<(Value, Value)>>,
     pub(crate) properties: PropertyStorage,
 }
+
+static NULL_VALUE: Value = Value::Null;
 
 impl NodeData {
     /// Create a new NodeData, interning all property keys and the node type.
@@ -1993,10 +2001,9 @@ impl NodeData {
             })
             .collect();
         NodeData {
-            id,
-            title,
+            ident: Self::pack_ident(id, title),
             node_type: type_key,
-            properties: PropertyStorage::Map(interned_props),
+            properties: PropertyStorage::Map(Box::new(interned_props)),
         }
     }
 
@@ -2008,16 +2015,64 @@ impl NodeData {
     ) -> Self {
         let map: HashMap<InternedKey, Value> = properties.into_iter().collect();
         NodeData {
-            id,
-            title,
+            ident: Self::pack_ident(id, title),
             node_type,
-            properties: PropertyStorage::Map(map),
+            properties: PropertyStorage::Map(Box::new(map)),
         }
+    }
+
+    /// The `ident` encoding of an `(id, title)` pair: `None` for the sentinel
+    /// pair, one boxed allocation otherwise.
+    #[inline]
+    pub(crate) fn pack_ident(id: Value, title: Value) -> Option<Box<(Value, Value)>> {
+        if matches!(id, Value::Null) && matches!(title, Value::Null) {
+            None
+        } else {
+            Some(Box::new((id, title)))
+        }
+    }
+
+    /// The inline id, borrowed; the `Null` sentinel when none is held.
+    #[inline]
+    pub(crate) fn id_ref(&self) -> &Value {
+        self.ident.as_deref().map_or(&NULL_VALUE, |p| &p.0)
+    }
+
+    /// The inline title, borrowed; the `Null` sentinel when none is held.
+    #[inline]
+    pub(crate) fn title_ref(&self) -> &Value {
+        self.ident.as_deref().map_or(&NULL_VALUE, |p| &p.1)
+    }
+
+    /// Replace the inline `(id, title)` pair; a `(Null, Null)` pair frees the box.
+    #[inline]
+    pub(crate) fn set_ident(&mut self, id: Value, title: Value) {
+        self.ident = Self::pack_ident(id, title);
+    }
+
+    /// Replace the inline title, leaving the id as it is.
+    pub(crate) fn set_title(&mut self, title: Value) {
+        let id = self.take_id();
+        self.set_ident(id, title);
+    }
+
+    /// Move the inline id out, leaving the sentinel in its place.
+    pub(crate) fn take_id(&mut self) -> Value {
+        match self.ident.as_deref_mut() {
+            Some(p) => std::mem::replace(&mut p.0, Value::Null),
+            None => Value::Null,
+        }
+    }
+
+    /// Reset both inline fields to the sentinel, freeing the box.
+    #[inline]
+    pub(crate) fn clear_ident(&mut self) {
+        self.ident = None;
     }
 
     /// The node's **stored** `id` field — not a resolved read.
     ///
-    /// This returns `self.id` verbatim and consults no `ColumnStore`. Since
+    /// This returns the inline id verbatim and consults no `ColumnStore`. Since
     /// 0.16.0 every ingest path is columnar from the first node, so on the
     /// memory and mapped backends the inline field is the `Value::Null`
     /// sentinel and the node's canonical id lives in its type's store. The
@@ -2030,7 +2085,7 @@ impl NodeData {
     /// [`GraphRead::get_node_id`]: crate::graph::storage::GraphRead::get_node_id
     #[inline]
     pub fn id(&self) -> Cow<'_, Value> {
-        Cow::Borrowed(&self.id)
+        Cow::Borrowed(self.id_ref())
     }
 
     /// The node's **stored** `title` field — not a resolved read.
@@ -2040,12 +2095,47 @@ impl NodeData {
     /// title through `NodeView::title`.
     #[inline]
     pub fn title(&self) -> Cow<'_, Value> {
-        Cow::Borrowed(&self.title)
+        Cow::Borrowed(self.title_ref())
     }
 
     #[inline]
     pub fn node_type_str<'a>(&self, interner: &'a StringInterner) -> &'a str {
         interner.resolve(self.node_type)
+    }
+}
+
+// Stable wire shape: the positional `(id, title, node_type, properties)` tuple
+// every `.kgl` file carries. `ident` is flattened back into the two leading
+// fields (the sentinel for `None`), so files written before the boxed layout
+// load unchanged, including ones holding a real inline id/title.
+impl Serialize for NodeData {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("NodeData", 4)?;
+        s.serialize_field("id", self.id_ref())?;
+        s.serialize_field("title", self.title_ref())?;
+        s.serialize_field("node_type", &self.node_type)?;
+        s.serialize_field("properties", &self.properties)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeData {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "NodeData")]
+        struct NodeDataHelper {
+            id: Value,
+            title: Value,
+            node_type: InternedKey,
+            properties: PropertyStorage,
+        }
+        let h = NodeDataHelper::deserialize(deserializer)?;
+        Ok(NodeData {
+            ident: NodeData::pack_ident(h.id, h.title),
+            node_type: h.node_type,
+            properties: h.properties,
+        })
     }
 }
 

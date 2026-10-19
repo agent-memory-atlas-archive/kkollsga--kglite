@@ -47,6 +47,7 @@
 // Pre-v5 magic values are retained only for explicit rejection and migration
 // guidance; their payloads are never decoded by the current reader.
 
+#[cfg(test)]
 use crate::datatypes::values::Value;
 use crate::graph::constraints::{NamedConstraint, UniqueConstraintKey};
 use crate::graph::features::temporal::declarations::TemporalDeclarations;

@@ -94,7 +94,12 @@ impl ColumnarRow {
 pub(crate) enum PropertyStorage {
     /// Transient staging: values held inline before they reach a store.
     /// Never a durable end state.
-    Map(HashMap<InternedKey, Value>),
+    ///
+    /// Boxed so the enum is 16 B and `NodeData` 32 B; the allocation is paid
+    /// only by the rare staged node.
+    // An unboxed HashMap is 48 B inline and would size every node's slot.
+    #[allow(clippy::box_collection)]
+    Map(Box<HashMap<InternedKey, Value>>),
     /// Column-oriented storage — properties live in a per-type `ColumnStore`
     /// the backend owns. See [`ColumnarRow`] for why the handle is not a bare
     /// field here. This is the shape every construction funnel produces and
@@ -271,8 +276,8 @@ impl PropertyStorage {
         &mut self,
         _interner: &StringInterner,
     ) -> Vec<(InternedKey, Value)> {
-        match std::mem::replace(self, PropertyStorage::Map(HashMap::new())) {
-            PropertyStorage::Map(map) => map.into_iter().collect(),
+        match std::mem::replace(self, PropertyStorage::Map(Box::default())) {
+            PropertyStorage::Map(map) => (*map).into_iter().collect(),
             PropertyStorage::Columnar { .. } => {
                 // Already columnar — nothing to drain
                 Vec::new()
@@ -366,7 +371,7 @@ impl Serialize for PropertyStorage {
 impl<'de> Deserialize<'de> for PropertyStorage {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let map = HashMap::<InternedKey, Value>::deserialize(deserializer)?;
-        Ok(PropertyStorage::Map(map))
+        Ok(PropertyStorage::Map(Box::new(map)))
     }
 }
 

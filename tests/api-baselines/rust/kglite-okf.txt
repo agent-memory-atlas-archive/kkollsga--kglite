@@ -5155,9 +5155,9 @@ impl core::fmt::Debug for kglite::api::NodeData
 pub fn kglite::api::NodeData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::NodeData
 impl serde_core::ser::Serialize for kglite::api::NodeData
-pub fn kglite::api::NodeData::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn kglite::api::NodeData::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::NodeData
-pub fn kglite::api::NodeData::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn kglite::api::NodeData::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct kglite::api::NodeInfo
 pub kglite::api::NodeInfo::id: kglite::datatypes::values::Value
 pub kglite::api::NodeInfo::node_type: alloc::string::String

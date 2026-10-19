@@ -320,8 +320,7 @@ pub(super) fn attach_portable_column_stores(dir_graph: &mut DirGraph) {
             };
             node.properties = PropertyStorage::Columnar(ColumnarRow::new(row_id as u32));
             if has_id_title {
-                node.id = Value::Null;
-                node.title = Value::Null;
+                node.clear_ident();
             }
         }
     }

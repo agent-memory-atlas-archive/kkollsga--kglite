@@ -147,8 +147,9 @@ impl DirGraph {
                                     // (petekSuite bug 2). A consolidated/loaded
                                     // node has `node.title == Null`, so no
                                     // false drift.
-                                    !matches!(n.title, Value::Null)
-                                        && graph_store.get_title(row_id).as_ref() != Some(&n.title)
+                                    !matches!(n.title_ref(), Value::Null)
+                                        && graph_store.get_title(row_id).as_ref()
+                                            != Some(n.title_ref())
                                 }
                                 None => true,
                             }
@@ -266,9 +267,11 @@ impl DirGraph {
                     let old_row = node.properties.columnar_row_id();
                     let old_store = old_row.and(self.graph.column_store(node.node_type));
                     let id_val = if let (Some(old_store), Some(old_row)) = (old_store, old_row) {
-                        old_store.get_id(old_row).unwrap_or_else(|| node.id.clone())
+                        old_store
+                            .get_id(old_row)
+                            .unwrap_or_else(|| node.id_ref().clone())
                     } else {
-                        node.id.clone()
+                        node.id_ref().clone()
                     };
                     let title_val = if let (Some(old_store), Some(old_row)) = (old_store, old_row) {
                         // Prefer a non-null inline `node.title` override. Every
@@ -281,15 +284,15 @@ impl DirGraph {
                         // untouched columnar node has `node.title == Null`
                         // (nulled at load), so it correctly falls back to the
                         // store.
-                        if !matches!(node.title, Value::Null) {
-                            node.title.clone()
+                        if !matches!(node.title_ref(), Value::Null) {
+                            node.title_ref().clone()
                         } else {
                             old_store
                                 .get_title(old_row)
-                                .unwrap_or_else(|| node.title.clone())
+                                .unwrap_or_else(|| node.title_ref().clone())
                         }
                     } else {
-                        node.title.clone()
+                        node.title_ref().clone()
                     };
 
                     store.push_id(&id_val);
@@ -352,7 +355,7 @@ impl DirGraph {
                     continue;
                 };
                 if let PropertyStorage::Map(map) = &node.properties {
-                    for (&key, value) in map {
+                    for (&key, value) in map.iter() {
                         if seen.insert((node.node_type, key, value.type_name())) {
                             found.push((node.node_type, key, value.clone()));
                         }
@@ -396,8 +399,7 @@ impl DirGraph {
                         // the saved file by ~27 B/node. Mirrors the load path
                         // (io/file/columns.rs) and the mapped batch path
                         // (mutation/batch.rs), which both null here.
-                        node.id = Value::Null;
-                        node.title = Value::Null;
+                        node.clear_ident();
                     }
                 }
             }

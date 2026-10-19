@@ -297,7 +297,7 @@ impl<G: GraphWrite> FnMutWeight for G {
 
     fn set_node_title_direct(&mut self, n: NodeIndex, title: Value) {
         if let Some(w) = self.node_weight_mut(n) {
-            w.title = title;
+            w.set_title(title);
         }
     }
 }

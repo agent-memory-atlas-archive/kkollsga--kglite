@@ -219,7 +219,7 @@ fn a_title_write_goes_through_the_master_and_rolls_back() {
     );
     assert!(
         matches!(
-            graph.graph.node_weight(idx).map(|n| &n.title),
+            graph.graph.node_weight(idx).map(|n| n.title_ref()),
             Some(Value::Null)
         ),
         "and the inline field must stay on its sentinel — a second copy is what \

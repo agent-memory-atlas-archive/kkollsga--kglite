@@ -276,8 +276,8 @@ fn copy_nodes(
             let data = node.data();
             let (node_store, row) = node.column_row()?;
             (std::ptr::eq(node_store, store)
-                && matches!(data.id, Value::Null)
-                && matches!(data.title, Value::Null))
+                && matches!(data.id_ref(), Value::Null)
+                && matches!(data.title_ref(), Value::Null))
             .then_some(row)
         });
         match gathered_row {
@@ -303,8 +303,7 @@ fn copy_nodes(
             let idx = GraphWrite::add_node(
                 &mut dest.graph,
                 NodeData {
-                    id: Value::Null,
-                    title: Value::Null,
+                    ident: None,
                     node_type: entry.key,
                     properties: PropertyStorage::Columnar(ColumnarRow::new(row)),
                 },

@@ -1667,8 +1667,8 @@ fn flush_entity(
 
     // Properties must reach the log BEFORE they are cleared for `add_node`
     // (which discards them anyway on disk).
-    let saved_id = node_data.id.clone();
-    let saved_title = node_data.title.clone();
+    let saved_id = node_data.id_ref().clone();
+    let saved_title = node_data.title_ref().clone();
     if prop_log.is_some() {
         scratch_props.clear();
         scratch_props.extend(
@@ -1676,9 +1676,8 @@ fn flush_entity(
                 .properties
                 .drain_to_interned_pairs(&graph.interner),
         );
-        node_data.properties = PropertyStorage::Map(HashMap::new());
-        node_data.id = Value::Null;
-        node_data.title = Value::Null;
+        node_data.properties = PropertyStorage::Map(Box::default());
+        node_data.clear_ident();
     }
 
     let node_idx = GraphWrite::add_node(&mut graph.graph, node_data);

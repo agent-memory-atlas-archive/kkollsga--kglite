@@ -547,8 +547,7 @@ impl DiskGraph {
             let id = store.get_id(slot.row_id).unwrap_or(Value::Null);
             let title = store.get_title(slot.row_id).unwrap_or(Value::Null);
             NodeData {
-                id,
-                title,
+                ident: NodeData::pack_ident(id, title),
                 node_type: node_type_key,
                 properties: crate::graph::schema::PropertyStorage::Columnar(
                     crate::graph::storage::property_storage::ColumnarRow::new(slot.row_id),
@@ -556,10 +555,9 @@ impl DiskGraph {
             }
         } else {
             NodeData {
-                id: Value::Null,
-                title: Value::Null,
+                ident: None,
                 node_type: node_type_key,
-                properties: crate::graph::schema::PropertyStorage::Map(HashMap::new()),
+                properties: crate::graph::schema::PropertyStorage::Map(Box::default()),
             }
         })
     }
@@ -603,10 +601,9 @@ impl DiskGraph {
             self.node_mut_cache.insert(
                 key,
                 NodeData {
-                    id: id_val,
-                    title: title_val,
+                    ident: NodeData::pack_ident(id_val, title_val),
                     node_type: node_type_key,
-                    properties: crate::graph::schema::PropertyStorage::Map(HashMap::new()),
+                    properties: crate::graph::schema::PropertyStorage::Map(Box::default()),
                 },
             );
         }
@@ -713,15 +710,14 @@ impl DiskGraph {
             (Value::Null, Value::Null)
         };
         let data = NodeData {
-            id: id_val,
-            title: title_val,
+            ident: NodeData::pack_ident(id_val, title_val),
             node_type: node_type_key,
             properties: if store.is_some() {
                 crate::graph::schema::PropertyStorage::Columnar(
                     crate::graph::storage::property_storage::ColumnarRow::new(slot.row_id),
                 )
             } else {
-                crate::graph::schema::PropertyStorage::Map(HashMap::new())
+                crate::graph::schema::PropertyStorage::Map(Box::default())
             },
         };
 
@@ -1461,8 +1457,8 @@ impl DiskGraph {
                 // Map scratch holds a real title, including an explicit clear.
                 // Columnar scratch may instead carry the unwritten Null sentinel.
                 (matches!(nd.properties, PropertyStorage::Map(_))
-                    || !matches!(nd.title, Value::Null))
-                    && current.get_title(slot.row_id).unwrap_or(Value::Null) != nd.title
+                    || !matches!(nd.title_ref(), Value::Null))
+                    && current.get_title(slot.row_id).unwrap_or(Value::Null) != *nd.title_ref()
             });
             if !any_writes_needed {
                 continue;

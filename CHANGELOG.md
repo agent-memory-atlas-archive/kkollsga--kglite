@@ -19,6 +19,10 @@ before upgrading.
 
 ### Changed
 
+- **In-memory nodes take 40 bytes of graph structure instead of 128.**
+  - A graph with 1 million nodes saves about 88 MB of RAM.
+  - Applies to the default and mapped storage modes.
+  - Saved files and query results are unchanged.
 - **In-memory relationships take 32 bytes of graph structure instead of 48.**
   - A graph with 8 million relationships saves about 128 MB of RAM.
   - Applies to the default and mapped storage modes.

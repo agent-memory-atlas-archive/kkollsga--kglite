@@ -394,7 +394,7 @@ impl<'a> ColumnFilter<'a> {
         params: &HashMap<String, Value>,
     ) -> Option<bool> {
         if self.reads_identity
-            && !(matches!(data.id, Value::Null) && matches!(data.title, Value::Null))
+            && !(matches!(data.id_ref(), Value::Null) && matches!(data.title_ref(), Value::Null))
         {
             return None;
         }

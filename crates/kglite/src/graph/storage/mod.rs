@@ -607,7 +607,7 @@ pub trait GraphWrite: GraphRead {
     /// backends with no per-type store to write through.
     fn set_node_title(&mut self, idx: NodeIndex, value: Value) {
         if let Some(node) = self.node_weight_mut(idx) {
-            node.title = value;
+            node.set_title(value);
         }
     }
 

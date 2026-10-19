@@ -725,6 +725,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite/src/graph/storage/property_storage.rs::statement:Map(Box<HashMap<InternedKey, Value>>),::clippy::box_collection",
+      "classification": "transitional"
+    },
+    {
       "identity": "crates/kglite/src/param/mod.rs::mod:tests::clippy::approx_constant",
       "classification": "test"
     }

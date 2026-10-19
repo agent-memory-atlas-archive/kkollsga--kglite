@@ -112,28 +112,28 @@ impl<'a> NodeView<'a> {
     /// column store).
     #[inline]
     pub fn id(&self) -> Cow<'a, Value> {
-        if matches!(self.data.id, Value::Null) {
+        if matches!(self.data.id_ref(), Value::Null) {
             if let Some((store, row_id)) = self.store {
                 if let Some(v) = store.get_id(row_id) {
                     return Cow::Owned(v);
                 }
             }
         }
-        Cow::Borrowed(&self.data.id)
+        Cow::Borrowed(self.data.id_ref())
     }
 
     /// The node's title (resolving the columnar `Null` sentinel through the
     /// column store).
     #[inline]
     pub fn title(&self) -> Cow<'a, Value> {
-        if matches!(self.data.title, Value::Null) {
+        if matches!(self.data.title_ref(), Value::Null) {
             if let Some((store, row_id)) = self.store {
                 if let Some(v) = store.get_title(row_id) {
                     return Cow::Owned(v);
                 }
             }
         }
-        Cow::Borrowed(&self.data.title)
+        Cow::Borrowed(self.data.title_ref())
     }
 
     /// Read a property by interned key. `None` when absent or `Value::Null`.
@@ -280,7 +280,7 @@ impl<'a> NodeView<'a> {
     #[inline]
     pub fn title_field(&self) -> StrField<'a> {
         Self::identity_str(
-            &self.data.title,
+            self.data.title_ref(),
             |store, row_id| store.title_field(row_id),
             self.store,
         )
@@ -290,7 +290,7 @@ impl<'a> NodeView<'a> {
     #[inline]
     pub fn id_field(&self) -> StrField<'a> {
         Self::identity_str(
-            &self.data.id,
+            self.data.id_ref(),
             |store, row_id| store.id_field(row_id),
             self.store,
         )
@@ -476,8 +476,8 @@ impl<'a> NodeView<'a> {
 impl std::fmt::Debug for NodeView<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NodeView")
-            .field("id", &self.data.id)
-            .field("title", &self.data.title)
+            .field("id", self.data.id_ref())
+            .field("title", self.data.title_ref())
             .field("node_type", &self.data.node_type)
             .field("columnar_row", &self.store.map(|(_, r)| r))
             .finish()
@@ -512,8 +512,7 @@ mod tests {
         let row_id = store.push_row(&[(key, list.clone())]);
 
         let data = NodeData {
-            id: Value::Null,
-            title: Value::Null,
+            ident: None,
             node_type: type_key,
             properties: crate::graph::schema::PropertyStorage::Columnar(ColumnarRow::new(row_id)),
         };

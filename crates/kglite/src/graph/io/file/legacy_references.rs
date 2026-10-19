@@ -324,7 +324,7 @@ fn node_location(graph: &DirGraph, index: NodeIndex) -> Option<(InternedKey, Nod
     let location = match data.properties.columnar_row_id() {
         Some(row) if graph.graph.column_store(data.node_type).is_some() => NodeLocation::Row {
             row,
-            inline_title: (!matches!(data.title, Value::Null)).then_some(&data.title),
+            inline_title: (!matches!(data.title_ref(), Value::Null)).then_some(data.title_ref()),
         },
         _ => NodeLocation::Inline,
     };
@@ -629,7 +629,7 @@ mod tests {
         let mut graph = typed_fixture();
         GraphWrite::node_weight_mut(&mut graph.graph, NodeIndex::new(3))
             .unwrap()
-            .title = Value::NodeRef(1);
+            .set_title(Value::NodeRef(1));
         graph.graph.flush_pending_writes();
         assert_eq!(changed(&graph), vec![(3, true, vec![])]);
     }
@@ -640,9 +640,9 @@ mod tests {
         let key = graph.interner.get_or_intern("endpoint");
         GraphWrite::node_weight_mut(&mut graph.graph, NodeIndex::new(5))
             .unwrap()
-            .properties = crate::graph::storage::property_storage::PropertyStorage::Map(
+            .properties = crate::graph::storage::property_storage::PropertyStorage::Map(Box::new(
             [(key, Value::NodeRef(1))].into_iter().collect(),
-        );
+        ));
         assert_eq!(changed(&graph), vec![(5, false, vec!["endpoint".into()])]);
     }
 

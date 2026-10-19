@@ -62,17 +62,19 @@ pub(super) fn write_staged_rows(
             continue;
         }
         // Avoid redundant title writes while preserving explicit Map clears.
-        if matches!(nd.properties, PropertyStorage::Map(_)) || !matches!(nd.title, Value::Null) {
+        if matches!(nd.properties, PropertyStorage::Map(_))
+            || !matches!(nd.title_ref(), Value::Null)
+        {
             let prior = store.get_title(row_id);
-            if prior.as_ref().unwrap_or(&Value::Null) != &nd.title {
+            if prior.as_ref().unwrap_or(&Value::Null) != nd.title_ref() {
                 if let Some(undo) = undo.as_deref_mut() {
                     undo.note_columnar_title(type_key, row_id, prior);
                 }
-                let _ = store.set_title(row_id, &nd.title);
+                let _ = store.set_title(row_id, nd.title_ref());
             }
         }
         if let PropertyStorage::Map(map) = &nd.properties {
-            for (key, value) in map {
+            for (key, value) in map.iter() {
                 if let Some(undo) = undo.as_deref_mut() {
                     undo.note_columnar_cell(store, type_key, row_id, *key);
                 }
