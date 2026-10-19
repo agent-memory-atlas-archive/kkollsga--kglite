@@ -1071,7 +1071,9 @@ impl DirGraph {
     /// is already indexed.
     pub fn ensure_id_index(&self, node_type: &str) {
         self.id_indices
-            .ensure(node_type, || self.compute_id_index(node_type));
+            .ensure(node_type, self.id_generation(node_type), || {
+                self.compute_id_index(node_type)
+            });
     }
 
     /// Compute (without inserting) the `TypeIdIndex` for a node type by
@@ -1183,7 +1185,17 @@ impl DirGraph {
     /// normalization the old scan did by hand.
     pub fn lookup_by_id_normalized(&self, node_type: &str, id: &Value) -> Option<NodeIndex> {
         self.id_indices
-            .lookup_or_build(node_type, id, || self.compute_id_index(node_type))
+            .lookup_or_build(node_type, id, self.id_generation(node_type), || {
+                self.compute_id_index(node_type)
+            })
+    }
+
+    /// The generation a lazily built id index for `node_type` is shared under,
+    /// or `None` for a type this graph does not have (nothing worth keeping).
+    fn id_generation(&self, node_type: &str) -> Option<u64> {
+        self.type_indices
+            .contains_key(node_type)
+            .then(|| self.type_indices.generation(node_type))
     }
 
     pub fn has_connection_type(&self, connection_type: &str) -> bool {
@@ -2471,5 +2483,7 @@ mod disk_tail_tests;
 mod disk_test_support;
 #[cfg(test)]
 mod edge_embedding_disk_tests;
+#[cfg(test)]
+mod shared_id_index_tests;
 #[cfg(test)]
 mod timestamp_retype_disk_tests;

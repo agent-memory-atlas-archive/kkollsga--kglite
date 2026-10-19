@@ -586,7 +586,7 @@ fn a_store_is_an_unchanged_view_of_its_file_only_until_something_writes_over_it(
     assert_eq!(grown.unchanged_origin(), None, "a type opened for writing");
 
     let cached = fresh();
-    cached.ensure("Other", || general([(1, 1)]));
+    cached.ensure("Other", None, || general([(1, 1)]));
     assert_eq!(cached.unchanged_origin(), None, "a heap entry");
 
     let mut cleared = fresh();

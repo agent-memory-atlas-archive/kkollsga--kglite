@@ -100,6 +100,7 @@ pattern, not by taste:
   correct unchanged (see [Invariants](#invariants)).
 * **`id_indices` splits inside `Clone`** through its existing `RwLock`, because
   it can: it hands out values, not borrowed slices.
+* **A lazily built id index is shared across the lineage, not reset on fork.** A published version is cut from the writer, never from a reader's snapshot, so an index a reader builds would be lost with that snapshot. `id_indices` holds a slot (`storage/disk/id_index_shared.rs`) that `Clone` shares: a build on any version is published there, tagged with the type's member-bucket generation (`TypeIndexStore::generation`), and served to any version holding the same generation. Generations come from one process-wide counter and change on every bucket edit, so diverging forks never agree; the writer drops a type's entry when it edits that type. The slot keeps the latest build per type, so a type read by id stays resident on the heap until a write to it replaces it.
 * **The layers other than `id_indices` cannot take a lock**, because their reads return `&[NodeIndex]`. They keep *every* level behind an `Arc`, including the one being written. The writer discovers the fork lazily at its next write through `Arc::get_mut`.
 
 ### The one thing that must not be done

@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::le_bytes::{le_u32_binary_search, le_u32_iter, read_le_u32};
+use super::type_generation::TypeGenerations;
 use super::type_index_layer::TypeBucket;
 use crate::graph::schema::{InternedKey, StringInterner};
 
@@ -538,9 +539,17 @@ pub struct TypeIndexStore {
     /// Types that exist in `base` but were removed/invalidated post-load.
     removed: std::collections::HashSet<String>,
     base: Option<Arc<TypeIndexBase>>,
+    /// Bumped by every mutator below; keys the shared lazy id index.
+    generations: TypeGenerations,
 }
 
 impl TypeIndexStore {
+    /// Identity of `name`'s current member bucket: equal across graphs only
+    /// when no create, delete or rollback separates them.
+    pub(crate) fn generation(&self, name: &str) -> u64 {
+        self.generations.current(name)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -551,6 +560,7 @@ impl TypeIndexStore {
             deltas: HashMap::new(),
             removed: std::collections::HashSet::new(),
             base: Some(Arc::new(base)),
+            generations: TypeGenerations::default(),
         }
     }
 
@@ -584,6 +594,7 @@ impl TypeIndexStore {
     /// name rather than taking it, so the common case (the bucket exists) also
     /// stops allocating a `String` per created node.
     pub fn push_to_type(&mut self, name: &str, idx: NodeIndex) {
+        self.generations.touch(name);
         if let Some(bucket) = self.overlay.get_mut(name) {
             bucket.push(idx);
             return;
@@ -606,6 +617,7 @@ impl TypeIndexStore {
     /// writable tail — slower, still correct. See
     /// [`TypeBucket::undo_append`] for when that can happen.
     pub fn undo_append(&mut self, name: &str, idx: NodeIndex) {
+        self.generations.touch(name);
         if let Some(bucket) = self.overlay.get_mut(name) {
             if bucket.undo_append(idx) {
                 return;
@@ -655,6 +667,7 @@ impl TypeIndexStore {
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Vec<NodeIndex>> {
+        self.generations.touch(name);
         let prev = self
             .overlay
             .remove(name)
@@ -667,6 +680,7 @@ impl TypeIndexStore {
     }
 
     pub fn clear(&mut self) {
+        self.generations.reset();
         self.overlay.clear();
         self.deltas.clear();
         if let Some(base) = &self.base {
@@ -759,6 +773,7 @@ impl TypeIndexStore {
     /// append should use [`push_to_type`](Self::push_to_type) instead, which
     /// stays O(1) while shared.
     pub fn entry_or_default(&mut self, name: String) -> &mut Vec<NodeIndex> {
+        self.generations.touch(&name);
         if !self.overlay.contains_key(&name) && !self.removed.contains(&name) {
             if let Some(v) = self.materialize_base(&name) {
                 self.overlay.insert(name.clone(), TypeBucket::from(v));
@@ -835,6 +850,7 @@ impl TypeIndexStore {
         if hits.is_empty() {
             return;
         }
+        self.generations.touch(name);
         let Some(bucket) = self.overlay.get_mut(name) else {
             return;
         };
@@ -863,6 +879,7 @@ impl TypeIndexStore {
     pub fn retain_in_type<F: FnMut(&NodeIndex) -> bool>(&mut self, name: &str, predicate: F) {
         #[cfg(test)]
         FULL_RETAINS.with(|count| count.set(count.get() + 1));
+        self.generations.touch(name);
         if let Some(bucket) = self.overlay.get_mut(name) {
             bucket.to_mut().retain(predicate);
             return;
@@ -891,6 +908,7 @@ impl TypeIndexStore {
     /// Run `predicate.retain(...)` across every live Vec. Materializes every
     /// base entry into the overlay first — used by full-graph rebuild paths.
     pub fn retain_all<F: FnMut(&NodeIndex) -> bool + Copy>(&mut self, predicate: F) {
+        self.generations.reset();
         if let Some(base) = self.base.clone() {
             for name in base.dir.keys() {
                 if !self.overlay.contains_key(name.as_str())
@@ -913,6 +931,7 @@ impl TypeIndexStore {
     }
 
     pub fn replace_with(&mut self, map: HashMap<String, Vec<NodeIndex>>) {
+        self.generations.reset();
         self.overlay = map
             .into_iter()
             .map(|(name, members)| (name, TypeBucket::from(members)))

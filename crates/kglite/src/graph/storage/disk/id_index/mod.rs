@@ -52,6 +52,7 @@ use crate::graph::schema::{
     heal_general_spellings, id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex,
 };
 use crate::graph::storage::disk::id_index_layer::TypeEntry;
+use crate::graph::storage::disk::id_index_shared::SharedIdIndexes;
 use crate::serde_codec;
 use memmap2::Mmap;
 use petgraph::graph::NodeIndex;
@@ -535,6 +536,9 @@ pub struct IdIndexStore {
     /// Types that exist in `base` but were removed/invalidated post-load.
     removed: std::collections::HashSet<String>,
     base: Option<Arc<IdIndexBase>>,
+    /// Lazily built indexes shared by every clone of this store — see
+    /// `id_index_shared`.
+    shared: Arc<SharedIdIndexes>,
 }
 
 impl Clone for IdIndexStore {
@@ -561,6 +565,7 @@ impl Clone for IdIndexStore {
             overlay: RwLock::new(shared),
             removed: self.removed.clone(),
             base: self.base.clone(),
+            shared: Arc::clone(&self.shared),
         }
     }
 }
@@ -575,6 +580,7 @@ impl IdIndexStore {
             overlay: RwLock::new(HashMap::new()),
             removed: std::collections::HashSet::new(),
             base: Some(Arc::new(base)),
+            shared: Arc::default(),
         }
     }
 
@@ -636,6 +642,12 @@ impl IdIndexStore {
     /// per type until the next invalidation. Returns None when the id simply
     /// isn't present (no scan).
     ///
+    /// `generation` is the type's member-bucket generation
+    /// (`TypeIndexStore::generation`), or `None` to build without sharing. With
+    /// it the build is published to every clone of this store and an index a
+    /// clone already built at the same generation is used instead of scanning —
+    /// see `id_index_shared`.
+    ///
     /// Without this, the read path (`MATCH (n {id:X})`, `MERGE` match) falls
     /// back to a full scan whenever the index is absent — after `add_nodes` /
     /// `CREATE` / `DELETE`. (issue #20)
@@ -643,6 +655,7 @@ impl IdIndexStore {
         &self,
         name: &str,
         id: &Value,
+        generation: Option<u64>,
         build: impl FnOnce() -> TypeIdIndex,
     ) -> Option<NodeIndex> {
         {
@@ -660,25 +673,38 @@ impl IdIndexStore {
         }
         // Not indexed anywhere — build once and cache (idempotent under a
         // concurrent race: the first writer wins, both indices are equal).
-        let built = build();
+        let built = self.lazy_entry(name, generation, build);
         let mut ov = self.overlay.write().unwrap();
-        ov.entry(name.to_string())
-            .or_insert_with(|| TypeEntry::from(built))
-            .get(id)
+        ov.entry(name.to_string()).or_insert(built).get(id)
+    }
+
+    /// The entry a lazy build installs: layered over the shared index when the
+    /// type has a generation, owned otherwise.
+    fn lazy_entry(
+        &self,
+        name: &str,
+        generation: Option<u64>,
+        build: impl FnOnce() -> TypeIdIndex,
+    ) -> TypeEntry {
+        match generation {
+            Some(generation) => {
+                TypeEntry::layered_over(self.shared.get_or_publish(name, generation, build))
+            }
+            None => TypeEntry::from(build()),
+        }
     }
 
     /// Ensure `name` is indexed (overlay or base) — the `&self` pre-warm
     /// counterpart of the self-healing read path, so callers can pre-build an
     /// id index without `&mut` and its `Arc::make_mut` deep copy. Racing
     /// builders are harmless: the first writer wins and both indices are equal.
-    pub fn ensure(&self, name: &str, build: impl FnOnce() -> TypeIdIndex) {
+    pub fn ensure(&self, name: &str, generation: Option<u64>, build: impl FnOnce() -> TypeIdIndex) {
         if self.contains_key(name) {
             return;
         }
-        let built = build();
+        let built = self.lazy_entry(name, generation, build);
         let mut ov = self.overlay.write().unwrap();
-        ov.entry(name.to_string())
-            .or_insert_with(|| TypeEntry::from(built));
+        ov.entry(name.to_string()).or_insert(built);
     }
 
     /// Look up without building — None when the type isn't indexed.
@@ -757,6 +783,7 @@ impl IdIndexStore {
     }
 
     pub fn insert(&mut self, name: String, idx: TypeIdIndex) {
+        self.shared.forget(&name);
         self.removed.remove(&name);
         self.overlay
             .get_mut()
@@ -827,6 +854,7 @@ impl IdIndexStore {
 
     /// Drop `name`'s index; the next read rebuilds it from the graph.
     pub fn remove(&mut self, name: &str) {
+        self.shared.forget(name);
         self.overlay.get_mut().unwrap().remove(name);
         if self.base.as_ref().is_some_and(|b| b.contains(name)) {
             self.removed.insert(name.to_string());
@@ -834,6 +862,7 @@ impl IdIndexStore {
     }
 
     pub fn clear(&mut self) {
+        self.shared.forget_all();
         self.overlay.get_mut().unwrap().clear();
         if let Some(base) = &self.base {
             self.removed.extend(base.dir.keys().cloned());
@@ -895,6 +924,7 @@ impl IdIndexStore {
     /// ([`TypeEntry::OverBase`]) — the first write costs nothing in proportion
     /// to the type's size. Any other base entry is copied onto the heap first.
     pub fn entry_or_default(&mut self, name: String) -> &mut TypeEntry {
+        self.shared.forget(&name);
         let needs_promotion = {
             let overlay = self.overlay.get_mut().unwrap();
             !overlay.contains_key(&name) && !self.removed.contains(&name)
@@ -931,6 +961,7 @@ impl IdIndexStore {
     /// Replace the entire store with a fresh HashMap (used by load fallback
     /// for legacy `.bin.zst`-only graphs and by `reindex()`).
     pub fn replace_with(&mut self, map: HashMap<String, TypeIdIndex>) {
+        self.shared.forget_all();
         *self.overlay.get_mut().unwrap() = map
             .into_iter()
             .map(|(name, index)| (name, TypeEntry::from(index)))

@@ -19,6 +19,12 @@ before upgrading.
 
 ### Changed
 
+- **Id lookups on a session's readers no longer rebuild the id index for every published version.**
+  - A reader's first `MATCH (n:T {id: …})` builds the type's id index; later versions now reuse it until the writer creates or deletes nodes of `T`.
+  - Before, each version started cold for any type the writer never queried by id, so every reader query paid the build.
+  - With 1 million products and a writer at 5,000 tx/s, a reader's `id IN` query on another type takes a median of 0.44 ms instead of 3.1 ms in the default storage mode (95th percentile 2.7 ms instead of 5.1 ms), and a median of 0.44-0.47 ms instead of 3.0 ms in mapped mode. Writer throughput is unchanged.
+  - The cached index stays in memory for each type read by id, until a write to that type replaces it.
+  - Query planning no longer builds an id index just to estimate `id IN [...]`; without one it uses the list length, capped by the type size.
 - **`load()` and `save()` return their transient allocator pages to the OS.**
   - After `load()` of a 1M-node, 8M-relationship graph, process footprint drops from 633 MB to 364 MB.
   - After `save()` of the same graph, it drops from 787 MB to 521 MB.
