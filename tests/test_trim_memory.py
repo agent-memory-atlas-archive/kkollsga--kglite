@@ -113,3 +113,27 @@ def test_trim_memory_returns_a_dropped_peak_to_the_os():
         f"trim_memory() released {released} of a {transient}-byte transient "
         f"(baseline={baseline}, peak={peak}, after drop={dropped}, after trim={trimmed})"
     )
+
+
+def test_load_and_save_collect_at_their_seam(tmp_path):
+    # load() and KnowledgeGraph.save() hand their transient pages back; the
+    # counter is the observable (footprint deltas depend on allocator state).
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("UNWIND range(1, 100) AS i CREATE (:T {id: i})")
+    path = str(tmp_path / "g.kgl")
+
+    before = kglite._seam_trim_count()
+    graph.save(path)
+    assert kglite._seam_trim_count() == before + 1
+
+    loaded = kglite.load(path)
+    assert kglite._seam_trim_count() == before + 2
+    assert loaded.cypher("MATCH (n:T) RETURN count(n) AS c").to_list()[0]["c"] == 100
+
+
+def test_failed_save_does_not_collect():
+    graph = kglite.KnowledgeGraph()
+    before = kglite._seam_trim_count()
+    with pytest.raises(Exception):
+        graph.save()  # no path and no origin file: refused before any work
+    assert kglite._seam_trim_count() == before

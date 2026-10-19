@@ -25,6 +25,7 @@ STUB_INTERNAL = {
     "_wal_next_lsn",
     "_run_cli",
     "_run_mcp_server",
+    "_seam_trim_count",
 }
 NONCONSTRUCTIBLE = {"FrozenGraph", "ResultIter", "ResultView", "Session", "SessionTransaction", "Transaction"}
 

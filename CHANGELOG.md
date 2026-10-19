@@ -19,6 +19,11 @@ before upgrading.
 
 ### Changed
 
+- **`load()` and `save()` return their transient allocator pages to the OS.**
+  - After `load()` of a 1M-node, 8M-relationship graph, process footprint drops from 633 MB to 364 MB.
+  - After `save()` of the same graph, it drops from 787 MB to 521 MB.
+  - The collect costs about 2 ms against 515 ms (load) and 380 ms (save).
+  - `kglite.trim_memory()` stays available for other seams.
 - **In-memory nodes take 40 bytes of graph structure instead of 128.**
   - A graph with 1 million nodes saves about 88 MB of RAM.
   - Applies to the default and mapped storage modes.

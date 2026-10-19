@@ -326,6 +326,7 @@ fn load(
     warn_data_advisories(py, &inner);
     let mut kg = KnowledgeGraph::from_arc(inner);
     kg.lifecycle.source_path = Some(std::path::PathBuf::from(&path));
+    allocator::release_after_seam(py);
     Ok(kg)
 }
 
@@ -1018,6 +1019,7 @@ fn kglite(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(allocator::trim_memory, m)?)?;
+    m.add_function(wrap_pyfunction!(allocator::_seam_trim_count, m)?)?;
     m.add_function(wrap_pyfunction!(_backend_is_forked, m)?)?;
     m.add_function(wrap_pyfunction!(_fail_wal_append, m)?)?;
     m.add_function(wrap_pyfunction!(_wal_next_lsn, m)?)?;

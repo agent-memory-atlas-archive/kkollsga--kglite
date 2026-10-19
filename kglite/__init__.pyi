@@ -1502,9 +1502,12 @@ def trim_memory() -> None:
     large query costs no page faults, and it is also why a process that once
     peaked at several GB keeps reporting that peak long after the graphs and
     result sets are gone. This is the lever that gives those pages back. It is
-    opt-in on purpose: a forced collect at an internal seam (after ``save()``,
-    on graph drop) would spend the reuse on every call, so KGLite never calls
-    it for you.
+    opt-in on purpose: a forced collect at a general internal seam (on graph
+    drop, after every query) would spend the reuse on every call. KGLite calls
+    it for you at exactly two seams, the end of :func:`load` and of
+    ``KnowledgeGraph.save()``, where the retained pages are large (about
+    270 MB each at 1M nodes and 8M relationships) and nothing reuses them; the
+    collect costs about 2 ms there.
 
     Call it when a peak is over and the process will stay alive: after a large
     ingest or a query that materialised millions of rows, before a long idle
@@ -1539,6 +1542,10 @@ def trim_memory() -> None:
         del rows, g            # free it first
         kglite.trim_memory()   # then give the pages back
     """
+    ...
+
+def _seam_trim_count() -> int:
+    """Number of automatic ``load()``/``save()`` allocator collects so far (test hook)."""
     ...
 
 def _backend_is_forked(graph: "KnowledgeGraph") -> bool:
