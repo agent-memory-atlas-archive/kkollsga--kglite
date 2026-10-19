@@ -18,7 +18,7 @@ mod overlay;
 mod packed_write;
 mod property_layout;
 mod tail;
-pub(crate) use tail::RegionParts;
+pub(crate) use tail::{RegionParts, MAPPED_SPILL_FLOOR};
 #[cfg(test)]
 mod heap_tail_tests;
 #[cfg(test)]

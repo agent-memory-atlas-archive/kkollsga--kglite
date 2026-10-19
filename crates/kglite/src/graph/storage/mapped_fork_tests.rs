@@ -283,7 +283,8 @@ fn a_forked_mapped_graph_keeps_spilling_and_reads_back() {
     use crate::graph::mutation::maintain::add_nodes;
 
     let mut graph = new_dir_graph_in_mode(StorageMode::Mapped, None).expect("mapped graph");
-    let rows = 4_000;
+    // Past `MAPPED_SPILL_FLOOR` of heap, so the load spills.
+    let rows = 12_000;
     let mut df = DataFrame::new(Vec::new());
     df.add_column(
         "id".to_string(),
@@ -380,7 +381,7 @@ fn a_small_overlay_tail_is_not_spilled_to_files_each_statement() {
     df.add_column(
         "body".to_string(),
         ColumnType::String,
-        ColumnData::String((0..rows).map(|_| Some("x".repeat(16))).collect()),
+        ColumnData::String((0..rows).map(|_| Some("x".repeat(64))).collect()),
     )
     .expect("body column");
     add_nodes(
@@ -422,4 +423,77 @@ fn a_small_overlay_tail_is_not_spilled_to_files_each_statement() {
     );
     assert_eq!(graph.graph.node_count(), rows + 20);
     assert_eq!(reader.graph.node_count(), rows);
+}
+
+/// A writer's first `SET` under a held reader clones the store and rewrites one
+/// column on the heap. At `Mapped`'s zero memory limit that used to re-run the
+/// spill pass on the forked statement, which wrote every store holding heap to a
+/// fresh directory of column files, once per fork, under the session's writer
+/// lock. Heap below the mapped spill floor stays where it is.
+#[test]
+fn a_small_cow_clone_under_a_held_reader_is_not_spilled_per_fork() {
+    use crate::datatypes::values::{ColumnData, ColumnType, DataFrame};
+    use crate::graph::mutation::maintain::add_nodes;
+
+    let mut graph = new_dir_graph_in_mode(StorageMode::Mapped, None).expect("mapped graph");
+    // Enough heap at load to cross the floor, so the load itself spills.
+    let rows = 40_000;
+    let mut df = DataFrame::new(Vec::new());
+    df.add_column(
+        "id".to_string(),
+        ColumnType::String,
+        ColumnData::String((0..rows).map(|i| Some(format!("n{i}"))).collect()),
+    )
+    .expect("id column");
+    df.add_column(
+        "body".to_string(),
+        ColumnType::String,
+        ColumnData::String((0..rows).map(|_| Some("x".repeat(40))).collect()),
+    )
+    .expect("body column");
+    df.add_column(
+        "qty".to_string(),
+        ColumnType::Int64,
+        ColumnData::Int64((0..rows).map(|i| Some(i as i64)).collect()),
+    )
+    .expect("qty column");
+    add_nodes(
+        &mut graph,
+        df,
+        "Doc".to_string(),
+        "id".to_string(),
+        None,
+        None,
+    )
+    .expect("add nodes");
+
+    let mut arc = Arc::new(graph);
+    let spill_dir = arc
+        .spill_dir
+        .clone()
+        .expect("precondition: the load spilled");
+    let mut before = None;
+    for i in 0..10 {
+        let reader = Arc::clone(&arc);
+        let graph = make_dir_graph_mut(&mut arc);
+        assert!(graph.graph.is_forked(), "precondition: forked");
+        run(
+            graph,
+            &format!("MATCH (n:Doc {{id: 'n5'}}) SET n.qty = {}", 1_000 + i),
+        );
+        drop(reader);
+        // The first fork may legitimately spill once; later ones must not add.
+        if i == 0 {
+            before = Some(spill_entries(&spill_dir));
+        }
+    }
+    assert_eq!(
+        spill_entries(&spill_dir),
+        before.expect("recorded"),
+        "nine more fork-and-SET cycles must not create spill files"
+    );
+    assert_eq!(
+        ids(&arc, "MATCH (n:Doc {id: 'n5'}) RETURN n.qty"),
+        vec![Value::Int64(1_009)]
+    );
 }

@@ -15,7 +15,7 @@ use crate::graph::schema::{
     EmbeddingStore, GraphBackend, IndexKey, InternedKey, NodeData, PropertyStorage, SaveMetadata,
     SchemaDefinition, SpatialConfig, StringInterner, TypeIdIndex, TypeSchema,
 };
-use crate::graph::storage::column_store::ColumnStore;
+use crate::graph::storage::column_store::{ColumnStore, MAPPED_SPILL_FLOOR};
 use crate::graph::storage::disk::id_index::IdIndexStore;
 use crate::graph::storage::disk::type_index::TypeIndexStore;
 
@@ -1903,8 +1903,15 @@ impl DirGraph {
     /// `graph_info()['columnar_heap_bytes']` keeps reporting the full
     /// `heap_bytes` — the floor is excluded from the *decision*, not from the
     /// observability reading.
+    ///
+    /// A mapped graph's effective limit is never below [`MAPPED_SPILL_FLOOR`]:
+    /// a writer overlay's first write under a held reader clones a store and
+    /// rewrites a column on the heap, and at a zero limit that re-ran this pass
+    /// over every store with heap once per fork (7 % of single-event
+    /// transactions at 1-2 ms against 15 us).
     pub fn maybe_spill_columns(&mut self) {
         let limit = match self.memory_limit {
+            Some(l) if self.graph.is_mapped() => l.max(MAPPED_SPILL_FLOOR),
             Some(l) => l,
             None => return,
         };

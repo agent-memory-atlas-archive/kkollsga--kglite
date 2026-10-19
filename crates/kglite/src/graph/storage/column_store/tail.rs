@@ -57,6 +57,11 @@ pub(crate) const HEAP_TAIL_MIN_ROWS: u32 = 16_384;
 /// reader still reaches the floor and spills, so the heap bound holds.
 pub(crate) const HEAP_TAIL_SPILL_FLOOR: usize = 1 << 20;
 
+/// Spillable heap a mapped graph may hold before the spill pass writes it to
+/// column files. Mapped pins `memory_limit` to zero, so without a floor any
+/// heap at all triggers a pass over every store.
+pub(crate) const MAPPED_SPILL_FLOOR: usize = 1 << 20;
+
 /// The kind of an identity column whose base part has kind `base` and whose
 /// tail has kind `tail`, as one column holding both parts' values would have
 /// it: a `UniqueId` part beside an `Int64` part widens to `Int64`
