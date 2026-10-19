@@ -116,6 +116,22 @@ That explains three things:
 Reach for it when the *properties* are what stopped fitting. It does not shrink the
 topology, and it will not save a graph whose nodes and edges are the problem.
 
+#### Memory per storage mode
+
+**Relationships dominate the in-memory footprint.** The default and `mapped` modes keep the graph structure on the heap.
+
+| Part of the graph | Heap cost of graph structure |
+|---|---|
+| Node | 40 bytes, plus its properties |
+| Relationship | 32 bytes, plus its properties |
+
+- A graph with 1 million nodes and 8 million relationships spends about 40 MB on node structure and 256 MB on relationship structure.
+- `mapped` moves property columns to mmap-backed files, so it does not shrink the 40 and 32 byte structures.
+- A disk graph built in the same process gives its edge buffers back after `compact()` or `save()`.
+- To get the smallest disk footprint, `save()` the built graph and reopen it with `kglite.open()`.
+- If readers hold `freeze()` snapshots while one writer keeps writing, the default mode is the best fit: it forks only what the write changes.
+- `mapped` forks the same way, and `load()` and `save()` return their transient allocator pages to the OS.
+
 #### What `disk` changes
 
 **`disk` is the one that changes the reload story.** A disk directory is already in

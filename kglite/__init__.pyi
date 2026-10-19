@@ -504,9 +504,9 @@ class ResultView:
     graph while such a view is still alive clones its graph shell so the view
     keeps seeing the data it was built from. Eligible memory graphs use a
     copy-on-write overlay, with a deep-copy fallback for incompatible slot
-    state. Mapped graphs share column stores while cloning other owned state;
-    disk graphs remap published mmap arrays and copy mutation overlays, while
-    heap-backed arrays still clone.
+    state. Mapped graphs fork through the same overlay; disk graphs
+    remap published mmap arrays and copy mutation overlays, while heap-backed
+    arrays still clone.
 
     Very small results — roughly a couple of dozen values, so a single-entity
     lookup or a handful of rows — are converted up front and hold no graph

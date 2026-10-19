@@ -44,6 +44,12 @@ before upgrading.
   - A write after `freeze()` on a compacted graph copied 66 KB of overlay in the same test, against 2.5 MB before compaction.
   - Query results and saved files are unchanged.
 
+### Security
+
+- **Dependency updates close RUSTSEC advisories.**
+  - `rustls` 0.23.46 fixes RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349.
+  - `calamine` 0.37 moves to `zip` 9, which fixes RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369.
+
 ## [0.20.0] - 2026-10-12
 
 ### Breaking changes and migration
