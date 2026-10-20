@@ -21,10 +21,11 @@
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use super::load_options::{MapPolicy, Verify};
@@ -530,18 +531,98 @@ impl MappedSection {
 
     /// Check the payload against the CRC32 recorded at write time.
     pub(crate) fn verify(&self) -> io::Result<()> {
-        let bytes = self.checked_bytes()?;
-        let actual = section_digest(bytes);
-        if actual != self.crc32 {
-            return Err(invalid_data(format!(
-                "the mappable section '{}' of this .kgl file is corrupt — it does not match the \
-                 CRC32 digest recorded when the file was written (recorded {:#010x}, computed \
-                 {actual:#010x}). Restore the file from a backup or rebuild the graph from its \
-                 source.",
-                self.name, self.crc32
-            )));
-        }
-        Ok(())
+        check_digest(&self.name, self.checked_bytes()?, self.crc32)
+    }
+}
+
+/// Compare `bytes` with the CRC32 a writer recorded for the section `name`.
+fn check_digest(name: &str, bytes: &[u8], recorded: u32) -> io::Result<()> {
+    let actual = section_digest(bytes);
+    if actual != recorded {
+        return Err(invalid_data(format!(
+            "the mappable section '{name}' of this .kgl file is corrupt — it does not match the \
+             CRC32 digest recorded when the file was written (recorded {recorded:#010x}, computed \
+             {actual:#010x}). Restore the file from a backup or rebuild the graph from its \
+             source."
+        )));
+    }
+    Ok(())
+}
+
+/// A mapped section shared by every clone of a column buffer, with the result
+/// of its first CRC check cached so a section is verified once however many
+/// snapshots hold it.
+#[derive(Debug)]
+pub struct SharedSection {
+    section: MappedSection,
+    verified: OnceLock<Result<(), String>>,
+}
+
+impl SharedSection {
+    /// `None` unless `section` is served from a file mapping.
+    pub(crate) fn new(section: MappedSection) -> Option<Arc<Self>> {
+        section.is_mapped().then(|| {
+            Arc::new(SharedSection {
+                section,
+                verified: OnceLock::new(),
+            })
+        })
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.section.name
+    }
+
+    /// The payload, without a truncation check; see [`MappedSection::as_bytes`].
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.section.as_bytes()
+    }
+
+    pub(crate) fn source_path(&self) -> Option<&Path> {
+        self.section.source_path()
+    }
+
+    pub(crate) fn modified_since_open(&self) -> Option<io::Result<bool>> {
+        self.section.modified_since_open()
+    }
+
+    /// The CRC32 check, run once and remembered.
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        self.verified
+            .get_or_init(|| self.section.verify().map_err(|e| e.to_string()))
+            .clone()
+            .map_err(invalid_data)
+    }
+}
+
+/// Where [`MappableTable::open_placed`] puts one section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// A handle into the file mapping.
+    Mapped,
+    /// A handle owning a copy of the bytes.
+    Heap,
+    /// Neither: only the validated range is kept, for a consumer that decodes
+    /// straight from the container bytes and keeps nothing of the section.
+    Deferred,
+}
+
+/// A validated section the consumer decodes from the container bytes itself.
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredSection {
+    pub(crate) name: String,
+    pub(crate) owner: String,
+    pub(crate) kind: u8,
+    pub(crate) dtype: SectionDtype,
+    pub(crate) elem_count: u64,
+    start: usize,
+    end: usize,
+}
+
+impl DeferredSection {
+    /// The payload within `container`, the bytes the table was opened over.
+    pub(crate) fn bytes<'c>(&self, container: &'c [u8]) -> &'c [u8] {
+        &container[self.start..self.end]
     }
 }
 
@@ -549,20 +630,33 @@ impl MappedSection {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MappableTable {
     sections: Vec<MappedSection>,
+    deferred: Vec<DeferredSection>,
+    /// Section name to position in `sections` / `deferred`; a load with
+    /// thousands of column sections looks each up by name.
+    section_index: HashMap<String, usize>,
+    deferred_index: HashMap<String, usize>,
 }
 
 impl MappableTable {
     pub(crate) fn get(&self, name: &str) -> Option<&MappedSection> {
-        self.sections.iter().find(|s| s.name == name)
+        self.section_index.get(name).map(|&i| &self.sections[i])
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &MappedSection> {
         self.sections.iter()
     }
 
+    pub(crate) fn get_deferred(&self, name: &str) -> Option<&DeferredSection> {
+        self.deferred_index.get(name).map(|&i| &self.deferred[i])
+    }
+
+    pub(crate) fn iter_deferred(&self) -> impl Iterator<Item = &DeferredSection> {
+        self.deferred.iter()
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.sections.len()
+        self.sections.len() + self.deferred.len()
     }
 
     /// Verify every section's CRC32 now.
@@ -657,11 +751,47 @@ impl MappableTable {
         verify: Verify,
         map: impl Fn(&MapEntry) -> bool,
     ) -> io::Result<Self> {
+        Self::open_placed(entries, bytes, base, file, verify, |entry| {
+            if map(entry) {
+                Placement::Mapped
+            } else {
+                Placement::Heap
+            }
+        })
+    }
+
+    /// [`Self::open`] with a three-way decision. A `Mapped` placement needs a
+    /// `file`; without one the section is copied.
+    pub(crate) fn open_placed(
+        entries: &[MapEntry],
+        bytes: &[u8],
+        base: u64,
+        file: Option<&Arc<MappedFile>>,
+        verify: Verify,
+        place: impl Fn(&MapEntry) -> Placement,
+    ) -> io::Result<Self> {
         let ranges = Self::validate(entries, bytes.len() as u64, base)?;
         let mut sections = Vec::with_capacity(entries.len());
+        let mut deferred = Vec::new();
         for (entry, (dtype, start, end)) in entries.iter().zip(ranges) {
-            let section_bytes = match file {
-                Some(file) if map(entry) => SectionBytes::Mapped {
+            let checked_now = verify == Verify::Eager || entry.flags & FLAG_UTF8_VALIDATED != 0;
+            let section_bytes = match (place(entry), file) {
+                (Placement::Deferred, _) => {
+                    if checked_now {
+                        check_digest(&entry.name, &bytes[start..end], entry.crc32)?;
+                    }
+                    deferred.push(DeferredSection {
+                        name: entry.name.clone(),
+                        owner: entry.owner.clone(),
+                        kind: entry.kind,
+                        dtype,
+                        elem_count: entry.elem_count,
+                        start,
+                        end,
+                    });
+                    continue;
+                }
+                (Placement::Mapped, Some(file)) => SectionBytes::Mapped {
                     file: Arc::clone(file),
                     offset: start,
                     len: end - start,
@@ -677,11 +807,23 @@ impl MappableTable {
                 crc32: entry.crc32,
                 bytes: section_bytes,
             };
-            if verify == Verify::Eager || entry.flags & FLAG_UTF8_VALIDATED != 0 {
+            if checked_now {
                 section.verify()?;
             }
             sections.push(section);
         }
-        Ok(MappableTable { sections })
+        let index = |names: Vec<&String>| -> HashMap<String, usize> {
+            names
+                .into_iter()
+                .enumerate()
+                .map(|(i, n)| (n.clone(), i))
+                .collect()
+        };
+        Ok(MappableTable {
+            section_index: index(sections.iter().map(|s| &s.name).collect()),
+            deferred_index: index(deferred.iter().map(|s| &s.name).collect()),
+            sections,
+            deferred,
+        })
     }
 }

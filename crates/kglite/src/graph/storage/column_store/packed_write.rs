@@ -37,6 +37,29 @@ impl ColumnStore {
         codec: crate::serde_codec::CodecVersion,
         int_encoding: IntColumnEncoding,
     ) -> io::Result<Vec<u8>> {
+        self.write_packed_inner(interner, codec, int_encoding, None)
+    }
+
+    /// [`Self::write_packed_with_codec`] for a `.kgl` v9 save: columns `split`
+    /// claims are written as `@map` entries, and their buffers (borrowed from
+    /// this store) are left in `split` for the container writer.
+    pub(crate) fn write_packed_split<'a>(
+        &'a self,
+        interner: &StringInterner,
+        codec: crate::serde_codec::CodecVersion,
+        int_encoding: IntColumnEncoding,
+        split: &mut ColumnSplit<'a>,
+    ) -> io::Result<Vec<u8>> {
+        self.write_packed_inner(interner, codec, int_encoding, Some(split))
+    }
+
+    fn write_packed_inner<'a>(
+        &'a self,
+        interner: &StringInterner,
+        codec: crate::serde_codec::CodecVersion,
+        int_encoding: IntColumnEncoding,
+        mut split: Option<&mut ColumnSplit<'a>>,
+    ) -> io::Result<Vec<u8>> {
         if let Some(ref mmap_store) = self.mmap_store {
             return self.write_packed_from_mmap(mmap_store, interner, codec);
         }
@@ -64,25 +87,40 @@ impl ColumnStore {
                 while padded.len() < self.row_count as usize {
                     padded.push_null();
                 }
-                Self::write_packed_column(&mut buf, col_name, &padded, codec, int_encoding)?;
+                Self::write_packed_column(&mut buf, col_name, &padded, codec, int_encoding, None)?;
             } else {
-                Self::write_packed_column(&mut buf, col_name, col, codec, int_encoding)?;
+                Self::write_packed_column(
+                    &mut buf,
+                    col_name,
+                    col,
+                    codec,
+                    int_encoding,
+                    split.as_deref_mut(),
+                )?;
             }
         }
 
-        if let Some(col) = self.id_column.as_deref() {
-            let mut padded = col.clone();
-            while padded.len() < self.row_count as usize {
-                padded.push_null();
+        for (name, col) in [
+            ("__id__", self.id_column.as_deref()),
+            ("__title__", self.title_column.as_deref()),
+        ] {
+            let Some(col) = col else { continue };
+            if col.len() < self.row_count as usize {
+                let mut padded = col.clone();
+                while padded.len() < self.row_count as usize {
+                    padded.push_null();
+                }
+                Self::write_packed_column(&mut buf, name, &padded, codec, int_encoding, None)?;
+            } else {
+                Self::write_packed_column(
+                    &mut buf,
+                    name,
+                    col,
+                    codec,
+                    int_encoding,
+                    split.as_deref_mut(),
+                )?;
             }
-            Self::write_packed_column(&mut buf, "__id__", &padded, codec, int_encoding)?;
-        }
-        if let Some(col) = self.title_column.as_deref() {
-            let mut padded = col.clone();
-            while padded.len() < self.row_count as usize {
-                padded.push_null();
-            }
-            Self::write_packed_column(&mut buf, "__title__", &padded, codec, int_encoding)?;
         }
 
         Self::write_overflow_columns(&mut buf, overflow.as_ref());
@@ -90,12 +128,13 @@ impl ColumnStore {
         Ok(buf)
     }
 
-    pub(super) fn write_packed_column(
+    pub(super) fn write_packed_column<'a>(
         buf: &mut Vec<u8>,
         col_name: &str,
-        col: &TypedColumn,
+        col: &'a TypedColumn,
         codec: crate::serde_codec::CodecVersion,
         int_encoding: IntColumnEncoding,
+        split: Option<&mut ColumnSplit<'a>>,
     ) -> io::Result<()> {
         // A v6 writer may swap an `Int64` column's fixed-width array for the
         // delta-varint form when that is smaller. The choice is recorded in the
@@ -107,6 +146,24 @@ impl ColumnStore {
             }
             _ => None,
         };
+        // A column the split claims is written as a data-region section unless
+        // the delta form is at least four times smaller: raw sections are the
+        // only mappable ones, so a modest delta saving does not justify
+        // decoding the column onto the heap at every load.
+        if let Some(split) = split {
+            let delta_wins = delta_blob
+                .as_ref()
+                .is_some_and(|blob| blob.len().saturating_mul(4) <= col.len().saturating_mul(9));
+            if !delta_wins && split.claim(col_name, col) {
+                let tag = format!("{}{MAP_TAG_SUFFIX}", col.type_tag());
+                buf.extend_from_slice(&(col_name.len() as u16).to_le_bytes());
+                buf.extend_from_slice(col_name.as_bytes());
+                buf.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+                buf.extend_from_slice(tag.as_bytes());
+                buf.extend_from_slice(&0u64.to_le_bytes());
+                return Ok(());
+            }
+        }
         let type_tag = match delta_blob {
             Some(_) => INT64_DELTA_TAG,
             None => col.type_tag(),

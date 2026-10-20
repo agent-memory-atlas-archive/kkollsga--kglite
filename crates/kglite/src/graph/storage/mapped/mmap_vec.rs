@@ -20,6 +20,9 @@ use memmap2::{MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::graph::io::file::mappable::SharedSection;
 
 /// Copy once into append growth room; an unrepresentable or refused reserve
 /// declines so the caller can retain its ordinary clone/push failure behavior.
@@ -176,10 +179,20 @@ impl_mmap_pod_primitive!(u8, u32, u64, i32, i64, f64);
 /// [`Self::try_push`]), invalidating old pointers — safe because
 /// `PropertyStorage::Columnar` returns owned `Cow::Owned` values, never
 /// references into the mapping.
+///
+/// `Shared` is a read-only slice of a memory-mapped `.kgl`. It is never
+/// written: every mutator first replaces it with a heap copy (`unshare`), and
+/// a mapped-mode graph's spill check later moves that copy to its own file.
+/// `Clone` of a `Shared` buffer is an `Arc` bump.
 #[derive(Debug)]
 pub enum MmapOrVec<T: MmapPod> {
     Heap {
         data: Vec<T>,
+    },
+    Shared {
+        section: Arc<SharedSection>,
+        len: usize,
+        _phantom: std::marker::PhantomData<T>,
     },
     Mapped {
         /// `None` is the valid representation of an exactly empty mapped file.
@@ -208,6 +221,39 @@ impl<T: MmapPod> MmapOrVec<T> {
     /// Create a heap-backed buffer from an existing Vec.
     pub fn from_vec(data: Vec<T>) -> Self {
         MmapOrVec::Heap { data }
+    }
+
+    /// A read-only view of a mapped `.kgl` section. `None` when the bytes are
+    /// not a whole number of `T`s or do not start `T`-aligned (the caller then
+    /// copies them instead).
+    pub(crate) fn shared(section: Arc<SharedSection>) -> Option<Self> {
+        let bytes = section.bytes();
+        let size = std::mem::size_of::<T>();
+        let (byte_len, address) = (bytes.len(), bytes.as_ptr() as usize);
+        let fits =
+            byte_len.is_multiple_of(size) && address.is_multiple_of(std::mem::align_of::<T>());
+        fits.then(|| MmapOrVec::Shared {
+            len: byte_len / size,
+            section,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// The mapped `.kgl` section this buffer reads from, if it is one.
+    pub(crate) fn shared_section(&self) -> Option<&Arc<SharedSection>> {
+        match self {
+            MmapOrVec::Shared { section, .. } => Some(section),
+            _ => None,
+        }
+    }
+
+    /// Replace a `Shared` view with a heap copy so the buffer can be written.
+    fn unshare(&mut self) {
+        if matches!(self, MmapOrVec::Shared { .. }) {
+            *self = MmapOrVec::Heap {
+                data: self.to_vec(),
+            };
+        }
     }
 
     pub(crate) fn try_clone_for_append(&self, additional: usize) -> Option<Self> {
@@ -347,7 +393,7 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub fn len(&self) -> usize {
         match self {
             MmapOrVec::Heap { data } => data.len(),
-            MmapOrVec::Mapped { len, .. } => *len,
+            MmapOrVec::Mapped { len, .. } | MmapOrVec::Shared { len, .. } => *len,
         }
     }
 
@@ -495,6 +541,7 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub fn get(&self, index: usize) -> T {
         match self {
             MmapOrVec::Heap { data } => data[index],
+            MmapOrVec::Shared { .. } => self.as_slice()[index],
             MmapOrVec::Mapped { mmap, len, .. } => {
                 assert!(index < *len, "MmapOrVec index out of bounds");
                 let offset = index * std::mem::size_of::<T>();
@@ -508,8 +555,10 @@ impl<T: MmapPod> MmapOrVec<T> {
 
     /// Set element at index. Panics if out of bounds.
     pub fn set(&mut self, index: usize, value: T) {
+        self.unshare();
         match self {
             MmapOrVec::Heap { data } => data[index] = value,
+            MmapOrVec::Shared { .. } => unreachable!("unshare leaves a heap buffer"),
             MmapOrVec::Mapped { mmap, len, .. } => {
                 assert!(index < *len, "MmapOrVec index out of bounds");
                 let offset = index * std::mem::size_of::<T>();
@@ -534,7 +583,9 @@ impl<T: MmapPod> MmapOrVec<T> {
     /// existing mapping or logical length when allocation, truncation, or
     /// remapping fails.
     pub fn try_push(&mut self, value: T) -> io::Result<()> {
+        self.unshare();
         match self {
+            MmapOrVec::Shared { .. } => unreachable!("unshare leaves a heap buffer"),
             MmapOrVec::Heap { data } => {
                 #[cfg(test)]
                 let capacity = data.capacity();
@@ -648,6 +699,9 @@ impl<T: MmapPod> MmapOrVec<T> {
             Self::Heap { data } => data.truncate(len),
             Self::Mapped {
                 len: current_len, ..
+            }
+            | Self::Shared {
+                len: current_len, ..
             } => *current_len = (*current_len).min(len),
         }
     }
@@ -661,6 +715,14 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub fn as_slice(&self) -> &[T] {
         match self {
             MmapOrVec::Heap { data } => data.as_slice(),
+            MmapOrVec::Shared { len, .. } if *len == 0 => &[],
+            // SAFETY: `shared` checked that the section starts `T`-aligned and
+            // holds a whole number of `T`s, `len` never exceeds that count, every
+            // bit pattern is valid for an `MmapPod`, and the section's
+            // `Arc<MappedFile>` keeps the read-only mapping alive while `self` is.
+            MmapOrVec::Shared { section, len, .. } => unsafe {
+                std::slice::from_raw_parts(section.bytes().as_ptr().cast::<T>(), *len)
+            },
             MmapOrVec::Mapped { len, .. } if *len == 0 => &[],
             // SAFETY: identical to `as_mut_slice` / `get` — the mmap holds
             // `capacity * size_of::<T>()` bytes from offset 0, page-aligned,
@@ -679,8 +741,10 @@ impl<T: MmapPod> MmapOrVec<T> {
     /// MmapOrVec can coexist; the caller is responsible for any further
     /// sub-slicing (e.g. `split_at_mut`) to enable safe parallel writes.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
+        self.unshare();
         match self {
             MmapOrVec::Heap { data } => data.as_mut_slice(),
+            MmapOrVec::Shared { .. } => unreachable!("unshare leaves a heap buffer"),
             // SAFETY: `&mut self` + `*len ≤ capacity`, and the mmap has
             // `capacity * size_of::<T>()` bytes. See module invariants.
             MmapOrVec::Mapped { len, .. } if *len == 0 => &mut [],
@@ -693,7 +757,8 @@ impl<T: MmapPod> MmapOrVec<T> {
 
     /// Convert from Heap to Mapped (file-backed). No-op if already mapped.
     pub fn materialize_to_file(&mut self, path: &Path) -> io::Result<()> {
-        if matches!(self, MmapOrVec::Mapped { .. }) {
+        // A shared section is already file-backed, and the file is the `.kgl`.
+        if matches!(self, MmapOrVec::Mapped { .. } | MmapOrVec::Shared { .. }) {
             return Ok(());
         }
         let MmapOrVec::Heap { data } = self else {
@@ -752,13 +817,14 @@ impl<T: MmapPod> MmapOrVec<T> {
                     unsafe { std::slice::from_raw_parts(mmap.as_ptr() as *const T, *len) }.to_vec()
                 }
             }
-            _ => unreachable!(),
+            MmapOrVec::Shared { .. } => self.to_vec(),
+            MmapOrVec::Heap { .. } => unreachable!(),
         };
         *self = MmapOrVec::Heap { data };
     }
 
     pub fn is_mapped(&self) -> bool {
-        matches!(self, MmapOrVec::Mapped { .. })
+        matches!(self, MmapOrVec::Mapped { .. } | MmapOrVec::Shared { .. })
     }
 
     /// Clone the backing for an immutable transaction snapshot. Heap buffers
@@ -769,6 +835,11 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub(crate) fn clone_snapshot(&self) -> io::Result<Self> {
         match self {
             MmapOrVec::Heap { data } => Ok(MmapOrVec::Heap { data: data.clone() }),
+            MmapOrVec::Shared { section, len, .. } => Ok(MmapOrVec::Shared {
+                section: Arc::clone(section),
+                len: *len,
+                _phantom: std::marker::PhantomData,
+            }),
             MmapOrVec::Mapped {
                 len,
                 capacity,
@@ -801,7 +872,7 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub fn heap_bytes(&self) -> usize {
         match self {
             MmapOrVec::Heap { data } => data.len() * std::mem::size_of::<T>(),
-            MmapOrVec::Mapped { .. } => 0,
+            MmapOrVec::Mapped { .. } | MmapOrVec::Shared { .. } => 0,
         }
     }
 
@@ -815,7 +886,10 @@ impl<T: MmapPod> MmapOrVec<T> {
                     data.len() * std::mem::size_of::<T>(),
                 )
             },
-            MmapOrVec::Mapped { len, .. } if *len == 0 => &[],
+            MmapOrVec::Mapped { len, .. } | MmapOrVec::Shared { len, .. } if *len == 0 => &[],
+            MmapOrVec::Shared { section, len, .. } => {
+                &section.bytes()[..*len * std::mem::size_of::<T>()]
+            }
             MmapOrVec::Mapped { mmap, len, .. } => {
                 let byte_len = capacity_bytes::<T>(*len)
                     .expect("validated MmapOrVec length must fit its address space");
@@ -840,7 +914,7 @@ impl<T: MmapPod> MmapOrVec<T> {
     /// Leaves `len` unchanged; shrinks `capacity` to equal `len`.
     pub fn trim_to_logical_length(&mut self) -> io::Result<()> {
         match self {
-            MmapOrVec::Heap { .. } => Ok(()),
+            MmapOrVec::Heap { .. } | MmapOrVec::Shared { .. } => Ok(()),
             MmapOrVec::Mapped {
                 mmap,
                 len,
@@ -952,6 +1026,7 @@ impl<T: MmapPod> MmapOrVec<T> {
                 };
                 std::fs::write(path, bytes)
             }
+            MmapOrVec::Shared { .. } => std::fs::write(path, self.as_raw_bytes()),
             MmapOrVec::Mapped { mmap, len, .. } => {
                 if let Some(mmap) = mmap.as_ref() {
                     mmap.flush()?;
@@ -969,7 +1044,7 @@ impl<T: MmapPod> MmapOrVec<T> {
 
     pub fn file_path(&self) -> Option<&Path> {
         match self {
-            MmapOrVec::Heap { .. } => None,
+            MmapOrVec::Heap { .. } | MmapOrVec::Shared { .. } => None,
             MmapOrVec::Mapped { path, .. } => Some(path.as_path()),
         }
     }
@@ -977,6 +1052,7 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub fn to_vec(&self) -> Vec<T> {
         match self {
             MmapOrVec::Heap { data } => data.clone(),
+            MmapOrVec::Shared { .. } => self.as_slice().to_vec(),
             MmapOrVec::Mapped { mmap, len, .. } => {
                 if *len == 0 {
                     return Vec::new();
@@ -991,10 +1067,18 @@ impl<T: MmapPod> MmapOrVec<T> {
 }
 
 impl<T: MmapPod> Clone for MmapOrVec<T> {
-    /// Clone always produces a Heap variant (cloning a mapped file doesn't make sense).
+    /// A `Shared` buffer clones by `Arc` bump; every other variant produces a
+    /// Heap copy (cloning a spill file doesn't make sense).
     fn clone(&self) -> Self {
-        MmapOrVec::Heap {
-            data: self.to_vec(),
+        match self {
+            MmapOrVec::Shared { section, len, .. } => MmapOrVec::Shared {
+                section: Arc::clone(section),
+                len: *len,
+                _phantom: std::marker::PhantomData,
+            },
+            _ => MmapOrVec::Heap {
+                data: self.to_vec(),
+            },
         }
     }
 }
@@ -1021,9 +1105,39 @@ pub enum MmapBytes {
         file: File,
         path: PathBuf,
     },
+    /// Read-only slice of a memory-mapped `.kgl` section; see [`MmapOrVec`].
+    Shared {
+        section: Arc<SharedSection>,
+        len: usize,
+    },
 }
 
 impl MmapBytes {
+    /// A read-only view of a mapped `.kgl` byte section.
+    pub(crate) fn shared(section: Arc<SharedSection>) -> Self {
+        MmapBytes::Shared {
+            len: section.bytes().len(),
+            section,
+        }
+    }
+
+    /// The mapped `.kgl` section this buffer reads from, if it is one.
+    pub(crate) fn shared_section(&self) -> Option<&Arc<SharedSection>> {
+        match self {
+            MmapBytes::Shared { section, .. } => Some(section),
+            _ => None,
+        }
+    }
+
+    /// Replace a `Shared` view with a heap copy so the buffer can be written.
+    fn unshare(&mut self) {
+        if matches!(self, MmapBytes::Shared { .. }) {
+            *self = MmapBytes::Heap {
+                data: self.to_vec(),
+            };
+        }
+    }
+
     pub fn new() -> Self {
         MmapBytes::Heap { data: Vec::new() }
     }
@@ -1077,7 +1191,7 @@ impl MmapBytes {
     pub fn len(&self) -> usize {
         match self {
             MmapBytes::Heap { data } => data.len(),
-            MmapBytes::Mapped { len, .. } => *len,
+            MmapBytes::Mapped { len, .. } | MmapBytes::Shared { len, .. } => *len,
         }
     }
 
@@ -1086,6 +1200,9 @@ impl MmapBytes {
         match self {
             Self::Heap { data } => data.truncate(len),
             Self::Mapped {
+                len: current_len, ..
+            }
+            | Self::Shared {
                 len: current_len, ..
             } => *current_len = (*current_len).min(len),
         }
@@ -1096,8 +1213,10 @@ impl MmapBytes {
     /// A mapped buffer reports file-growth or remapping failures without
     /// changing its logical length, so callers can abort or fall back safely.
     pub fn extend(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.unshare();
         let start = self.len();
         match self {
+            MmapBytes::Shared { .. } => unreachable!("unshare leaves a heap buffer"),
             MmapBytes::Heap { data } => {
                 #[cfg(test)]
                 let capacity = data.capacity();
@@ -1142,6 +1261,7 @@ impl MmapBytes {
     pub fn slice(&self, start: usize, end: usize) -> &[u8] {
         match self {
             MmapBytes::Heap { data } => &data[start..end],
+            MmapBytes::Shared { .. } => &self.as_raw_bytes()[start..end],
             MmapBytes::Mapped { mmap, .. } => &mmap[start..end],
         }
     }
@@ -1218,7 +1338,7 @@ impl MmapBytes {
     }
 
     pub fn materialize_to_file(&mut self, path: &Path) -> io::Result<()> {
-        if matches!(self, MmapBytes::Mapped { .. }) {
+        if matches!(self, MmapBytes::Mapped { .. } | MmapBytes::Shared { .. }) {
             return Ok(());
         }
         let MmapBytes::Heap { data } = self else {
@@ -1254,26 +1374,28 @@ impl MmapBytes {
         let len = self.len();
         let data = match self {
             MmapBytes::Mapped { mmap, .. } => mmap[..len].to_vec(),
-            _ => unreachable!(),
+            MmapBytes::Shared { .. } => self.to_vec(),
+            MmapBytes::Heap { .. } => unreachable!(),
         };
         *self = MmapBytes::Heap { data };
     }
 
     pub fn is_mapped(&self) -> bool {
-        matches!(self, MmapBytes::Mapped { .. })
+        matches!(self, MmapBytes::Mapped { .. } | MmapBytes::Shared { .. })
     }
 
     /// Heap-resident bytes (0 if file-backed).
     pub fn heap_bytes(&self) -> usize {
         match self {
             MmapBytes::Heap { data } => data.len(),
-            MmapBytes::Mapped { .. } => 0,
+            MmapBytes::Mapped { .. } | MmapBytes::Shared { .. } => 0,
         }
     }
 
     pub fn as_raw_bytes(&self) -> &[u8] {
         match self {
             MmapBytes::Heap { data } => data,
+            MmapBytes::Shared { section, len } => &section.bytes()[..*len],
             MmapBytes::Mapped { mmap, len, .. } => &mmap[..*len],
         }
     }
@@ -1303,6 +1425,7 @@ impl MmapBytes {
     pub fn save_to_file(&self, path: &Path) -> io::Result<()> {
         match self {
             MmapBytes::Heap { data } => std::fs::write(path, data),
+            MmapBytes::Shared { .. } => std::fs::write(path, self.as_raw_bytes()),
             MmapBytes::Mapped { mmap, len, .. } => std::fs::write(path, &mmap[..*len]),
         }
     }
@@ -1310,15 +1433,24 @@ impl MmapBytes {
     pub fn to_vec(&self) -> Vec<u8> {
         match self {
             MmapBytes::Heap { data } => data.clone(),
+            MmapBytes::Shared { .. } => self.as_raw_bytes().to_vec(),
             MmapBytes::Mapped { mmap, len, .. } => mmap[..*len].to_vec(),
         }
     }
 }
 
 impl Clone for MmapBytes {
+    /// A `Shared` buffer clones by `Arc` bump; every other variant produces a
+    /// Heap copy.
     fn clone(&self) -> Self {
-        MmapBytes::Heap {
-            data: self.to_vec(),
+        match self {
+            MmapBytes::Shared { section, len } => MmapBytes::Shared {
+                section: Arc::clone(section),
+                len: *len,
+            },
+            _ => MmapBytes::Heap {
+                data: self.to_vec(),
+            },
         }
     }
 }

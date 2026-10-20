@@ -17,6 +17,10 @@ mod null_overlay_tests;
 mod overlay;
 mod packed_write;
 mod property_layout;
+mod section_split;
+pub(crate) use section_split::{
+    ColumnSectionSource, ColumnSplit, PackedDecode, PartData, MAP_TAG_SUFFIX,
+};
 mod tail;
 pub(crate) use tail::{RegionParts, MAPPED_SPILL_FLOOR};
 #[cfg(test)]
@@ -1870,19 +1874,43 @@ impl ColumnStore {
         temp_dir: Option<&Path>,
         codec: crate::serde_codec::CodecVersion,
     ) -> io::Result<Self> {
-        Self::load_packed_inner(
-            schema, type_meta, interner, packed, row_count, temp_dir, codec,
+        Self::load_packed_sectioned(
+            schema,
+            type_meta,
+            interner,
+            packed,
+            row_count,
+            &PackedDecode {
+                temp_dir,
+                codec,
+                sections: None,
+            },
         )
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::InvalidData {
-                error
-            } else {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid packed column store: {error}"),
-                )
-            }
-        })
+    }
+
+    /// [`Self::load_packed_with_codec`] for a payload that may carry `@map`
+    /// entries, whose buffers `sections` supplies. Without a source such an
+    /// entry is refused as an unknown type tag.
+    pub(crate) fn load_packed_sectioned(
+        schema: Arc<TypeSchema>,
+        type_meta: &HashMap<String, String>,
+        interner: &StringInterner,
+        packed: &[u8],
+        row_count: u32,
+        decode: &PackedDecode<'_>,
+    ) -> io::Result<Self> {
+        Self::load_packed_inner(schema, type_meta, interner, packed, row_count, decode).map_err(
+            |error| {
+                if error.kind() == io::ErrorKind::InvalidData {
+                    error
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid packed column store: {error}"),
+                    )
+                }
+            },
+        )
     }
 
     fn load_packed_inner(
@@ -1891,9 +1919,13 @@ impl ColumnStore {
         interner: &StringInterner,
         packed: &[u8],
         row_count: u32,
-        temp_dir: Option<&Path>,
-        codec: crate::serde_codec::CodecVersion,
+        decode: &PackedDecode<'_>,
     ) -> io::Result<Self> {
+        let PackedDecode {
+            temp_dir,
+            codec,
+            sections,
+        } = *decode;
         use std::io::Read;
 
         let mut store = ColumnStore::new(Arc::clone(&schema), type_meta, interner);
@@ -1961,17 +1993,18 @@ impl ColumnStore {
             })?;
             cursor.set_position(data_end as u64);
 
+            let unpack = |type_tag: &str| {
+                Self::unpack_column_or_mapped(
+                    type_tag, data_blob, row_count, temp_dir, &col_name, codec, sections,
+                )
+            };
             if col_name == "__id__" {
-                let col = Self::unpack_column(
-                    &type_tag, data_blob, row_count, temp_dir, &col_name, codec,
-                )?;
+                let col = unpack(&type_tag)?;
                 store.id_column = Some(Arc::new(col));
                 continue;
             }
             if col_name == "__title__" {
-                let col = Self::unpack_column(
-                    &type_tag, data_blob, row_count, temp_dir, &col_name, codec,
-                )?;
+                let col = unpack(&type_tag)?;
                 store.title_column = Some(Arc::new(col));
                 continue;
             }
@@ -2007,8 +2040,7 @@ impl ColumnStore {
             // sidecar. Growth only ever appends, so every slot the caller's
             // schema already handed out still names the same column.
             let ik = InternedKey::from_str(&col_name);
-            let col =
-                Self::unpack_column(&type_tag, data_blob, row_count, temp_dir, &col_name, codec)?;
+            let col = unpack(&type_tag)?;
             match schema.slot(ik) {
                 Some(slot) => {
                     let slot = slot as usize;
@@ -2045,6 +2077,25 @@ impl ColumnStore {
         }
 
         Ok(store)
+    }
+
+    /// [`Self::unpack_column`], or the data-region form when the tag says the
+    /// buffers are `@map` sections.
+    fn unpack_column_or_mapped(
+        type_tag: &str,
+        data_blob: &[u8],
+        row_count: u32,
+        temp_dir: Option<&Path>,
+        col_name: &str,
+        codec: crate::serde_codec::CodecVersion,
+        sections: Option<&dyn ColumnSectionSource>,
+    ) -> io::Result<TypedColumn> {
+        match (type_tag.strip_suffix(MAP_TAG_SUFFIX), sections) {
+            (Some(base), Some(source)) => {
+                Self::unpack_mapped_column(base, source, row_count as usize, temp_dir, col_name)
+            }
+            _ => Self::unpack_column(type_tag, data_blob, row_count, temp_dir, col_name, codec),
+        }
     }
 
     fn unpack_column(

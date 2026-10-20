@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use kglite::api::io::{load_file, save_graph};
+use kglite::api::io::{load_file_with, save_graph, LoadOptions, MapPolicy};
 use kglite::api::mutation::{add_nodes, ColumnData, ColumnType, DataFrame};
 use kglite::api::storage::{new_dir_graph_in_mode, StorageMode};
 use kglite::api::DirGraph;
@@ -122,7 +122,13 @@ fn load_sweeps_dead_pid_spill_dirs_and_honors_kglite_tmpdir() {
     save_graph(&mut graph, path.to_str().unwrap()).expect("save");
     drop(graph);
 
-    let loaded = load_file(path.to_str().unwrap()).expect("load");
+    // A default load maps this file's large column from the file; decoding it
+    // is what spills.
+    let loaded = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new().with_columns(MapPolicy::Memory),
+    )
+    .expect("load");
 
     let spills = spill_dirs_of(root.path());
     assert!(

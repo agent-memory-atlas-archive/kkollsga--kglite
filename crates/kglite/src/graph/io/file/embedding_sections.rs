@@ -19,7 +19,7 @@ use super::invalid_data;
 use super::load_options::LoadOptions;
 use super::mappable::{
     must_materialize_before_save, resolve_mapping, MapContext, MapEntry, MappableSection,
-    MappableTable, MappedFile, MappedSection, SaveLayout, SectionDtype,
+    MappableTable, MappedFile, MappedSection, Placement, SaveLayout, SectionDtype,
 };
 use crate::graph::schema::{DirGraph, EmbeddingStore};
 use crate::graph::vector_buf::VectorBuf;
@@ -40,7 +40,7 @@ pub(crate) const WRITE_MIN_BYTES: usize = 4 * 1024 * 1024;
 /// Load-side `Auto` floor: a store of at least this many bytes is mapped.
 pub(crate) const AUTO_MAP_MIN_BYTES: u64 = 64 * 1024 * 1024;
 
-fn escape(part: &str) -> String {
+pub(super) fn escape(part: &str) -> String {
     part.replace('%', "%25").replace(':', "%3A")
 }
 
@@ -157,7 +157,8 @@ pub(super) fn collect_embedding_sections(
 /// Open the data-region table of a v9 container, deciding per embedding store
 /// whether its sections are mapped or copied (`LoadOptions::embeddings`). The
 /// decision is made once per store, from the vector section's length, so the
-/// norms always follow the vectors. Sections of other classes go to the heap.
+/// norms always follow the vectors. Column sections are placed per column by
+/// `LoadOptions::columns`; sections of other classes go to the heap.
 pub(super) fn open_table(
     entries: &[MapEntry],
     bytes: &[u8],
@@ -166,9 +167,13 @@ pub(super) fn open_table(
     options: &LoadOptions,
 ) -> io::Result<MappableTable> {
     let lengths: HashMap<&str, u64> = entries.iter().map(|e| (e.name.as_str(), e.len)).collect();
-    MappableTable::open(entries, bytes, base, file, options.verify, |entry| {
+    let columns = super::column_sections::ColumnPlacer::new(entries);
+    MappableTable::open_placed(entries, bytes, base, file, options.verify, |entry| {
+        if entry.kind == super::column_sections::KIND_COLUMN {
+            return columns.place(entry, file, options.columns);
+        }
         if entry.kind != KIND_VECTORS && entry.kind != KIND_NORMS {
-            return false;
+            return Placement::Heap;
         }
         let vectors_len = entry
             .name
@@ -176,7 +181,11 @@ pub(super) fn open_table(
             .and_then(|stem| lengths.get(format!("{stem}:data").as_str()).copied())
             .unwrap_or(entry.len);
         let ctx = MapContext::host(file.map(|f| &**f), vectors_len);
-        resolve_mapping(options.embeddings, AUTO_MAP_MIN_BYTES, &ctx)
+        if resolve_mapping(options.embeddings, AUTO_MAP_MIN_BYTES, &ctx) {
+            Placement::Mapped
+        } else {
+            Placement::Heap
+        }
     })
 }
 
@@ -306,7 +315,7 @@ pub(super) fn check_edge_claimed(
     check_all_claimed(table, claimed, EDGE_OWNER)
 }
 
-/// The files `graph`'s mapped embedding buffers read from.
+/// The files `graph`'s mapped embedding and column buffers read from.
 pub(crate) fn mapped_sources(graph: &DirGraph) -> Vec<std::path::PathBuf> {
     let mut paths: Vec<std::path::PathBuf> = graph
         .embeddings
@@ -314,12 +323,13 @@ pub(crate) fn mapped_sources(graph: &DirGraph) -> Vec<std::path::PathBuf> {
         .chain(graph.edge_embeddings.values().map(|s| s.numeric()))
         .filter_map(|store| store.data.mapped_source().map(std::path::Path::to_path_buf))
         .collect();
+    paths.extend(super::column_sections::mapped_sources(graph));
     paths.sort();
     paths.dedup();
     paths
 }
 
-/// Copy every mapped embedding buffer of `graph` to the heap.
+/// Copy every mapped embedding and column buffer of `graph` to the heap.
 pub(crate) fn promote_all(graph: &mut DirGraph) {
     for store in graph.embeddings.values_mut() {
         store.promote_to_heap();
@@ -327,6 +337,7 @@ pub(crate) fn promote_all(graph: &mut DirGraph) {
     for store in graph.edge_embeddings.values_mut() {
         store.numeric_mut().promote_to_heap();
     }
+    super::column_sections::promote_all(graph);
 }
 
 /// Before a save to `path`: where the platform cannot rename over a file this

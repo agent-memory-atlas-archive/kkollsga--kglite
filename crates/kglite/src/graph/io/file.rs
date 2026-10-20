@@ -2065,110 +2065,6 @@ pub(crate) fn metadata_checksum(header: &[u8], json: &[u8]) -> u32 {
     hasher.finalize()
 }
 
-fn load_portable_column_section(
-    codec: serde_codec::CodecVersion,
-    dir_graph: &mut DirGraph,
-    sections: &mut SectionCursor<'_>,
-    section_meta: &PortableColumnSection,
-    section_index: usize,
-    temp_dir: &Path,
-) -> io::Result<()> {
-    let compressed = sections.take(
-        section_meta.compressed_size,
-        &column_section_key(&section_meta.type_name),
-    )?;
-    let packed = zstd_decompress(compressed)?;
-    let expected_rows = dir_graph
-        .type_indices
-        .get(&section_meta.type_name)
-        .map_or(0, |nodes| nodes.len());
-    if section_meta.row_count as usize != expected_rows {
-        return Err(invalid_data(format!(
-            "column section {section_index} for '{}' declares {} rows; topology has {expected_rows}",
-            section_meta.type_name, section_meta.row_count
-        )));
-    }
-    // Column slot order comes from the PAYLOAD, not from `section_meta.columns`.
-    //
-    // The packed block is self-describing and ordered — it carries
-    // `(name, type_tag, data)` per column in the writing store's slot order —
-    // whereas `section_meta.columns` is a `HashMap` that records only the key
-    // set and type tags (see the writer's own note that the loader "uses these
-    // entries only for their key set"). Building the schema from that map made
-    // slot order a `RandomState` artefact that differed on every load, so
-    // re-saving a file produced different bytes each run.
-    //
-    // Reading the recorded order makes a re-save byte-identical to the
-    // original, not merely deterministic.
-    let mut ordered_names = ColumnStore::packed_column_names(&packed)?;
-    // A key the metadata declares but the payload does not carry has no
-    // recorded position; append such keys by name so they still get a slot and
-    // the result stays deterministic. Expected to be empty — writer and payload
-    // are built from the same schema — but silently dropping a declared column
-    // would be worse than an arbitrary-but-stable position.
-    let in_payload: std::collections::HashSet<&str> =
-        ordered_names.iter().map(String::as_str).collect();
-    let mut orphans: Vec<&String> = section_meta
-        .columns
-        .keys()
-        .filter(|name| !in_payload.contains(name.as_str()))
-        .collect();
-    orphans.sort();
-    let orphans: Vec<String> = orphans.into_iter().cloned().collect();
-    ordered_names.extend(orphans);
-
-    let col_keys = ordered_names
-        .iter()
-        .map(|name| {
-            dir_graph
-                .interner
-                .try_get_or_intern(name)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-    let column_schema = Arc::new(crate::graph::schema::TypeSchema::from_keys(col_keys));
-    let type_meta = dir_graph
-        .node_type_metadata
-        .get(&section_meta.type_name)
-        .cloned()
-        .unwrap_or_default();
-    // A *name* for this section's spill directory, not a directory: the column
-    // reader creates it when it has a blob to write there, and most sections
-    // never do. Creating it here made every load — including one of a 12 KB
-    // file that cannot spill a single column — mkdir under a shared `$TMPDIR`,
-    // and racing that mkdir against another load's cleanup is what returned
-    // bare `EEXIST`/`EINVAL`/`ENOENT` from `load_file`.
-    let type_temp_dir = temp_dir.join(format!("type_{section_index}"));
-    let store = ColumnStore::load_packed_with_codec(
-        column_schema,
-        &type_meta,
-        &dir_graph.interner,
-        &packed,
-        section_meta.row_count,
-        Some(&type_temp_dir),
-        codec,
-    )?;
-    dir_graph.install_column_store(&section_meta.type_name, Arc::new(store));
-    Ok(())
-}
-
-fn load_portable_columns(
-    codec: serde_codec::CodecVersion,
-    dir_graph: &mut DirGraph,
-    sections: &mut SectionCursor<'_>,
-    columns: &[PortableColumnSection],
-) -> io::Result<()> {
-    let temp_dir = portable_temp_dir();
-    if let Ok(mut dirs) = dir_graph.temp_dirs.lock() {
-        dirs.push(temp_dir.clone());
-    }
-    for (index, metadata) in columns.iter().enumerate() {
-        load_portable_column_section(codec, dir_graph, sections, metadata, index, &temp_dir)?;
-    }
-    attach_portable_column_stores(dir_graph);
-    Ok(())
-}
-
 /// Bytes in the largest unit that keeps them readable.
 ///
 /// Unit-picking rather than fixed MB: the ceiling is as legitimate on a 40 KB
@@ -2349,7 +2245,14 @@ fn load_portable_columnar(
         None => recorded_mode,
     };
     let (mut dir_graph, plan) = decode_portable_topology(codec, &mut sections, metadata)?;
-    load_portable_columns(codec, &mut dir_graph, &mut sections, &plan.columns)?;
+    column_sections::load_portable_columns(
+        codec,
+        &mut dir_graph,
+        &mut sections,
+        &plan.columns,
+        &mappable_table,
+        buf,
+    )?;
     // Keep declarations visible to complete-state validation while derived
     // lookup structures are deliberately absent. Normalization must precede
     // every index that would otherwise retain raw NodeRef equality.
@@ -2379,6 +2282,7 @@ fn load_portable_columnar(
     Ok(Arc::new(dir_graph))
 }
 
+mod column_sections;
 mod columns;
 pub(crate) use columns::remap_column_stores_to_generation;
 use columns::{attach_portable_column_stores, load_disk_column_stores};
@@ -2428,6 +2332,9 @@ mod edge_embedding_persistence_tests;
 #[path = "file/mappable_tests.rs"]
 mod mappable_tests;
 
+#[cfg(test)]
+#[path = "file/column_mapped_tests.rs"]
+mod column_mapped_tests;
 #[cfg(test)]
 #[path = "file/embedding_load_validation_tests.rs"]
 mod embedding_load_validation_tests;

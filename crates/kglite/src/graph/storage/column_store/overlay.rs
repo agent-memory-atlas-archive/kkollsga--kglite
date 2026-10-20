@@ -346,6 +346,7 @@ impl ColumnStore {
                 &column,
                 codec,
                 IntColumnEncoding::Raw,
+                None,
             )?;
         }
         let ids = TypedColumn::Mixed {
@@ -358,13 +359,21 @@ impl ColumnStore {
                 .map(|row| self.get_title(row).unwrap_or(Value::Null))
                 .collect(),
         };
-        Self::write_packed_column(&mut buf, "__id__", &ids, codec, IntColumnEncoding::Raw)?;
+        Self::write_packed_column(
+            &mut buf,
+            "__id__",
+            &ids,
+            codec,
+            IntColumnEncoding::Raw,
+            None,
+        )?;
         Self::write_packed_column(
             &mut buf,
             "__title__",
             &titles,
             codec,
             IntColumnEncoding::Raw,
+            None,
         )?;
         Self::write_overflow_columns(&mut buf, overflow.as_ref());
         Ok(buf)

@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use kglite::api::io::{load_file, save_graph};
+use kglite::api::io::{load_file, load_file_with, save_graph, LoadOptions, MapPolicy};
 use kglite::api::mutation::{add_nodes, ColumnData, ColumnType, DataFrame};
 use kglite::api::storage::{new_dir_graph_in_mode, StorageMode};
 use kglite::api::{DirGraph, GraphRead};
@@ -105,13 +105,32 @@ fn only_a_load_that_spills_touches_the_spill_root() {
     );
     drop(loaded);
 
-    // The other side of the same contract: a load that does spill still gets
-    // its directory, and still cleans it up on drop.
+    // A default save writes a column this large to the file's data region and
+    // a default load maps it from there: nothing to spill either.
     let big = root.path().join("big.kgl");
     save_to(doc_graph(4_000, 128), &big);
 
     let before = our_spill_dirs();
-    let loaded = load_file(big.to_str().unwrap()).expect("load big");
+    let mapped = load_file(big.to_str().unwrap()).expect("load big mapped");
+    assert_eq!(mapped.graph.node_count(), 4_000);
+    let created: Vec<PathBuf> = our_spill_dirs()
+        .into_iter()
+        .filter(|p| !before.contains(p))
+        .collect();
+    assert!(
+        created.is_empty(),
+        "a load that maps its large columns still wrote to the spill root: {created:?}"
+    );
+    drop(mapped);
+
+    // The other side of the same contract: a load that decodes the column
+    // still spills it, gets its directory, and cleans it up on drop.
+    let before = our_spill_dirs();
+    let loaded = load_file_with(
+        big.to_str().unwrap(),
+        &LoadOptions::new().with_columns(MapPolicy::Memory),
+    )
+    .expect("load big");
     assert_eq!(loaded.graph.node_count(), 4_000);
     let created: Vec<PathBuf> = our_spill_dirs()
         .into_iter()

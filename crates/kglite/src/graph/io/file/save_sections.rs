@@ -52,56 +52,6 @@ fn encode_topology(graph: &DirGraph, codec: serde_codec::CodecVersion) -> io::Re
     zstd_compress(&topology_raw)
 }
 
-/// Column sections, one per node type, sorted by type_name: the backend's
-/// map is a HashMap whose per-instance RandomState would otherwise vary the
-/// section order across processes, breaking the byte-level reproducibility
-/// the `test_phase4_parity` golden-hash test relies on. Sorting is free
-/// (type_name count is small) and doesn't affect the format: each section
-/// is self-describing and the decoder iterates column_sections_meta in order.
-fn encode_column_sections(
-    graph: &DirGraph,
-    codec: serde_codec::CodecVersion,
-) -> io::Result<(Vec<PortableColumnSection>, Vec<Vec<u8>>)> {
-    let mut meta_out = Vec::new();
-    let mut data_out = Vec::new();
-    let mut stores: Vec<(&str, &Arc<ColumnStore>)> = graph.column_stores_by_name();
-    stores.sort_by(|a, b| a.0.cmp(b.0));
-    for (type_name, store) in stores {
-        // A writer overlay's store can carry a heap tail; the sections are
-        // written from its columns, so they must hold every row.
-        let store = store.with_heap_tail_folded();
-        let packed = store.write_packed_with_codec(
-            &graph.interner,
-            codec,
-            // v6: integer columns pick their smaller encoding per column.
-            crate::graph::storage::packed_codec::IntColumnEncoding::Auto,
-        )?;
-        let compressed = zstd_compress(&packed)?;
-        drop(packed); // free uncompressed before next type
-
-        let mut cols = HashMap::new();
-        for (slot, ik) in store.schema().iter() {
-            let prop_name = graph.interner.resolve(ik);
-            if let Some(col) = store.column(slot as usize) {
-                // The *logical* column type. The per-column encoding actually
-                // used lives in the section itself (a v6 `Int64` column may be
-                // written delta-varint); the loader reads the section's tag and
-                // uses these entries only for their key set.
-                cols.insert(prop_name.to_string(), col.type_tag().to_string());
-            }
-        }
-
-        meta_out.push(PortableColumnSection {
-            type_name: type_name.to_string(),
-            compressed_size: compressed.len() as u64,
-            row_count: store.row_count(),
-            columns: cols,
-        });
-        data_out.push(compressed);
-    }
-    Ok((meta_out, data_out))
-}
-
 /// `graph.embeddings` and `graph.timeseries_store` are HashMaps whose
 /// per-process RandomState would randomize entry order; serializing through
 /// a BTreeMap view keeps the bytes reproducible (same wire shape).
@@ -245,7 +195,10 @@ pub(super) fn write_kgl_container<W: Write>(
     validate_column_keys_registered(graph)?;
     let codec = serde_codec::CodecVersion::PostcardV1;
     let topology = encode_topology(graph, codec)?;
-    let (column_meta, column_data) = encode_column_sections(graph, codec)?;
+    let columns = column_sections::encode_column_sections(graph, codec, layout)?;
+    let (column_meta, column_data) = (columns.meta, columns.compressed);
+    let mut mappable = mappable;
+    mappable.extend(columns.mappable);
     let optional = encode_optional_sections(graph, codec, layout)?;
     let core_version = optional.core_version;
     let (entries, _region_len) = plan_data_region(&mappable)?;
