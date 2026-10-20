@@ -2,6 +2,10 @@
 //! and the stamped backup path, split from `file.rs` (source-quality
 //! ceilings). One serializer body serves both: the stamp is a parameter.
 
+use super::mappable::{
+    collect_mappable_sections, plan_data_region, write_data_region, MapEntry, MappableSection,
+    SaveLayout,
+};
 use super::*;
 
 /// Compressed optional sections, each `None` when the graph has nothing for it.
@@ -156,6 +160,7 @@ fn build_metadata_json(
     column_meta: Vec<PortableColumnSection>,
     column_data: &[Vec<u8>],
     optional: &OptionalSections,
+    mappable: Vec<MapEntry>,
 ) -> io::Result<Vec<u8>> {
     let keys = [
         EMBEDDINGS_SECTION,
@@ -179,6 +184,7 @@ fn build_metadata_json(
         metadata.checkpoint_lsn = lsn;
     }
     metadata.section_digests = digests;
+    metadata.mappable = mappable;
     metadata.topology_compressed_size = topology.len() as u64;
     metadata.column_sections = column_meta;
     metadata.embeddings_compressed_size = compressed_len(&optional.embeddings);
@@ -200,12 +206,31 @@ pub fn write_kgl_to_stamped<W: Write>(
     writer: &mut W,
     checkpoint_lsn: Option<u64>,
 ) -> io::Result<()> {
+    write_kgl_container(
+        graph,
+        writer,
+        checkpoint_lsn,
+        collect_mappable_sections(graph, SaveLayout::Default),
+    )
+}
+
+/// The container writer: v9 when `mappable` is non-empty, otherwise the v8
+/// bytes this writer has always produced. The caller decides the layout by
+/// what it passes — [`collect_mappable_sections`] returns none under
+/// `SaveLayout::Compact` — so a `Compact` save cannot reach the v9 branch.
+pub(super) fn write_kgl_container<W: Write>(
+    graph: &DirGraph,
+    writer: &mut W,
+    checkpoint_lsn: Option<u64>,
+    mappable: Vec<MappableSection<'_>>,
+) -> io::Result<()> {
     validate_column_keys_registered(graph)?;
     let codec = serde_codec::CodecVersion::PostcardV1;
     let topology = encode_topology(graph, codec)?;
     let (column_meta, column_data) = encode_column_sections(graph, codec)?;
     let optional = encode_optional_sections(graph, codec)?;
     let core_version = optional.core_version;
+    let (entries, _region_len) = plan_data_region(&mappable)?;
     let metadata_json = build_metadata_json(
         graph,
         checkpoint_lsn,
@@ -213,14 +238,20 @@ pub fn write_kgl_to_stamped<W: Write>(
         column_meta,
         &column_data,
         &optional,
+        entries.clone(),
     )?;
 
     // Header: magic (4B) + codec (1B) + core_data_version (4B) +
     // metadata_length (4B). The codec byte prevents implicit byte sniffing.
     // `metadata_length` counts the JSON plus its 4-byte CRC32 trailer, so
     // `13 + metadata_length` still ends the metadata block.
+    let magic = if mappable.is_empty() {
+        V8_MAGIC
+    } else {
+        V9_MAGIC
+    };
     let mut header = Vec::with_capacity(13);
-    header.extend_from_slice(&V8_MAGIC);
+    header.extend_from_slice(&magic);
     header.push(codec.tag());
     header.extend_from_slice(&core_version.to_le_bytes());
     header.extend_from_slice(&((metadata_json.len() + 4) as u32).to_le_bytes());
@@ -231,8 +262,14 @@ pub fn write_kgl_to_stamped<W: Write>(
     for section_data in &column_data {
         writer.write_all(section_data)?;
     }
+    let mut written = (header.len() + metadata_json.len() + 4 + topology.len()) as u64;
+    written += column_data.iter().map(|d| d.len() as u64).sum::<u64>();
     for section in optional.in_file_order() {
         write_optional_section(writer, section)?;
+        written += section.map_or(0, |s| s.len() as u64);
+    }
+    if !mappable.is_empty() {
+        write_data_region(writer, written, &mappable, &entries)?;
     }
     // Flush the writer's own buffer; the atomic-save wrapper additionally
     // fsyncs the file. A harmless no-op for an in-memory `Vec<u8>` writer.

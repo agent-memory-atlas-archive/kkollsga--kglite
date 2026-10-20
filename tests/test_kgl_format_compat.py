@@ -225,17 +225,17 @@ def test_v5_durable_directory_recovers(tmp_path):
 def test_a_newer_container_is_refused_by_name_and_number(tmp_path):
     """What an older binary sees. Every reader since 0.15.14 rejects a container
     above the one it knows with this sentence (0.15.14 above 5, 0.19.0 above 6,
-    0.19.7 above 7: verified against the published 0.19.7 wheel loading a v8 file);
+    0.19.7 above 7, 0.20.x above 8: verified against the published 0.19.7 wheel loading a v8 file);
     it is reproduced here because we cannot change what those binaries do, only
     make sure the sentence they print is the one users are told to expect.
-    Asserted through this build's own reader on a v9 buffer, which takes the
+    Asserted through this build's own reader on a v10 buffer (v9 is now readable), which takes the
     identical branch.
     """
     forged = tmp_path / "future.kgl"
-    forged.write_bytes(b"RGF\x09\x02" + b"\x00" * 40)
+    forged.write_bytes(b"RGF\x0a\x02" + b"\x00" * 40)
     with pytest.raises(kglite.FileFormatError) as excinfo:
         kglite.load(str(forged))
     message = str(excinfo.value)
-    assert "container version 9" in message
-    assert "only supports up to version 8" in message
+    assert "container version 10" in message
+    assert "only supports up to version 9" in message
     assert "Please upgrade kglite" in message

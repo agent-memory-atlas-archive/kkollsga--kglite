@@ -272,17 +272,17 @@ mod atomic_save_tests {
 
     #[test]
     fn newer_container_and_invalid_codec_are_rejected_clearly() {
-        let newer = [b'R', b'G', b'F', 9];
+        let newer = [b'R', b'G', b'F', 10];
         let error = load_kgl_bytes(&newer).err().unwrap().to_string();
         assert!(
-            error.contains("version 9")
-                && error.contains("up to version 8")
+            error.contains("version 10")
+                && error.contains("up to version 9")
                 && error.contains("upgrade kglite"),
             "{error}"
         );
 
         // Both readable containers validate the codec byte the same way.
-        for version in [5u8, 6u8, 7u8, 8u8] {
+        for version in [5u8, 6u8, 7u8, 8u8, 9u8] {
             let mut invalid = vec![b'R', b'G', b'F', version, 99];
             invalid.extend_from_slice(&CURRENT_CORE_DATA_VERSION.to_le_bytes());
             invalid.extend_from_slice(&0u32.to_le_bytes());

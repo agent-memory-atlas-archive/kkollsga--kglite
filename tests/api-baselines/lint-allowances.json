@@ -787,6 +787,10 @@
       "classification": "dead-code"
     },
     {
+      "identity": "crates/kglite/src/graph/io/file/mappable.rs::module::dead_code",
+      "classification": "dead-code"
+    },
+    {
       "identity": "crates/kglite/src/graph/storage/column_store/mod.rs::fn:column_values_mixed:pub fn column_values_mixed(&self, slot: usize) -> Option<&Vec<Value>>::dead_code",
       "classification": "dead-code"
     },

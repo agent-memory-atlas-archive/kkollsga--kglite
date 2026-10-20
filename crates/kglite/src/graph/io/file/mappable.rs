@@ -1,0 +1,604 @@
+//! Mappable sections of a v9 `.kgl` container: the section table, the aligned
+//! writer plan, and the reader handles.
+//!
+//! A v9 container is a v8 container followed by a **data region** of raw
+//! (uncompressed) sections, each starting on a 64-byte boundary so a consumer
+//! can reinterpret a mapped section as a typed slice without copying. The
+//! table of those sections is `FileMetadata::mappable`; offsets in it are
+//! relative to the data-region base, which is `align_up(end of the compressed
+//! sections, 64)`. Relative offsets avoid the circularity of absolute ones
+//! (the metadata length would depend on offsets that depend on it).
+//!
+//! This module owns the container mechanics only. What a section *contains*
+//! (embedding data, column blobs) and when a writer chooses to emit one belong
+//! to the consumers; they register payloads through [`MappableSection`] and
+//! read them back through [`MappedSection`].
+//!
+//! Integrity: the CRC32 recorded per section is checked on demand
+//! ([`MappedSection::verify`]); a section carrying [`FLAG_UTF8_VALIDATED`]
+//! (string payloads, which readers use without re-validating) is also checked
+//! at open, and [`Verify::Eager`] checks every section at open.
+// reason: embedding and column consumers attach to this container machinery as they adopt it; until each does, only the loader's table validation and the tests reach most of it.
+#![allow(dead_code)]
+
+use memmap2::Mmap;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use super::load_options::{MapPolicy, Verify};
+use super::{invalid_data, section_digest};
+
+/// Alignment, in bytes, of every mappable section within the file.
+pub(crate) const SECTION_ALIGNMENT: u64 = 64;
+
+/// Entry flag: the payload is little-endian. Always set by the writer; a
+/// big-endian host must decode to the heap instead of reinterpreting.
+pub(crate) const FLAG_LITTLE_ENDIAN: u32 = 1;
+/// Entry flag: the payload is UTF-8 that the writer validated. Such sections
+/// are CRC-checked at open, because readers use the bytes without re-checking.
+pub(crate) const FLAG_UTF8_VALIDATED: u32 = 1 << 1;
+/// Entry flag reserved for sorted-unique slot lists; accepted, not interpreted.
+pub(crate) const FLAG_SORTED_UNIQUE_SLOTS: u32 = 1 << 2;
+const KNOWN_FLAGS: u32 = FLAG_LITTLE_ENDIAN | FLAG_UTF8_VALIDATED | FLAG_SORTED_UNIQUE_SLOTS;
+
+/// Environment kill switch: `0`/`false`/`no`/`off` forces every mappable
+/// section onto the heap.
+pub(crate) const MMAP_ENV_VAR: &str = "KGLITE_MMAP";
+
+/// Element type of a section; the on-disk tag is the discriminant. An unknown
+/// tag refuses the load, since v9 is not silently forward-extensible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub(crate) enum SectionDtype {
+    Raw = 0,
+    F32 = 1,
+    F16 = 2,
+    I8 = 3,
+    /// Bit-packed bytes; `elem_count` counts bytes.
+    BitPacked = 4,
+    U32 = 5,
+    U64 = 6,
+    I32 = 7,
+    I64 = 8,
+    F64 = 9,
+    U8 = 10,
+}
+
+impl SectionDtype {
+    pub(crate) fn tag(self) -> u8 {
+        self as u8
+    }
+
+    pub(crate) fn from_tag(tag: u8) -> Option<Self> {
+        Some(match tag {
+            0 => Self::Raw,
+            1 => Self::F32,
+            2 => Self::F16,
+            3 => Self::I8,
+            4 => Self::BitPacked,
+            5 => Self::U32,
+            6 => Self::U64,
+            7 => Self::I32,
+            8 => Self::I64,
+            9 => Self::F64,
+            10 => Self::U8,
+            _ => return None,
+        })
+    }
+
+    /// Bytes per element.
+    pub(crate) fn width(self) -> u64 {
+        match self {
+            Self::Raw | Self::I8 | Self::BitPacked | Self::U8 => 1,
+            Self::F16 => 2,
+            Self::F32 | Self::U32 | Self::I32 => 4,
+            Self::U64 | Self::I64 | Self::F64 => 8,
+        }
+    }
+}
+
+/// Facts about the load source that decide whether a section is mapped.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MapContext {
+    pub(crate) file_backed: bool,
+    pub(crate) regular_file: bool,
+    pub(crate) windows: bool,
+    pub(crate) big_endian: bool,
+    pub(crate) section_len: u64,
+    pub(crate) env_disabled: bool,
+}
+
+impl MapContext {
+    /// The context of the running host for a section of `section_len` bytes
+    /// read from `file` (`None` for a byte buffer).
+    pub(crate) fn host(file: Option<&MappedFile>, section_len: u64) -> Self {
+        MapContext {
+            file_backed: file.is_some(),
+            regular_file: file.is_some_and(MappedFile::is_regular),
+            windows: cfg!(windows),
+            big_endian: cfg!(target_endian = "big"),
+            section_len,
+            env_disabled: mmap_disabled_by_env(),
+        }
+    }
+}
+
+/// Resolve a [`MapPolicy`] to "serve this section from the mapping".
+///
+/// `auto_min_len` is the consumer's `Auto` size floor. A byte buffer, a
+/// non-regular file, a big-endian host and the environment kill switch force
+/// the heap under every policy; `Auto` additionally never maps on Windows,
+/// where an open mapping blocks the rename a save performs over its source.
+pub(crate) fn resolve_mapping(policy: MapPolicy, auto_min_len: u64, ctx: &MapContext) -> bool {
+    if !ctx.file_backed || !ctx.regular_file || ctx.big_endian || ctx.env_disabled {
+        return false;
+    }
+    match policy {
+        MapPolicy::Memory => false,
+        MapPolicy::Mapped => true,
+        MapPolicy::Auto => !ctx.windows && ctx.section_len >= auto_min_len,
+    }
+}
+
+fn mmap_disabled_by_env() -> bool {
+    mmap_off(std::env::var(MMAP_ENV_VAR).ok().as_deref())
+}
+
+pub(crate) fn mmap_off(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+/// Whether a save to `dest` must first release this process's mappings of it.
+///
+/// Windows refuses to rename over a file that is mapped; Unix replaces the
+/// directory entry and the old inode lives on for whoever holds the mapping.
+/// Pure so the truth table runs on every OS.
+pub(crate) fn must_materialize_before_save(windows: bool, dest: &Path, held: &[&Path]) -> bool {
+    windows && held.contains(&dest)
+}
+
+/// A file mapped read-only for the life of its last holder.
+///
+/// Held through `Arc` by every section handle that points into it, so the
+/// mapping outlives the graph that loaded it. On Unix a `save()` that renames
+/// a new file over the path leaves this inode readable.
+#[derive(Debug)]
+pub(crate) struct MappedFile {
+    mmap: Mmap,
+    file: File,
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl MappedFile {
+    pub(crate) fn open(path: &Path) -> io::Result<Arc<Self>> {
+        let file = File::open(path).map_err(|e| super::io_context("opening", path, e))?;
+        Self::map(file, path)
+    }
+
+    /// Map an already-open `file`.
+    pub(crate) fn map(file: File, path: &Path) -> io::Result<Arc<Self>> {
+        let meta = file
+            .metadata()
+            .map_err(|e| super::io_context("reading the metadata of", path, e))?;
+        let len = meta.len();
+        // SAFETY: writers replace a `.kgl` atomically instead of truncating
+        // it, so this inode is stable for the mapping's life. In-place
+        // truncation is outside that contract; `check_intact` catches it at
+        // the explicit-check points.
+        let mmap = unsafe { Mmap::map(&file) }
+            .map_err(|e| super::io_context(&format!("memory-mapping {len} bytes of"), path, e))?;
+        Ok(Arc::new(MappedFile {
+            mmap,
+            file,
+            path: path.to_path_buf(),
+            len,
+            modified: meta.modified().ok(),
+        }))
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.mmap
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn is_regular(&self) -> bool {
+        self.file.metadata().is_ok_and(|m| m.is_file())
+    }
+
+    /// Fail instead of touching pages if the file is shorter than when it was
+    /// mapped. A truncated mapping raises SIGBUS on access, so every explicit
+    /// check point (verify, promote, save copy-out) calls this first.
+    pub(crate) fn check_intact(&self) -> io::Result<()> {
+        let now = self
+            .file
+            .metadata()
+            .map_err(|e| super::io_context("re-reading the metadata of", &self.path, e))?
+            .len();
+        if now != self.len {
+            return Err(invalid_data(format!(
+                "source file was truncated or replaced: '{}' was {} bytes when it was memory-mapped and is {} now",
+                self.path.display(),
+                self.len,
+                now
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether the file's modification time differs from the one recorded at
+    /// map time. A same-length rewrite is only visible this way.
+    pub(crate) fn modified_since_open(&self) -> io::Result<bool> {
+        let now = self.file.metadata()?.modified().ok();
+        Ok(now != self.modified)
+    }
+}
+
+/// The bytes of a container being loaded, and the mapping they live in when
+/// there is one. A byte buffer, a small file read into a `Vec` and any other
+/// non-mapped source carry `file: None`, which sends every mappable section
+/// to the heap.
+pub(crate) struct LoadSource<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) file: Option<&'a Arc<MappedFile>>,
+}
+
+/// One row of `FileMetadata::mappable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MapEntry {
+    /// Digest key, e.g. `emb:<Type>:<prop>:data`.
+    pub(crate) name: String,
+    /// The compressed-section record that references this section.
+    pub(crate) owner: String,
+    /// Consumer-defined section class.
+    pub(crate) kind: u8,
+    pub(crate) dtype: u8,
+    pub(crate) elem_count: u64,
+    /// Relative to the data-region base.
+    pub(crate) offset: u64,
+    pub(crate) len: u64,
+    pub(crate) flags: u32,
+    pub(crate) crc32: u32,
+}
+
+/// A payload a writer registers for the data region.
+#[derive(Debug, Clone)]
+pub(crate) struct MappableSection<'a> {
+    pub(crate) name: String,
+    pub(crate) owner: String,
+    pub(crate) kind: u8,
+    pub(crate) dtype: SectionDtype,
+    pub(crate) elem_count: u64,
+    /// [`FLAG_UTF8_VALIDATED`] etc.; [`FLAG_LITTLE_ENDIAN`] is always added.
+    pub(crate) flags: u32,
+    pub(crate) data: Cow<'a, [u8]>,
+}
+
+/// Which container a save produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SaveLayout {
+    /// v9 when at least one mappable section is supplied, otherwise v8.
+    #[default]
+    Default,
+    /// Never emit v9: every section compressed, readable by older readers.
+    Compact,
+}
+
+/// The mappable sections a save of `graph` emits under `layout`.
+///
+/// No store registers sections yet, so this is empty and every save writes the
+/// v8 bytes. `Compact` always yields none.
+pub(crate) fn collect_mappable_sections(
+    _graph: &crate::graph::schema::DirGraph,
+    layout: SaveLayout,
+) -> Vec<MappableSection<'static>> {
+    match layout {
+        SaveLayout::Compact | SaveLayout::Default => Vec::new(),
+    }
+}
+
+pub(crate) fn align_up(value: u64, align: u64) -> u64 {
+    value.div_ceil(align) * align
+}
+
+/// The data-region plan for `sections`: table rows (offsets relative to the
+/// region base) and the region's total length, padding included.
+pub(crate) fn plan_data_region(
+    sections: &[MappableSection<'_>],
+) -> io::Result<(Vec<MapEntry>, u64)> {
+    let mut entries: Vec<MapEntry> = Vec::with_capacity(sections.len());
+    let mut cursor = 0u64;
+    for section in sections {
+        let len = section.data.len() as u64;
+        if section.elem_count.checked_mul(section.dtype.width()) != Some(len) {
+            return Err(invalid_data(format!(
+                "mappable section '{}' holds {len} bytes, not {} elements of {} bytes",
+                section.name,
+                section.elem_count,
+                section.dtype.width()
+            )));
+        }
+        if entries.iter().any(|e| e.name == section.name) {
+            return Err(invalid_data(format!(
+                "mappable section '{}' is registered twice",
+                section.name
+            )));
+        }
+        let offset = align_up(cursor, SECTION_ALIGNMENT);
+        cursor = offset + len;
+        entries.push(MapEntry {
+            name: section.name.clone(),
+            owner: section.owner.clone(),
+            kind: section.kind,
+            dtype: section.dtype.tag(),
+            elem_count: section.elem_count,
+            offset,
+            len,
+            flags: section.flags | FLAG_LITTLE_ENDIAN,
+            crc32: section_digest(&section.data),
+        });
+    }
+    Ok((entries, cursor))
+}
+
+/// Write the data region: zero padding up to `base`, then each section at its
+/// planned offset. `written` is the number of bytes already in the container.
+pub(crate) fn write_data_region<W: Write>(
+    writer: &mut W,
+    written: u64,
+    sections: &[MappableSection<'_>],
+    entries: &[MapEntry],
+) -> io::Result<()> {
+    let mut position = written;
+    let base = align_up(written, SECTION_ALIGNMENT);
+    write_zeros(writer, base - position)?;
+    position = base;
+    for (section, entry) in sections.iter().zip(entries) {
+        let target = base + entry.offset;
+        write_zeros(writer, target - position)?;
+        writer.write_all(&section.data)?;
+        position = target + entry.len;
+    }
+    Ok(())
+}
+
+fn write_zeros<W: Write>(writer: &mut W, mut count: u64) -> io::Result<()> {
+    const ZEROS: [u8; SECTION_ALIGNMENT as usize] = [0; SECTION_ALIGNMENT as usize];
+    while count > 0 {
+        let chunk = count.min(ZEROS.len() as u64) as usize;
+        writer.write_all(&ZEROS[..chunk])?;
+        count -= chunk as u64;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum SectionBytes {
+    Mapped {
+        file: Arc<MappedFile>,
+        offset: usize,
+        len: usize,
+    },
+    Heap(Arc<Vec<u8>>),
+}
+
+/// A validated section of an opened container.
+///
+/// A mapped handle keeps its [`MappedFile`] alive; a heap handle owns a copy.
+/// Both yield identical bytes. The bytes of a mapped section start on a
+/// 64-byte boundary; a heap copy has only `Vec<u8>` alignment, so a typed
+/// consumer must not assume more than that from a heap handle.
+#[derive(Debug, Clone)]
+pub(crate) struct MappedSection {
+    pub(crate) name: String,
+    pub(crate) owner: String,
+    pub(crate) kind: u8,
+    pub(crate) dtype: SectionDtype,
+    pub(crate) elem_count: u64,
+    pub(crate) flags: u32,
+    pub(crate) crc32: u32,
+    bytes: SectionBytes,
+}
+
+impl MappedSection {
+    pub(crate) fn is_mapped(&self) -> bool {
+        matches!(self.bytes, SectionBytes::Mapped { .. })
+    }
+
+    /// The payload, without a truncation check. Safe to call only where the
+    /// caller has already passed [`Self::checked_bytes`] or [`Self::verify`],
+    /// or holds a heap handle; otherwise a file truncated behind the mapping
+    /// faults on access.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        match &self.bytes {
+            SectionBytes::Mapped { file, offset, len } => &file.bytes()[*offset..*offset + *len],
+            SectionBytes::Heap(vec) => vec,
+        }
+    }
+
+    /// The payload after confirming the backing file is still intact.
+    pub(crate) fn checked_bytes(&self) -> io::Result<&[u8]> {
+        if let SectionBytes::Mapped { file, .. } = &self.bytes {
+            file.check_intact()?;
+        }
+        Ok(self.as_bytes())
+    }
+
+    /// Check the payload against the CRC32 recorded at write time.
+    pub(crate) fn verify(&self) -> io::Result<()> {
+        let bytes = self.checked_bytes()?;
+        let actual = section_digest(bytes);
+        if actual != self.crc32 {
+            return Err(invalid_data(format!(
+                "the mappable section '{}' of this .kgl file is corrupt — it does not match the \
+                 CRC32 digest recorded when the file was written (recorded {:#010x}, computed \
+                 {actual:#010x}). Restore the file from a backup or rebuild the graph from its \
+                 source.",
+                self.name, self.crc32
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// The opened data region of a v9 container.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MappableTable {
+    sections: Vec<MappedSection>,
+}
+
+impl MappableTable {
+    pub(crate) fn get(&self, name: &str) -> Option<&MappedSection> {
+        self.sections.iter().find(|s| s.name == name)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &MappedSection> {
+        self.sections.iter()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.sections.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.sections.is_empty()
+    }
+
+    /// Verify every section's CRC32 now.
+    pub(crate) fn verify_all(&self) -> io::Result<()> {
+        self.sections.iter().try_for_each(MappedSection::verify)
+    }
+
+    /// Check `entries` against the container without touching a section.
+    ///
+    /// `file_len` is the whole container's length; `base` is the absolute
+    /// offset of the data region. Every check is O(table): tag and flag
+    /// sanity, `len == elem_count * width`, alignment, ascending
+    /// non-overlapping offsets, unique names, and that the last byte lies
+    /// inside the file, so a truncated file fails here and not at first
+    /// access. Returns each entry's dtype and absolute byte range.
+    pub(crate) fn validate(
+        entries: &[MapEntry],
+        file_len: u64,
+        base: u64,
+    ) -> io::Result<Vec<(SectionDtype, usize, usize)>> {
+        let mut ranges = Vec::with_capacity(entries.len());
+        let mut previous_end = 0u64;
+        for (index, entry) in entries.iter().enumerate() {
+            let dtype = SectionDtype::from_tag(entry.dtype).ok_or_else(|| {
+                invalid_data(format!(
+                    "mappable section '{}' has unknown dtype tag {}; this build cannot read it. Please upgrade kglite.",
+                    entry.name, entry.dtype
+                ))
+            })?;
+            if entry.flags & !KNOWN_FLAGS != 0 || entry.flags & FLAG_LITTLE_ENDIAN == 0 {
+                return Err(invalid_data(format!(
+                    "mappable section '{}' has unsupported flags {:#x}",
+                    entry.name, entry.flags
+                )));
+            }
+            if entry.elem_count.checked_mul(dtype.width()) != Some(entry.len) {
+                return Err(invalid_data(format!(
+                    "mappable section '{}' declares {} bytes for {} elements of {} bytes",
+                    entry.name,
+                    entry.len,
+                    entry.elem_count,
+                    dtype.width()
+                )));
+            }
+            let absolute = base.checked_add(entry.offset);
+            if !base.is_multiple_of(SECTION_ALIGNMENT)
+                || absolute.is_none_or(|a| !a.is_multiple_of(SECTION_ALIGNMENT))
+            {
+                return Err(invalid_data(format!(
+                    "mappable section '{}' is not {SECTION_ALIGNMENT}-byte aligned",
+                    entry.name
+                )));
+            }
+            if entry.offset < previous_end {
+                return Err(invalid_data(format!(
+                    "mappable section '{}' overlaps or precedes the section before it",
+                    entry.name
+                )));
+            }
+            if entries[..index].iter().any(|e| e.name == entry.name) {
+                return Err(invalid_data(format!(
+                    "mappable section '{}' appears twice in the section table",
+                    entry.name
+                )));
+            }
+            let start = absolute.unwrap_or(u64::MAX);
+            let end = start
+                .checked_add(entry.len)
+                .filter(|&end| end <= file_len)
+                .ok_or_else(|| {
+                    invalid_data(format!(
+                        "file is truncated — mappable section '{}' needs {} bytes at offset {start}",
+                        entry.name, entry.len
+                    ))
+                })?;
+            previous_end = entry.offset + entry.len;
+            ranges.push((dtype, start as usize, end as usize));
+        }
+        Ok(ranges)
+    }
+
+    /// Validate `entries` and build handles into `bytes`, the whole container.
+    ///
+    /// `map(entry)` decides per entry whether the handle points into `file`'s
+    /// mapping (when there is one) or owns a heap copy of the bytes.
+    pub(crate) fn open(
+        entries: &[MapEntry],
+        bytes: &[u8],
+        base: u64,
+        file: Option<&Arc<MappedFile>>,
+        verify: Verify,
+        map: impl Fn(&MapEntry) -> bool,
+    ) -> io::Result<Self> {
+        let ranges = Self::validate(entries, bytes.len() as u64, base)?;
+        let mut sections = Vec::with_capacity(entries.len());
+        for (entry, (dtype, start, end)) in entries.iter().zip(ranges) {
+            let section_bytes = match file {
+                Some(file) if map(entry) => SectionBytes::Mapped {
+                    file: Arc::clone(file),
+                    offset: start,
+                    len: end - start,
+                },
+                _ => SectionBytes::Heap(Arc::new(bytes[start..end].to_vec())),
+            };
+            let section = MappedSection {
+                name: entry.name.clone(),
+                owner: entry.owner.clone(),
+                kind: entry.kind,
+                dtype,
+                elem_count: entry.elem_count,
+                flags: entry.flags,
+                crc32: entry.crc32,
+                bytes: section_bytes,
+            };
+            if verify == Verify::Eager || entry.flags & FLAG_UTF8_VALIDATED != 0 {
+                section.verify()?;
+            }
+            sections.push(section);
+        }
+        Ok(MappableTable { sections })
+    }
+}

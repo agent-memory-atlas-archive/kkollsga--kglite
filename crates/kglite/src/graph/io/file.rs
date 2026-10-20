@@ -44,6 +44,18 @@
 // v8 file by version number (the shipped 0.19.x wording says "older version",
 // wrong in direction — see CHANGELOG).
 //
+// v9 vs v8: v8's bytes, then a data region of raw sections (embedding and
+// column payloads) that a reader can map instead of decompress. Written only
+// when a save supplies at least one such section, so a graph without them
+// produces v8 bytes exactly. Layout:
+//   [..]       v8 header, metadata (+ CRC32) and compressed sections, as above
+//   [pad]      zeros up to the next 64-byte boundary — the data-region base
+//   [region]   mappable sections, each at a 64-byte-aligned offset
+// `FileMetadata::mappable` tables them (offset relative to the base, length,
+// dtype, flags, CRC32); see `io::file::mappable`. A v8 reader refuses the file
+// by container version ("Please upgrade kglite"); `SaveLayout::Compact` is the
+// writer's way to keep producing v8.
+//
 // Pre-v5 magic values are retained only for explicit rejection and migration
 // guidance; their payloads are never decoded by the current reader.
 
@@ -65,7 +77,6 @@ use crate::graph::storage::{GraphRead, GraphWrite};
 // Loaders return `Arc<DirGraph>`; each binding wraps that in its own type
 // (pyapi → `KnowledgeGraph`, mcp-server → `ActiveGraph`), which keeps io
 // decoupled from binding state.
-use memmap2::Mmap;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -77,8 +88,8 @@ use std::sync::Arc;
 
 use crate::graph::io::columns_meta;
 use crate::graph::io::magic::{
-    newer_portable_format_error, unrecognized_magic_error, V3_HARD_BREAK_MSG, V3_MAGIC, V4_MAGIC,
-    V5_MAGIC, V6_MAGIC, V7_MAGIC, V8_MAGIC,
+    newer_portable_format_error, unrecognized_magic_error, MAX_READABLE_CONTAINER_VERSION,
+    V3_HARD_BREAK_MSG, V3_MAGIC, V4_MAGIC, V5_MAGIC, V6_MAGIC, V7_MAGIC, V8_MAGIC, V9_MAGIC,
 };
 use crate::serde_codec;
 
@@ -416,6 +427,10 @@ pub(crate) struct FileMetadata {
     timeseries_data_version: u32,
     #[serde(default)]
     topology_compressed_size: u64,
+    /// v9 data-region section table (see `mappable`); empty — and therefore
+    /// absent from the JSON — in every container that carries no such section.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mappable: Vec<mappable::MapEntry>,
     /// Column-section metadata (one per node type).
     #[serde(default)]
     column_sections: Vec<PortableColumnSection>,
@@ -559,6 +574,7 @@ impl FileMetadata {
             temporal_declarations: graph.temporal.to_persisted(),
             timeseries_data_version: 2,
             topology_compressed_size: 0,
+            mappable: Vec::new(),
             column_sections: Vec::new(),
             embeddings_compressed_size: 0,
             edge_embeddings_compressed_size: 0,
@@ -763,6 +779,7 @@ pub(crate) use metadata_sidecars::{
 use storage_mode::recorded_storage_mode_tag;
 
 mod fast_load_sidecars;
+mod mappable;
 mod save_sections;
 use fast_load_sidecars::{decode_secondary_label_index, encode_secondary_label_index};
 pub(crate) use fast_load_sidecars::{
@@ -774,6 +791,7 @@ pub(crate) use fast_load_sidecars::{
 pub(crate) use fast_load_sidecars::{
     ID_INDICES_MAGIC, ID_INDICES_VERSION, TYPE_INDICES_MAGIC, TYPE_INDICES_VERSION,
 };
+use mappable::LoadSource;
 
 // ─── Save ────────────────────────────────────────────────────────────────────
 
@@ -1218,7 +1236,9 @@ pub(crate) fn io_context(operation: &str, path: impl AsRef<Path>, error: io::Err
 /// "too small to be a `.kgl`" is phrased in terms of what the caller was
 /// handed (a file, a buffer).
 fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static str> {
-    if prefix[..4] == V8_MAGIC {
+    if prefix[..4] == V9_MAGIC {
+        Ok("v9")
+    } else if prefix[..4] == V8_MAGIC {
         Ok("v8")
     } else if prefix[..4] == V7_MAGIC {
         Ok("v7")
@@ -1230,7 +1250,7 @@ fn portable_container_format(prefix: &[u8], origin: &str) -> io::Result<&'static
         Err(pre_014_bincode_error(".kgl container v4"))
     } else if prefix[..4] == V3_MAGIC {
         Err(invalid_data(V3_HARD_BREAK_MSG))
-    } else if prefix[..3] == V8_MAGIC[..3] && prefix[3] > V8_MAGIC[3] {
+    } else if prefix[..3] == V8_MAGIC[..3] && prefix[3] > MAX_READABLE_CONTAINER_VERSION {
         Err(newer_portable_format_error(prefix[3]))
     } else {
         Err(unrecognized_magic_error(&prefix[..4], origin))
@@ -1386,19 +1406,20 @@ fn load_file_inner(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGraph
         .map_err(|e| io_context("reading the metadata of", p, e))?
         .len();
 
-    // For large files, mmap avoids the full copy into a Vec<u8>
+    // For large files, mmap avoids the full copy into a Vec<u8>. The mapping
+    // is an `Arc<MappedFile>` so a section handle can outlive this call.
     if file_len >= FILE_MMAP_THRESHOLD {
-        // SAFETY: standalone `.kgl` files follow a caller-enforced
-        // single-writer contract. Writers replace the destination atomically
-        // rather than truncating it in place, so this opened inode remains
-        // stable for the mapping's lifetime.
-        let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|e| io_context(&format!("memory-mapping {file_len} bytes of"), p, e))?;
-        if mmap.len() < 4 {
+        let mapped = mappable::MappedFile::map(file, p)?;
+        let bytes = mapped.bytes();
+        if bytes.len() < 4 {
             return Err(invalid_data("File is too small to be a valid kglite file."));
         }
-        let format_name = portable_container_format(&mmap, &format!("'{path}'"))?;
-        return load_portable_container(&mmap, format_name, options);
+        let format_name = portable_container_format(bytes, &format!("'{path}'"))?;
+        let source = LoadSource {
+            bytes,
+            file: Some(&mapped),
+        };
+        return load_portable_container(&source, format_name, options);
     }
 
     let buf = std::fs::read(path).map_err(|e| io_context("reading", p, e))?;
@@ -1406,7 +1427,11 @@ fn load_file_inner(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGraph
         return Err(invalid_data("File is too small to be a valid kglite file."));
     }
     let format_name = portable_container_format(&buf, &format!("'{path}'"))?;
-    load_portable_container(&buf, format_name, options)
+    let source = LoadSource {
+        bytes: &buf,
+        file: None,
+    };
+    load_portable_container(&source, format_name, options)
 }
 
 /// Load an in-memory graph from a `.kgl` byte buffer — the counterpart of
@@ -1446,7 +1471,11 @@ pub fn load_kgl_bytes_with(data: &[u8], options: &LoadOptions) -> io::Result<Arc
         ));
     }
     let format_name = portable_container_format(data, "the byte buffer")?;
-    with_load_advisories(load_portable_container(data, format_name, options)?)
+    let source = LoadSource {
+        bytes: data,
+        file: None,
+    };
+    with_load_advisories(load_portable_container(&source, format_name, options)?)
 }
 
 /// Contained break message for a pre-v3 embeddings section (model_id +
@@ -1793,15 +1822,16 @@ fn apply_disk_metadata(dir: &std::path::Path, graph: &mut DirGraph) -> io::Resul
     Ok(())
 }
 
-/// Decode a v5, v6, v7 or v8 container. They share a header, a codec and a section
+/// Decode a v5, v6, v7, v8 or v9 container. They share a header, a codec and a section
 /// layout; they differ only in which per-column encodings the column sections
 /// may use, and the column reader dispatches on the section's own type tags.
 /// `format_name` is the version the caller matched, and appears in errors.
 fn load_portable_container(
-    buf: &[u8],
+    source: &LoadSource<'_>,
     format_name: &str,
     options: &LoadOptions,
 ) -> io::Result<Arc<DirGraph>> {
+    let buf = source.bytes;
     if buf.len() < 13 {
         return Err(invalid_data(format!(
             "{format_name} file is truncated — header incomplete"
@@ -1822,7 +1852,7 @@ fn load_portable_container(
     let core_version = u32::from_le_bytes([buf[5], buf[6], buf[7], buf[8]]);
     let metadata_len = u32::from_le_bytes([buf[9], buf[10], buf[11], buf[12]]) as usize;
     load_portable_columnar(
-        buf,
+        source,
         format_name,
         PortableHeader {
             codec,
@@ -1882,7 +1912,7 @@ fn decode_metadata_json(
     metadata_block: &[u8],
     format_name: &str,
 ) -> io::Result<FileMetadata> {
-    let metadata_bytes = if format_name == "v8" {
+    let metadata_bytes = if matches!(format_name, "v8" | "v9") {
         let split = metadata_block.len().checked_sub(4).ok_or_else(|| {
             invalid_data(format!(
                 "{format_name} metadata is too short to hold its checksum — the file is corrupt"
@@ -1910,6 +1940,66 @@ fn decode_metadata_json(
         )));
     }
     Ok(metadata)
+}
+
+/// Absolute offset of a v9 container's data region: the end of the compressed
+/// sections, rounded up to the section alignment. Refuses a container whose
+/// declared compressed sections run past `file_len`.
+fn data_region_base(
+    metadata: &FileMetadata,
+    metadata_end: usize,
+    file_len: u64,
+) -> io::Result<u64> {
+    let sizes = [
+        metadata.topology_compressed_size,
+        metadata
+            .column_sections
+            .iter()
+            .fold(0u64, |a, c| a.saturating_add(c.compressed_size)),
+        metadata.embeddings_compressed_size,
+        metadata.edge_embeddings_compressed_size,
+        metadata.timeseries_compressed_size,
+        metadata.secondary_labels_compressed_size,
+        metadata.vector_index_compressed_size,
+        metadata.text_index_compressed_size,
+        metadata.edge_vector_index_compressed_size,
+        metadata.edge_text_index_compressed_size,
+    ];
+    let compressed_end = sizes
+        .iter()
+        .fold(metadata_end as u64, |a, n| a.saturating_add(*n));
+    if compressed_end > file_len {
+        return Err(invalid_data(
+            "file is truncated — the compressed sections run past the end of the file",
+        ));
+    }
+    Ok(mappable::align_up(
+        compressed_end,
+        mappable::SECTION_ALIGNMENT,
+    ))
+}
+
+/// Validate a v9 container's data-region table before any section is decoded,
+/// and refuse a table in a container that cannot carry one.
+///
+/// A v5-v8 file with a `mappable` key was not written by this code: v8 readers
+/// never look at the key, so honouring it would read offsets nobody aligned.
+fn check_mappable_table(
+    metadata: &FileMetadata,
+    format_name: &str,
+    buf: &[u8],
+    metadata_end: usize,
+) -> io::Result<()> {
+    if metadata.mappable.is_empty() {
+        return Ok(());
+    }
+    if format_name != "v9" {
+        return Err(invalid_data(format!(
+            "{format_name} container declares mappable sections, which only v9 containers carry"
+        )));
+    }
+    let base = data_region_base(metadata, metadata_end, buf.len() as u64)?;
+    mappable::MappableTable::validate(&metadata.mappable, buf.len() as u64, base).map(|_| ())
 }
 
 /// CRC32 over a v8 container's fixed 13-byte header and its metadata JSON —
@@ -2117,11 +2207,12 @@ struct PortableHeader {
 /// Load the shared v5/v6/v7 columnar section layout through the codec selected by
 /// the already-validated container header.
 fn load_portable_columnar(
-    buf: &[u8],
+    source: &LoadSource<'_>,
     format_name: &str,
     header: PortableHeader,
     options: &LoadOptions,
 ) -> io::Result<Arc<DirGraph>> {
+    let buf = source.bytes;
     let PortableHeader {
         codec,
         core_version,
@@ -2148,6 +2239,7 @@ fn load_portable_columnar(
             "portable header and metadata core-data versions disagree",
         ));
     }
+    check_mappable_table(&metadata, format_name, buf, metadata_start + metadata_len)?;
     match core_version {
         CURRENT_CORE_DATA_VERSION if metadata.edge_embeddings_compressed_size == 0 => {
             return Err(invalid_data(
@@ -2242,8 +2334,8 @@ mod load_estimate;
 pub use load_estimate::{estimate_load_memory, estimate_load_memory_bytes, LoadMemoryEstimate};
 
 mod load_options;
-pub use load_options::LoadOptions;
 use load_options::MAX_LOAD_ENV_VAR;
+pub use load_options::{LoadOptions, MapPolicy, Verify};
 
 mod portable_sections;
 use portable_sections::{
@@ -2272,6 +2364,10 @@ pub(crate) mod container_test_support;
 #[cfg(test)]
 #[path = "file/edge_embedding_persistence_tests.rs"]
 mod edge_embedding_persistence_tests;
+
+#[cfg(test)]
+#[path = "file/mappable_tests.rs"]
+mod mappable_tests;
 
 #[cfg(test)]
 #[path = "file/embedding_load_validation_tests.rs"]

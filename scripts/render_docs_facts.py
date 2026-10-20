@@ -131,7 +131,11 @@ def _engine_facts() -> tuple[list[str], int, int, int, str]:
     spatial_source = (REPO_ROOT / spatial).read_text(encoding="utf-8")
     if "RTree::<" not in spatial_source:
         raise ValueError("spatial join no longer constructs an RTree")
-    return modes, max(magic_versions), int(node_only_core.group(1)), int(core.group(1)), spatial
+    written = re.search(r"CURRENT_CONTAINER_VERSION:\s*u8\s*=\s*V(\d+)_MAGIC", magic_source)
+    if written is None:
+        raise ValueError("CURRENT_CONTAINER_VERSION not found")
+    container = f"v{written.group(1)} by default, v{max(magic_versions)} when a save carries mappable sections"
+    return modes, container, int(node_only_core.group(1)), int(core.group(1)), spatial
 
 
 def _benchmark_facts() -> dict[str, Any]:
@@ -201,7 +205,7 @@ def render() -> str:
             "## Engine contracts",
             "",
             f"- User storage modes: {', '.join(f'`{mode}`' for mode in modes)}",
-            f"- Snapshot container: RGF v{container_version}; writer core v{node_core_version} for "
+            f"- Snapshot container: RGF {container_version}; writer core v{node_core_version} for "
             f"node-only graphs and v{max_core_version} for graphs declaring relationship "
             f"embedding stores (reader supports through v{max_core_version})",
             f"- Spatial candidate index: per-query `rstar::RTree` in `{spatial_source}`",

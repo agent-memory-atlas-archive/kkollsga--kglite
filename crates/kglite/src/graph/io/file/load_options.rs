@@ -1,5 +1,4 @@
-//! [`LoadOptions`] — what a caller may ask of a `.kgl` load, and the two
-//! things it can currently ask.
+//! [`LoadOptions`] — what a caller may ask of a `.kgl` load.
 //!
 //! **`storage` is not a memory lever.** For a `.kgl` load, mapped and memory
 //! cost the same resident memory: columns of 256 KB or more are spilled and
@@ -47,12 +46,40 @@ pub(crate) const DEFER_ENV_VAR: &str = "KGLITE_DEFER_INDEX_REBUILD";
 /// Environment ceiling, in **megabytes**; see the module doc.
 pub(crate) const MAX_LOAD_ENV_VAR: &str = "KGLITE_MAX_LOAD_MB";
 
+/// How a load treats CRC32 verification of mappable sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Verify {
+    /// Verify string-class sections at open and everything else on demand.
+    #[default]
+    Lazy,
+    /// Verify every section at open; faults every page in.
+    Eager,
+}
+
+/// Whether a load may serve a mappable section from the file mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum MapPolicy {
+    /// Map when the source is a regular file on a supported platform and the
+    /// section is large enough to be worth it.
+    #[default]
+    Auto,
+    /// Map whenever the source is a file, regardless of size or platform.
+    Mapped,
+    /// Always copy into the heap.
+    Memory,
+}
+
 /// Options for [`load_file_with`](super::load_file_with) /
 /// [`load_kgl_bytes_with`](super::load_kgl_bytes_with).
 ///
 /// Built with [`LoadOptions::new`] plus `with_*` builders, mirroring
 /// `ExecuteOptions`; [`load_file`](super::load_file) and
 /// [`load_kgl_bytes`](super::load_kgl_bytes) are exactly the `new()` defaults.
+///
+/// `LoadOptions` is `#[non_exhaustive]`: construct it with [`LoadOptions::new`]
+/// and the `with_*` builders, never a struct literal.
 ///
 /// ```no_run
 /// use kglite::api::io::{load_file_with, LoadOptions};
@@ -65,6 +92,7 @@ pub(crate) const MAX_LOAD_ENV_VAR: &str = "KGLITE_MAX_LOAD_MB";
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LoadOptions {
     /// The backend the loaded graph should end up in, or `None` to honour
     /// whatever mode the file recorded (the default).
@@ -139,6 +167,17 @@ pub struct LoadOptions {
     /// Portable `.kgl` loads only. A disk-graph directory streams its columns
     /// off disk and has no single decode to refuse.
     pub max_load_bytes: Option<u64>,
+    /// Whether embedding payloads of a v9 container are served from the file
+    /// mapping or copied to the heap. `Auto` (the default, in every storage
+    /// mode) maps large stores of a regular local file; see [`MapPolicy`].
+    /// Decoupled from [`Self::storage`], which decides what the graph
+    /// *continues* in. A container with no mappable sections ignores it.
+    pub embeddings: MapPolicy,
+    /// Same choice for column payloads of a v9 container.
+    pub columns: MapPolicy,
+    /// CRC32 verification of mappable sections; `KGLITE_VERIFY=eager` sets
+    /// the default. See [`Verify`].
+    pub verify: Verify,
 }
 
 impl LoadOptions {
@@ -150,6 +189,9 @@ impl LoadOptions {
             storage: None,
             defer_index_rebuild: defer_index_rebuild_default(),
             max_load_bytes: max_load_bytes_default(),
+            embeddings: MapPolicy::Auto,
+            columns: MapPolicy::Auto,
+            verify: verify_default(),
         }
     }
 
@@ -173,11 +215,38 @@ impl LoadOptions {
         self.max_load_bytes = max_bytes;
         self
     }
+
+    /// Choose how embedding payloads of a v9 container are held.
+    pub fn with_embeddings(mut self, policy: MapPolicy) -> Self {
+        self.embeddings = policy;
+        self
+    }
+
+    /// Choose how column payloads of a v9 container are held.
+    pub fn with_columns(mut self, policy: MapPolicy) -> Self {
+        self.columns = policy;
+        self
+    }
+
+    /// Set CRC32 verification, outranking `KGLITE_VERIFY`.
+    pub fn with_verify(mut self, verify: Verify) -> Self {
+        self.verify = verify;
+        self
+    }
 }
 
 impl Default for LoadOptions {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The environment's answer for [`LoadOptions::verify`]: `eager` selects
+/// [`Verify::Eager`]; anything else, including an unset variable, is lazy.
+fn verify_default() -> Verify {
+    match std::env::var("KGLITE_VERIFY") {
+        Ok(raw) if raw.trim().eq_ignore_ascii_case("eager") => Verify::Eager,
+        _ => Verify::Lazy,
     }
 }
 

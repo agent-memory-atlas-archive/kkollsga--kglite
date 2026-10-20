@@ -2196,6 +2196,21 @@ impl core::marker::StructuralPartialEq for kglite::api::io::BeginWrite
 pub enum kglite::api::io::EmbeddingExportFilter
 pub kglite::api::io::EmbeddingExportFilter::TypeProperties(std::collections::hash::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>)
 pub kglite::api::io::EmbeddingExportFilter::Types(alloc::vec::Vec<alloc::string::String>)
+#[non_exhaustive] pub enum kglite::api::io::MapPolicy
+pub kglite::api::io::MapPolicy::Auto
+pub kglite::api::io::MapPolicy::Mapped
+pub kglite::api::io::MapPolicy::Memory
+impl core::clone::Clone for kglite::api::io::MapPolicy
+pub fn kglite::api::io::MapPolicy::clone(&self) -> kglite::api::io::MapPolicy
+impl core::cmp::Eq for kglite::api::io::MapPolicy
+impl core::cmp::PartialEq for kglite::api::io::MapPolicy
+pub fn kglite::api::io::MapPolicy::eq(&self, &kglite::api::io::MapPolicy) -> bool
+impl core::default::Default for kglite::api::io::MapPolicy
+pub fn kglite::api::io::MapPolicy::default() -> kglite::api::io::MapPolicy
+impl core::fmt::Debug for kglite::api::io::MapPolicy
+pub fn kglite::api::io::MapPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::io::MapPolicy
+impl core::marker::StructuralPartialEq for kglite::api::io::MapPolicy
 pub enum kglite::api::io::OpenDisposition
 pub kglite::api::io::OpenDisposition::Created
 pub kglite::api::io::OpenDisposition::Opened
@@ -2238,6 +2253,20 @@ impl core::fmt::Debug for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum kglite::api::io::Verify
+pub kglite::api::io::Verify::Eager
+pub kglite::api::io::Verify::Lazy
+impl core::clone::Clone for kglite::api::io::Verify
+pub fn kglite::api::io::Verify::clone(&self) -> kglite::api::io::Verify
+impl core::cmp::Eq for kglite::api::io::Verify
+impl core::cmp::PartialEq for kglite::api::io::Verify
+pub fn kglite::api::io::Verify::eq(&self, &kglite::api::io::Verify) -> bool
+impl core::default::Default for kglite::api::io::Verify
+pub fn kglite::api::io::Verify::default() -> kglite::api::io::Verify
+impl core::fmt::Debug for kglite::api::io::Verify
+pub fn kglite::api::io::Verify::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::io::Verify
+impl core::marker::StructuralPartialEq for kglite::api::io::Verify
 pub enum kglite::api::io::WriteRefusal
 pub kglite::api::io::WriteRefusal::Contended(kglite::api::io::LeaseRefusal)
 pub kglite::api::io::WriteRefusal::Io(core::io::error::Error)
@@ -2370,15 +2399,21 @@ impl core::fmt::Debug for kglite::api::io::LoadMemoryEstimate
 pub fn kglite::api::io::LoadMemoryEstimate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::api::io::LoadMemoryEstimate
 impl core::marker::StructuralPartialEq for kglite::api::io::LoadMemoryEstimate
-pub struct kglite::api::io::LoadOptions
+#[non_exhaustive] pub struct kglite::api::io::LoadOptions
+pub kglite::api::io::LoadOptions::columns: kglite::api::io::MapPolicy
 pub kglite::api::io::LoadOptions::defer_index_rebuild: bool
+pub kglite::api::io::LoadOptions::embeddings: kglite::api::io::MapPolicy
 pub kglite::api::io::LoadOptions::max_load_bytes: core::option::Option<u64>
 pub kglite::api::io::LoadOptions::storage: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::io::LoadOptions::verify: kglite::api::io::Verify
 impl kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::new() -> Self
+pub fn kglite::api::io::LoadOptions::with_columns(self, kglite::api::io::MapPolicy) -> Self
 pub fn kglite::api::io::LoadOptions::with_defer_index_rebuild(self, bool) -> Self
+pub fn kglite::api::io::LoadOptions::with_embeddings(self, kglite::api::io::MapPolicy) -> Self
 pub fn kglite::api::io::LoadOptions::with_max_load_bytes(self, core::option::Option<u64>) -> Self
 pub fn kglite::api::io::LoadOptions::with_storage(self, kglite::api::storage::StorageMode) -> Self
+pub fn kglite::api::io::LoadOptions::with_verify(self, kglite::api::io::Verify) -> Self
 impl core::clone::Clone for kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::clone(&self) -> kglite::api::io::LoadOptions
 impl core::cmp::Eq for kglite::api::io::LoadOptions

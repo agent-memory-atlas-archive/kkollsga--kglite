@@ -47,7 +47,7 @@ pub(crate) const V6_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x06];
 /// refuse, so the version number turns it away. Still read; no longer written.
 pub(crate) const V7_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x07];
 
-/// Magic bytes for the v8 columnar format — what this binary writes. The
+/// Magic bytes for the v8 columnar format — what this binary writes by default. The
 /// section layout and codec are v7's. v8 adds a CRC32 trailer inside the
 /// declared metadata block (see `io::file`'s module header), so a flipped byte
 /// in the metadata or in the length fields is refused as corruption instead of
@@ -56,11 +56,19 @@ pub(crate) const V7_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x07];
 /// are decoded by the same reader.
 pub(crate) const V8_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x08];
 
-/// The container version byte this build writes — the number
+/// Magic bytes for the v9 container: v8's layout followed by a 64-byte-aligned
+/// data region of raw mappable sections, tabled in the metadata (see
+/// `io::file::mappable`). Written only when a save supplies at least one such
+/// section; every other save still writes v8 bytes.
+pub(crate) const V9_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x09];
+
+/// The container version byte a save writes by default — the number
 /// [`crate::graph::schema::KGL_FORMAT_VERSION`] reports to `graph_info()` and
-/// to the C ABI. Bumping the written container means adding a `V9_MAGIC` and
-/// pointing this at it; nothing else needs to move.
+/// to the C ABI. v9 is written only conditionally, so this stays at v8.
 pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V8_MAGIC[3];
+
+/// The highest container version this build can read.
+pub(crate) const MAX_READABLE_CONTAINER_VERSION: u8 = V9_MAGIC[3];
 
 /// Hard-break message for v3 files in a v4 binary. Per the
 /// user decision in docs/history/bolt-implementation.md: no read-compat
@@ -80,7 +88,7 @@ pub(crate) const V3_HARD_BREAK_MSG: &str = "kglite .kgl file format v3 is not su
 pub(crate) fn newer_portable_format_error(version: u8) -> io::Error {
     invalid_data(format!(
         "File uses .kgl container version {version}, but this library only supports up to version {}. Please upgrade kglite.",
-        V8_MAGIC[3]
+        MAX_READABLE_CONTAINER_VERSION
     ))
 }
 

@@ -9,6 +9,14 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- **Rust API: `LoadOptions` is `#[non_exhaustive]`.**
+  - Build it with `LoadOptions::new()` and the `with_*` builders; a struct literal no longer compiles.
+  - New builders: `with_embeddings`, `with_columns` (`MapPolicy::{Auto, Mapped, Memory}`) and `with_verify` (`Verify::{Lazy, Eager}`, default from `KGLITE_VERIFY=eager`).
+  - The new fields apply only to containers that carry mappable sections; a v8 or older file ignores them.
+- **The reader accepts `.kgl` container v9** (raw, 64-byte-aligned sections after the compressed ones). Nothing writes v9 yet, so every save still produces v8 bytes.
+
 ### Changed
 
 - **Memory is returned to the OS after embedding imports, removals and replacements.**

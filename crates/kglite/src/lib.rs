@@ -760,7 +760,15 @@ pub mod api {
         /// footprint on a 500k-row four-index fixture), at the price of a scan
         /// where an indexed lookup would have run and a one-time build on the
         /// first write. Both are documented in full on [`LoadOptions`].
-        pub use crate::graph::io::file::{load_file_with, load_kgl_bytes_with, LoadOptions};
+        ///
+        /// `embeddings`, `columns` ([`MapPolicy`]) and `verify` ([`Verify`])
+        /// concern only v9 containers, whose raw sections can be mapped from the
+        /// file; a v8 or older file ignores them. `LoadOptions` is
+        /// `#[non_exhaustive]`, so it is built with `LoadOptions::new()` and the
+        /// `with_*` builders.
+        pub use crate::graph::io::file::{
+            load_file_with, load_kgl_bytes_with, LoadOptions, MapPolicy, Verify,
+        };
         pub use crate::graph::io::ntriples::{
             load_ntriples, Cancelled, NTriplesConfig, ProgressEvent, ProgressSink, ProgressValue,
         };
