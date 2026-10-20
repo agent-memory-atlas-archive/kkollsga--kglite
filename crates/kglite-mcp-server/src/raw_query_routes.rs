@@ -4,7 +4,7 @@ use mcp_methods::server::McpServer;
 use rmcp::handler::server::tool::DynCallToolHandler;
 use rmcp::model::{CallToolResult, ContentBlock};
 
-use crate::raw_stdio::RawJsonRpcRequest;
+use mcp_methods::server::stdio::RawJsonRpcRequest;
 
 pub(crate) fn protect_query_route(
     server: &mut McpServer,

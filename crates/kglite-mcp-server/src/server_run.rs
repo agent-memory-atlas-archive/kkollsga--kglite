@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use mcp_methods::server::{init_tracing, load_env_for_mode, McpServer, ServerOptions};
-use rmcp::ServiceExt;
 
 use crate::tools::GraphState;
 use crate::*;
@@ -1277,16 +1276,17 @@ pub(crate) async fn run_async(
         },
     );
 
+    let query_routes = crate::raw_query_routes::route_pointers(
+        manifest.as_ref(),
+        recipe_catalog_hint.is_some(),
+        &named_recipe_tools,
+    );
     let service = server
-        .serve(crate::raw_stdio::QueryAwareStdio::new(
-            tokio::io::stdin(),
-            tokio::io::stdout(),
-            crate::raw_query_routes::route_pointers(
-                manifest.as_ref(),
-                recipe_catalog_hint.is_some(),
-                &named_recipe_tools,
-            ),
-        ))
+        .serve_with_handover(
+            mcp_methods::server::stdio::StdioTransport::stdio().with_recover(move |raw| {
+                crate::query_recover::recover_query_message(raw, &query_routes)
+            }),
+        )
         .await
         .context("failed to start MCP service over stdio")?;
     // The one handle on the connected client anything downstream can reach:

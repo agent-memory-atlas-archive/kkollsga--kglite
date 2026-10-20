@@ -86,6 +86,7 @@ before upgrading.
 
 ### Changed
 
+- **The MCP server reads stdio through mcp-methods 0.5.0's transport.** The line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner now lives in its own module with unit tests.
 - **Memory is returned to the OS after embedding imports, removals and replacements.**
   - `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish.
   - Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).

@@ -2325,18 +2325,20 @@ dependencies = [
 
 [[package]]
 name = "mcp-methods"
-version = "0.4.13"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97eb20dc0d7038ec9ff777df628774b32081dadebe5404aaa100c47d702308e9"
+checksum = "bf0357919284a3e82de51b97351fa51626069df9e0cc20081c98c78c41a5b7f2"
 dependencies = [
  "anyhow",
  "clap",
  "fancy-regex",
+ "futures",
  "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "libc",
  "notify",
  "notify-debouncer-mini",
  "regex",
@@ -2347,6 +2349,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "ureq 2.12.1",
