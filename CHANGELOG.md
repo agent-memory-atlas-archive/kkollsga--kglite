@@ -40,6 +40,19 @@ before upgrading.
   - A load verifies a mapped store's CRC32 on its first search (`Verify::Lazy`) or at open (`Verify::Eager`); a corrupt store fails that search with an error naming the store.
   - A save refuses to copy a corrupt mapped store into a new file.
 - **Saving over the path a graph is mapped from works.** On Unix the old file stays readable until the graph drops it; on Windows the graph's mapped stores are copied to the heap first.
+- **Python: `kglite.load(path, embeddings=..., verify=...)`, `save(layout=...)` and `verify_integrity()`.**
+  - `embeddings` is `"auto"` (default), `"mapped"` or `"memory"`; `verify` is `"lazy"` or `"eager"`. `kglite.open_session` takes both for its read-only form.
+  - `save(path, layout="compact")` writes the v8 container; `layout="auto"` is the default.
+  - `g.verify_integrity()` returns `{"ok": bool, "sections": [{"name", "bytes", "mapped", "error"}]}` for the mapped sections the graph serves.
+  - `list_embeddings()` and `embedding_diagnostics()` rows gain `storage` (`"mapped"` or `"heap"`).
+- **MCP server: `extensions.embeddings.storage` and `--embeddings auto|mapped|memory`.** The flag overrides the manifest; both apply to boot, `load_graph` and reloads. Schema: `docs/schemas/extensions/embeddings.json`.
+- **CLI: `kglite query --embeddings auto|mapped|memory`.**
+- **C ABI: three new symbols.**
+  - `kglite_load_file_with_options` takes a versioned `KgliteLoadOptions` (`embeddings`: 0 default, 1 auto, 2 mapped, 3 memory; `verify`: 0 default, 1 lazy, 2 eager).
+  - `kglite_save_graph_with_layout` adds a `layout` (0 default, 1 compact) to `kglite_save_graph_durable`.
+  - `kglite_graph_verify_integrity` returns the integrity report as JSON. `kglite_session_list_embeddings` rows gain `storage`.
+  - Existing symbols are unchanged.
+- **Rust API.** `SaveLayout`, `save_graph_with_layout`, `write_kgl_to_layout`, `open_or_create_graph_in_mode_with` (takes `LoadOptions`), `MapPolicy::from_name`, `Verify::from_name`, `VectorBuf`, `verify_file`, `verify_graph`, `IntegrityReport` and `SectionStatus` are public.
 
 ### Changed
 

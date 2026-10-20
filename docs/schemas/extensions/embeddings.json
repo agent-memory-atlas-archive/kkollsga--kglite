@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/embeddings.json",
+  "title": "extensions.embeddings",
+  "description": "Where the embedding stores of a v9 .kgl file live once the server opens it. 'storage' is 'auto' (the default: a store of 64 MB or more is read in place from a regular local file on Unix, smaller ones and every other source are copied to memory), 'mapped' (every store is read in place) or 'memory' (every store is copied to memory). The --embeddings flag overrides it. The setting is runtime only and never written into a .kgl file; a v8 or older file ignores it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "storage": {
+      "type": "string",
+      "enum": ["auto", "mapped", "memory"],
+      "description": "'auto', 'mapped' or 'memory'."
+    }
+  }
+}

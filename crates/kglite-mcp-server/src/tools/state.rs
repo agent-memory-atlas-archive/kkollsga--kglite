@@ -12,8 +12,8 @@ use kglite::api::cypher::ValueCodec;
 use kglite::api::durable::DurabilityLevel;
 use kglite::api::introspection::compute_schema;
 use kglite::api::io::{
-    open_or_create_graph_in_mode, GraphFileIdentity, GraphWriterLease, OpenDisposition,
-    WriteOwnership,
+    open_or_create_graph_in_mode_with, GraphFileIdentity, GraphWriterLease, LoadOptions, MapPolicy,
+    OpenDisposition, WriteOwnership,
 };
 use kglite::api::storage::StorageMode;
 use kglite::api::{Embedder, KnowledgeGraph};
@@ -105,6 +105,11 @@ pub struct GraphState {
     /// sets it on every graph this state installs, and a `.kgl` file never
     /// carries it.
     pub(crate) valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
+    /// The operator's embedding placement (`--embeddings` /
+    /// `extensions.embeddings.storage`): whether a v9 `.kgl`'s embedding stores
+    /// are mapped from the file or copied to the heap. `None` leaves the
+    /// engine's default (`auto`). Applied to every `.kgl` this state opens.
+    pub(crate) embeddings_policy: Option<MapPolicy>,
     /// External workspace-graph lifecycle extension. Set once at boot and
     /// carried by every clone so lazy watch rebuilds use the same producer.
     pub(crate) workspace_graph_hooks: Option<Arc<WorkspaceGraphHooks>>,
@@ -193,6 +198,13 @@ impl GraphState {
         default: Option<kglite::api::temporal::ValidTimeDefault>,
     ) -> Self {
         self.valid_time_default = default;
+        self
+    }
+
+    /// The embedding placement every opened `.kgl` takes. Builder form, set
+    /// once at boot like [`Self::with_value_codecs`].
+    pub fn with_embeddings_policy(mut self, policy: Option<MapPolicy>) -> Self {
+        self.embeddings_policy = policy;
         self
     }
 
@@ -430,8 +442,17 @@ impl GraphState {
         // `DurabilityLevel::Off`: this server attaches no write-ahead log, so
         // it takes the unrecovered-sidecar refusal rather than opening a graph
         // that is silently missing another writer's committed frames.
-        let opened = open_or_create_graph_in_mode(path, requested_mode, DurabilityLevel::Off)
-            .map_err(|e| anyhow::anyhow!("kglite graph open/create failed: {e}"))?;
+        let mut load_options = LoadOptions::new();
+        if let Some(policy) = self.embeddings_policy {
+            load_options = load_options.with_embeddings(policy);
+        }
+        let opened = open_or_create_graph_in_mode_with(
+            path,
+            requested_mode,
+            DurabilityLevel::Off,
+            &load_options,
+        )
+        .map_err(|e| anyhow::anyhow!("kglite graph open/create failed: {e}"))?;
         let identity = opened.identity;
         let loaded_identity = identity.clone();
         let mut kg = KnowledgeGraph::from_arc(opened.graph);

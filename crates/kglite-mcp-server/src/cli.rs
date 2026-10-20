@@ -138,6 +138,15 @@ pub(crate) struct Cli {
           value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
     pub(crate) valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
 
+    /// Where a v9 `.kgl`'s embedding stores live: `auto` (map a store of 64 MB
+    /// or more from a regular local file), `mapped` (map any size) or `memory`
+    /// (copy to the heap). Overrides `extensions.embeddings.storage` in the
+    /// manifest. A v8 or older file ignores it. Applies to every `.kgl` the
+    /// server opens, including reloads.
+    #[arg(long = "embeddings", value_name = "auto|mapped|memory",
+          value_parser = parse_embeddings_policy)]
+    pub(crate) embeddings: Option<kglite::api::io::MapPolicy>,
+
     /// Run a configuration self-test instead of serving: re-spawn this binary
     /// with the same flags, drive a live MCP handshake (initialize →
     /// tools/list → activate → cypher_query), and print green/red per
@@ -197,6 +206,14 @@ pub(crate) enum Mode {
         dir: PathBuf,
     },
     Bare,
+}
+
+/// Parse the `--embeddings` value, naming the three spellings on a refusal.
+pub(crate) fn parse_embeddings_policy(
+    text: &str,
+) -> std::result::Result<kglite::api::io::MapPolicy, String> {
+    kglite::api::io::MapPolicy::from_name(text)
+        .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory"))
 }
 
 pub(crate) fn pick_mode(cli: &Cli) -> Mode {

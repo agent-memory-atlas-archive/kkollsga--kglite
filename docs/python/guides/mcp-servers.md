@@ -1125,6 +1125,7 @@ Machine-readable JSON Schema (Draft 2020-12) for each first-class block lives un
 - [`csv_http_server.json`][schema-csv]
 - [`cypher_recipes.json`][schema-cypher-recipes]
 - [`embedder.json`][schema-embedder]
+- [`embeddings.json`][schema-embeddings]
 - [`recipe_catalog.json`][schema-recipe-catalog]
 - [`recipe_tools.json`][schema-recipe-tools]
 - [`valid_time.json`][schema-valid-time]
@@ -1136,6 +1137,7 @@ The schemas are anchored to the Python parsers by the regression test `tests/tes
 [schema-csv]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/csv_http_server.json
 [schema-cypher-recipes]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/cypher_recipes.json
 [schema-embedder]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embedder.json
+[schema-embeddings]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embeddings.json
 [schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
 [schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
 [schema-valid-time]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/valid_time.json
@@ -1319,6 +1321,25 @@ This key sets the instant a statement, recipe tool or fluent step reads when it 
 - The setting is runtime only. It is never written into a `.kgl` file, and every graph the server installs (boot, reload, activation) takes it.
 - A per-call `valid_at` (a date, or `"all"` for every version) and a `FOR VALID_TIME` prefix still win over it.
 - A malformed value fails the boot.
+
+#### `extensions.embeddings`
+
+```yaml
+extensions:
+  embeddings:
+    storage: auto   # 'auto' (default), 'mapped' or 'memory'
+```
+
+This key decides where the embedding stores of a v9 `.kgl` file live. A graph saved with a store of 4 MiB or more is a v9 file, whose vectors sit uncompressed in the file.
+
+- `auto` reads a store of 64 MB or more in place from a regular local file on Unix. Smaller stores, byte buffers, network and FUSE filesystems, and Windows get a heap copy.
+- `mapped` reads every store in place, whatever its size.
+- `memory` copies every store to the heap, as releases before v9 did.
+- `--embeddings {auto|mapped|memory}` overrides the manifest.
+- The setting is runtime only. Every `.kgl` the server opens takes it: boot, `load_graph`, and reloads after a file change. A v8 or older file ignores it.
+- A mapped store costs no resident memory until a search touches it, and the first write to a store copies that store to the heap.
+- Do not overwrite the served file in place (`cp`, `rsync --inplace`): a truncated mapping faults. Write a new file beside it and rename it over, as `save_graph` does.
+- A malformed value, or a key other than `storage`, fails the boot.
 
 #### `extensions.<other>` (passthrough)
 

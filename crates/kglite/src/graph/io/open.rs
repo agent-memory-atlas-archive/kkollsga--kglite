@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 use fs2::FileExt;
 
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::io::file::load_file;
+use crate::graph::io::file::{load_file_with, LoadOptions};
 use crate::graph::storage::mode::{
     convert_dir_graph_to_mode, live_storage_mode, new_dir_graph_in_mode, StorageMode,
 };
@@ -629,7 +629,7 @@ pub fn open_or_create_graph(
     path: &Path,
     create_mode: Option<StorageMode>,
 ) -> io::Result<OpenGraphResult> {
-    open_or_create_graph_logged(path, create_mode, DurabilityLevel::Off)
+    open_or_create_graph_logged(path, create_mode, DurabilityLevel::Off, &LoadOptions::new())
 }
 
 /// [`open_or_create_graph`], plus the caller's declaration of the log it is
@@ -639,11 +639,12 @@ fn open_or_create_graph_logged(
     path: &Path,
     create_mode: Option<StorageMode>,
     attaching_log: DurabilityLevel,
+    load_options: &LoadOptions,
 ) -> io::Result<OpenGraphResult> {
     match std::fs::metadata(path) {
         Ok(_) => {
             let before = GraphFileIdentity::capture(path)?;
-            let graph = load_file(&path.to_string_lossy())?;
+            let graph = load_file_with(&path.to_string_lossy(), load_options)?;
             let identity = GraphFileIdentity::capture(path)?;
             if identity != before {
                 return Err(io::Error::new(
@@ -752,7 +753,21 @@ pub fn open_or_create_graph_in_mode(
     requested: Option<StorageMode>,
     attaching_log: DurabilityLevel,
 ) -> io::Result<OpenGraphResult> {
-    let mut opened = open_or_create_graph_logged(path, requested, attaching_log)?;
+    open_or_create_graph_in_mode_with(path, requested, attaching_log, &LoadOptions::new())
+}
+
+/// [`open_or_create_graph_in_mode`] loading an existing `.kgl` with the
+/// caller's [`LoadOptions`] — how a server applies its operator's embedding
+/// placement (`MapPolicy`) and verification choice to every graph it opens.
+/// `LoadOptions::storage` is not read here: `requested` is the mode request on
+/// this entry, applied after the load.
+pub fn open_or_create_graph_in_mode_with(
+    path: &Path,
+    requested: Option<StorageMode>,
+    attaching_log: DurabilityLevel,
+    load_options: &LoadOptions,
+) -> io::Result<OpenGraphResult> {
+    let mut opened = open_or_create_graph_logged(path, requested, attaching_log, load_options)?;
     let Some(requested) = requested else {
         return Ok(opened);
     };

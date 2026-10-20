@@ -414,6 +414,19 @@ mode the graph recorded.
 Keep read-only mode for untrusted agents. Scope filesystem access with
 manifest `source_root`/`source_roots`.
 
+### Embedding placement
+
+`--embeddings auto|mapped|memory` (or `extensions.embeddings.storage`) decides
+where the embedding stores of a v9 `.kgl` live. A graph saved with a store of
+4 MiB or more is v9, and its vectors sit uncompressed in the file.
+
+- `auto` (default) reads a store of 64 MB or more in place from a regular local file on Unix.
+- `mapped` reads every store in place; `memory` copies every store to the heap.
+- A mapped store costs no resident memory until a search touches it. `ps` and Linux cgroups still count the pages a search has touched; macOS `phys_footprint` does not.
+- The first write to a store copies it to the heap.
+- Write a new file and rename it over the served one. Overwriting it in place (`cp`, `rsync --inplace`) truncates a live mapping, and the next search faults.
+- v9 files are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
+
 ### The writer lease, and several servers on one file
 
 A `.kgl` has one writer at a time, guarded by an advisory lock on a

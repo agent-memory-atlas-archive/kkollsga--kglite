@@ -1833,3 +1833,68 @@ fn a_configured_servers_second_clean_save_is_a_no_op() {
         );
     }
 }
+
+// ── `extensions.embeddings` / `--embeddings` ────────────────────────────────
+
+/// A `.kgl` whose one node store (1100 x 1024 f32, 4.4 MiB) is large enough to
+/// be saved in the v9 data region.
+fn seed_big_embeddings(path: &std::path::Path) {
+    let mut dir = kglite::api::storage::new_dir_graph_in_mode(StorageMode::Memory, None)
+        .expect("create the graph");
+    let params = std::collections::HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::eager(&params);
+    kglite::api::session::execute_mut(
+        &mut dir,
+        "UNWIND range(1, 1100) AS i CREATE (:Doc {id: i, title: 'd', text: 't'})",
+        &opts,
+    )
+    .expect("seed nodes");
+    let vectors: Vec<(kglite::api::Value, Vec<f32>)> = (1..=1100i64)
+        .map(|i| {
+            let vector = (0..1024)
+                .map(|j| ((i * 31 + j) % 101) as f32 / 50.0)
+                .collect();
+            (kglite::api::Value::Int64(i), vector)
+        })
+        .collect();
+    kglite::api::embeddings::set_embeddings(&mut dir, "Doc", "text", None, vectors)
+        .expect("seed vectors");
+    let mut graph = Arc::new(dir);
+    kglite::api::io::save_graph(&mut graph, path.to_str().expect("utf-8 path")).expect("save");
+}
+
+fn store_is_mapped(state: &GraphState) -> bool {
+    state
+        .with_active(|active| {
+            active
+                .kg
+                .dir()
+                .embeddings
+                .values()
+                .next()
+                .expect("a node store")
+                .is_mapped()
+        })
+        .expect("active graph")
+}
+
+#[test]
+fn the_embeddings_policy_decides_where_an_opened_graphs_vectors_live() {
+    use kglite::api::io::MapPolicy;
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("big.kgl");
+    seed_big_embeddings(&p);
+
+    // Default: a 4.4 MiB store is under the 64 MB `auto` floor.
+    let auto = GraphState::default();
+    auto.open_or_create(&p, None).unwrap();
+    assert!(!store_is_mapped(&auto));
+
+    let mapped = GraphState::default().with_embeddings_policy(Some(MapPolicy::Mapped));
+    mapped.open_or_create(&p, None).unwrap();
+    assert!(store_is_mapped(&mapped));
+
+    let memory = GraphState::default().with_embeddings_policy(Some(MapPolicy::Memory));
+    memory.open_or_create(&p, None).unwrap();
+    assert!(!store_is_mapped(&memory));
+}

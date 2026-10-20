@@ -296,10 +296,11 @@ fn a_newer_container_says_restart_rather_than_rebuild() {
     let state = serving(&served);
 
     // The header a later kglite would write: `RGF` plus a container byte this
-    // build has no reader for. Only the version byte is forged — the loader
-    // refuses on it before anything else in the file is parsed.
+    // build has no reader for (10; this build reads up to v9). Only the
+    // version byte is forged — the loader refuses on it before anything else in
+    // the file is parsed.
     let mut bytes = std::fs::read(&served).expect("read the seeded file");
-    bytes[3] += 1;
+    bytes[3] = 10;
     let future = bytes[3];
     std::fs::write(&served, &bytes).expect("republish from the future");
 

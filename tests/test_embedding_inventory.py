@@ -16,7 +16,7 @@ import pytest
 import kglite
 from kglite import KnowledgeGraph
 
-NODE_LIST_KEYS = {"node_type", "text_column", "store_name", "dimension", "count", "metric"}
+NODE_LIST_KEYS = {"node_type", "text_column", "store_name", "dimension", "count", "metric", "storage"}
 NODE_DIAGNOSTIC_KEYS = {
     "node_type",
     "text_column",
@@ -26,6 +26,7 @@ NODE_DIAGNOSTIC_KEYS = {
     "status",
     "dimension",
     "metric",
+    "storage",
     "length_stats",
 }
 
@@ -71,6 +72,7 @@ def test_list_embeddings_reports_both_entities() -> None:
             "dimension": 3,
             "count": 2,
             "metric": "cosine",
+            "storage": "heap",
         },
         {
             "entity": "relationship",
@@ -80,6 +82,7 @@ def test_list_embeddings_reports_both_entities() -> None:
             "dimension": 2,
             "count": 1,
             "metric": "dot_product",
+            "storage": "heap",
         },
     ]
 

@@ -510,6 +510,7 @@ pub unsafe extern "C" fn kglite_session_list_embeddings(
                         "dimension": info.dimension,
                         "count": info.count,
                         "metric": info.metric,
+                        "storage": info.storage,
                     })
                 })
                 .collect();

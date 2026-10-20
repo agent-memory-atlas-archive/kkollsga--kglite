@@ -33,6 +33,7 @@ const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "writable",
     "fetch_images",
     "valid_time",
+    "embeddings",
 ];
 
 /// Manifest `extensions:` keys this build does not read, for the boot warning.
@@ -221,6 +222,42 @@ fn boot_valid_time_default(
         }
     };
     Ok(cli.valid_time_default.or(configured))
+}
+
+/// The embedding placement for every `.kgl` the server opens: `--embeddings`
+/// when given, else `extensions.embeddings.storage`, else `None` (the engine's
+/// default, `auto`). The flag wins outright, like `--valid-time-default`. A
+/// malformed value, or a key other than `storage`, fails the boot rather than
+/// being silently ignored.
+fn boot_embeddings_policy(
+    manifest: Option<&mcp_methods::server::Manifest>,
+    cli: &Cli,
+) -> Result<Option<kglite::api::io::MapPolicy>> {
+    let Some(raw) = manifest.and_then(|m| m.extensions.get("embeddings")) else {
+        return Ok(cli.embeddings);
+    };
+    let map = raw
+        .as_object()
+        .context("extensions.embeddings must be a map with an optional 'storage' key")?;
+    if let Some(key) = map.keys().find(|key| key.as_str() != "storage") {
+        anyhow::bail!("extensions.embeddings: unknown key '{key}'; the only key is 'storage'");
+    }
+    let configured = match map.get("storage") {
+        None => None,
+        Some(value) => {
+            let text = value
+                .as_str()
+                .context("extensions.embeddings.storage must be 'auto', 'mapped' or 'memory'")?;
+            Some(
+                kglite::api::io::MapPolicy::from_name(text).with_context(|| {
+                    format!(
+                        "extensions.embeddings.storage: '{text}' is not one of auto, mapped, memory"
+                    )
+                })?,
+            )
+        }
+    };
+    Ok(cli.embeddings.or(configured))
 }
 
 /// `extensions.writable: true` — the manifest half of the write opt-in.
@@ -962,6 +999,7 @@ fn boot_graph(
         .with_value_codecs(boot_value_codecs(manifest.as_ref())?)
         .with_parallel(parallel)
         .with_valid_time_default(boot_valid_time_default(manifest.as_ref(), cli)?)
+        .with_embeddings_policy(boot_embeddings_policy(manifest.as_ref(), cli)?)
         // Declared here rather than from `builtins` (built below, after the
         // csv_http boot it needs) because `bind_mode` performs the boot open
         // a few lines down — a policy set later would arrive after the lease
@@ -1598,7 +1636,7 @@ mod boot_manifest_tests {
             "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
              recipe_tools: true\n  value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
-             fetch_images: {}\n  valid_time: {}\n",
+             fetch_images: {}\n  valid_time: {}\n  embeddings: {}\n",
         );
         assert!(
             unknown_extension_keys(Some(&all_keys)).is_empty(),
@@ -1927,6 +1965,67 @@ mod boot_manifest_tests {
         let empty = manifest_with(tmp.path(), "name: e\nextensions:\n  valid_time: {}\n");
         assert_eq!(boot_valid_time_default(Some(&empty), &bare).unwrap(), None);
         assert!(KNOWN_EXTENSION_KEYS.contains(&"valid_time"));
+    }
+
+    #[test]
+    fn embeddings_policy_reads_flag_over_manifest_and_defaults_to_none() {
+        use kglite::api::io::MapPolicy;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bare = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        let flag = Cli::parse_from([
+            "kglite-mcp-server",
+            "--graph",
+            "g.kgl",
+            "--embeddings",
+            "memory",
+        ]);
+        assert_eq!(boot_embeddings_policy(None, &bare).unwrap(), None);
+        assert_eq!(
+            boot_embeddings_policy(None, &flag).unwrap(),
+            Some(MapPolicy::Memory)
+        );
+        let mapped = manifest_with(
+            tmp.path(),
+            "name: a\nextensions:\n  embeddings:\n    storage: mapped\n",
+        );
+        assert_eq!(
+            boot_embeddings_policy(Some(&mapped), &bare).unwrap(),
+            Some(MapPolicy::Mapped)
+        );
+        assert_eq!(
+            boot_embeddings_policy(Some(&mapped), &flag).unwrap(),
+            Some(MapPolicy::Memory),
+            "the flag overrides the manifest"
+        );
+        let empty = manifest_with(tmp.path(), "name: e\nextensions:\n  embeddings: {}\n");
+        assert_eq!(boot_embeddings_policy(Some(&empty), &bare).unwrap(), None);
+        assert!(KNOWN_EXTENSION_KEYS.contains(&"embeddings"));
+        assert!(Cli::try_parse_from([
+            "kglite-mcp-server",
+            "--graph",
+            "g.kgl",
+            "--embeddings",
+            "always"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn a_malformed_embeddings_block_fails_boot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        for body in ["storage: always", "storage: 7", "stroage: mapped"] {
+            let manifest = manifest_with(
+                tmp.path(),
+                &format!("name: m\nextensions:\n  embeddings:\n    {body}\n"),
+            );
+            assert!(
+                boot_embeddings_policy(Some(&manifest), &cli).is_err(),
+                "{body}"
+            );
+        }
+        let scalar = manifest_with(tmp.path(), "name: s\nextensions:\n  embeddings: mapped\n");
+        assert!(boot_embeddings_policy(Some(&scalar), &cli).is_err());
     }
 
     #[test]

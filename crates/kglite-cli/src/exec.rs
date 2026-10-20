@@ -38,6 +38,9 @@ pub struct QueryOptions {
     /// stored one, else `today`). Runtime only — never written into the
     /// `.kgl` file.
     pub valid_time_default: Option<ValidTimeDefault>,
+    /// Where a v9 `.kgl`'s embedding stores live (`--embeddings`); `None`
+    /// leaves the engine's default (`auto`).
+    pub embeddings: Option<kglite::api::io::MapPolicy>,
 }
 
 /// `graph` with the operator's valid-time default set. The graph is the

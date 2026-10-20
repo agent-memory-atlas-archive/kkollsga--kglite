@@ -335,6 +335,34 @@ typedef struct KgliteGraph {
 } KgliteGraph;
 
 /**
+ * Options for [`kglite_load_file_with_options`]. A versioned struct: set
+ * `struct_size` to `sizeof(KgliteLoadOptions)` as compiled; the library reads
+ * only that many bytes and treats every later field as zero, so a field added
+ * in a later release is additive. Zero-initialise, then set `struct_size` and
+ * the fields you want; zero means "the process default" for every field.
+ */
+typedef struct KgliteLoadOptions {
+  /**
+   * `sizeof(KgliteLoadOptions)` in the caller's build. Must cover at least
+   * this field.
+   */
+  uintptr_t struct_size;
+  /**
+   * Where a v9 file's embedding stores live: `0` default (`auto`), `1`
+   * auto (map a store of 64 MB or more from a regular local file), `2`
+   * mapped (map any size), `3` memory (copy to the heap). A v8 or older
+   * file ignores it.
+   */
+  uint32_t embeddings;
+  /**
+   * CRC32 verification of mapped sections: `0` default (lazy unless
+   * `KGLITE_VERIFY=eager`), `1` lazy (a mapped store is checked on its
+   * first search), `2` eager (every mapped section is checked at load).
+   */
+  uint32_t verify;
+} KgliteLoadOptions;
+
+/**
  * Opaque handle for a held writer lease. See
  * [`KgliteGraph`](crate::KgliteGraph) for the rationale on the empty
  * `#[repr(C)]` facade pattern — cbindgen renders only a forward
@@ -1103,6 +1131,64 @@ KgliteStatusCode kglite_graph_storage_mode(struct KgliteGraph *graph,
 KgliteStatusCode kglite_load_file(const char *path,
                                   struct KgliteGraph **out_graph,
                                   const char **out_error_msg);
+
+/**
+ * [`kglite_load_file`] with load options: where the embedding stores of a v9
+ * file live, and when their CRC32 is checked.
+ *
+ * Identical to `kglite_load_file` (same outputs, errors and safety contract)
+ * plus `options`: null means every default, which is exactly `kglite_load_file`.
+ * `KGLITE_STATUS_CODE_INVALID_ARGUMENT` reports an `options` value out of
+ * range.
+ *
+ * # Safety
+ *
+ * As [`kglite_load_file`]; `options` is null or points to at least
+ * `options->struct_size` readable bytes.
+ */
+
+KgliteStatusCode kglite_load_file_with_options(const char *path,
+                                               const struct KgliteLoadOptions *options,
+                                               struct KgliteGraph **out_graph,
+                                               const char **out_error_msg);
+
+/**
+ * [`kglite_save_graph_durable`] with a container layout.
+ *
+ * `layout` `0` writes the default container: a graph with an embedding store
+ * of 4 MiB or more saves as `.kgl` v9, whose raw vectors a load can map.
+ * `1` (compact) writes the v8 container with every section compressed, which
+ * every kglite release can read; use it for files older readers must open.
+ * Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
+ * graph ignores the layout. Everything else is as `kglite_save_graph_durable`.
+ *
+ * # Safety
+ *
+ * As [`kglite_save_graph_durable`].
+ */
+
+KgliteStatusCode kglite_save_graph_with_layout(struct KgliteGraph *graph,
+                                               const char *path,
+                                               uint8_t fsync,
+                                               uint32_t layout,
+                                               const char **out_error_msg);
+
+/**
+ * Check the CRC32 of every memory-mapped section `graph` serves and write a
+ * JSON report to `*out_json`: `{"ok": bool, "sections": [{"name", "bytes",
+ * "mapped", "error"}]}` (`error` is null for an intact section). A graph with
+ * no mapped section reports `ok: true` with no sections. Free the string with
+ * [`kglite_free_string`](crate::kglite_free_string).
+ *
+ * # Safety
+ *
+ * `graph` must be a valid handle; `out_json` a writable `*const c_char` slot;
+ * `out_error_msg` null or a valid slot.
+ */
+
+KgliteStatusCode kglite_graph_verify_integrity(struct KgliteGraph *graph,
+                                               const char **out_json,
+                                               const char **out_error_msg);
 
 #if defined(KGLITE_FEATURE_RDF)
 /**

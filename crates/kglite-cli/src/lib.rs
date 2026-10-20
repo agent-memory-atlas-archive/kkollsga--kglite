@@ -151,6 +151,14 @@ enum Command {
         #[arg(long, value_name = "today|all|YYYY-MM-DD",
               value_parser = |text: &str| kglite::api::temporal::ValidTimeDefault::parse(text))]
         valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
+        /// Where a v9 `.kgl`'s embedding stores live: `auto` (read a store of
+        /// 64 MB or more in place from a regular local file), `mapped` (read
+        /// every store in place) or `memory` (copy every store to the heap).
+        /// A v8 or older file ignores it.
+        #[arg(long, value_name = "auto|mapped|memory",
+              value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
+                  .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
+        embeddings: Option<kglite::api::io::MapPolicy>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -513,6 +521,7 @@ fn dispatch(command: &Command) -> Result<()> {
             format,
             parallel,
             valid_time_default,
+            embeddings,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -524,6 +533,7 @@ fn dispatch(command: &Command) -> Result<()> {
                 parallel: *parallel,
                 timeout_ms: *timeout_ms,
                 valid_time_default: *valid_time_default,
+                embeddings: *embeddings,
                 ..QueryOptions::default()
             },
             agent_response::AgentOptions {
@@ -734,8 +744,20 @@ fn fresh_graph() -> Result<DirGraph> {
 }
 
 fn load_graph(path: &Path) -> Result<Arc<DirGraph>> {
+    load_graph_placed(path, None)
+}
+
+/// [`load_graph`] with the operator's embedding placement (`--embeddings`).
+fn load_graph_placed(
+    path: &Path,
+    embeddings: Option<kglite::api::io::MapPolicy>,
+) -> Result<Arc<DirGraph>> {
     let p = path.to_string_lossy().to_string();
-    load_file(&p).with_context(|| format!("failed to open {p}"))
+    let mut options = kglite::api::io::LoadOptions::new();
+    if let Some(policy) = embeddings {
+        options = options.with_embeddings(policy);
+    }
+    kglite::api::io::load_file_with(&p, &options).with_context(|| format!("failed to open {p}"))
 }
 
 /// Write the SQL projection of a graph to a file, or to stdout when no output
@@ -757,7 +779,10 @@ fn run_export_sqlite(graph_path: &Path, output: Option<&Path>) -> Result<()> {
 }
 
 fn run_query(path: &Path, query: &str, mode: Mode, options: QueryOptions) -> Result<()> {
-    let graph = exec::with_valid_time_default(load_graph(path)?, options.valid_time_default);
+    let graph = exec::with_valid_time_default(
+        load_graph_placed(path, options.embeddings)?,
+        options.valid_time_default,
+    );
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
         .map_err(|e| anyhow::anyhow!("Cypher parse error: {e}"))?;
     if is_mutation {
@@ -783,8 +808,10 @@ fn run_agent_query(
     let operation = kglite::api::cypher::with_query_warning_sink(
         kglite::api::cypher::QueryWarningSink::Silent,
         || {
-            let graph =
-                exec::with_valid_time_default(load_graph(path)?, options.valid_time_default);
+            let graph = exec::with_valid_time_default(
+                load_graph_placed(path, options.embeddings)?,
+                options.valid_time_default,
+            );
             let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
                 .map_err(|error| anyhow::anyhow!("Cypher parse error: {error}"))?;
             if is_mutation {

@@ -262,6 +262,7 @@ impl KnowledgeGraph {
             dict.set_item("dimension", info.dimension)?;
             dict.set_item("count", info.count)?;
             dict.set_item("metric", info.metric)?;
+            dict.set_item("storage", info.storage)?;
             py_list.append(dict)?;
         }
         for info in list_relationship_embeddings(self.graph()) {
@@ -273,6 +274,7 @@ impl KnowledgeGraph {
             dict.set_item("dimension", info.dimension)?;
             dict.set_item("count", info.count)?;
             dict.set_item("metric", info.metric)?;
+            dict.set_item("storage", info.storage)?;
             py_list.append(dict)?;
         }
         py_list.into_py_any(py)
@@ -307,6 +309,7 @@ impl KnowledgeGraph {
             dict.set_item("status", row.status.as_str())?;
             dict.set_item("dimension", row.dimension)?;
             dict.set_item("metric", row.metric)?;
+            dict.set_item("storage", row.storage)?;
             let length_stats = PyDict::new(py);
             length_stats.set_item("mean_length", row.length_stats.mean_length)?;
             length_stats.set_item("max_length", row.length_stats.max_length)?;

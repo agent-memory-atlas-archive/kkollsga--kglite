@@ -891,6 +891,8 @@ def load(
     storage: str | None = None,
     defer_index_rebuild: bool | None = None,
     max_load_mb: int | None = None,
+    embeddings: Literal["auto", "mapped", "memory"] | None = None,
+    verify: Literal["lazy", "eager"] | None = None,
 ) -> KnowledgeGraph:
     """Load a graph from a binary file previously saved with ``save()``.
 
@@ -913,6 +915,16 @@ def load(
             ``None`` (default) leaves the process default in charge — no
             ceiling, unless ``KGLITE_MAX_LOAD_MB`` sets one, which this
             outranks.
+        embeddings: Where a v9 file's embedding stores live: ``"auto"``
+            (default) serves a store of 64 MB or more from the file mapping
+            (a regular local file, Unix); ``"mapped"`` maps any size;
+            ``"memory"`` copies every store to the heap. A byte buffer, a
+            network or FUSE filesystem (``"auto"``), Windows (``"auto"``) and
+            ``KGLITE_MMAP=0`` always give the heap. A v8 or older file has
+            nothing to map and ignores it. See "Mapped embeddings" below.
+        verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
+            mapped store's CRC32 on its first search; ``"eager"`` checks every
+            mapped section at load, which reads the whole file once.
 
     Returns:
         A new KnowledgeGraph with the loaded data.
@@ -923,7 +935,22 @@ def load(
         LoadMemoryLimitError: The estimated load exceeds ``max_load_mb`` (or
             ``KGLITE_MAX_LOAD_MB``), either at the metadata precheck or at the
             pre-publication legacy normalization check.
-        ArgumentError: ``storage`` is an unknown mode, or ``"disk"``.
+        ArgumentError: ``storage`` is an unknown mode, or ``"disk"``;
+            ``embeddings`` or ``verify`` is not one of its names.
+
+    **Mapped embeddings.** A graph saved with an embedding store of 4 MiB or
+    more is a v9 file: the vectors and their norms sit uncompressed in the
+    file. A mapped load reads them in place, so the process holds no resident
+    memory for a store until a search touches its pages, and two graphs loaded
+    from the same file share them. Search results are identical to a heap
+    load. The first write to a store copies that store to the heap, so a graph
+    that edits its embeddings pays the copy once. :meth:`KnowledgeGraph.list_embeddings`
+    reports each store as ``storage="mapped"`` or ``"heap"``.
+
+    Do not overwrite a loaded file in place (``cp``, ``rsync --inplace``): a
+    truncated mapping faults. Write to a new name and rename it over, as
+    :meth:`KnowledgeGraph.save` does, or load with ``embeddings="memory"``.
+    Saving over the loaded path with ``save()`` is safe.
 
     **``storage`` is not a memory lever.** For a loaded ``.kgl``, mapped and
     memory cost the same resident memory — measured within 0.3 MB of each other
@@ -1037,6 +1064,8 @@ def open_session(
     storage: str | None = None,
     defer_index_rebuild: bool | None = None,
     max_load_mb: int | None = None,
+    embeddings: Literal["auto", "mapped", "memory"] | None = None,
+    verify: Literal["lazy", "eager"] | None = None,
     durable: bool | Literal["full", "normal", "off"] | None = None,
     auto_checkpoint_wal_mib: int | None = None,
 ) -> "Session":
@@ -1082,6 +1111,8 @@ def open_session(
         defer_index_rebuild: As on :func:`load`. Read-only form only.
         max_load_mb: As on :func:`load` — a ceiling in **megabytes**. Read-only
             form only.
+        embeddings: As on :func:`load`. Read-only form only.
+        verify: As on :func:`load`. Read-only form only.
         durable: ``"full"`` (every commit survives power loss), ``"normal"``
             (survives the process dying, not an OS crash), ``"off"`` (no log;
             persistence is :meth:`Session.save` and :meth:`Session.close`), or
@@ -5305,7 +5336,13 @@ class KnowledgeGraph:
     # Persistence
     # ====================================================================
 
-    def save(self, path: str | None = None, *, fsync: bool = True) -> None:
+    def save(
+        self,
+        path: str | None = None,
+        *,
+        fsync: bool = True,
+        layout: Literal["auto", "compact"] = "auto",
+    ) -> None:
         """Serialise the graph to disk, atomically and durably.
 
         For default/mapped modes: saves to a ``.kgl`` binary file.
@@ -5380,6 +5417,15 @@ class KnowledgeGraph:
                 flush happens anyway): the save is the checkpoint that truncates
                 the fsync'd write-ahead log, so skipping the flush could lose
                 both the checkpoint and the log on a crash.
+            layout: ``"auto"`` (default) writes a v9 file when an embedding
+                store is 4 MiB or larger: the vectors and norms are stored
+                uncompressed, so a load can map them. ``"compact"`` writes the
+                v8 container with every section compressed, which every kglite
+                release can read. Use ``"compact"`` for files that older
+                servers or tools must open; they refuse a v9 file with "File
+                uses .kgl container version 9, but this library only supports
+                up to version 8". A graph with no store that large writes the
+                same bytes either way. Ignored for disk mode.
 
         Raises:
             kglite.FileIoError: The write itself failed — a full disk, a
@@ -5388,7 +5434,31 @@ class KnowledgeGraph:
                 classifies the same way the load path does.
             ValueError: The call was refused before the path was touched — no
                 remembered path, or a write-ahead sidecar that runs ahead of
-                the target (above).
+                the target (above) — or ``layout`` is not ``"auto"`` or
+                ``"compact"``.
+        """
+        ...
+
+    def verify_integrity(self) -> dict[str, Any]:
+        """Check the CRC32 of every memory-mapped section this graph serves.
+
+        A mapped load checks a store when it is first searched; this checks all
+        of them now, and also reports a source file whose modification time
+        changed since it was mapped. A graph with no mapped sections returns an
+        empty, passing report.
+
+        Returns:
+            ``{"ok": bool, "sections": [...]}``. Each section is
+            ``{"name": str, "bytes": int, "mapped": bool, "error": str | None}``;
+            ``error`` is ``None`` for an intact section. Names read
+            ``embeddings:<node_type>.<store>`` and
+            ``edge_embeddings:<relationship_type>.<store>``.
+
+        Example::
+
+            report = g.verify_integrity()
+            if not report["ok"]:
+                bad = [s["name"] for s in report["sections"] if s["error"]]
         """
         ...
 
@@ -9449,7 +9519,10 @@ class KnowledgeGraph:
             source column this API takes (``'summary'``); ``store_name`` is the
             store the column is held in (``'summary_emb'``) — the spelling
             Cypher's ``vector_score()`` takes. ``metric`` is the store's own
-            metric, or ``'cosine'`` when it recorded none. Relationship rows are
+            metric, or ``'cosine'`` when it recorded none. ``storage`` is
+            ``'mapped'`` when the vectors are read in place from the loaded
+            ``.kgl`` file (until the first write to the store copies them) and
+            ``'heap'`` otherwise. Relationship rows are
             sorted by type and store; node-row order is unspecified.
 
         Example::
@@ -9660,7 +9733,8 @@ class KnowledgeGraph:
             by type and column. Every row carries ``entity`` (``'node'`` or
             ``'relationship'``), ``text_column``, ``embedding_key``
             (the store name, ``f"{text_column}_emb"``), ``dimension`` (or ``None``),
-            ``metric`` (or ``None``), ``status``, and ``length_stats`` with
+            ``metric`` (or ``None``), ``storage`` (``'mapped'``, ``'heap'`` or
+            ``None`` without a store), ``status``, and ``length_stats`` with
             ``mean_length`` / ``max_length`` / ``distinct_count`` /
             ``distinct_ratio``. Node rows add ``node_type``,
             ``nodes_with_property`` and ``nodes_embedded``; relationship rows

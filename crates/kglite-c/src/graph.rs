@@ -11,7 +11,8 @@ use crate::strings::alloc_c_string;
 use kglite::api::blueprint::{build as blueprint_build, load_blueprint_file};
 use kglite::api::introspection::{compute_schema, schema_overview_to_json};
 use kglite::api::io::{
-    load_file, load_kgl_bytes, refuse_foreign_writer, save_graph, save_graph_with, write_kgl_to,
+    load_file, load_file_with, load_kgl_bytes, refuse_foreign_writer, save_graph, save_graph_with,
+    save_graph_with_layout, verify_graph, write_kgl_to, LoadOptions, MapPolicy, SaveLayout, Verify,
 };
 #[cfg(feature = "rdf")]
 use kglite::api::io::{load_rdf as core_load_rdf, RdfConfig};
@@ -344,6 +345,253 @@ pub unsafe extern "C" fn kglite_load_file(
                     code
                 }
             }
+        },
+    )
+}
+
+/// Options for [`kglite_load_file_with_options`]. A versioned struct: set
+/// `struct_size` to `sizeof(KgliteLoadOptions)` as compiled; the library reads
+/// only that many bytes and treats every later field as zero, so a field added
+/// in a later release is additive. Zero-initialise, then set `struct_size` and
+/// the fields you want; zero means "the process default" for every field.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct KgliteLoadOptions {
+    /// `sizeof(KgliteLoadOptions)` in the caller's build. Must cover at least
+    /// this field.
+    pub struct_size: usize,
+    /// Where a v9 file's embedding stores live: `0` default (`auto`), `1`
+    /// auto (map a store of 64 MB or more from a regular local file), `2`
+    /// mapped (map any size), `3` memory (copy to the heap). A v8 or older
+    /// file ignores it.
+    pub embeddings: u32,
+    /// CRC32 verification of mapped sections: `0` default (lazy unless
+    /// `KGLITE_VERIFY=eager`), `1` lazy (a mapped store is checked on its
+    /// first search), `2` eager (every mapped section is checked at load).
+    pub verify: u32,
+}
+
+fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, String> {
+    let mut load = LoadOptions::new();
+    if options.is_null() {
+        return Ok(load);
+    }
+    let declared = unsafe { std::ptr::addr_of!((*options).struct_size).read_unaligned() };
+    if declared < std::mem::size_of::<usize>() {
+        return Err("KgliteLoadOptions.struct_size is smaller than its first field".to_string());
+    }
+    // SAFETY: zero is a valid bit pattern for every field.
+    let mut local: KgliteLoadOptions = unsafe { std::mem::zeroed() };
+    let take = declared.min(std::mem::size_of::<KgliteLoadOptions>());
+    // SAFETY: the caller promises `struct_size` readable bytes at `options`.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            options.cast::<u8>(),
+            std::ptr::addr_of_mut!(local).cast::<u8>(),
+            take,
+        );
+    }
+    match local.embeddings {
+        0 => {}
+        1 => load = load.with_embeddings(MapPolicy::Auto),
+        2 => load = load.with_embeddings(MapPolicy::Mapped),
+        3 => load = load.with_embeddings(MapPolicy::Memory),
+        other => return Err(format!("KgliteLoadOptions.embeddings {other} is not 0..=3")),
+    }
+    match local.verify {
+        0 => {}
+        1 => load = load.with_verify(Verify::Lazy),
+        2 => load = load.with_verify(Verify::Eager),
+        other => return Err(format!("KgliteLoadOptions.verify {other} is not 0..=2")),
+    }
+    Ok(load)
+}
+
+/// [`kglite_load_file`] with load options: where the embedding stores of a v9
+/// file live, and when their CRC32 is checked.
+///
+/// Identical to `kglite_load_file` (same outputs, errors and safety contract)
+/// plus `options`: null means every default, which is exactly `kglite_load_file`.
+/// `KGLITE_STATUS_CODE_INVALID_ARGUMENT` reports an `options` value out of
+/// range.
+///
+/// # Safety
+///
+/// As [`kglite_load_file`]; `options` is null or points to at least
+/// `options->struct_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn kglite_load_file_with_options(
+    path: *const c_char,
+    options: *const KgliteLoadOptions,
+    out_graph: *mut *mut KgliteGraph,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || crate::ffi::init_out(out_graph, std::ptr::null_mut()),
+        || {
+            if path.is_null() || out_graph.is_null() {
+                return KgliteStatusCode::NullPointer;
+            }
+            let path_str = match unsafe { CStr::from_ptr(path) }.to_str() {
+                Ok(s) => s,
+                Err(_) => return KgliteStatusCode::InvalidUtf8,
+            };
+            let load_options = match read_load_options(options) {
+                Ok(parsed) => parsed,
+                Err(message) => {
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = alloc_c_string(&message);
+                        }
+                    }
+                    return KgliteStatusCode::InvalidArgument;
+                }
+            };
+            match load_file_with(path_str, &load_options) {
+                Ok(arc) => {
+                    unsafe {
+                        *out_graph = GraphState::into_handle(arc);
+                    }
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = std::ptr::null();
+                        }
+                    }
+                    KgliteStatusCode::Ok
+                }
+                Err(io_err) => {
+                    let (code, message) = classify_io_error(&io_err);
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = alloc_c_string(&message);
+                        }
+                    }
+                    code
+                }
+            }
+        },
+    )
+}
+
+/// [`kglite_save_graph_durable`] with a container layout.
+///
+/// `layout` `0` writes the default container: a graph with an embedding store
+/// of 4 MiB or more saves as `.kgl` v9, whose raw vectors a load can map.
+/// `1` (compact) writes the v8 container with every section compressed, which
+/// every kglite release can read; use it for files older readers must open.
+/// Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
+/// graph ignores the layout. Everything else is as `kglite_save_graph_durable`.
+///
+/// # Safety
+///
+/// As [`kglite_save_graph_durable`].
+#[no_mangle]
+pub unsafe extern "C" fn kglite_save_graph_with_layout(
+    graph: *mut KgliteGraph,
+    path: *const c_char,
+    fsync: u8,
+    layout: u32,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || {},
+        || {
+            if graph.is_null() || path.is_null() {
+                return KgliteStatusCode::NullPointer;
+            }
+            let layout = match layout {
+                0 => SaveLayout::Auto,
+                1 => SaveLayout::Compact,
+                other => {
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = alloc_c_string(&format!(
+                                "layout {other} is not 0 (default) or 1 (compact)"
+                            ));
+                        }
+                    }
+                    return KgliteStatusCode::InvalidArgument;
+                }
+            };
+            let path_str = match unsafe { CStr::from_ptr(path) }.to_str() {
+                Ok(s) => s,
+                Err(_) => return KgliteStatusCode::InvalidUtf8,
+            };
+            if let Some(refusal) = foreign_lease_refusal(path_str) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
+            let state = unsafe { GraphState::from_handle_mut(graph) };
+            match save_graph_with_layout(&mut state.inner, path_str, fsync != 0, layout) {
+                Ok(()) => {
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = std::ptr::null();
+                        }
+                    }
+                    KgliteStatusCode::Ok
+                }
+                Err(error) => {
+                    if !out_error_msg.is_null() {
+                        unsafe {
+                            *out_error_msg = alloc_c_string(&error.to_string());
+                        }
+                    }
+                    KgliteStatusCode::FileIo
+                }
+            }
+        },
+    )
+}
+
+/// Check the CRC32 of every memory-mapped section `graph` serves and write a
+/// JSON report to `*out_json`: `{"ok": bool, "sections": [{"name", "bytes",
+/// "mapped", "error"}]}` (`error` is null for an intact section). A graph with
+/// no mapped section reports `ok: true` with no sections. Free the string with
+/// [`kglite_free_string`](crate::kglite_free_string).
+///
+/// # Safety
+///
+/// `graph` must be a valid handle; `out_json` a writable `*const c_char` slot;
+/// `out_error_msg` null or a valid slot.
+#[no_mangle]
+pub unsafe extern "C" fn kglite_graph_verify_integrity(
+    graph: *mut KgliteGraph,
+    out_json: *mut *const c_char,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || crate::ffi::init_out(out_json, std::ptr::null()),
+        || {
+            if graph.is_null() || out_json.is_null() {
+                return KgliteStatusCode::NullPointer;
+            }
+            let state = unsafe { GraphState::from_handle_mut(graph) };
+            let report = verify_graph(&state.inner);
+            let sections: Vec<serde_json::Value> = report
+                .sections
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "bytes": s.bytes,
+                        "mapped": s.mapped,
+                        "error": s.error,
+                    })
+                })
+                .collect();
+            let json = serde_json::json!({ "ok": report.is_ok(), "sections": sections });
+            unsafe {
+                *out_json = alloc_c_string(&json.to_string());
+            }
+            if !out_error_msg.is_null() {
+                unsafe {
+                    *out_error_msg = std::ptr::null();
+                }
+            }
+            KgliteStatusCode::Ok
         },
     )
 }

@@ -81,6 +81,24 @@ The header exposes:
   `FILE_NOT_FOUND`). A binding's read-only open uses this symbol and checks
   the mode from `kglite_graph_storage_mode` itself; no separate read-only
   symbol exists;
+- `kglite_load_file_with_options`: `kglite_load_file` plus a versioned
+  `KgliteLoadOptions` (null means every default). `embeddings` is `0` default
+  (`auto`), `1` auto, `2` mapped or `3` memory; `verify` is `0` default, `1`
+  lazy or `2` eager. A file saved with an embedding store of 4 MiB or more is
+  a v9 file whose store a load can read in place instead of copying.
+  - `auto` maps a store of 64 MB or more from a regular local file on Unix.
+    A byte buffer, a network or FUSE filesystem, Windows (`auto`) and
+    `KGLITE_MMAP=0` give the heap.
+  - The first write to a mapped store copies it to the heap.
+  - Do not overwrite a loaded file in place (`cp`, `rsync --inplace`): a
+    truncated mapping faults. Write to a new name and rename it over;
+    `kglite_save_graph_durable` already does;
+- `kglite_save_graph_with_layout`: `kglite_save_graph_durable` plus a `layout`
+  (`0` default, `1` compact). Compact writes the v8 container that releases
+  before the v9 reader can open; the default writes v9 when a store is large
+  enough;
+- `kglite_graph_verify_integrity`, which checks the CRC32 of every mapped
+  section a graph serves and returns a JSON report;
 - `kglite_graph_storage_mode`, which reports the mode a graph handle is running
   in *right now* as an owned `"memory"` / `"mapped"` / `"disk"` string. It
   borrows the handle, so call it before `kglite_session_new` consumes it.

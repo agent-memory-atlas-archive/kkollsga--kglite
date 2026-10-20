@@ -71,6 +71,43 @@ pub enum MapPolicy {
     Memory,
 }
 
+impl MapPolicy {
+    /// Parse a user-facing policy name: `"auto"`, `"mapped"` or `"memory"`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "auto" => Some(MapPolicy::Auto),
+            "mapped" => Some(MapPolicy::Mapped),
+            "memory" => Some(MapPolicy::Memory),
+            _ => None,
+        }
+    }
+
+    /// The user-facing name [`Self::from_name`] accepts.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MapPolicy::Auto => "auto",
+            MapPolicy::Mapped => "mapped",
+            MapPolicy::Memory => "memory",
+        }
+    }
+}
+
+impl Verify {
+    /// Parse a user-facing name: `"lazy"` or `"eager"`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "lazy" => Some(Verify::Lazy),
+            "eager" => Some(Verify::Eager),
+            _ => None,
+        }
+    }
+}
+
+/// The embedding policy [`LoadOptions::new`] starts from, in every storage
+/// mode. One constant so a measured regression can change the default without
+/// touching the option's meaning.
+pub(crate) const DEFAULT_EMBEDDINGS_POLICY: MapPolicy = MapPolicy::Auto;
+
 /// Options for [`load_file_with`](super::load_file_with) /
 /// [`load_kgl_bytes_with`](super::load_kgl_bytes_with).
 ///
@@ -189,7 +226,7 @@ impl LoadOptions {
             storage: None,
             defer_index_rebuild: defer_index_rebuild_default(),
             max_load_bytes: max_load_bytes_default(),
-            embeddings: MapPolicy::Auto,
+            embeddings: DEFAULT_EMBEDDINGS_POLICY,
             columns: MapPolicy::Auto,
             verify: verify_default(),
         }

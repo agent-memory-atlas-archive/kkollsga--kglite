@@ -289,6 +289,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/lib.rs::fn:open_session:fn open_session( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, verify: Option<&str>, durable: Option<Bound<'_, PyAny>>, auto_checkpoint_wal_mib: Option<u64>, ) -> PyResult<Session>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/okf/pyapi/entry.rs::fn:open:pub fn open( py: Python<'_>, path: PathBuf, cache: Option<Bound<'_, PyAny>>, dialect: Option<String>, embedder: Option<Py<PyAny>>, require_frontmatter: Option<bool>, respect_skip: bool, skip_dirs: Option<Vec<String>>, with_body: Option<bool>, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
       "classification": "boundary"
     },
@@ -407,6 +411,10 @@
     {
       "identity": "crates/kglite/src/graph/edge_vector_index.rs::fn:build_relationship_vector_index:pub fn build_relationship_vector_index( graph: &mut DirGraph, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> Result<crate::graph::embeddings::VectorIndexReport, Stri::clippy::too_many_arguments",
       "classification": "transitional"
+    },
+    {
+      "identity": "crates/kglite/src/graph/embedding_store.rs::fn:len:pub fn len(&self) -> usize::clippy::len_without_is_empty",
+      "classification": "api-shape"
     },
     {
       "identity": "crates/kglite/src/graph/embeddings.rs::fn:build_index_structure:pub(crate) fn build_index_structure( graph: &mut DirGraph, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> Result<VectorIndexReport, String>::clippy::too_many_arguments",
@@ -574,10 +582,6 @@
     },
     {
       "identity": "crates/kglite/src/graph/recipes/records.rs::module::clippy::result_large_err",
-      "classification": "api-shape"
-    },
-    {
-      "identity": "crates/kglite/src/graph/schema.rs::fn:len:pub fn len(&self) -> usize::clippy::len_without_is_empty",
       "classification": "api-shape"
     },
     {

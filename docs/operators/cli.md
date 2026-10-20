@@ -72,6 +72,15 @@ changes what an unprefixed statement reads for that run. A statement's own
 prefix still wins. Without the flag, a default the graph stored in its file
 applies, else today.
 
+### Embedding placement
+
+`kglite query --embeddings {auto|mapped|memory}` chooses where a v9 `.kgl`'s
+embedding stores live for that run. A graph saved with a store of 4 MiB or more
+is v9. `auto` (the default) reads a store of 64 MB or more in place from a
+regular local file on Unix, so a one-shot query does not copy the vectors it
+barely touches. `mapped` reads every store in place and `memory` copies every
+store. A v8 or older file ignores the flag.
+
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

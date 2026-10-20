@@ -239,8 +239,26 @@ fn load_options_from_args(
     storage: Option<&str>,
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
+    embeddings: Option<&str>,
+    verify: Option<&str>,
 ) -> PyResult<kglite_core::api::io::LoadOptions> {
+    use kglite_core::api::io::{MapPolicy, Verify};
+    let argument =
+        |message: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message));
     let mut options = kglite_core::api::io::LoadOptions::new();
+    if let Some(name) = embeddings {
+        let policy = MapPolicy::from_name(name).ok_or_else(|| {
+            argument(format!(
+                "embeddings must be 'auto', 'mapped' or 'memory', got '{name}'"
+            ))
+        })?;
+        options = options.with_embeddings(policy);
+    }
+    if let Some(name) = verify {
+        let verify = Verify::from_name(name)
+            .ok_or_else(|| argument(format!("verify must be 'lazy' or 'eager', got '{name}'")))?;
+        options = options.with_verify(verify);
+    }
     if let Some(mode_str) = storage {
         let mode = kglite_core::api::storage::StorageMode::parse(mode_str)
             .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(e)))?;
@@ -310,15 +328,23 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// estimate and ceiling. `KGLITE_MAX_LOAD_MB` sets a process-wide default this
 /// outranks.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, verify=None))]
 fn load(
     py: Python<'_>,
     path: String,
     storage: Option<&str>,
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
+    embeddings: Option<&str>,
+    verify: Option<&str>,
 ) -> PyResult<KnowledgeGraph> {
-    let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb)?;
+    let options = load_options_from_args(
+        storage,
+        defer_index_rebuild,
+        max_load_mb,
+        embeddings,
+        verify,
+    )?;
     let inner = py
         .detach(|| kglite_core::api::io::load_file_with(&path, &options))
         .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
@@ -404,16 +430,20 @@ fn load_rdf(
 /// owns the writer lease, replays the log, and routes `execute()` writes
 /// through group commit with the GIL released.
 ///
-/// `defer_index_rebuild` and `max_load_mb` apply to the load form only;
-/// `auto_checkpoint_wal_mib` to the durable form only.
+/// `defer_index_rebuild`, `max_load_mb`, `embeddings` and `verify` apply to the
+/// load form only; `auto_checkpoint_wal_mib` to the durable form only.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, durable=None, auto_checkpoint_wal_mib=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, verify=None, durable=None, auto_checkpoint_wal_mib=None))]
+// One keyword per documented option; the load and durable forms share the signature.
+#[allow(clippy::too_many_arguments)]
 fn open_session(
     py: Python<'_>,
     path: String,
     storage: Option<&str>,
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
+    embeddings: Option<&str>,
+    verify: Option<&str>,
     durable: Option<Bound<'_, PyAny>>,
     auto_checkpoint_wal_mib: Option<u64>,
 ) -> PyResult<Session> {
@@ -423,7 +453,13 @@ fn open_session(
                 "auto_checkpoint_wal_mib applies only to a durable session; pass durable= too.",
             ));
         }
-        let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb)?;
+        let options = load_options_from_args(
+            storage,
+            defer_index_rebuild,
+            max_load_mb,
+            embeddings,
+            verify,
+        )?;
         let inner = py
             .detach(|| kglite_core::api::io::load_file_with(&path, &options))
             .map_err(|e| load_request_err_to_pyerr(e, Some(&path)))?;
@@ -431,10 +467,14 @@ fn open_session(
         warn_data_advisories(py, &inner);
         return Ok(Session::from_arc(inner, None));
     };
-    if defer_index_rebuild.is_some() || max_load_mb.is_some() {
+    if defer_index_rebuild.is_some()
+        || max_load_mb.is_some()
+        || embeddings.is_some()
+        || verify.is_some()
+    {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "defer_index_rebuild and max_load_mb apply to the read-only load form; a durable \
-             session (durable=...) opens through the writer path, which takes neither.",
+            "defer_index_rebuild, max_load_mb, embeddings and verify apply to the read-only load \
+             form; a durable session (durable=...) opens through the writer path, which takes none.",
         ));
     }
     // Durability is a separate Session rather than KnowledgeGraph writes routed
@@ -470,7 +510,7 @@ fn from_bytes(
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
 ) -> PyResult<KnowledgeGraph> {
-    let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb)?;
+    let options = load_options_from_args(storage, defer_index_rebuild, max_load_mb, None, None)?;
     py.detach(|| kglite_core::api::io::load_kgl_bytes_with(data, &options))
         .map(KnowledgeGraph::from_arc)
         .map_err(|e| load_request_err_to_pyerr(e, None))

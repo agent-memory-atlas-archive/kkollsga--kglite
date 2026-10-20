@@ -1159,7 +1159,7 @@
         },
         "save": {
           "kind": "method",
-          "signature": "(self, /, path=None, *, fsync=True)"
+          "signature": "(self, /, path=None, *, fsync=True, layout='auto')"
         },
         "save_subset": {
           "kind": "method",
@@ -1444,6 +1444,10 @@
         "vector_search": {
           "kind": "method",
           "signature": "(self, /, text_column, query_vector, top_k=10, metric=None, to_df=False, returning=None, exact=False, *, entity='node', types=None, relationship_keys=None)"
+        },
+        "verify_integrity": {
+          "kind": "method",
+          "signature": "(self, /)"
         },
         "verify_unique_constraints": {
           "kind": "method",
@@ -1962,7 +1966,7 @@
     },
     "load": {
       "kind": "function",
-      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None)"
+      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, verify=None)"
     },
     "load_rdf": {
       "kind": "function",
@@ -1974,7 +1978,7 @@
     },
     "open_session": {
       "kind": "function",
-      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, durable=None, auto_checkpoint_wal_mib=None)"
+      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, verify=None, durable=None, auto_checkpoint_wal_mib=None)"
     },
     "outline": {
       "kind": "function",

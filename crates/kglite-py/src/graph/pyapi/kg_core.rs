@@ -652,7 +652,7 @@ impl KnowledgeGraph {
         // writes the checkpoint and truncates it. Other graphs only need the
         // capture buffer drained for CDC.
         if self.lifecycle.durable.is_some() {
-            self.save(py, None, true)?;
+            self.save(py, None, true, "auto")?;
         } else {
             self.flush_pending_ops()?;
         }
@@ -679,8 +679,19 @@ impl KnowledgeGraph {
     }
 
     /// Serialise the graph to disk, atomically and durably.
-    #[pyo3(signature = (path=None, *, fsync=true))]
-    fn save(&mut self, py: Python<'_>, path: Option<&str>, fsync: bool) -> PyResult<()> {
+    #[pyo3(signature = (path=None, *, fsync=true, layout="auto"))]
+    fn save(
+        &mut self,
+        py: Python<'_>,
+        path: Option<&str>,
+        fsync: bool,
+        layout: &str,
+    ) -> PyResult<()> {
+        let layout = io::SaveLayout::from_name(layout).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "layout must be 'auto' or 'compact', got '{layout}'"
+            ))
+        })?;
         // A graph whose log refused an append holds a statement the caller was
         // told had failed. `save()` is the one call that would commit it — it
         // serializes whatever is in memory, and cannot tell the acknowledged
@@ -811,7 +822,9 @@ impl KnowledgeGraph {
                 durable::checkpoint_prologue(&mut state.wal, state.next_lsn, graph)
                     .map_err(io_error)?;
             }
-            if let Err(error) = io::save_graph_with(graph_arc, &target.to_string_lossy(), fsync) {
+            if let Err(error) =
+                io::save_graph_with_layout(graph_arc, &target.to_string_lossy(), fsync, layout)
+            {
                 lifecycle_graph_mut(graph_arc).checkpoint_lsn = previous_stamp;
                 return Err(error);
             }
@@ -845,6 +858,25 @@ impl KnowledgeGraph {
         })?;
         crate::allocator::release_after_seam(py);
         Ok(())
+    }
+
+    /// Check the CRC32 of every memory-mapped section this graph serves.
+    fn verify_integrity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let graph = Arc::clone(self.graph());
+        let report = py.detach(|| io::verify_graph(&graph));
+        let sections = PyList::empty(py);
+        for section in &report.sections {
+            let dict = PyDict::new(py);
+            dict.set_item("name", &section.name)?;
+            dict.set_item("bytes", section.bytes)?;
+            dict.set_item("mapped", section.mapped)?;
+            dict.set_item("error", section.error.as_deref())?;
+            sections.append(dict)?;
+        }
+        let result = PyDict::new(py);
+        result.set_item("ok", report.is_ok())?;
+        result.set_item("sections", sections)?;
+        result.into_py_any(py)
     }
 
     /// Write a consistent single-file backup of the graph to `path` without moving this graph's save target.
@@ -1038,7 +1070,7 @@ impl KnowledgeGraph {
     /// Save to the remembered path and end persistence ownership, retaining detached usable data.
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         if self.lifecycle.source_path.is_some() {
-            self.save(py, None, true)?;
+            self.save(py, None, true, "auto")?;
             self.end_persistence_ownership(py);
         }
         Ok(())
@@ -1061,7 +1093,7 @@ impl KnowledgeGraph {
     ) -> PyResult<bool> {
         if self.lifecycle.source_path.is_some() {
             if exc_type.is_none() {
-                self.save(py, None, true)?;
+                self.save(py, None, true, "auto")?;
             }
             self.end_persistence_ownership(py);
         }
