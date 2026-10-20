@@ -2059,7 +2059,20 @@ fn open_mappable_table(
         )));
     }
     let base = data_region_base(metadata, metadata_end, source.bytes.len() as u64)?;
-    embedding_sections::open_table(&metadata.mappable, source.bytes, base, source.file, options)
+    // The mode the graph ends in decides the unrequested column placement. A
+    // record that cannot be read yields no mode here; the load refuses it with
+    // the proper message right after.
+    let target_mode = options
+        .storage
+        .or_else(|| metadata.recorded_storage_mode().ok());
+    embedding_sections::open_table(
+        &metadata.mappable,
+        source.bytes,
+        base,
+        source.file,
+        options,
+        target_mode,
+    )
 }
 
 /// CRC32 over a v8 container's fixed 13-byte header and its metadata JSON —

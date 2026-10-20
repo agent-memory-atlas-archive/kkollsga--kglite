@@ -208,6 +208,39 @@ fn a_mapped_load_mints_no_spill_directory_and_a_decoded_one_does() {
 }
 
 #[test]
+fn an_unrequested_columns_policy_decodes_in_memory_mode_and_maps_in_mapped_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("g.kgl");
+    save_to(big_graph(), &path, SaveLayout::Auto);
+    let path_str = path.to_str().unwrap();
+    let shared =
+        |options: &LoadOptions| shared_count(&load_file_with(path_str, options).unwrap(), "Big");
+
+    assert_eq!(
+        shared(&LoadOptions::new()),
+        0,
+        "in-memory mode decodes unrequested columns"
+    );
+    assert!(
+        shared(&LoadOptions::new().with_columns(MapPolicy::Auto)) > 0,
+        "an explicit Auto maps even in memory mode"
+    );
+    assert!(
+        shared(&LoadOptions::new().with_storage(StorageMode::Mapped)) > 0,
+        "mapped storage mode keeps Auto"
+    );
+    assert_eq!(
+        shared(
+            &LoadOptions::new()
+                .with_storage(StorageMode::Mapped)
+                .with_columns(MapPolicy::Memory)
+        ),
+        0,
+        "an explicit Memory decodes in mapped mode too"
+    );
+}
+
+#[test]
 fn the_first_write_promotes_only_the_written_column_and_leaves_snapshots_mapped() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");

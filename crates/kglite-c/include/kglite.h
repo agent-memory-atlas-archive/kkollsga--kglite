@@ -362,7 +362,8 @@ typedef struct KgliteLoadOptions {
   uint32_t verify;
   /**
    * Where a v9 file's property columns live, with the values of
-   * `embeddings`: `0` default (`auto`), `1` auto (map a column of 256 KB or
+   * `embeddings`: `0` default (`memory` for a graph that loads into in-memory
+   * storage, `auto` otherwise), `1` auto (map a column of 256 KB or
    * more from a regular local file), `2` mapped, `3` memory (decode to the
    * heap, spilling large columns to a temp file). A caller built before
    * this field existed reads as `0`.

@@ -278,13 +278,13 @@ fn the_columns_option_chooses_where_property_columns_live() {
     let path = column_file(&dir);
     assert_eq!(magic(&path), b"RGF\x09");
 
-    let expected_default = usize::from(cfg!(unix));
+    // Unrequested, an in-memory graph decodes its columns.
     let (rc, graph, _) = load(&path, None);
     assert_eq!(rc, KgliteStatusCode::Ok);
-    assert_eq!(column_sections(graph) > 0, expected_default == 1);
+    assert_eq!(column_sections(graph), 0);
     unsafe { kglite_graph_free(graph) };
 
-    for (columns, mapped) in [(2u32, true), (3, false)] {
+    for (columns, mapped) in [(1u32, cfg!(unix)), (2, true), (3, false)] {
         let mut opts = options(0, 0);
         opts.columns = columns;
         let (rc, graph, _) = load(&path, Some(&opts));
@@ -306,10 +306,6 @@ fn the_columns_option_chooses_where_property_columns_live() {
     old.struct_size = 8 + 2 * std::mem::size_of::<u32>();
     let (rc, graph, _) = load(&path, Some(&old));
     assert_eq!(rc, KgliteStatusCode::Ok);
-    assert_eq!(
-        column_sections(graph) > 0,
-        expected_default == 1,
-        "columns reads as default"
-    );
+    assert_eq!(column_sections(graph), 0, "columns reads as default");
     unsafe { kglite_graph_free(graph) };
 }

@@ -75,7 +75,11 @@ def test_every_placement_answers_identically(v9, tmp_path):
         graph = kglite.load(v9, columns="mapped", storage=storage)
         assert _rows(graph) == expected, storage
         assert _col_sections(graph), storage
-    assert _col_sections(kglite.load(v9)) != []  # Auto maps a 256 KB column
+    # Unrequested: an in-memory graph decodes (mapped scans measured >5 % slower),
+    # every other storage mode maps; an explicit "auto" maps in both.
+    assert _col_sections(kglite.load(v9)) == []
+    assert _col_sections(kglite.load(v9, storage="mapped")) != []
+    assert _col_sections(kglite.load(v9, columns="auto")) != []
     assert _col_sections(kglite.load(v9, columns="memory")) == []
     compact = str(tmp_path / "compact.kgl")
     _build().save(compact, layout="compact")

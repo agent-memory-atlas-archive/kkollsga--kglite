@@ -33,7 +33,7 @@ impl FileMetadata {
     /// Resolve the recorded storage mode, erroring by name on a value this
     /// build does not recognise — the likeliest source of an unknown spelling
     /// is a *newer* kglite whose mode this build cannot honour.
-    fn recorded_storage_mode(&self) -> io::Result<StorageMode> {
+    pub(super) fn recorded_storage_mode(&self) -> io::Result<StorageMode> {
         match self.storage_mode.as_deref() {
             None => Ok(StorageMode::Memory),
             Some(tag) => StorageMode::parse(tag).map_err(|_| {

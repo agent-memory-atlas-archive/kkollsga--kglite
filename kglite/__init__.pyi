@@ -926,11 +926,14 @@ def load(
             ``KGLITE_MMAP=0`` always give the heap. A v8 or older file has
             nothing to map and ignores it. See "Mapped embeddings" below.
         columns: Where a v9 file's property columns live: ``"auto"``
-            (default) serves a column of 256 KB or more from the file mapping
+            serves a column of 256 KB or more from the file mapping
             (a regular local file, Unix); ``"mapped"`` maps any size;
             ``"memory"`` decodes every column to the heap, spilling those of
             256 KB or more to a temp file as a v8 file's load does. The
-            fallbacks of ``embeddings`` apply. A v8 or older file ignores it.
+            fallbacks of ``embeddings`` apply. Left unset, a graph that loads
+            into ``storage="memory"`` decodes (``"memory"``) and every other
+            mode uses ``"auto"``: column scans over mapped pages measured 4-9 %
+            slower than over decoded ones. A v8 or older file ignores it.
             See "Mapped columns" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
             mapped store's CRC32 on its first search; ``"eager"`` checks every
