@@ -172,6 +172,11 @@ pub(crate) fn embed_selected_nodes(
     let had_existing_vectors = existing.is_some_and(|store| store.len() > 0);
     let prior_model = existing.and_then(|store| store.model_id.clone());
 
+    if let Some(store) = existing {
+        store
+            .verify_storage()
+            .map_err(|error| EmbedError::Output(error.to_string()))?;
+    }
     model.load().map_err(EmbedError::Model)?;
     let dimension = model.dimension();
     let mut store = match existing {
@@ -242,6 +247,9 @@ pub(crate) fn remove_node_vectors(
     {
         return Ok(0);
     }
+    existing
+        .verify_storage()
+        .map_err(|error| error.to_string())?;
     let mut store = existing.clone();
     let removed = nodes
         .iter()

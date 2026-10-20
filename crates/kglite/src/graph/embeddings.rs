@@ -356,6 +356,12 @@ fn upsert_prepared<V: AsRef<[f32]>>(
 ) -> Result<EmbeddingIngestReport, String> {
     let key = store_key(node_type, text_column);
     let store_existed = graph.embeddings.contains_key(&key);
+    if let Some(existing) = graph.embeddings.get(&key) {
+        // Writing promotes a mapped store to the heap; do not launder a corrupt one.
+        existing
+            .verify_storage()
+            .map_err(|error| error.to_string())?;
+    }
     let Some(dim) = prepared.dimension else {
         return Ok(EmbeddingIngestReport {
             skipped: prepared.skipped,
@@ -1226,6 +1232,14 @@ pub fn embed_property(
 
     if found.texts.is_empty() && !hooks.load_when_idle {
         return Ok(found.outcome(0, store_dimension.unwrap_or(0)));
+    }
+    // The write copies the existing store; refuse a corrupt mapped one first.
+    if mode != EmbedMode::All {
+        if let Some(existing) = graph.embeddings.get(&key) {
+            existing
+                .verify_storage()
+                .map_err(|error| EmbedError::Output(error.to_string()))?;
+        }
     }
     model.load().map_err(EmbedError::Model)?;
     let requested_model_id = requested_model_id.or_else(|| model.model_id());

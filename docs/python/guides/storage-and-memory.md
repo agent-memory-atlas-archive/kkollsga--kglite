@@ -41,7 +41,7 @@ Meanings of the values:
 - `auto` maps a store of 64 MB or more (columns: 256 KB or more) from a regular local file on Unix.
 - `mapped` maps every store or column of a v9 file, whatever its size.
 - `memory` copies to the heap. Columns of 256 KB or more spill to a temp file, as in earlier releases.
-- `lazy` checks an embedding store's CRC32 at its first search. String columns are always checked and UTF-8-validated at load.
+- `lazy` checks the CRC32 of a section that stays mapped at its first use: a search, a save, `verify_integrity()` or the write that promotes it to the heap. A section copied to the heap at load is always checked at load, as are string columns, which are also UTF-8-validated.
 - `eager` checks every section at open. `KGLITE_VERIFY=eager` sets it for a process.
 
 If you do not pass `columns=`, an in-memory graph decodes its columns. A scan over mapped column pages measured 4-9 % slower than over decoded ones (50k rows, release build), and in-memory speed is the core product. `Auto` stays the default for `mapped` storage and the MCP server.

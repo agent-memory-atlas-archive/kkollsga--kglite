@@ -936,8 +936,10 @@ def load(
             slower than over decoded ones. A v8 or older file ignores it.
             See "Mapped columns" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
-            mapped store's CRC32 on its first search; ``"eager"`` checks every
-            mapped section at load, which reads the whole file once.
+            mapped section's CRC32 on its first use (search, save, write); a
+            section copied to the heap is always checked at load. ``"eager"``
+            checks every mapped section at load, which reads the whole file
+            once.
 
     Returns:
         A new KnowledgeGraph with the loaded data.

@@ -85,7 +85,7 @@ store. A v8 or older file ignores the flag.
 
 `kglite query --columns {auto|mapped|memory}` chooses where a v9 `.kgl`'s
 property columns live for that run. A column of 256 KB or more is written to
-the data region by a default save. `auto` (the default) reads such a column in
+the data region by a default save. With no flag an in-memory graph decodes its columns. `auto` reads such a column in
 place from a regular local file on Unix, so the query writes no spill file.
 `mapped` reads every column in place and `memory` decodes every column, spilling
 the large ones to a temp file as a v8 load does. A v8 or older file ignores the

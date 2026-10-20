@@ -354,13 +354,14 @@ fn a_corrupt_mapped_section_is_found_at_first_use_and_by_verify_not_at_load() {
             .with_verify(Verify::Eager),
     );
     assert!(eager.is_err());
-    // A copied (memory) load reads the bytes without a CRC pass, like a
-    // numeric column; verify_file is the on-demand check.
-    assert!(load_file_with(
+    // A copied (memory) load checks the bytes it copies, so it refuses too.
+    let error = load_file_with(
         path.to_str().unwrap(),
-        &LoadOptions::new().with_embeddings(MapPolicy::Memory)
+        &LoadOptions::new().with_embeddings(MapPolicy::Memory),
     )
-    .is_ok());
+    .map(|_| ())
+    .unwrap_err();
+    assert!(error.to_string().contains("corrupt"), "{error}");
 }
 
 #[test]
@@ -522,4 +523,65 @@ fn the_windows_policy_releases_a_mapping_of_the_destination_before_a_save() {
     assert!(!node_store(&graph).is_mapped() && !node_store(&graph).norms.is_mapped());
     assert!(!edge_store(&graph).is_mapped());
     assert!(embedding_sections::mapped_sources(&graph).is_empty());
+}
+
+/// A heap-placed section is copied at load and nothing re-checks the copy, so
+/// the load itself must refuse a corrupt one under the default lazy verify,
+/// whether the policy asks for memory or Auto puts a store under its floor
+/// on the heap.
+#[test]
+fn a_corrupt_section_is_refused_at_load_when_it_is_copied_to_the_heap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("g.kgl");
+    save_to(big_graph(false), &path, SaveLayout::Auto);
+    corrupt_first_section(&path);
+    for policy in [MapPolicy::Memory, MapPolicy::Auto] {
+        let error = load_file_with(
+            path.to_str().unwrap(),
+            &LoadOptions::new().with_embeddings(policy),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert!(error.to_string().contains("corrupt"), "{policy:?}: {error}");
+    }
+}
+
+/// Promoting a mapped store copies it to the heap, where its CRC is never
+/// asked again; a write before any search must verify first, or the next
+/// save would checksum the corrupt bytes into a file that verifies clean.
+#[test]
+fn a_write_to_a_corrupt_mapped_store_fails_before_anything_is_copied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("g.kgl");
+    save_to(big_graph(false), &path, SaveLayout::Auto);
+    corrupt_first_section(&path);
+    let on_disk = std::fs::read(&path).unwrap();
+
+    let mut loaded = load_with(&path, MapPolicy::Mapped);
+    let error = crate::graph::embeddings::add_embeddings(
+        Arc::make_mut(&mut loaded),
+        "Doc",
+        "text",
+        None,
+        [(Value::Int64(1), vector_for(7))],
+    )
+    .unwrap_err();
+    assert!(error.contains("corrupt"), "{error}");
+    assert!(node_store(&loaded).is_mapped(), "no partial promotion");
+    assert_eq!(std::fs::read(&path).unwrap(), on_disk);
+
+    // The infallible mutators carry a backstop: they refuse to copy too.
+    let mut store = node_store(&loaded).clone();
+    let promoted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.set_embedding(1, &vector_for(7));
+    }));
+    assert!(promoted.is_err());
+    assert!(store.is_mapped());
+
+    let dest = tmp.path().join("copy.kgl");
+    assert!(
+        save_graph_with_layout(&mut loaded, dest.to_str().unwrap(), true, SaveLayout::Auto)
+            .is_err()
+    );
+    assert!(!dest.exists());
 }

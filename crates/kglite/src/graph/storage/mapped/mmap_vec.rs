@@ -205,6 +205,21 @@ pub enum MmapOrVec<T: MmapPod> {
     },
 }
 
+/// Refuse to promote a mapped `.kgl` section whose CRC32 has not passed.
+///
+/// The copy would become a heap buffer whose `verify()` is a no-op, so a
+/// later save would checksum the corrupt bytes as if they were good. The
+/// verdict is cached on the section, shared by every clone, so a section
+/// verified earlier (search, save, `verify_integrity`) costs nothing here.
+/// Entry points that can return an error verify first and fail cleanly; this
+/// panic is the backstop for the infallible mutators, raised before any byte
+/// is copied or the buffer replaced.
+fn check_before_copy(section: &SharedSection) {
+    if let Err(error) = section.verify() {
+        panic!("cannot copy a corrupt memory-mapped section to the heap: {error}");
+    }
+}
+
 impl<T: MmapPod> MmapOrVec<T> {
     /// Create a new heap-backed buffer.
     pub fn new() -> Self {
@@ -249,7 +264,8 @@ impl<T: MmapPod> MmapOrVec<T> {
 
     /// Replace a `Shared` view with a heap copy so the buffer can be written.
     fn unshare(&mut self) {
-        if matches!(self, MmapOrVec::Shared { .. }) {
+        if let MmapOrVec::Shared { section, .. } = self {
+            check_before_copy(section);
             *self = MmapOrVec::Heap {
                 data: self.to_vec(),
             };
@@ -830,7 +846,10 @@ impl<T: MmapPod> MmapOrVec<T> {
                     unsafe { std::slice::from_raw_parts(mmap.as_ptr() as *const T, *len) }.to_vec()
                 }
             }
-            MmapOrVec::Shared { .. } => self.to_vec(),
+            MmapOrVec::Shared { section, .. } => {
+                check_before_copy(section);
+                self.to_vec()
+            }
             MmapOrVec::Heap { .. } => unreachable!(),
         };
         *self = MmapOrVec::Heap { data };
@@ -1144,7 +1163,8 @@ impl MmapBytes {
 
     /// Replace a `Shared` view with a heap copy so the buffer can be written.
     fn unshare(&mut self) {
-        if matches!(self, MmapBytes::Shared { .. }) {
+        if let MmapBytes::Shared { section, .. } = self {
+            check_before_copy(section);
             *self = MmapBytes::Heap {
                 data: self.to_vec(),
             };
@@ -1387,7 +1407,10 @@ impl MmapBytes {
         let len = self.len();
         let data = match self {
             MmapBytes::Mapped { mmap, .. } => mmap[..len].to_vec(),
-            MmapBytes::Shared { .. } => self.to_vec(),
+            MmapBytes::Shared { section, .. } => {
+                check_before_copy(section);
+                self.to_vec()
+            }
             MmapBytes::Heap { .. } => unreachable!(),
         };
         *self = MmapBytes::Heap { data };

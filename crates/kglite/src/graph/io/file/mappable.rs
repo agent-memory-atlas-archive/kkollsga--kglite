@@ -774,8 +774,14 @@ impl MappableTable {
         let mut sections = Vec::with_capacity(entries.len());
         let mut deferred = Vec::new();
         for (entry, (dtype, start, end)) in entries.iter().zip(ranges) {
-            let checked_now = verify == Verify::Eager || entry.flags & FLAG_UTF8_VALIDATED != 0;
-            let section_bytes = match (place(entry), file) {
+            let placement = place(entry);
+            // A copy is read here anyway and nothing re-checks it afterwards (a
+            // heap handle's `verify()` is a no-op), so its CRC32 is checked in
+            // the same pass; only sections that stay mapped may defer to first use.
+            let copied = !matches!((placement, file), (Placement::Mapped, Some(_)));
+            let checked_now =
+                verify == Verify::Eager || copied || entry.flags & FLAG_UTF8_VALIDATED != 0;
+            let section_bytes = match (placement, file) {
                 (Placement::Deferred, _) => {
                     if checked_now {
                         check_digest(&entry.name, &bytes[start..end], entry.crc32)?;

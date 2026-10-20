@@ -195,7 +195,7 @@ fn mapped_and_heap_handles_yield_the_same_bytes_and_alignment() {
 }
 
 #[test]
-fn a_flipped_payload_byte_fails_verify_but_not_lazy_open() {
+fn a_flipped_payload_byte_is_refused_when_the_section_is_copied_even_when_lazy() {
     let mut bytes = v9_bytes(synthetic_sections());
     let (metadata, base) = head(&bytes);
     let victim = metadata
@@ -205,12 +205,11 @@ fn a_flipped_payload_byte_fails_verify_but_not_lazy_open() {
         .unwrap();
     bytes[(base + victim.offset) as usize + 3] ^= 0x40;
 
-    let table = heap_table(&bytes, Verify::Lazy).unwrap();
-    let error = table.get("col:Doc:n:data").unwrap().verify().unwrap_err();
+    // `heap_table` has no file to map, so every section is copied; a copy is
+    // never re-checked, so the open itself must refuse.
+    let error = heap_table(&bytes, Verify::Lazy).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("col:Doc:n:data"), "{error}");
-    assert!(table.get("emb:Doc:v:data").unwrap().verify().is_ok());
-    assert!(table.verify_all().is_err());
     assert!(heap_table(&bytes, Verify::Eager).is_err());
 }
 

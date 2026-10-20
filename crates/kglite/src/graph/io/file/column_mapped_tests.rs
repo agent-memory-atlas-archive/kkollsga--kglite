@@ -494,3 +494,53 @@ fn mapped_storage_mode_keeps_columns_shared_until_written() {
         )
     );
 }
+
+/// A numeric column section decoded onto the heap (the default for an
+/// in-memory load) is checked in the same pass, since nothing re-checks the
+/// copy afterwards.
+#[test]
+fn a_corrupt_numeric_section_is_refused_by_a_default_in_memory_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("g.kgl");
+    save_to(big_graph(), &path, SaveLayout::Auto);
+    flip_byte_in(&path, "col:Big:ratio:data", 100, false);
+    let error = load_file_with(path.to_str().unwrap(), &LoadOptions::new())
+        .map(|_| ())
+        .unwrap_err();
+    assert!(error.to_string().contains("corrupt"), "{error}");
+    let error = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new().with_columns(MapPolicy::Memory),
+    )
+    .map(|_| ())
+    .unwrap_err();
+    assert!(error.to_string().contains("corrupt"), "{error}");
+}
+
+/// A column write promotes the buffer to the heap; promoting a mapped buffer
+/// that fails its CRC must refuse, leaving it mapped and unsaveable, instead
+/// of laundering the damage into a freshly checksummed file.
+#[test]
+fn a_column_write_does_not_promote_a_corrupt_mapped_buffer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("g.kgl");
+    save_to(big_graph(), &path, SaveLayout::Auto);
+    flip_byte_in(&path, "col:Big:ratio:data", 100, false);
+    let mut graph = load_columns(&path, MapPolicy::Mapped);
+    let before = shared_count(&graph, "Big");
+
+    let wrote = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        execute_mut(
+            Arc::make_mut(&mut graph),
+            "MATCH (n:Big) WHERE n.seq = 5 SET n.ratio = 0.5",
+            &opts(),
+        )
+    }));
+    assert!(wrote.is_err() || wrote.unwrap().is_err());
+    assert_eq!(shared_count(&graph, "Big"), before, "nothing was promoted");
+    let copy = tmp.path().join("copy.kgl");
+    assert!(
+        save_graph_with_layout(&mut graph, copy.to_str().unwrap(), true, SaveLayout::Auto).is_err()
+    );
+    assert!(!copy.exists());
+}

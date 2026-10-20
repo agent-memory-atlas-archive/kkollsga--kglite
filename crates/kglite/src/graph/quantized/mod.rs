@@ -177,8 +177,13 @@ impl<T: Code> CodeBuf<T> {
     }
 
     /// Copy a mapped buffer into the heap (whole buffer). Panics if the
-    /// backing file was truncated, which would otherwise be a SIGBUS.
+    /// backing file was truncated (a SIGBUS otherwise) or fails its CRC32.
     fn make_heap(&mut self) -> &mut Vec<T> {
+        if self.is_mapped() {
+            if let Err(error) = self.verify() {
+                panic!("cannot copy a memory-mapped quantized buffer to the heap: {error}");
+            }
+        }
         if let CodeBuf::Mapped(mapped, _) = self {
             if let Err(error) = mapped.section.checked_bytes() {
                 panic!("cannot copy a memory-mapped quantized buffer to the heap: {error}");

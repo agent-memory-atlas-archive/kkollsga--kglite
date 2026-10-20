@@ -135,10 +135,13 @@ impl VectorBuf {
 
     /// Copy a mapped buffer into the heap (whole buffer); a heap buffer is
     /// untouched. Panics if the backing file was truncated since it was
-    /// mapped, which would otherwise be a SIGBUS.
+    /// mapped (a SIGBUS otherwise) or fails its CRC32; callers that can return
+    /// an error call [`Self::verify`] first.
     pub fn make_heap(&mut self) -> &mut Vec<f32> {
         if let VectorBuf::Mapped(mapped) = self {
-            if let Err(error) = mapped.section.checked_bytes() {
+            // Verify before copying: a heap buffer is never re-checked, so a
+            // corrupt copy would pass for good data at the next save.
+            if let Err(error) = mapped.section.checked_bytes().and(mapped.verify()) {
                 panic!("cannot copy a memory-mapped embedding buffer to the heap: {error}");
             }
             *self = VectorBuf::Heap(mapped.as_slice().to_vec());

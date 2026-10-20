@@ -42,7 +42,7 @@ pub struct QueryOptions {
     /// leaves the engine's default (`auto`).
     pub embeddings: Option<kglite::api::io::MapPolicy>,
     /// Where a v9 `.kgl`'s property columns live (`--columns`); `None` leaves
-    /// the engine's default (`auto`).
+    /// the engine's default (`memory` for an in-memory graph, `auto` otherwise).
     pub columns: Option<kglite::api::io::MapPolicy>,
 }
 
