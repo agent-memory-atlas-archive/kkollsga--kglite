@@ -241,6 +241,8 @@ fn a_truncated_v9_file_is_a_clear_error_not_a_fault() {
     }
 }
 
+// Windows refuses to truncate a file that has a mapped section (error 1224).
+#[cfg(unix)]
 #[test]
 fn truncating_a_mapped_file_is_reported_before_any_page_is_touched() {
     let bytes = v9_bytes(synthetic_sections());

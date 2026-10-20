@@ -61,7 +61,7 @@ NOT_A_WRITER = set(
     source_fingerprint source_root spatial statistics subgraph_stats symmetric_difference
     time_index timeseries timeseries_config titles to_bytes to_df to_networkx to_str to_subgraph
     to_text toc traverse union valid_at valid_during validate_schema vector_search
-    verify_unique_constraints where where_any where_connected where_orphans within_bounds
+    verify_integrity verify_unique_constraints where where_any where_connected where_orphans within_bounds
     wkt_centroid
     """.split()
 )

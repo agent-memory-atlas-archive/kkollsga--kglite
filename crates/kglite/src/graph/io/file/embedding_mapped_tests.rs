@@ -301,7 +301,9 @@ fn a_mapped_store_saves_back_to_a_v9_file_and_over_its_own_path() {
     // readable for the live graph; the new file is complete.
     save_graph_with_layout(&mut loaded, path.to_str().unwrap(), true, SaveLayout::Auto).unwrap();
     assert_eq!(magic(&path), V9_MAGIC);
-    assert!(node_store(&loaded).is_mapped());
+    // Windows cannot rename over a mapped file, so the save first copies the
+    // store to the heap; elsewhere the live graph keeps its old inode mapped.
+    assert_eq!(node_store(&loaded).is_mapped(), cfg!(unix));
     assert_eq!(node_store(&loaded).data, before);
     assert!(search(&loaded, &vector_for(3), true).is_ok());
 
