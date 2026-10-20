@@ -84,31 +84,54 @@ fn coarse_nodes(
         .collect()
 }
 
-/// The best `pool` slots of the whole store by approximate score — the
-/// relationship search's stage one, which scans every slot.
+/// Valid-slot filter over node indices (`store.slot_to_node` values) plus the
+/// number of slots it admits.
+pub(crate) type Admitted<'a> = (&'a dyn Fn(usize) -> bool, usize);
+
+/// Stage one over `store`'s own slots: the best `top_k × oversample` slots by
+/// approximate score, among the `admitted` ones when given. `None` (the exact
+/// scan answers) when the store has no usable copy, the metric cannot be
+/// ranked by it, or the pool would cover every slot in play anyway. Both the
+/// relationship search and the Cypher node routes call this, so the kernel,
+/// the pool size and the skip rule exist once.
+pub(crate) fn pool_slots(
+    store: &EmbeddingStore,
+    metric: DistanceMetric,
+    query: &[f32],
+    top_k: usize,
+    admitted: Option<Admitted<'_>>,
+) -> Option<Vec<usize>> {
+    let (scan, oversample) = store.quantized_scan(metric, query)?;
+    let pool = top_k.saturating_mul(oversample as usize);
+    if pool >= admitted.map_or(store.len(), |(_, count)| count) {
+        return None;
+    }
+    Some(coarse_slots(store, &scan, pool, admitted.map(|(f, _)| f)))
+}
+
+/// The best `pool` slots by approximate score, scanning every slot (or only
+/// those `admits` keeps).
 pub(crate) fn coarse_slots(
     store: &EmbeddingStore,
     scan: &QuantScan<'_>,
     pool: usize,
+    admits: Option<&dyn Fn(usize) -> bool>,
 ) -> Vec<usize> {
-    let slots: Vec<NodeIndex> = (0..store.len()).map(NodeIndex::new).collect();
-    let rank = |chunk: &[NodeIndex]| {
-        let mut heap = MinHeap::with_capacity(pool);
-        for &slot in chunk {
-            let slot = slot.index();
-            heap.push_if_better(
-                NodeIndex::new(slot),
-                scan.score(slot, store.norms[slot]),
-                pool,
-            );
-        }
-        heap.into_sorted_results()
-    };
-    let merged: Vec<VectorSearchResult> = if slots.len() <= PARALLEL_THRESHOLD {
-        rank(&slots)
+    let total = store.len();
+    // An admit test is not `Sync` (it borrows the statement's filter), so a
+    // masked scan stays on one thread, like the exact masked scan it replaces.
+    let merged: Vec<VectorSearchResult> = if total <= PARALLEL_THRESHOLD || admits.is_some() {
+        rank_range(store, scan, pool, 0..total, admits)
     } else {
-        let chunk = (slots.len() / rayon::current_num_threads()).max(1024);
-        let partial: Vec<Vec<VectorSearchResult>> = slots.par_chunks(chunk).map(rank).collect();
+        let chunk = (total / rayon::current_num_threads()).max(1024);
+        let ranges: Vec<std::ops::Range<usize>> = (0..total)
+            .step_by(chunk)
+            .map(|start| start..(start + chunk).min(total))
+            .collect();
+        let partial: Vec<Vec<VectorSearchResult>> = ranges
+            .into_par_iter()
+            .map(|range| rank_range(store, scan, pool, range, None))
+            .collect();
         let mut heap = MinHeap::with_capacity(pool);
         for result in partial.into_iter().flatten() {
             heap.push_if_better(result.node_idx, result.score, pool);
@@ -116,4 +139,25 @@ pub(crate) fn coarse_slots(
         heap.into_sorted_results()
     };
     merged.into_iter().map(|r| r.node_idx.index()).collect()
+}
+
+fn rank_range(
+    store: &EmbeddingStore,
+    scan: &QuantScan<'_>,
+    pool: usize,
+    range: std::ops::Range<usize>,
+    admits: Option<&dyn Fn(usize) -> bool>,
+) -> Vec<VectorSearchResult> {
+    let mut heap = MinHeap::with_capacity(pool);
+    for slot in range {
+        if admits.is_some_and(|admits| !admits(store.slot_to_node[slot])) {
+            continue;
+        }
+        heap.push_if_better(
+            NodeIndex::new(slot),
+            scan.score(slot, store.norms[slot]),
+            pool,
+        );
+    }
+    heap.into_sorted_results()
 }

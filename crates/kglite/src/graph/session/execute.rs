@@ -1272,8 +1272,8 @@ fn finish_echo(
 ) -> TemporalDiagnostics {
     echo.slice = diagnostics.temporal.as_ref().is_some_and(|t| t.slice);
     echo.retrieval = diagnostics.retrieval.iter().find_map(|record| {
-        if record.actual_mode == "hnsw_mask" {
-            Some("hnsw_mask".to_string())
+        if matches!(record.actual_mode.as_str(), "hnsw_mask" | "quantized_mask") {
+            Some(record.actual_mode.clone())
         } else {
             let reason = record.fallback_reason.as_deref().unwrap_or_default();
             reason

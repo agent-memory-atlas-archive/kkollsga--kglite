@@ -1132,6 +1132,7 @@ mod retrieval;
 mod retrieval_diagnostics;
 mod retrieval_edge;
 mod retrieval_mask;
+mod retrieval_quantized;
 mod retrieval_text;
 pub mod return_clause;
 pub mod rev_procedures;

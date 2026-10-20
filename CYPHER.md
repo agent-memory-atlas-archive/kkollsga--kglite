@@ -1942,7 +1942,9 @@ MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
   - `vector_score(n, …)` top-k over `MATCH (n:Label)` ranks only the valid nodes'
     vectors, by one of two routes.
     - The exact route scores every valid vector (`diagnostics.retrieval`:
-      `actual_mode: "exact"`, `fallback_reason: "exact_mask"`).
+      `actual_mode: "exact"`, `fallback_reason: "exact_mask"`). With a quantized
+      copy it ranks the valid vectors by the copy and re-scores the best
+      candidates exactly (`actual_mode: "quantized_mask"`).
     - With a built HNSW index, a filtered search walks the index through every
       vector but returns only valid ones (`actual_mode: "hnsw_mask"`). It is one
       search with no over-fetch, and an invalid vector never comes back even
@@ -1961,8 +1963,9 @@ MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
         (`"exact_mask_unreached"`).
   - `db.node_embeddings.query` / `db.relationship_embeddings.query` (and the
     `db.embeddings.query` router) rank only valid nodes, or valid relationships
-    with both endpoints valid. They report `search_method: "exact_mask"` or
-    `"hnsw_mask"`.
+    with both endpoints valid. They report `search_method: "exact_mask"`,
+    `"hnsw_mask"` or, for a store with a quantized copy and no index serving the
+    query, `"quantized_mask"`.
 - **Graph algorithms.** `pagerank`, `betweenness`, `degree`, `closeness`,
   `louvain`, `leiden`, `label_propagation`, `connected_components`, `k_core`,
   `ready_set`, `clustering_coefficient`, `triangle_count`, `eccentricity` and
@@ -1996,7 +1999,7 @@ MATCH (f:Project)-[l:HAS_HOLDER]->(c:Company) RETURN f.name, c.name
   | `hidden` | Per target, how many rows it governs that are not valid at the instant, by that target's own bounds. A target answered by property guards has no entry. |
   | `endpoint_invalid` | Relationships valid by their own bounds but hidden because an endpoint node is not valid at the instant, in no `hidden` entry. Null when a target is answered by property guards. |
   | `route` | `guarded`; `plain` when the timeless exit ran; `view` through a `freeze(valid_at=…)` handle. |
-  | `retrieval` | `exact_mask` / `hnsw_mask` for a `vector_score` top-k, else null. |
+  | `retrieval` | `exact_mask` / `hnsw_mask` / `quantized_mask` for a `vector_score` top-k, else null. |
   | `slice` | A graph algorithm ran on the valid slice. |
   | `session_version` | The graph version answered. It is comparable within one process only, as it restarts on load. |
 
@@ -5591,7 +5594,10 @@ Ordinary query results and `PROFILE` carry `diagnostics.retrieval`: distinct
 executed vector ranking routes. Each record has:
 
 - `requested_policy`: `auto`, `exact`, or `per_row`.
-- `actual_mode`: `hnsw` or `exact`.
+- `actual_mode`: `hnsw`, `quantized` or `exact`. `quantized` means a quantized scan copy
+  (`quantize_embeddings`) narrowed the candidates and the winners were re-scored
+  against the `f32` vectors, so their scores are exact; `hnsw_mask` and `quantized_mask`
+  are the valid-time forms.
 - `fallback_reason`: reasons include `forced_exact`, `no_index`, `stale_index`, `metric_mismatch`,
   `filtered_underfill`, `row_coverage`, `row_dependent_selectors` and
   `ordering_requires_exact`.

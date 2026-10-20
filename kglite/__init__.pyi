@@ -604,9 +604,11 @@ class ResultView:
         - ``retrieval`` (list[dict]): distinct vector ranking routes executed,
           including nested CALL, UNION and mutation pipelines. Available for
           ordinary queries and PROFILE. Each record carries ``requested_policy``
-          (``auto``, ``exact``, or ``per_row``), ``actual_mode`` (``hnsw`` or
-          ``exact``; ``hnsw_mask`` under a valid-time context when a filtered
-          HNSW search ranked the valid vectors), ``fallback_reason`` (a reason
+          (``auto``, ``exact``, or ``per_row``), ``actual_mode`` (``hnsw``,
+          ``quantized`` when a quantized copy narrowed the candidates before an
+          exact re-score, or ``exact``; ``hnsw_mask`` / ``quantized_mask``
+          under a valid-time context when a filtered HNSW search or the copy
+          ranked the valid vectors), ``fallback_reason`` (a reason
           string, or None for HNSW; under a context ``exact_mask`` when the
           valid vectors were scored exactly, ``exact_mask_visit_limit`` when
           the filtered search passed its step budget first,
@@ -681,7 +683,7 @@ class ResultView:
           — nothing was filtered: every declared target was valid in full at
           the instant, the statement reaches none, or it reads every version; ``'view'`` — through a
           ``freeze(valid_at=…)`` handle); ``retrieval`` (``'exact_mask'`` or
-          ``'hnsw_mask'`` for a ``vector_score`` top-k over the valid
+          ``'hnsw_mask'`` or ``'quantized_mask'`` for a ``vector_score`` top-k over the valid
           vectors, else ``None``; the embedding ``query`` procedures report
           theirs per row in ``search_method``); ``slice`` (whether a graph
           algorithm ran on the valid slice); ``session_version`` (the graph

@@ -213,7 +213,7 @@ fn approx_top(store: &EmbeddingStore, query: &[f32], pool: usize) -> Vec<usize> 
     let (scan, _) = store
         .quantized_scan(DistanceMetric::Cosine, query)
         .expect("copy present");
-    crate::graph::algorithms::vector::coarse_slots(store, &scan, pool)
+    crate::graph::algorithms::vector::coarse_slots(store, &scan, pool, None)
 }
 
 /// Recall of the quantized stage on random Gaussian 1024-d vectors — the

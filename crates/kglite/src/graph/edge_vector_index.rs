@@ -729,8 +729,9 @@ fn resolve_params(options: &EdgeVectorIndexOptions) -> Result<HnswParams, String
 /// [`query_dense_store`] over only the targets `admits` keeps (a valid-time
 /// filter): an exact pass over the admitted slots, or — for a large admitted
 /// set with an index serving `metric` — the index's admitted candidates
-/// (`features::temporal::vector_mask`). The route answers `"exact_mask"` or
-/// `"hnsw_mask"`, and refreshes a stale index as [`query_dense_store`] does.
+/// (`features::temporal::vector_mask`), or the quantized copy's best admitted
+/// candidates re-scored exactly. The route answers `"exact_mask"`,
+/// `"hnsw_mask"` or `"quantized_mask"`, and refreshes a stale index as [`query_dense_store`] does.
 pub(crate) fn query_admitted_store(
     store: &EmbeddingStore,
     query: &[f32],
@@ -758,6 +759,14 @@ pub(crate) fn query_admitted_store(
                     return (hits, "hnsw_mask");
                 }
             }
+        }
+    }
+    if !exact && store.quantized().is_some() {
+        let admitted = vector_mask::admitted_slots(store, admits);
+        if let Some(slots) = vs::pool_slots(store, metric, query, top_k, Some((admits, admitted))) {
+            let mut hits = score_slots(store, query, metric, slots.into_iter().map(|s| s as u32));
+            sort_and_truncate(&mut hits, top_k);
+            return (hits, "quantized_mask");
         }
     }
     let slots = (0..store.len() as u32).filter(|&slot| admits(store.slot_to_node[slot as usize]));
@@ -800,12 +809,7 @@ fn query_quantized(
     top_k: usize,
     metric: DistanceMetric,
 ) -> Option<Vec<(usize, f64)>> {
-    let (scan, oversample) = store.quantized_scan(metric, query)?;
-    let pool = top_k.saturating_mul(oversample as usize);
-    if pool >= store.len() {
-        return None;
-    }
-    let slots = vs::coarse_slots(store, &scan, pool);
+    let slots = vs::pool_slots(store, metric, query, top_k, None)?;
     let mut hits = score_slots(
         store,
         query,

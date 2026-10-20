@@ -312,7 +312,17 @@ impl CypherExecutor<'_> {
                 None => {}
             }
         }
-        let winners = self.exact_vector_winners(store, prepared, limit, Some(admits))?;
+        let (winners, quantized) = self.vector_winners(
+            store,
+            prepared,
+            limit,
+            Some((admits, embedded)),
+            !args.options.exact,
+        )?;
+        if quantized {
+            info.actual_mode = "quantized_mask".into();
+            info.fallback_reason = None;
+        }
         Ok((winners, info))
     }
 

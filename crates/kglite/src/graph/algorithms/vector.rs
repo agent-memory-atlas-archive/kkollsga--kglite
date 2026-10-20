@@ -8,7 +8,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, BinaryHeap, HashSet};
 
 mod quantized_search;
+#[cfg(test)]
 pub(crate) use quantized_search::coarse_slots;
+pub(crate) use quantized_search::{pool_slots, Admitted};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DistanceMetric {

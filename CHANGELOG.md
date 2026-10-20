@@ -29,6 +29,11 @@ before upgrading.
   - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo`, `EmbeddingInfo` and `EmbeddingDiagnostic` gain `quantization: Option<QuantizationInfo>`.
   - `ImportStats` and `RelationshipCarryStats` gain `installed`, the `(type, column)` of every store the import wrote.
   - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`.
+- **Cypher node retrieval uses a quantized copy.**
+  - `MATCH (n:T) RETURN … vector_score(n, 'col_emb', $q) AS s ORDER BY s DESC LIMIT k` over a store with a quantized copy and no usable index scans the copy for `k × oversample` candidates and re-scores them against the `f32` vectors; the returned scores are exact, the candidate set is approximate.
+  - Under a `FOR VALID_TIME AS OF` context the same route ranks the valid vectors (`actual_mode: "quantized_mask"`; `db.*_embeddings.query` reports `search_method: "quantized_mask"`).
+  - A built index still serves first, `{exact: true}` bypasses the copy, and the Poincare metric never uses it. A `MATCH … WHERE` that narrows the rows before the ranking scores them exactly.
+  - Result diagnostics report `actual_mode: "quantized"` for the whole-type route.
 - **Relationship search can report `search_method: "quantized"`.** `db.relationship_embeddings.query` and `relationship_vector_search` use a quantized copy when the store has one; without a copy the value stays `hnsw` or `exact`.
 
 ### Added

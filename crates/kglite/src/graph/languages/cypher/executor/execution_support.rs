@@ -110,6 +110,8 @@ pub(super) struct VectorScoreCache {
     pub(super) prop_name: String,
     pub(super) query_vec: Vec<f32>,
     pub(super) scorer: crate::graph::algorithms::vector::Scorer,
+    /// The metric `scorer` was built for (the quantized scan needs it).
+    pub(super) metric: crate::graph::algorithms::vector::DistanceMetric,
 }
 
 impl VectorScoreCache {

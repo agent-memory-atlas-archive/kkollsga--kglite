@@ -336,7 +336,13 @@ impl<'a> CypherExecutor<'a> {
         else {
             return Ok(None);
         };
-        if rows_population && coverage.unembedded_count == 0 {
+        // A fully covered row population is the established route's, unless
+        // a quantized copy can narrow the scan the store serves here.
+        let quantized_scan = !args.options.exact && !store.has_index();
+        if rows_population
+            && coverage.unembedded_count == 0
+            && !(quantized_scan && store.quantized().is_some())
+        {
             return Ok(None);
         }
         let nulls = if non_null_only {
@@ -362,9 +368,9 @@ impl<'a> CypherExecutor<'a> {
             };
             (empty, info)
         } else if exact {
-            let result = self.exact_vector_entry(
+            let (result, quantized) = self.exact_vector_entry(
                 score_expr,
-                limit - nulls,
+                (limit - nulls, !args.options.exact),
                 (store, &node_type),
                 &slots,
                 return_clause,
@@ -380,6 +386,10 @@ impl<'a> CypherExecutor<'a> {
                 info.requested_policy = "exact".into();
             } else {
                 info.store = Some(format!("{node_type}.{}", args.property));
+            }
+            if quantized {
+                info.actual_mode = "quantized".into();
+                info.fallback_reason = None;
             }
             (result, info)
         } else {
@@ -462,29 +472,32 @@ impl<'a> CypherExecutor<'a> {
         Ok((coverage.slot_positions.len() == store.len()).then_some(coverage))
     }
 
-    /// Exact top-`limit` of the whole store, projected over `population`,
-    /// whose position `i` is slot `i`.
+    /// Top-`limit` of the whole store, projected over `population`, whose
+    /// position `i` is slot `i`: exact, or — when `allow_quantized` and the
+    /// store has a copy that serves — the copy's candidates re-scored exactly.
+    /// The flag says which.
     fn exact_vector_entry(
         &self,
         score_expr: &Expression,
-        limit: usize,
+        (limit, allow_quantized): (usize, bool),
         (store, node_type): (&EmbeddingStore, &str),
         population: &RetrievalPopulation<'_>,
         return_clause: &ReturnClause,
         score_item_index: usize,
-    ) -> Result<ResultSet, String> {
+    ) -> Result<(ResultSet, bool), String> {
         let seed = population.row(0);
-        let winners =
+        let (winners, quantized) =
             self.with_prepared_vector_score(score_expr, &seed, (store, node_type), |prepared| {
-                self.exact_vector_winners(store, prepared, limit, None)
+                self.vector_winners(store, prepared, limit, None, allow_quantized)
             })?;
-        self.project_retrieval_winners(
+        let result = self.project_retrieval_winners(
             winners.into_iter(),
             score_expr,
             population,
             return_clause,
             score_item_index,
-        )
+        )?;
+        Ok((result, quantized))
     }
 
     /// Run `run` with the prepared (and, when its arguments are constant,

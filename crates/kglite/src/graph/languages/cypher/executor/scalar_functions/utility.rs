@@ -527,6 +527,7 @@ impl CypherExecutor<'_> {
             prop_name,
             query_vec,
             scorer,
+            metric,
         })
     }
 
