@@ -759,6 +759,10 @@
       "classification": "dead-code"
     },
     {
+      "identity": "crates/kglite-mcp-server/tests/support/mod.rs::module::dead_code",
+      "classification": "dead-code"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/embedder/py_adapter.rs::fn:instance:pub fn instance(&self) -> &Py<PyAny>::dead_code",
       "classification": "dead-code"
     },
