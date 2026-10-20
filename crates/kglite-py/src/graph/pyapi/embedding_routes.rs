@@ -290,13 +290,14 @@ impl KnowledgeGraph {
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn remove_embeddings(
         &mut self,
+        py: Python<'_>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<()> {
         match Entity::parse("remove_embeddings", entity)? {
-            Entity::Node => self.remove_node_embeddings(node_type, text_column),
-            Entity::Relationship => self.remove_relationship_embeddings(node_type, text_column),
+            Entity::Node => self.remove_node_embeddings(py, node_type, text_column),
+            Entity::Relationship => self.remove_relationship_embeddings(py, node_type, text_column),
         }
     }
 

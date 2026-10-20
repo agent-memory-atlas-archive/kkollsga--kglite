@@ -90,6 +90,8 @@ pub(super) fn load_portable_optional_sections(
         let raw = zstd_decompress(compressed)?;
         let mut embeddings: HashMap<(String, String), EmbeddingStore> =
             codec_deser(codec, &raw, raw.capacity() as u64)?;
+        // The decompressed payload is as large as the stores it decoded into.
+        drop(raw);
         validate_and_rebuild_embedding_norms(&mut embeddings)?;
         dir_graph.embeddings = embeddings;
     }

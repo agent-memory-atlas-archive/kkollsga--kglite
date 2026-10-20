@@ -9,6 +9,15 @@ before upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- **Memory is returned to the OS after embedding imports, removals and replacements.**
+  - `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish.
+  - Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).
+- **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied, so the live buffers no longer stack up.
+- **Loading a graph with embeddings reserves each decompressed section once** instead of growing it by doubling.
+- **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.
+
 ## [0.20.1] - 2026-10-19
 
 ### Breaking changes and migration

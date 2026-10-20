@@ -145,6 +145,7 @@ impl KnowledgeGraph {
     /// Remove a relationship type's embedding store for a text column; refuses a store that does not exist.
     pub(super) fn remove_relationship_embeddings(
         &mut self,
+        py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
@@ -155,7 +156,9 @@ impl KnowledgeGraph {
                 text_column,
             )
             .map_err(PyValueError::new_err)
-        })
+        })?;
+        crate::allocator::release_after_seam(py);
+        Ok(())
     }
 }
 

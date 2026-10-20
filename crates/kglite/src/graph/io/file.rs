@@ -855,7 +855,15 @@ fn zstd_decompress_limited(data: &[u8], limit: u64) -> io::Result<Vec<u8>> {
     let decoder = zstd::Decoder::new(std::io::Cursor::new(data))
         .map_err(|e| invalid_data(format!("invalid zstd section: {e}")))?;
     let mut bounded = decoder.take(limit.saturating_add(1));
-    let mut decoded = Vec::new();
+    // Sections are written with a known content size; reserving it up front
+    // spares the doubling reallocations (a transient 2x of the output) that
+    // `read_to_end` would otherwise make. The header is untrusted, so the
+    // reservation is capped at the load limit.
+    let expected = zstd::zstd_safe::get_frame_content_size(data)
+        .ok()
+        .flatten()
+        .map_or(0, |n| n.min(limit) as usize);
+    let mut decoded = Vec::with_capacity(expected);
     bounded
         .read_to_end(&mut decoded)
         .map_err(|e| invalid_data(format!("invalid zstd section: {e}")))?;

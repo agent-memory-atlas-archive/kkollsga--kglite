@@ -44,6 +44,8 @@ impl KnowledgeGraph {
         result.set_item("embeddings_stored", report.embeddings_stored)?;
         result.set_item("dimension", report.dimension)?;
         result.set_item("skipped", report.skipped)?;
+        // The replaced store's buffer is freed; hand its pages back.
+        crate::allocator::release_after_seam(py);
         Ok(result.into())
     }
 
@@ -236,6 +238,7 @@ impl KnowledgeGraph {
             g.copy_embeddings_with_relationships_from(&src_arc, &keys)
                 .map_err(crate::error_py::ArgumentError::new_err)
         })?;
+        crate::allocator::release_after_seam(py);
         let d = PyDict::new(py);
         d.set_item("stores_copied", report.stores_copied)?;
         d.set_item("vectors_copied", report.vectors_copied)?;
@@ -318,13 +321,16 @@ impl KnowledgeGraph {
     /// Remove a node type's embedding store for a text column; refuses a store that does not exist.
     pub(super) fn remove_node_embeddings(
         &mut self,
+        py: Python<'_>,
         node_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
         self.logged_write(|g| {
             kglite_core::api::embeddings::remove_embeddings(g, node_type, text_column)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
-        })
+        })?;
+        crate::allocator::release_after_seam(py);
+        Ok(())
     }
 
     /// Export node and relationship embeddings to a standalone .kgle file.
@@ -388,6 +394,8 @@ impl KnowledgeGraph {
         let stats = self.logged_write(|g| {
             file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)
         })?;
+        // The import's decode buffers are dead; their pages are not reusable.
+        crate::allocator::release_after_seam(py);
 
         // Surface the silent-drop cases as a UserWarning: visible by default,
         // still suppressible via the standard `warnings` module.
@@ -702,6 +710,7 @@ impl KnowledgeGraph {
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
         result.set_item("dimension", outcome.dimension)?;
+        crate::allocator::release_after_seam(py);
         Ok(result.into())
     }
 

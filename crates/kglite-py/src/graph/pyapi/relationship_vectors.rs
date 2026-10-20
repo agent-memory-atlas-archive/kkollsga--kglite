@@ -47,11 +47,13 @@ impl KnowledgeGraph {
             relationship_keys,
             metric,
         };
-        self.write_relationship_rows(
+        let result = self.write_relationship_rows(
             py,
             rows,
             kglite_core::api::embeddings::set_relationship_embeddings,
-        )
+        )?;
+        crate::allocator::release_after_seam(py);
+        Ok(result)
     }
 
     /// Upsert relationship vectors addressed by endpoint ids — the relationship twin of add_embeddings.
@@ -156,6 +158,7 @@ impl KnowledgeGraph {
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
         result.set_item("dimension", outcome.dimension)?;
+        crate::allocator::release_after_seam(py);
         Ok(result.into())
     }
 

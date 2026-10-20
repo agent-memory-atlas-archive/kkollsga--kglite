@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ─── HNSW vector-index section (0.11.0) ───────────────────────────────────
 //
@@ -455,17 +457,18 @@ pub fn export_embeddings_to_file(
     let payload =
         payload.map_err(|e| io::Error::other(format!("Failed to serialize embeddings: {e}")))?;
 
-    // Write: magic + version + codec tag + gzip(codec(payload)).
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    writer.write_all(&KGLE_MAGIC)?;
-    writer.write_all(&version.to_le_bytes())?;
-    writer.write_all(&[serde_codec::CodecVersion::PostcardV1.tag()])?;
-    let mut gz = GzEncoder::new(&mut writer, Compression::new(3));
-    gz.write_all(&payload)?;
-    gz.finish()?;
-
-    writer.flush()?;
+    // Write: magic + version + codec tag + gzip(codec(payload)), to a sibling
+    // temp that is fsynced and renamed over `path`, so a crash or full disk
+    // never leaves a torn `.kgle` where a good one stood.
+    write_file_atomically(Path::new(path), |writer| {
+        writer.write_all(&KGLE_MAGIC)?;
+        writer.write_all(&version.to_le_bytes())?;
+        writer.write_all(&[serde_codec::CodecVersion::PostcardV1.tag()])?;
+        let mut gz = GzEncoder::new(&mut *writer, Compression::new(3));
+        gz.write_all(&payload)?;
+        gz.finish()?;
+        Ok(())
+    })?;
 
     Ok(ExportStats {
         stores: node_stores,
@@ -475,6 +478,43 @@ pub fn export_embeddings_to_file(
     })
 }
 
+/// Write `dest` through a same-directory temp (named like a save temp, so
+/// `reap_stale_save_temps` also collects a crashed export's), fsync it and
+/// rename it into place; the temp is removed on any failure.
+fn write_file_atomically(
+    dest: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+) -> io::Result<()> {
+    static EXPORT_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nonce = EXPORT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!(
+        "{}{}.{}",
+        super::save_temp_prefix(dest),
+        std::process::id(),
+        nonce
+    );
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
+    let tmp = match dir {
+        Some(d) => d.join(&tmp_name),
+        None => PathBuf::from(&tmp_name),
+    };
+    let result = (|| -> io::Result<()> {
+        let mut writer = BufWriter::new(File::create(&tmp)?);
+        write(&mut writer)?;
+        writer.flush()?;
+        let file = writer
+            .into_inner()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, dest)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return result;
+    }
+    crate::graph::durable_io::sync_dir(dir.unwrap_or_else(|| Path::new(".")))
+}
+
 /// Import embeddings from a .kgle file, resolving node IDs to current graph indices.
 pub fn import_embeddings_from_file(
     graph: &mut DirGraph,
@@ -482,8 +522,9 @@ pub fn import_embeddings_from_file(
     relationship_keys: &RelationshipKeys,
 ) -> io::Result<ImportStats> {
     let file = File::open(path)?;
+    let file_len = file.metadata().map(|m| m.len() as usize).unwrap_or(0);
     let mut reader = BufReader::new(file);
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(file_len);
     reader.read_to_end(&mut buf)?;
 
     if buf.len() < 8 {
@@ -500,6 +541,9 @@ pub fn import_embeddings_from_file(
     }
     let version = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
     let decoded = decode_embedding_file_payload(&buf, version)?;
+    // The compressed file bytes are dead once decoded; at store scale they are
+    // hundreds of MB that would otherwise stay live through the install loop.
+    drop(buf);
     let exported_stores = decoded.nodes;
     // Preflight the complete payload before touching graph indexes or stores:
     // a malformed later store must not leave earlier stores installed, and an
@@ -513,7 +557,7 @@ pub fn import_embeddings_from_file(
     let mut stores_count = 0usize;
     let mut dropped_stores = 0usize;
 
-    for exported in exported_stores {
+    for mut exported in exported_stores {
         // Build ID index for this node type so lookup_by_id works
         graph.build_id_index(&exported.node_type);
 
@@ -528,14 +572,17 @@ pub fn import_embeddings_from_file(
         let mut imported = 0usize;
         let mut skipped = 0usize;
 
-        for (id, vec, hash) in &exported.entries {
-            match graph.lookup_by_id(&exported.node_type, id) {
+        // Consumed one entry at a time so each per-vector buffer is freed as
+        // it is copied into the packed store.
+        let had_entries = !exported.entries.is_empty();
+        for (id, vec, hash) in std::mem::take(&mut exported.entries) {
+            match graph.lookup_by_id(&exported.node_type, &id) {
                 Some(node_idx) => {
-                    store.set_embedding(node_idx.index(), vec);
+                    store.set_embedding(node_idx.index(), &vec);
                     // Restore the per-node text hash so embed_texts(mode='changed')
                     // can diff against it (the whole point of v2 provenance).
                     if let Some(h) = hash {
-                        store.set_text_hash(node_idx.index(), *h);
+                        store.set_text_hash(node_idx.index(), h);
                     }
                     imported += 1;
                 }
@@ -548,7 +595,7 @@ pub fn import_embeddings_from_file(
         if imported > 0 {
             graph.set_embedding_store(&exported.node_type, &exported.text_column, store);
             stores_count += 1;
-        } else if !exported.entries.is_empty() {
+        } else if had_entries {
             dropped_stores += 1;
         }
 
@@ -845,6 +892,33 @@ mod tests {
     /// version 3, then the gzip of the node stores alone. Readers up to 0.17.12
     /// accept exactly these bytes, so a v4 header here would lock them out of
     /// files that carry nothing they cannot read.
+    #[test]
+    fn export_is_atomic_and_leaves_no_temp_beside_the_file() {
+        let graph = graph_with_doc_and_embedding(&[0.25, 0.75]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out.kgle");
+        std::fs::write(&dest, b"previous contents").unwrap();
+        let path = dest.to_str().unwrap();
+        export_embeddings_to_file(&graph, path, None, &RelationshipKeys::new()).unwrap();
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec!["out.kgle".to_string()]);
+        assert_eq!(&std::fs::read(&dest).unwrap()[..4], &KGLE_MAGIC);
+
+        // A failed export (unwritable directory) keeps the previous file whole.
+        let missing = dir.path().join("no-such-dir").join("out.kgle");
+        assert!(export_embeddings_to_file(
+            &graph,
+            missing.to_str().unwrap(),
+            None,
+            &RelationshipKeys::new()
+        )
+        .is_err());
+        assert_eq!(&std::fs::read(&dest).unwrap()[..4], &KGLE_MAGIC);
+    }
+
     #[test]
     fn a_node_only_export_writes_the_v3_bytes() {
         let graph = graph_with_doc_and_embedding(&[0.25, 0.75]);

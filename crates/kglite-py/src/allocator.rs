@@ -4,7 +4,9 @@
 //! belongs to *this* extension module, not to the `kglite` engine crate (which
 //! sets no allocator and inherits whatever its host chose). A sibling binding
 //! that does not link mimalloc has nothing to trim, so there is nothing here
-//! for `kglite::api` to own.
+//! for `kglite::api` to own. The seam calls (load, save, embedding
+//! import/remove/replace) therefore live in the `pyapi` methods too: only the
+//! binding knows which allocator it runs on.
 
 use pyo3::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,8 +27,10 @@ extern "C" {
 
 /// Return allocator-retained memory to the operating system.
 ///
-/// Opt-in everywhere except two seams where retention is large, certain and
-/// not reusable: the end of `load()` and of `KnowledgeGraph.save()`. mimalloc
+/// Opt-in everywhere except the seams where retention is large, certain and
+/// not reusable: the end of `load()`, of `KnowledgeGraph.save()`, and of every
+/// call that replaces or removes an embedding store (a freed 50k x 1024 store
+/// otherwise stays resident: 212 -> 17 MB once trimmed). mimalloc
 /// keeps a freed workload's pages so the next one can reuse them without a
 /// syscall, which is what makes repeated queries fast, so a forced collect at
 /// other seams (graph drop, every query) would trade that away. Measured on a
@@ -48,7 +52,7 @@ pub(crate) fn release_after_seam(py: Python<'_>) {
     collect(py);
 }
 
-/// Number of `load()`/`save()` seam collects so far; a test hook, not an API.
+/// Number of seam collects so far; a test hook, not an API.
 #[pyfunction]
 pub(crate) fn _seam_trim_count() -> u64 {
     SEAM_TRIMS.load(Ordering::Relaxed)
