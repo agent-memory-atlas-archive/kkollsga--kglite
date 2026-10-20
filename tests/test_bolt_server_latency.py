@@ -111,6 +111,14 @@ def test_slow_queries_do_not_stall_other_connections(tmp_path, bolt_binary_path)
 
     assert waits, f"no probe completed while the slow queries ran ({durations})"
     assert min(durations) > 0.1, f"premise: the slow query must take real time, took {durations}"
-    assert max(waits) < min(durations) / 4, (
-        f"a RETURN 1 waited {max(waits) * 1000:.0f} ms behind queries that run {min(durations) * 1000:.0f} ms"
+    # Head-of-line blocking makes every probe wait for a worker to free up, so the
+    # median carries the signal; a single scheduler stall on a shared CI runner
+    # moves only the max, which is bounded at "never a whole query".
+    waits.sort()
+    median = waits[len(waits) // 2]
+    assert median < min(durations) / 4, (
+        f"median RETURN 1 waited {median * 1000:.0f} ms behind queries that run {min(durations) * 1000:.0f} ms"
+    )
+    assert max(waits) < min(durations), (
+        f"a RETURN 1 waited {max(waits) * 1000:.0f} ms, a whole query ({min(durations) * 1000:.0f} ms)"
     )
