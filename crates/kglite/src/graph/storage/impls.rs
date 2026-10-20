@@ -980,9 +980,10 @@ impl GraphRead for MappedGraph {
         max: Option<usize>,
     ) -> Option<Vec<u32>> {
         let block = self.ensure_type_index(conn_type);
+        let csr = self.type_csr(&block, conn_type);
         let slice = match max {
-            Some(n) => &block.out_sources[..n.min(block.out_sources.len())],
-            None => &block.out_sources[..],
+            Some(n) => &csr.out_sources[..n.min(csr.out_sources.len())],
+            None => &csr.out_sources[..],
         };
         Some(slice.iter().map(|n| n.index() as u32).collect())
     }
@@ -992,13 +993,7 @@ impl GraphRead for MappedGraph {
         // Callers use Outgoing semantics (peer = target); the disk helper
         // does the same. Incoming-dir callers go through
         // `count_edges_grouped_by_peer` instead.
-        Some(
-            block
-                .out_peer_counts
-                .iter()
-                .map(|(n, c)| (n.index() as u32, *c))
-                .collect(),
-        )
+        Some(block.out_peer_counts.clone())
     }
 
     // ─── OVERRIDE: O(distinct-peers) via the index instead of full scan ──
@@ -1013,10 +1008,7 @@ impl GraphRead for MappedGraph {
             Direction::Outgoing => &block.out_peer_counts,
             Direction::Incoming => &block.in_peer_counts,
         };
-        Ok(peer_counts
-            .iter()
-            .map(|(n, c)| (n.index() as u32, *c))
-            .collect())
+        Ok(peer_counts.clone())
     }
 
     fn count_edges_filtered(
@@ -1129,9 +1121,10 @@ impl MappedGraph {
         let mut count = 0usize;
         if let Some(ct) = conn_type {
             let block = self.ensure_type_index(ct);
+            let csr = self.type_csr(&block, ct);
             let (sources, offsets, edges) = match dir {
-                Direction::Outgoing => (&block.out_sources, &block.out_offsets, &block.out_edges),
-                Direction::Incoming => (&block.in_sources, &block.in_offsets, &block.in_edges),
+                Direction::Outgoing => (&csr.out_sources, &csr.out_offsets, &csr.out_edges),
+                Direction::Incoming => (&csr.in_sources, &csr.in_offsets, &csr.in_edges),
             };
             if let Ok(pos) = sources.binary_search_by_key(&node.index(), |n| n.index()) {
                 let start = offsets[pos] as usize;

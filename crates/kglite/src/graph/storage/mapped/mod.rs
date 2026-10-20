@@ -22,7 +22,7 @@ use petgraph::stable_graph::StableDiGraph;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Memory-mapped in-memory graph backend — a distinct struct rather than
 /// a type alias for `MemoryGraph`, so per-backend trait impls can
@@ -72,14 +72,29 @@ pub struct MappedGraph {
     pub(crate) slot_mirror: SlotMirror,
 }
 
-/// Per-conn-type edge index for `MappedGraph`. CSR-style layout
-/// mirrors the disk backend's `conn_type_index_*` arrays but holds
-/// `NodeIndex` / `EdgeIndex` directly (no id→index lookup needed —
-/// `StableDiGraph`'s indices *are* the heap identity).
+/// Per-conn-type edge index for `MappedGraph`. The peer counts are built on
+/// the first typed-edge query (one cheap edge scan, like the memory backend);
+/// the CSR adjacency is built only when a per-node or source-list lookup asks
+/// for it, so count-shaped queries never pay for it.
 #[derive(Debug, Default)]
 pub struct MappedTypeIndex {
-    /// Distinct source nodes with ≥ 1 outgoing edge of this conn_type,
-    /// sorted ascending. Binary-searchable in `edges_directed_filtered`.
+    /// target → count of edges of this conn_type landing there.
+    /// Powers `count_edges_grouped_by_peer(conn, Outgoing)`.
+    pub out_peer_counts: HashMap<u32, i64>,
+    /// source → count of edges of this conn_type leaving there.
+    /// Powers `count_edges_grouped_by_peer(conn, Incoming)` (the peer is
+    /// the source per the trait's `dir=Incoming` semantics).
+    pub in_peer_counts: HashMap<u32, i64>,
+    /// Lazily built adjacency; see [`MappedTypeCsr`].
+    pub csr: OnceLock<MappedTypeCsr>,
+}
+
+/// CSR adjacency of one conn_type, keyed by `NodeIndex` and holding
+/// `EdgeIndex` directly (`StableDiGraph`'s indices *are* the heap identity).
+#[derive(Debug, Default)]
+pub struct MappedTypeCsr {
+    /// Distinct source nodes with at least one outgoing edge of this
+    /// conn_type, sorted ascending. Binary-searchable in `edges_directed_filtered`.
     pub out_sources: Vec<NodeIndex>,
     /// CSR offsets into `out_edges`. Length = `out_sources.len() + 1`.
     pub out_offsets: Vec<u32>,
@@ -90,13 +105,6 @@ pub struct MappedTypeIndex {
     pub in_sources: Vec<NodeIndex>,
     pub in_offsets: Vec<u32>,
     pub in_edges: Vec<EdgeIndex>,
-    /// target → count of outgoing edges of this conn_type landing there.
-    /// Powers `count_edges_grouped_by_peer(conn, Outgoing)`.
-    pub out_peer_counts: HashMap<NodeIndex, i64>,
-    /// source → count of outgoing edges of this conn_type from there.
-    /// Powers `count_edges_grouped_by_peer(conn, Incoming)` (peer is
-    /// the source per the trait's `dir=Incoming` semantics).
-    pub in_peer_counts: HashMap<NodeIndex, i64>,
 }
 
 /// Sorted in-memory property index for `MappedGraph`. Mirrors the

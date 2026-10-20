@@ -497,3 +497,69 @@ fn a_small_cow_clone_under_a_held_reader_is_not_spilled_per_fork() {
         vec![Value::Int64(1_009)]
     );
 }
+
+/// Count-shaped queries read only the peer counts. The CSR adjacency is built
+/// by the first per-node lookup, and an edge write drops both.
+#[test]
+fn mapped_type_csr_is_built_only_for_per_node_lookups() {
+    use crate::graph::storage::backend::GraphBackend;
+
+    let mut graph = mapped_row_storage_people(3);
+    let knows = InternedKey::from_str("KNOWS");
+    run(
+        &mut graph,
+        "MATCH (a:Person {id: 1}), (b:Person {id: 2}) CREATE (a)-[:KNOWS]->(b)",
+    );
+    let csr_built = |g: &DirGraph| match &g.graph {
+        GraphBackend::Mapped(m) => m
+            .type_index
+            .read()
+            .unwrap()
+            .get(&knows.as_u64())
+            .map(|b| b.csr.get().is_some()),
+        _ => panic!("fixture must be mapped"),
+    };
+
+    let peers = graph
+        .graph
+        .count_edges_grouped_by_peer(knows, Direction::Outgoing, None)
+        .expect("peer counts");
+    assert_eq!(peers.values().sum::<i64>(), 1);
+    assert_eq!(
+        csr_built(&graph),
+        Some(false),
+        "counts must not build the CSR"
+    );
+
+    let n = graph
+        .graph
+        .count_edges_filtered(
+            NodeIndex::new(0),
+            Direction::Outgoing,
+            Some(knows),
+            None,
+            None,
+        )
+        .expect("count");
+    assert_eq!(n, 1);
+    assert_eq!(
+        csr_built(&graph),
+        Some(true),
+        "a per-node lookup builds the CSR"
+    );
+
+    run(
+        &mut graph,
+        "MATCH (a:Person {id: 1}), (b:Person {id: 3}) CREATE (a)-[:KNOWS]->(b)",
+    );
+    assert_eq!(csr_built(&graph), None, "an edge write drops the index");
+    let peers = graph
+        .graph
+        .count_edges_grouped_by_peer(knows, Direction::Outgoing, None)
+        .expect("peer counts");
+    assert_eq!(
+        peers.values().sum::<i64>(),
+        2,
+        "rebuilt counts see the new edge"
+    );
+}

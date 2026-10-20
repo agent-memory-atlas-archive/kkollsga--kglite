@@ -14,6 +14,7 @@ before upgrading.
 - **Memory is returned to the OS after embedding imports, removals and replacements.**
   - `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish.
   - Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).
+- **The first typed-relationship query on a `mapped` graph is as fast as in memory mode.** It builds only per-type peer counts; the adjacency index is built when a per-node lookup needs it. A 250k-node, 1M-edge `MATCH ()-[:T]->() RETURN ... count(*)` first query drops from 60 ms to 24 ms (memory mode: 23 ms).
 - **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied, so the live buffers no longer stack up.
 - **Loading a graph with embeddings reserves each decompressed section once** instead of growing it by doubling.
 - **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.

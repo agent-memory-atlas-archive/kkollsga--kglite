@@ -686,7 +686,7 @@ pub(crate) struct MemoryPeerCounts {
 pub mod impls;
 pub mod recording;
 
-pub use mapped::{MappedGraph, MappedPropertyIndex, MappedTypeIndex};
+pub use mapped::{MappedGraph, MappedPropertyIndex, MappedTypeCsr, MappedTypeIndex};
 
 #[cfg(test)]
 mod incoming_count_tests;

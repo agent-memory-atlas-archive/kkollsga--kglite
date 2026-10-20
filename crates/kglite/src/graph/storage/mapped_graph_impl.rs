@@ -16,7 +16,7 @@ use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use super::{MappedGraph, MappedPropertyIndex, MappedTypeIndex};
+use super::{MappedGraph, MappedPropertyIndex, MappedTypeCsr, MappedTypeIndex};
 
 /// Flatten an adjacency map into CSR form: sorted source list, per-source
 /// offsets, and the flat edge array. Both columnar index builds below feed
@@ -352,13 +352,12 @@ impl MappedGraph {
         MappedPropertyIndex { keys, nodes }
     }
 
-    /// Fetch or build the per-conn-type index block.
+    /// Fetch or build the per-conn-type peer counts.
     ///
-    /// Build cost on first hit: O(|E|) — we scan every edge in the
-    /// graph filtering by `conn_type`. Subsequent queries on the same
-    /// conn_type reuse the `Arc` in amortised O(1). Memory per block is
-    /// ~(2 × 4 bytes × |edges_of_type|) + a peer-count HashMap — for
-    /// Wikidata P31 on wiki100m that's ~750 k edges = ~18 MB.
+    /// Build cost on first hit: one O(|E|) scan filtering by `conn_type`
+    /// (the same scan the memory backend does), holding two count maps.
+    /// Later queries on the same conn_type reuse the `Arc` in O(1). The CSR
+    /// adjacency is not built here; see [`Self::type_csr`].
     pub(crate) fn ensure_type_index(&self, conn_type: InternedKey) -> Arc<MappedTypeIndex> {
         let key = conn_type.as_u64();
         // Fast path: already built.
@@ -378,41 +377,63 @@ impl MappedGraph {
         Arc::clone(block)
     }
 
-    fn build_type_index_block(&self, conn_type: InternedKey) -> MappedTypeIndex {
-        // Per-source and per-target edge lists (grown via Vec<EdgeIndex>).
-        let mut out_map: HashMap<NodeIndex, Vec<EdgeIndex>> = HashMap::new();
-        let mut in_map: HashMap<NodeIndex, Vec<EdgeIndex>> = HashMap::new();
-        let mut out_peer_counts: HashMap<NodeIndex, i64> = HashMap::new();
-        let mut in_peer_counts: HashMap<NodeIndex, i64> = HashMap::new();
+    /// The CSR adjacency of `conn_type`, built on first use from a second
+    /// O(|E|) scan and cached inside `block`.
+    pub(crate) fn type_csr<'a>(
+        &self,
+        block: &'a MappedTypeIndex,
+        conn_type: InternedKey,
+    ) -> &'a MappedTypeCsr {
+        block.csr.get_or_init(|| self.build_type_csr(conn_type))
+    }
 
+    fn build_type_index_block(&self, conn_type: InternedKey) -> MappedTypeIndex {
+        let mut out_peer_counts: HashMap<u32, i64> = HashMap::new();
+        let mut in_peer_counts: HashMap<u32, i64> = HashMap::new();
         for er in self.inner.edge_references() {
             if er.weight().connection_type != conn_type {
                 continue;
             }
-            let src = er.source();
-            let tgt = er.target();
-            let ei = er.id();
-            out_map.entry(src).or_default().push(ei);
-            in_map.entry(tgt).or_default().push(ei);
             // Outgoing dir → peer = target (edges land on target).
-            *out_peer_counts.entry(tgt).or_insert(0) += 1;
+            *out_peer_counts
+                .entry(er.target().index() as u32)
+                .or_insert(0) += 1;
             // Incoming dir → peer = source (edges originate at source).
-            *in_peer_counts.entry(src).or_insert(0) += 1;
+            *in_peer_counts
+                .entry(er.source().index() as u32)
+                .or_insert(0) += 1;
+        }
+        MappedTypeIndex {
+            out_peer_counts,
+            in_peer_counts,
+            csr: Default::default(),
+        }
+    }
+
+    fn build_type_csr(&self, conn_type: InternedKey) -> MappedTypeCsr {
+        // Per-source and per-target edge lists (grown via Vec<EdgeIndex>).
+        let mut out_map: HashMap<NodeIndex, Vec<EdgeIndex>> = HashMap::new();
+        let mut in_map: HashMap<NodeIndex, Vec<EdgeIndex>> = HashMap::new();
+        for er in self.inner.edge_references() {
+            if er.weight().connection_type != conn_type {
+                continue;
+            }
+            let ei = er.id();
+            out_map.entry(er.source()).or_default().push(ei);
+            in_map.entry(er.target()).or_default().push(ei);
         }
 
         // Materialise CSR arrays sorted by NodeIndex for binary search.
         let (out_sources, out_offsets, out_edges) = flatten_to_csr(out_map);
         let (in_sources, in_offsets, in_edges) = flatten_to_csr(in_map);
 
-        MappedTypeIndex {
+        MappedTypeCsr {
             out_sources,
             out_offsets,
             out_edges,
             in_sources,
             in_offsets,
             in_edges,
-            out_peer_counts,
-            in_peer_counts,
         }
     }
 }
