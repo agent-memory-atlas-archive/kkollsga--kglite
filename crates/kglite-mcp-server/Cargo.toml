@@ -125,7 +125,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 anyhow = "1.0.72"
 # `fetch_images` returns image content blocks, which the MCP wire format
 # carries base64-encoded.
-base64 = "0.23"
+base64 = "0.23.1"
 clap = { version = "4.3", features = ["derive"] }
 
 # Logging
