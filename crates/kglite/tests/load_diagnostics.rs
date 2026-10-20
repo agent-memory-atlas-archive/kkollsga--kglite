@@ -105,13 +105,18 @@ fn only_a_load_that_spills_touches_the_spill_root() {
     );
     drop(loaded);
 
-    // A default save writes a column this large to the file's data region and
-    // a default load maps it from there: nothing to spill either.
+    // A default save writes a column this large to the file's data region, and
+    // a load that asks for mapped columns maps it from there: nothing to spill
+    // either. (An unrequested policy decodes in memory mode, which spills.)
     let big = root.path().join("big.kgl");
     save_to(doc_graph(4_000, 128), &big);
 
     let before = our_spill_dirs();
-    let mapped = load_file(big.to_str().unwrap()).expect("load big mapped");
+    let mapped = load_file_with(
+        big.to_str().unwrap(),
+        &LoadOptions::new().with_columns(MapPolicy::Mapped),
+    )
+    .expect("load big mapped");
     assert_eq!(mapped.graph.node_count(), 4_000);
     let created: Vec<PathBuf> = our_spill_dirs()
         .into_iter()

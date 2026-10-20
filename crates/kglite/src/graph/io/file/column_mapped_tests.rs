@@ -221,13 +221,16 @@ fn an_unrequested_columns_policy_decodes_in_memory_mode_and_maps_in_mapped_mode(
         0,
         "in-memory mode decodes unrequested columns"
     );
-    assert!(
+    // Auto never maps on Windows, where a mapped file cannot be replaced.
+    assert_eq!(
         shared(&LoadOptions::new().with_columns(MapPolicy::Auto)) > 0,
-        "an explicit Auto maps even in memory mode"
+        cfg!(unix),
+        "an explicit Auto maps even in memory mode (unix)"
     );
-    assert!(
+    assert_eq!(
         shared(&LoadOptions::new().with_storage(StorageMode::Mapped)) > 0,
-        "mapped storage mode keeps Auto"
+        cfg!(unix),
+        "mapped storage mode keeps Auto (unix)"
     );
     assert_eq!(
         shared(

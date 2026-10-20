@@ -605,13 +605,15 @@ tracks by audience, each with its own index:
   [traversal and hierarchy](https://kglite.readthedocs.io/en/latest/python/guides/traversal-hierarchy.html) ·
   [graph algorithms](https://kglite.readthedocs.io/en/latest/python/guides/graph-algorithms.html) ·
   [semantic search](https://kglite.readthedocs.io/en/latest/python/guides/semantic-search.html) ·
+  [embedding quantization](https://kglite.readthedocs.io/en/latest/python/guides/embedding-quantization.html) ·
   [text search](https://kglite.readthedocs.io/en/latest/python/guides/text-search.html) ·
   [spatial](https://kglite.readthedocs.io/en/latest/python/guides/spatial.html) ·
   [timeseries](https://kglite.readthedocs.io/en/latest/python/guides/timeseries.html) ·
   [valid time](https://kglite.readthedocs.io/en/latest/python/guides/valid-time.html) ·
   [ontology](https://kglite.readthedocs.io/en/latest/python/guides/ontology.html) ·
   [recipes](https://kglite.readthedocs.io/en/latest/python/guides/recipes.html).
-  *Ship*: [durable apps](https://kglite.readthedocs.io/en/latest/python/guides/durable-apps.html) ·
+  *Ship*: [storage and memory](https://kglite.readthedocs.io/en/latest/python/guides/storage-and-memory.html) ·
+  [durable apps](https://kglite.readthedocs.io/en/latest/python/guides/durable-apps.html) ·
   [derived index](https://kglite.readthedocs.io/en/latest/python/guides/derived-index.html) ·
   [primary store](https://kglite.readthedocs.io/en/latest/python/guides/primary-store.html) ·
   [OKF ingestion](https://kglite.readthedocs.io/en/latest/python/guides/okf.html) · [help-vault lifecycle](https://kglite.readthedocs.io/en/latest/python/guides/help-vault.html) ·
