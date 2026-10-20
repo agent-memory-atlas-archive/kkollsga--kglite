@@ -94,6 +94,7 @@ fn relationship_listing_is_separate_from_the_node_listing() {
             dimension: 2,
             count: 1,
             metric: "dot_product".into(),
+            storage: "heap",
         }]
     );
 }

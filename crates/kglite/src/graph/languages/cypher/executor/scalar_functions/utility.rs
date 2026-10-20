@@ -230,7 +230,10 @@ impl CypherExecutor<'_> {
             },
         };
 
-        let store = match self.graph.embedding_store(node_type, &c.prop_name) {
+        let store = match self
+            .graph
+            .embedding_store_verified(node_type, &c.prop_name)?
+        {
             Some(s) => s,
             None => return Err(self.missing_embedding_error(node_type, &c.prop_name)),
         };
@@ -330,7 +333,7 @@ impl CypherExecutor<'_> {
     ) -> Result<Option<&[f32]>, String> {
         let store = self
             .graph
-            .embedding_store(node_type, prop_name)
+            .embedding_store_verified(node_type, prop_name)?
             .ok_or_else(|| {
                 format!("{caller}(): no embedding '{prop_name}' found for node type '{node_type}'")
             })?;
@@ -362,6 +365,7 @@ impl CypherExecutor<'_> {
                      '{relationship_type}'"
                 )
             })?;
+        store.verify_storage()?;
         Ok(store.get(edge.edge_index))
     }
 
@@ -435,6 +439,7 @@ impl CypherExecutor<'_> {
             .edge_embeddings
             .get(&(relationship_type.to_string(), prop_name.clone()))
             .ok_or_else(|| self.missing_edge_embedding_error(relationship_type, &prop_name))?;
+        store.verify_storage()?;
         Self::check_vector_score_dimension(query_vec.len(), store.dimension())?;
         let tail = args[3..]
             .iter()
@@ -505,7 +510,7 @@ impl CypherExecutor<'_> {
         let options = super::super::vector_options::parse(&tail)?;
         let store = self
             .graph
-            .embedding_store(node_type, &prop_name)
+            .embedding_store_verified(node_type, &prop_name)?
             .ok_or_else(|| self.missing_embedding_error(node_type, &prop_name))?;
         let metric = match options.metric {
             Some(metric) => metric,

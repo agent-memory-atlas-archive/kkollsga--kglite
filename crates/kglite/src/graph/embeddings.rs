@@ -101,6 +101,9 @@ pub struct EmbeddingStoreInfo {
     /// The distance metric the store is scored with; `"cosine"` when the store
     /// recorded none.
     pub metric: String,
+    /// Where the vectors live: `"mapped"` (a read-only view of the `.kgl`
+    /// file, until the first write) or `"heap"`.
+    pub storage: &'static str,
 }
 
 /// The store name for a source column: `"{text_column}_emb"`.
@@ -203,6 +206,7 @@ pub fn list_embeddings(graph: &DirGraph) -> Vec<EmbeddingStoreInfo> {
             dimension: store.dimension,
             count: store.len(),
             metric: store.metric.as_deref().unwrap_or("cosine").to_string(),
+            storage: store.storage_name(),
         })
         .collect()
 }

@@ -549,12 +549,24 @@ impl DirGraph {
 
         // BTreeMap view for byte-determinism — same rationale as write_kgl.
         if !self.embeddings.is_empty() {
+            // A mapped store streams from its mapping: refuse a corrupt one
+            // here rather than copying it into a fresh, valid-looking sidecar.
+            for store in self.embeddings.values() {
+                store.verify_storage().map_err(|e| e.to_string())?;
+            }
             let ordered: std::collections::BTreeMap<_, _> = self.embeddings.iter().collect();
             write_compressed_disk_serde(dir, "embeddings.bin.zst", &ordered, "embeddings")?;
         }
 
         if edge_embeddings_required {
-            let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(self);
+            for store in self.edge_embeddings.values() {
+                store
+                    .numeric()
+                    .verify_storage()
+                    .map_err(|e| e.to_string())?;
+            }
+            let ordered =
+                crate::graph::edge_embeddings::persisted_edge_embedding_stores(self, |_| false);
             write_compressed_disk_serde(
                 dir,
                 "edge_embeddings.bin.zst",

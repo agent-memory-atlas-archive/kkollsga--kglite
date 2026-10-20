@@ -744,7 +744,8 @@ pub mod api {
         /// the live handle ends on the generation a fresh open would read.
         pub use crate::graph::io::file::{
             load_file, load_kgl_bytes, materialize_disk_graph, prepare_save, save_graph,
-            save_graph_with, write_kgl, write_kgl_to, write_kgl_with, SaveError,
+            save_graph_with, save_graph_with_layout, write_kgl, write_kgl_to, write_kgl_to_layout,
+            write_kgl_with, SaveError, SaveLayout,
         };
         /// The optional half of a `.kgl` load: `load_file_with` /
         /// `load_kgl_bytes_with` take a [`LoadOptions`], which `load_file` /
@@ -768,6 +769,13 @@ pub mod api {
         /// `with_*` builders.
         pub use crate::graph::io::file::{
             load_file_with, load_kgl_bytes_with, LoadOptions, MapPolicy, Verify,
+        };
+        /// On-demand integrity checks: `verify_file` re-checks every digest of a
+        /// `.kgl` without loading it, `verify_graph` the mapped data a live graph
+        /// serves. Both return per-section results; a load itself defers the
+        /// CRC32 of mapped vector sections to first use.
+        pub use crate::graph::io::file::{
+            verify_file, verify_graph, IntegrityReport, SectionStatus,
         };
         pub use crate::graph::io::ntriples::{
             load_ntriples, Cancelled, NTriplesConfig, ProgressEvent, ProgressSink, ProgressValue,
@@ -840,6 +848,7 @@ pub mod api {
             convert_dir_graph_to_mode, live_storage_mode, new_dir_graph_in_mode, StorageMode,
         };
         pub use crate::graph::storage::MappedGraph;
+        pub use crate::graph::vector_buf::VectorBuf;
     }
 
     /// Change data capture — the opt-in in-process change stream a binding

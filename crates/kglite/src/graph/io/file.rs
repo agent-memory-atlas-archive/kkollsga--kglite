@@ -778,9 +778,12 @@ pub(crate) use metadata_sidecars::{
 };
 use storage_mode::recorded_storage_mode_tag;
 
+mod embedding_sections;
 mod fast_load_sidecars;
-mod mappable;
+mod integrity;
+pub(crate) mod mappable;
 mod save_sections;
+use embedding_sections::NodeStoreRecord;
 use fast_load_sidecars::{decode_secondary_label_index, encode_secondary_label_index};
 pub(crate) use fast_load_sidecars::{
     read_id_indices_bin, read_interner_bin, read_secondary_labels_bin, read_type_connectivity_bin,
@@ -791,7 +794,9 @@ pub(crate) use fast_load_sidecars::{
 pub(crate) use fast_load_sidecars::{
     ID_INDICES_MAGIC, ID_INDICES_VERSION, TYPE_INDICES_MAGIC, TYPE_INDICES_VERSION,
 };
+pub use integrity::{verify_file, verify_graph, IntegrityReport, SectionStatus};
 use mappable::LoadSource;
+pub use mappable::SaveLayout;
 
 // ─── Save ────────────────────────────────────────────────────────────────────
 
@@ -968,6 +973,17 @@ pub fn write_kgl_with_stamp(
     fsync: bool,
     checkpoint_lsn: Option<u64>,
 ) -> io::Result<u64> {
+    write_kgl_with_stamp_layout(graph, path, fsync, checkpoint_lsn, SaveLayout::Auto)
+}
+
+/// [`write_kgl_with_stamp`] under an explicit [`SaveLayout`].
+pub fn write_kgl_with_stamp_layout(
+    graph: &DirGraph,
+    path: &str,
+    fsync: bool,
+    checkpoint_lsn: Option<u64>,
+    layout: SaveLayout,
+) -> io::Result<u64> {
     let dest = Path::new(path);
     let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
 
@@ -984,7 +1000,7 @@ pub fn write_kgl_with_stamp(
     let write_result = (|| -> io::Result<u64> {
         let file = File::create(&tmp)?;
         let mut writer = BufWriter::new(file);
-        write_kgl_to_stamped(graph, &mut writer, checkpoint_lsn)?;
+        write_kgl_to_layout(graph, &mut writer, checkpoint_lsn, layout)?;
         writer.flush()?;
         let file = writer
             .into_inner()
@@ -1008,7 +1024,7 @@ pub fn write_kgl_with_stamp(
     crate::graph::durable_io::trace::record(|| "kgl rename".to_string());
     if let Err(e) = std::fs::rename(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+        return Err(rename_error_with_mapping_hint(e));
     }
 
     // fsync the directory so the rename itself is durable (the rename can
@@ -1020,6 +1036,19 @@ pub fn write_kgl_with_stamp(
         crate::graph::durable_io::sync_dir(dir.unwrap_or_else(|| Path::new(".")))?;
     }
     Ok(bytes)
+}
+
+/// On Windows a rename over a file that something has mapped fails with
+/// `ERROR_USER_MAPPED_FILE` (1224); say what to do about it. Any other error
+/// passes through.
+fn rename_error_with_mapping_hint(error: io::Error) -> io::Error {
+    if cfg!(windows) && error.raw_os_error() == Some(1224) {
+        return io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source file is memory-mapped by this process; save to another path or reload with embeddings='memory'",
+        );
+    }
+    error
 }
 
 /// Serialize, compress, and write the graph to a `.kgl` file, atomically
@@ -1070,7 +1099,7 @@ pub fn write_kgl_to<W: Write>(graph: &DirGraph, writer: &mut W) -> io::Result<()
     write_kgl_to_stamped(graph, writer, None)
 }
 
-pub use save_sections::write_kgl_to_stamped;
+pub use save_sections::{write_kgl_to_layout, write_kgl_to_stamped};
 
 /// Everything a `.kgl` write needs done to the graph before its bytes are
 /// produced: stamp the save metadata ([`prepare_save`]), then run the
@@ -1080,7 +1109,7 @@ pub use save_sections::write_kgl_to_stamped;
 /// this can serialize every row against the wrong node.
 ///
 /// This is the single pre-write step for every `.kgl` producer — the
-/// path-writing [`save_inmemory_with`] and the buffer-writing bindings
+/// path-writing [`save_inmemory_with_layout`] and the buffer-writing bindings
 /// (`KnowledgeGraph.to_bytes`) — so neither can drift from the other. A
 /// binding that wants the bytes rather than a file calls this, then
 /// [`write_kgl_to`] (releasing its runtime's lock around the write).
@@ -1102,13 +1131,23 @@ pub fn prepare_kgl_write(graph: &mut Arc<DirGraph>) {
 ///
 /// `fsync` as in [`write_kgl_with`]; `false` is the bench-only fast path.
 /// Callers normally use the mode-aware [`save_graph`] / [`save_graph_with`].
-pub fn save_inmemory_with(graph: &mut Arc<DirGraph>, path: &str, fsync: bool) -> io::Result<()> {
+///
+/// On Windows, a graph whose embeddings are mapped from `path` itself first
+/// copies them to the heap, because the rename that publishes the save cannot
+/// replace a mapped file there.
+pub fn save_inmemory_with_layout(
+    graph: &mut Arc<DirGraph>,
+    path: &str,
+    fsync: bool,
+    layout: SaveLayout,
+) -> io::Result<()> {
     prepare_kgl_write(graph);
-    write_kgl_with(graph, path, fsync)
+    embedding_sections::release_mappings_of_destination(graph, path, cfg!(windows));
+    write_kgl_with_stamp_layout(graph, path, fsync, None, layout).map(|_| ())
 }
 
 /// Mode-aware durable save: dispatches to `DirGraph::save_disk` for
-/// disk-backed graphs, `save_inmemory_with` otherwise. This is THE single
+/// disk-backed graphs, `save_inmemory_with_layout` otherwise. This is THE single
 /// save-dispatch — the wheel (`KnowledgeGraph::save`), the MCP server,
 /// and the C ABI (`kglite_save_graph`) all route through it so dispatch
 /// + durability behaviour can't drift between bindings.
@@ -1140,12 +1179,23 @@ pub fn save_graph_with(
     path: &str,
     fsync: bool,
 ) -> Result<(), SaveError> {
+    save_graph_with_layout(graph, path, fsync, SaveLayout::Auto)
+}
+
+/// [`save_graph_with`] under an explicit [`SaveLayout`]. A disk-backed graph
+/// persists as a directory and ignores the layout.
+pub fn save_graph_with_layout(
+    graph: &mut Arc<DirGraph>,
+    path: &str,
+    fsync: bool,
+    layout: SaveLayout,
+) -> Result<(), SaveError> {
     save_guard::ensure_target_recovered(graph, path)?;
     if graph.graph.is_disk() {
         let dir = crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph);
         return dir.save_disk(path);
     }
-    save_inmemory_with(graph, path, fsync).map_err(|e| SaveError::Io(e.to_string()))
+    save_inmemory_with_layout(graph, path, fsync, layout).map_err(|e| SaveError::Io(e.to_string()))
 }
 
 /// Convert an in-memory (or mapped) graph to disk-backed storage **and publish
@@ -1980,26 +2030,28 @@ fn data_region_base(
 }
 
 /// Validate a v9 container's data-region table before any section is decoded,
-/// and refuse a table in a container that cannot carry one.
+/// refuse a table in a container that cannot carry one, and open its sections
+/// (mapped or copied per `options`).
 ///
 /// A v5-v8 file with a `mappable` key was not written by this code: v8 readers
 /// never look at the key, so honouring it would read offsets nobody aligned.
-fn check_mappable_table(
+fn open_mappable_table(
     metadata: &FileMetadata,
     format_name: &str,
-    buf: &[u8],
+    source: &LoadSource<'_>,
     metadata_end: usize,
-) -> io::Result<()> {
+    options: &LoadOptions,
+) -> io::Result<mappable::MappableTable> {
     if metadata.mappable.is_empty() {
-        return Ok(());
+        return Ok(mappable::MappableTable::default());
     }
     if format_name != "v9" {
         return Err(invalid_data(format!(
             "{format_name} container declares mappable sections, which only v9 containers carry"
         )));
     }
-    let base = data_region_base(metadata, metadata_end, buf.len() as u64)?;
-    mappable::MappableTable::validate(&metadata.mappable, buf.len() as u64, base).map(|_| ())
+    let base = data_region_base(metadata, metadata_end, source.bytes.len() as u64)?;
+    embedding_sections::open_table(&metadata.mappable, source.bytes, base, source.file, options)
 }
 
 /// CRC32 over a v8 container's fixed 13-byte header and its metadata JSON —
@@ -2239,7 +2291,13 @@ fn load_portable_columnar(
             "portable header and metadata core-data versions disagree",
         ));
     }
-    check_mappable_table(&metadata, format_name, buf, metadata_start + metadata_len)?;
+    let mappable_table = open_mappable_table(
+        &metadata,
+        format_name,
+        source,
+        metadata_start + metadata_len,
+        options,
+    )?;
     match core_version {
         CURRENT_CORE_DATA_VERSION if metadata.edge_embeddings_compressed_size == 0 => {
             return Err(invalid_data(
@@ -2308,6 +2366,7 @@ fn load_portable_columnar(
         &mut sections,
         &plan,
         &normalization_effects,
+        &mappable_table,
     )?;
     // Place the graph in its mode. The payload always deserializes into a
     // memory backend (`GraphBackend`'s Deserialize), so a mapped target is
@@ -2372,6 +2431,9 @@ mod mappable_tests;
 #[cfg(test)]
 #[path = "file/embedding_load_validation_tests.rs"]
 mod embedding_load_validation_tests;
+#[cfg(test)]
+#[path = "file/embedding_mapped_tests.rs"]
+mod embedding_mapped_tests;
 
 mod vector_persistence;
 

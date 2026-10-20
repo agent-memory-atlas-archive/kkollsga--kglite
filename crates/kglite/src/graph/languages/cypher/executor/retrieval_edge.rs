@@ -192,6 +192,7 @@ impl<'a> CypherExecutor<'a> {
             else {
                 return Ok(None);
             };
+            store.verify_storage()?;
             let Some(metric) = self.edge_query_metric(store, &args) else {
                 return Ok(None);
             };

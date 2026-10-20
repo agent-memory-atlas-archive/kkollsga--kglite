@@ -18,9 +18,6 @@
 //! ([`MappedSection::verify`]); a section carrying [`FLAG_UTF8_VALIDATED`]
 //! (string payloads, which readers use without re-validating) is also checked
 //! at open, and [`Verify::Eager`] checks every section at open.
-// reason: embedding and column consumers attach to this container machinery as they adopt it; until each does, only the loader's table validation and the tests reach most of it.
-#![allow(dead_code)]
-
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -107,6 +104,8 @@ impl SectionDtype {
 pub(crate) struct MapContext {
     pub(crate) file_backed: bool,
     pub(crate) regular_file: bool,
+    /// The file is not on a network or FUSE filesystem; only `Auto` cares.
+    pub(crate) local_fs: bool,
     pub(crate) windows: bool,
     pub(crate) big_endian: bool,
     pub(crate) section_len: u64,
@@ -120,6 +119,7 @@ impl MapContext {
         MapContext {
             file_backed: file.is_some(),
             regular_file: file.is_some_and(MappedFile::is_regular),
+            local_fs: file.is_none_or(MappedFile::is_local),
             windows: cfg!(windows),
             big_endian: cfg!(target_endian = "big"),
             section_len,
@@ -133,7 +133,9 @@ impl MapContext {
 /// `auto_min_len` is the consumer's `Auto` size floor. A byte buffer, a
 /// non-regular file, a big-endian host and the environment kill switch force
 /// the heap under every policy; `Auto` additionally never maps on Windows,
-/// where an open mapping blocks the rename a save performs over its source.
+/// where an open mapping blocks the rename a save performs over its source,
+/// nor a file on a network or FUSE filesystem, where another host's write
+/// truncates pages out from under the mapping.
 pub(crate) fn resolve_mapping(policy: MapPolicy, auto_min_len: u64, ctx: &MapContext) -> bool {
     if !ctx.file_backed || !ctx.regular_file || ctx.big_endian || ctx.env_disabled {
         return false;
@@ -141,8 +143,61 @@ pub(crate) fn resolve_mapping(policy: MapPolicy, auto_min_len: u64, ctx: &MapCon
     match policy {
         MapPolicy::Memory => false,
         MapPolicy::Mapped => true,
-        MapPolicy::Auto => !ctx.windows && ctx.section_len >= auto_min_len,
+        MapPolicy::Auto => !ctx.windows && ctx.local_fs && ctx.section_len >= auto_min_len,
     }
+}
+
+/// `false` for a file on NFS/SMB/CIFS/AFP/WebDAV/9p/FUSE. Any failure to ask,
+/// and every other platform, answers `true`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn filesystem_is_local(file: &File) -> bool {
+    use std::os::fd::AsRawFd;
+    // statfs(2) f_type magics of filesystems whose files another host can
+    // shrink or replace under a live mapping.
+    const REMOTE: [u64; 9] = [
+        0x6969,     // NFS
+        0x517B,     // SMB
+        0xFE534D42, // SMB2
+        0xFF534D42, // CIFS
+        0x65735546, // FUSE
+        0x01021997, // 9p
+        0x5346414F, // AFS
+        0x00C36400, // Ceph
+        0x7461636F, // OCFS2
+    ];
+    // SAFETY: `statfs` is plain old data, so the all-zero value is valid.
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `stat` is a valid out-pointer and the descriptor is open for the call.
+    if unsafe { libc::fstatfs(file.as_raw_fd(), &mut stat) } != 0 {
+        return true;
+    }
+    !REMOTE.contains(&((stat.f_type as u64) & 0xFFFF_FFFF))
+}
+
+#[cfg(target_os = "macos")]
+fn filesystem_is_local(file: &File) -> bool {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `statfs` is plain old data, so the all-zero value is valid.
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `stat` is a valid out-pointer and the descriptor is open for the call.
+    if unsafe { libc::fstatfs(file.as_raw_fd(), &mut stat) } != 0 {
+        return true;
+    }
+    let name: Vec<u8> = stat
+        .f_fstypename
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    !matches!(
+        name.as_slice(),
+        b"nfs" | b"smbfs" | b"afpfs" | b"webdav" | b"macfuse" | b"osxfuse" | b"fuse"
+    )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn filesystem_is_local(_file: &File) -> bool {
+    true
 }
 
 fn mmap_disabled_by_env() -> bool {
@@ -216,12 +271,18 @@ impl MappedFile {
         &self.path
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> u64 {
         self.len
     }
 
     fn is_regular(&self) -> bool {
         self.file.metadata().is_ok_and(|m| m.is_file())
+    }
+
+    /// Whether the file's filesystem is local. Unknown counts as local.
+    fn is_local(&self) -> bool {
+        filesystem_is_local(&self.file)
     }
 
     /// Fail instead of touching pages if the file is shorter than when it was
@@ -294,25 +355,34 @@ pub(crate) struct MappableSection<'a> {
 
 /// Which container a save produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum SaveLayout {
-    /// v9 when at least one mappable section is supplied, otherwise v8.
+#[non_exhaustive]
+pub enum SaveLayout {
+    /// v9 when at least one store is large enough to leave the compressed
+    /// sections, otherwise v8 bytes. Mapped loads need v9.
     #[default]
-    Default,
+    Auto,
     /// Never emit v9: every section compressed, readable by older readers.
     Compact,
 }
 
-/// The mappable sections a save of `graph` emits under `layout`.
-///
-/// No store registers sections yet, so this is empty and every save writes the
-/// v8 bytes. `Compact` always yields none.
-pub(crate) fn collect_mappable_sections(
-    _graph: &crate::graph::schema::DirGraph,
-    layout: SaveLayout,
-) -> Vec<MappableSection<'static>> {
-    match layout {
-        SaveLayout::Compact | SaveLayout::Default => Vec::new(),
+impl SaveLayout {
+    /// Parse a user-facing layout name (`"auto"` or `"compact"`).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "auto" => Some(SaveLayout::Auto),
+            "compact" => Some(SaveLayout::Compact),
+            _ => None,
+        }
     }
+}
+
+/// The mappable sections a save of `graph` emits under `layout`. `Compact`
+/// always yields none.
+pub(crate) fn collect_mappable_sections(
+    graph: &crate::graph::schema::DirGraph,
+    layout: SaveLayout,
+) -> io::Result<Vec<MappableSection<'_>>> {
+    super::embedding_sections::collect_embedding_sections(graph, layout)
 }
 
 pub(crate) fn align_up(value: u64, align: u64) -> u64 {
@@ -413,7 +483,6 @@ pub(crate) struct MappedSection {
     pub(crate) kind: u8,
     pub(crate) dtype: SectionDtype,
     pub(crate) elem_count: u64,
-    pub(crate) flags: u32,
     pub(crate) crc32: u32,
     bytes: SectionBytes,
 }
@@ -421,6 +490,23 @@ pub(crate) struct MappedSection {
 impl MappedSection {
     pub(crate) fn is_mapped(&self) -> bool {
         matches!(self.bytes, SectionBytes::Mapped { .. })
+    }
+
+    /// Whether the mapped file's modification time differs from the one
+    /// recorded at map time; `None` for a heap copy.
+    pub(crate) fn modified_since_open(&self) -> Option<io::Result<bool>> {
+        match &self.bytes {
+            SectionBytes::Mapped { file, .. } => Some(file.modified_since_open()),
+            SectionBytes::Heap(_) => None,
+        }
+    }
+
+    /// The file a mapped section reads from; `None` for a heap copy.
+    pub(crate) fn source_path(&self) -> Option<&Path> {
+        match &self.bytes {
+            SectionBytes::Mapped { file, .. } => Some(file.path()),
+            SectionBytes::Heap(_) => None,
+        }
     }
 
     /// The payload, without a truncation check. Safe to call only where the
@@ -474,15 +560,13 @@ impl MappableTable {
         self.sections.iter()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.sections.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.sections.is_empty()
-    }
-
     /// Verify every section's CRC32 now.
+    #[cfg(test)]
     pub(crate) fn verify_all(&self) -> io::Result<()> {
         self.sections.iter().try_for_each(MappedSection::verify)
     }
@@ -590,7 +674,6 @@ impl MappableTable {
                 kind: entry.kind,
                 dtype,
                 elem_count: entry.elem_count,
-                flags: entry.flags,
                 crc32: entry.crc32,
                 bytes: section_bytes,
             };

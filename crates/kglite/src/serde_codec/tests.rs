@@ -78,7 +78,7 @@ fn postcard_round_trips_value_graph_metadata_maps_and_wal() {
 #[test]
 fn postcard_round_trips_embedding_payload() {
     let mut store = EmbeddingStore::with_metric(2, "cosine");
-    store.data = vec![0.25, 0.75, -0.5, 0.5];
+    store.data = vec![0.25, 0.75, -0.5, 0.5].into();
     store.node_to_slot = HashMap::from([(3, 0), (8, 1)]);
     store.slot_to_node = vec![3, 8];
     store.model_id = Some("fixture-model".to_string());

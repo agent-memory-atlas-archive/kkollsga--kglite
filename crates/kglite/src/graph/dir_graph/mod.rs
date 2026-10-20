@@ -63,6 +63,7 @@ mod disk_rebase;
 #[cfg(test)]
 pub(crate) use disk_rebase::{post_publish_failpoint, with_failing_stage};
 mod duplicate_ids;
+mod embedding_lookup;
 mod id_index_reuse;
 mod independent_copy;
 pub(crate) mod index_create;
@@ -1040,17 +1041,6 @@ impl DirGraph {
         node_index: usize,
     ) -> Option<&crate::graph::features::timeseries::NodeTimeseries> {
         self.timeseries_store.get(&node_index)
-    }
-
-    /// Look up an embedding store by `(&str, &str)`: a linear scan of the
-    /// embeddings map (typically 1-3 entries), so no owned `String` key has to
-    /// be allocated for a `HashMap` probe.
-    #[inline]
-    pub fn embedding_store(&self, node_type: &str, prop_name: &str) -> Option<&EmbeddingStore> {
-        self.embeddings
-            .iter()
-            .find(|((nt, pn), _)| nt == node_type && pn == prop_name)
-            .map(|(_, store)| store)
     }
 
     /// Build the ID index for a specific node type.

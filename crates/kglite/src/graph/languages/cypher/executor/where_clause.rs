@@ -1026,10 +1026,14 @@ impl<'a> CypherExecutor<'a> {
             Some(n) => n.node_type_str(&graph.interner),
             None => return false,
         };
-        let store = match graph.embedding_store(node_type, &spec.prop_name) {
-            Some(s) => s,
-            None => {
+        let store = match graph.embedding_store_verified(node_type, &spec.prop_name) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
                 error = Some(self.missing_embedding_error(node_type, &spec.prop_name));
+                return false;
+            }
+            Err(message) => {
+                error = Some(message);
                 return false;
             }
         };

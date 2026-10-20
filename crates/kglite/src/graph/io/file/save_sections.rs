@@ -121,10 +121,15 @@ fn encode_ordered_map<K: Ord + Serialize, V: Serialize>(
 fn encode_optional_sections(
     graph: &DirGraph,
     codec: serde_codec::CodecVersion,
+    layout: SaveLayout,
 ) -> io::Result<OptionalSections> {
-    let embeddings =
-        encode_ordered_map(graph.embeddings.iter(), graph.embeddings.is_empty(), codec)?;
-    let (edge_embeddings, core_version) = encode_portable_edge_embeddings(graph, codec)?;
+    let records = graph
+        .embeddings
+        .iter()
+        .map(|(key, store)| Ok((key, NodeStoreRecord::new(store, layout)?)))
+        .collect::<io::Result<Vec<_>>>()?;
+    let embeddings = encode_ordered_map(records.into_iter(), graph.embeddings.is_empty(), codec)?;
+    let (edge_embeddings, core_version) = encode_portable_edge_embeddings(graph, codec, layout)?;
     let timeseries = encode_ordered_map(
         graph.timeseries_store.iter(),
         graph.timeseries_store.is_empty(),
@@ -206,29 +211,42 @@ pub fn write_kgl_to_stamped<W: Write>(
     writer: &mut W,
     checkpoint_lsn: Option<u64>,
 ) -> io::Result<()> {
+    write_kgl_to_layout(graph, writer, checkpoint_lsn, SaveLayout::Auto)
+}
+
+/// [`write_kgl_to_stamped`] under an explicit [`SaveLayout`]: `Compact` writes
+/// the v8 container every kglite release can read.
+pub fn write_kgl_to_layout<W: Write>(
+    graph: &DirGraph,
+    writer: &mut W,
+    checkpoint_lsn: Option<u64>,
+    layout: SaveLayout,
+) -> io::Result<()> {
     write_kgl_container(
         graph,
         writer,
         checkpoint_lsn,
-        collect_mappable_sections(graph, SaveLayout::Default),
+        layout,
+        collect_mappable_sections(graph, layout)?,
     )
 }
 
 /// The container writer: v9 when `mappable` is non-empty, otherwise the v8
-/// bytes this writer has always produced. The caller decides the layout by
-/// what it passes — [`collect_mappable_sections`] returns none under
-/// `SaveLayout::Compact` — so a `Compact` save cannot reach the v9 branch.
+/// bytes this writer has always produced. `layout` also decides which stores
+/// are written as shells (their vectors are the `mappable` sections), so it
+/// must be the layout `mappable` was collected under.
 pub(super) fn write_kgl_container<W: Write>(
     graph: &DirGraph,
     writer: &mut W,
     checkpoint_lsn: Option<u64>,
+    layout: SaveLayout,
     mappable: Vec<MappableSection<'_>>,
 ) -> io::Result<()> {
     validate_column_keys_registered(graph)?;
     let codec = serde_codec::CodecVersion::PostcardV1;
     let topology = encode_topology(graph, codec)?;
     let (column_meta, column_data) = encode_column_sections(graph, codec)?;
-    let optional = encode_optional_sections(graph, codec)?;
+    let optional = encode_optional_sections(graph, codec, layout)?;
     let core_version = optional.core_version;
     let (entries, _region_len) = plan_data_region(&mappable)?;
     let metadata_json = build_metadata_json(

@@ -1131,8 +1131,8 @@ mod embedding_store_tests {
             hashes.sort();
             (
                 store.slot_to_node.clone(),
-                store.data.clone(),
-                store.norms.clone(),
+                store.data.to_vec(),
+                store.norms.to_vec(),
                 hashes,
             )
         }

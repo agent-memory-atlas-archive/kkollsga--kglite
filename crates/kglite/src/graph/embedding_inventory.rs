@@ -62,6 +62,8 @@ pub struct RelationshipEmbeddingStoreInfo {
     pub count: usize,
     /// The metric the store is scored with; `"cosine"` when none is recorded.
     pub metric: String,
+    /// `"mapped"` or `"heap"`, as [`EmbeddingStoreInfo::storage`].
+    pub storage: &'static str,
 }
 
 /// Every relationship embedding store, sorted by `(relationship type, store)`.
@@ -78,6 +80,7 @@ pub fn list_relationship_embeddings(graph: &DirGraph) -> Vec<RelationshipEmbeddi
                 dimension: numeric.dimension,
                 count: numeric.len(),
                 metric: effective_metric(numeric),
+                storage: numeric.storage_name(),
             }
         })
         .collect();
@@ -189,6 +192,8 @@ pub struct EmbeddingDiagnostic {
     pub status: EmbeddingCoverage,
     pub dimension: Option<usize>,
     pub metric: Option<String>,
+    /// `"mapped"` or `"heap"`; `None` without a store.
+    pub storage: Option<&'static str>,
     pub length_stats: LengthStats,
 }
 
@@ -365,6 +370,7 @@ fn finish(entity: EmbeddingEntity, tallies: Tallies<'_>) -> Vec<EmbeddingDiagnos
                 status,
                 dimension: tally.store.map(|s| s.dimension),
                 metric: tally.store.map(effective_metric),
+                storage: tally.store.map(EmbeddingStore::storage_name),
                 length_stats: LengthStats {
                     mean_length: per_element(tally.total_length as f64),
                     max_length: tally.max_length,

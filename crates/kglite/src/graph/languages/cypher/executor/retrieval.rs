@@ -319,7 +319,10 @@ impl<'a> CypherExecutor<'a> {
                 return Ok(None);
             }
         }
-        let Some(store) = self.graph.embedding_store(&node_type, &args.property) else {
+        let Some(store) = self
+            .graph
+            .embedding_store_verified(&node_type, &args.property)?
+        else {
             return Ok(None);
         };
         let exact = args.options.exact || !store.has_index();
@@ -761,7 +764,10 @@ impl<'a> CypherExecutor<'a> {
             Some(node) => node.node_type_str(&self.graph.interner).to_string(),
             None => return Ok(HnswOutcome::Exact(info.fallback("unsupported_shape"))),
         };
-        let store = match self.graph.embedding_store(&node_type, &args.property) {
+        let store = match self
+            .graph
+            .embedding_store_verified(&node_type, &args.property)?
+        {
             Some(store) => store,
             None => return Ok(HnswOutcome::Exact(info.fallback("unsupported_shape"))),
         };

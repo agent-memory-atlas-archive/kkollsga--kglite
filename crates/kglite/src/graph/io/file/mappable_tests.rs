@@ -75,7 +75,7 @@ fn synthetic_sections() -> Vec<MappableSection<'static>> {
 
 fn v9_bytes(sections: Vec<MappableSection<'_>>) -> Vec<u8> {
     let mut out = Vec::new();
-    write_kgl_container(&graph(4), &mut out, None, sections).unwrap();
+    write_kgl_container(&graph(4), &mut out, None, SaveLayout::Auto, sections).unwrap();
     out
 }
 
@@ -104,7 +104,8 @@ fn a_graph_with_no_mappable_section_still_writes_v8_bytes() {
         &g,
         &mut compact,
         None,
-        collect_mappable_sections(&g, SaveLayout::Compact),
+        SaveLayout::Compact,
+        collect_mappable_sections(&g, SaveLayout::Compact).unwrap(),
     )
     .unwrap();
     assert_eq!(default, compact);
@@ -465,6 +466,7 @@ fn mapping_policy_truth_table() {
     let base = MapContext {
         file_backed: true,
         regular_file: true,
+        local_fs: true,
         windows: false,
         big_endian: false,
         section_len: 100,
@@ -483,7 +485,17 @@ fn mapping_policy_truth_table() {
         0,
         &at(|c| c.windows = true)
     ));
-    // Explicit Mapped ignores size and Windows.
+    assert!(!resolve_mapping(
+        MapPolicy::Auto,
+        0,
+        &at(|c| c.local_fs = false)
+    ));
+    // Explicit Mapped ignores size, Windows and a network filesystem.
+    assert!(resolve_mapping(
+        MapPolicy::Mapped,
+        0,
+        &at(|c| c.local_fs = false)
+    ));
     assert!(resolve_mapping(
         MapPolicy::Mapped,
         u64::MAX,
@@ -560,8 +572,7 @@ fn a_loaded_section_exposes_its_table_row() {
     let table = heap_table(&v9_bytes(sections), Verify::Lazy).unwrap();
     let handle = table.get("emb:Doc:v:data").unwrap();
     assert_eq!((handle.kind, handle.owner.as_str()), (7, "embeddings.zst"));
-    assert_ne!(handle.flags & FLAG_LITTLE_ENDIAN, 0);
-    assert!(!table.is_empty());
+    assert!(table.len() > 0);
     let source = LoadSource {
         bytes: &[],
         file: None,

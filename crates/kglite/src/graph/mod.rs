@@ -24,6 +24,7 @@ pub mod embedder;
 pub mod embedding_carry;
 pub(crate) mod embedding_hints;
 pub mod embedding_inventory;
+pub(crate) mod embedding_store;
 pub(crate) mod embedding_validation;
 pub mod embeddings;
 pub mod explore;
@@ -47,6 +48,7 @@ pub mod tables;
 #[cfg(test)]
 mod test_scope;
 pub mod text_indexes;
+pub mod vector_buf;
 pub mod wal;
 
 #[cfg(test)]

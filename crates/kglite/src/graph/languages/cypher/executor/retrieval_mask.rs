@@ -149,7 +149,10 @@ impl CypherExecutor<'_> {
         if args.variable != variable {
             return Ok(None);
         }
-        let Some(store) = self.graph.embedding_store(node_type, &args.property) else {
+        let Some(store) = self
+            .graph
+            .embedding_store_verified(node_type, &args.property)?
+        else {
             return Ok(None);
         };
         if store.len() == 0 || !slots_ascend_within_type(self.graph, store, node_type) {
@@ -232,7 +235,10 @@ impl CypherExecutor<'_> {
         if args.variable != variable {
             return Ok(Some(None));
         }
-        let Some(store) = self.graph.embedding_store(node_type, &args.property) else {
+        let Some(store) = self
+            .graph
+            .embedding_store_verified(node_type, &args.property)?
+        else {
             return Ok(Some(None));
         };
         if store.len() != nodes.len()

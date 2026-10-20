@@ -125,17 +125,30 @@ pub(crate) fn has_persisted_edge_embeddings(graph: &DirGraph) -> bool {
 
 pub(crate) fn persisted_edge_embedding_stores(
     graph: &DirGraph,
+    in_section: impl Fn(&EmbeddingStore) -> bool,
 ) -> BTreeMap<&EdgeEmbeddingKey, PersistedEdgeEmbeddingStoreRef<'_>> {
     graph
         .edge_embeddings
         .iter()
-        .map(|(key, store)| (key, store.persisted()))
+        .map(|(key, store)| (key, store.persisted(in_section(&store.numeric))))
         .collect()
 }
 
 pub(crate) fn validate_decoded_edge_embedding_stores(
     graph: &DirGraph,
     decoded: BTreeMap<EdgeEmbeddingKey, PersistedEdgeEmbeddingStore>,
+) -> Result<HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>, String> {
+    validate_decoded_edge_embedding_stores_with(graph, decoded, |_, _| Ok(false))
+}
+
+/// [`validate_decoded_edge_embedding_stores`] with a hook that runs on each
+/// decoded store before it is validated: it installs vectors that live outside
+/// the compressed section (a v9 mappable section) and returns `true` when it
+/// also installed norms that validation may trust instead of rebuilding.
+pub(crate) fn validate_decoded_edge_embedding_stores_with(
+    graph: &DirGraph,
+    decoded: BTreeMap<EdgeEmbeddingKey, PersistedEdgeEmbeddingStore>,
+    mut install: impl FnMut(&EdgeEmbeddingKey, &mut EmbeddingStore) -> Result<bool, String>,
 ) -> Result<HashMap<EdgeEmbeddingKey, EdgeEmbeddingStore>, String> {
     if decoded.is_empty() {
         return Err("required payload contains no stores".to_string());
@@ -146,12 +159,13 @@ pub(crate) fn validate_decoded_edge_embedding_stores(
         let mut store = EdgeEmbeddingStore::from_persisted(payload).map_err(|error| {
             format!("store '{relationship_type}.{property}' is invalid: {error}")
         })?;
+        let key = (relationship_type, property);
+        let norms_trusted = install(&key, &mut store.numeric)
+            .map_err(|error| format!("store '{}.{}' is invalid: {error}", key.0, key.1))?;
         store
-            .validate_for_graph(graph, &relationship_type, &property)
-            .map_err(|error| {
-                format!("store '{relationship_type}.{property}' is invalid: {error}")
-            })?;
-        stores.insert((relationship_type, property), store);
+            .validate_for_graph(graph, &key.0, &key.1, norms_trusted)
+            .map_err(|error| format!("store '{}.{}' is invalid: {error}", key.0, key.1))?;
+        stores.insert(key, store);
     }
     drop(arena_guard);
     Ok(stores)
@@ -212,10 +226,30 @@ impl EdgeEmbeddingStore {
             .map(EdgeIndex::new)
     }
 
-    pub(crate) fn persisted(&self) -> PersistedEdgeEmbeddingStoreRef<'_> {
+    /// [`EmbeddingStore::verify_storage`] with the error as text.
+    pub(crate) fn verify_storage(&self) -> Result<(), String> {
+        self.numeric.verify_storage().map_err(|e| e.to_string())
+    }
+
+    /// The dense store behind this one (vectors, norms, index).
+    pub(crate) fn numeric(&self) -> &EmbeddingStore {
+        &self.numeric
+    }
+
+    pub(crate) fn numeric_mut(&mut self) -> &mut EmbeddingStore {
+        &mut self.numeric
+    }
+
+    /// The persisted record. `data_in_section` leaves `data` empty because the
+    /// vectors travel as a mappable section of a v9 container instead.
+    pub(crate) fn persisted(&self, data_in_section: bool) -> PersistedEdgeEmbeddingStoreRef<'_> {
         PersistedEdgeEmbeddingStoreRef {
             dimension: self.numeric.dimension,
-            data: &self.numeric.data,
+            data: if data_in_section {
+                &[]
+            } else {
+                &self.numeric.data
+            },
             edge_slots: &self.numeric.slot_to_node,
             metric: self.numeric.metric.as_deref(),
             model_id: self.numeric.model_id.as_deref(),
@@ -225,7 +259,7 @@ impl EdgeEmbeddingStore {
 
     pub(crate) fn from_persisted(payload: PersistedEdgeEmbeddingStore) -> Result<Self, String> {
         let mut numeric = EmbeddingStore::new(payload.dimension);
-        numeric.data = payload.data;
+        numeric.data = payload.data.into();
         numeric.slot_to_node = payload.edge_slots;
         numeric.metric = payload.metric;
         numeric.model_id = payload.model_id;
@@ -244,6 +278,7 @@ impl EdgeEmbeddingStore {
         graph: &DirGraph,
         relationship_type: &str,
         embedding_property: &str,
+        norms_trusted: bool,
     ) -> Result<(), String> {
         if relationship_type.is_empty() {
             return Err("relationship type is empty".to_string());
@@ -260,10 +295,14 @@ impl EdgeEmbeddingStore {
             .validate_shape()
             .map_err(|error| error.to_string())?;
         // Norms are derived here, in the pass that refuses a non-finite
-        // coordinate; the checks below read only slots and endpoints.
-        self.numeric
-            .rebuild_norms_checked()
-            .map_err(|error| error.to_string())?;
+        // coordinate; the checks below read only slots and endpoints. Norms a
+        // CRC-covered mappable section supplied are used as they are, which is
+        // what keeps a mapped load from reading every vector.
+        if !(norms_trusted && self.numeric.norms.len() == self.numeric.len()) {
+            self.numeric
+                .rebuild_norms_checked()
+                .map_err(|error| error.to_string())?;
+        }
         for &raw in self.numeric.text_hashes.keys() {
             if !self.numeric.node_to_slot.contains_key(&raw) {
                 return Err(format!("source hash names absent relationship slot {raw}"));

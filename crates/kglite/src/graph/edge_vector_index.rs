@@ -437,6 +437,9 @@ pub(crate) fn query_edge_embeddings(
         .ok_or_else(|| {
             format!("No relationship embedding store '{connection_type}.{text_property}'")
         })?;
+    store.verify_storage().map_err(|error| {
+        format!("relationship embedding store '{connection_type}.{text_property}': {error}")
+    })?;
     if query.len() != store.dimension() {
         return Err(format!(
             "Query dimension {} does not match store dimension {}",
@@ -552,6 +555,9 @@ pub(crate) fn rank_dense_stores(
     admits: Option<&dyn Fn(usize) -> bool>,
 ) -> Result<Vec<DenseStoreHit>, String> {
     for (type_name, store) in stores {
+        store.verify_storage().map_err(|error| {
+            format!("{entity} embedding store '{type_name}.{text_property}': {error}")
+        })?;
         if query.len() != store.dimension {
             return Err(format!(
                 "Query dimension {} does not match store dimension {} of '{type_name}.{text_property}'",

@@ -262,7 +262,7 @@ fn decoded_store_validation_rejects_nonfinite_dead_and_wrong_type() {
         [(one, vec![f32::NAN, 0.0])],
     );
     assert!(nonfinite
-        .validate_for_graph(&graph, "ASSERTS", "text_emb")
+        .validate_for_graph(&graph, "ASSERTS", "text_emb", false)
         .is_err());
 
     let mut dead = crate::graph::edge_embeddings::EdgeEmbeddingStore::decoded_fixture(
@@ -270,7 +270,7 @@ fn decoded_store_validation_rejects_nonfinite_dead_and_wrong_type() {
         [(EdgeIndex::new(9999), vec![1.0, 0.0])],
     );
     assert!(dead
-        .validate_for_graph(&graph, "ASSERTS", "text_emb")
+        .validate_for_graph(&graph, "ASSERTS", "text_emb", false)
         .is_err());
 
     let mut wrong_type = crate::graph::edge_embeddings::EdgeEmbeddingStore::decoded_fixture(
@@ -278,6 +278,6 @@ fn decoded_store_validation_rejects_nonfinite_dead_and_wrong_type() {
         [(one, vec![1.0, 0.0])],
     );
     assert!(wrong_type
-        .validate_for_graph(&graph, "MENTIONS", "text_emb")
+        .validate_for_graph(&graph, "MENTIONS", "text_emb", false)
         .is_err());
 }

@@ -409,6 +409,9 @@ pub fn vector_search(
     };
 
     let results = if let Some((node_type, store)) = single_type {
+        store.verify_storage().map_err(|error| {
+            format!("embedding store '{node_type}.{embedding_property}': {error}")
+        })?;
         if query_vector.len() != store.dimension {
             return Err(format!(
                 "Query vector dimension {} does not match embedding dimension {} for '{}.{}'",
@@ -491,6 +494,11 @@ pub fn vector_search(
                 let key = (node_type_name.to_string(), embedding_property.to_string());
                 cached_store = graph.embeddings.get(&key);
                 cached_type = Some(node_type);
+                if let Some(store) = cached_store {
+                    store.verify_storage().map_err(|error| {
+                        format!("embedding store '{node_type_name}.{embedding_property}': {error}")
+                    })?;
+                }
                 if cached_store.is_some() {
                     matched_a_store = true;
                 } else if !unmatched_types.contains(&node_type_name) {

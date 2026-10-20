@@ -15,7 +15,31 @@ before upgrading.
   - Build it with `LoadOptions::new()` and the `with_*` builders; a struct literal no longer compiles.
   - New builders: `with_embeddings`, `with_columns` (`MapPolicy::{Auto, Mapped, Memory}`) and `with_verify` (`Verify::{Lazy, Eager}`, default from `KGLITE_VERIFY=eager`).
   - The new fields apply only to containers that carry mappable sections; a v8 or older file ignores them.
-- **The reader accepts `.kgl` container v9** (raw, 64-byte-aligned sections after the compressed ones). Nothing writes v9 yet, so every save still produces v8 bytes.
+- **A graph with an embedding store of 4 MiB or more now saves as `.kgl` container v9.**
+  - The vectors and their L2 norms are stored raw, 64-byte aligned, after the compressed sections; smaller stores stay inside the compressed sections, as before.
+  - kglite releases before this one refuse a v9 file with "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
+  - The vectors are no longer zstd-compressed; embeddings compress by under 10%, so the file changes little, plus 4 bytes per vector for the stored norm.
+  - To write a file that older readers can open, save with `layout="compact"` (Rust: `SaveLayout::Compact`), which writes the v8 container.
+  - A graph with no store of that size writes the same bytes as before.
+- **Rust API: `EmbeddingStore.data` and `.norms` are `VectorBuf`, not `Vec<f32>`.**
+  - `VectorBuf` derefs to `[f32]`, so reads, slicing and indexing compile unchanged; `push`, `extend_from_slice`, `truncate`, `pop`, `reserve` and `clear` are inherent methods.
+  - Assign with `vec.into()`. Cloning a store whose buffers are mapped shares the mapping; the first write to a buffer copies it to the heap.
+  - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo` and `EmbeddingDiagnostic` gain a `storage` field (`"mapped"` or `"heap"`).
+
+### Added
+
+- **Embedding stores can be served from the `.kgl` file instead of the heap.**
+  - A v9 file loaded with `LoadOptions::with_embeddings(MapPolicy::Auto)` (the default) maps every store of 64 MB or more from a regular local file on Unix; `Mapped` maps any size; `Memory` copies to the heap.
+  - A mapped store costs no resident memory until a search touches its pages, and a second graph loaded from the same file shares them.
+  - Searches, HNSW and `get_embedding` read the mapping through the same slices as a heap store.
+  - The first write to a mapped store copies that store to the heap; clones, snapshots and transactions that did not write keep the mapping.
+  - Byte buffers (`load_kgl_bytes`), non-regular files, network and FUSE filesystems (`Auto`), Windows (`Auto`) and big-endian hosts always load to the heap. `KGLITE_MMAP=0` forces the heap everywhere.
+- **`verify_file(path)` and `verify_graph(&graph)` re-check integrity on demand.**
+  - `verify_file` checks the CRC32 of every compressed and mappable section of a `.kgl` without loading it.
+  - `verify_graph` checks the mapped stores a live graph serves, and that their file still has its length and modification time.
+  - A load verifies a mapped store's CRC32 on its first search (`Verify::Lazy`) or at open (`Verify::Eager`); a corrupt store fails that search with an error naming the store.
+  - A save refuses to copy a corrupt mapped store into a new file.
+- **Saving over the path a graph is mapped from works.** On Unix the old file stays readable until the graph drops it; on Windows the graph's mapped stores are copied to the heap first.
 
 ### Changed
 

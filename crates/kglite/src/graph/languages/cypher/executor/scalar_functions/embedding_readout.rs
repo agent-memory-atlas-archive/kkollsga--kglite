@@ -109,7 +109,7 @@ impl<'a> CypherExecutor<'a> {
         else {
             return Ok(None);
         };
-        match self.graph.embedding_store(node_type, store) {
+        match self.graph.embedding_store_verified(node_type, store)? {
             Some(found) => Ok(found.get_embedding(node_idx.index())),
             None => Err(missing_store_error(
                 store,
@@ -133,7 +133,10 @@ impl<'a> CypherExecutor<'a> {
             .edge_embeddings
             .get(&(rel_type.to_string(), store.to_string()))
         {
-            Some(found) => Ok(found.get(edge.edge_index)),
+            Some(found) => {
+                found.verify_storage()?;
+                Ok(found.get(edge.edge_index))
+            }
             None => Err(missing_store_error(
                 store,
                 "relationship type",

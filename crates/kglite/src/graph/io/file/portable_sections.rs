@@ -7,11 +7,17 @@ use super::*;
 pub(super) fn encode_portable_edge_embeddings(
     graph: &DirGraph,
     codec: serde_codec::CodecVersion,
+    layout: SaveLayout,
 ) -> io::Result<(Option<Vec<u8>>, u32)> {
     if !crate::graph::edge_embeddings::has_persisted_edge_embeddings(graph) {
         return Ok((None, NODE_ONLY_CORE_DATA_VERSION));
     }
-    let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(graph);
+    for store in graph.edge_embeddings.values() {
+        store.numeric().verify_storage()?;
+    }
+    let ordered = crate::graph::edge_embeddings::persisted_edge_embedding_stores(graph, |store| {
+        embedding_sections::store_goes_to_data_region(store, layout)
+    });
     let raw = codec_ser(codec, &ordered)?;
     Ok((Some(zstd_compress(&raw)?), CURRENT_CORE_DATA_VERSION))
 }
@@ -81,6 +87,7 @@ pub(super) fn load_portable_optional_sections(
     sections: &mut SectionCursor<'_>,
     plan: &PortableSectionPlan,
     normalization_effects: &legacy_references::NormalizationEffects,
+    mappable_table: &mappable::MappableTable,
 ) -> io::Result<()> {
     if plan.embeddings > 0 {
         if core_version < EMBED_PROVENANCE_MIN_VERSION {
@@ -92,7 +99,7 @@ pub(super) fn load_portable_optional_sections(
             codec_deser(codec, &raw, raw.capacity() as u64)?;
         // The decompressed payload is as large as the stores it decoded into.
         drop(raw);
-        validate_and_rebuild_embedding_norms(&mut embeddings)?;
+        embedding_sections::attach_and_validate_node_stores(&mut embeddings, mappable_table)?;
         dir_graph.embeddings = embeddings;
     }
     if plan.edge_embeddings > 0 {
@@ -102,11 +109,17 @@ pub(super) fn load_portable_optional_sections(
             crate::graph::edge_embeddings::EdgeEmbeddingKey,
             crate::graph::edge_embeddings::PersistedEdgeEmbeddingStore,
         > = codec_deser(codec, &raw, raw.capacity() as u64)?;
+        let mut claimed = std::collections::HashSet::new();
         dir_graph.edge_embeddings =
-            crate::graph::edge_embeddings::validate_decoded_edge_embedding_stores(
-                dir_graph, decoded,
+            crate::graph::edge_embeddings::validate_decoded_edge_embedding_stores_with(
+                dir_graph,
+                decoded,
+                |key, store| {
+                    embedding_sections::install_edge_store(mappable_table, &mut claimed, key, store)
+                },
             )
             .map_err(|error| invalid_data(format!("edge_embeddings {error}")))?;
+        embedding_sections::check_edge_claimed(mappable_table, &claimed)?;
     }
     if plan.timeseries > 0 {
         let compressed = sections.take(plan.timeseries, TIMESERIES_SECTION)?;
