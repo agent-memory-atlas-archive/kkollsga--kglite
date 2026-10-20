@@ -75,7 +75,7 @@ before upgrading.
 - **The first typed-relationship query on a `mapped` graph is as fast as in memory mode.** It builds only per-type peer counts; the adjacency index is built when a per-node lookup needs it. A 250k-node, 1M-edge `MATCH ()-[:T]->() RETURN ... count(*)` first query drops from 60 to 24 ms (memory mode: 23 ms).
 - **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied. Loading a graph with embeddings reserves each decompressed section once instead of growing it by doubling.
 - **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.
-- **The MCP server reads stdio through mcp-methods 0.5.0's transport.** Line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner lives in its own module with unit tests. `kglite-mcp-server` and `kglite-cli` now require `mcp-methods` 0.5.0.
+- **The MCP server reads stdio through mcp-methods 0.5.0's transport.** Line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner lives in its own module with unit tests. `kglite-mcp-server` and `kglite-cli` now require `mcp-methods` 0.5.1.
 
 ### Fixed
 
@@ -84,7 +84,7 @@ before upgrading.
 
 ### Security
 
-- **Dependency updates close RUSTSEC advisories.** `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382. `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381. RUSTSEC-2026-0381 remains open for `webpki-roots` 0.26.11, pulled in through `ureq` 2 by mcp-methods 0.5.0.
+- **Dependency updates close RUSTSEC advisories.** `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382. `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381; mcp-methods 0.5.1 moved to `ureq` 3, which removes the last `webpki-roots` 0.26 copy.
 
 ### Rust API
 
