@@ -538,7 +538,20 @@ impl<T: MmapPod> MmapOrVec<T> {
     }
 
     /// Read element at index. Panics if out of bounds.
+    ///
+    /// The heap arm stays inline in the caller's loop; the file-backed arms
+    /// live in an out-of-line cold fn so the extra `Shared` variant does not
+    /// grow the per-row code of in-memory scans.
+    #[inline(always)]
     pub fn get(&self, index: usize) -> T {
+        match self {
+            MmapOrVec::Heap { data } => data[index],
+            _ => self.get_backed(index),
+        }
+    }
+
+    #[inline(never)]
+    fn get_backed(&self, index: usize) -> T {
         match self {
             MmapOrVec::Heap { data } => data[index],
             MmapOrVec::Shared { .. } => self.as_slice()[index],
