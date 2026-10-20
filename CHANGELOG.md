@@ -99,6 +99,12 @@ before upgrading.
 - **Loading a graph with embeddings reserves each decompressed section once** instead of growing it by doubling.
 - **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.
 
+### Security
+
+- **Dependency updates close RUSTSEC advisories.**
+  - `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382.
+  - `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381.
+
 ## [0.20.1] - 2026-10-19
 
 ### Breaking changes and migration
