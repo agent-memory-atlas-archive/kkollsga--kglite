@@ -20,6 +20,7 @@ BOUND	KgliteStatusCode kglite_session_set_embeddings(struct KgliteSession *sessi
 BOUND	KgliteStatusCode kglite_session_add_embeddings(struct KgliteSession *session, const char *node_type, const char *text_column, const char *ids_json, const float *vectors, uintptr_t dim, uintptr_t count, const char *metric, const char **out_report_json, const char **out_error_msg)
 BOUND	KgliteStatusCode kglite_session_build_vector_index(struct KgliteSession *session, const char *node_type, const char *text_column, uintptr_t m, uintptr_t ef_construction, uintptr_t ef_search, const char *metric, const char **out_report_json, const char **out_error_msg)
 BOUND	KgliteStatusCode kglite_session_list_embeddings(const struct KgliteSession *session, const char **out_report_json, const char **out_error_msg)
+-	KgliteStatusCode kglite_session_quantize_embeddings(struct KgliteSession *session, const char *node_type, const char *text_column, const char *precision, uint32_t oversample, const char *entity, const char **out_report_json, const char **out_error_msg)
 -	KgliteStatusCode kglite_export_csv(struct KgliteGraph *graph, const char *output_dir, const char **out_summary_json, const char **out_error_msg)
 -	KgliteStatusCode kglite_export_rdf(struct KgliteGraph *graph, const char *path, const char *format, const char *base, uint8_t schema_org, const char **out_summary_json, const char **out_error_msg)
 BOUND	KgliteStatusCode kglite_session_export_csv(const struct KgliteSession *session, const char *output_dir, const char **out_summary_json, const char **out_error_msg)

@@ -29,7 +29,9 @@ const ROW_KEYS: [&str; 6] = [
 #[pymethods]
 impl KnowledgeGraph {
     /// Replace a relationship store with vectors addressed by endpoint ids — the relationship twin of set_embeddings.
-    #[pyo3(signature = (relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None))]
+    #[pyo3(signature = (relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None, precision=None))]
+    // One Rust argument per Python keyword, as embed_relationship_texts has.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn set_relationship_embeddings(
         &mut self,
         py: Python<'_>,
@@ -38,7 +40,10 @@ impl KnowledgeGraph {
         embeddings: &Bound<'_, PyAny>,
         relationship_keys: Option<HashMap<String, String>>,
         metric: Option<&str>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let precision = super::quantization::parse_precision(precision)?;
+        super::quantization::refuse_poincare(precision, metric)?;
         let rows = RelationshipRows {
             method: "set_relationship_embeddings",
             relationship_type,
@@ -46,6 +51,7 @@ impl KnowledgeGraph {
             embeddings,
             relationship_keys,
             metric,
+            precision,
         };
         let result = self.write_relationship_rows(
             py,
@@ -74,6 +80,7 @@ impl KnowledgeGraph {
             embeddings,
             relationship_keys,
             metric,
+            precision: None,
         };
         self.write_relationship_rows(
             py,
@@ -83,7 +90,7 @@ impl KnowledgeGraph {
     }
 
     /// Embed a text column for every relationship of a type with the registered model.
-    #[pyo3(signature = (relationship_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None))]
+    #[pyo3(signature = (relationship_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None, precision=None))]
     // One Rust argument per Python keyword, as embed_node_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_relationship_texts(
@@ -95,8 +102,11 @@ impl KnowledgeGraph {
         show_progress: bool,
         mode: Option<&str>,
         metric: Option<&str>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
+        let precision = super::quantization::parse_precision(precision)?;
+        super::quantization::refuse_poincare(precision, metric)?;
         let (model, _) = self.embedder_or_idle(
             kglite_core::api::embeddings::EmbeddingEntity::Relationship,
             relationship_type,
@@ -152,12 +162,24 @@ impl KnowledgeGraph {
             }
             outcome.map_err(|error| embed_error(error, relationship_type, text_column))
         })?;
+        let quantized = self.quantize_written(
+            kglite_core::api::embeddings::EmbeddingEntity::Relationship,
+            relationship_type,
+            text_column,
+            precision,
+        )?;
         let result = PyDict::new(py);
         result.set_item("embedded", outcome.embedded)?;
         result.set_item("skipped", outcome.skipped)?;
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
         result.set_item("dimension", outcome.dimension)?;
+        if precision.is_some() {
+            result.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, quantized.as_ref())?,
+            )?;
+        }
         crate::allocator::release_after_seam(py);
         Ok(result.into())
     }
@@ -255,6 +277,8 @@ struct RelationshipRows<'a, 'py> {
     embeddings: &'a Bound<'py, PyAny>,
     relationship_keys: Option<HashMap<String, String>>,
     metric: Option<&'a str>,
+    /// The scan precision to quantize the written store to, if requested.
+    precision: Option<kglite_core::api::embeddings::Precision>,
 }
 
 /// The core writer both methods call: replace or upsert.
@@ -293,6 +317,18 @@ impl KnowledgeGraph {
         result.set_item("dimension", report.dimension)?;
         result.set_item("changed", report.changed)?;
         result.set_item("store_created", report.store_created)?;
+        if args.precision.is_some() {
+            let quantized = self.quantize_written(
+                kglite_core::api::embeddings::EmbeddingEntity::Relationship,
+                args.relationship_type,
+                args.text_column,
+                args.precision,
+            )?;
+            result.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, quantized.as_ref())?,
+            )?;
+        }
         Ok(result.into())
     }
 }

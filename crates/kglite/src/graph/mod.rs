@@ -24,6 +24,7 @@ pub mod embedder;
 pub mod embedding_carry;
 pub(crate) mod embedding_hints;
 pub mod embedding_inventory;
+pub(crate) mod embedding_quantization;
 pub(crate) mod embedding_store;
 pub(crate) mod embedding_validation;
 pub mod embeddings;

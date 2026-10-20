@@ -75,6 +75,8 @@ pub struct RelationshipCarryStats {
     /// Stores that had vectors but matched no relationship, so were not
     /// installed.
     pub dropped_stores: usize,
+    /// `(relationship type, text column)` of each installed store.
+    pub installed: Vec<(String, String)>,
 }
 
 /// A carried store resolved against the target graph, ready to install.
@@ -404,6 +406,10 @@ pub(crate) fn install_edge_stores(
         }
         stats.carried += resolved.members.len();
         stats.stores += 1;
+        stats.installed.push((
+            resolved.store.relationship_type.clone(),
+            resolved.store.text_column.clone(),
+        ));
         install_one(dst, resolved)?;
     }
     if stats.stores > 0 {

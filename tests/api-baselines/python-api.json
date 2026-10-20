@@ -739,15 +739,15 @@
         },
         "embed_node_texts": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None)"
+          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None, precision=None)"
         },
         "embed_relationship_texts": {
           "kind": "method",
-          "signature": "(self, /, relationship_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None)"
+          "signature": "(self, /, relationship_type, text_column, batch_size=256, show_progress=True, mode=None, *, metric=None, precision=None)"
         },
         "embed_texts": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, entity='node', metric=None)"
+          "signature": "(self, /, node_type, text_column, batch_size=256, show_progress=True, mode=None, *, entity='node', metric=None, precision=None)"
         },
         "embedding": {
           "kind": "method",
@@ -903,7 +903,7 @@
         },
         "import_embeddings": {
           "kind": "method",
-          "signature": "(self, /, path, *, relationship_keys=None)"
+          "signature": "(self, /, path, *, relationship_keys=None, precision=None)"
         },
         "import_recipes": {
           "kind": "method",
@@ -1069,6 +1069,14 @@
           "kind": "method",
           "signature": "(self, /)"
         },
+        "quantization_recall": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, sample=100, top_k=10, oversample=None, *, entity='node', seed=0)"
+        },
+        "quantize_embeddings": {
+          "kind": "method",
+          "signature": "(self, /, node_type, text_column, precision, oversample=None, *, entity='node')"
+        },
         "read_only": {
           "kind": "method",
           "signature": "(self, /, enabled=None)"
@@ -1227,7 +1235,7 @@
         },
         "set_embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, embeddings, metric=None, *, entity='node', relationship_keys=None)"
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None, *, entity='node', relationship_keys=None, precision=None)"
         },
         "set_instructions": {
           "kind": "method",
@@ -1239,7 +1247,7 @@
         },
         "set_node_embeddings": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, embeddings, metric=None)"
+          "signature": "(self, /, node_type, text_column, embeddings, metric=None, *, precision=None)"
         },
         "set_parent_type": {
           "kind": "method",
@@ -1251,7 +1259,7 @@
         },
         "set_relationship_embeddings": {
           "kind": "method",
-          "signature": "(self, /, relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None)"
+          "signature": "(self, /, relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None, precision=None)"
         },
         "set_schema_version": {
           "kind": "method",

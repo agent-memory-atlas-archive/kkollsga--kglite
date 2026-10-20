@@ -98,7 +98,7 @@ impl Search<'_, '_> {
 #[pymethods]
 impl KnowledgeGraph {
     /// Replace an embedding store: a node type's (default) or, with entity='relationship', a relationship type's.
-    #[pyo3(signature = (node_type, text_column, embeddings, metric=None, *, entity="node", relationship_keys=None))]
+    #[pyo3(signature = (node_type, text_column, embeddings, metric=None, *, entity="node", relationship_keys=None, precision=None))]
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn set_embeddings(
@@ -110,6 +110,7 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         entity: &str,
         relationship_keys: Option<HashMap<String, String>>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         match Entity::parse("set_embeddings", entity)? {
             Entity::Node => {
@@ -120,7 +121,14 @@ impl KnowledgeGraph {
                     "relationship",
                     relationship_keys.is_some(),
                 )?;
-                self.set_node_embeddings(py, node_type, text_column, node_rows(embeddings)?, metric)
+                self.set_node_embeddings(
+                    py,
+                    node_type,
+                    text_column,
+                    node_rows(embeddings)?,
+                    metric,
+                    precision,
+                )
             }
             Entity::Relationship => self.set_relationship_embeddings(
                 py,
@@ -129,6 +137,7 @@ impl KnowledgeGraph {
                 embeddings,
                 relationship_keys,
                 metric,
+                precision,
             ),
         }
     }
@@ -170,7 +179,7 @@ impl KnowledgeGraph {
     }
 
     /// Embed a text column with the registered model, for a node type (default) or, with entity='relationship', a relationship type.
-    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None, *, entity="node", metric=None))]
+    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None, *, entity="node", metric=None, precision=None))]
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn embed_texts(
@@ -183,6 +192,7 @@ impl KnowledgeGraph {
         mode: Option<&str>,
         entity: &str,
         metric: Option<&str>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         match Entity::parse("embed_texts", entity)? {
             Entity::Node => self.embed_node_texts(
@@ -193,6 +203,7 @@ impl KnowledgeGraph {
                 show_progress,
                 mode,
                 metric,
+                precision,
             ),
             Entity::Relationship => self.embed_relationship_texts(
                 py,
@@ -202,6 +213,7 @@ impl KnowledgeGraph {
                 show_progress.unwrap_or(true),
                 mode,
                 metric,
+                precision,
             ),
         }
     }

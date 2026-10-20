@@ -1,6 +1,6 @@
 //! Embedding ingest + vector-index construction through the C ABI.
 //!
-//! Four `#[no_mangle] extern "C"` symbols on the session, wrapping the shared
+//! Five `#[no_mangle] extern "C"` symbols on the session, wrapping the shared
 //! [`kglite::api::embeddings`] primitives so every non-Rust binding gets the
 //! same validate-then-apply ingest the Python wrapper does:
 //!
@@ -8,6 +8,8 @@
 //! - [`kglite_session_add_embeddings`] — upsert into a store.
 //! - [`kglite_session_build_vector_index`] — build the HNSW index.
 //! - [`kglite_session_list_embeddings`] — enumerate the node stores present.
+//! - [`kglite_session_quantize_embeddings`] — build, replace or drop a store's
+//!   quantized scan copy.
 //!
 //! **Wire.** Vectors travel as a packed `const float *` (dim*count floats,
 //! row-major) — one `memcpy` on each side, the layout `EmbeddingStore.data`
@@ -473,9 +475,11 @@ pub unsafe extern "C" fn kglite_session_build_vector_index(
 /// `{"node_type": "Note", "text_column": "body", "dimension": 384,
 ///   "count": 1000, "metric": "cosine"}`. `text_column` is the source column
 /// (the store's `"_emb"` suffix stripped), and `metric` is the store's own
-/// metric or `"cosine"` when it recorded none. Free it with
-/// [`kglite_free_string`](crate::kglite_free_string). A graph with no stores
-/// returns `"[]"`.
+/// metric or `"cosine"` when it recorded none. `storage` is `"mapped"` or
+/// `"heap"`; `quantization` is `null` or `{"precision", "oversample",
+/// "storage", "bytes", "kernel"}` for a store with a quantized scan copy.
+/// Free it with [`kglite_free_string`](crate::kglite_free_string). A graph
+/// with no stores returns `"[]"`.
 ///
 /// # Errors
 ///
@@ -511,6 +515,15 @@ pub unsafe extern "C" fn kglite_session_list_embeddings(
                         "count": info.count,
                         "metric": info.metric,
                         "storage": info.storage,
+                        "quantization": info.quantization.as_ref().map(|q| {
+                            serde_json::json!({
+                                "precision": q.precision,
+                                "oversample": q.oversample,
+                                "storage": q.storage,
+                                "bytes": q.bytes,
+                                "kernel": q.kernel,
+                            })
+                        }),
                     })
                 })
                 .collect();
@@ -519,6 +532,140 @@ pub unsafe extern "C" fn kglite_session_list_embeddings(
                 *out_report_json = alloc_c_string(&json);
             }
             KgliteStatusCode::Ok
+        },
+    )
+}
+
+/// Build, replace or drop the quantized scan copy of an embedding store.
+///
+/// Wraps [`kglite::api::embeddings::quantize_embeddings`]. A copy is a
+/// smaller, derived duplicate of the store's `f32` vectors that vector search
+/// scans for `top_k * oversample` candidates before re-scoring them against
+/// the `f32` vectors, so scores stay exact and only the candidate set is
+/// approximate. The `f32` vectors are never altered.
+///
+/// `precision` is `"f16"`, `"int8"` or `"binary"`, which builds (or replaces)
+/// the copy, or null, which drops it. `oversample` is the candidates scanned
+/// per requested result, `0` for the precision's default (4, 4, 10); it needs a
+/// `precision`. `entity` is `"node"` (null means node) or `"relationship"`,
+/// and `node_type` then names the relationship type.
+///
+/// On success `out_report_json` is an owned JSON object
+/// `{"count": N, "dimension": D, "previous": "int8" | null, "quantization":
+/// {"precision", "oversample", "storage", "bytes", "kernel"} | null}`; free it
+/// with [`kglite_free_string`](crate::kglite_free_string). The declaration is
+/// not journalled: a durable session persists it at the next checkpoint.
+///
+/// # Errors
+///
+/// - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `node_type`, `text_column`,
+///   or `out_report_json` is null.
+/// - `KGLITE_STATUS_CODE_INVALID_UTF8` — a string argument is not valid UTF-8.
+/// - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — no such store, an unknown
+///   precision or entity, a Poincare-metric store, or an `oversample` without a
+///   precision; the message explains which.
+///
+/// # Safety
+///
+/// `session` must be a valid handle from
+/// [`kglite_session_new`](crate::kglite_session_new). `node_type` and
+/// `text_column` must be null-terminated UTF-8 strings; `precision` and
+/// `entity` null or the same. `out_report_json` must be a valid writable slot;
+/// `out_error_msg` null or a valid writable slot.
+#[no_mangle]
+// A published C signature is flat: one argument per knob, as build_vector_index has.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn kglite_session_quantize_embeddings(
+    session: *mut KgliteSession,
+    node_type: *const c_char,
+    text_column: *const c_char,
+    precision: *const c_char,
+    oversample: u32,
+    entity: *const c_char,
+    out_report_json: *mut *const c_char,
+    out_error_msg: *mut *const c_char,
+) -> KgliteStatusCode {
+    use kglite::api::embeddings::{quantize_embeddings, EmbeddingEntity, Precision};
+    crate::ffi::status_boundary(
+        out_error_msg,
+        || crate::ffi::init_out(out_report_json, std::ptr::null()),
+        || {
+            if session.is_null()
+                || node_type.is_null()
+                || text_column.is_null()
+                || out_report_json.is_null()
+            {
+                return KgliteStatusCode::NullPointer;
+            }
+            let node_type = match unsafe { required_str(node_type) } {
+                Ok(s) => s,
+                Err(rc) => return rc,
+            };
+            let text_column = match unsafe { required_str(text_column) } {
+                Ok(s) => s,
+                Err(rc) => return rc,
+            };
+            let precision = match unsafe { optional_str(precision) } {
+                Ok(p) => p,
+                Err(rc) => return rc,
+            };
+            let entity = match unsafe { optional_str(entity) } {
+                Ok(e) => e.unwrap_or("node"),
+                Err(rc) => return rc,
+            };
+            let refuse = |msg: String| {
+                if !out_error_msg.is_null() {
+                    unsafe {
+                        *out_error_msg = alloc_c_string(&msg);
+                    }
+                }
+                KgliteStatusCode::InvalidArgument
+            };
+            let entity = match EmbeddingEntity::parse(entity) {
+                Ok(e) => e,
+                Err(msg) => return refuse(msg),
+            };
+            let precision = match precision.map(Precision::parse).transpose() {
+                Ok(p) => p,
+                Err(msg) => return refuse(msg),
+            };
+            let session_state = unsafe { SessionState::from_handle(session) };
+            if let Err(refusal) = session_state.guard_direct_write() {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
+            let mut working = session_state.inner.write();
+            let result = quantize_embeddings(
+                &mut working,
+                entity,
+                node_type,
+                text_column,
+                precision,
+                (oversample != 0).then_some(oversample),
+            );
+            match result {
+                Ok(report) => {
+                    let json = serde_json::json!({
+                        "count": report.count,
+                        "dimension": report.dimension,
+                        "previous": report.previous,
+                        "quantization": report.quantization.as_ref().map(|q| {
+                            serde_json::json!({
+                                "precision": q.precision,
+                                "oversample": q.oversample,
+                                "storage": q.storage,
+                                "bytes": q.bytes,
+                                "kernel": q.kernel,
+                            })
+                        }),
+                    })
+                    .to_string();
+                    unsafe {
+                        *out_report_json = alloc_c_string(&json);
+                    }
+                    KgliteStatusCode::Ok
+                }
+                Err(msg) => refuse(msg),
+            }
         },
     )
 }

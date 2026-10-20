@@ -21,6 +21,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-c/src/embeddings.rs::fn:kglite_session_quantize_embeddings:pub unsafe extern \"C\" fn kglite_session_quantize_embeddings( session: *mut KgliteSession, node_type: *const c_char, text_column: *const c_char, precision: *const c_char, oversample: u32, entity: *const c_char, out_report_json: *mut *const c_char, out_error_msg: *mut *const c_char, ) -> KgliteStatusC::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-c/src/embeddings.rs::fn:kglite_session_set_embeddings:pub unsafe extern \"C\" fn kglite_session_set_embeddings( session: *mut KgliteSession, node_type: *const c_char, text_column: *const c_char, ids_json: *const c_char, vectors: *const f32, dim: usize, count: usize, metric: *const c_char, out_report_json: *mut *const c_char, out_error_msg: *mut *const c_::clippy::too_many_arguments",
       "classification": "boundary"
     },
@@ -113,7 +117,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:embed_texts:fn embed_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, entity: &str, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:embed_texts:fn embed_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, entity: &str, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -121,7 +125,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:set_embeddings:fn set_embeddings( &mut self, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:set_embeddings:fn set_embeddings( &mut self, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -209,6 +213,10 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/graph/pyapi/quantization.rs::fn:quantization_recall:fn quantization_recall( &self, py: Python<'_>, node_type: &str, text_column: &str, sample: usize, top_k: usize, oversample: Option<u32>, entity: &str, seed: u64, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/graph/pyapi/recipes.rs::fn:set_recipe:fn set_recipe( &mut self, py: Python<'_>, recipe: &str, name: &str, description: &str, cypher: &str, parameters: Option<&Bound<'_, PyAny>>, recipe_description: Option<&str>, tool: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
@@ -225,7 +233,11 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, batch_size: usize, show_progress: bool, mode: Option<&str>, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, batch_size: usize, show_progress: bool, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:set_relationship_embeddings:pub(super) fn set_relationship_embeddings( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, relationship_keys: Option<HashMap<String, String>>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -273,7 +285,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:embed_node_texts:pub(super) fn embed_node_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, metric: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:embed_node_texts:pub(super) fn embed_node_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

@@ -24,7 +24,7 @@ const SELECTION_ID_KEY: NodeKeyGuard<'static> = NodeKeyGuard {
 #[pymethods]
 impl KnowledgeGraph {
     /// Replace the embedding store of a node type with vectors keyed by node id.
-    #[pyo3(signature = (node_type, text_column, embeddings, metric=None))]
+    #[pyo3(signature = (node_type, text_column, embeddings, metric=None, *, precision=None))]
     pub(super) fn set_node_embeddings(
         &mut self,
         py: Python<'_>,
@@ -32,18 +32,33 @@ impl KnowledgeGraph {
         text_column: &str,
         embeddings: &Bound<'_, PyDict>,
         metric: Option<&str>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
+        let precision = super::quantization::parse_precision(precision)?;
+        super::quantization::refuse_poincare(precision, metric)?;
         let entries = marshal_embedding_batch(embeddings)?;
         let report = self.logged_write(|g| {
             kglite_core::api::embeddings::set_embeddings(g, node_type, text_column, metric, entries)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })?;
+        let quantized = self.quantize_written(
+            kglite_core::api::embeddings::EmbeddingEntity::Node,
+            node_type,
+            text_column,
+            precision,
+        )?;
 
         let result = PyDict::new(py);
         result.set_item("embeddings_stored", report.embeddings_stored)?;
         result.set_item("dimension", report.dimension)?;
         result.set_item("skipped", report.skipped)?;
+        if precision.is_some() {
+            result.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, quantized.as_ref())?,
+            )?;
+        }
         // The replaced store's buffer is freed; hand its pages back.
         crate::allocator::release_after_seam(py);
         Ok(result.into())
@@ -215,6 +230,10 @@ impl KnowledgeGraph {
         d.set_item("model", info.model)?;
         d.set_item("metric", info.metric)?;
         d.set_item("hashed", info.hashed)?;
+        d.set_item(
+            "quantization",
+            super::quantization::quantization_value(py, info.quantization.as_ref())?,
+        )?;
         d.into_py_any(py)
     }
 
@@ -263,6 +282,10 @@ impl KnowledgeGraph {
             dict.set_item("count", info.count)?;
             dict.set_item("metric", info.metric)?;
             dict.set_item("storage", info.storage)?;
+            dict.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, info.quantization.as_ref())?,
+            )?;
             py_list.append(dict)?;
         }
         for info in list_relationship_embeddings(self.graph()) {
@@ -275,6 +298,10 @@ impl KnowledgeGraph {
             dict.set_item("count", info.count)?;
             dict.set_item("metric", info.metric)?;
             dict.set_item("storage", info.storage)?;
+            dict.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, info.quantization.as_ref())?,
+            )?;
             py_list.append(dict)?;
         }
         py_list.into_py_any(py)
@@ -310,6 +337,10 @@ impl KnowledgeGraph {
             dict.set_item("dimension", row.dimension)?;
             dict.set_item("metric", row.metric)?;
             dict.set_item("storage", row.storage)?;
+            dict.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, row.quantization.as_ref())?,
+            )?;
             let length_stats = PyDict::new(py);
             length_stats.set_item("mean_length", row.length_stats.mean_length)?;
             length_stats.set_item("max_length", row.length_stats.max_length)?;
@@ -385,20 +416,37 @@ impl KnowledgeGraph {
     }
 
     /// Import node and relationship embeddings from a .kgle file.
-    #[pyo3(signature = (path, *, relationship_keys=None))]
+    #[pyo3(signature = (path, *, relationship_keys=None, precision=None))]
     fn import_embeddings(
         &mut self,
         py: Python<'_>,
         path: &str,
         relationship_keys: Option<HashMap<String, String>>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         self.check_durable_owner()?;
+        let precision = super::quantization::parse_precision(precision)?;
         let keys = relationship_keys.unwrap_or_default();
         let stats = self.logged_write(|g| {
             file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)
         })?;
         // The import's decode buffers are dead; their pages are not reusable.
         crate::allocator::release_after_seam(py);
+        // Every store the import installed gets the requested copy; a store
+        // that cannot hold one (poincare metric) fails the call after the
+        // vectors are in, and the message says so.
+        let mut quantized = 0usize;
+        if precision.is_some() {
+            use kglite_core::api::embeddings::EmbeddingEntity;
+            for (type_name, column) in &stats.installed {
+                self.quantize_written(EmbeddingEntity::Node, type_name, column, precision)?;
+                quantized += 1;
+            }
+            for (type_name, column) in &stats.relationships.installed {
+                self.quantize_written(EmbeddingEntity::Relationship, type_name, column, precision)?;
+                quantized += 1;
+            }
+        }
 
         // Surface the silent-drop cases as a UserWarning: visible by default,
         // still suppressible via the standard `warnings` module.
@@ -460,6 +508,9 @@ impl KnowledgeGraph {
         result.set_item("relationship_imported", relationships.carried)?;
         result.set_item("relationship_skipped", relationships.skipped)?;
         result.set_item("relationship_dropped_stores", relationships.dropped_stores)?;
+        if precision.is_some() {
+            result.set_item("quantized_stores", quantized)?;
+        }
         result.into_py_any(py)
     }
 
@@ -617,7 +668,7 @@ impl KnowledgeGraph {
     }
 
     /// Embed a text column for every node of a type with the registered model.
-    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None))]
+    #[pyo3(signature = (node_type, text_column, batch_size=256, show_progress=true, mode=None, *, metric=None, precision=None))]
     // One Rust argument per Python keyword, as embed_relationship_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_node_texts(
@@ -629,11 +680,14 @@ impl KnowledgeGraph {
         show_progress: Option<bool>,
         mode: Option<&str>,
         metric: Option<&str>,
+        precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         // Refuse derived durable/CDC handles before loading or invoking the
         // model. `commit_wal()` retains the same guard after mutation as
         // defense in depth, but it cannot undo an already-installed store.
         self.check_durable_owner()?;
+        let precision = super::quantization::parse_precision(precision)?;
+        super::quantization::refuse_poincare(precision, metric)?;
         let (model, registered) = self.embedder_or_idle(
             kglite_core::api::embeddings::EmbeddingEntity::Node,
             node_type,
@@ -707,12 +761,24 @@ impl KnowledgeGraph {
             }
             outcome.map_err(|error| embed_error(error, node_type, text_column))
         })?;
+        let quantized = self.quantize_written(
+            kglite_core::api::embeddings::EmbeddingEntity::Node,
+            node_type,
+            text_column,
+            precision,
+        )?;
         let result = PyDict::new(py);
         result.set_item("embedded", outcome.embedded)?;
         result.set_item("skipped", outcome.skipped)?;
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
         result.set_item("dimension", outcome.dimension)?;
+        if precision.is_some() {
+            result.set_item(
+                "quantization",
+                super::quantization::quantization_value(py, quantized.as_ref())?,
+            )?;
+        }
         crate::allocator::release_after_seam(py);
         Ok(result.into())
     }

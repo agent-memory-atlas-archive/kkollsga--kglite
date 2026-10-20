@@ -838,9 +838,11 @@ KgliteStatusCode kglite_session_build_vector_index(struct KgliteSession *session
  * `{"node_type": "Note", "text_column": "body", "dimension": 384,
  *   "count": 1000, "metric": "cosine"}`. `text_column` is the source column
  * (the store's `"_emb"` suffix stripped), and `metric` is the store's own
- * metric or `"cosine"` when it recorded none. Free it with
- * [`kglite_free_string`](crate::kglite_free_string). A graph with no stores
- * returns `"[]"`.
+ * metric or `"cosine"` when it recorded none. `storage` is `"mapped"` or
+ * `"heap"`; `quantization` is `null` or `{"precision", "oversample",
+ * "storage", "bytes", "kernel"}` for a store with a quantized scan copy.
+ * Free it with [`kglite_free_string`](crate::kglite_free_string). A graph
+ * with no stores returns `"[]"`.
  *
  * # Errors
  *
@@ -856,6 +858,54 @@ KgliteStatusCode kglite_session_build_vector_index(struct KgliteSession *session
 KgliteStatusCode kglite_session_list_embeddings(const struct KgliteSession *session,
                                                 const char **out_report_json,
                                                 const char **out_error_msg);
+
+/**
+ * Build, replace or drop the quantized scan copy of an embedding store.
+ *
+ * Wraps [`kglite::api::embeddings::quantize_embeddings`]. A copy is a
+ * smaller, derived duplicate of the store's `f32` vectors that vector search
+ * scans for `top_k * oversample` candidates before re-scoring them against
+ * the `f32` vectors, so scores stay exact and only the candidate set is
+ * approximate. The `f32` vectors are never altered.
+ *
+ * `precision` is `"f16"`, `"int8"` or `"binary"`, which builds (or replaces)
+ * the copy, or null, which drops it. `oversample` is the candidates scanned
+ * per requested result, `0` for the precision's default (4, 4, 10); it needs a
+ * `precision`. `entity` is `"node"` (null means node) or `"relationship"`,
+ * and `node_type` then names the relationship type.
+ *
+ * On success `out_report_json` is an owned JSON object
+ * `{"count": N, "dimension": D, "previous": "int8" | null, "quantization":
+ * {"precision", "oversample", "storage", "bytes", "kernel"} | null}`; free it
+ * with [`kglite_free_string`](crate::kglite_free_string). The declaration is
+ * not journalled: a durable session persists it at the next checkpoint.
+ *
+ * # Errors
+ *
+ * - `KGLITE_STATUS_CODE_NULL_POINTER` — `session`, `node_type`, `text_column`,
+ *   or `out_report_json` is null.
+ * - `KGLITE_STATUS_CODE_INVALID_UTF8` — a string argument is not valid UTF-8.
+ * - `KGLITE_STATUS_CODE_INVALID_ARGUMENT` — no such store, an unknown
+ *   precision or entity, a Poincare-metric store, or an `oversample` without a
+ *   precision; the message explains which.
+ *
+ * # Safety
+ *
+ * `session` must be a valid handle from
+ * [`kglite_session_new`](crate::kglite_session_new). `node_type` and
+ * `text_column` must be null-terminated UTF-8 strings; `precision` and
+ * `entity` null or the same. `out_report_json` must be a valid writable slot;
+ * `out_error_msg` null or a valid writable slot.
+ */
+
+KgliteStatusCode kglite_session_quantize_embeddings(struct KgliteSession *session,
+                                                    const char *node_type,
+                                                    const char *text_column,
+                                                    const char *precision,
+                                                    uint32_t oversample,
+                                                    const char *entity,
+                                                    const char **out_report_json,
+                                                    const char **out_error_msg);
 
 /**
  * Export the graph to a lossless CSV directory tree with a re-import

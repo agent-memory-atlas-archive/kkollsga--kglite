@@ -49,6 +49,7 @@ NOT_A_WRITER = set(
     has_relationship_vector_index has_schema has_text_index has_vector_index ids index_stats indexes
     indices intersection intersects_geometry label_pair_counts label_propagation
     last_mutation_stats last_report len limit list_composite_indexes list_embeddings list_indexes
+    quantization_recall
     list_recipes list_skills louvain_communities match_pattern near_point near_point_m
     neighbors_schema node node_embedding node_embedding_dim node_embeddings node_search_text
     node_type_counts node_types node_vector_search offset ontology ontology_diff operation_index
@@ -77,7 +78,7 @@ NO_NODE_RULE = {
         set_embeddings add_node_embeddings add_embeddings add_relationship_embeddings
         set_relationship_embeddings remove_embeddings remove_node_embeddings
         remove_relationship_embeddings import_embeddings copy_embeddings_from embed_node_texts
-        embed_relationship_texts embed_texts set_embedder""".split(),
+        embed_relationship_texts embed_texts set_embedder quantize_embeddings""".split(),
         "side store keyed by node",
     ),
     # Indexes and caches over existing data.

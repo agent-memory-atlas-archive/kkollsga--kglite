@@ -291,10 +291,11 @@ def test_mode_is_positional_on_both_embed_twins_and_metric_keyword_on_both() -> 
     graph = _graph()
     node = inspect.signature(graph.embed_node_texts).parameters
     rel = inspect.signature(graph.embed_relationship_texts).parameters
-    assert list(node)[1:] == ["text_column", "batch_size", "show_progress", "mode", "metric"]
-    assert list(rel)[1:] == ["text_column", "batch_size", "show_progress", "mode", "metric"]
+    assert list(node)[1:] == ["text_column", "batch_size", "show_progress", "mode", "metric", "precision"]
+    assert list(rel)[1:] == ["text_column", "batch_size", "show_progress", "mode", "metric", "precision"]
     assert node["mode"].kind is rel["mode"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert node["metric"].kind is rel["metric"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert node["precision"].kind is rel["precision"].kind is inspect.Parameter.KEYWORD_ONLY
     assert graph.embed_relationship_texts("SUPPORTS", "evidence", 256, False, "all")["embedded"] == 4
 
 

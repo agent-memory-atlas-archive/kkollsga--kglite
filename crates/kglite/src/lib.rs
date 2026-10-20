@@ -457,6 +457,12 @@ pub mod api {
             EmbeddingDiagnostic, EmbeddingEntity, EmbeddingInfo, LengthStats,
             RelationshipEmbeddingStoreInfo,
         };
+        /// Build, replace or drop a store's quantized scan copy, and measure
+        /// the recall it costs on the store's own vectors.
+        pub use crate::graph::embedding_quantization::{
+            embedding_store_exists, quantization_recall, quantize_embeddings, QuantizationRecall,
+            QuantizationReport, RecallOptions,
+        };
         pub use crate::graph::embeddings::{
             add_embeddings, build_vector_index, drop_vector_index, embed_property,
             has_vector_index, list_embeddings, list_vector_indexes, node_embedding,
@@ -465,6 +471,7 @@ pub mod api {
             EmbedOutcome, EmbeddingIngestReport, EmbeddingStoreInfo, VectorIndexReport,
             VectorIndexStatus,
         };
+        pub use crate::graph::quantized::{Precision, QuantizationInfo};
     }
 
     /// Lexical (BM25) text-index lifecycle — how a binding gets a text index

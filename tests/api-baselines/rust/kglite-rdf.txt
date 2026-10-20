@@ -1556,6 +1556,27 @@ impl core::hash::Hash for kglite::api::embeddings::EmbeddingEntity
 pub fn kglite::api::embeddings::EmbeddingEntity::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for kglite::api::embeddings::EmbeddingEntity
 impl core::marker::StructuralPartialEq for kglite::api::embeddings::EmbeddingEntity
+pub enum kglite::api::embeddings::Precision
+pub kglite::api::embeddings::Precision::Binary
+pub kglite::api::embeddings::Precision::F16
+pub kglite::api::embeddings::Precision::Int8
+impl kglite::api::embeddings::Precision
+pub const kglite::api::embeddings::Precision::ALL: [kglite::api::embeddings::Precision; 3]
+pub fn kglite::api::embeddings::Precision::default_oversample(self) -> u32
+pub fn kglite::api::embeddings::Precision::name(self) -> &'static str
+pub fn kglite::api::embeddings::Precision::parse(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn kglite::api::embeddings::Precision::row_bytes(self, usize) -> usize
+impl core::clone::Clone for kglite::api::embeddings::Precision
+pub fn kglite::api::embeddings::Precision::clone(&self) -> kglite::api::embeddings::Precision
+impl core::cmp::Eq for kglite::api::embeddings::Precision
+impl core::cmp::PartialEq for kglite::api::embeddings::Precision
+pub fn kglite::api::embeddings::Precision::eq(&self, &kglite::api::embeddings::Precision) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::Precision
+pub fn kglite::api::embeddings::Precision::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for kglite::api::embeddings::Precision
+pub fn kglite::api::embeddings::Precision::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for kglite::api::embeddings::Precision
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::Precision
 pub struct kglite::api::embeddings::EmbedHooks<'a>
 pub kglite::api::embeddings::EmbedHooks::batch_size: usize
 pub kglite::api::embeddings::EmbedHooks::embed_batch: core::option::Option<kglite::api::embeddings::EmbedBatchFn<'a>>
@@ -1588,6 +1609,7 @@ pub kglite::api::embeddings::EmbeddingDiagnostic::embedding_key: alloc::string::
 pub kglite::api::embeddings::EmbeddingDiagnostic::entity: kglite::api::embeddings::EmbeddingEntity
 pub kglite::api::embeddings::EmbeddingDiagnostic::length_stats: kglite::api::embeddings::LengthStats
 pub kglite::api::embeddings::EmbeddingDiagnostic::metric: core::option::Option<alloc::string::String>
+pub kglite::api::embeddings::EmbeddingDiagnostic::quantization: core::option::Option<kglite::api::embeddings::QuantizationInfo>
 pub kglite::api::embeddings::EmbeddingDiagnostic::status: kglite::api::embeddings::EmbeddingCoverage
 pub kglite::api::embeddings::EmbeddingDiagnostic::storage: core::option::Option<&'static str>
 pub kglite::api::embeddings::EmbeddingDiagnostic::text_column: alloc::string::String
@@ -1607,6 +1629,7 @@ pub kglite::api::embeddings::EmbeddingInfo::entity: kglite::api::embeddings::Emb
 pub kglite::api::embeddings::EmbeddingInfo::hashed: usize
 pub kglite::api::embeddings::EmbeddingInfo::metric: alloc::string::String
 pub kglite::api::embeddings::EmbeddingInfo::model: core::option::Option<alloc::string::String>
+pub kglite::api::embeddings::EmbeddingInfo::quantization: core::option::Option<kglite::api::embeddings::QuantizationInfo>
 pub kglite::api::embeddings::EmbeddingInfo::text_column: alloc::string::String
 pub kglite::api::embeddings::EmbeddingInfo::type_name: alloc::string::String
 impl core::clone::Clone for kglite::api::embeddings::EmbeddingInfo
@@ -1637,6 +1660,7 @@ pub kglite::api::embeddings::EmbeddingStoreInfo::count: usize
 pub kglite::api::embeddings::EmbeddingStoreInfo::dimension: usize
 pub kglite::api::embeddings::EmbeddingStoreInfo::metric: alloc::string::String
 pub kglite::api::embeddings::EmbeddingStoreInfo::node_type: alloc::string::String
+pub kglite::api::embeddings::EmbeddingStoreInfo::quantization: core::option::Option<kglite::api::embeddings::QuantizationInfo>
 pub kglite::api::embeddings::EmbeddingStoreInfo::storage: &'static str
 pub kglite::api::embeddings::EmbeddingStoreInfo::store_name: alloc::string::String
 pub kglite::api::embeddings::EmbeddingStoreInfo::text_column: alloc::string::String
@@ -1660,6 +1684,67 @@ pub fn kglite::api::embeddings::LengthStats::eq(&self, &kglite::api::embeddings:
 impl core::fmt::Debug for kglite::api::embeddings::LengthStats
 pub fn kglite::api::embeddings::LengthStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::embeddings::LengthStats
+pub struct kglite::api::embeddings::QuantizationInfo
+pub kglite::api::embeddings::QuantizationInfo::bytes: usize
+pub kglite::api::embeddings::QuantizationInfo::kernel: &'static str
+pub kglite::api::embeddings::QuantizationInfo::oversample: u32
+pub kglite::api::embeddings::QuantizationInfo::precision: &'static str
+pub kglite::api::embeddings::QuantizationInfo::storage: &'static str
+impl core::clone::Clone for kglite::api::embeddings::QuantizationInfo
+pub fn kglite::api::embeddings::QuantizationInfo::clone(&self) -> kglite::api::embeddings::QuantizationInfo
+impl core::cmp::Eq for kglite::api::embeddings::QuantizationInfo
+impl core::cmp::PartialEq for kglite::api::embeddings::QuantizationInfo
+pub fn kglite::api::embeddings::QuantizationInfo::eq(&self, &kglite::api::embeddings::QuantizationInfo) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::QuantizationInfo
+pub fn kglite::api::embeddings::QuantizationInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::QuantizationInfo
+#[non_exhaustive] pub struct kglite::api::embeddings::QuantizationRecall
+pub kglite::api::embeddings::QuantizationRecall::oversample: u32
+pub kglite::api::embeddings::QuantizationRecall::precision: &'static str
+pub kglite::api::embeddings::QuantizationRecall::recall: f64
+pub kglite::api::embeddings::QuantizationRecall::recall_rescored: f64
+pub kglite::api::embeddings::QuantizationRecall::sampled: usize
+pub kglite::api::embeddings::QuantizationRecall::top_k: usize
+impl core::clone::Clone for kglite::api::embeddings::QuantizationRecall
+pub fn kglite::api::embeddings::QuantizationRecall::clone(&self) -> kglite::api::embeddings::QuantizationRecall
+impl core::cmp::PartialEq for kglite::api::embeddings::QuantizationRecall
+pub fn kglite::api::embeddings::QuantizationRecall::eq(&self, &kglite::api::embeddings::QuantizationRecall) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::QuantizationRecall
+pub fn kglite::api::embeddings::QuantizationRecall::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::QuantizationRecall
+#[non_exhaustive] pub struct kglite::api::embeddings::QuantizationReport
+pub kglite::api::embeddings::QuantizationReport::count: usize
+pub kglite::api::embeddings::QuantizationReport::dimension: usize
+pub kglite::api::embeddings::QuantizationReport::previous: core::option::Option<&'static str>
+pub kglite::api::embeddings::QuantizationReport::quantization: core::option::Option<kglite::api::embeddings::QuantizationInfo>
+impl core::clone::Clone for kglite::api::embeddings::QuantizationReport
+pub fn kglite::api::embeddings::QuantizationReport::clone(&self) -> kglite::api::embeddings::QuantizationReport
+impl core::cmp::Eq for kglite::api::embeddings::QuantizationReport
+impl core::cmp::PartialEq for kglite::api::embeddings::QuantizationReport
+pub fn kglite::api::embeddings::QuantizationReport::eq(&self, &kglite::api::embeddings::QuantizationReport) -> bool
+impl core::fmt::Debug for kglite::api::embeddings::QuantizationReport
+pub fn kglite::api::embeddings::QuantizationReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::QuantizationReport
+#[non_exhaustive] pub struct kglite::api::embeddings::RecallOptions
+pub kglite::api::embeddings::RecallOptions::oversample: core::option::Option<u32>
+pub kglite::api::embeddings::RecallOptions::sample: usize
+pub kglite::api::embeddings::RecallOptions::seed: u64
+pub kglite::api::embeddings::RecallOptions::top_k: usize
+impl kglite::api::embeddings::RecallOptions
+pub fn kglite::api::embeddings::RecallOptions::with_oversample(self, core::option::Option<u32>) -> Self
+pub fn kglite::api::embeddings::RecallOptions::with_sample(self, usize) -> Self
+pub fn kglite::api::embeddings::RecallOptions::with_seed(self, u64) -> Self
+pub fn kglite::api::embeddings::RecallOptions::with_top_k(self, usize) -> Self
+impl core::clone::Clone for kglite::api::embeddings::RecallOptions
+pub fn kglite::api::embeddings::RecallOptions::clone(&self) -> kglite::api::embeddings::RecallOptions
+impl core::cmp::Eq for kglite::api::embeddings::RecallOptions
+impl core::cmp::PartialEq for kglite::api::embeddings::RecallOptions
+pub fn kglite::api::embeddings::RecallOptions::eq(&self, &kglite::api::embeddings::RecallOptions) -> bool
+impl core::default::Default for kglite::api::embeddings::RecallOptions
+pub fn kglite::api::embeddings::RecallOptions::default() -> Self
+impl core::fmt::Debug for kglite::api::embeddings::RecallOptions
+pub fn kglite::api::embeddings::RecallOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::embeddings::RecallOptions
 #[non_exhaustive] pub struct kglite::api::embeddings::RelationshipEmbedding
 pub kglite::api::embeddings::RelationshipEmbedding::key: core::option::Option<kglite::datatypes::values::Value>
 pub kglite::api::embeddings::RelationshipEmbedding::source_id: kglite::datatypes::values::Value
@@ -1680,6 +1765,7 @@ impl core::marker::StructuralPartialEq for kglite::api::embeddings::Relationship
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::count: usize
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::dimension: usize
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::metric: alloc::string::String
+pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::quantization: core::option::Option<kglite::api::embeddings::QuantizationInfo>
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::relationship_type: alloc::string::String
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::storage: &'static str
 pub kglite::api::embeddings::RelationshipEmbeddingStoreInfo::store_name: alloc::string::String
@@ -1792,6 +1878,7 @@ pub fn kglite::api::embeddings::embed_property(&mut alloc::sync::Arc<kglite::api
 pub fn kglite::api::embeddings::embed_relationship_texts(&mut kglite::api::DirGraph, &str, &str, kglite::api::embeddings::EmbedMode, &dyn kglite::api::Embedder, &kglite::api::embeddings::EmbedHooks<'_>, core::option::Option<&str>) -> core::result::Result<kglite::api::embeddings::EmbedOutcome, kglite::api::embeddings::EmbedError>
 pub fn kglite::api::embeddings::embedding_diagnostics(&kglite::api::DirGraph, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<kglite::api::embeddings::EmbeddingDiagnostic>, alloc::string::String>
 pub fn kglite::api::embeddings::embedding_info(&kglite::api::DirGraph, kglite::api::embeddings::EmbeddingEntity, &str, &str) -> core::option::Option<kglite::api::embeddings::EmbeddingInfo>
+pub fn kglite::api::embeddings::embedding_store_exists(&kglite::api::DirGraph, kglite::api::embeddings::EmbeddingEntity, &str, &str) -> bool
 pub fn kglite::api::embeddings::has_relationship_vector_index(&kglite::api::DirGraph, &str, &str) -> bool
 pub fn kglite::api::embeddings::has_vector_index(&kglite::api::DirGraph, &str, &str) -> bool
 pub fn kglite::api::embeddings::list_embeddings(&kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::EmbeddingStoreInfo>
@@ -1799,6 +1886,8 @@ pub fn kglite::api::embeddings::list_relationship_embeddings(&kglite::api::DirGr
 pub fn kglite::api::embeddings::list_vector_indexes(&kglite::api::DirGraph) -> alloc::vec::Vec<kglite::api::embeddings::VectorIndexStatus>
 pub fn kglite::api::embeddings::node_embedding(&kglite::api::DirGraph, &str, &str, &kglite::datatypes::values::Value) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>
 pub fn kglite::api::embeddings::node_embeddings(&kglite::api::DirGraph, &str, &str) -> core::result::Result<alloc::vec::Vec<(kglite::datatypes::values::Value, alloc::vec::Vec<f32>)>, alloc::string::String>
+pub fn kglite::api::embeddings::quantization_recall(&kglite::api::DirGraph, kglite::api::embeddings::EmbeddingEntity, &str, &str, &kglite::api::embeddings::RecallOptions) -> core::result::Result<kglite::api::embeddings::QuantizationRecall, alloc::string::String>
+pub fn kglite::api::embeddings::quantize_embeddings(&mut kglite::api::DirGraph, kglite::api::embeddings::EmbeddingEntity, &str, &str, core::option::Option<kglite::api::embeddings::Precision>, core::option::Option<u32>) -> core::result::Result<kglite::api::embeddings::QuantizationReport, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_relationship_vector_index(&kglite::api::DirGraph, &str, &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::refresh_vector_index(&kglite::api::DirGraph, &str, &str) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::embeddings::relationship_embedding(&kglite::api::DirGraph, &str, &str, &kglite::api::embeddings::RelationshipVector, &kglite::api::embeddings::RelationshipKeys) -> core::result::Result<core::option::Option<alloc::vec::Vec<f32>>, alloc::string::String>
@@ -2391,6 +2480,7 @@ pub fn kglite::api::io::GraphWriterLease::drop(&mut self)
 pub struct kglite::api::io::ImportStats
 pub kglite::api::io::ImportStats::dropped_stores: usize
 pub kglite::api::io::ImportStats::imported: usize
+pub kglite::api::io::ImportStats::installed: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub kglite::api::io::ImportStats::relationships: kglite::api::io::RelationshipCarryStats
 pub kglite::api::io::ImportStats::skipped: usize
 pub kglite::api::io::ImportStats::stores: usize
@@ -2536,6 +2626,7 @@ pub fn kglite::api::io::RdfStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> c
 #[non_exhaustive] pub struct kglite::api::io::RelationshipCarryStats
 pub kglite::api::io::RelationshipCarryStats::carried: usize
 pub kglite::api::io::RelationshipCarryStats::dropped_stores: usize
+pub kglite::api::io::RelationshipCarryStats::installed: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub kglite::api::io::RelationshipCarryStats::skipped: usize
 pub kglite::api::io::RelationshipCarryStats::stores: usize
 impl core::clone::Clone for kglite::api::io::RelationshipCarryStats
@@ -3798,6 +3889,7 @@ pub fn kglite::api::storage::EmbeddingStore::auto_refresh_limit(&self) -> usize
 pub fn kglite::api::storage::EmbeddingStore::build_index(&mut self, kglite::api::algorithms::DistanceMetric, kglite::api::algorithms::HnswParams, u64) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::storage::EmbeddingStore::can_auto_refresh(&self) -> bool
 pub fn kglite::api::storage::EmbeddingStore::delta_size(&self) -> usize
+pub fn kglite::api::storage::EmbeddingStore::drop_quantization(&mut self) -> bool
 pub fn kglite::api::storage::EmbeddingStore::get_embedding(&self, usize) -> core::option::Option<&[f32]>
 pub fn kglite::api::storage::EmbeddingStore::get_embedding_with_norm(&self, usize) -> core::option::Option<(&[f32], f32)>
 pub fn kglite::api::storage::EmbeddingStore::has_index(&self) -> bool
@@ -3809,13 +3901,17 @@ pub fn kglite::api::storage::EmbeddingStore::is_mapped(&self) -> bool
 pub fn kglite::api::storage::EmbeddingStore::is_stale(&self, usize, u64) -> bool
 pub fn kglite::api::storage::EmbeddingStore::len(&self) -> usize
 pub fn kglite::api::storage::EmbeddingStore::new(usize) -> Self
+pub fn kglite::api::storage::EmbeddingStore::precision(&self) -> core::option::Option<kglite::api::embeddings::Precision>
 pub fn kglite::api::storage::EmbeddingStore::promote_to_heap(&mut self)
+pub fn kglite::api::storage::EmbeddingStore::quantization_info(&self) -> core::option::Option<kglite::api::embeddings::QuantizationInfo>
+pub fn kglite::api::storage::EmbeddingStore::quantize(&mut self, kglite::api::embeddings::Precision, core::option::Option<u32>) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::storage::EmbeddingStore::rebuild_norms(&mut self)
 pub fn kglite::api::storage::EmbeddingStore::refresh_index(&self) -> usize
 pub fn kglite::api::storage::EmbeddingStore::remove_embedding(&mut self, usize) -> core::option::Option<kglite::graph::embedding_store::RemovedEmbedding>
 pub fn kglite::api::storage::EmbeddingStore::restore_embedding(&mut self, usize, &kglite::graph::embedding_store::RemovedEmbedding)
 pub fn kglite::api::storage::EmbeddingStore::set_auto_refresh_limit(&mut self, usize)
 pub fn kglite::api::storage::EmbeddingStore::set_embedding(&mut self, usize, &[f32]) -> usize
+pub fn kglite::api::storage::EmbeddingStore::set_oversample(&mut self, u32) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::storage::EmbeddingStore::set_text_hash(&mut self, usize, u64)
 pub fn kglite::api::storage::EmbeddingStore::storage_name(&self) -> &'static str
 pub fn kglite::api::storage::EmbeddingStore::text_hash(&str) -> u64

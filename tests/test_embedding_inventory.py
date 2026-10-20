@@ -16,7 +16,7 @@ import pytest
 import kglite
 from kglite import KnowledgeGraph
 
-NODE_LIST_KEYS = {"node_type", "text_column", "store_name", "dimension", "count", "metric", "storage"}
+NODE_LIST_KEYS = {"node_type", "text_column", "store_name", "dimension", "count", "metric", "storage", "quantization"}
 NODE_DIAGNOSTIC_KEYS = {
     "node_type",
     "text_column",
@@ -27,6 +27,7 @@ NODE_DIAGNOSTIC_KEYS = {
     "dimension",
     "metric",
     "storage",
+    "quantization",
     "length_stats",
 }
 
@@ -73,6 +74,7 @@ def test_list_embeddings_reports_both_entities() -> None:
             "count": 2,
             "metric": "cosine",
             "storage": "heap",
+            "quantization": None,
         },
         {
             "entity": "relationship",
@@ -83,6 +85,7 @@ def test_list_embeddings_reports_both_entities() -> None:
             "count": 1,
             "metric": "dot_product",
             "storage": "heap",
+            "quantization": None,
         },
     ]
 
@@ -114,6 +117,7 @@ def test_embedding_info_resolves_the_requested_entity_on_a_same_name_pair() -> N
         "model": None,
         "metric": "cosine",
         "hashed": 0,
+        "quantization": None,
     }
     assert graph.embedding_info("SUPPORTS", "body", entity="node") == node
     assert graph.embedding_info("SUPPORTS", "body", entity="relationship") == {
@@ -124,6 +128,7 @@ def test_embedding_info_resolves_the_requested_entity_on_a_same_name_pair() -> N
         "model": None,
         "metric": "dot_product",
         "hashed": 0,
+        "quantization": None,
     }
     assert graph.embedding_info("SUPPORTS", "note", entity="relationship") is None
     assert graph.embedding_info("MISSING", "body", entity="relationship") is None

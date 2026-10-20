@@ -440,6 +440,14 @@ ROWS: list[Row] = [
         probe={"vi": "g.has_node_vector_index('Q', 'name')"},
     ),
     Row(
+        "quantize_embeddings",
+        ("quantization.rs::quantize_embeddings", "quantization.rs::quantize_written"),
+        "g.quantize_embeddings('Q', 'name', 'int8')",
+        seed=_VEC,
+        kind="unlogged",
+        probe={"q": "g.embedding_info('Q', 'name')"},
+    ),
+    Row(
         "drop_node_vector_index",
         ("vector.rs::drop_node_vector_index",),
         "g.drop_node_vector_index('Q', 'name')",

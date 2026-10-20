@@ -25,9 +25,27 @@ before upgrading.
   - `VectorBuf` derefs to `[f32]`, so reads, slicing and indexing compile unchanged; `push`, `extend_from_slice`, `truncate`, `pop`, `reserve` and `clear` are inherent methods.
   - Assign with `vec.into()`. Cloning a store whose buffers are mapped shares the mapping; the first write to a buffer copies it to the heap.
   - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo` and `EmbeddingDiagnostic` gain a `storage` field (`"mapped"` or `"heap"`).
+- **Rust API: embedding inventory and import types gain fields for quantized copies.**
+  - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo`, `EmbeddingInfo` and `EmbeddingDiagnostic` gain `quantization: Option<QuantizationInfo>`.
+  - `ImportStats` and `RelationshipCarryStats` gain `installed`, the `(type, column)` of every store the import wrote.
+  - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`.
+- **Relationship search can report `search_method: "quantized"`.** `db.relationship_embeddings.query` and `relationship_vector_search` use a quantized copy when the store has one; without a copy the value stays `hnsw` or `exact`.
 
 ### Added
 
+- **Embedding stores can carry a smaller scan copy: `f16`, `int8` or `binary`.**
+  - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay the canonical data.
+  - Search scans the copy for `top_k * oversample` candidates, then re-scores them against the `f32` vectors. Returned scores are exact; only the candidate set is approximate, as with HNSW.
+  - `exact=True` bypasses the copy, a built HNSW index still serves first, and the Poincare metric is never served from a copy. Node search and relationship search (including `db.relationship_embeddings.query`) use it; Cypher `vector_score` ordering and `db.node_embeddings.query` do not.
+  - Size added: 50% (`f16`), 25% (`int8`, scales included) or 3% (`binary`) of the store. Default oversample is 4, 4 and 10.
+  - Measured recall@10 on random Gaussian 1024-d vectors (the adversarial case for sign bits): `f16` 1.000; `int8` 0.990 before the exact re-score, 1.000 with it; `binary` 0.137 before, 0.557 with the default pool, 0.960 at oversample 100.
+  - Kernels: `f16` uses F16C on x86-64 (detected at run time) and the compiler's NEON vectorization on aarch64, with a scalar fallback; `int8` is an integer dot product; `binary` is a popcount, POPCNT-dispatched on x86.
+  - The copy follows every write to the store (set, add, delete, rollback, vacuum) without a rebuild, and is saved with the graph: as `qcodes` / `qscales` sections beside a store written to the v9 data region (mapped on load like the vectors), as a metadata record only for small stores and `layout="compact"` (the load re-derives it).
+  - Replacing a store (`set_embeddings`, `embed_texts(mode="all")`, `import_embeddings`) starts without a copy unless the call passes `precision=`.
+  - A durable graph persists the declaration at the next `save()`, not in the write-ahead log. Disk storage mode and `.kgle` export do not carry copies.
+  - `precision=` is a keyword on `set_embeddings`, `set_node_embeddings`, `set_relationship_embeddings`, `embed_texts`, `embed_node_texts`, `embed_relationship_texts` and `import_embeddings`; `list_embeddings()`, `embedding_info()` and `embedding_diagnostics()` report a `quantization` entry.
+  - `quantization_recall(node_type, text_column, sample=100, top_k=10, oversample=None, *, entity="node", seed=0)` replays stored vectors as queries and reports `recall` (before the re-score) and `recall_rescored` (what a search returns).
+  - C ABI: `kglite_session_quantize_embeddings` (additive); `kglite_session_list_embeddings` rows gain a `quantization` key.
 - **Large property columns are served from the `.kgl` file instead of a spill file.**
   - A default save writes each fixed-width or string column of 256 KB or more raw and aligned into the v9 data region; the file is v9 whenever one exists.
   - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and still decode, and spill, at load. `save(layout="compact")` writes every column compressed in a v8 file.

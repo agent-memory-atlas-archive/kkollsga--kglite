@@ -139,7 +139,8 @@ fn a_key_carries_each_member_to_its_twin_despite_swapped_order() {
             stores: 1,
             carried: 3,
             skipped: 0,
-            dropped_stores: 0
+            dropped_stores: 0,
+            installed: vec![("CLAIMS".to_string(), "text".to_string())],
         }
     );
     assert_eq!(cells(&dst), expected_cells());
@@ -230,7 +231,8 @@ fn relationships_the_target_lacks_are_skipped_and_an_unmatched_store_dropped() {
             stores: 0,
             carried: 0,
             skipped: 3,
-            dropped_stores: 1
+            dropped_stores: 1,
+            installed: Vec::new(),
         }
     );
     assert!(empty.edge_embeddings.is_empty());

@@ -18,6 +18,7 @@ pub mod kg_introspection;
 pub mod kg_mutation;
 pub(crate) mod lifecycle;
 pub mod networkx;
+pub(crate) mod quantization;
 pub(crate) mod query_defaults;
 pub mod recipes;
 pub mod relationship_search;

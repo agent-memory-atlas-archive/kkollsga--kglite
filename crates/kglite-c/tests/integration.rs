@@ -22,9 +22,10 @@ use kglite_c::{
     kglite_session_execute_mut, kglite_session_execute_mut_batch, kglite_session_execute_mut_opts,
     kglite_session_execute_read, kglite_session_execute_read_batch,
     kglite_session_execute_read_opts, kglite_session_free, kglite_session_list_embeddings,
-    kglite_session_new, kglite_session_save, kglite_session_set_embeddings,
-    kglite_writer_lease_acquire, kglite_writer_lease_acquire_ex, kglite_writer_lease_free,
-    KgliteCypherResult, KgliteGraph, KgliteSession, KgliteStatusCode, KgliteWriterLease,
+    kglite_session_new, kglite_session_quantize_embeddings, kglite_session_save,
+    kglite_session_set_embeddings, kglite_writer_lease_acquire, kglite_writer_lease_acquire_ex,
+    kglite_writer_lease_free, KgliteCypherResult, KgliteGraph, KgliteSession, KgliteStatusCode,
+    KgliteWriterLease,
 };
 
 #[cfg(feature = "fastembed")]
@@ -2263,6 +2264,116 @@ fn build_vector_index_without_a_store_errors() {
     assert!(report.is_null());
     assert!(!err.is_null(), "a rejected build must explain itself");
     unsafe { kglite_free_string(err) };
+    unsafe { kglite_session_free(session) };
+}
+
+// ── quantized scan copy (kglite_session_quantize_embeddings) ─────────
+
+/// Call the symbol, returning (status, report JSON, error message).
+fn quantize_embeddings(
+    session: *mut KgliteSession,
+    precision: Option<&str>,
+    oversample: u32,
+    entity: Option<&str>,
+) -> (KgliteStatusCode, Option<serde_json::Value>, Option<String>) {
+    let nt = CString::new("Note").unwrap();
+    let tc = CString::new("body").unwrap();
+    let precision = precision.map(|p| CString::new(p).unwrap());
+    let entity = entity.map(|e| CString::new(e).unwrap());
+    let mut report: *const c_char = std::ptr::null();
+    let mut err: *const c_char = std::ptr::null();
+    let rc = unsafe {
+        kglite_session_quantize_embeddings(
+            session,
+            nt.as_ptr(),
+            tc.as_ptr(),
+            precision.as_ref().map_or(std::ptr::null(), |p| p.as_ptr()),
+            oversample,
+            entity.as_ref().map_or(std::ptr::null(), |e| e.as_ptr()),
+            &mut report as *mut _,
+            &mut err as *mut _,
+        )
+    };
+    let parsed = (!report.is_null()).then(|| {
+        let json: serde_json::Value =
+            serde_json::from_str(unsafe { CStr::from_ptr(report) }.to_str().unwrap()).unwrap();
+        unsafe { kglite_free_string(report) };
+        json
+    });
+    let message = (!err.is_null()).then(|| {
+        let text = unsafe { CStr::from_ptr(err) }.to_str().unwrap().to_string();
+        unsafe { kglite_free_string(err) };
+        text
+    });
+    (rc, parsed, message)
+}
+
+/// Build, report through `list_embeddings`, replace and drop a copy; every
+/// refusal is an `InvalidArgument` that explains itself.
+#[test]
+fn quantize_embeddings_builds_lists_replaces_and_drops() {
+    let session = seed_notes(
+        "CREATE (:Note {id: 1, body: 'a'}) CREATE (:Note {id: 2, body: 'b'}) \
+         CREATE (:Note {id: 3, body: 'c'})",
+    );
+    let (status, _, err) = set_embeddings(
+        session,
+        "Note",
+        "body",
+        "[1, 2, 3]",
+        &[1.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        2,
+        3,
+        None,
+    );
+    assert_eq!(status, KgliteStatusCode::Ok, "{err:?}");
+
+    let (rc, report, err) = quantize_embeddings(session, Some("int8"), 0, None);
+    assert_eq!(rc, KgliteStatusCode::Ok, "{err:?}");
+    let report = report.unwrap();
+    assert_eq!(
+        (report["count"].as_u64(), report["dimension"].as_u64()),
+        (Some(3), Some(2))
+    );
+    assert!(report["previous"].is_null());
+    assert_eq!(report["quantization"]["precision"], "int8");
+    assert_eq!(report["quantization"]["oversample"], 4);
+
+    let mut lreport: *const c_char = std::ptr::null();
+    let mut lerr: *const c_char = std::ptr::null();
+    unsafe { kglite_session_list_embeddings(session, &mut lreport as *mut _, &mut lerr as *mut _) };
+    let list: serde_json::Value =
+        serde_json::from_str(unsafe { CStr::from_ptr(lreport) }.to_str().unwrap()).unwrap();
+    unsafe { kglite_free_string(lreport) };
+    assert_eq!(list[0]["quantization"]["precision"], "int8");
+
+    let (rc, report, err) = quantize_embeddings(session, Some("binary"), 12, Some("node"));
+    assert_eq!(rc, KgliteStatusCode::Ok, "{err:?}");
+    let report = report.unwrap();
+    assert_eq!(report["previous"], "int8");
+    assert_eq!(report["quantization"]["oversample"], 12);
+
+    let (rc, report, _) = quantize_embeddings(session, None, 0, None);
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert!(report.unwrap()["quantization"].is_null());
+
+    for (precision, oversample, entity, needle) in [
+        (Some("f8"), 0, None, "unknown quantization precision"),
+        (None, 3, None, "needs a precision"),
+        (Some("f16"), 0, Some("edge"), "entity must be"),
+        (
+            Some("f16"),
+            0,
+            Some("relationship"),
+            "No relationship embedding store",
+        ),
+    ] {
+        let (rc, report, err) = quantize_embeddings(session, precision, oversample, entity);
+        assert_eq!(rc, KgliteStatusCode::InvalidArgument);
+        assert!(report.is_none());
+        let message = err.expect("a refusal explains itself");
+        assert!(message.contains(needle), "{message}");
+    }
     unsafe { kglite_session_free(session) };
 }
 

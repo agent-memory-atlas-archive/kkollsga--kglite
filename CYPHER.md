@@ -991,8 +991,9 @@ store.
 Parameter defaults and routes:
 
 - `top_k` defaults to 10, and `exact` defaults to false.
-- `search_method` is `hnsw` only when HNSW served the query, otherwise `exact`.
-  `exact:true` always bypasses the index.
+- `search_method` is `hnsw` when HNSW served the query, `quantized` when a
+  quantized scan copy (`quantize_embeddings`) narrowed the candidates, otherwise
+  `exact`. `exact:true` always bypasses the index and the copy.
 - A requested metric that cannot use the installed index falls back to the
   exact route.
 - `build_index` takes an optional `metric`. It becomes the store's metric when

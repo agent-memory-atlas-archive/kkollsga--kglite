@@ -9112,7 +9112,9 @@ class KnowledgeGraph:
         text_column: str,
         embeddings: dict[Any, list[float]],
         metric: Optional[str] = None,
-    ) -> dict[str, int]:
+        *,
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
+    ) -> dict[str, Any]:
         """Store embeddings for nodes of the given type. Replaces any
         existing store for ``(node_type, "{text_column}_emb")``.
 
@@ -9156,10 +9158,15 @@ class KnowledgeGraph:
             metric: Default distance metric for this store. Used when no metric
                 is specified at query time. ``'cosine'`` (default), ``'dot_product'``,
                 ``'euclidean'``, or ``'poincare'``. Persisted with ``save()``.
+            precision: Quantize the written store to ``'f16'``, ``'int8'`` or
+                ``'binary'`` in the same call — shorthand for a following
+                :meth:`quantize_embeddings` (see there). Refused before anything
+                is written for an unknown name or the ``'poincare'`` metric.
 
         Returns:
             Dict with ``embeddings_stored`` (vectors in the store after the
-            call), ``dimension``, and ``skipped``.
+            call), ``dimension``, and ``skipped``; plus ``quantization`` (as
+            :meth:`quantize_embeddings` reports it) when ``precision`` was given.
         """
         ...
 
@@ -9172,6 +9179,7 @@ class KnowledgeGraph:
         *,
         entity: Literal["node", "relationship"] = "node",
         relationship_keys: Optional[dict[str, str]] = None,
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
     ) -> dict[str, Any]:
         """Replace an embedding store — a node type's by default, a relationship type's with
         ``entity="relationship"``.
@@ -9199,6 +9207,7 @@ class KnowledgeGraph:
             entity: ``"node"`` (default) or ``"relationship"``.
             relationship_keys: Relationship route only — see
                 :meth:`set_relationship_embeddings`.
+            precision: Quantize the written store, as the routed method takes it.
 
         Returns:
             The routed method's result dict.
@@ -9364,6 +9373,9 @@ class KnowledgeGraph:
                 neither type's rows are dropped. Selections covering little of
                 the store, and the ``'poincare'`` metric, are always exact
                 regardless.
+                ``exact=True`` also bypasses a quantized scan copy
+                (:meth:`quantize_embeddings`), which otherwise narrows the
+                candidates before an exact re-score.
 
         Returns:
             List of dicts (or a DataFrame if ``to_df=True``). By default a hit has
@@ -9428,7 +9440,8 @@ class KnowledgeGraph:
         list. The stores' answers merge into one ``top_k`` ordered by score,
         then relationship type, then relationship position. Each store answers
         on its own route — HNSW once :meth:`build_relationship_vector_index` has
-        run, else an exact scan — so a ranking over many relationship types
+        run, a quantized scan once :meth:`quantize_embeddings` has built a copy
+        (``search_method`` ``'quantized'``), else an exact scan — so a ranking over many relationship types
         runs one search per type.
 
         Each hit is a :meth:`relationship_embeddings` row without the vector,
@@ -9458,7 +9471,8 @@ class KnowledgeGraph:
             to_df: If ``True``, return a pandas DataFrame.
             types: A relationship type or a list of them; omitted ranks every
                 type with a ``text_column`` store.
-            exact: Force an exact scan even where an HNSW index is online.
+            exact: Force an exact scan even where an HNSW index is online or a
+                quantized copy (:meth:`quantize_embeddings`) would narrow the candidates.
             relationship_keys: Per relationship type, the property whose value
                 a hit carries as ``key`` (as :meth:`relationship_embeddings`
                 takes it).
@@ -9519,7 +9533,8 @@ class KnowledgeGraph:
             metric: As the routed method takes it.
             to_df: If ``True``, return a pandas DataFrame.
             returning: Node route only — see :meth:`node_vector_search`.
-            exact: Force an exact scan even where an HNSW index is online.
+            exact: Force an exact scan even where an HNSW index is online or a
+                quantized copy (:meth:`quantize_embeddings`) would narrow the candidates.
             entity: ``"node"`` (default) or ``"relationship"``.
             types: Relationship route only — see
                 :meth:`relationship_vector_search`.
@@ -9552,7 +9567,11 @@ class KnowledgeGraph:
             metric, or ``'cosine'`` when it recorded none. ``storage`` is
             ``'mapped'`` when the vectors are read in place from the loaded
             ``.kgl`` file (until the first write to the store copies them) and
-            ``'heap'`` otherwise. Relationship rows are
+            ``'heap'`` otherwise. ``quantization`` is ``None`` for a store with
+            no quantized scan copy, else a dict with ``precision`` (``'f16'``,
+            ``'int8'`` or ``'binary'``), ``oversample``, ``storage``
+            (``'mapped'`` or ``'heap'``), ``bytes`` and ``kernel`` (the scoring
+            routine this CPU selected). Relationship rows are
             sorted by type and store; node-row order is unspecified.
 
         Example::
@@ -9636,7 +9655,8 @@ class KnowledgeGraph:
         (a known model shared by every vector, or ``None`` for unknown/mixed
         provenance), ``metric``, and ``hashed`` (how many vectors carry a
         source-text hash, used by ``embed_texts(mode='changed')`` for change
-        detection).
+        detection) and ``quantization`` (``None``, or the dict
+        :meth:`list_embeddings` describes).
 
         ``metric`` is the store's **effective** distance metric: the one set via
         ``set_embeddings(metric=...)``, or the explicit ``metric`` a later
@@ -9769,7 +9789,137 @@ class KnowledgeGraph:
             ``distinct_ratio``. Node rows add ``node_type``,
             ``nodes_with_property`` and ``nodes_embedded``; relationship rows
             add ``relationship_type``, ``relationships_with_property`` and
-            ``relationships_embedded``.
+            ``relationships_embedded``. ``quantization`` is ``None`` or the
+            quantized-copy dict :meth:`list_embeddings` describes.
+        """
+        ...
+
+    def quantize_embeddings(
+        self,
+        node_type: str,
+        text_column: str,
+        precision: Optional[Literal["f16", "int8", "binary"]],
+        oversample: Optional[int] = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+    ) -> dict[str, Any]:
+        """Build, replace or drop the quantized scan copy of an embedding
+        store — a node store by default, a relationship store with
+        ``entity="relationship"``.
+
+        A quantized copy is a smaller, derived duplicate of the store's ``f32``
+        vectors that brute-force search scans instead of the full vectors:
+        ``'f16'`` halves the bytes read, ``'int8'`` (one symmetric scale per
+        vector) quarters them, ``'binary'`` (sign bits, Hamming distance)
+        divides them by 32. The ``f32`` vectors stay the canonical data and are
+        never altered.
+
+        **What search returns.** With a copy present,
+        :meth:`vector_search` / :meth:`search_text` (nodes) and the
+        relationship search (``search_method`` ``'quantized'``) scan the copy
+        for ``top_k * oversample`` candidates, then re-score exactly those
+        against the ``f32`` vectors and return the best ``top_k``. Every
+        returned score is therefore the exact ``f32`` score; only the *set* of
+        candidates is approximate, as with an HNSW index. A built HNSW index
+        still serves the query first; ``exact=True`` bypasses both. The Poincare
+        metric (a store's own or a query's) is never served from a copy. Cypher
+        retrieval (``vector_score`` ordering, ``db.*_embeddings.query``) scans
+        the ``f32`` vectors and does not use the copy.
+
+        **Cost and size.** The copy adds 50% (``f16``), 25% (``int8``, scales
+        included) or 3% (``binary``) of the store's size on disk and in memory.
+        It is kept in step with every write to the store (set, add, delete,
+        rollback) without a rebuild, is saved with the graph (and mapped from
+        the ``.kgl`` like the vectors), and is re-derived on load when the file
+        carries only the declaration (``save(layout="compact")``, small stores).
+        Replacing a store (``set_embeddings``, ``embed_texts(mode='all')``)
+        starts without a copy unless you pass ``precision=`` to that call. A
+        durable graph persists the declaration at the next ``save()`` /
+        checkpoint, not in the write-ahead log.
+
+        Use :meth:`quantization_recall` to see what a precision costs on your
+        own vectors before relying on it.
+
+        Args:
+            node_type: The node type, or the relationship type with
+                ``entity="relationship"``.
+            text_column: The source column (``'summary'``, not ``'summary_emb'``).
+            precision: ``'f16'``, ``'int8'`` or ``'binary'`` builds (or
+                replaces) the copy; ``None`` drops it.
+            oversample: Candidates scanned per requested result. Defaults per
+                precision: 4 for ``'f16'`` and ``'int8'``, 10 for ``'binary'``.
+                Raise it to trade scan work for recall; only valid with a
+                ``precision``.
+            entity: ``"node"`` (default) or ``"relationship"``.
+
+        Returns:
+            Dict with ``entity``, ``node_type`` (or ``relationship_type``),
+            ``text_column``, ``count`` and ``dimension`` of the store,
+            ``previous`` (the precision it held before, or ``None``) and
+            ``quantization`` (``None`` after a drop, else ``precision``,
+            ``oversample``, ``storage``, ``bytes`` and ``kernel``).
+
+        Raises:
+            ArgumentError: the store does not exist; ``precision`` is unknown;
+                the store's metric is ``'poincare'``; the dimension exceeds
+                100,000; ``oversample`` is zero or given without a precision.
+
+        Example::
+
+            g.quantize_embeddings("Article", "summary", "int8")
+            g.quantization_recall("Article", "summary")["recall_rescored"]
+            g.quantize_embeddings("Article", "summary", None)   # drop the copy
+        """
+        ...
+
+    def quantization_recall(
+        self,
+        node_type: str,
+        text_column: str,
+        sample: int = 100,
+        top_k: int = 10,
+        oversample: Optional[int] = None,
+        *,
+        entity: Literal["node", "relationship"] = "node",
+        seed: int = 0,
+    ) -> dict[str, Any]:
+        """Measure how an embedding store's quantized copy ranks against exact
+        ``f32`` search, on the store's own vectors.
+
+        Replays up to ``sample`` stored vectors as queries — each excluded from
+        its own results — and compares the quantized ranking with the exact one
+        under the store's metric. Costs ``O(sample * store size * dimension)``.
+
+        Args:
+            node_type: The node type, or the relationship type with
+                ``entity="relationship"``.
+            text_column: The source column.
+            sample: Vectors to replay as queries (default 100; capped at the
+                store size).
+            top_k: Results per query (default 10; capped at the store size - 1).
+            oversample: Measure with this oversample instead of the store's
+                (the copy is not changed).
+            entity: ``"node"`` (default) or ``"relationship"``.
+            seed: Fixes which vectors are sampled; the same seed on the same
+                store gives the same numbers.
+
+        Returns:
+            Dict with ``precision``, ``oversample``, ``sampled``, ``top_k``,
+            ``recall`` (mean overlap of the quantized top-``top_k`` with the
+            exact top-``top_k``, before re-scoring) and ``recall_rescored``
+            (after the exact re-score of the ``top_k * oversample`` candidates
+            — the recall a search returns).
+
+        Raises:
+            ArgumentError: the store does not exist or has no quantized copy,
+                ``sample`` / ``top_k`` / ``oversample`` is zero, the store holds
+                fewer than two vectors, or its metric is ``'poincare'``.
+
+        Example::
+
+            g.quantize_embeddings("Article", "summary", "binary")
+            r = g.quantization_recall("Article", "summary", sample=200, oversample=30)
+            print(r["recall"], r["recall_rescored"])
         """
         ...
 
@@ -9833,6 +9983,7 @@ class KnowledgeGraph:
         path: str,
         *,
         relationship_keys: dict[str, str] | None = None,
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
     ) -> dict[str, int]:
         """Import node and relationship embeddings from a ``.kgle`` file.
 
@@ -9867,6 +10018,11 @@ class KnowledgeGraph:
                 ``export_embeddings()``.
             relationship_keys: Keyword-only. ``{relationship_type: property}``
                 overriding the key the file recorded for a type.
+            precision: Keyword-only. Quantize every store the import installed
+                to ``'f16'``, ``'int8'`` or ``'binary'`` (see
+                :meth:`quantize_embeddings`). A ``.kgle`` file carries the
+                ``f32`` vectors only; a store imported without ``precision``
+                has no quantized copy.
 
         Raises:
             ArgumentError: A relationship vector meets a parallel group in this
@@ -9887,6 +10043,7 @@ class KnowledgeGraph:
               same four counts for relationship stores (a relationship the
               graph lacks counts as skipped; a warning is emitted when none
               matched).
+            - ``quantized_stores``: stores quantized (only with ``precision``).
         """
         ...
 
@@ -10228,6 +10385,7 @@ class KnowledgeGraph:
         *,
         relationship_keys: Optional[dict[str, str]] = None,
         metric: Optional[str] = None,
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
     ) -> dict[str, Any]:
         """Store relationship vectors addressed by their endpoints.
         **Replaces** any existing store for ``(relationship_type,
@@ -10286,12 +10444,17 @@ class KnowledgeGraph:
             metric: The new store's distance metric — ``'cosine'``
                 (default), ``'dot_product'``, ``'euclidean'`` or
                 ``'poincare'``.
+            precision: Quantize the written store to ``'f16'``, ``'int8'`` or
+                ``'binary'`` in the same call — shorthand for a following
+                :meth:`quantize_embeddings` (see there). Refused before anything
+                is written for an unknown name or the ``'poincare'`` metric.
 
         Returns:
             Dict with ``embeddings_stored`` (vectors in the store after the
             call), ``dimension``, ``changed`` (vectors written) and
             ``store_created`` (``True`` whenever the call wrote: it always
-            installs a fresh store).
+            installs a fresh store); plus ``quantization`` when ``precision``
+            was given.
 
         Raises:
             TypeError: ``embeddings`` is neither shape, a dict key is not one of
@@ -10426,7 +10589,8 @@ class KnowledgeGraph:
         mode: str | None = None,
         *,
         metric: str | None = None,
-    ) -> dict[str, int]:
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
+    ) -> dict[str, Any]:
         """Embed a text column for all nodes of a given type.
 
         Uses the model registered via ``set_embedder()``.  Reads each node's
@@ -10467,10 +10631,16 @@ class KnowledgeGraph:
                 call creates or rebuilds (``mode='all'``); a different metric
                 than an existing store declares is refused. Omitted keeps the
                 store's own (``'cosine'`` for a new one).
+            precision: Quantize the store after the pass to ``'f16'``,
+                ``'int8'`` or ``'binary'`` — see :meth:`quantize_embeddings`. An
+                incremental pass (``'missing'`` / ``'changed'``) keeps an
+                existing quantized copy in step without this; ``mode='all'``
+                builds a fresh store with no copy unless ``precision`` is given.
 
         Returns:
             Dict with ``embedded``, ``skipped``, ``skipped_existing``,
-            ``reembedded_changed``, and ``dimension``.
+            ``reembedded_changed``, and ``dimension``; plus ``quantization``
+            when ``precision`` was given.
 
         Raises:
             ValueError: if ``node_type`` does not exist in the graph — the same
@@ -10505,7 +10675,8 @@ class KnowledgeGraph:
         *,
         entity: Literal["node", "relationship"] = "node",
         metric: str | None = None,
-    ) -> dict[str, int]:
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
+    ) -> dict[str, Any]:
         """Embed a text column with the registered model — for a node type by
         default, a relationship type with ``entity="relationship"``.
 
@@ -10529,6 +10700,7 @@ class KnowledgeGraph:
             mode: ``'missing'`` (default), ``'changed'`` or ``'all'``.
             entity: ``"node"`` (default) or ``"relationship"``.
             metric: As the routed method takes it.
+            precision: Quantize the store after the pass, as the routed method takes it.
 
         Returns:
             The routed method's result dict.
@@ -10548,7 +10720,8 @@ class KnowledgeGraph:
         mode: str | None = None,
         *,
         metric: str | None = None,
-    ) -> dict[str, int]:
+        precision: Optional[Literal["f16", "int8", "binary"]] = None,
+    ) -> dict[str, Any]:
         """Embed a text column for every relationship of a type — the
         relationship twin of :meth:`embed_texts`.
 
@@ -10581,10 +10754,12 @@ class KnowledgeGraph:
                 dimension. The same position as :meth:`embed_node_texts`.
             metric: The distance metric to record on the store, as
                 ``db.relationship_embeddings.embed``'s ``metric`` does.
+            precision: Quantize the store after the pass, as :meth:`embed_node_texts` takes it.
 
         Returns:
             Dict with ``embedded``, ``skipped`` (no text), ``skipped_existing``,
-            ``reembedded_changed`` and ``dimension``.
+            ``reembedded_changed`` and ``dimension``; plus ``quantization`` when
+            ``precision`` was given.
 
         Raises:
             ValueError: No relationship of ``relationship_type`` carries

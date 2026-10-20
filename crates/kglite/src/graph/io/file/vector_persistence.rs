@@ -269,6 +269,8 @@ pub struct ImportStats {
     /// different node IDs or types — the count of such stores would
     /// otherwise be invisible to callers.
     pub dropped_stores: usize,
+    /// `(node type, text column)` of each node store installed.
+    pub installed: Vec<(String, String)>,
     /// The relationship-store carry (all zero for a v3 file).
     pub relationships: RelationshipCarryStats,
 }
@@ -556,6 +558,7 @@ pub fn import_embeddings_from_file(
     let mut total_skipped = 0usize;
     let mut stores_count = 0usize;
     let mut dropped_stores = 0usize;
+    let mut installed = Vec::new();
 
     for mut exported in exported_stores {
         // Build ID index for this node type so lookup_by_id works
@@ -594,6 +597,7 @@ pub fn import_embeddings_from_file(
 
         if imported > 0 {
             graph.set_embedding_store(&exported.node_type, &exported.text_column, store);
+            installed.push((exported.node_type.clone(), exported.text_column.clone()));
             stores_count += 1;
         } else if had_entries {
             dropped_stores += 1;
@@ -613,6 +617,7 @@ pub fn import_embeddings_from_file(
         imported: total_imported,
         skipped: total_skipped,
         dropped_stores,
+        installed,
         relationships,
     })
 }
