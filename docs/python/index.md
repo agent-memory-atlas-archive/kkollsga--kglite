@@ -43,6 +43,8 @@ guides/timeseries
 guides/valid-time
 guides/bitemporal
 guides/large-registers
+guides/storage-and-memory
+guides/embedding-quantization
 guides/graph-algorithms
 guides/import-export
 guides/open-exports

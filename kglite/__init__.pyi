@@ -9828,8 +9828,9 @@ class KnowledgeGraph:
         candidates is approximate, as with an HNSW index. A built HNSW index
         still serves the query first; ``exact=True`` bypasses both. The Poincare
         metric (a store's own or a query's) is never served from a copy. Cypher
-        retrieval (``vector_score`` ordering, ``db.*_embeddings.query``) scans
-        the ``f32`` vectors and does not use the copy.
+        retrieval (``vector_score`` ordering, ``db.*_embeddings.query``) uses
+        the copy the same way when no index serves the query and
+        ``exact`` is not set.
 
         **Cost and size.** The copy adds 50% (``f16``), 25% (``int8``, scales
         included) or 3% (``binary``) of the store's size on disk and in memory.

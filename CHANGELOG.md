@@ -11,104 +11,86 @@ before upgrading.
 
 ### Breaking changes and migration
 
-- **Rust API: `LoadOptions` is `#[non_exhaustive]`.**
-  - Build it with `LoadOptions::new()` and the `with_*` builders; a struct literal no longer compiles.
-  - New builders: `with_embeddings`, `with_columns` (`MapPolicy::{Auto, Mapped, Memory}`) and `with_verify` (`Verify::{Lazy, Eager}`, default from `KGLITE_VERIFY=eager`).
-  - The new fields apply only to containers that carry mappable sections; a v8 or older file ignores them.
-- **A graph with an embedding store of 4 MiB or more, or a property column of 256 KB or more, now saves as `.kgl` container v9.**
-  - The vectors and their L2 norms are stored raw, 64-byte aligned, after the compressed sections; smaller stores stay inside the compressed sections, as before.
-  - kglite releases before this one refuse a v9 file with "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
-  - The vectors are no longer zstd-compressed; embeddings compress by under 10%, so the file changes little, plus 4 bytes per vector for the stored norm.
-  - To write a file that older readers can open, save with `layout="compact"` (Rust: `SaveLayout::Compact`), which writes the v8 container.
-  - A graph with no store of that size writes the same bytes as before.
+- **A graph with an embedding store of 4 MiB or more, or a property column of 256 KB or more, saves as `.kgl` container v9, which kglite releases before this one refuse.**
+  - The refusal reads "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
+  - **Do:** save with `layout="compact"` (Rust: `SaveLayout::Compact`) for any file an older kglite must read. It writes the v8 container with everything compressed.
+  - A graph with no store or column of that size writes the same bytes as before. This release reads v8 and older files unchanged.
+  - A v9 file keeps vectors, their norms and large columns raw and 64-byte aligned. Embeddings compress by under 10 %, so the file changes little; columns that do not delta-compress grow more (a 94 MB test graph became about 230 MB). See the Storage and memory guide.
+- **Large property columns are mapped from the file only when you ask, in the default storage mode.**
+  - `columns=` left unset resolves to `memory` for an in-memory graph (as before this release) and to `auto` for `mapped` storage and the MCP server.
+  - A column scan over mapped pages measured 4-9 % slower than over decoded ones, so the in-memory default stays on the heap. Pass `columns="auto"` or `"mapped"` to map.
+  - `embeddings=` defaults to `auto` in every mode: a store of 64 MB or more is read in place from a regular local file.
+- **Result labels change for a store with a quantized copy.** Cypher and relationship search can report `search_method: "quantized"` (or `"quantized_mask"` under `FOR VALID_TIME AS OF`) and `actual_mode: "quantized"`. Without a copy the values are unchanged. **Do:** accept the new values, or pass `{exact: true}` to bypass the copy.
+- **Rust API: `LoadOptions` is `#[non_exhaustive]`.** Build it with `LoadOptions::new()` and the `with_*` builders; a struct literal no longer compiles. The new builders are `with_embeddings`, `with_columns` (`MapPolicy::{Auto, Mapped, Memory}`) and `with_verify` (`Verify::{Lazy, Eager}`, default from `KGLITE_VERIFY=eager`).
 - **Rust API: `EmbeddingStore.data` and `.norms` are `VectorBuf`, not `Vec<f32>`.**
   - `VectorBuf` derefs to `[f32]`, so reads, slicing and indexing compile unchanged; `push`, `extend_from_slice`, `truncate`, `pop`, `reserve` and `clear` are inherent methods.
-  - Assign with `vec.into()`. Cloning a store whose buffers are mapped shares the mapping; the first write to a buffer copies it to the heap.
-  - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo` and `EmbeddingDiagnostic` gain a `storage` field (`"mapped"` or `"heap"`).
-- **Rust API: embedding inventory and import types gain fields for quantized copies.**
+  - **Do:** assign with `vec.into()`.
+  - Cloning a store whose buffers are mapped shares the mapping; the first write to a buffer copies it to the heap.
+- **Rust API: inventory and import types gain fields.**
+  - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo` and `EmbeddingDiagnostic` gain `storage` (`"mapped"` or `"heap"`).
   - `EmbeddingStoreInfo`, `RelationshipEmbeddingStoreInfo`, `EmbeddingInfo` and `EmbeddingDiagnostic` gain `quantization: Option<QuantizationInfo>`.
   - `ImportStats` and `RelationshipCarryStats` gain `installed`, the `(type, column)` of every store the import wrote.
-  - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`.
-- **Cypher node retrieval uses a quantized copy.**
-  - `MATCH (n:T) RETURN … vector_score(n, 'col_emb', $q) AS s ORDER BY s DESC LIMIT k` over a store with a quantized copy and no usable index scans the copy for `k × oversample` candidates and re-scores them against the `f32` vectors; the returned scores are exact, the candidate set is approximate.
-  - Under a `FOR VALID_TIME AS OF` context the same route ranks the valid vectors (`actual_mode: "quantized_mask"`; `db.*_embeddings.query` reports `search_method: "quantized_mask"`).
-  - A built index still serves first, `{exact: true}` bypasses the copy, and the Poincare metric never uses it. A `MATCH … WHERE` that narrows the rows before the ranking scores them exactly.
-  - Result diagnostics report `actual_mode: "quantized"` for the whole-type route.
-- **Relationship search can report `search_method: "quantized"`.** `db.relationship_embeddings.query` and `relationship_vector_search` use a quantized copy when the store has one; without a copy the value stays `hnsw` or `exact`.
 
 ### Added
 
-- **The MCP server says when the code it runs was replaced on disk.**
-  - After `pip install -U kglite` or a rebuilt binary, every successful tool result ends with `stale: kglite-mcp-server 0.20.1 running, 0.20.2 installed`, and `ping` reports the same.
-  - The watched file is the extension module the server was loaded from (wheel) or the executable (cargo binary); the installed version comes from `<package>-*.dist-info` or `--version`.
-- **An agent can load a replaced server build without restarting the MCP client: `ping(reload=true)`.**
-  - After the `stale:` notice, the server checks the new build (`--version`, then the same arguments with the hidden `--reload-preflight`, 5 s each), then re-executes itself in place: same process id, same stdio, no second `initialize`. A request already queued behind the reload is answered by the new build.
-  - The reload is refused, with the reason in the answer, while the active graph has unsaved changes (`save_graph` first, or `reload_graph(discard_unsaved=true)`) or when the new build fails the check. The old build keeps serving.
-  - The graph that `load_graph`, `create_graph` or `save_graph_as` bound is reopened in the new process. The CSV HTTP port is new on every boot, so URLs issued before the reload stop working.
-  - Unix only. The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
-- **Rust API: `ServerExtensions::with_identity(name, version)`** sets the name and version the server reports, so an embedder's notice names its own package.
+- **Embedding stores and large columns are read from the `.kgl` file instead of the heap.**
+  - `kglite.load(path, embeddings=..., columns=..., verify=...)`; `embeddings` and `columns` are `"auto"`, `"mapped"` or `"memory"`, `verify` is `"lazy"` or `"eager"`. `open_session` takes the same options for its read-only form.
+  - `auto` maps a store of 64 MB or more (a column of 256 KB or more) from a regular local file on Unix. `mapped` maps any size. `memory` copies to the heap; columns then spill to a temp file as in v8 loads.
+  - A mapped store costs no resident memory until a search touches its pages, and a second graph loaded from the same file shares them. Searches, HNSW and `get_embedding` read the mapping through the same slices as a heap store.
+  - The first write to a mapped store or column copies it to the heap. Clones, snapshots and transactions that did not write keep the mapping.
+  - Byte buffers (`load_kgl_bytes`), non-regular files, network and FUSE filesystems, Windows (`auto`) and big-endian hosts load to the heap. `KGLITE_MMAP=0` forces the heap everywhere.
+  - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and decode at load. `save(layout="compact")` writes every column compressed in a v8 file.
+  - String columns are CRC-checked and UTF-8-validated at load. Numeric columns are checked by `verify_integrity()` and at save. A corrupt mapped store fails its first search with an error naming it.
+  - Saving over the path a graph is mapped from works: on Unix the old file stays readable until the graph drops it; on Windows the mapped stores are copied to the heap first.
+  - Never overwrite a served `.kgl` in place (`cp`, `rsync --inplace`); a truncated mapping faults. Write a new file and rename it over, as `save()` does.
+  - Surfaces: `--embeddings` and `--columns` on `kglite-mcp-server`, with manifest keys `extensions.embeddings.storage` and `extensions.columns.storage` (schemas under `docs/schemas/extensions/`); `kglite query --embeddings` and `--columns`; `list_embeddings()` and `embedding_diagnostics()` rows gain `storage`.
+- **`g.verify_integrity()` re-checks the mapped sections a graph serves.** It returns `{"ok": bool, "sections": [{"name", "bytes", "mapped", "error"}]}` and reports a source file whose modification time changed since it was mapped. A save refuses to copy a corrupt mapped store into a new file.
+- **`save(path, layout="auto" | "compact")`** chooses the container version; see Breaking.
 - **Embedding stores can carry a smaller scan copy: `f16`, `int8` or `binary`.**
-  - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay the canonical data.
-  - Search scans the copy for `top_k * oversample` candidates, then re-scores them against the `f32` vectors. Returned scores are exact; only the candidate set is approximate, as with HNSW.
-  - `exact=True` bypasses the copy, a built HNSW index still serves first, and the Poincare metric is never served from a copy. Node search and relationship search (including `db.relationship_embeddings.query`) use it; Cypher `vector_score` ordering and `db.node_embeddings.query` do not.
-  - Size added: 50% (`f16`), 25% (`int8`, scales included) or 3% (`binary`) of the store. Default oversample is 4, 4 and 10.
-  - Measured recall@10 on random Gaussian 1024-d vectors (the adversarial case for sign bits): `f16` 1.000; `int8` 0.990 before the exact re-score, 1.000 with it; `binary` 0.137 before, 0.557 with the default pool, 0.960 at oversample 100.
-  - Kernels: `f16` uses F16C on x86-64 (detected at run time) and the compiler's NEON vectorization on aarch64, with a scalar fallback; `int8` is an integer dot product; `binary` is a popcount, POPCNT-dispatched on x86.
-  - The copy follows every write to the store (set, add, delete, rollback, vacuum) without a rebuild, and is saved with the graph: as `qcodes` / `qscales` sections beside a store written to the v9 data region (mapped on load like the vectors), as a metadata record only for small stores and `layout="compact"` (the load re-derives it).
-  - Replacing a store (`set_embeddings`, `embed_texts(mode="all")`, `import_embeddings`) starts without a copy unless the call passes `precision=`.
-  - A durable graph persists the declaration at the next `save()`, not in the write-ahead log. Disk storage mode and `.kgle` export do not carry copies.
+  - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay canonical.
+  - Search scans the copy for `top_k * oversample` candidates, then re-scores them against the `f32` vectors. Returned scores are exact; only the candidate set is approximate, as with HNSW. Default oversample is 4, 4 and 10.
+  - A built HNSW index serves first, `exact=True` (`{exact: true}` in Cypher) bypasses the copy, and the Poincare metric never uses one.
+  - Node and relationship search, Cypher `vector_score` top-k, `db.node_embeddings.query` and `db.relationship_embeddings.query` use the copy. A `MATCH … WHERE` that narrows the rows before ranking scores them exactly.
+  - Size added: 50 % (`f16`), 25 % (`int8`, scales included) or 3 % (`binary`) of the store. Measured recall@10 on random Gaussian 1024-d vectors: `f16` 1.000; `int8` 0.990 before the exact re-score and 1.000 with it; `binary` 0.137 before, 0.557 at the default pool, 0.960 at oversample 100.
+  - The copy follows every write to the store without a rebuild and is saved with the graph: as `qcodes` / `qscales` sections beside a v9 store (mapped on load), or as a declaration the load re-derives (small stores, `layout="compact"`). A durable graph persists it at the next `save()`, not in the write-ahead log.
+  - Replacing a store (`set_embeddings`, `embed_texts(mode="all")`, `import_embeddings`) starts without a copy unless the call passes `precision=`. Disk storage mode and `.kgle` export do not carry copies.
   - `precision=` is a keyword on `set_embeddings`, `set_node_embeddings`, `set_relationship_embeddings`, `embed_texts`, `embed_node_texts`, `embed_relationship_texts` and `import_embeddings`; `list_embeddings()`, `embedding_info()` and `embedding_diagnostics()` report a `quantization` entry.
-  - `quantization_recall(node_type, text_column, sample=100, top_k=10, oversample=None, *, entity="node", seed=0)` replays stored vectors as queries and reports `recall` (before the re-score) and `recall_rescored` (what a search returns).
-  - C ABI: `kglite_session_quantize_embeddings` (additive); `kglite_session_list_embeddings` rows gain a `quantization` key.
-- **Large property columns are served from the `.kgl` file instead of a spill file.**
-  - A default save writes each fixed-width or string column of 256 KB or more raw and aligned into the v9 data region; the file is v9 whenever one exists.
-  - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and still decode, and spill, at load. `save(layout="compact")` writes every column compressed in a v8 file.
-  - `LoadOptions::with_columns(MapPolicy::Auto)` maps those columns read-only from a regular local file on Unix, so no per-process spill file is written and two processes loading one file share the pages. Left unset, `Auto` applies to mapped storage mode and the MCP server; an in-memory graph decodes its columns, because a column scan over mapped pages measured 4-9 % slower than over decoded ones (50k rows, release profile). `Mapped` maps any size; `Memory` decodes and spills as a v8 load does.
-  - String columns are CRC-checked and UTF-8-validated at load, so a corrupt file fails there. Numeric columns are checked by `verify_integrity()` (sections named `col:<type>:<column>:<part>`) and when the graph is saved.
-  - The first write to a column copies that column to the heap; other columns, and graphs forked beforehand, keep the mapping. Saving over the loaded path stays safe.
-  - New surfaces: `kglite.load(..., columns=)` and `open_session(..., columns=)`, `--columns` and `extensions.columns.storage` on the MCP server, `kglite query --columns`, and `KgliteLoadOptions.columns` in the C ABI (an additive field; callers built earlier read it as `0`).
-- **Embedding stores can be served from the `.kgl` file instead of the heap.**
-  - A v9 file loaded with `LoadOptions::with_embeddings(MapPolicy::Auto)` (the default) maps every store of 64 MB or more from a regular local file on Unix; `Mapped` maps any size; `Memory` copies to the heap.
-  - A mapped store costs no resident memory until a search touches its pages, and a second graph loaded from the same file shares them.
-  - Searches, HNSW and `get_embedding` read the mapping through the same slices as a heap store.
-  - The first write to a mapped store copies that store to the heap; clones, snapshots and transactions that did not write keep the mapping.
-  - Byte buffers (`load_kgl_bytes`), non-regular files, network and FUSE filesystems (`Auto`), Windows (`Auto`) and big-endian hosts always load to the heap. `KGLITE_MMAP=0` forces the heap everywhere.
-- **`verify_file(path)` and `verify_graph(&graph)` re-check integrity on demand.**
-  - `verify_file` checks the CRC32 of every compressed and mappable section of a `.kgl` without loading it.
-  - `verify_graph` checks the mapped stores a live graph serves, and that their file still has its length and modification time.
-  - A load verifies a mapped store's CRC32 on its first search (`Verify::Lazy`) or at open (`Verify::Eager`); a corrupt store fails that search with an error naming the store.
-  - A save refuses to copy a corrupt mapped store into a new file.
-- **Saving over the path a graph is mapped from works.** On Unix the old file stays readable until the graph drops it; on Windows the graph's mapped stores are copied to the heap first.
-- **Python: `kglite.load(path, embeddings=..., verify=...)`, `save(layout=...)` and `verify_integrity()`.**
-  - `embeddings` is `"auto"` (default), `"mapped"` or `"memory"`; `verify` is `"lazy"` or `"eager"`. `kglite.open_session` takes both for its read-only form.
-  - `save(path, layout="compact")` writes the v8 container; `layout="auto"` is the default.
-  - `g.verify_integrity()` returns `{"ok": bool, "sections": [{"name", "bytes", "mapped", "error"}]}` for the mapped sections the graph serves.
-  - `list_embeddings()` and `embedding_diagnostics()` rows gain `storage` (`"mapped"` or `"heap"`).
-- **MCP server: `extensions.embeddings.storage` and `--embeddings auto|mapped|memory`.** The flag overrides the manifest; both apply to boot, `load_graph` and reloads. Schema: `docs/schemas/extensions/embeddings.json`.
-- **CLI: `kglite query --embeddings auto|mapped|memory`.**
-- **C ABI: three new symbols.**
-  - `kglite_load_file_with_options` takes a versioned `KgliteLoadOptions` (`embeddings`: 0 default, 1 auto, 2 mapped, 3 memory; `verify`: 0 default, 1 lazy, 2 eager).
+  - `quantization_recall(node_type, text_column, sample=100, top_k=10, oversample=None, *, entity="node", seed=0)` replays stored vectors as queries and reports `recall` (before the re-score) and `recall_rescored` (what a search returns). See the Embedding quantization guide.
+- **The MCP server says when the code it runs was replaced on disk.** After `pip install -U kglite` or a rebuilt binary, every successful tool result ends with `stale: kglite-mcp-server 0.20.1 running, 0.20.2 installed`, and `ping` reports the same.
+- **An agent can load a replaced server build without restarting the MCP client: `ping(reload=true)`.**
+  - The server checks the new build (`--version`, then the same arguments with the hidden `--reload-preflight`, 5 s each), then re-executes itself in place: same process id and stdio, no second `initialize`.
+  - The reload is refused, with the reason, while the active graph has unsaved changes (`save_graph` first, or `reload_graph(discard_unsaved=true)`) or when the new build fails the check. The old build keeps serving.
+  - The graph that `load_graph`, `create_graph` or `save_graph_as` bound is reopened in the new process. The CSV HTTP port is new on every boot, so earlier URLs stop working.
+  - Unix only. The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
+- **C ABI: four additive symbols.**
+  - `kglite_load_file_with_options` takes a versioned `KgliteLoadOptions` (`embeddings`: 0 default, 1 auto, 2 mapped, 3 memory; `verify`: 0 default, 1 lazy, 2 eager; `columns` with the same values as `embeddings`, read as 0 by callers built earlier).
   - `kglite_save_graph_with_layout` adds a `layout` (0 default, 1 compact) to `kglite_save_graph_durable`.
-  - `kglite_graph_verify_integrity` returns the integrity report as JSON. `kglite_session_list_embeddings` rows gain `storage`.
+  - `kglite_graph_verify_integrity` returns the integrity report as JSON.
+  - `kglite_session_quantize_embeddings` builds or drops a copy; `kglite_session_list_embeddings` rows gain `storage` and `quantization`.
   - Existing symbols are unchanged.
-- **Rust API.** `SaveLayout`, `save_graph_with_layout`, `write_kgl_to_layout`, `open_or_create_graph_in_mode_with` (takes `LoadOptions`), `MapPolicy::from_name`, `Verify::from_name`, `VectorBuf`, `verify_file`, `verify_graph`, `IntegrityReport` and `SectionStatus` are public.
 
 ### Changed
 
-- **The MCP server reads stdio through mcp-methods 0.5.0's transport.** The line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner now lives in its own module with unit tests.
-- **Memory is returned to the OS after embedding imports, removals and replacements.**
-  - `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish.
-  - Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).
-- **The first typed-relationship query on a `mapped` graph is as fast as in memory mode.** It builds only per-type peer counts; the adjacency index is built when a per-node lookup needs it. A 250k-node, 1M-edge `MATCH ()-[:T]->() RETURN ... count(*)` first query drops from 60 ms to 24 ms (memory mode: 23 ms).
-- **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied, so the live buffers no longer stack up.
-- **Loading a graph with embeddings reserves each decompressed section once** instead of growing it by doubling.
+- **Loading a v9 graph with embeddings is faster and smaller.** A 205 MB store (50k vectors x 1024, release build, macOS): load 334 to 54 ms, process footprint after load 242 to 44 MB. The first brute-force query after load costs about 13 ms more (15.5 against 2.5 ms), because it faults the pages in and checks the CRC. Warm search matches the heap within 1 %.
+- **The first typed-relationship query on a `mapped` graph is as fast as in memory mode.** It builds only per-type peer counts; the adjacency index is built when a per-node lookup needs it. A 250k-node, 1M-edge `MATCH ()-[:T]->() RETURN ... count(*)` first query drops from 60 to 24 ms (memory mode: 23 ms).
+- **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied. Loading a graph with embeddings reserves each decompressed section once instead of growing it by doubling.
 - **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.
+- **The MCP server reads stdio through mcp-methods 0.5.0's transport.** Line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner lives in its own module with unit tests. `kglite-mcp-server` and `kglite-cli` now require `mcp-methods` 0.5.0.
+
+### Fixed
+
+- **Memory is returned to the OS after embedding imports, removals and replacements.** `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish. Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).
+- **Per-value column aggregates (`sum`, `max` and filters over a property column) are back at the 0.20.1 speed** after the shared-column variant added 3-6 % (about 1 ns per row) to the heap read path. Measured in-memory, 300k rows, release build.
 
 ### Security
 
-- **Dependency updates close RUSTSEC advisories.**
-  - `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382.
-  - `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381.
+- **Dependency updates close RUSTSEC advisories.** `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382. `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381. RUSTSEC-2026-0381 remains open for `webpki-roots` 0.26.11, pulled in through `ureq` 2 by mcp-methods 0.5.0.
+
+### Rust API
+
+- `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.
+- `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`; `Precision`, `QuantStore` and `QuantizationInfo` are public.
+- `SaveLayout`, `save_graph_with_layout`, `write_kgl_to_layout`, `open_or_create_graph_in_mode_with` (takes `LoadOptions`), `MapPolicy::from_name`, `Verify::from_name`, `VectorBuf`, `verify_file`, `verify_graph`, `IntegrityReport` and `SectionStatus` are public.
 
 ## [0.20.1] - 2026-10-19
 

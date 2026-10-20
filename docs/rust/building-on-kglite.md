@@ -49,7 +49,7 @@ stability posture; kglite's CI locks against accidental drift on all of them.
 | Seam | What it is | Stability |
 |---|---|---|
 | **Engine facade** — `kglite::api::*` | The curated Rust surface: `DirGraph`, `Value`, `session::*`, `io::{save_graph, load_file}`, error types, `code_entities`. | Exact-baseline-locked in CI (cargo-public-api, pinned nightly). Additive within a minor line; deliberate breaks ship on a MINOR bump with a migration guide. See the [API reference](api-reference.md). |
-| **MCP server library** — `kglite-mcp-server` | `run`, `run_with_embedder_factory`, `run_with_extensions`, `WorkspaceGraphHooks`, `WorkspaceGraphRequest`, `WorkspaceGraphResult`, `WorkspaceGraphRelevance`, `ServerExtensions` (`with_workspace_graph`, `with_domain_tools`, `with_skills`, `with_recipes`, `read_only`), `DomainToolRegistry`, `DomainGraphState`, `DomainGraphContext`, and the re-exported `SkillRecord` / `Delivery` / `RecipeCatalog`. The seams a producer/domain MCP server builds on. | Public-API baseline + hook/registrar-semantics unit tests. Same MINOR-break posture as the engine facade. |
+| **MCP server library** — `kglite-mcp-server` | `run`, `run_with_embedder_factory`, `run_with_extensions`, `WorkspaceGraphHooks`, `WorkspaceGraphRequest`, `WorkspaceGraphResult`, `WorkspaceGraphRelevance`, `ServerExtensions` (`with_workspace_graph`, `with_domain_tools`, `with_skills`, `with_recipes`, `with_identity`, `read_only`), `DomainToolRegistry`, `DomainGraphState`, `DomainGraphContext`, and the re-exported `SkillRecord` / `Delivery` / `RecipeCatalog`. The seams a producer/domain MCP server builds on. | Public-API baseline + hook/registrar-semantics unit tests. Same MINOR-break posture as the engine facade. |
 | **`.kgl` file format** | The persisted graph format that handoff and all persistence use. | Writes RGF v8/Postcard; reads v8, v7, v6 and v5. v4/bincode and older containers are refused with a clear 0.13.4 conversion or rebuild message. A v8 file cannot be read by kglite 0.19.x or earlier. |
 | **Python top-level** — `kglite.*` | `kglite.load`, `kglite.from_blueprint`, `kglite.from_records`, `KnowledgeGraph` methods. The P3 entry points and the P1 handoff target. | Contract-tested + stubtest against `kglite/__init__.pyi`. |
 | **C ABI** — `include/kglite.h` | The `extern "C"` surface for non-Rust bindings. | cbindgen header-drift check in CI; see the [C ABI guide](c-abi.md). |
@@ -216,6 +216,19 @@ default, mutations stay sequential, and `KGLITE_QUERY_THREADS` sets the pool
 width. It is applied at the one read seam every route funnels through. Built-in
 `cypher_query`, manifest `tools[].cypher` templates, recipe routes, and a domain
 tool's `run_cypher` all inherit it without wiring of their own.
+
+### Naming your package in the stale-build notice
+
+The MCP server compares the running build with the installed one and prints `stale: <name> <running> running, <installed> installed`. By default the notice names `kglite-mcp-server`. An embedder sets its own identity:
+
+```rust
+let extensions = ServerExtensions::new()
+    .with_identity("codingest", env!("CARGO_PKG_VERSION"));
+```
+
+- `name` is the package the user installs; it selects the `<name>-*.dist-info` the wheel check reads.
+- `version` is the running version the notice and `--version` probe compare against.
+- A binary that does not call it reports kglite's own version.
 
 ### Pinning the server read-only
 

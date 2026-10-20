@@ -74,7 +74,7 @@ The server speaks MCP over stdio. Its core tools are:
     - the total rows the context hid with the heaviest targets;
     - the relationships hidden only through an invalid endpoint (`endpoint_invalid`).
   - An agent that needs history sends `FOR VALID_TIME ALL` or `valid_at: "all"`.
-- `ping(message?)` — liveness probe. It echoes the message or returns `pong`.
+- `ping(message?, reload?)` — liveness probe. It echoes the message or returns `pong`. `reload=true` loads a replaced server build in place ([Stale builds and in-place reload](#stale-builds-and-in-place-reload)).
 
 For semantic search (`text_score()` inside Cypher) or source-file access tools, drop a manifest. See step 4 below or the [Customising with a manifest](#customising-with-a-manifest) section.
 
@@ -886,6 +886,47 @@ ORDER BY score DESC LIMIT 10
 
 The full schema is in the [`extensions:` schema reference](#extensions-schema-reference) below. A worked example is at {doc}`../examples/manifest_with_embedder`. The embedder protocol itself is in [Semantic Search](semantic-search.md).
 
+### Stale builds and in-place reload
+
+The server tells the agent when the code it runs was replaced on disk, and can load the new build without a client restart.
+
+**The notice.** After `pip install -U kglite` or a rebuilt binary, every successful tool result ends with a line such as `stale: kglite-mcp-server 0.20.1 running, 0.20.2 installed`. `ping` reports the same.
+
+- The watched file is the extension module the server loaded from (wheel) or the executable (cargo binary).
+- The installed version comes from `<package>-*.dist-info` or from `--version`.
+- A binary that embeds the server names its own package when its `main` calls `ServerExtensions::with_identity(name, version)` ({doc}`/rust/building-on-kglite`).
+
+**The reload.** `ping(reload=true)` re-executes the server in place: same process id, same stdio, no second `initialize`. A request already queued behind the reload is answered by the new build. Unix only.
+
+Before it re-executes, the server checks the new build:
+
+1. `--version`, 5 s limit.
+2. The same arguments plus the hidden `--reload-preflight`, 5 s limit. It runs the side-effect-free prefix of the boot (arguments, manifest, graph path) and exits with the verdict.
+
+The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
+
+**What carries across a reload**
+
+- The MCP session and its retained responses (`expand_response` still resolves earlier handles).
+- Loaded skills.
+- The workspace root.
+- The graph that `load_graph`, `create_graph` or `save_graph_as` bound, which the new process reopens instead of the boot graph.
+
+**What does not carry**
+
+- CSV export URLs. The HTTP port is new on every boot, so earlier URLs stop working.
+- The name and version the client recorded at `initialize`; they describe the old build until the client reconnects.
+- The vault build report, which a restart rebuilds.
+
+**Refusals.** The old build keeps serving and the answer names the reason:
+
+| Cause | Do |
+|---|---|
+| The active graph has unsaved changes | `save_graph`, or `reload_graph(discard_unsaved=true)`, then retry |
+| `--version` or `--reload-preflight` fails or times out | Fix the installed build (for example a missing dependency or an unreadable manifest) |
+
+**Memory options.** A reload applies the same `--embeddings` and `--columns` (or `extensions.embeddings.storage` and `extensions.columns.storage`) as the boot. See {doc}`storage-and-memory` for what they do.
+
 ### Security
 
 - **Read-only mode** rejects mutations at the Cypher level, and is the default.
@@ -1072,7 +1113,7 @@ This table shows which tool registers, under what conditions. `tools/list` only 
 |---|---|---|
 | `cypher_query` | always | Returns inline rows or CSV URL — see "Tool response formats". Accepts mutations only on a write-enabled server (`--writable` or `extensions.writable: true`); otherwise they are refused naming both spellings. |
 | `graph_overview` | always | Always available even with no graph: returns the no-graph message. |
-| `ping` | always | Liveness probe. |
+| `ping` | always | Liveness probe; `reload=true` re-executes a replaced build (Unix). |
 | `read_code_source` | always | Requires an active graph at call time (returns the no-graph message otherwise). |
 | `save_graph` | `--graph` mode AND (`builtins.save_graph: true` OR write-enabled) | Other modes have no single graph to save back to. `builtins.save_graph: true` alone registers just this tool — it does not make `cypher_query` writable. A save with nothing unsaved is a no-op unless `force=true`, and `force` itself needs the write opt-in. |
 | `load_graph` / `create_graph` / `save_graph_as` | write-enabled: `--writable` OR `extensions.writable: true` | The graph-lifecycle tools. `builtins.save_graph: true` does not register them. |

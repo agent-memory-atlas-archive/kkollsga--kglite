@@ -113,6 +113,8 @@ That explains three things:
   deserializing into a memory backend and then swapping it onto the mapped one, so
   reopening a mapped graph costs what reopening a memory graph costs.
 
+Large columns and embedding stores can also be read straight from the `.kgl` file in any mode; see {doc}`guides/storage-and-memory`.
+
 Reach for it when the *properties* are what stopped fitting. It does not shrink the
 topology, and it will not save a graph whose nodes and edges are the problem.
 
