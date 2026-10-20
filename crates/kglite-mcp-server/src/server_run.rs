@@ -1163,6 +1163,45 @@ fn skills_catalog_summary(
     hint.map(|hint| hint.summary)
 }
 
+/// Register the tools only one serving mode has: `reload_graph` (graph mode),
+/// `rebuild_graph` (vault mode) and the post-activation skill refresh
+/// (workspace modes).
+fn register_mode_tools(
+    server: &mut McpServer,
+    mode: &Mode,
+    graph_state: &GraphState,
+    refresher: &crate::skills::SkillRefresher,
+    vault_report: Option<&crate::vault::VaultReportSlot>,
+) {
+    if matches!(mode, Mode::Graph { .. }) {
+        // `reload_graph` is graph-mode-only: it re-reads *the* served file, an
+        // identity no other mode has. Registered from here rather than inside
+        // `tools::register`, because the mode is not otherwise visible there.
+        tools::register_graph_mode_tools(server, graph_state.clone(), refresher.clone());
+    }
+    if let Mode::Vault { dir } = &mode {
+        // `rebuild_graph` is the producer-backed counterpart of
+        // `reload_graph`: registered where a directory, not a file, is the
+        // source of truth. Vault mode only — `--watch`'s producer is an
+        // injected one whose report this binary cannot render.
+        tools::register_vault_mode_tools(
+            server,
+            graph_state.clone(),
+            refresher.clone(),
+            dir.canonicalize().unwrap_or_else(|_| dir.clone()),
+            vault_report.cloned().unwrap_or_default(),
+        );
+    }
+    if matches!(mode, Mode::Workspace { .. } | Mode::LocalWorkspace { .. }) {
+        // The workspace counterpart of `reload_graph`'s refresh: the graph a
+        // predicate resolves against does not exist until a root is
+        // activated, and the framework owns those two tool handlers. Before
+        // `register_extension_tools`, whose tail settles the final route
+        // names.
+        tools::refresh_skills_after_activation(server, refresher.clone());
+    }
+}
+
 pub(crate) async fn run_async(
     cli: Cli,
     py_embedder_factory: Option<PyEmbedderFactory>,
@@ -1260,33 +1299,13 @@ pub(crate) async fn run_async(
             skill_refresher: skill_refresher.clone(),
         },
     )?;
-    if matches!(mode, Mode::Graph { .. }) {
-        // `reload_graph` is graph-mode-only: it re-reads *the* served file, an
-        // identity no other mode has. Registered from here rather than inside
-        // `tools::register`, because the mode is not otherwise visible there.
-        tools::register_graph_mode_tools(&mut server, graph_state.clone(), skill_refresher.clone());
-    }
-    if let Mode::Vault { dir } = &mode {
-        // `rebuild_graph` is the producer-backed counterpart of
-        // `reload_graph`: registered where a directory, not a file, is the
-        // source of truth. Vault mode only — `--watch`'s producer is an
-        // injected one whose report this binary cannot render.
-        tools::register_vault_mode_tools(
-            &mut server,
-            graph_state.clone(),
-            skill_refresher.clone(),
-            dir.canonicalize().unwrap_or_else(|_| dir.clone()),
-            vault_report.clone().unwrap_or_default(),
-        );
-    }
-    if matches!(mode, Mode::Workspace { .. } | Mode::LocalWorkspace { .. }) {
-        // The workspace counterpart of `reload_graph`'s refresh: the graph a
-        // predicate resolves against does not exist until a root is
-        // activated, and the framework owns those two tool handlers. Before
-        // `register_extension_tools`, whose tail settles the final route
-        // names.
-        tools::refresh_skills_after_activation(&mut server, skill_refresher.clone());
-    }
+    register_mode_tools(
+        &mut server,
+        &mode,
+        &graph_state,
+        &skill_refresher,
+        vault_report.as_ref(),
+    );
     if gate_code_tools {
         disable_code_tools(&mut server);
     }
