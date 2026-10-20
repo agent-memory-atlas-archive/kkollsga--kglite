@@ -2116,6 +2116,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "kglite",
+ "libc",
  "mcp-methods",
  "regex",
  "rmcp",

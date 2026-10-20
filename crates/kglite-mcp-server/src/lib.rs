@@ -50,6 +50,7 @@ mod output_schema;
 mod query_recover;
 mod raw_query_routes;
 mod recipe_queries;
+mod self_update;
 mod selftest;
 mod server_run;
 mod skills;

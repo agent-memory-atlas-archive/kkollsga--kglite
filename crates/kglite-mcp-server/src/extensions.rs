@@ -194,6 +194,7 @@ pub struct ServerExtensions {
     pub(crate) read_only: bool,
     pub(crate) producer_skills: Vec<SkillRecord>,
     pub(crate) producer_recipes: Option<RecipeCatalog>,
+    pub(crate) identity: crate::self_update::Identity,
 }
 
 impl ServerExtensions {
@@ -297,6 +298,24 @@ impl ServerExtensions {
     /// Repeated calls replace; merge before calling if you have two sources.
     pub fn with_recipes(mut self, catalog: RecipeCatalog) -> Self {
         self.producer_recipes = Some(catalog);
+        self
+    }
+
+    /// Name and version this server reports as its own: the stale-build
+    /// notice, `ping` and `serverInfo.version` (default: `kglite-mcp-server`
+    /// and this crate's version).
+    ///
+    /// An embedder that ships under its own package sets its own, so an agent
+    /// is told "codingest 0.2.31 running, 0.2.32 installed" and not a number
+    /// from the library underneath. The installed version is read from the
+    /// package that holds the loaded code (`<package>-*.dist-info` for a wheel,
+    /// `--version` of a binary), so `version` must be what that package
+    /// reports.
+    pub fn with_identity(mut self, name: impl Into<String>, version: impl Into<String>) -> Self {
+        self.identity = crate::self_update::Identity {
+            name: name.into(),
+            version: version.into(),
+        };
         self
     }
 

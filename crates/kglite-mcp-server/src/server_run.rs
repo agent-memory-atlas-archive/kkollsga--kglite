@@ -1109,6 +1109,7 @@ pub(crate) async fn run_async(
         read_only: read_only_pin,
         producer_skills,
         producer_recipes,
+        identity,
     } = extensions;
     let shared_embedder_factory = crate::embedder::share_factory(py_embedder_factory);
     let BootedGraph {
@@ -1150,6 +1151,10 @@ pub(crate) async fn run_async(
         write_scope,
     );
 
+    let options = match crate::self_update::build_self_check(&identity) {
+        Some(check) => options.with_self_check(check),
+        None => options,
+    };
     let mut server = apply_response_preview(McpServer::new(options));
     // `repo_management` needs no gate here since mcp-methods 0.4.7:
     // `McpServer::new` registers it only for `kind: github` workspaces, so

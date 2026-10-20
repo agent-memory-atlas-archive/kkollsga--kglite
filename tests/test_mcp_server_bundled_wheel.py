@@ -499,3 +499,50 @@ def test_python_embedder_lazy_torch_import_survives_repeat_calls(tmp_path: Path)
     finally:
         client.shutdown()
     assert client.proc.returncode == 0, f"server exited {client.proc.returncode}"
+
+
+def test_replaced_wheel_extension_adds_a_stale_notice_with_the_dist_info_version(tmp_path: Path) -> None:
+    """A copy of the installed package is served from a throwaway site
+    directory; replacing its extension by rename (what pip does) puts the
+    `<package>-*.dist-info` version into the notice on the next tool call."""
+    import shutil
+
+    package = Path(kglite.__file__).parent
+    extension = next(package.glob("kglite*.so"), None) or next(package.glob("kglite*.pyd"), None)
+    if extension is None:
+        pytest.skip("no extension module beside the package")
+    site = tmp_path / "site"
+    shutil.copytree(package, site / "kglite", ignore=shutil.ignore_patterns("__pycache__", "_bin"))
+    (site / "kglite-0.0.1.dist-info").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.txt").write_text("hello", encoding="utf-8")
+    manifest = work / "manifest.yaml"
+    manifest.write_text("name: Stale\nworkspace:\n  kind: local\n  root: .\n  sandbox_root: .\n", encoding="utf-8")
+
+    env = {**os.environ, "PYTHONPATH": str(site)}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "kglite.mcp_server", "--mcp-config", str(manifest)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(work),
+        env=env,
+    )
+    client = McpClient(proc)
+    client.initialize()
+    try:
+        before = _text_content(client.call_tool("list_source", {"path": "."}))
+        assert "a.txt" in before and "stale:" not in before
+
+        served = site / "kglite" / extension.name
+        staged = served.with_name(served.name + ".new")
+        shutil.copy2(extension, staged)
+        os.replace(staged, served)
+        (site / "kglite-0.0.1.dist-info").rename(site / "kglite-99.1.0.dist-info")
+
+        after = _text_content(client.call_tool("list_source", {"path": "."}))
+    finally:
+        client.shutdown()
+    assert "stale: kglite-mcp-server" in after, after
+    assert "99.1.0 installed" in after, after

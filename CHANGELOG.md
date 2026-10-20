@@ -38,6 +38,10 @@ before upgrading.
 
 ### Added
 
+- **The MCP server says when the code it runs was replaced on disk.**
+  - After `pip install -U kglite` or a rebuilt binary, every successful tool result ends with `stale: kglite-mcp-server 0.20.1 running, 0.20.2 installed`, and `ping` reports the same.
+  - The watched file is the extension module the server was loaded from (wheel) or the executable (cargo binary); the installed version comes from `<package>-*.dist-info` or `--version`.
+- **Rust API: `ServerExtensions::with_identity(name, version)`** sets the name and version the server reports, so an embedder's notice names its own package.
 - **Embedding stores can carry a smaller scan copy: `f16`, `int8` or `binary`.**
   - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay the canonical data.
   - Search scans the copy for `top_k * oversample` candidates, then re-scores them against the `f32` vectors. Returned scores are exact; only the candidate set is approximate, as with HNSW.
