@@ -41,6 +41,9 @@ pub struct QueryOptions {
     /// Where a v9 `.kgl`'s embedding stores live (`--embeddings`); `None`
     /// leaves the engine's default (`auto`).
     pub embeddings: Option<kglite::api::io::MapPolicy>,
+    /// Where a v9 `.kgl`'s property columns live (`--columns`); `None` leaves
+    /// the engine's default (`auto`).
+    pub columns: Option<kglite::api::io::MapPolicy>,
 }
 
 /// `graph` with the operator's valid-time default set. The graph is the

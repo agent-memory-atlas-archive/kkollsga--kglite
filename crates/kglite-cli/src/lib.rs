@@ -159,6 +159,15 @@ enum Command {
               value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
                   .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
         embeddings: Option<kglite::api::io::MapPolicy>,
+        /// Where a v9 `.kgl`'s property columns live: `auto` (read a column
+        /// of 256 KB or more in place from a regular local file), `mapped`
+        /// (read every column in place) or `memory` (decode every column to
+        /// the heap, spilling large ones to a temp file). A v8 or older file
+        /// ignores it.
+        #[arg(long, value_name = "auto|mapped|memory",
+              value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
+                  .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
+        columns: Option<kglite::api::io::MapPolicy>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -522,6 +531,7 @@ fn dispatch(command: &Command) -> Result<()> {
             parallel,
             valid_time_default,
             embeddings,
+            columns,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -534,6 +544,7 @@ fn dispatch(command: &Command) -> Result<()> {
                 timeout_ms: *timeout_ms,
                 valid_time_default: *valid_time_default,
                 embeddings: *embeddings,
+                columns: *columns,
                 ..QueryOptions::default()
             },
             agent_response::AgentOptions {
@@ -744,18 +755,23 @@ fn fresh_graph() -> Result<DirGraph> {
 }
 
 fn load_graph(path: &Path) -> Result<Arc<DirGraph>> {
-    load_graph_placed(path, None)
+    load_graph_placed(path, None, None)
 }
 
-/// [`load_graph`] with the operator's embedding placement (`--embeddings`).
+/// [`load_graph`] with the operator's placement of embeddings (`--embeddings`)
+/// and property columns (`--columns`).
 fn load_graph_placed(
     path: &Path,
     embeddings: Option<kglite::api::io::MapPolicy>,
+    columns: Option<kglite::api::io::MapPolicy>,
 ) -> Result<Arc<DirGraph>> {
     let p = path.to_string_lossy().to_string();
     let mut options = kglite::api::io::LoadOptions::new();
     if let Some(policy) = embeddings {
         options = options.with_embeddings(policy);
+    }
+    if let Some(policy) = columns {
+        options = options.with_columns(policy);
     }
     kglite::api::io::load_file_with(&p, &options).with_context(|| format!("failed to open {p}"))
 }
@@ -780,7 +796,7 @@ fn run_export_sqlite(graph_path: &Path, output: Option<&Path>) -> Result<()> {
 
 fn run_query(path: &Path, query: &str, mode: Mode, options: QueryOptions) -> Result<()> {
     let graph = exec::with_valid_time_default(
-        load_graph_placed(path, options.embeddings)?,
+        load_graph_placed(path, options.embeddings, options.columns)?,
         options.valid_time_default,
     );
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
@@ -809,7 +825,7 @@ fn run_agent_query(
         kglite::api::cypher::QueryWarningSink::Silent,
         || {
             let graph = exec::with_valid_time_default(
-                load_graph_placed(path, options.embeddings)?,
+                load_graph_placed(path, options.embeddings, options.columns)?,
                 options.valid_time_default,
             );
             let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)

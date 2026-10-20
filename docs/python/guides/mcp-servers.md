@@ -1125,6 +1125,7 @@ Machine-readable JSON Schema (Draft 2020-12) for each first-class block lives un
 - [`csv_http_server.json`][schema-csv]
 - [`cypher_recipes.json`][schema-cypher-recipes]
 - [`embedder.json`][schema-embedder]
+- [`columns.json`][schema-columns]
 - [`embeddings.json`][schema-embeddings]
 - [`recipe_catalog.json`][schema-recipe-catalog]
 - [`recipe_tools.json`][schema-recipe-tools]
@@ -1137,6 +1138,7 @@ The schemas are anchored to the Python parsers by the regression test `tests/tes
 [schema-csv]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/csv_http_server.json
 [schema-cypher-recipes]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/cypher_recipes.json
 [schema-embedder]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embedder.json
+[schema-columns]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/columns.json
 [schema-embeddings]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embeddings.json
 [schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
 [schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
@@ -1339,6 +1341,25 @@ This key decides where the embedding stores of a v9 `.kgl` file live. A graph sa
 - The setting is runtime only. Every `.kgl` the server opens takes it: boot, `load_graph`, and reloads after a file change. A v8 or older file ignores it.
 - A mapped store costs no resident memory until a search touches it, and the first write to a store copies that store to the heap.
 - Do not overwrite the served file in place (`cp`, `rsync --inplace`): a truncated mapping faults. Write a new file beside it and rename it over, as `save_graph` does.
+- A malformed value, or a key other than `storage`, fails the boot.
+
+#### `extensions.columns`
+
+```yaml
+extensions:
+  columns:
+    storage: auto   # 'auto' (default), 'mapped' or 'memory'
+```
+
+This key decides where the property columns of a v9 `.kgl` file live. A graph saved with a column of 256 KB or more is a v9 file, whose column bytes sit uncompressed in the file.
+
+- `auto` reads a column of 256 KB or more in place from a regular local file on Unix, with no spill file. Byte buffers, network and FUSE filesystems, and Windows decode it.
+- `mapped` reads every column in place, whatever its size.
+- `memory` decodes every column, spilling those of 256 KB or more to a temp file, as v8 files do.
+- `--columns {auto|mapped|memory}` overrides the manifest.
+- The setting is runtime only. Every `.kgl` the server opens takes it, including reloads. A v8 or older file ignores it.
+- The first write to a column copies that column to the heap; other columns stay mapped.
+- Write a new file beside the served one and rename it over; overwriting it in place truncates a live mapping.
 - A malformed value, or a key other than `storage`, fails the boot.
 
 #### `extensions.<other>` (passthrough)

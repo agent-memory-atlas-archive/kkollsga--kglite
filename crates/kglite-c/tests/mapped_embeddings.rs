@@ -124,6 +124,7 @@ fn options(embeddings: u32, verify: u32) -> KgliteLoadOptions {
         struct_size: std::mem::size_of::<KgliteLoadOptions>(),
         embeddings,
         verify,
+        columns: 0,
     }
 }
 
@@ -221,6 +222,94 @@ fn save_layout_compact_writes_v8_and_other_values_are_refused() {
             kglite_save_graph_with_layout(graph, refused.as_ptr(), 0, 7, std::ptr::null_mut())
         },
         KgliteStatusCode::InvalidArgument
+    );
+    unsafe { kglite_graph_free(graph) };
+}
+
+/// A `.kgl` whose `Doc.score` / `Doc.ratio` columns are over the 256 KB floor
+/// and do not delta-compress, so a default save writes them to the data region.
+fn column_file(dir: &std::path::Path) -> PathBuf {
+    let graph = kglite_graph_new();
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { kglite_session_new(graph, &mut session) },
+        KgliteStatusCode::Ok
+    );
+    let query = c(
+        "UNWIND range(1, 40000) AS i CREATE (:Doc {id: i, score: (i * 7919) % 40009 * 104729, \
+         ratio: i / 7.0})",
+    );
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            kglite_session_execute_mut(
+                session,
+                query.as_ptr(),
+                std::ptr::null(),
+                &mut result,
+                std::ptr::null_mut(),
+            )
+        },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_cypher_result_free(result) };
+    let path = dir.join("columns.kgl");
+    let path_c = c(path.to_str().unwrap());
+    assert_eq!(
+        unsafe { kglite_session_save(session, path_c.as_ptr(), 0, std::ptr::null_mut()) },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_session_free(session) };
+    path
+}
+
+fn column_sections(graph: *mut KgliteGraph) -> usize {
+    report(graph)["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["name"].as_str().unwrap().starts_with("col:"))
+        .count()
+}
+
+#[test]
+fn the_columns_option_chooses_where_property_columns_live() {
+    let dir = scratch("columns");
+    let path = column_file(&dir);
+    assert_eq!(magic(&path), b"RGF\x09");
+
+    let expected_default = usize::from(cfg!(unix));
+    let (rc, graph, _) = load(&path, None);
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert_eq!(column_sections(graph) > 0, expected_default == 1);
+    unsafe { kglite_graph_free(graph) };
+
+    for (columns, mapped) in [(2u32, true), (3, false)] {
+        let mut opts = options(0, 0);
+        opts.columns = columns;
+        let (rc, graph, _) = load(&path, Some(&opts));
+        assert_eq!(rc, KgliteStatusCode::Ok);
+        assert_eq!(column_sections(graph) > 0, mapped, "columns={columns}");
+        unsafe { kglite_graph_free(graph) };
+    }
+
+    let mut bad = options(0, 0);
+    bad.columns = 9;
+    let (rc, graph, message) = load(&path, Some(&bad));
+    assert_eq!(rc, KgliteStatusCode::InvalidArgument);
+    assert!(graph.is_null());
+    assert!(message.contains("columns"), "{message}");
+
+    // A caller built before `columns` existed declares the shorter struct.
+    let mut old = options(3, 0);
+    old.columns = 2;
+    old.struct_size = 8 + 2 * std::mem::size_of::<u32>();
+    let (rc, graph, _) = load(&path, Some(&old));
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert_eq!(
+        column_sections(graph) > 0,
+        expected_default == 1,
+        "columns reads as default"
     );
     unsafe { kglite_graph_free(graph) };
 }

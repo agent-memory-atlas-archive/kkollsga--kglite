@@ -110,6 +110,10 @@ pub struct GraphState {
     /// are mapped from the file or copied to the heap. `None` leaves the
     /// engine's default (`auto`). Applied to every `.kgl` this state opens.
     pub(crate) embeddings_policy: Option<MapPolicy>,
+    /// The operator's property-column placement (`--columns` /
+    /// `extensions.columns.storage`), on the same terms as
+    /// [`Self::embeddings_policy`].
+    pub(crate) columns_policy: Option<MapPolicy>,
     /// External workspace-graph lifecycle extension. Set once at boot and
     /// carried by every clone so lazy watch rebuilds use the same producer.
     pub(crate) workspace_graph_hooks: Option<Arc<WorkspaceGraphHooks>>,
@@ -205,6 +209,13 @@ impl GraphState {
     /// once at boot like [`Self::with_value_codecs`].
     pub fn with_embeddings_policy(mut self, policy: Option<MapPolicy>) -> Self {
         self.embeddings_policy = policy;
+        self
+    }
+
+    /// The property-column placement every opened `.kgl` takes. Builder form,
+    /// set once at boot like [`Self::with_embeddings_policy`].
+    pub fn with_columns_policy(mut self, policy: Option<MapPolicy>) -> Self {
+        self.columns_policy = policy;
         self
     }
 
@@ -445,6 +456,9 @@ impl GraphState {
         let mut load_options = LoadOptions::new();
         if let Some(policy) = self.embeddings_policy {
             load_options = load_options.with_embeddings(policy);
+        }
+        if let Some(policy) = self.columns_policy {
+            load_options = load_options.with_columns(policy);
         }
         let opened = open_or_create_graph_in_mode_with(
             path,

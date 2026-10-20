@@ -285,11 +285,15 @@
       "classification": "boundary"
     },
     {
+      "identity": "crates/kglite-py/src/lib.rs::fn:load:fn load( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, verify: Option<&str>, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
+      "classification": "boundary"
+    },
+    {
       "identity": "crates/kglite-py/src/lib.rs::fn:load_rdf:fn load_rdf( py: Python<'_>, path: String, languages: Option<Vec<String>>, label_predicates: Option<Vec<String>>, keep_full_iris: bool, default_type: Option<String>, max_triples: Option<u64>, language_maps: bool, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/lib.rs::fn:open_session:fn open_session( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, verify: Option<&str>, durable: Option<Bound<'_, PyAny>>, auto_checkpoint_wal_mib: Option<u64>, ) -> PyResult<Session>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/lib.rs::fn:open_session:fn open_session( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, verify: Option<&str>, durable: Option<Bound<'_, PyAny>>, auto_checkpoint_wal_mib: Option<u64>, ) -> PyResult<Session>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

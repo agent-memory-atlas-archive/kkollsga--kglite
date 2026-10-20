@@ -360,6 +360,14 @@ typedef struct KgliteLoadOptions {
    * first search), `2` eager (every mapped section is checked at load).
    */
   uint32_t verify;
+  /**
+   * Where a v9 file's property columns live, with the values of
+   * `embeddings`: `0` default (`auto`), `1` auto (map a column of 256 KB or
+   * more from a regular local file), `2` mapped, `3` memory (decode to the
+   * heap, spilling large columns to a temp file). A caller built before
+   * this field existed reads as `0`.
+   */
+  uint32_t columns;
 } KgliteLoadOptions;
 
 /**
@@ -1133,8 +1141,8 @@ KgliteStatusCode kglite_load_file(const char *path,
                                   const char **out_error_msg);
 
 /**
- * [`kglite_load_file`] with load options: where the embedding stores of a v9
- * file live, and when their CRC32 is checked.
+ * [`kglite_load_file`] with load options: where the embedding stores and property
+ * columns of a v9 file live, and when their CRC32 is checked.
  *
  * Identical to `kglite_load_file` (same outputs, errors and safety contract)
  * plus `options`: null means every default, which is exactly `kglite_load_file`.

@@ -369,6 +369,12 @@ pub struct KgliteLoadOptions {
     /// `KGLITE_VERIFY=eager`), `1` lazy (a mapped store is checked on its
     /// first search), `2` eager (every mapped section is checked at load).
     pub verify: u32,
+    /// Where a v9 file's property columns live, with the values of
+    /// `embeddings`: `0` default (`auto`), `1` auto (map a column of 256 KB or
+    /// more from a regular local file), `2` mapped, `3` memory (decode to the
+    /// heap, spilling large columns to a temp file). A caller built before
+    /// this field existed reads as `0`.
+    pub columns: u32,
 }
 
 fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, String> {
@@ -404,11 +410,18 @@ fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, S
         2 => load = load.with_verify(Verify::Eager),
         other => return Err(format!("KgliteLoadOptions.verify {other} is not 0..=2")),
     }
+    match local.columns {
+        0 => {}
+        1 => load = load.with_columns(MapPolicy::Auto),
+        2 => load = load.with_columns(MapPolicy::Mapped),
+        3 => load = load.with_columns(MapPolicy::Memory),
+        other => return Err(format!("KgliteLoadOptions.columns {other} is not 0..=3")),
+    }
     Ok(load)
 }
 
-/// [`kglite_load_file`] with load options: where the embedding stores of a v9
-/// file live, and when their CRC32 is checked.
+/// [`kglite_load_file`] with load options: where the embedding stores and property
+/// columns of a v9 file live, and when their CRC32 is checked.
 ///
 /// Identical to `kglite_load_file` (same outputs, errors and safety contract)
 /// plus `options`: null means every default, which is exactly `kglite_load_file`.

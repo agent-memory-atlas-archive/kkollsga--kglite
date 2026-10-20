@@ -139,10 +139,8 @@ fn every_placement_serves_the_same_answers() {
     let auto = load_columns(&path, MapPolicy::Auto);
     let memory = load_columns(&path, MapPolicy::Memory);
     assert!(shared_count(&mapped, "Big") > 0);
-    assert!(
-        shared_count(&auto, "Big") > 0,
-        "Auto maps a v9 column of 256 KB"
-    );
+    // `Auto` never maps on Windows, where a mapping blocks the save rename.
+    assert_eq!(shared_count(&auto, "Big") > 0, cfg!(unix));
     assert_eq!(shared_count(&memory, "Big"), 0);
     assert_eq!(shared_count(&mapped, "Small"), 0);
     for graph in [&mapped, &auto, &memory] {
@@ -278,10 +276,8 @@ fn a_mapped_graph_saves_to_a_v9_file_and_over_its_own_path() {
 
     save_graph_with_layout(&mut loaded, path.to_str().unwrap(), true, SaveLayout::Auto).unwrap();
     assert_eq!(magic(&path), V9_MAGIC);
-    assert!(
-        shared_count(&loaded, "Big") > 0,
-        "the live graph keeps its old inode"
-    );
+    // Windows promotes before the rename; elsewhere the old inode stays mapped.
+    assert_eq!(shared_count(&loaded, "Big") > 0, cfg!(unix));
     assert_eq!(rows(&loaded, PROBE), expected);
 
     let reloaded = load_columns(&path, MapPolicy::Mapped);

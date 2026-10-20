@@ -892,6 +892,7 @@ def load(
     defer_index_rebuild: bool | None = None,
     max_load_mb: int | None = None,
     embeddings: Literal["auto", "mapped", "memory"] | None = None,
+    columns: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
 ) -> KnowledgeGraph:
     """Load a graph from a binary file previously saved with ``save()``.
@@ -922,6 +923,13 @@ def load(
             network or FUSE filesystem (``"auto"``), Windows (``"auto"``) and
             ``KGLITE_MMAP=0`` always give the heap. A v8 or older file has
             nothing to map and ignores it. See "Mapped embeddings" below.
+        columns: Where a v9 file's property columns live: ``"auto"``
+            (default) serves a column of 256 KB or more from the file mapping
+            (a regular local file, Unix); ``"mapped"`` maps any size;
+            ``"memory"`` decodes every column to the heap, spilling those of
+            256 KB or more to a temp file as a v8 file's load does. The
+            fallbacks of ``embeddings`` apply. A v8 or older file ignores it.
+            See "Mapped columns" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
             mapped store's CRC32 on its first search; ``"eager"`` checks every
             mapped section at load, which reads the whole file once.
@@ -936,7 +944,7 @@ def load(
             ``KGLITE_MAX_LOAD_MB``), either at the metadata precheck or at the
             pre-publication legacy normalization check.
         ArgumentError: ``storage`` is an unknown mode, or ``"disk"``;
-            ``embeddings`` or ``verify`` is not one of its names.
+            ``embeddings``, ``columns`` or ``verify`` is not one of its names.
 
     **Mapped embeddings.** A graph saved with an embedding store of 4 MiB or
     more is a v9 file: the vectors and their norms sit uncompressed in the
@@ -949,15 +957,31 @@ def load(
 
     Do not overwrite a loaded file in place (``cp``, ``rsync --inplace``): a
     truncated mapping faults. Write to a new name and rename it over, as
-    :meth:`KnowledgeGraph.save` does, or load with ``embeddings="memory"``.
-    Saving over the loaded path with ``save()`` is safe.
+    :meth:`KnowledgeGraph.save` does, or load with ``embeddings="memory"``
+    and ``columns="memory"``. Saving over the loaded path with ``save()`` is
+    safe.
 
-    **``storage`` is not a memory lever.** For a loaded ``.kgl``, mapped and
-    memory cost the same resident memory — measured within 0.3 MB of each other
-    on every fixture, because columns of 256 KB or more spill to a temp
-    directory and are mmap'd on *both* paths. What the mode decides is the
-    backend the graph continues in: the spill policy its later writes follow,
-    and the mode its next ``save()`` records.
+    **Mapped columns.** A default save also writes each property column of
+    256 KB or more (numbers, dates, booleans; strings as offsets plus bytes)
+    uncompressed into the v9 file, and a load reads it in place: no spill file
+    is created for it, and two processes loading the same file share the
+    pages. Query results are identical to a decoded load. The first write to a
+    column copies that column to the heap (a ``"mapped"`` graph then spills it
+    after the statement, as before); other columns stay mapped, and a graph
+    that was copied or forked beforehand keeps reading the file. An integer
+    column that is four times smaller as deltas, such as a monotonic id, stays
+    compressed in the file and still decodes (and spills) at load. A string
+    column's bytes are checked for corruption and valid UTF-8 at load, so a
+    damaged file fails there; numeric columns are checked by
+    :meth:`KnowledgeGraph.verify_integrity` and when the graph is saved.
+    ``save(layout="compact")`` writes columns compressed as before.
+
+    **``storage`` is not a memory lever.** For a v8 file, or a v9 file loaded
+    with ``columns="memory"``, mapped and memory cost the same resident memory
+    — measured within 0.3 MB of each other on every fixture, because columns of
+    256 KB or more spill to a temp directory and are mmap'd on *both* paths.
+    What the mode decides is the backend the graph continues in: the spill
+    policy its later writes follow, and the mode its next ``save()`` records.
 
     **``defer_index_rebuild`` is the memory lever.** Rebuilding the declared
     indexes is the largest single term in what an index-bearing graph costs to
@@ -1065,6 +1089,7 @@ def open_session(
     defer_index_rebuild: bool | None = None,
     max_load_mb: int | None = None,
     embeddings: Literal["auto", "mapped", "memory"] | None = None,
+    columns: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
     durable: bool | Literal["full", "normal", "off"] | None = None,
     auto_checkpoint_wal_mib: int | None = None,
@@ -1112,6 +1137,7 @@ def open_session(
         max_load_mb: As on :func:`load` — a ceiling in **megabytes**. Read-only
             form only.
         embeddings: As on :func:`load`. Read-only form only.
+        columns: As on :func:`load`. Read-only form only.
         verify: As on :func:`load`. Read-only form only.
         durable: ``"full"`` (every commit survives power loss), ``"normal"``
             (survives the process dying, not an OS crash), ``"off"`` (no log;
@@ -5418,13 +5444,14 @@ class KnowledgeGraph:
                 the fsync'd write-ahead log, so skipping the flush could lose
                 both the checkpoint and the log on a crash.
             layout: ``"auto"`` (default) writes a v9 file when an embedding
-                store is 4 MiB or larger: the vectors and norms are stored
-                uncompressed, so a load can map them. ``"compact"`` writes the
+                store is 4 MiB or larger or a property column is 256 KB or
+                larger: those buffers are stored uncompressed, so a load can
+                map them. ``"compact"`` writes the
                 v8 container with every section compressed, which every kglite
                 release can read. Use ``"compact"`` for files that older
                 servers or tools must open; they refuse a v9 file with "File
                 uses .kgl container version 9, but this library only supports
-                up to version 8". A graph with no store that large writes the
+                up to version 8". A graph with nothing that large writes the
                 same bytes either way. Ignored for disk mode.
 
         Raises:
@@ -5442,17 +5469,20 @@ class KnowledgeGraph:
     def verify_integrity(self) -> dict[str, Any]:
         """Check the CRC32 of every memory-mapped section this graph serves.
 
-        A mapped load checks a store when it is first searched; this checks all
-        of them now, and also reports a source file whose modification time
-        changed since it was mapped. A graph with no mapped sections returns an
-        empty, passing report.
+        A mapped load checks an embedding store when it is first searched and a
+        string column at load; this checks every mapped section now, and also
+        reports a source file whose modification time changed since it was
+        mapped. A graph with no mapped sections returns an empty, passing
+        report.
 
         Returns:
             ``{"ok": bool, "sections": [...]}``. Each section is
             ``{"name": str, "bytes": int, "mapped": bool, "error": str | None}``;
             ``error`` is ``None`` for an intact section. Names read
-            ``embeddings:<node_type>.<store>`` and
-            ``edge_embeddings:<relationship_type>.<store>``.
+            ``embeddings:<node_type>.<store>``,
+            ``edge_embeddings:<relationship_type>.<store>`` and
+            ``col:<node_type>:<column>:<part>`` (``data``, ``nulls``,
+            ``offsets`` or ``bytes``) for a mapped property column.
 
         Example::
 

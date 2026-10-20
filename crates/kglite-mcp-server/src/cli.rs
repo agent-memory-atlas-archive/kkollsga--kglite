@@ -147,6 +147,16 @@ pub(crate) struct Cli {
           value_parser = parse_embeddings_policy)]
     pub(crate) embeddings: Option<kglite::api::io::MapPolicy>,
 
+    /// Where a v9 `.kgl`'s property columns live: `auto` (map a column of 256 KB
+    /// or more from a regular local file), `mapped` (map any size) or `memory`
+    /// (decode to the heap, spilling large columns to a temp file as v8 files
+    /// do). Overrides `extensions.columns.storage` in the manifest. A v8 or
+    /// older file ignores it. Applies to every `.kgl` the server opens,
+    /// including reloads.
+    #[arg(long = "columns", value_name = "auto|mapped|memory",
+          value_parser = parse_embeddings_policy)]
+    pub(crate) columns: Option<kglite::api::io::MapPolicy>,
+
     /// Run a configuration self-test instead of serving: re-spawn this binary
     /// with the same flags, drive a live MCP handshake (initialize →
     /// tools/list → activate → cypher_query), and print green/red per
@@ -208,7 +218,7 @@ pub(crate) enum Mode {
     Bare,
 }
 
-/// Parse the `--embeddings` value, naming the three spellings on a refusal.
+/// Parse the `--embeddings` / `--columns` value, naming the three spellings on a refusal.
 pub(crate) fn parse_embeddings_policy(
     text: &str,
 ) -> std::result::Result<kglite::api::io::MapPolicy, String> {

@@ -1898,3 +1898,58 @@ fn the_embeddings_policy_decides_where_an_opened_graphs_vectors_live() {
     memory.open_or_create(&p, None).unwrap();
     assert!(!store_is_mapped(&memory));
 }
+
+/// A graph whose `Doc.score` / `Doc.ratio` columns clear the 256 KB floor and
+/// do not delta-compress, saved as v9 with those columns in the data region.
+fn seed_big_columns(path: &std::path::Path) {
+    let mut dir = kglite::api::storage::new_dir_graph_in_mode(StorageMode::Memory, None)
+        .expect("create the graph");
+    let params = std::collections::HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::eager(&params);
+    kglite::api::session::execute_mut(
+        &mut dir,
+        "UNWIND range(1, 40000) AS i CREATE (:Doc {id: i, score: (i * 7919) % 40009 * 104729, \
+         ratio: i / 7.0})",
+        &opts,
+    )
+    .expect("seed nodes");
+    let mut graph = Arc::new(dir);
+    kglite::api::io::save_graph(&mut graph, path.to_str().expect("utf-8 path")).expect("save");
+}
+
+fn mapped_column_sections(state: &GraphState) -> usize {
+    state
+        .with_active(|active| {
+            kglite::api::io::verify_graph(active.kg.dir())
+                .sections
+                .iter()
+                .filter(|s| s.name.starts_with("col:"))
+                .count()
+        })
+        .expect("active graph")
+}
+
+#[test]
+fn the_columns_policy_decides_where_an_opened_graphs_columns_live() {
+    use kglite::api::io::MapPolicy;
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("big.kgl");
+    seed_big_columns(&p);
+
+    // Default: a column of 256 KB is mapped by `auto`.
+    let auto = GraphState::default();
+    auto.open_or_create(&p, None).unwrap();
+    assert_eq!(
+        mapped_column_sections(&auto) > 0,
+        cfg!(unix),
+        "auto never maps on Windows"
+    );
+
+    let mapped = GraphState::default().with_columns_policy(Some(MapPolicy::Mapped));
+    mapped.open_or_create(&p, None).unwrap();
+    assert!(mapped_column_sections(&mapped) > 0);
+
+    let memory = GraphState::default().with_columns_policy(Some(MapPolicy::Memory));
+    memory.open_or_create(&p, None).unwrap();
+    assert_eq!(mapped_column_sections(&memory), 0);
+}

@@ -164,7 +164,9 @@ def _schema_growth_graph() -> kglite.KnowledgeGraph:
 
 
 def _saved_size(graph: kglite.KnowledgeGraph, path) -> int:
-    graph.save(str(path))
+    # The compact layout is the compressed writer this goalpost is about; the
+    # default layout stores columns of 256 KB or more raw so a load can map them.
+    graph.save(str(path), layout="compact")
     return path.stat().st_size
 
 

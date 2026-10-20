@@ -427,6 +427,19 @@ where the embedding stores of a v9 `.kgl` live. A graph saved with a store of
 - Write a new file and rename it over the served one. Overwriting it in place (`cp`, `rsync --inplace`) truncates a live mapping, and the next search faults.
 - v9 files are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
 
+### Column placement
+
+`--columns auto|mapped|memory` (or `extensions.columns.storage`) decides where
+the property columns of a v9 `.kgl` live. A default save writes every column of
+256 KB or more uncompressed into the file.
+
+- `auto` (default) reads such a column in place from a regular local file on Unix; the server writes no spill file for it and a second process serving the same file shares the pages.
+- `mapped` reads every column in place; `memory` decodes every column, spilling those of 256 KB or more to a temp file as v8 files do.
+- An integer column that is four times smaller as deltas (a monotonic id) stays compressed in the file and still spills.
+- The first write to a column copies it to the heap; other columns stay mapped.
+- A corrupt string column fails the load. `verify_integrity` checks the numeric ones.
+- As for embeddings: write a new file and rename it over the served one.
+
 ### The writer lease, and several servers on one file
 
 A `.kgl` has one writer at a time, guarded by an advisory lock on a

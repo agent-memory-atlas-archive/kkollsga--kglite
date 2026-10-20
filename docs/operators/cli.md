@@ -81,6 +81,16 @@ regular local file on Unix, so a one-shot query does not copy the vectors it
 barely touches. `mapped` reads every store in place and `memory` copies every
 store. A v8 or older file ignores the flag.
 
+### Column placement
+
+`kglite query --columns {auto|mapped|memory}` chooses where a v9 `.kgl`'s
+property columns live for that run. A column of 256 KB or more is written to
+the data region by a default save. `auto` (the default) reads such a column in
+place from a regular local file on Unix, so the query writes no spill file.
+`mapped` reads every column in place and `memory` decodes every column, spilling
+the large ones to a temp file as a v8 load does. A v8 or older file ignores the
+flag.
+
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

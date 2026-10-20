@@ -15,7 +15,7 @@ before upgrading.
   - Build it with `LoadOptions::new()` and the `with_*` builders; a struct literal no longer compiles.
   - New builders: `with_embeddings`, `with_columns` (`MapPolicy::{Auto, Mapped, Memory}`) and `with_verify` (`Verify::{Lazy, Eager}`, default from `KGLITE_VERIFY=eager`).
   - The new fields apply only to containers that carry mappable sections; a v8 or older file ignores them.
-- **A graph with an embedding store of 4 MiB or more now saves as `.kgl` container v9.**
+- **A graph with an embedding store of 4 MiB or more, or a property column of 256 KB or more, now saves as `.kgl` container v9.**
   - The vectors and their L2 norms are stored raw, 64-byte aligned, after the compressed sections; smaller stores stay inside the compressed sections, as before.
   - kglite releases before this one refuse a v9 file with "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
   - The vectors are no longer zstd-compressed; embeddings compress by under 10%, so the file changes little, plus 4 bytes per vector for the stored norm.
@@ -28,6 +28,13 @@ before upgrading.
 
 ### Added
 
+- **Large property columns are served from the `.kgl` file instead of a spill file.**
+  - A default save writes each fixed-width or string column of 256 KB or more raw and aligned into the v9 data region; the file is v9 whenever one exists.
+  - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and still decode, and spill, at load. `save(layout="compact")` writes every column compressed in a v8 file.
+  - `LoadOptions::with_columns(MapPolicy::Auto)` (the default) maps those columns read-only from a regular local file on Unix, in memory and mapped storage mode alike, so no per-process spill file is written and two processes loading one file share the pages. `Mapped` maps any size; `Memory` decodes and spills as a v8 load does.
+  - String columns are CRC-checked and UTF-8-validated at load, so a corrupt file fails there. Numeric columns are checked by `verify_integrity()` (sections named `col:<type>:<column>:<part>`) and when the graph is saved.
+  - The first write to a column copies that column to the heap; other columns, and graphs forked beforehand, keep the mapping. Saving over the loaded path stays safe.
+  - New surfaces: `kglite.load(..., columns=)` and `open_session(..., columns=)`, `--columns` and `extensions.columns.storage` on the MCP server, `kglite query --columns`, and `KgliteLoadOptions.columns` in the C ABI (an additive field; callers built earlier read it as `0`).
 - **Embedding stores can be served from the `.kgl` file instead of the heap.**
   - A v9 file loaded with `LoadOptions::with_embeddings(MapPolicy::Auto)` (the default) maps every store of 64 MB or more from a regular local file on Unix; `Mapped` maps any size; `Memory` copies to the heap.
   - A mapped store costs no resident memory until a search touches its pages, and a second graph loaded from the same file shares them.

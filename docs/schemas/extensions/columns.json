@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/columns.json",
+  "title": "extensions.columns",
+  "description": "Where the property columns of a v9 .kgl file live once the server opens it. 'storage' is 'auto' (the default: a column of 256 KB or more is read in place from a regular local file on Unix, smaller ones and every other source are decoded to memory), 'mapped' (every column is read in place) or 'memory' (every column is decoded, large ones spilling to a temp file as v8 files do). The --columns flag overrides it. The setting is runtime only and never written into a .kgl file; a v8 or older file ignores it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "storage": {
+      "type": "string",
+      "enum": ["auto", "mapped", "memory"],
+      "description": "'auto', 'mapped' or 'memory'."
+    }
+  }
+}

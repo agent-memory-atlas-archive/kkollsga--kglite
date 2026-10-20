@@ -90,6 +90,11 @@ The header exposes:
     A byte buffer, a network or FUSE filesystem, Windows (`auto`) and
     `KGLITE_MMAP=0` give the heap.
   - The first write to a mapped store copies it to the heap.
+  - `columns` (an additive field; a caller built before it declares a shorter
+    `struct_size` and reads as `0`) takes the same values for property columns:
+    `auto` maps a column of 256 KB or more from a regular local file on Unix,
+    `mapped` maps any size and `memory` decodes to the heap, spilling large
+    columns to a temp file. A v8 or older file ignores it.
   - Do not overwrite a loaded file in place (`cp`, `rsync --inplace`): a
     truncated mapping faults. Write to a new name and rename it over;
     `kglite_save_graph_durable` already does;

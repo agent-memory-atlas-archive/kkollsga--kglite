@@ -358,7 +358,9 @@ class TestTempDirCleanup:
         pattern = os.path.join(tempfile.gettempdir(), f"kglite_portable_{pid}_*")
         baseline = set(glob.glob(pattern))
 
-        kg2 = kglite.load(fp)
+        # A default load maps the large column from the v9 file and spills nothing;
+        # decoding it is what mints the directory this test pins.
+        kg2 = kglite.load(fp, columns="memory")
         assert kg2.graph_info()["node_count"] == 4000
         created = set(glob.glob(pattern)) - baseline
         assert created, f"Expected a new temp dir matching {pattern}"
@@ -409,7 +411,7 @@ class TestTempDirCleanup:
         baseline = set(glob.glob(pattern))
 
         for _ in range(5):
-            kg = kglite.load(fp)
+            kg = kglite.load(fp, columns="memory")  # decoding is what spills
             assert kg.graph_info()["node_count"] == 4000
             del kg
             gc.collect()
