@@ -168,7 +168,9 @@ pub fn verify_graph(graph: &DirGraph) -> IntegrityReport {
             });
         report.sections.push(status(
             &label,
-            (store.data.len() * 4 + store.norms.len() * 4) as u64,
+            (store.data.len() * 4
+                + store.norms.len() * 4
+                + store.quant_store().map_or(0, |q| q.byte_size())) as u64,
             true,
             result,
         ));

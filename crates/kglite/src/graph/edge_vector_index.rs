@@ -672,6 +672,11 @@ pub(crate) fn query_dense_store(
             return (hits, "hnsw");
         }
     }
+    if !exact {
+        if let Some(hits) = query_quantized(store, query, top_k, metric) {
+            return (hits, "quantized");
+        }
+    }
     (query_exact(store, query, top_k, metric), "exact")
 }
 
@@ -783,6 +788,32 @@ fn score_slots(
             )
         })
         .collect()
+}
+
+/// Stage one over the whole store through its quantized copy, then the exact
+/// re-score of the oversampled pool. `None` (exact scan instead) when the
+/// store has no usable copy, the metric cannot be ranked by it, or the pool
+/// would cover the whole store anyway.
+fn query_quantized(
+    store: &EmbeddingStore,
+    query: &[f32],
+    top_k: usize,
+    metric: DistanceMetric,
+) -> Option<Vec<(usize, f64)>> {
+    let (scan, oversample) = store.quantized_scan(metric, query)?;
+    let pool = top_k.saturating_mul(oversample as usize);
+    if pool >= store.len() {
+        return None;
+    }
+    let slots = vs::coarse_slots(store, &scan, pool);
+    let mut hits = score_slots(
+        store,
+        query,
+        metric,
+        slots.into_iter().map(|slot| slot as u32),
+    );
+    sort_and_truncate(&mut hits, top_k);
+    Some(hits)
 }
 
 fn query_exact(

@@ -89,6 +89,10 @@ impl DirGraph {
             vectors_copied += carried;
             vectors_skipped += skipped;
 
+            // A carried store keeps the scan precision it was built with.
+            if let Some(quant) = src_store.quant_store() {
+                let _ = dst_store.quantize(quant.precision(), Some(quant.oversample()));
+            }
             let text_column = crate::graph::embeddings::text_column_of(&prop)
                 .unwrap_or(&prop)
                 .to_string();
@@ -134,6 +138,7 @@ impl DirGraph {
             // Slots were remapped wholesale; resync the cached-norm column and
             // drop any HNSW index (its slot ids are now stale — rebuild on demand).
             store.rebuild_norms();
+            store.requantize();
             store.invalidate_index();
         }
     }

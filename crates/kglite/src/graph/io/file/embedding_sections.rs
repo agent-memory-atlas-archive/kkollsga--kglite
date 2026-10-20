@@ -26,8 +26,8 @@ use crate::graph::vector_buf::VectorBuf;
 
 pub(super) const NODE_OWNER: &str = "embeddings";
 pub(super) const EDGE_OWNER: &str = "edge_embeddings";
-const NODE_SCOPE: &str = "emb";
-const EDGE_SCOPE: &str = "edge_emb";
+pub(super) const NODE_SCOPE: &str = "emb";
+pub(super) const EDGE_SCOPE: &str = "edge_emb";
 
 /// Section classes (`MapEntry::kind`) owned by this module.
 pub(super) const KIND_VECTORS: u8 = 1;
@@ -44,7 +44,7 @@ pub(super) fn escape(part: &str) -> String {
     part.replace('%', "%25").replace(':', "%3A")
 }
 
-fn section_name(scope: &str, first: &str, second: &str, part: &str) -> String {
+pub(super) fn section_name(scope: &str, first: &str, second: &str, part: &str) -> String {
     format!("{scope}:{}:{}:{part}", escape(first), escape(second))
 }
 
@@ -123,6 +123,7 @@ fn push_store_sections<'g>(
             data: f32_bytes(values),
         });
     }
+    super::quantized_sections::push_sections(out, scope, owner, keys, store);
 }
 
 /// The embedding sections a save of `graph` writes under `layout`, in the
@@ -172,12 +173,20 @@ pub(super) fn open_table(
         if entry.kind == super::column_sections::KIND_COLUMN {
             return columns.place(entry, file, options.columns);
         }
-        if entry.kind != KIND_VECTORS && entry.kind != KIND_NORMS {
+        if !matches!(
+            entry.kind,
+            KIND_VECTORS
+                | KIND_NORMS
+                | super::quantized_sections::KIND_QCODES
+                | super::quantized_sections::KIND_QSCALES
+        ) {
             return Placement::Heap;
         }
-        let vectors_len = entry
-            .name
-            .strip_suffix(":norms")
+        // Every part of a store follows its vectors' size, so the norms and
+        // the quantized copy are mapped or copied together with them.
+        let vectors_len = [":norms", ":qcodes", ":qscales"]
+            .iter()
+            .find_map(|suffix| entry.name.strip_suffix(suffix))
             .and_then(|stem| lengths.get(format!("{stem}:data").as_str()).copied())
             .unwrap_or(entry.len);
         let ctx = MapContext::host(file.map(|f| &**f), vectors_len);
@@ -280,6 +289,7 @@ fn check_all_claimed(
 pub(super) fn attach_and_validate_node_stores(
     embeddings: &mut HashMap<(String, String), EmbeddingStore>,
     table: &MappableTable,
+    quantization: &[super::quantized_sections::QuantRecord],
 ) -> io::Result<()> {
     let mut claimed = HashSet::new();
     for (key, store) in embeddings.iter_mut() {
@@ -291,6 +301,14 @@ pub(super) fn attach_and_validate_node_stores(
                 .rebuild_norms_checked()
                 .map_err(|error| invalid_data(error.to_string()))?;
         }
+        super::quantized_sections::attach(
+            table,
+            &mut claimed,
+            NODE_SCOPE,
+            (&key.0, &key.1),
+            store,
+            quantization,
+        )?;
     }
     check_all_claimed(table, &claimed, NODE_OWNER)
 }
@@ -302,10 +320,20 @@ pub(super) fn install_edge_store(
     claimed: &mut HashSet<String>,
     key: &(String, String),
     store: &mut EmbeddingStore,
+    quantization: &[super::quantized_sections::QuantRecord],
 ) -> Result<bool, String> {
-    install_store_sections(table, claimed, EDGE_SCOPE, (&key.0, &key.1), store)
-        .map(|installed| installed == Some(true))
-        .map_err(|error| error.to_string())
+    let installed = install_store_sections(table, claimed, EDGE_SCOPE, (&key.0, &key.1), store)
+        .map_err(|error| error.to_string())?;
+    super::quantized_sections::attach(
+        table,
+        claimed,
+        EDGE_SCOPE,
+        (&key.0, &key.1),
+        store,
+        quantization,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(installed == Some(true))
 }
 
 pub(super) fn check_edge_claimed(
@@ -321,7 +349,15 @@ pub(crate) fn mapped_sources(graph: &DirGraph) -> Vec<std::path::PathBuf> {
         .embeddings
         .values()
         .chain(graph.edge_embeddings.values().map(|s| s.numeric()))
-        .filter_map(|store| store.data.mapped_source().map(std::path::Path::to_path_buf))
+        .flat_map(|store| {
+            store
+                .data
+                .mapped_source()
+                .into_iter()
+                .chain(store.quant_store().and_then(|q| q.mapped_source()))
+                .map(std::path::Path::to_path_buf)
+                .collect::<Vec<_>>()
+        })
         .collect();
     paths.extend(super::column_sections::mapped_sources(graph));
     paths.sort();

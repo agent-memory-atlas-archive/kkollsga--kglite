@@ -7,6 +7,9 @@ use petgraph::graph::NodeIndex;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, BinaryHeap, HashSet};
 
+mod quantized_search;
+pub(crate) use quantized_search::coarse_slots;
+
 #[derive(Clone, Copy, Debug)]
 pub enum DistanceMetric {
     Cosine,
@@ -45,7 +48,8 @@ pub struct VectorSearchOptions {
     pub top_k: usize,
     /// Distance metric (default [`DistanceMetric::Cosine`]).
     pub metric: DistanceMetric,
-    /// Force a full exact scan, bypassing any HNSW index (default `false`).
+    /// Force a full exact scan, bypassing any HNSW index and any quantized
+    /// scan copy (default `false`).
     pub exact: bool,
     /// Resolve the metric from embedding stores represented by the selection.
     /// Set through [`Self::with_stored_metric`]; explicit metrics remain the
@@ -454,12 +458,19 @@ pub fn vector_search(
             })
         };
 
-        let rows = match hnsw_result {
-            Some(r) => r,
-            None if candidates.len() > PARALLEL_THRESHOLD => {
+        // An index serves the query first; otherwise a quantized copy narrows
+        // the candidates before the exact re-score, unless `exact` bypasses it.
+        let quantized = if hnsw_result.is_some() || exact {
+            None
+        } else {
+            quantized_search::search(&candidates, store, metric, query_vector, top_k, &scorer)
+        };
+        let rows = match (hnsw_result, quantized) {
+            (Some(r), _) | (None, Some(r)) => r,
+            (None, None) if candidates.len() > PARALLEL_THRESHOLD => {
                 parallel_search(&candidates, store, query_vector, top_k, &scorer)
             }
-            None => sequential_search(&candidates, store, query_vector, top_k, &scorer),
+            (None, None) => sequential_search(&candidates, store, query_vector, top_k, &scorer),
         };
         // The mistake `unmatched_store_error` reconstructs can only surface as
         // an empty result, so the walk never costs a populated search anything.

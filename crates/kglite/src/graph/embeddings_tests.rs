@@ -536,6 +536,7 @@ fn list_embeddings_projects_source_column_and_defaults_metric() {
             count: 2,
             metric: "dot_product".to_string(),
             storage: "heap",
+            quantization: None,
         }]
     );
 }

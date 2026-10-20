@@ -64,6 +64,8 @@ pub struct RelationshipEmbeddingStoreInfo {
     pub metric: String,
     /// `"mapped"` or `"heap"`, as [`EmbeddingStoreInfo::storage`].
     pub storage: &'static str,
+    /// The quantized scan copy, when the store holds one.
+    pub quantization: Option<crate::graph::quantized::QuantizationInfo>,
 }
 
 /// Every relationship embedding store, sorted by `(relationship type, store)`.
@@ -81,6 +83,7 @@ pub fn list_relationship_embeddings(graph: &DirGraph) -> Vec<RelationshipEmbeddi
                 count: numeric.len(),
                 metric: effective_metric(numeric),
                 storage: numeric.storage_name(),
+                quantization: numeric.quantization_info(),
             }
         })
         .collect();
@@ -107,6 +110,8 @@ pub struct EmbeddingInfo {
     pub metric: String,
     /// Vectors carrying a source-text hash (what changed-text refresh reads).
     pub hashed: usize,
+    /// The quantized scan copy, when the store holds one.
+    pub quantization: Option<crate::graph::quantized::QuantizationInfo>,
 }
 
 /// Provenance for the `entity` store `(type_name, "{text_column}_emb")`, or
@@ -132,6 +137,7 @@ pub fn embedding_info(
         model: store.model_id.clone(),
         metric: effective_metric(store),
         hashed: store.text_hashes.len(),
+        quantization: store.quantization_info(),
     })
 }
 
@@ -194,6 +200,8 @@ pub struct EmbeddingDiagnostic {
     pub metric: Option<String>,
     /// `"mapped"` or `"heap"`; `None` without a store.
     pub storage: Option<&'static str>,
+    /// The quantized scan copy, when the store holds one.
+    pub quantization: Option<crate::graph::quantized::QuantizationInfo>,
     pub length_stats: LengthStats,
 }
 
@@ -371,6 +379,7 @@ fn finish(entity: EmbeddingEntity, tallies: Tallies<'_>) -> Vec<EmbeddingDiagnos
                 dimension: tally.store.map(|s| s.dimension),
                 metric: tally.store.map(effective_metric),
                 storage: tally.store.map(EmbeddingStore::storage_name),
+                quantization: tally.store.and_then(EmbeddingStore::quantization_info),
                 length_stats: LengthStats {
                     mean_length: per_element(tally.total_length as f64),
                     max_length: tally.max_length,

@@ -104,6 +104,8 @@ pub struct EmbeddingStoreInfo {
     /// Where the vectors live: `"mapped"` (a read-only view of the `.kgl`
     /// file, until the first write) or `"heap"`.
     pub storage: &'static str,
+    /// The quantized scan copy, when the store holds one.
+    pub quantization: Option<crate::graph::quantized::QuantizationInfo>,
 }
 
 /// The store name for a source column: `"{text_column}_emb"`.
@@ -207,6 +209,7 @@ pub fn list_embeddings(graph: &DirGraph) -> Vec<EmbeddingStoreInfo> {
             count: store.len(),
             metric: store.metric.as_deref().unwrap_or("cosine").to_string(),
             storage: store.storage_name(),
+            quantization: store.quantization_info(),
         })
         .collect()
 }

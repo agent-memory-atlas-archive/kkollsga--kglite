@@ -5,6 +5,7 @@
 //! and friends keep their paths.
 
 use crate::graph::index_freshness::{IndexFreshness, SlotCoverage};
+use crate::graph::quantized::{Precision, QuantScan, QuantStore};
 use crate::graph::schema::serialize_sorted_map;
 use crate::graph::vector_buf::VectorBuf;
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,12 @@ pub struct EmbeddingStore {
     /// existence.
     #[serde(skip, default = "empty_vector_freshness")]
     freshness: IndexFreshness,
+    /// Optional quantized scan copy of `data`, kept slot-for-slot in step with
+    /// it by every mutator below. Derived data: never part of the serde
+    /// payload, persisted as its own v9 sections (and the precision in the
+    /// file metadata), and rebuilt from `data` whenever it is absent.
+    #[serde(skip)]
+    quant: Option<QuantStore>,
 }
 
 /// Freshness state for a deserialized store, which carries no index yet — the
@@ -117,6 +124,7 @@ impl Clone for EmbeddingStore {
             norms: self.norms.clone(),
             index: RwLock::new(self.index_guard().clone()),
             freshness: self.freshness.clone(),
+            quant: self.quant.clone(),
         }
     }
 }
@@ -200,6 +208,7 @@ impl EmbeddingStore {
             norms: VectorBuf::new(),
             index: RwLock::new(None),
             freshness: empty_vector_freshness(),
+            quant: None,
         }
     }
 
@@ -258,6 +267,7 @@ impl EmbeddingStore {
             norms: VectorBuf::new(),
             index: RwLock::new(None),
             freshness: empty_vector_freshness(),
+            quant: None,
         }
     }
 
@@ -281,7 +291,11 @@ impl EmbeddingStore {
     /// call this before trusting a mapped store.
     pub fn verify_storage(&self) -> std::io::Result<()> {
         self.data.verify()?;
-        self.norms.verify()
+        self.norms.verify()?;
+        match &self.quant {
+            Some(quant) => quant.verify(),
+            None => Ok(()),
+        }
     }
 
     /// Copy mapped `data` and `norms` into the heap now, releasing this
@@ -289,6 +303,109 @@ impl EmbeddingStore {
     pub fn promote_to_heap(&mut self) {
         self.data.make_heap();
         self.norms.make_heap();
+        if let Some(quant) = &mut self.quant {
+            quant.promote_to_heap();
+        }
+    }
+
+    /// Precision, oversample, placement and size of the quantized copy.
+    pub fn quantization_info(&self) -> Option<crate::graph::quantized::QuantizationInfo> {
+        self.quant.as_ref().map(QuantStore::info)
+    }
+
+    /// Precision of the quantized scan copy, if one is held.
+    pub fn precision(&self) -> Option<Precision> {
+        self.quant.as_ref().map(QuantStore::precision)
+    }
+
+    /// The quantized copy, when it is present and in step with the store.
+    /// A copy whose length disagrees with the slot count (a mutation path
+    /// that bypassed the maintenance hooks) is ignored, so a miss costs
+    /// speed, never a wrong candidate set.
+    pub(crate) fn quantized(&self) -> Option<&QuantStore> {
+        self.quant.as_ref().filter(|quant| {
+            quant.slot_count() == self.slot_to_node.len() && quant.dimension() == self.dimension
+        })
+    }
+
+    /// A prepared scan of the quantized copy for `query` under `metric`;
+    /// `None` when there is no usable copy or the metric cannot be ranked
+    /// by it (Poincaré).
+    pub(crate) fn quantized_scan<'a>(
+        &'a self,
+        metric: crate::graph::algorithms::vector::DistanceMetric,
+        query: &'a [f32],
+    ) -> Option<(QuantScan<'a>, u32)> {
+        let quant = self.quantized()?;
+        quant
+            .scan(metric, query)
+            .map(|scan| (scan, quant.oversample()))
+    }
+
+    /// Raw access for persistence and diagnostics.
+    pub(crate) fn quant_store(&self) -> Option<&QuantStore> {
+        self.quant.as_ref()
+    }
+
+    /// Install a quantized copy decoded from a file.
+    pub(crate) fn attach_quant(&mut self, quant: QuantStore) {
+        self.quant = Some(quant);
+    }
+
+    /// Build (or rebuild) the quantized scan copy from the `f32` vectors.
+    /// Refuses a store whose declared metric is Poincaré, which a quantized
+    /// dot product cannot rank. `oversample` defaults per precision.
+    pub fn quantize(
+        &mut self,
+        precision: Precision,
+        oversample: Option<u32>,
+    ) -> Result<(), String> {
+        if self.metric.as_deref() == Some("poincare") {
+            return Err(
+                "the poincare metric is non-linear in the vector norms, so a quantized copy cannot rank it; the store stays exact"
+                    .to_string(),
+            );
+        }
+        self.validate_shape().map_err(str::to_string)?;
+        self.quant = Some(QuantStore::build(
+            precision,
+            &self.data,
+            self.dimension,
+            oversample,
+        )?);
+        Ok(())
+    }
+
+    /// Re-derive the quantized copy at its current precision after a bulk
+    /// replacement of `data` that bypassed the per-slot hooks (compaction,
+    /// carry). A no-op without a copy.
+    pub(crate) fn requantize(&mut self) {
+        if let Some(quant) = self.quant.take() {
+            let rebuilt = QuantStore::build(
+                quant.precision(),
+                &self.data,
+                self.dimension,
+                Some(quant.oversample()),
+            );
+            self.quant = rebuilt.ok();
+        }
+    }
+
+    /// Drop the quantized copy; `true` if one was held.
+    pub fn drop_quantization(&mut self) -> bool {
+        self.quant.take().is_some()
+    }
+
+    /// Change how many candidates a quantized scan fetches per result.
+    pub fn set_oversample(&mut self, oversample: u32) -> Result<(), String> {
+        match &mut self.quant {
+            Some(quant) if oversample >= 1 => {
+                quant.set_oversample(oversample);
+                Ok(())
+            }
+            Some(_) => Err("oversample must be at least 1".to_string()),
+            None => Err("the store has no quantized copy".to_string()),
+        }
     }
 
     /// Add or replace an embedding for a node. Returns the slot index.
@@ -306,6 +423,9 @@ impl EmbeddingStore {
             let start = slot * self.dimension;
             self.data[start..start + self.dimension].copy_from_slice(embedding);
             self.norms[slot] = norm;
+            if let Some(quant) = &mut self.quant {
+                quant.set(slot, embedding);
+            }
             self.freshness.note_changed(slot as u32);
             slot
         } else {
@@ -314,6 +434,9 @@ impl EmbeddingStore {
             self.slot_to_node.push(node_index);
             self.data.extend_from_slice(embedding);
             self.norms.push(norm);
+            if let Some(quant) = &mut self.quant {
+                quant.push(embedding);
+            }
             self.freshness.note_created(slot as u32, true);
             slot
         }
@@ -350,6 +473,9 @@ impl EmbeddingStore {
         self.slot_to_node.pop();
         self.data.truncate(last * dim);
         self.norms.pop();
+        if let Some(quant) = &mut self.quant {
+            quant.swap_remove(slot);
+        }
         Some(RemovedEmbedding {
             slot,
             vector,
@@ -385,10 +511,17 @@ impl EmbeddingStore {
             self.data[slot * dim..(slot + 1) * dim].copy_from_slice(&removed.vector);
             self.norms[slot] = norm;
             self.slot_to_node[slot] = node_index;
+            if let Some(quant) = &mut self.quant {
+                quant.push_copy_of(slot);
+                quant.set(slot, &removed.vector);
+            }
         } else {
             self.slot_to_node.push(node_index);
             self.data.extend_from_slice(&removed.vector);
             self.norms.push(norm);
+            if let Some(quant) = &mut self.quant {
+                quant.push(&removed.vector);
+            }
         }
         self.node_to_slot.insert(node_index, slot);
         if let Some(hash) = removed.text_hash {
@@ -486,6 +619,9 @@ impl EmbeddingStore {
         self.slot_to_node.pop();
         self.data.truncate(slot * self.dimension);
         self.norms.pop();
+        if let Some(quant) = &mut self.quant {
+            quant.pop();
+        }
         if self.freshness.watermark() as usize > slot {
             self.invalidate_index();
         }

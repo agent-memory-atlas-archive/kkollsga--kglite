@@ -431,6 +431,11 @@ pub(crate) struct FileMetadata {
     /// absent from the JSON — in every container that carries no such section.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mappable: Vec<mappable::MapEntry>,
+    /// Declared quantized scan copies of embedding stores (see
+    /// `quantized_sections`); absent from the JSON when no store has one, so
+    /// a graph without quantization keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    quantization: Vec<quantized_sections::QuantRecord>,
     /// Column-section metadata (one per node type).
     #[serde(default)]
     column_sections: Vec<PortableColumnSection>,
@@ -575,6 +580,7 @@ impl FileMetadata {
             timeseries_data_version: 2,
             topology_compressed_size: 0,
             mappable: Vec::new(),
+            quantization: quantized_sections::collect_records(graph),
             column_sections: Vec::new(),
             embeddings_compressed_size: 0,
             edge_embeddings_compressed_size: 0,
@@ -782,6 +788,7 @@ mod embedding_sections;
 mod fast_load_sidecars;
 mod integrity;
 pub(crate) mod mappable;
+mod quantized_sections;
 mod save_sections;
 use embedding_sections::NodeStoreRecord;
 use fast_load_sidecars::{decode_secondary_label_index, encode_secondary_label_index};
@@ -1924,6 +1931,7 @@ struct PortableSectionPlan {
     text_index: u64,
     edge_vector_index: u64,
     edge_text_index: u64,
+    quantization: Vec<quantized_sections::QuantRecord>,
 }
 
 fn parse_portable_metadata<'a>(
@@ -2341,6 +2349,8 @@ mod embedding_load_validation_tests;
 #[cfg(test)]
 #[path = "file/embedding_mapped_tests.rs"]
 mod embedding_mapped_tests;
+#[cfg(test)]
+mod quantized_persistence_tests;
 
 mod vector_persistence;
 

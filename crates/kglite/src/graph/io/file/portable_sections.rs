@@ -71,6 +71,7 @@ pub(super) fn decode_portable_topology(
         text_index: metadata.text_index_compressed_size,
         edge_vector_index: metadata.edge_vector_index_compressed_size,
         edge_text_index: metadata.edge_text_index_compressed_size,
+        quantization: metadata.quantization.clone(),
     };
     let mut dir_graph = DirGraph::from_graph(graph);
     dir_graph.interner = interner;
@@ -99,7 +100,11 @@ pub(super) fn load_portable_optional_sections(
             codec_deser(codec, &raw, raw.capacity() as u64)?;
         // The decompressed payload is as large as the stores it decoded into.
         drop(raw);
-        embedding_sections::attach_and_validate_node_stores(&mut embeddings, mappable_table)?;
+        embedding_sections::attach_and_validate_node_stores(
+            &mut embeddings,
+            mappable_table,
+            &plan.quantization,
+        )?;
         dir_graph.embeddings = embeddings;
     }
     if plan.edge_embeddings > 0 {
@@ -115,7 +120,13 @@ pub(super) fn load_portable_optional_sections(
                 dir_graph,
                 decoded,
                 |key, store| {
-                    embedding_sections::install_edge_store(mappable_table, &mut claimed, key, store)
+                    embedding_sections::install_edge_store(
+                        mappable_table,
+                        &mut claimed,
+                        key,
+                        store,
+                        &plan.quantization,
+                    )
                 },
             )
             .map_err(|error| invalid_data(format!("edge_embeddings {error}")))?;

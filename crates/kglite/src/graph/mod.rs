@@ -38,6 +38,7 @@ pub mod mutation;
 pub mod ontology;
 pub(crate) mod parallel;
 pub mod property_types;
+pub mod quantized;
 pub mod recipes;
 pub mod schema;
 pub mod schema_json;

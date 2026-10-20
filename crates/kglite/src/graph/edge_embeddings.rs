@@ -443,6 +443,11 @@ impl EdgeEmbeddingStore {
                 rebuilt.set_text_hash(new_edge.index(), *hash);
             }
         }
+        // The rebuilt store is a fresh slot layout; derive its scan copy at
+        // the precision the old one had.
+        if let Some(quant) = old.quant_store() {
+            let _ = rebuilt.quantize(quant.precision(), Some(quant.oversample()));
+        }
         self.numeric = rebuilt;
     }
 }
