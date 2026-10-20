@@ -535,8 +535,10 @@ fn a_column_write_does_not_promote_a_corrupt_mapped_buffer() {
             "MATCH (n:Big) WHERE n.seq = 5 SET n.ratio = 0.5",
             &opts(),
         )
+        .is_err()
     }));
-    assert!(wrote.is_err() || wrote.unwrap().is_err());
+    // A panic (the promotion backstop) or an error both mean the write was refused.
+    assert!(wrote.unwrap_or(true));
     assert_eq!(shared_count(&graph, "Big"), before, "nothing was promoted");
     let copy = tmp.path().join("copy.kgl");
     assert!(
