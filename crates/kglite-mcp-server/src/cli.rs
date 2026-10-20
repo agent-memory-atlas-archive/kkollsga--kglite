@@ -157,6 +157,13 @@ pub(crate) struct Cli {
           value_parser = parse_embeddings_policy)]
     pub(crate) columns: Option<kglite::api::io::MapPolicy>,
 
+    /// Check that this build can boot with these flags, then exit: runs the
+    /// side-effect-free prefix of boot (flags, mode paths, manifest, env file,
+    /// codecs, ontology) and stops before any graph, listener or embedder.
+    /// What a running server asks of the new build before it reloads into it.
+    #[arg(long = "reload-preflight", hide = true)]
+    pub(crate) reload_preflight: bool,
+
     /// Run a configuration self-test instead of serving: re-spawn this binary
     /// with the same flags, drive a live MCP handshake (initialize →
     /// tools/list → activate → cypher_query), and print green/red per

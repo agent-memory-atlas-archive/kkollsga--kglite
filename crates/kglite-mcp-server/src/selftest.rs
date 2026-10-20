@@ -71,19 +71,24 @@ struct Rpc {
 /// array like `["/…/python", "-m", "kglite.mcp_server"]`) telling us how to
 /// relaunch the *server*, not the interpreter. Absent that (standalone
 /// binary), fall back to `current_exe()`.
-fn respawn_command() -> Result<(OsString, Vec<OsString>)> {
+pub(crate) fn respawn_command() -> Result<(OsString, Vec<OsString>)> {
     if let Ok(raw) = std::env::var("KGLITE_MCP_RESPAWN") {
-        let parts: Vec<String> = serde_json::from_str(&raw)
-            .context("KGLITE_MCP_RESPAWN is not a JSON array of strings")?;
-        let mut it = parts.into_iter();
-        let program = it
-            .next()
-            .context("KGLITE_MCP_RESPAWN is an empty array (need at least the program)")?;
-        return Ok((OsString::from(program), it.map(OsString::from).collect()));
+        return parse_respawn_vector(&raw);
     }
-    let exe =
-        std::env::current_exe().context("cannot resolve current executable for --selftest")?;
+    let exe = crate::self_update::current_exe_path()
+        .context("cannot resolve current executable for --selftest")?;
     Ok((exe.into_os_string(), Vec::new()))
+}
+
+/// The `KGLITE_MCP_RESPAWN` JSON array as `(program, leading_args)`.
+pub(crate) fn parse_respawn_vector(raw: &str) -> Result<(OsString, Vec<OsString>)> {
+    let parts: Vec<String> =
+        serde_json::from_str(raw).context("KGLITE_MCP_RESPAWN is not a JSON array of strings")?;
+    let mut it = parts.into_iter();
+    let program = it
+        .next()
+        .context("KGLITE_MCP_RESPAWN is an empty array (need at least the program)")?;
+    Ok((OsString::from(program), it.map(OsString::from).collect()))
 }
 
 impl Rpc {

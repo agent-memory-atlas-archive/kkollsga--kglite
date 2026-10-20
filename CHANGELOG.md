@@ -41,6 +41,11 @@ before upgrading.
 - **The MCP server says when the code it runs was replaced on disk.**
   - After `pip install -U kglite` or a rebuilt binary, every successful tool result ends with `stale: kglite-mcp-server 0.20.1 running, 0.20.2 installed`, and `ping` reports the same.
   - The watched file is the extension module the server was loaded from (wheel) or the executable (cargo binary); the installed version comes from `<package>-*.dist-info` or `--version`.
+- **An agent can load a replaced server build without restarting the MCP client: `ping(reload=true)`.**
+  - After the `stale:` notice, the server checks the new build (`--version`, then the same arguments with the hidden `--reload-preflight`, 5 s each), then re-executes itself in place: same process id, same stdio, no second `initialize`. A request already queued behind the reload is answered by the new build.
+  - The reload is refused, with the reason in the answer, while the active graph has unsaved changes (`save_graph` first, or `reload_graph(discard_unsaved=true)`) or when the new build fails the check. The old build keeps serving.
+  - The graph that `load_graph`, `create_graph` or `save_graph_as` bound is reopened in the new process. The CSV HTTP port is new on every boot, so URLs issued before the reload stop working.
+  - Unix only. The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
 - **Rust API: `ServerExtensions::with_identity(name, version)`** sets the name and version the server reports, so an embedder's notice names its own package.
 - **Embedding stores can carry a smaller scan copy: `f16`, `int8` or `binary`.**
   - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay the canonical data.

@@ -376,6 +376,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -1066,6 +1070,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -1911,6 +1919,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -2637,6 +2649,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -3296,6 +3312,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -3885,6 +3905,10 @@
               "string",
               "null"
             ]
+          },
+          "reload": {
+            "description": "Set true, when a result says this server is stale, to load the newer installed build in place; the session continues without restarting the client. Refused while other calls are running, or when already up to date.",
+            "type": "boolean"
           }
         },
         "type": "object"

@@ -154,6 +154,13 @@ where
     if cli.selftest {
         return selftest::run_selftest(&cli, &argv);
     }
+    // `--reload-preflight` is what a running server asks of a new build before
+    // it reloads into it: the side-effect-free prefix of boot, then exit.
+    if cli.reload_preflight {
+        server_run::run_reload_preflight(&cli, extensions.read_only)?;
+        eprintln!("reload preflight ok");
+        return Ok(());
+    }
     // Tool handlers are synchronous closures that run the Cypher pipeline
     // inline on a worker thread (see `tools.rs`), and that pipeline recurses
     // per level of expression nesting. Tokio's default 2 MiB worker stack is
@@ -165,5 +172,10 @@ where
         .thread_stack_size(kglite::api::session::QUERY_THREAD_STACK_SIZE)
         .build()
         .context("failed to build tokio runtime")?;
-    runtime.block_on(run_async(cli, factory, extensions))
+    runtime.block_on(run_async(
+        cli,
+        factory,
+        extensions,
+        argv.into_iter().skip(1).collect(),
+    ))
 }

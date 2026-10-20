@@ -6,11 +6,15 @@
 //! what version is installed there, and which name and version this process
 //! reports.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use mcp_methods::server::SelfCheck;
+
+use crate::skills::SkillRefresher;
+use crate::tools::GraphState;
 
 /// Name and version a server reports in its stale notice, `ping` and
 /// `serverInfo`. The default is this crate; an embedder that ships its own
@@ -49,7 +53,7 @@ impl Artifact {
 
 /// `current_exe()` with the ` (deleted)` suffix Linux appends once the file
 /// was unlinked, so the path still names what a replacement will recreate.
-fn current_exe_path() -> Option<PathBuf> {
+pub(crate) fn current_exe_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let text = exe.to_string_lossy();
     Some(match text.strip_suffix(" (deleted)") {
@@ -171,20 +175,174 @@ pub(crate) fn parse_version_line(output: &str) -> Option<String> {
 }
 
 /// The framework check for this process, or `None` when no file can be named.
-pub(crate) fn build_self_check(identity: &Identity) -> Option<SelfCheck> {
+/// `reload` additionally enables `ping(reload=true)` when a launch command
+/// for the new build can be derived.
+pub(crate) fn build_self_check(
+    identity: &Identity,
+    reload: Option<ReloadParts>,
+) -> Option<SelfCheck> {
     let artifact = watched_artifact()?;
     let probe = artifact.clone();
-    Some(
-        SelfCheck::new(
-            identity.name.clone(),
-            artifact.path().to_path_buf(),
-            identity.version.clone(),
-        )
-        .with_installed_version(move || match &probe {
-            Artifact::Extension(path) => dist_info_version(path),
-            Artifact::Binary(path) => probe_binary_version(path, Duration::from_secs(5)),
-        }),
+    let check = SelfCheck::new(
+        identity.name.clone(),
+        artifact.path().to_path_buf(),
+        identity.version.clone(),
     )
+    .with_installed_version(move || match &probe {
+        Artifact::Extension(path) => dist_info_version(path),
+        Artifact::Binary(path) => probe_binary_version(path, Duration::from_secs(5)),
+    });
+    Some(match reload {
+        Some(parts) => attach_reload(check, &artifact, parts),
+        None => check,
+    })
+}
+
+/// What reload needs from the running server.
+pub(crate) struct ReloadParts {
+    /// The process's own arguments after `argv[0]`.
+    pub(crate) args: Vec<OsString>,
+    pub(crate) graph_state: GraphState,
+    pub(crate) refresher: SkillRefresher,
+    /// `--graph` mode only: the served file can be re-bound by `load_graph`,
+    /// `create_graph` and `save_graph_as`, so it is carried across.
+    pub(crate) carry_graph: bool,
+}
+
+/// How to launch a fresh server: the executable itself for a binary, the
+/// wheel's `KGLITE_MCP_RESPAWN` vector for an extension hosted by Python, and
+/// nothing for an extension launched some other way (reload then stays off and
+/// the notice says to restart the client).
+fn launch_vector(artifact: &Artifact) -> Option<(OsString, Vec<OsString>)> {
+    match artifact {
+        Artifact::Binary(path) => Some((path.clone().into_os_string(), Vec::new())),
+        Artifact::Extension(_) => {
+            let raw = std::env::var("KGLITE_MCP_RESPAWN").ok()?;
+            crate::selftest::parse_respawn_vector(&raw).ok()
+        }
+    }
+}
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn attach_reload(check: SelfCheck, artifact: &Artifact, parts: ReloadParts) -> SelfCheck {
+    let Some((program, lead)) = launch_vector(artifact) else {
+        return check;
+    };
+    let mut argv = vec![program.clone()];
+    argv.extend(lead.iter().cloned());
+    argv.extend(parts.args.iter().cloned());
+    let version_args: Vec<OsString> = lead
+        .iter()
+        .cloned()
+        .chain([OsString::from("--version")])
+        .collect();
+    let preflight_args: Vec<OsString> = lead
+        .iter()
+        .cloned()
+        .chain(parts.args.iter().cloned())
+        .chain([OsString::from("--reload-preflight")])
+        .collect();
+
+    let dirty_check = parts.graph_state.clone();
+    let release = parts.graph_state.clone();
+    let save = parts.graph_state.clone();
+    let restore_state = parts.graph_state;
+    let refresher = parts.refresher;
+    let carry_graph = parts.carry_graph;
+    check
+        .with_reload(argv)
+        .with_can_reload(move || {
+            if dirty_check.is_dirty() {
+                Err(
+                    "the active graph has unsaved changes that a reload would lose; \
+                     call save_graph to keep them or reload_graph(discard_unsaved=true) \
+                     to drop them, then reload again"
+                        .to_string(),
+                )
+            } else {
+                Ok(())
+            }
+        })
+        .with_selftest(move |_| {
+            run_probe(&program, &version_args, "--version")?;
+            run_probe(&program, &preflight_args, "--reload-preflight")
+        })
+        // Exec skips every destructor, so the active graph is dropped here:
+        // that removes a writable disk graph's `.working-<pid>-*` directory
+        // (the new image has the same pid and restarts the nonce at 0), the
+        // spill directories, and stamps the writer lease as released.
+        .with_before_exec(move || {
+            *crate::tools::write_lock(&release.inner) = None;
+        })
+        .with_carry(
+            move || {
+                if !carry_graph {
+                    return None;
+                }
+                let path = save.source_path()?;
+                Some(serde_json::json!({ "graph_source_path": path }))
+            },
+            move |value| {
+                let Some(path) = value.get("graph_source_path").and_then(|v| v.as_str()) else {
+                    return Ok(());
+                };
+                let path = Path::new(path);
+                if restore_state.source_path().as_deref() == Some(path) {
+                    return Ok(());
+                }
+                restore_state
+                    .open_or_create(path, None)
+                    .map_err(|e| format!("could not reopen the graph {}: {e}", path.display()))?;
+                refresher.refresh();
+                Ok(())
+            },
+        )
+}
+
+/// Run the new build with `args`; `Err` names the check and the child's last
+/// stderr lines. The child is killed and reaped on timeout.
+fn run_probe(program: &std::ffi::OsStr, args: &[OsString], what: &str) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .env_remove("MCP_METHODS_RELOAD_HANDOVER")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("the new build could not be started for {what}: {e}"))?;
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        }
+        text
+    });
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!(
+                    "the new build did not finish {what} within {} s",
+                    PROBE_TIMEOUT.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => break Err(format!("waiting for {what} failed: {e}")),
+        }
+    };
+    let stderr = reader.join().unwrap_or_default();
+    let status = status?;
+    if status.success() {
+        return Ok(());
+    }
+    let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+    Err(format!("the new build failed {what} ({status}): {tail}"))
 }
 
 #[cfg(test)]
@@ -281,7 +439,7 @@ mod tests {
         use rmcp::ServerHandler;
         let extensions = crate::ServerExtensions::new().with_identity("codingest", "9.8.7");
         assert_eq!(extensions.identity.name, "codingest");
-        let check = build_self_check(&extensions.identity).expect("watched file");
+        let check = build_self_check(&extensions.identity, None).expect("watched file");
         let options = mcp_methods::server::ServerOptions::default().with_self_check(check);
         let info = mcp_methods::server::McpServer::new(options).get_info();
         assert_eq!(info.server_info.version, "9.8.7");

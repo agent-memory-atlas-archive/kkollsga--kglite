@@ -960,26 +960,37 @@ struct BootedGraph {
     vault_report: Option<crate::vault::VaultReportSlot>,
 }
 
-fn boot_graph(
-    cli: &Cli,
-    workspace_graph: Option<WorkspaceGraphHooks>,
-    producer_recipes: Option<recipe_queries::RecipeCatalog>,
-    read_only_pin: bool,
-    py_embedder_factory: Option<&SharedEmbedderFactory>,
-) -> Result<BootedGraph> {
-    init_tracing();
+/// Everything boot settles from argv, the manifest and the environment before
+/// it opens a graph, binds an embedder, listens or watches. `--reload-preflight`
+/// runs exactly this and nothing after it, so a build that passes it has parsed
+/// every input the real boot parses first.
+struct BootPrefix {
+    mode: Mode,
+    manifest: Option<mcp_methods::server::Manifest>,
+    extensions: BootExtensions,
+    env_file_loaded: Option<PathBuf>,
+    options: ServerOptions,
+    value_codecs: Option<Arc<Vec<kglite::api::cypher::ValueCodec>>>,
+    valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
+    embeddings_policy: Option<kglite::api::io::MapPolicy>,
+    columns_policy: Option<kglite::api::io::MapPolicy>,
+    ontology: Option<BoundOntology>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread entered [`boot_prefix`].
+    static PREFIX_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn boot_prefix(cli: &Cli, read_only_pin: bool) -> Result<BootPrefix> {
+    #[cfg(test)]
+    PREFIX_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mode = pick_mode(cli);
     validate_mode_paths(&mode, cli)?;
 
     let manifest = load_manifest(cli, &mode).context("manifest load failed")?;
-    let BootExtensions {
-        recipe_catalog,
-        manifest_recipes_declared,
-        tools_allow,
-        mutations_enabled,
-        write_scope,
-        parallel,
-    } = boot_extensions(manifest.as_ref(), cli, read_only_pin)?;
+    let extensions = boot_extensions(manifest.as_ref(), cli, read_only_pin)?;
 
     // Manifest `workspace.kind: local` wins over CLI flags — promote before
     // mode-specific binding so the rest of boot sees `Mode::LocalWorkspace`.
@@ -1004,6 +1015,60 @@ fn boot_graph(
     // guidance by default, without every deployment copy-pasting it.
     let options = apply_discovery_steer(&mode, options);
 
+    let value_codecs = boot_value_codecs(manifest.as_ref())?;
+    let valid_time_default = boot_valid_time_default(manifest.as_ref(), cli)?;
+    let embeddings_policy = boot_embeddings_policy(manifest.as_ref(), cli)?;
+    let columns_policy = boot_columns_policy(manifest.as_ref(), cli)?;
+    let ontology = boot_ontology(manifest.as_ref(), &manifest_base_dir(manifest.as_ref()))?;
+    Ok(BootPrefix {
+        mode,
+        manifest,
+        extensions,
+        env_file_loaded,
+        options,
+        value_codecs,
+        valid_time_default,
+        embeddings_policy,
+        columns_policy,
+        ontology,
+    })
+}
+
+/// `--reload-preflight`: the exit status says whether this build can boot with
+/// these flags as far as the side-effect-free prefix can tell.
+pub(crate) fn run_reload_preflight(cli: &Cli, read_only_pin: bool) -> Result<()> {
+    boot_prefix(cli, read_only_pin).map(|_| ())
+}
+
+fn boot_graph(
+    cli: &Cli,
+    workspace_graph: Option<WorkspaceGraphHooks>,
+    producer_recipes: Option<recipe_queries::RecipeCatalog>,
+    read_only_pin: bool,
+    py_embedder_factory: Option<&SharedEmbedderFactory>,
+) -> Result<BootedGraph> {
+    init_tracing();
+    let BootPrefix {
+        mode,
+        manifest,
+        extensions:
+            BootExtensions {
+                recipe_catalog,
+                manifest_recipes_declared,
+                tools_allow,
+                mutations_enabled,
+                write_scope,
+                parallel,
+            },
+        env_file_loaded,
+        options,
+        value_codecs,
+        valid_time_default,
+        embeddings_policy,
+        columns_policy,
+        ontology,
+    } = boot_prefix(cli, read_only_pin)?;
+
     // `--vault`'s producer is this binary's own (decision D5): built here and
     // installed on the state directly, not injected through
     // `ServerExtensions`, because the closure has to hold state the public
@@ -1011,11 +1076,11 @@ fn boot_graph(
     // carry, and the embedder slot. Refuse the collision rather than letting
     // whichever write lands last decide what the server is.
     let graph_state = GraphState::new(workspace_graph_mode(&mode))
-        .with_value_codecs(boot_value_codecs(manifest.as_ref())?)
+        .with_value_codecs(value_codecs)
         .with_parallel(parallel)
-        .with_valid_time_default(boot_valid_time_default(manifest.as_ref(), cli)?)
-        .with_embeddings_policy(boot_embeddings_policy(manifest.as_ref(), cli)?)
-        .with_columns_policy(boot_columns_policy(manifest.as_ref(), cli)?)
+        .with_valid_time_default(valid_time_default)
+        .with_embeddings_policy(embeddings_policy)
+        .with_columns_policy(columns_policy)
         // Declared here rather than from `builtins` (built below, after the
         // csv_http boot it needs) because `bind_mode` performs the boot open
         // a few lines down — a policy set later would arrive after the lease
@@ -1037,7 +1102,7 @@ fn boot_graph(
 
     // Bound before `bind_mode`, whose boot open publishes the first graph —
     // the ontology rides the same pre-publication seam as the embedder.
-    if let Some(bound) = boot_ontology(manifest.as_ref(), &manifest_base_dir(manifest.as_ref()))? {
+    if let Some(bound) = ontology {
         graph_state.bind_ontology(bound);
     }
     // And the embedder with it, for the same reason plus one more: in vault
@@ -1102,6 +1167,7 @@ pub(crate) async fn run_async(
     cli: Cli,
     py_embedder_factory: Option<PyEmbedderFactory>,
     extensions: ServerExtensions,
+    launch_args: Vec<std::ffi::OsString>,
 ) -> Result<()> {
     let ServerExtensions {
         workspace_graph,
@@ -1151,7 +1217,16 @@ pub(crate) async fn run_async(
         write_scope,
     );
 
-    let options = match crate::self_update::build_self_check(&identity) {
+    // Built before the server so the stale-build check is part of its options;
+    // `register_kglite_tools` below receives the same refresher.
+    let skill_refresher = crate::skills::SkillRefresher::default();
+    let reload = crate::self_update::ReloadParts {
+        args: launch_args,
+        graph_state: graph_state.clone(),
+        refresher: skill_refresher.clone(),
+        carry_graph: matches!(mode, Mode::Graph { .. }),
+    };
+    let options = match crate::self_update::build_self_check(&identity, Some(reload)) {
         Some(check) => options.with_self_check(check),
         None => options,
     };
@@ -1171,7 +1246,6 @@ pub(crate) async fn run_async(
     // Same late-fill shape as `skills_index`, for the same reason: the swap
     // handlers below are registered long before `install_skills` can hand them
     // anything to rebuild.
-    let skill_refresher = crate::skills::SkillRefresher::default();
     let peer_slot = tools::PeerSlot::default();
     register_kglite_tools(
         &mut server,
@@ -1310,6 +1384,40 @@ pub(crate) async fn run_async(
 #[cfg(test)]
 mod boot_manifest_tests {
     use super::*;
+
+    #[test]
+    fn reload_preflight_and_the_real_boot_run_the_same_prefix() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest = manifest_with(tmp.path(), "name: prefix\n");
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("kglite-mcp-server"),
+            "--mcp-config".into(),
+            manifest.yaml_path.clone().into_os_string(),
+        ])
+        .expect("flags parse");
+        let runs = || PREFIX_RUNS.with(|runs| runs.get());
+        let before = runs();
+        run_reload_preflight(&cli, false).expect("preflight passes");
+        assert_eq!(runs(), before + 1, "--reload-preflight runs boot_prefix");
+        boot_graph(&cli, None, None, false, None).expect("boot passes");
+        assert_eq!(runs(), before + 2, "boot_graph runs boot_prefix");
+    }
+
+    #[test]
+    fn reload_preflight_rejects_what_the_real_boot_rejects() {
+        use clap::Parser;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("bad.yaml");
+        std::fs::write(&path, "name: [unterminated\n").expect("write");
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("kglite-mcp-server"),
+            "--mcp-config".into(),
+            path.into_os_string(),
+        ])
+        .expect("flags parse");
+        assert!(run_reload_preflight(&cli, false).is_err());
+    }
 
     fn manifest_with(dir: &Path, body: &str) -> mcp_methods::server::Manifest {
         let path = dir.join("graph_watch_mcp.yaml");

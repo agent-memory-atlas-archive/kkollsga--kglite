@@ -546,3 +546,45 @@ def test_replaced_wheel_extension_adds_a_stale_notice_with_the_dist_info_version
         client.shutdown()
     assert "stale: kglite-mcp-server" in after, after
     assert "99.1.0 installed" in after, after
+
+
+def test_wheel_reload_execs_the_replaced_package_and_keeps_serving(tmp_path: Path) -> None:
+    """`ping(reload=true)` re-executes `python -m kglite.mcp_server` with the
+    original arguments: same pid, same stdio, the replaced extension loaded."""
+    import shutil
+
+    package = Path(kglite.__file__).parent
+    extension = next(package.glob("kglite*.so"), None)
+    if extension is None:
+        pytest.skip("no extension module beside the package")
+    site = tmp_path / "site"
+    shutil.copytree(package, site / "kglite", ignore=shutil.ignore_patterns("__pycache__", "_bin"))
+    (site / "kglite-0.0.1.dist-info").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.txt").write_text("hello", encoding="utf-8")
+    manifest = work / "manifest.yaml"
+    manifest.write_text("name: Reload\nworkspace:\n  kind: local\n  root: .\n  sandbox_root: .\n", encoding="utf-8")
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "kglite.mcp_server", "--mcp-config", str(manifest)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(work),
+        env={**os.environ, "PYTHONPATH": str(site)},
+    )
+    client = McpClient(proc)
+    client.initialize()
+    try:
+        served = site / "kglite" / extension.name
+        staged = served.with_name(served.name + ".new")
+        shutil.copy2(extension, staged)
+        os.replace(staged, served)
+        reloaded = _text_content(client.call_tool("ping", {"reload": True}))
+        assert "reloaded" in reloaded, reloaded
+        after = _text_content(client.call_tool("list_source", {"path": "."}))
+        assert "a.txt" in after and "stale:" not in after, after
+        assert proc.poll() is None
+    finally:
+        client.shutdown()
