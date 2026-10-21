@@ -11,11 +11,11 @@ before upgrading.
 
 ### Breaking changes and migration
 
-- **A save writes `.kgl` container v9, which kglite releases before this one refuse, when the graph holds an embedding store of 4 MiB or more, a property column with a buffer of 256 KB or more, 65,536 nodes or more.**
+- **A save writes `.kgl` container v9, which kglite releases before this one refuse, when the graph holds an embedding store of 4 MiB or more, a property column with a buffer of 256 KB or more, 65,536 nodes or more, or 262,144 relationships or more.**
   - The refusal reads "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
   - **Do:** save with `layout="compact"` (Rust: `SaveLayout::Compact`) for any file an older kglite must read. It writes the v8 container with everything compressed.
   - A graph below all of those sizes writes the same bytes as before. This release reads v8 and older files unchanged.
-  - The node threshold adds index sections (see Added): 4 bytes per node and 8 per indexed id. A random 1M-node, 12M-relationship graph grows 110 to 123 MB; the `legal` operator graph grows 0.2 % and `sodir` 2.2 %.
+  - The node and relationship thresholds add index sections (see Added): 4 bytes per node, 8 per indexed id and 16 per distinct relationship peer. A random 1M-node, 12M-relationship graph grows 110 to 147 MB; the `legal` operator graph grows 1.3 % and `sodir` 3.7 %.
   - A v9 file keeps those buffers raw and 64-byte aligned. Embeddings compress by under 10 %, so they add little; column text does not compress away. Measured on six operator graphs the file grew from 1.0x to 5.4x: `sodir` 134 to 389 MB, `rms` 18.5 to 99.7 MB, `legal` 196 to 265 MB. `layout="compact"` keeps the old size.
   - The size rule is the one a v8 load uses to spill a column to a temp file, so the file holds raw exactly what a load would otherwise copy into a per-process spill file.
 - **Property columns with a buffer of 256 KB or more are read from the file by default, in every storage mode.**
@@ -36,12 +36,14 @@ before upgrading.
 
 ### Added
 
-- **A large graph's type member lists and id index are stored in the `.kgl` and read from it in `mapped` storage.**
-  - A save records them for a graph of 65,536 nodes or more: a sorted member list per node type, and an id index for each type whose ids are all `UniqueId` or all int64 and unique. `layout="compact"` records none.
+- **A large graph's type member lists, id index and relationship peer counts are stored in the `.kgl` and read from it in `mapped` storage.**
+  - A save records them for a graph of 65,536 nodes or more (member lists, and an id index for each type whose ids are all `UniqueId` or all int64 and unique) and 262,144 relationships or more (counts per relationship type and direction). `layout="compact"` records none.
   - A load into `mapped` storage serves them from the file. It no longer groups every node by type, and the first `{id: ...}` lookup no longer builds a hash map of every id. A load into `memory` storage ignores them and builds what it always built.
-  - Measured (release, macOS footprint, `mapped`): at 1M nodes the first id lookup fell from 23 ms and +83 MB to 0.2 ms and +0 MB; at 3M nodes from 61 ms and +224 MB to 0.2 ms and +0 MB. On `sodir` the first lookup per type fell from 0.4-2.5 ms to 0.03 ms.
-  - A write to a node type layers over its recorded lists. Types with string ids or repeated ids build their id index on first use, as before.
+  - Measured (release, macOS footprint, 1M nodes and 12M relationships, `mapped`): the first id lookup fell from 23 ms and +83 MB to 0.2 ms and +0 MB; the footprint after the query mix fell from 799 to 671-684 MB (`memory` storage: 773-816 MB). At 3M nodes and 36M relationships the first id lookup fell from 61 ms and +224 MB to 0.2 ms and +0 MB.
+  - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning the relationships. `b.id, count(a)` over 12M relationships fell from 590 ms and +261 MB to 235 ms and +179 MB (`memory` storage: 560 ms and +227 MB). On the `legal` operator graph the first `CITES` aggregation fell from 12 to 3.3 ms, and the first id lookup on `sodir` from 2.4 to 0.03 ms.
+  - A write to a node type layers over its recorded lists; the first relationship write drops the recorded counts, which are then built from the relationships on first use. Types with string ids or repeated ids build their id index on first use, as before.
   - A mapped load reads and checks every index section: a damaged one refuses the load, and `verify_file()` names it. The load costs about 1-2 % more time than before.
+  - Peer counts of a mapped graph are shared between queries instead of copied for each one.
 - **Embedding stores and large columns are read from the `.kgl` file instead of the heap.**
   - `kglite.load(path, embeddings=..., columns=..., verify=...)`; `embeddings` and `columns` are `"auto"`, `"mapped"` or `"memory"`, `verify` is `"lazy"` or `"eager"`. `open_session` takes the same options for its read-only form.
   - `auto` maps a store of 64 MB or more (a column of 256 KB or more) from a regular local file on Unix. `mapped` maps any size. `memory` copies to the heap; columns then spill to a temp file as in v8 loads.

@@ -10,6 +10,7 @@ Placement follows the data, not the storage mode.
 |---|---|---|
 | Topology (nodes, relationships) | Heap in `memory` and `mapped`; mmap CSR in `disk` | 40 bytes per node and 32 per relationship on the heap |
 | Node type member lists and the id index of an all-`UniqueId` or all-int64 type | The `.kgl` file in `mapped` storage; heap in `memory` | A save records them for a graph of 65,536 nodes or more |
+| Peer counts per relationship type | The `.kgl` file in `mapped` storage; built on first use in `memory` | A save records them for 262,144 relationships or more |
 | Other indexes (property, string-id, HNSW structure) | Heap | Built or rebuilt at load |
 | Small columns (under 256 KB) | Heap | Stored inside the compressed sections |
 | Large columns (a buffer of 256 KB or more) | The `.kgl` file (`columns="auto"`) | Read in place, no spill file; `columns="memory"` spills them |
@@ -49,14 +50,14 @@ Meanings of the values:
 
 ## Container v9 and v8
 
-A default `save()` writes v9 when the graph holds an embedding store of 4 MiB or more, a column with a buffer of 256 KB or more, or 65,536 nodes or more. Otherwise it is v8, with the same bytes as before.
+A default `save()` writes v9 when the graph holds an embedding store of 4 MiB or more, a column with a buffer of 256 KB or more, 65,536 nodes or more, or 262,144 relationships or more. Otherwise it is v8, with the same bytes as before.
 
 - The rule for "large" is the one a v8 load uses to spill a column to a temp file. A default file therefore maps exactly the columns that would otherwise be copied into a per-process spill file: many servers on one graph share the file's pages instead of each writing its own copy under `$TMPDIR`.
 - A v9 file stores the vectors, their norms and those column buffers uncompressed and 64-byte aligned, after the compressed sections. Smaller columns stay in the compressed sections and decode to the heap.
 - Embeddings compress by under 10 %, so they add little. Raw column text does not compress away: on the operator graphs measured the file grows 1.4-5.4x (one 134 MB graph becomes 389 MB), almost all of it string bytes that zstd shrinks 3-7x.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
-- A graph of 65,536 nodes or more also records, per node type, the sorted member list, and for a type whose ids are all `UniqueId` or all int64 and unique, a sorted id index.
-- These sections cost 4 bytes per node and 8 per indexed id. Measured: a random 1M-node, 12M-relationship graph grows 110 to 123 MB; a 196 MB operator graph grows 0.2 % and a 134 MB one 2.2 %.
+- A graph of 65,536 nodes or more also records, per node type, the sorted member list, and for a type whose ids are all `UniqueId` or all int64 and unique, a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts.
+- These sections cost 4 bytes per node, 8 per indexed id and 16 per distinct peer. Measured: a random 1M-node, 12M-relationship graph grows 110 to 147 MB; a 196 MB operator graph grows 1.3 % and a 134 MB one 3.7 %.
 - A kglite release before this one refuses a v9 file: "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
 - If a consumer must stay on an older kglite, or the file size matters more than a spill file, save with `layout="compact"`. It writes v8 with every column and vector compressed.
 - kglite reads v8 and older files unchanged. `embeddings=` and `columns=` have no effect on them.
@@ -66,8 +67,9 @@ A default `save()` writes v9 when the graph holds an embedding store of 4 MiB or
 A load into `mapped` storage serves the recorded indexes from the file. A load into `memory` storage ignores them and builds what it always built.
 
 - The first `{id: ...}` lookup on a recorded type costs nothing to build and holds no heap: a binary search in the mapping. Before, it built a hash map of every id (1M ids: 23 ms and +83 MB, now 0.2 ms).
+- The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning every relationship (1M nodes, 12M relationships, `b.id, count(a)` over one type: 590 ms and +261 MB before, 235 ms and +179 MB after; `memory` storage takes 560 ms and +227 MB).
 - A type with string ids or repeated ids has no recorded id index and builds one on first use, as before.
-- A write to a node type layers over its recorded member list and id index.
+- A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
 - `columns="memory"` and `KGLITE_MMAP=0` copy these sections to the heap instead of mapping them; the load still skips the scan.
 - A damaged index section refuses a `mapped` load, because the load reads and checks every one.
 

@@ -16,6 +16,7 @@ use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use super::mapped::peer_base;
 use super::{MappedGraph, MappedPropertyIndex, MappedTypeCsr, MappedTypeIndex};
 
 /// Flatten an adjacency map into CSR form: sorted source list, per-source
@@ -57,6 +58,9 @@ impl Clone for MappedGraph {
             // Copied, NOT reset — see `MemoryGraph::clone`. `StableDiGraph`
             // clones its free lists, so this is canonical state, not a cache.
             slot_mirror: self.slot_mirror.clone(),
+            // Valid for exactly the edges this copy holds, and any edge write
+            // to either graph drops its own handle.
+            peer_base: self.peer_base.clone(),
         }
     }
 }
@@ -82,6 +86,7 @@ impl MappedGraph {
             global_property_index: RwLock::new(HashMap::new()),
             undo: None,
             slot_mirror: SlotMirror::for_empty_graph(),
+            peer_base: None,
         }
     }
 
@@ -144,6 +149,7 @@ impl MappedGraph {
             global_property_index: RwLock::new(HashMap::new()),
             undo: None,
             slot_mirror,
+            peer_base: None,
         }
     }
 
@@ -165,8 +171,19 @@ impl MappedGraph {
     /// conn_types on first hit.
     #[inline]
     pub(crate) fn invalidate_type_index(&mut self) {
+        self.peer_base = None;
         if let Ok(mut map) = self.type_index.write() {
             map.clear();
+        }
+    }
+
+    /// Serve peer counts and source lists from the sections a `.kgl` recorded.
+    /// Called once, on the graph a load just built: the counts describe the
+    /// edges as loaded, and the first edge mutation drops them.
+    pub(crate) fn install_peer_base(&mut self, base: peer_base::PeerBase) {
+        self.invalidate_type_index();
+        if !base.is_empty() {
+            self.peer_base = Some(Arc::new(base));
         }
     }
 
@@ -352,12 +369,9 @@ impl MappedGraph {
         MappedPropertyIndex { keys, nodes }
     }
 
-    /// Fetch or build the per-conn-type peer counts.
-    ///
-    /// Build cost on first hit: one O(|E|) scan filtering by `conn_type`
-    /// (the same scan the memory backend does), holding two count maps.
-    /// Later queries on the same conn_type reuse the `Arc` in O(1). The CSR
-    /// adjacency is not built here; see [`Self::type_csr`].
+    /// Fetch or create the per-conn-type index block. Creating one is O(1):
+    /// it records where the type's peer counts come from, and each direction
+    /// is produced by [`Self::peer_counts`] the first time it is asked for.
     pub(crate) fn ensure_type_index(&self, conn_type: InternedKey) -> Arc<MappedTypeIndex> {
         let key = conn_type.as_u64();
         // Fast path: already built.
@@ -366,9 +380,16 @@ impl MappedGraph {
                 return Arc::clone(block);
             }
         }
-        // Slow path: build. Another writer might win the race; that's
-        // fine — we just discard our build and use theirs.
-        let built = Arc::new(self.build_type_index_block(conn_type));
+        // Another writer might win the race; that's fine — we just discard
+        // our block and use theirs.
+        let built = Arc::new(MappedTypeIndex {
+            persisted: self
+                .peer_base
+                .as_ref()
+                .and_then(|base| base.get(key))
+                .cloned(),
+            ..Default::default()
+        });
         let mut map = match self.type_index.write() {
             Ok(m) => m,
             Err(_) => return built,
@@ -387,7 +408,50 @@ impl MappedGraph {
         block.csr.get_or_init(|| self.build_type_csr(conn_type))
     }
 
-    fn build_type_index_block(&self, conn_type: InternedKey) -> MappedTypeIndex {
+    /// Edge counts of `conn_type` grouped by the far end of `dir`
+    /// (`Outgoing` groups by target, `Incoming` by source), shared by every
+    /// caller until an edge write drops the block.
+    ///
+    /// From the file's persisted counts the requested direction alone is
+    /// decoded, with no edge scan. Otherwise one scan builds both directions,
+    /// as the memory backend's does.
+    pub(crate) fn peer_counts(
+        &self,
+        conn_type: InternedKey,
+        dir: petgraph::Direction,
+    ) -> Arc<HashMap<u32, i64>> {
+        let block = self.ensure_type_index(conn_type);
+        let (wanted, other) = match dir {
+            petgraph::Direction::Outgoing => (&block.out_peer_counts, &block.in_peer_counts),
+            petgraph::Direction::Incoming => (&block.in_peer_counts, &block.out_peer_counts),
+        };
+        Arc::clone(wanted.get_or_init(|| match &block.persisted {
+            Some(persisted) => Arc::new(persisted.counts(dir)),
+            None => {
+                let (targets, sources) = self.scan_peer_counts(conn_type);
+                let (wanted_map, other_map) = match dir {
+                    petgraph::Direction::Outgoing => (targets, sources),
+                    petgraph::Direction::Incoming => (sources, targets),
+                };
+                let _ = other.set(Arc::new(other_map));
+                Arc::new(wanted_map)
+            }
+        }))
+    }
+
+    /// The distinct source nodes of `conn_type`, ascending, at most `max`;
+    /// `None` when the file did not record them and the CSR must be built.
+    pub(crate) fn persisted_sources(
+        &self,
+        conn_type: InternedKey,
+        max: Option<usize>,
+    ) -> Option<Vec<u32>> {
+        let base = self.peer_base.as_ref()?;
+        Some(base.get(conn_type.as_u64())?.sources(max))
+    }
+
+    /// One O(|E|) pass: `(target → count, source → count)` for `conn_type`.
+    fn scan_peer_counts(&self, conn_type: InternedKey) -> (HashMap<u32, i64>, HashMap<u32, i64>) {
         let mut out_peer_counts: HashMap<u32, i64> = HashMap::new();
         let mut in_peer_counts: HashMap<u32, i64> = HashMap::new();
         for er in self.inner.edge_references() {
@@ -403,11 +467,7 @@ impl MappedGraph {
                 .entry(er.source().index() as u32)
                 .or_insert(0) += 1;
         }
-        MappedTypeIndex {
-            out_peer_counts,
-            in_peer_counts,
-            csr: Default::default(),
-        }
+        (out_peer_counts, in_peer_counts)
     }
 
     fn build_type_csr(&self, conn_type: InternedKey) -> MappedTypeCsr {

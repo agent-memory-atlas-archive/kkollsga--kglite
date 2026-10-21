@@ -665,6 +665,17 @@ impl GraphBackend {
         }
     }
 
+    /// Hand a freshly loaded mapped backend the peer counts its `.kgl` recorded.
+    /// A no-op for every other backend.
+    pub(crate) fn install_peer_base(
+        &mut self,
+        base: crate::graph::storage::mapped::peer_base::PeerBase,
+    ) {
+        if let GraphBackend::Mapped(mapped) = self {
+            unique_heap_backend(mapped).install_peer_base(base);
+        }
+    }
+
     /// Hold the disk materialization arenas for one read-query lifetime.
     /// Heap/mapped backends do not materialize through shared arenas.
     pub(crate) fn begin_query(&self) -> Option<DiskQueryGuard> {
@@ -995,8 +1006,8 @@ impl GraphBackend {
         }
     }
 
-    /// Borrow the default heap backend's immutable peer-count histogram.
-    /// Other backends keep their existing owned-result fallback.
+    /// Borrow the in-memory and mapped backends' immutable peer-count
+    /// histogram. Other backends keep their existing owned-result fallback.
     pub(crate) fn cached_edge_counts_grouped_by_peer(
         &self,
         conn_type: InternedKey,
@@ -1014,10 +1025,11 @@ impl GraphBackend {
             GraphBackend::Recording(graph) => graph
                 .inner()
                 .cached_edge_counts_grouped_by_peer(conn_type, dir, deadline)?,
+            GraphBackend::Mapped(graph) => Some(graph.peer_counts(conn_type, dir)),
             // Cold by design: the fork keeps no peer-count cache of its own, so
             // the writer can never publish a count into a reader's snapshot.
             // The owned fallback is correct, just uncached.
-            GraphBackend::Forked(_) | GraphBackend::Mapped(_) | GraphBackend::Disk(_) => None,
+            GraphBackend::Forked(_) | GraphBackend::Disk(_) => None,
         })
     }
 }

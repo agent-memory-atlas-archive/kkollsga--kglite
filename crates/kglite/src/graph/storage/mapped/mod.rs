@@ -12,6 +12,7 @@
 
 pub mod column_store;
 pub mod mmap_vec;
+pub(crate) mod peer_base;
 
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
@@ -70,21 +71,28 @@ pub struct MappedGraph {
     /// heap `StableDiGraph`, so leaving it off would make Mapped the arm that is
     /// silently half-done.
     pub(crate) slot_mirror: SlotMirror,
+    /// Peer counts the loaded `.kgl` recorded, valid until the first edge
+    /// mutation; see [`peer_base`]. `None` for a graph that was built, edited
+    /// or loaded from a file without them.
+    pub(crate) peer_base: Option<Arc<peer_base::PeerBase>>,
 }
 
-/// Per-conn-type edge index for `MappedGraph`. The peer counts are built on
-/// the first typed-edge query (one cheap edge scan, like the memory backend);
-/// the CSR adjacency is built only when a per-node or source-list lookup asks
-/// for it, so count-shaped queries never pay for it.
+/// Per-conn-type edge index for `MappedGraph`. Each direction's peer counts
+/// are produced on first use, from the file's persisted counts when it has
+/// them and otherwise by one edge scan (like the memory backend); the CSR
+/// adjacency is built only when a per-node lookup asks for it, so
+/// count-shaped queries never pay for it.
 #[derive(Debug, Default)]
 pub struct MappedTypeIndex {
     /// target → count of edges of this conn_type landing there.
     /// Powers `count_edges_grouped_by_peer(conn, Outgoing)`.
-    pub out_peer_counts: HashMap<u32, i64>,
+    pub(crate) out_peer_counts: OnceLock<Arc<HashMap<u32, i64>>>,
     /// source → count of edges of this conn_type leaving there.
     /// Powers `count_edges_grouped_by_peer(conn, Incoming)` (the peer is
     /// the source per the trait's `dir=Incoming` semantics).
-    pub in_peer_counts: HashMap<u32, i64>,
+    pub(crate) in_peer_counts: OnceLock<Arc<HashMap<u32, i64>>>,
+    /// This type's counts from the file, when it recorded them.
+    pub(crate) persisted: Option<peer_base::ConnPeers>,
     /// Lazily built adjacency; see [`MappedTypeCsr`].
     pub csr: OnceLock<MappedTypeCsr>,
 }

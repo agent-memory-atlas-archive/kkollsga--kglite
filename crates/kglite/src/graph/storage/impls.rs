@@ -979,6 +979,9 @@ impl GraphRead for MappedGraph {
         conn_type: InternedKey,
         max: Option<usize>,
     ) -> Option<Vec<u32>> {
+        if let Some(sources) = self.persisted_sources(conn_type, max) {
+            return Some(sources);
+        }
         let block = self.ensure_type_index(conn_type);
         let csr = self.type_csr(&block, conn_type);
         let slice = match max {
@@ -989,11 +992,10 @@ impl GraphRead for MappedGraph {
     }
 
     fn lookup_peer_counts(&self, conn_type: InternedKey) -> Option<HashMap<u32, i64>> {
-        let block = self.ensure_type_index(conn_type);
         // Callers use Outgoing semantics (peer = target); the disk helper
         // does the same. Incoming-dir callers go through
         // `count_edges_grouped_by_peer` instead.
-        Some(block.out_peer_counts.clone())
+        Some((*self.peer_counts(conn_type, Direction::Outgoing)).clone())
     }
 
     // ─── OVERRIDE: O(distinct-peers) via the index instead of full scan ──
@@ -1003,12 +1005,7 @@ impl GraphRead for MappedGraph {
         dir: Direction,
         _deadline: Option<Instant>,
     ) -> Result<HashMap<u32, i64>, String> {
-        let block = self.ensure_type_index(conn_type);
-        let peer_counts = match dir {
-            Direction::Outgoing => &block.out_peer_counts,
-            Direction::Incoming => &block.in_peer_counts,
-        };
-        Ok(peer_counts.clone())
+        Ok((*self.peer_counts(conn_type, dir)).clone())
     }
 
     fn count_edges_filtered(

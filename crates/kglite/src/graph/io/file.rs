@@ -2306,6 +2306,10 @@ fn load_portable_columnar(
     // produced, so it is a no-op.
     crate::graph::storage::mode::convert_dir_graph_to_mode(&mut dir_graph, target_mode)
         .map_err(io::Error::other)?;
+    if let Some(indexes) = indexes.filter(|_| dir_graph.graph.is_mapped()) {
+        let base = indexes.peer_base(&dir_graph)?;
+        dir_graph.graph.install_peer_base(base);
+    }
     Ok(Arc::new(dir_graph))
 }
 

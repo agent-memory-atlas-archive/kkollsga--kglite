@@ -3,10 +3,12 @@
 //! as one that built the same indexes on the heap, through writes, a rollback
 //! and a save-and-reload.
 
-use super::index_sections::{with_floor, KIND_ID_KEYS, KIND_ID_NODES, KIND_TYPE_MEMBERS, OWNER};
+use super::index_sections::{with_floors, KIND_PEERS, OWNER};
 use super::mappable::SaveLayout;
 use super::*;
+use crate::graph::schema::InternedKey;
 use crate::graph::session::{execute_mut, execute_read, ExecuteOptions};
+use crate::graph::storage::backend::GraphBackend;
 use crate::graph::storage::disk::type_index::TypeNodesRef;
 use std::collections::HashMap;
 
@@ -163,7 +165,7 @@ fn load_owned(path: &std::path::Path, storage: StorageMode) -> DirGraph {
 fn saved(layout: SaveLayout) -> (tempfile::TempDir, std::path::PathBuf, Arc<DirGraph>) {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    let original = with_floor(50, || save(graph(), &path, layout));
+    let original = with_floors(50, 100, || save(graph(), &path, layout));
     (tmp, path, original)
 }
 
@@ -171,6 +173,13 @@ fn section_names(path: &std::path::Path) -> Vec<String> {
     let bytes = std::fs::read(path).unwrap();
     let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
     metadata.mappable.iter().map(|e| e.name.clone()).collect()
+}
+
+fn peer_base_present(graph: &DirGraph) -> bool {
+    match &graph.graph {
+        GraphBackend::Mapped(mapped) => mapped.peer_base.is_some(),
+        _ => false,
+    }
 }
 
 fn type_is_mapped(graph: &DirGraph, name: &str) -> bool {
@@ -204,6 +213,10 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
         "idx:id:Uni:keys",
         "idx:id:Uni:nodes",
         "idx:id:A%3Ab%25c:keys",
+        "idx:peer:LINKS:out",
+        "idx:peer:LINKS:in",
+        "idx:peer:TAGS:out",
+        "idx:peer:TAGS:in",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -218,15 +231,35 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
     );
 
     let compact = tmp.path().join("compact.kgl");
-    with_floor(50, || save(graph(), &compact, SaveLayout::Compact));
+    with_floors(50, 100, || save(graph(), &compact, SaveLayout::Compact));
     assert_eq!(&std::fs::read(&compact).unwrap()[..4], &V8_MAGIC);
+}
+
+#[test]
+fn an_edge_floor_and_a_node_floor_apply_independently() {
+    let tmp = tempfile::tempdir().unwrap();
+    let nodes_only = tmp.path().join("nodes.kgl");
+    with_floors(50, usize::MAX, || {
+        save(graph(), &nodes_only, SaveLayout::Auto)
+    });
+    let names = section_names(&nodes_only);
+    assert!(names.iter().any(|n| n == "idx:type:Doc"));
+    assert!(names.iter().all(|n| !n.starts_with("idx:peer:")));
+
+    let edges_only = tmp.path().join("edges.kgl");
+    with_floors(usize::MAX, 100, || {
+        save(graph(), &edges_only, SaveLayout::Auto)
+    });
+    let names = section_names(&edges_only);
+    assert!(names.iter().all(|n| !n.starts_with("idx:type:")));
+    assert!(names.iter().any(|n| n == "idx:peer:LINKS:out"));
 }
 
 #[test]
 fn saving_twice_writes_the_same_bytes() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (tmp.path().join("a.kgl"), tmp.path().join("b.kgl"));
-    with_floor(50, || {
+    with_floors(50, 100, || {
         save(graph(), &a, SaveLayout::Auto);
         save(graph(), &b, SaveLayout::Auto);
     });
@@ -261,6 +294,7 @@ fn a_mapped_load_serves_the_recorded_indexes_and_answers_like_the_original() {
         !mapped.id_indices.contains_key("Tag") && !mapped.id_indices.contains_key("Twin"),
         "types the file recorded no id index for are built on first use"
     );
+    assert!(peer_base_present(&mapped));
 
     assert_eq!(probe(&mapped), probe(&original));
     let memory = load(&path, StorageMode::Memory);
@@ -281,6 +315,7 @@ fn a_memory_load_ignores_the_recorded_indexes() {
         Some(TypeNodesRef::Overlay(_))
     ));
     assert!(!memory.id_indices.contains_key("Doc"));
+    assert!(!peer_base_present(&memory));
     assert_eq!(probe(&memory), probe(&original));
 }
 
@@ -291,7 +326,55 @@ fn a_v8_file_loads_into_mapped_storage_as_before() {
     let mapped = load(&path, StorageMode::Mapped);
     assert!(!type_is_mapped(&mapped, "Doc"));
     assert!(!mapped.id_indices.contains_key("Doc"));
+    assert!(!peer_base_present(&mapped));
     assert_eq!(probe(&mapped), probe(&original));
+}
+
+#[test]
+fn persisted_peer_counts_equal_a_scan_and_build_no_csr() {
+    let (_tmp, path, _) = saved(SaveLayout::Auto);
+    let mapped = load(&path, StorageMode::Mapped);
+    let memory = load(&path, StorageMode::Memory);
+    let GraphBackend::Mapped(backend) = &mapped.graph else {
+        panic!("mapped");
+    };
+    for conn in ["LINKS", "TAGS"] {
+        let key = InternedKey::from_str(conn);
+        for dir in [petgraph::Direction::Outgoing, petgraph::Direction::Incoming] {
+            assert_eq!(
+                mapped
+                    .graph
+                    .count_edges_grouped_by_peer(key, dir, None)
+                    .unwrap(),
+                memory
+                    .graph
+                    .count_edges_grouped_by_peer(key, dir, None)
+                    .unwrap(),
+                "{conn} {dir:?}"
+            );
+        }
+        let mut scanned: Vec<u32> = memory
+            .graph
+            .edge_endpoint_keys()
+            .filter(|(_, _, c)| *c == key)
+            .map(|(s, _, _)| s.index() as u32)
+            .collect();
+        scanned.sort_unstable();
+        scanned.dedup();
+        assert_eq!(
+            mapped.graph.sources_for_conn_type_bounded(key, None),
+            Some(scanned.clone())
+        );
+        assert_eq!(
+            mapped.graph.sources_for_conn_type_bounded(key, Some(3)),
+            Some(scanned.into_iter().take(3).collect())
+        );
+        let block = backend.ensure_type_index(key);
+        assert!(
+            block.csr.get().is_none(),
+            "{conn}: counts and sources build no CSR"
+        );
+    }
 }
 
 /// The same write sequence on a file-served mapped graph and on a memory graph
@@ -307,6 +390,11 @@ fn writes_rollback_and_resave_match(overlay: bool) {
         mapped = mapped.clone();
         memory = memory.clone();
         assert!(mapped.graph.is_forked(), "the overlay must be in play");
+    } else {
+        assert!(
+            peer_base_present(&mapped),
+            "the writes start on the loaded backend"
+        );
     }
     assert!(type_is_mapped(&mapped, "Doc"));
 
@@ -377,6 +465,30 @@ fn writes_through_an_overlay_match_a_graph_that_built_its_own_indexes() {
     writes_rollback_and_resave_match(true);
 }
 
+#[test]
+fn an_edge_write_drops_the_persisted_counts_and_a_node_write_keeps_the_type_base() {
+    let (_tmp, path, _) = saved(SaveLayout::Auto);
+    let mut mapped = load_owned(&path, StorageMode::Mapped);
+    assert!(peer_base_present(&mapped));
+    run(&mut mapped, "CREATE (:Doc {id: 5000, n: 5000})");
+    assert!(
+        type_is_mapped(&mapped, "Doc"),
+        "an appended member layers over the mapped list"
+    );
+    assert!(
+        peer_base_present(&mapped),
+        "a node write changes no edge count"
+    );
+    run(
+        &mut mapped,
+        "MATCH (a:Doc {id: 1357}), (b:Doc {id: 1360}) CREATE (a)-[:LINKS]->(b)",
+    );
+    assert!(
+        !peer_base_present(&mapped),
+        "an edge write drops the counts"
+    );
+}
+
 fn flip_in_section(path: &std::path::Path, name: &str) {
     let mut bytes = std::fs::read(path).unwrap();
     let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
@@ -395,6 +507,8 @@ fn a_damaged_index_section_refuses_a_mapped_load() {
         "idx:id:Doc:nodes",
         "idx:id:Uni:keys",
         "idx:id:Uni:nodes",
+        "idx:peer:LINKS:out",
+        "idx:peer:LINKS:in",
     ] {
         let (_tmp, path, _) = saved(SaveLayout::Auto);
         flip_in_section(&path, name);
@@ -462,6 +576,36 @@ fn sections_that_disagree_with_the_topology_are_not_installed() {
     assert_eq!(rows(&graph, "MATCH (d:Doc) RETURN count(d)"), before);
 }
 
+#[test]
+fn only_the_index_owner_and_kinds_are_claimed() {
+    let (_tmp, path, _) = saved(SaveLayout::Auto);
+    let bytes = std::fs::read(&path).unwrap();
+    let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
+    assert!(metadata
+        .mappable
+        .iter()
+        .filter(|e| e.name.starts_with("idx:peer:"))
+        .all(|e| e.owner == OWNER && e.kind == KIND_PEERS));
+}
+
+#[test]
+fn dense_and_hashed_peer_counting_agree() {
+    let (_tmp, path, _) = saved(SaveLayout::Auto);
+    let graph = load(&path, StorageMode::Memory);
+    let dense = index_sections::count_peers_dense(&graph).expect("the fixture fits the budget");
+    let hashed = index_sections::count_peers_hashed(&graph);
+    assert_eq!(dense.len(), 2, "LINKS and TAGS");
+    assert_eq!(dense, hashed);
+    for (by_target, by_source) in dense.values() {
+        assert_eq!(
+            by_target.iter().map(|(_, c)| u64::from(*c)).sum::<u64>(),
+            by_source.iter().map(|(_, c)| u64::from(*c)).sum::<u64>(),
+            "both directions count every edge of the type"
+        );
+        assert!(by_target.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+}
+
 /// A disk-mode save of a graph whose indexes came from `.kgl` sections writes
 /// the same lookups and member lists into `id_indices.bin` / `type_indices.bin`.
 #[test]
@@ -504,21 +648,4 @@ fn section_bases_write_the_disk_index_files_they_serve() {
         };
         assert_eq!(types.slice_for(node_type), Some(served), "{node_type}");
     }
-}
-
-#[test]
-fn every_index_section_carries_the_index_owner_and_a_known_kind() {
-    let (_tmp, path, _) = saved(SaveLayout::Auto);
-    let bytes = std::fs::read(&path).unwrap();
-    let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
-    let index: Vec<_> = metadata
-        .mappable
-        .iter()
-        .filter(|e| e.name.starts_with("idx:"))
-        .collect();
-    assert!(!index.is_empty());
-    assert!(index
-        .iter()
-        .all(|e| e.owner == OWNER
-            && [KIND_TYPE_MEMBERS, KIND_ID_KEYS, KIND_ID_NODES].contains(&e.kind)));
 }
