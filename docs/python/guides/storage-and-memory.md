@@ -78,6 +78,8 @@ The two metrics disagree about mapped files, so name the one you quote.
 
 Freed allocator pages return to the OS only when the allocator is told to collect. `load()`, `save()` and the embedding writers (`import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from`) do that for you. For other seams call `kglite.trim_memory()`.
 
+The MCP server started from the wheel (`kglite-mcp-server`) releases memory itself after every graph load, reload and rebuild. Measured with `phys_footprint` after boot and queries: a 195 MB graph fell from 700-732 MB to 229 MB, and a 134 MB graph from 187-231 MB to 138 MB. A standalone `kglite-mcp-server` binary uses the system allocator and has nothing to release.
+
 If you spawn a subprocess between freeing a store and the trim, the child holds a copy-on-write view of the parent's heap and pins those pages. A removed 50k x 1024 store then stays at 212 MB instead of falling to 17 MB. Trim first, then spawn.
 
 ## Overwriting a served file

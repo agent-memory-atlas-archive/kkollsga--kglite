@@ -42,6 +42,9 @@ pub(crate) fn workspace_activation_transaction(
             ActivationBuild::Plain => None,
             ActivationBuild::Reuse => unreachable!("reuse returned above"),
         };
+        // Opened before the build and closed after the swap, so the producer's
+        // transient buffers and the graph being replaced are both returned.
+        let release_scope = kglite::api::memory::ReleaseScope::enter();
         let prepared = state.prepare_workspace_graph(
             request.path(),
             revisions,
@@ -49,7 +52,9 @@ pub(crate) fn workspace_activation_transaction(
         )?;
         let commit_state = state.clone();
         Ok(PreparedActivation::new(move || {
-            Ok(commit_state.commit_workspace_graph(prepared))
+            let summary = commit_state.commit_workspace_graph(prepared);
+            drop(release_scope);
+            Ok(summary)
         }))
     })
 }

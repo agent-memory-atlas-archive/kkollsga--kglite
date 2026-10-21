@@ -1959,3 +1959,40 @@ fn the_columns_policy_decides_where_an_opened_graphs_columns_live() {
     memory.open_or_create(&p, None).unwrap();
     assert_eq!(mapped_column_sections(&memory), 0);
 }
+
+thread_local! {
+    static SCOPES: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+fn scopes() -> (u32, u32) {
+    SCOPES.with(std::cell::Cell::get)
+}
+
+/// Every route that installs a graph brackets the load and the swap in one
+/// release scope. The hooks count per thread, so concurrent lib tests that
+/// also open graphs do not disturb the assertion.
+#[test]
+fn each_graph_install_route_runs_one_release_scope() {
+    kglite::api::memory::set_release_hooks(kglite::api::memory::ReleaseHooks {
+        enter: || SCOPES.with(|c| c.set((c.get().0 + 1, c.get().1))),
+        leave: || SCOPES.with(|c| c.set((c.get().0, c.get().1 + 1))),
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("g.kgl");
+    seed_big_embeddings(&p);
+
+    let state = GraphState::default();
+    state.open_or_create(&p, None).unwrap();
+    assert_eq!(scopes(), (1, 1), "boot or load_graph");
+    state.open_or_create(&p, None).unwrap();
+    assert_eq!(scopes(), (2, 2), "reload of the same path");
+    assert!(state
+        .open_or_create(&tmp.path().join("missing").join("x.kgl"), None)
+        .is_err());
+    assert_eq!(scopes(), (3, 3), "a failed open still closes its scope");
+
+    let workspace = GraphState::new(Some(WorkspaceGraphMode::LocalWorkspace))
+        .with_workspace_graph(Some(test_hooks()));
+    workspace.build_workspace_graph(tmp.path(), None).unwrap();
+    assert_eq!(scopes(), (4, 4), "workspace or vault build");
+}

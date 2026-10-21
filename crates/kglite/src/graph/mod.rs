@@ -35,6 +35,7 @@ pub mod index_freshness;
 pub mod introspection;
 pub mod io;
 pub mod languages;
+pub(crate) mod memory_release;
 pub mod mutation;
 pub mod ontology;
 pub(crate) mod parallel;

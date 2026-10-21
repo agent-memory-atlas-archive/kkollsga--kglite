@@ -873,6 +873,14 @@ pub mod api {
         };
     }
 
+    /// The allocator-release seam. A host that links its own global allocator
+    /// registers `ReleaseHooks` that return freed pages to the OS; an embedder
+    /// that replaces a large graph (the MCP server) wraps each load or swap in
+    /// a `ReleaseScope`. No hooks registered means no effect.
+    pub mod memory {
+        pub use crate::graph::memory_release::{set_release_hooks, ReleaseHooks, ReleaseScope};
+    }
+
     /// Durable transactions — the write-ahead log (append / recover / replay)
     /// and the write-capture recording layer behind a binding's `durable()`
     /// feature. The in-process WAL mechanism (distinct from the checkpoint

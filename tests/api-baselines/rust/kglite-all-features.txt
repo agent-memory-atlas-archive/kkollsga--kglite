@@ -2365,8 +2365,8 @@ impl core::fmt::Display for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub enum kglite::api::io::SaveLayout
 pub kglite::api::io::SaveLayout::Auto
-pub kglite::api::io::SaveLayout::Mapped
 pub kglite::api::io::SaveLayout::Compact
+pub kglite::api::io::SaveLayout::Mapped
 impl kglite::api::io::SaveLayout
 pub fn kglite::api::io::SaveLayout::from_name(&str) -> core::option::Option<Self>
 impl core::clone::Clone for kglite::api::io::SaveLayout
@@ -2722,6 +2722,19 @@ pub fn kglite::api::io::write_kgl_to<W: core::io::write::Write>(&kglite::api::Di
 pub fn kglite::api::io::write_kgl_to_layout<W: core::io::write::Write>(&kglite::api::DirGraph, &mut W, core::option::Option<u64>, kglite::api::io::SaveLayout) -> core::io::error::Result<()>
 pub fn kglite::api::io::write_kgl_with(&kglite::api::DirGraph, &str, bool) -> core::io::error::Result<()>
 pub type kglite::api::io::RelationshipKeys = std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub mod kglite::api::memory
+pub struct kglite::api::memory::ReleaseHooks
+pub kglite::api::memory::ReleaseHooks::enter: fn()
+pub kglite::api::memory::ReleaseHooks::leave: fn()
+impl core::clone::Clone for kglite::api::memory::ReleaseHooks
+pub fn kglite::api::memory::ReleaseHooks::clone(&self) -> kglite::api::memory::ReleaseHooks
+impl core::marker::Copy for kglite::api::memory::ReleaseHooks
+pub struct kglite::api::memory::ReleaseScope(_)
+impl kglite::api::memory::ReleaseScope
+pub fn kglite::api::memory::ReleaseScope::enter() -> Self
+impl core::ops::drop::Drop for kglite::api::memory::ReleaseScope
+pub fn kglite::api::memory::ReleaseScope::drop(&mut self)
+pub fn kglite::api::memory::set_release_hooks(kglite::api::memory::ReleaseHooks) -> bool
 pub mod kglite::api::mutation
 pub enum kglite::api::mutation::ColumnData
 pub kglite::api::mutation::ColumnData::Boolean(alloc::vec::Vec<core::option::Option<bool>>)

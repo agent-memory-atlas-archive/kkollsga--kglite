@@ -1079,6 +1079,7 @@ fn kglite(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         warning_policy::get_query_warning_policy,
         m
     )?)?;
+    allocator::register_release_hooks();
     m.add_function(wrap_pyfunction!(allocator::trim_memory, m)?)?;
     m.add_function(wrap_pyfunction!(allocator::_seam_trim_count, m)?)?;
     m.add_function(wrap_pyfunction!(_backend_is_forked, m)?)?;

@@ -414,6 +414,7 @@ impl GraphState {
         path: &Path,
         requested_mode: Option<StorageMode>,
     ) -> Result<OpenDisposition> {
+        let _release_scope = kglite::api::memory::ReleaseScope::enter();
         let reuse_existing = read_lock(&self.inner)
             .as_ref()
             .is_some_and(|active| active.source_path.as_deref() == Some(path));

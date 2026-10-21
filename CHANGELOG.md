@@ -81,6 +81,10 @@ before upgrading.
 ### Fixed
 
 - **Memory is returned to the OS after embedding imports, removals and replacements.** `import_embeddings`, `remove_embeddings`, `set_embeddings`, `embed_texts`, `copy_embeddings_from` and their relationship twins now collect the allocator's freed pages when they finish. Before, a removed 50k x 1024 store stayed charged to the process (212 MB against 17 MB after `kglite.trim_memory()`).
+- **The MCP server started from the wheel gives memory back after it loads or reloads a graph.**
+  - Boot, `load_graph`, `reload_graph`, `create_graph`, the lazy file-change reload, workspace activation and vault rebuilds now run inside one release scope. It sets mimalloc's purge delay to 0 for the load and ends with a forced collect.
+  - Before, freed load buffers stayed charged to the process. Measured with macOS `phys_footprint` after boot and queries, release build: a 195 MB graph 700-732 MB to 229 MB, a 134 MB graph 187-231 MB to 138 MB.
+  - The purge delay is not lowered process-wide: purge-on-free regressed in-memory benchmark cells by up to 145 %. A standalone `kglite-mcp-server` binary registers nothing and is unchanged.
 - **Per-value column aggregates (`sum`, `max` and filters over a property column) are back at the 0.20.1 speed** after the shared-column variant added 3-6 % (about 1 ns per row) to the heap read path. Measured in-memory, 300k rows, release build.
 
 ### Security
@@ -91,6 +95,7 @@ before upgrading.
 
 - `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.
 - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`; `Precision`, `QuantStore` and `QuantizationInfo` are public.
+- `kglite::api::memory` (`ReleaseHooks`, `ReleaseScope`, `set_release_hooks`) lets a host that links its own allocator release memory after a graph load; with no hooks registered a scope does nothing.
 - `SaveLayout`, `save_graph_with_layout`, `write_kgl_to_layout`, `open_or_create_graph_in_mode_with` (takes `LoadOptions`), `MapPolicy::from_name`, `Verify::from_name`, `VectorBuf`, `verify_file`, `verify_graph`, `IntegrityReport` and `SectionStatus` are public.
 
 ## [0.20.1] - 2026-10-19

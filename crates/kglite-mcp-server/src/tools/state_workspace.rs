@@ -122,6 +122,7 @@ impl GraphState {
         );
         let changes =
             WorkspaceGraphChanges::Changed(pending_rebuild.changed_paths.iter().cloned().collect());
+        let _release_scope = kglite::api::memory::ReleaseScope::enter();
         match self.prepare_workspace_graph(&target.root, target.revisions.as_deref(), changes) {
             Ok(prepared) => match self.commit_workspace_rebuild(prepared, &pending_rebuild) {
                 WorkspaceRebuildCommit::Installed => {
@@ -373,6 +374,7 @@ impl GraphState {
     /// Build and publish outside activation transactions (boot and lazy-watch
     /// paths). Activation uses the prepare/commit pair directly.
     pub fn build_workspace_graph(&self, root: &Path, revisions: Option<&[String]>) -> Result<()> {
+        let _release_scope = kglite::api::memory::ReleaseScope::enter();
         let prepared =
             self.prepare_workspace_graph(root, revisions, WorkspaceGraphChanges::Full)?;
         self.commit_workspace_graph(prepared);
