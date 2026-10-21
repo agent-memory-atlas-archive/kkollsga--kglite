@@ -1,7 +1,7 @@
 """report.py: markdown tables from MD_WORK/matrix_run{1,2}.json (+ convert.json). Prints to stdout."""
 import json, os, statistics as st
 O = os.environ["MD_WORK"]
-runs = [json.load(open(f"{O}/matrix_run{r}.json")) for r in (1, 2, 3) if os.path.exists(f"{O}/matrix_run{r}.json")]
+runs = [json.load(open(f"{O}/matrix_run{r}.json")) for r in (1, 2, 3, 4) if os.path.exists(f"{O}/matrix_run{r}.json")]
 GR = ["legal", "sodir", "petrel", "codebase", "music", "rms"]
 V = ["A_wheel", "N_default", "N_heap", "C_compact"]
 def cell(r, g, v): return r.get(f"{g}|{v}")  # run 3 covers only some graphs

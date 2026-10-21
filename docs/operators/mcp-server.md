@@ -425,12 +425,12 @@ where the embedding stores of a v9 `.kgl` live. A graph saved with a store of
 - A mapped store costs no resident memory until a search touches it. `ps` and Linux cgroups still count the pages a search has touched; macOS `phys_footprint` does not.
 - The first write to a store copies it to the heap.
 - Write a new file and rename it over the served one. Overwriting it in place (`cp`, `rsync --inplace`) truncates a live mapping, and the next search faults.
-- v9 files (a default save with an embedding store of 4 MiB or more, or any `layout="mapped"` save) are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
+- v9 files (a default save of a graph with an embedding store of 4 MiB or more or a property column buffer of 256 KB or more) are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
 
 ### Column placement
 
 `--columns auto|mapped|memory` (or `extensions.columns.storage`) decides where
-the property columns of a v9 `.kgl` live. A default save writes every column of
+the property columns of a v9 `.kgl` live. A default save writes every column with a buffer of
 256 KB or more uncompressed into the file.
 
 - `auto` (default) reads such a column in place from a regular local file on Unix; the server writes no spill file for it and a second process serving the same file shares the pages.
