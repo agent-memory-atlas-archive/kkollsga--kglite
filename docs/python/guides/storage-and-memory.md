@@ -72,7 +72,7 @@ The two metrics disagree about mapped files, so name the one you quote.
 - Mapped pages are therefore cheaper than heap pages on both platforms, but only macOS footprint shows it as zero.
 - Measured on a 205 MB embedding store (50k vectors x 1024, macOS, release build): load 334 to 54 ms, and footprint after load 242 to 44 MB (76 MB after queries).
 - The first brute-force query after load costs about 13 ms more (15.5 against 2.5 ms), because it faults the pages in and checks the CRC. Warm queries match the heap.
-- A `layout="mapped"` file's string columns are checked at load, which reads every page. The load drops those pages afterwards, so the resident set follows the rows queries read: the MCP server on a 395 MB file went from 656 to 330 MB RSS after boot. Linux uses `madvise(MADV_DONTNEED)` and macOS `msync(MS_INVALIDATE)`; the Linux path was not measured.
+- A `layout="mapped"` file's string columns are checked at load, which reads every page. The load drops those pages afterwards, so the resident set follows the rows queries read: the MCP server on a 395 MB file went from 656 to 330 MB RSS after boot. Linux uses `madvise(MADV_DONTNEED)` and macOS re-maps the range, which keeps the file in the OS cache so the next boot stays warm; the Linux path was not measured.
 - Linux RSS and PSS were not measured for this release.
 
 ### Memory that stays charged after a free

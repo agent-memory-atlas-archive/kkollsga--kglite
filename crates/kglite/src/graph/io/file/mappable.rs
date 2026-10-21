@@ -290,8 +290,12 @@ impl MappedFile {
     ///
     /// Linux uses `madvise(MADV_DONTNEED)`. macOS treats that call as a hint
     /// that leaves the pages in the resident set (measured: 378 MB before and
-    /// after on a fully read 395 MB mapping), so it uses
-    /// `msync(MS_INVALIDATE)`, which dropped the same mapping to 2 MB.
+    /// after on a fully read 395 MB mapping), so it re-maps the range over
+    /// itself (`MAP_FIXED`), which unmaps the resident pages from this process
+    /// and leaves them in the unified buffer cache. `msync(MS_INVALIDATE)`
+    /// also drops the resident set but evicts the file's cached pages, so the
+    /// next open of the file reads it cold from disk (a 395 MB file booted in
+    /// 2.0 s instead of 0.34 s).
     /// Windows has no equivalent and does nothing.
     pub(crate) fn release_resident(&self, offset: usize, len: usize) {
         #[cfg(unix)]
@@ -308,7 +312,19 @@ impl MappedFile {
                 // dropping clean pages of such a mapping loses no data.
                 unsafe {
                     #[cfg(target_os = "macos")]
-                    libc::msync(start as *mut libc::c_void, end - start, libc::MS_INVALIDATE);
+                    {
+                        use std::os::fd::AsRawFd;
+                        // Same file, offset and protection as the original
+                        // mapping, so a failure leaves the pages resident.
+                        libc::mmap(
+                            start as *mut libc::c_void,
+                            end - start,
+                            libc::PROT_READ,
+                            libc::MAP_SHARED | libc::MAP_FIXED,
+                            self.file.as_raw_fd(),
+                            (start - base) as libc::off_t,
+                        );
+                    }
                     #[cfg(not(target_os = "macos"))]
                     libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_DONTNEED);
                 }
