@@ -269,6 +269,13 @@ pub(crate) enum PartData<'a> {
 }
 
 impl PartData<'_> {
+    /// Drop the resident pages of a mapped part once it has been validated.
+    fn release_resident(&self) {
+        if let PartData::Shared(section) = self {
+            section.release_resident();
+        }
+    }
+
     fn bytes(&self) -> &[u8] {
         match self {
             PartData::Shared(section) => section.bytes(),
@@ -417,6 +424,10 @@ impl ColumnStore {
             )
         })?;
         Self::validate_string_offsets(offset_bytes, validated, last, col_name)?;
+        // The checksum and the validation above read every page of both parts;
+        // a query refaults only the rows it touches.
+        text.release_resident();
+        offsets.release_resident();
         let nulls = source.part(col_name, "nulls", SectionDtype::U8, Some(rows as u64))?;
         let data = match text {
             PartData::Shared(section) => MmapBytes::shared(section),

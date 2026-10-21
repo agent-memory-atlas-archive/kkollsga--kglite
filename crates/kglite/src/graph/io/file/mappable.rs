@@ -281,6 +281,43 @@ impl MappedFile {
         self.file.metadata().is_ok_and(|m| m.is_file())
     }
 
+    /// Drop the resident pages inside `offset..offset + len` after a pass that
+    /// touched all of them at load (checksum, UTF-8 validation). The mapping
+    /// is read-only and its pages clean, so the kernel refaults them from the
+    /// file on the next access and nothing is lost; only whole pages inside
+    /// the range are advised, so a neighbouring section's page is never
+    /// dropped. A failed call is ignored: the pages just stay resident.
+    ///
+    /// Linux uses `madvise(MADV_DONTNEED)`. macOS treats that call as a hint
+    /// that leaves the pages in the resident set (measured: 378 MB before and
+    /// after on a fully read 395 MB mapping), so it uses
+    /// `msync(MS_INVALIDATE)`, which dropped the same mapping to 2 MB.
+    /// Windows has no equivalent and does nothing.
+    pub(crate) fn release_resident(&self, offset: usize, len: usize) {
+        #[cfg(unix)]
+        {
+            // SAFETY: `sysconf` takes no pointers.
+            let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(4096) as usize;
+            let base = self.mmap.as_ptr() as usize;
+            let start = (base + offset).next_multiple_of(page);
+            let end = (base + offset + len) / page * page;
+            if end > start {
+                // SAFETY: `start..end` lies inside this live read-only file
+                // mapping (the section was validated against the file
+                // length), so the call cannot touch another allocation, and
+                // dropping clean pages of such a mapping loses no data.
+                unsafe {
+                    #[cfg(target_os = "macos")]
+                    libc::msync(start as *mut libc::c_void, end - start, libc::MS_INVALIDATE);
+                    #[cfg(not(target_os = "macos"))]
+                    libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_DONTNEED);
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = (offset, len);
+    }
+
     /// Whether the file's filesystem is local. Unknown counts as local.
     fn is_local(&self) -> bool {
         filesystem_is_local(&self.file)
@@ -527,6 +564,13 @@ impl MappedSection {
         }
     }
 
+    /// See [`MappedFile::release_resident`]; a heap copy has nothing to drop.
+    pub(crate) fn release_resident(&self) {
+        if let SectionBytes::Mapped { file, offset, len } = &self.bytes {
+            file.release_resident(*offset, *len);
+        }
+    }
+
     /// The payload after confirming the backing file is still intact.
     pub(crate) fn checked_bytes(&self) -> io::Result<&[u8]> {
         if let SectionBytes::Mapped { file, .. } = &self.bytes {
@@ -590,6 +634,11 @@ impl SharedSection {
 
     pub(crate) fn modified_since_open(&self) -> Option<io::Result<bool>> {
         self.section.modified_since_open()
+    }
+
+    /// See [`MappedFile::release_resident`].
+    pub(crate) fn release_resident(&self) {
+        self.section.release_resident();
     }
 
     /// The CRC32 check, run once and remembered.
@@ -821,6 +870,12 @@ impl MappableTable {
             };
             if checked_now {
                 section.verify()?;
+                // A string section is validated again by its column loader,
+                // which releases it after that pass; releasing here would only
+                // fault it back in.
+                if entry.flags & FLAG_UTF8_VALIDATED == 0 {
+                    section.release_resident();
+                }
             }
             sections.push(section);
         }

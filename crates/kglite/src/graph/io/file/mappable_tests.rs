@@ -580,3 +580,56 @@ fn a_loaded_section_exposes_its_table_row() {
     };
     assert!(source.file.is_none());
 }
+
+/// Resident set size in MB, read through `ps` so one probe covers Linux and
+/// macOS; `None` when `ps` is unavailable.
+#[cfg(unix)]
+fn resident_mb() -> Option<f64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<f64>()
+            .ok()?
+            / 1024.0,
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn releasing_a_validated_range_drops_its_resident_pages_and_keeps_the_bytes() {
+    const MB: usize = 1 << 20;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("big.bin");
+    let content: Vec<u8> = (0..96 * MB).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&path, &content).unwrap();
+    let file = MappedFile::open(&path).unwrap();
+
+    let touch = |bytes: &[u8]| bytes.iter().step_by(4096).map(|b| *b as u64).sum::<u64>();
+    let (Some(base), expected) = (resident_mb(), touch(&content)) else {
+        return;
+    };
+    assert_eq!(touch(file.bytes()), expected);
+    let touched = resident_mb().unwrap();
+    assert!(
+        touched - base > 80.0,
+        "the pass should fault the mapping in ({base:.0} -> {touched:.0} MB)"
+    );
+
+    // An unaligned range releases only the whole pages inside it.
+    file.release_resident(100, 96 * MB - 200);
+    let released = resident_mb().unwrap();
+    assert!(
+        touched - released > 60.0,
+        "resident set should drop ({touched:.0} -> {released:.0} MB)"
+    );
+    assert_eq!(touch(file.bytes()), expected, "pages refault from the file");
+    assert_eq!(&file.bytes()[100..4200], &content[100..4200]);
+
+    // Ranges smaller than a page, and past the end of any whole page, are no-ops.
+    file.release_resident(10, 20);
+    assert_eq!(file.bytes()[10], content[10]);
+}
