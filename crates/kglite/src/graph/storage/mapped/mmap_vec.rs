@@ -601,11 +601,34 @@ impl<T: MmapPod> MmapOrVec<T> {
         }
     }
 
+    /// [`Self::get`] with the `Shared` arm inline too, for the per-row numeric
+    /// reads of a column scan: a file-mapped column then costs a pointer read,
+    /// not a call. Kept apart from `get` because inlining the extra arm into
+    /// every caller (string offsets included) measured +7 % on a heap string
+    /// group-by.
+    #[inline(always)]
+    pub fn get_inline(&self, index: usize) -> T {
+        match self {
+            MmapOrVec::Heap { data } => data[index],
+            MmapOrVec::Shared { start, len, .. } => {
+                assert!(index < *len, "MmapOrVec index out of bounds");
+                // SAFETY: `start` addresses `len` elements of the section
+                // `self` keeps mapped (see `SectionStart`), and `index < len`.
+                unsafe { std::ptr::read(start.0.add(index)) }
+            }
+            _ => self.get_backed(index),
+        }
+    }
+
     #[inline(never)]
     fn get_backed(&self, index: usize) -> T {
         match self {
             MmapOrVec::Heap { data } => data[index],
-            MmapOrVec::Shared { .. } => self.as_slice()[index],
+            MmapOrVec::Shared { start, len, .. } => {
+                assert!(index < *len, "MmapOrVec index out of bounds");
+                // SAFETY: as in `get_inline`.
+                unsafe { std::ptr::read(start.0.add(index)) }
+            }
             MmapOrVec::Mapped { mmap, len, .. } => {
                 assert!(index < *len, "MmapOrVec index out of bounds");
                 let offset = index * std::mem::size_of::<T>();

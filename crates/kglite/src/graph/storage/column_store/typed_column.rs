@@ -646,53 +646,53 @@ impl TypedColumn {
                 if idx >= nulls.len() {
                     return None;
                 }
-                if nulls.get(idx) != 0 {
+                if nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                Some(Value::Int64(data.get(idx)))
+                Some(Value::Int64(data.get_inline(idx)))
             }
             TypedColumn::Float64 { data, nulls } => {
                 if idx >= nulls.len() {
                     return None;
                 }
-                if nulls.get(idx) != 0 {
+                if nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                Some(Value::Float64(data.get(idx)))
+                Some(Value::Float64(data.get_inline(idx)))
             }
             TypedColumn::UniqueId { data, nulls } => {
                 if idx >= nulls.len() {
                     return None;
                 }
-                if nulls.get(idx) != 0 {
+                if nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                Some(Value::UniqueId(data.get(idx)))
+                Some(Value::UniqueId(data.get_inline(idx)))
             }
             TypedColumn::Bool { data, nulls } => {
                 if idx >= nulls.len() {
                     return None;
                 }
-                if nulls.get(idx) != 0 {
+                if nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                Some(Value::Boolean(data.get(idx) != 0))
+                Some(Value::Boolean(data.get_inline(idx) != 0))
             }
             TypedColumn::Date { data, nulls } => {
                 if idx >= nulls.len() {
                     return None;
                 }
-                if nulls.get(idx) != 0 {
+                if nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                let date = UNIX_EPOCH_DATE + chrono::Duration::days(data.get(idx) as i64);
+                let date = UNIX_EPOCH_DATE + chrono::Duration::days(data.get_inline(idx) as i64);
                 Some(Value::DateTime(date))
             }
             TypedColumn::Timestamp { data, nulls } => {
-                if idx >= nulls.len() || nulls.get(idx) != 0 {
+                if idx >= nulls.len() || nulls.get_inline(idx) != 0 {
                     return None;
                 }
-                micros_to_timestamp(data.get(idx)).map(Value::Timestamp)
+                micros_to_timestamp(data.get_inline(idx)).map(Value::Timestamp)
             }
             TypedColumn::Str {
                 offsets,
