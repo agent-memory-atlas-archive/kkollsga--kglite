@@ -887,10 +887,17 @@ fn a_damaged_section_of_a_mapped_file_is_named_by_verify_and_never_reaches_the_h
         );
         reached_promotion += 1;
     }
-    assert!(
-        reached_promotion >= 4,
-        "the lazily verified sections must be the ones promotion guards: {reached_promotion}"
-    );
+    // Windows never maps a topology section (an open mapping blocks a save's
+    // rename), so a load copies and verifies every section and refuses a
+    // damaged file before any graph exists to promote.
+    if cfg!(windows) {
+        assert_eq!(reached_promotion, 0, "Windows verifies at load");
+    } else {
+        assert!(
+            reached_promotion >= 4,
+            "the lazily verified sections must be the ones promotion guards: {reached_promotion}"
+        );
+    }
 }
 
 #[test]
@@ -969,12 +976,18 @@ fn a_mapped_frozen_load_keeps_its_arrays_in_the_file() {
     // the endpoint array are read in place. (The filler nodes reused every
     // vacated node slot, so this file has no alive bitset.)
     assert!(section_names(&path).iter().all(|n| n != "topo:alive"));
-    assert_eq!(backend.shared_sections().len(), 8);
-    let templates_and_props = backend.heap_bytes();
-    assert!(
-        templates_and_props < 8 * 1024,
-        "only the per-type templates and the sparse edge properties are heap: {templates_and_props} B"
-    );
+    // Windows copies every section (an open mapping blocks a save's rename),
+    // so nothing is shared there and the heap holds the arrays.
+    if cfg!(windows) {
+        assert_eq!(backend.shared_sections().len(), 0);
+    } else {
+        assert_eq!(backend.shared_sections().len(), 8);
+        let templates_and_props = backend.heap_bytes();
+        assert!(
+            templates_and_props < 8 * 1024,
+            "only the per-type templates and the sparse edge properties are heap: {templates_and_props} B"
+        );
+    }
     let report = verify_graph(&loaded);
     for name in ["topo:nodes", "topo:out_edges", "topo:edges"] {
         assert!(
