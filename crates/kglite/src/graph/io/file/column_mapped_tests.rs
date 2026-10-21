@@ -87,7 +87,7 @@ const PROBE: &str = "MATCH (n:Big) RETURN count(n), sum(n.score), sum(n.ratio), 
 fn large_columns_are_written_to_the_data_region_and_small_ones_stay_inline() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     assert_eq!(magic(&path), V9_MAGIC);
 
     let bytes = std::fs::read(&path).unwrap();
@@ -129,15 +129,11 @@ fn large_columns_are_written_to_the_data_region_and_small_ones_stay_inline() {
 }
 
 #[test]
-fn a_default_save_keeps_columns_compressed() {
+fn a_compact_save_keeps_columns_compressed() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    let original = save_to(big_graph(), &path, SaveLayout::Auto);
-    assert_eq!(
-        magic(&path),
-        V8_MAGIC,
-        "no embeddings and no raw columns: v8 bytes"
-    );
+    let original = save_to(big_graph(), &path, SaveLayout::Compact);
+    assert_eq!(magic(&path), V8_MAGIC, "compact writes v8 bytes");
     let loaded = load_columns(&path, MapPolicy::Mapped);
     assert_eq!(shared_count(&loaded, "Big"), 0);
     assert_eq!(rows(&loaded, PROBE), rows(&original, PROBE));
@@ -147,7 +143,7 @@ fn a_default_save_keeps_columns_compressed() {
 fn every_placement_serves_the_same_answers() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    let original = save_to(big_graph(), &path, SaveLayout::Mapped);
+    let original = save_to(big_graph(), &path, SaveLayout::Auto);
     let expected = rows(&original, PROBE);
 
     let mapped = load_columns(&path, MapPolicy::Mapped);
@@ -198,7 +194,7 @@ fn a_mapped_load_mints_no_spill_directory_and_a_decoded_one_does() {
         &opts(),
     )
     .unwrap();
-    save_to(graph, &path, SaveLayout::Mapped);
+    save_to(graph, &path, SaveLayout::Auto);
 
     let spill_dirs =
         |graph: &DirGraph| -> Vec<std::path::PathBuf> { graph.temp_dirs.lock().unwrap().clone() };
@@ -217,35 +213,36 @@ fn a_mapped_load_mints_no_spill_directory_and_a_decoded_one_does() {
     // A monotonic integer column stays delta-compressed in the file, so its
     // decode still spills under every policy: the price of the smaller file.
     let path = tmp.path().join("seq.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let mapped = load_columns(&path, MapPolicy::Mapped);
     assert!(spill_dirs(&mapped).iter().any(|dir| dir.exists()));
 }
 
 #[test]
-fn an_unrequested_columns_policy_decodes_in_memory_mode_and_maps_in_mapped_mode() {
+fn an_unrequested_columns_policy_maps_in_every_storage_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let path_str = path.to_str().unwrap();
     let shared =
         |options: &LoadOptions| shared_count(&load_file_with(path_str, options).unwrap(), "Big");
 
-    assert_eq!(
-        shared(&LoadOptions::new()),
-        0,
-        "in-memory mode decodes unrequested columns"
-    );
     // Auto never maps on Windows, where a mapped file cannot be replaced.
+    let maps = cfg!(unix);
     assert_eq!(
-        shared(&LoadOptions::new().with_columns(MapPolicy::Auto)) > 0,
-        cfg!(unix),
-        "an explicit Auto maps even in memory mode (unix)"
+        shared(&LoadOptions::new()) > 0,
+        maps,
+        "in-memory mode maps unrequested columns (unix)"
     );
     assert_eq!(
         shared(&LoadOptions::new().with_storage(StorageMode::Mapped)) > 0,
-        cfg!(unix),
-        "mapped storage mode keeps Auto (unix)"
+        maps,
+        "mapped storage mode maps unrequested columns (unix)"
+    );
+    assert_eq!(
+        shared(&LoadOptions::new().with_columns(MapPolicy::Memory)),
+        0,
+        "an explicit Memory decodes in memory mode"
     );
     assert_eq!(
         shared(
@@ -262,7 +259,7 @@ fn an_unrequested_columns_policy_decodes_in_memory_mode_and_maps_in_mapped_mode(
 fn the_first_write_promotes_only_the_written_column_and_leaves_snapshots_mapped() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let mut graph = load_columns(&path, MapPolicy::Mapped);
     let before = shared_count(&graph, "Big");
     let snapshot = Arc::clone(&graph);
@@ -321,17 +318,11 @@ fn the_first_write_promotes_only_the_written_column_and_leaves_snapshots_mapped(
 fn a_mapped_graph_saves_to_a_v9_file_and_over_its_own_path() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let mut loaded = load_columns(&path, MapPolicy::Mapped);
     let expected = rows(&loaded, PROBE);
 
-    save_graph_with_layout(
-        &mut loaded,
-        path.to_str().unwrap(),
-        true,
-        SaveLayout::Mapped,
-    )
-    .unwrap();
+    save_graph_with_layout(&mut loaded, path.to_str().unwrap(), true, SaveLayout::Auto).unwrap();
     assert_eq!(magic(&path), V9_MAGIC);
     // Windows promotes before the rename; elsewhere the old inode stays mapped.
     assert_eq!(shared_count(&loaded, "Big") > 0, cfg!(unix));
@@ -360,7 +351,7 @@ fn a_mapped_graph_saves_to_a_v9_file_and_over_its_own_path() {
 fn promotion_before_a_windows_save_releases_every_column_mapping() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let mut graph = load_columns(&path, MapPolicy::Mapped);
     let expected = rows(&graph, PROBE);
     assert!(shared_count(&graph, "Big") > 0);
@@ -406,7 +397,7 @@ fn flip_byte_in(path: &std::path::Path, section: &str, at: usize, refresh_crc: b
 fn a_corrupt_string_section_is_refused_at_open_and_a_numeric_one_by_verify() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
 
     let numeric = tmp.path().join("numeric.kgl");
     std::fs::copy(&path, &numeric).unwrap();
@@ -427,7 +418,7 @@ fn a_corrupt_string_section_is_refused_at_open_and_a_numeric_one_by_verify() {
     let mut arc = graph;
     let copy = tmp.path().join("copy.kgl");
     assert!(
-        save_graph_with_layout(&mut arc, copy.to_str().unwrap(), true, SaveLayout::Mapped).is_err()
+        save_graph_with_layout(&mut arc, copy.to_str().unwrap(), true, SaveLayout::Auto).is_err()
     );
 
     for policy in [MapPolicy::Mapped, MapPolicy::Memory] {
@@ -448,7 +439,7 @@ fn a_corrupt_string_section_is_refused_at_open_and_a_numeric_one_by_verify() {
 fn invalid_utf8_with_a_valid_digest_is_refused_at_open() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     flip_byte_in(&path, "col:Big:label:bytes", 10, true);
     for policy in [MapPolicy::Mapped, MapPolicy::Memory] {
         let error = load_file_with(
@@ -465,7 +456,7 @@ fn invalid_utf8_with_a_valid_digest_is_refused_at_open() {
 fn clones_of_a_mapped_column_buffer_share_the_mapping() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let graph = load_columns(&path, MapPolicy::Mapped);
     let store = graph.column_store("Big").unwrap();
     let copy = (**store).clone();
@@ -481,7 +472,7 @@ fn mapped_storage_mode_keeps_columns_shared_until_written() {
     use crate::graph::storage::mode::StorageMode;
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     let expected = rows(&load_columns(&path, MapPolicy::Memory), PROBE);
 
     let mut graph = load_file_with(
@@ -519,19 +510,15 @@ fn mapped_storage_mode_keeps_columns_shared_until_written() {
     );
 }
 
-/// A numeric column section decoded onto the heap (the default for an
-/// in-memory load) is checked in the same pass, since nothing re-checks the
-/// copy afterwards.
+/// A numeric column section decoded onto the heap is checked in the same
+/// pass, since nothing re-checks the copy afterwards. A mapped one is checked
+/// at first use instead (see `a_corrupt_string_section_is_refused_at_open_and_a_numeric_one_by_verify`).
 #[test]
-fn a_corrupt_numeric_section_is_refused_by_a_default_in_memory_load() {
+fn a_corrupt_numeric_section_is_refused_by_a_memory_load() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     flip_byte_in(&path, "col:Big:ratio:data", 100, false);
-    let error = load_file_with(path.to_str().unwrap(), &LoadOptions::new())
-        .map(|_| ())
-        .unwrap_err();
-    assert!(error.to_string().contains("corrupt"), "{error}");
     let error = load_file_with(
         path.to_str().unwrap(),
         &LoadOptions::new().with_columns(MapPolicy::Memory),
@@ -539,6 +526,11 @@ fn a_corrupt_numeric_section_is_refused_by_a_default_in_memory_load() {
     .map(|_| ())
     .unwrap_err();
     assert!(error.to_string().contains("corrupt"), "{error}");
+    if cfg!(unix) {
+        // The default load maps it, so the damage surfaces at verify.
+        let graph = load_file_with(path.to_str().unwrap(), &LoadOptions::new()).unwrap();
+        assert!(!verify_graph(&graph).is_ok());
+    }
 }
 
 /// A column write promotes the buffer to the heap; promoting a mapped buffer
@@ -548,7 +540,7 @@ fn a_corrupt_numeric_section_is_refused_by_a_default_in_memory_load() {
 fn a_column_write_does_not_promote_a_corrupt_mapped_buffer() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    save_to(big_graph(), &path, SaveLayout::Mapped);
+    save_to(big_graph(), &path, SaveLayout::Auto);
     flip_byte_in(&path, "col:Big:ratio:data", 100, false);
     let mut graph = load_columns(&path, MapPolicy::Mapped);
     let before = shared_count(&graph, "Big");
@@ -566,8 +558,7 @@ fn a_column_write_does_not_promote_a_corrupt_mapped_buffer() {
     assert_eq!(shared_count(&graph, "Big"), before, "nothing was promoted");
     let copy = tmp.path().join("copy.kgl");
     assert!(
-        save_graph_with_layout(&mut graph, copy.to_str().unwrap(), true, SaveLayout::Mapped)
-            .is_err()
+        save_graph_with_layout(&mut graph, copy.to_str().unwrap(), true, SaveLayout::Auto).is_err()
     );
     assert!(!copy.exists());
 }

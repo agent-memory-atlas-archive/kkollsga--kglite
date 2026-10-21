@@ -210,14 +210,9 @@ pub struct LoadOptions {
     /// Decoupled from [`Self::storage`], which decides what the graph
     /// *continues* in. A container with no mappable sections ignores it.
     pub embeddings: MapPolicy,
-    /// Same choice for column payloads of a v9 container. Unless set through
-    /// [`Self::with_columns`], a graph that loads into the in-memory storage
-    /// mode resolves this to `Memory` and every other mode to `Auto`; see
-    /// [`Self::columns_for`].
+    /// Same choice for column payloads of a v9 container. `Auto` (the
+    /// default, in every storage mode) maps the columns a save wrote raw.
     pub columns: MapPolicy,
-    /// Whether [`Self::with_columns`] was called, so an explicit `Auto` is not
-    /// mistaken for the unset default.
-    pub(crate) columns_requested: bool,
     /// CRC32 verification of mappable sections; `KGLITE_VERIFY=eager` sets
     /// the default. See [`Verify`].
     pub verify: Verify,
@@ -234,7 +229,6 @@ impl LoadOptions {
             max_load_bytes: max_load_bytes_default(),
             embeddings: DEFAULT_EMBEDDINGS_POLICY,
             columns: MapPolicy::Auto,
-            columns_requested: false,
             verify: verify_default(),
         }
     }
@@ -269,24 +263,7 @@ impl LoadOptions {
     /// Choose how column payloads of a v9 container are held.
     pub fn with_columns(mut self, policy: MapPolicy) -> Self {
         self.columns = policy;
-        self.columns_requested = true;
         self
-    }
-
-    /// The column placement for a load that ends in `mode`. An explicit
-    /// request wins. Unrequested, the in-memory mode decodes columns
-    /// (`Memory`): measured at release profile (2026-10-20, 50k-row graph,
-    /// min of three agreeing runs) a column scan over mapped file pages ran
-    /// 4-9 % slower than over decoded ones, past the 5 % budget in-memory mode
-    /// is held to. Every other mode keeps `Auto`.
-    pub(crate) fn columns_for(&self, mode: StorageMode) -> MapPolicy {
-        if self.columns_requested {
-            self.columns
-        } else if mode == StorageMode::Memory {
-            MapPolicy::Memory
-        } else {
-            MapPolicy::Auto
-        }
     }
 
     /// Set CRC32 verification, outranking `KGLITE_VERIFY`.

@@ -2351,7 +2351,6 @@ pub fn kglite::api::io::SaveError::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 #[non_exhaustive] pub enum kglite::api::io::SaveLayout
 pub kglite::api::io::SaveLayout::Auto
 pub kglite::api::io::SaveLayout::Compact
-pub kglite::api::io::SaveLayout::Mapped
 impl kglite::api::io::SaveLayout
 pub fn kglite::api::io::SaveLayout::from_name(&str) -> core::option::Option<Self>
 impl core::clone::Clone for kglite::api::io::SaveLayout

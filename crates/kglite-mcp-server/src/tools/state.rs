@@ -458,9 +458,9 @@ impl GraphState {
         if let Some(policy) = self.embeddings_policy {
             load_options = load_options.with_embeddings(policy);
         }
-        // The server maps columns of any storage mode unless told otherwise;
-        // the engine's own unrequested default is `Memory` for in-memory mode.
-        load_options = load_options.with_columns(self.columns_policy.unwrap_or(MapPolicy::Auto));
+        if let Some(policy) = self.columns_policy {
+            load_options = load_options.with_columns(policy);
+        }
         let opened = open_or_create_graph_in_mode_with(
             path,
             requested_mode,

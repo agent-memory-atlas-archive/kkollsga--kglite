@@ -1900,7 +1900,7 @@ fn the_embeddings_policy_decides_where_an_opened_graphs_vectors_live() {
 }
 
 /// A graph whose `Doc.score` / `Doc.ratio` columns clear the 256 KB floor and
-/// do not delta-compress, saved with `SaveLayout::Mapped` so those columns sit in the data region.
+/// do not delta-compress, saved with `SaveLayout::Auto` so those columns sit in the data region.
 fn seed_big_columns(path: &std::path::Path) {
     let mut dir = kglite::api::storage::new_dir_graph_in_mode(StorageMode::Memory, None)
         .expect("create the graph");
@@ -1918,7 +1918,7 @@ fn seed_big_columns(path: &std::path::Path) {
         &mut graph,
         path.to_str().expect("utf-8 path"),
         true,
-        kglite::api::io::SaveLayout::Mapped,
+        kglite::api::io::SaveLayout::Auto,
     )
     .expect("save");
 }

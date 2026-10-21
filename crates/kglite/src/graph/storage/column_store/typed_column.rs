@@ -370,6 +370,14 @@ fn str_at<'c>(
 /// Column data smaller than this threshold is loaded into heap Vec instead of
 /// being written to a temp file and mmap'd. Avoids file I/O overhead for small columns.
 pub(super) const MMAP_THRESHOLD: usize = 262_144; // 256 KB
+
+/// Whether a decoded column buffer of `len` bytes leaves the heap. The one
+/// rule behind three decisions that must agree: a v8 load spills such a buffer
+/// to a file, a save writes it raw into the data region, and a v9 load maps
+/// it from the file, so a default save/load cycle spills nothing.
+pub(crate) fn buffer_leaves_heap(len: usize) -> bool {
+    len >= MMAP_THRESHOLD
+}
 pub(super) static NEXT_TEMP_COLUMN_FILE: AtomicU64 = AtomicU64::new(0);
 
 const UNIX_EPOCH_DATE: NaiveDate = match NaiveDate::from_ymd_opt(1970, 1, 1) {

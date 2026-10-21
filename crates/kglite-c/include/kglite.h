@@ -1215,11 +1215,11 @@ KgliteStatusCode kglite_load_file_with_options(const char *path,
  * [`kglite_save_graph_durable`] with a container layout.
  *
  * `layout` `0` writes the default container: a graph with an embedding store
- * of 4 MiB or more saves as `.kgl` v9, whose raw vectors a load can map.
+ * or a property column of 256 KB or more saves as `.kgl` v9, whose raw
+ * buffers a load can map instead of spilling.
  * `1` (compact) writes the v8 container with every section compressed, which
  * every kglite release can read; use it for files older readers must open.
- * `2` (mapped) is the default plus the large property columns raw, so a load
- * can serve them from the file. Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
+ * Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
  * graph ignores the layout. Everything else is as `kglite_save_graph_durable`.
  *
  * # Safety

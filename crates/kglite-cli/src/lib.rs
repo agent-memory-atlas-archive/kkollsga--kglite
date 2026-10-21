@@ -162,9 +162,8 @@ enum Command {
         /// Where a v9 `.kgl`'s property columns live: `auto` (read a column
         /// of 256 KB or more in place from a regular local file), `mapped`
         /// (read every column in place) or `memory` (decode every column to
-        /// the heap, spilling large ones to a temp file). Unset, an in-memory
-        /// graph decodes and other storage modes use `auto`. A v8 or older
-        /// file ignores it.
+        /// the heap, spilling large ones to a temp file). Unset means `auto`. A
+        /// v8 or older file ignores it.
         #[arg(long, value_name = "auto|mapped|memory",
               value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
                   .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]

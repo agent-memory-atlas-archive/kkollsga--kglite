@@ -39,10 +39,11 @@ pub use typed_column::TypedColumn;
 mod displaced;
 #[cfg(test)]
 pub(crate) use overlay::flattens;
+pub(crate) use typed_column::buffer_leaves_heap;
+use typed_column::NEXT_TEMP_COLUMN_FILE;
 #[cfg(test)]
 pub(crate) use typed_column::{column_clones, reset_column_clones};
 pub(crate) use typed_column::{exact_micros, micros_to_timestamp, DAY_US, EPOCH_DAYS_FROM_CE};
-use typed_column::{MMAP_THRESHOLD, NEXT_TEMP_COLUMN_FILE};
 
 use crate::datatypes::values::Value;
 use crate::graph::core::filtering::str_values_equal;
@@ -1768,7 +1769,7 @@ impl ColumnStore {
 
     /// Load columns from the portable packed byte representation.
     ///
-    /// If `temp_dir` is `Some`, a column of [`MMAP_THRESHOLD`] bytes or more is
+    /// If `temp_dir` is `Some`, a column with a buffer that [`buffer_leaves_heap`] is
     /// written to a file there and mmap'd (for larger-than-RAM support);
     /// smaller ones, and every column when it is `None`, load onto the heap.
     /// The directory is created at the first such write, so a `Some` whose
@@ -2314,7 +2315,7 @@ impl ColumnStore {
 
     /// Create the spill directory for a column that is about to be written to
     /// it. Called at the write, never at the load: a `.kgl` whose every column
-    /// stays under [`MMAP_THRESHOLD`] must leave no directory behind, and a
+    /// stays under the spill threshold ([`buffer_leaves_heap`]) must leave no directory behind, and a
     /// mkdir a load does not need is one more thing to race with another
     /// load's cleanup.
     fn mint_spill_dir(dir: &Path) -> io::Result<()> {
@@ -2345,7 +2346,7 @@ impl ColumnStore {
         }
 
         // Skip mmap for small columns — file I/O overhead exceeds memory savings.
-        if let Some(dir) = temp_dir.filter(|_| bytes.len() >= MMAP_THRESHOLD) {
+        if let Some(dir) = temp_dir.filter(|_| buffer_leaves_heap(bytes.len())) {
             Self::mint_spill_dir(dir)?;
             let file_id = NEXT_TEMP_COLUMN_FILE.fetch_add(1, Ordering::Relaxed);
             let path = dir.join(format!("column_{file_id}.{ext}"));
@@ -2383,7 +2384,7 @@ impl ColumnStore {
         ext: &str,
     ) -> io::Result<MmapBytes> {
         // Skip mmap for small data — file I/O overhead exceeds memory savings
-        if let Some(dir) = temp_dir.filter(|_| bytes.len() >= MMAP_THRESHOLD) {
+        if let Some(dir) = temp_dir.filter(|_| buffer_leaves_heap(bytes.len())) {
             Self::mint_spill_dir(dir)?;
             let file_id = NEXT_TEMP_COLUMN_FILE.fetch_add(1, Ordering::Relaxed);
             let path = dir.join(format!("column_{file_id}.{ext}"));

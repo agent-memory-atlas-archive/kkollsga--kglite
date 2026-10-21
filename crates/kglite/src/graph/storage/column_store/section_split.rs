@@ -43,23 +43,23 @@ pub(crate) struct SplitColumn<'a> {
 /// The columns of one store a save has claimed for the data region.
 pub(crate) struct ColumnSplit<'a> {
     pub(crate) columns: Vec<SplitColumn<'a>>,
-    min_bytes: usize,
+    claims: bool,
 }
 
 impl<'a> ColumnSplit<'a> {
-    /// A split that claims columns of at least `min_bytes` bytes; `usize::MAX`
-    /// claims nothing.
-    pub(crate) fn new(min_bytes: usize) -> Self {
+    /// A split that claims the columns a load would otherwise spill (see
+    /// [`buffer_leaves_heap`]) when `claims` is set, and nothing otherwise.
+    pub(crate) fn new(claims: bool) -> Self {
         ColumnSplit {
             columns: Vec::new(),
-            min_bytes,
+            claims,
         }
     }
 
     /// The same claims with their bytes copied out of the store they borrowed.
     pub(crate) fn into_owned(self) -> ColumnSplit<'static> {
         ColumnSplit {
-            min_bytes: self.min_bytes,
+            claims: self.claims,
             columns: self
                 .columns
                 .into_iter()
@@ -82,7 +82,7 @@ impl<'a> ColumnSplit<'a> {
     }
 
     /// Take `col` for the data region if it is a fixed-width or string column
-    /// of at least the split's size floor. Little-endian hosts only: the
+    /// with a buffer that [`buffer_leaves_heap`]. Little-endian hosts only: the
     /// section bytes are the in-memory bytes.
     pub(crate) fn claim(&mut self, name: &str, col: &'a TypedColumn) -> bool {
         if !cfg!(target_endian = "little") {
@@ -91,8 +91,11 @@ impl<'a> ColumnSplit<'a> {
         let Some(parts) = col.split_parts() else {
             return false;
         };
-        let total: usize = parts.iter().map(|part| part.bytes.len()).sum();
-        if total < self.min_bytes {
+        if !self.claims
+            || !parts
+                .iter()
+                .any(|part| buffer_leaves_heap(part.bytes.len()))
+        {
             return false;
         }
         self.columns.push(SplitColumn {

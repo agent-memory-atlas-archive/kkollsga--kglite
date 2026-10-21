@@ -22,7 +22,6 @@ use super::mappable::{
     MappableTable, MappedFile, MappedSection, Placement, SaveLayout, SectionDtype,
 };
 use crate::graph::schema::{DirGraph, EmbeddingStore};
-use crate::graph::storage::mode::StorageMode;
 use crate::graph::vector_buf::VectorBuf;
 
 pub(super) const NODE_OWNER: &str = "embeddings";
@@ -160,18 +159,15 @@ pub(super) fn collect_embedding_sections(
 /// whether its sections are mapped or copied (`LoadOptions::embeddings`). The
 /// decision is made once per store, from the vector section's length, so the
 /// norms always follow the vectors. Column sections are placed per column by
-/// `LoadOptions::columns_for(target_mode)` (`None` when the recorded mode is
-/// unreadable, which the load refuses next); sections of other classes go to
-/// the heap.
+/// `LoadOptions::columns`; sections of other classes go to the heap.
 pub(super) fn open_table(
     entries: &[MapEntry],
     bytes: &[u8],
     base: u64,
     file: Option<&Arc<MappedFile>>,
     options: &LoadOptions,
-    target_mode: Option<StorageMode>,
 ) -> io::Result<MappableTable> {
-    let columns_policy = target_mode.map_or(options.columns, |mode| options.columns_for(mode));
+    let columns_policy = options.columns;
     let lengths: HashMap<&str, u64> = entries.iter().map(|e| (e.name.as_str(), e.len)).collect();
     let columns = super::column_sections::ColumnPlacer::new(entries);
     MappableTable::open_placed(entries, bytes, base, file, options.verify, |entry| {

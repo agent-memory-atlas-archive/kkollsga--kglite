@@ -45,7 +45,7 @@ def _build() -> kglite.KnowledgeGraph:
 @pytest.fixture(scope="module")
 def v9(tmp_path_factory):
     path = str(tmp_path_factory.mktemp("cols") / "g.kgl")
-    _build().save(path, layout="mapped")
+    _build().save(path)
     return path
 
 
@@ -57,7 +57,7 @@ def _rows(graph):
     return graph.cypher(PROBE).to_list()
 
 
-def test_a_mapped_save_is_v9_and_compact_is_v8(v9, tmp_path):
+def test_a_default_save_is_v9_and_compact_is_v8(v9, tmp_path):
     with open(v9, "rb") as f:
         assert f.read(4) == V9
     compact = str(tmp_path / "compact.kgl")
@@ -75,9 +75,8 @@ def test_every_placement_answers_identically(v9, tmp_path):
         graph = kglite.load(v9, columns="mapped", storage=storage)
         assert _rows(graph) == expected, storage
         assert _col_sections(graph), storage
-    # Unrequested: an in-memory graph decodes (mapped scans measured >5 % slower),
-    # every other storage mode maps; an explicit "auto" maps in both.
-    assert _col_sections(kglite.load(v9)) == []
+    # Unrequested means "auto": every storage mode maps; "memory" decodes.
+    assert _col_sections(kglite.load(v9)) != []
     assert _col_sections(kglite.load(v9, storage="mapped")) != []
     assert _col_sections(kglite.load(v9, columns="auto")) != []
     assert _col_sections(kglite.load(v9, columns="memory")) == []
@@ -116,10 +115,10 @@ def test_the_first_write_promotes_one_column_and_a_copy_keeps_reading_the_file(v
 
 def test_saving_over_the_loaded_path_keeps_working(v9, tmp_path):
     path = str(tmp_path / "again.kgl")
-    _build().save(path, layout="mapped")
+    _build().save(path)
     graph = kglite.load(path, columns="mapped")
     expected = _rows(graph)
-    graph.save(path, layout="mapped")
+    graph.save(path)
     assert _rows(graph) == expected
     assert _rows(kglite.load(path, columns="mapped")) == expected
     assert graph.verify_integrity()["ok"]
@@ -143,7 +142,7 @@ def _flip(path: str, section_marker: bytes, offset: int) -> None:
 
 def test_corruption_is_found_where_the_design_promises(tmp_path):
     good = str(tmp_path / "good.kgl")
-    _build().save(good, layout="mapped")
+    _build().save(good)
 
     numeric = str(tmp_path / "numeric.kgl")
     open(numeric, "wb").write(open(good, "rb").read())
@@ -174,7 +173,7 @@ def test_a_mapped_load_writes_no_spill_directory(tmp_path):
         "title: 't' + toString(i), score: (i * 7919) % 40009 * 104729, ratio: i / 7.0}) "
     )
     path = str(tmp_path / "g.kgl")
-    graph.save(path, layout="mapped")
+    graph.save(path)
     spill = tmp_path / "spill"
     spill.mkdir()
     script = textwrap.dedent(
@@ -251,7 +250,7 @@ def test_a_mapped_load_writes_no_bytes_where_a_decoded_one_writes_the_columns(tm
         "score: (i * 7919) % 1000003 * 104729, ratio: i / 7.0})"
     )
     path = str(tmp_path / "g.kgl")
-    graph.save(path, layout="mapped")
+    graph.save(path)
     script = textwrap.dedent(
         """
         import os, sys, kglite
@@ -279,11 +278,7 @@ def test_a_mapped_load_writes_no_bytes_where_a_decoded_one_writes_the_columns(tm
     assert spilled("memory") >= 1_000_000 * 8 * 3 * 0.9  # id, score, ratio at 8 bytes a row
 
 
-def test_a_default_save_keeps_columns_compressed(tmp_path):
-    path = str(tmp_path / "default.kgl")
-    _build().save(path)
-    with open(path, "rb") as f:
-        assert f.read(4) == V8
-    assert _col_sections(kglite.load(path, columns="mapped")) == []
-    with pytest.raises(ValueError, match="layout must be"):
-        _build().save(str(tmp_path / "x.kgl"), layout="raw")
+def test_layout_values_are_auto_and_compact(tmp_path):
+    for layout in ("mapped", "raw"):
+        with pytest.raises(ValueError, match="layout must be"):
+            _build().save(str(tmp_path / "x.kgl"), layout=layout)

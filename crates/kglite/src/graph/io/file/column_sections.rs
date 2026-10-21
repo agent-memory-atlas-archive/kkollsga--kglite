@@ -20,18 +20,13 @@ use super::mappable::{
 };
 use super::*;
 use crate::graph::storage::column_store::{
-    ColumnSectionSource, ColumnSplit, PackedDecode, PartData,
+    buffer_leaves_heap, ColumnSectionSource, ColumnSplit, PackedDecode, PartData,
 };
 
 pub(super) const OWNER: &str = "columns";
 
 /// Section class (`MapEntry::kind`) of every column buffer.
 pub(super) const KIND_COLUMN: u8 = 3;
-
-/// Writer floor: a column whose buffers total at least this many bytes moves
-/// to the data region. Equal to the size at which a v8 load spills a column,
-/// and the load-side `Auto` floor for the same reason.
-pub(crate) const COLUMN_MIN_BYTES: usize = 256 * 1024;
 
 fn section_name(type_name: &str, column: &str, suffix: &str) -> String {
     format!("col:{}:{}:{suffix}", escape(type_name), escape(column))
@@ -57,10 +52,7 @@ pub(super) fn encode_column_sections(
     codec: serde_codec::CodecVersion,
     layout: SaveLayout,
 ) -> io::Result<EncodedColumns<'_>> {
-    let min_bytes = match layout {
-        SaveLayout::Mapped => COLUMN_MIN_BYTES,
-        _ => usize::MAX,
-    };
+    let claims = layout != SaveLayout::Compact;
     let mut meta_out = Vec::new();
     let mut data_out = Vec::new();
     let mut sections = Vec::new();
@@ -74,14 +66,14 @@ pub(super) fn encode_column_sections(
         // written from its columns, so they must hold every row.
         let (store, packed, split) = match store.with_heap_tail_folded() {
             Cow::Borrowed(store) => {
-                let mut split = ColumnSplit::new(min_bytes);
+                let mut split = ColumnSplit::new(claims);
                 // v6: integer columns pick their smaller encoding per column.
                 let packed =
                     store.write_packed_split(&graph.interner, codec, int_encoding, &mut split)?;
                 (Cow::Borrowed(store), packed, split)
             }
             Cow::Owned(store) => {
-                let mut split = ColumnSplit::new(min_bytes);
+                let mut split = ColumnSplit::new(claims);
                 let packed =
                     store.write_packed_split(&graph.interner, codec, int_encoding, &mut split)?;
                 let split = split.into_owned();
@@ -133,7 +125,7 @@ pub(super) fn encode_column_sections(
 
 /// Decides, per column, whether a load maps its sections or decodes them.
 pub(super) struct ColumnPlacer {
-    totals: HashMap<String, u64>,
+    largest: HashMap<String, u64>,
 }
 
 fn column_stem(name: &str) -> &str {
@@ -142,30 +134,38 @@ fn column_stem(name: &str) -> &str {
 
 impl ColumnPlacer {
     pub(super) fn new(entries: &[MapEntry]) -> Self {
-        let mut totals: HashMap<String, u64> = HashMap::new();
+        let mut largest: HashMap<String, u64> = HashMap::new();
         for entry in entries.iter().filter(|e| e.kind == KIND_COLUMN) {
-            *totals
+            let biggest = largest
                 .entry(column_stem(&entry.name).to_string())
-                .or_default() += entry.len;
+                .or_default();
+            *biggest = (*biggest).max(entry.len);
         }
-        ColumnPlacer { totals }
+        ColumnPlacer { largest }
     }
 
-    /// One decision for all of a column's buffers, made from their total size,
-    /// so a column is never half mapped.
+    /// One decision for all of a column's buffers, made from its largest
+    /// buffer against the rule a spill uses ([`buffer_leaves_heap`]), so a
+    /// column is never half mapped and `Auto` maps exactly what a v8 load
+    /// would have spilled.
     pub(super) fn place(
         &self,
         entry: &MapEntry,
         file: Option<&Arc<MappedFile>>,
         policy: MapPolicy,
     ) -> Placement {
-        let total = self
-            .totals
+        let largest = self
+            .largest
             .get(column_stem(&entry.name))
             .copied()
             .unwrap_or(entry.len);
-        let ctx = MapContext::host(file.map(|f| &**f), total);
-        if resolve_mapping(policy, COLUMN_MIN_BYTES as u64, &ctx) {
+        let ctx = MapContext::host(file.map(|f| &**f), largest);
+        let auto_floor = if buffer_leaves_heap(largest as usize) {
+            0
+        } else {
+            u64::MAX
+        };
+        if resolve_mapping(policy, auto_floor, &ctx) {
             Placement::Mapped
         } else {
             Placement::Deferred

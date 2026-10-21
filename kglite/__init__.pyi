@@ -930,11 +930,9 @@ def load(
             (a regular local file, Unix); ``"mapped"`` maps any size;
             ``"memory"`` decodes every column to the heap, spilling those of
             256 KB or more to a temp file as a v8 file's load does. The
-            fallbacks of ``embeddings`` apply. Left unset, a graph that loads
-            into ``storage="memory"`` decodes (``"memory"``) and every other
-            mode uses ``"auto"``: column scans over mapped pages measured 4-9 %
-            slower than over decoded ones. A v8 or older file ignores it.
-            See "Mapped columns" below.
+            fallbacks of ``embeddings`` apply. Left unset, every storage mode
+            uses ``"auto"``. A v8 or older file ignores it. See "Mapped
+            columns" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
             mapped section's CRC32 on its first use (search, save, write); a
             section copied to the heap is always checked at load. ``"eager"``
@@ -968,22 +966,22 @@ def load(
     and ``columns="memory"``. Saving over the loaded path with ``save()`` is
     safe.
 
-    **Mapped columns.** A default save also writes each property column of
-    256 KB or more (numbers, dates, booleans; strings as offsets plus bytes)
-    uncompressed into the v9 file, and a load reads it in place: no spill file
-    is created for it, and two processes loading the same file share the
-    pages. Query results are identical to a decoded load. The first write to a
-    column copies that column to the heap (a ``"mapped"`` graph then spills it
-    after the statement, as before); other columns stay mapped, and a graph
-    that was copied or forked beforehand keeps reading the file. An integer
-    column that is four times smaller as deltas, such as a monotonic id, stays
-    compressed in the file and still decodes (and spills) at load. A string
-    column's bytes are checked for corruption and valid UTF-8 at load, so a
-    damaged file fails there; numeric columns are checked by
-    :meth:`KnowledgeGraph.verify_integrity` and when the graph is saved.
-    A column is stored raw only in a file written by
-    ``save(layout="mapped")``; the default and ``"compact"`` layouts compress
-    columns, so ``columns=`` has nothing to map in their files.
+    **Mapped columns.** A default save writes each property column that has a
+    buffer of 256 KB or more (numbers, dates, booleans; strings as offsets plus
+    bytes) uncompressed into the v9 file, and a load reads it in place: no
+    spill file is created for it, and two processes loading the same file share
+    the pages. Those are exactly the columns a v8 load would spill. Query
+    results are identical to a decoded load. The first write to a column
+    copies that column to the heap (a ``"mapped"`` graph then spills it after
+    the statement, as before); other columns stay mapped, and a graph that was
+    copied or forked beforehand keeps reading the file. An integer column that
+    is four times smaller as deltas, such as a monotonic id, stays compressed
+    in the file and still decodes (and spills) at load. A string column's
+    bytes are checked for corruption and valid UTF-8 at load, so a damaged file
+    fails there; numeric columns are checked by
+    :meth:`KnowledgeGraph.verify_integrity`, when the graph is saved, and at
+    load with ``verify="eager"``. A file saved with ``layout="compact"`` has
+    nothing raw, so ``columns=`` has nothing to map in it.
 
     **``storage`` is not a memory lever.** For a v8 file, or a v9 file loaded
     with ``columns="memory"``, mapped and memory cost the same resident memory
@@ -5376,7 +5374,7 @@ class KnowledgeGraph:
         path: str | None = None,
         *,
         fsync: bool = True,
-        layout: Literal["auto", "mapped", "compact"] = "auto",
+        layout: Literal["auto", "compact"] = "auto",
     ) -> None:
         """Serialise the graph to disk, atomically and durably.
 
@@ -5453,13 +5451,11 @@ class KnowledgeGraph:
                 the fsync'd write-ahead log, so skipping the flush could lose
                 both the checkpoint and the log on a crash.
             layout: ``"auto"`` (default) writes a v9 file when an embedding
-                store is 4 MiB or larger: its vectors are stored uncompressed,
-                so a load can map them. Property columns stay compressed.
-                ``"mapped"`` also stores property columns of 256 KB or more
-                uncompressed, so ``columns="auto"`` / ``"mapped"`` can serve
-                them from the file; string columns grow the file 3-7x, and a
-                mapped load reads their pages at load time, so use it when the
-                file is much larger than the memory you want resident.
+                store is 4 MiB or larger or a property column has a buffer of
+                256 KB or more: those buffers are stored uncompressed, so a
+                load can map them instead of copying them into a per-process
+                spill file. Smaller columns stay compressed. Raw buffers make
+                the file larger than its v8 form (strings and floats most);
                 ``"compact"`` writes the v8 container with every section
                 compressed, which every kglite release can read. Use
                 ``"compact"`` for files that older servers or tools must open;
