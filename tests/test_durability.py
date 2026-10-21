@@ -3139,8 +3139,13 @@ def test_auto_checkpoint_runs_off_the_committing_call(tmp_path):
     assert path.stat().st_mtime_ns != before, "a background checkpoint was published"
     assert slowest < save_seconds, f"a commit took {slowest:.3f}s against a {save_seconds:.3f}s save()"
     # Published but not yet trimmed: the log still holds the frames it covers.
-    end = _commit_until(g, lambda: _wal_bytes(path) < 1024 * 1024, start=i)
-    assert _wal_bytes(path) < 1024 * 1024
+    # The trim keeps the frames committed while the file was being written, and
+    # a second checkpoint waits for the log to outgrow the file again, so the
+    # remainder is not bounded by the 1 MiB trigger; it shrinks below what the
+    # log held at publish only if the trim ran.
+    published = _wal_bytes(path)
+    end = _commit_until(g, lambda: _wal_bytes(path) < published, start=i)
+    assert _wal_bytes(path) < published, "the finished checkpoint's frames were trimmed"
     del g
     assert _count(kglite.open(str(path), durable="normal")) == end
 
