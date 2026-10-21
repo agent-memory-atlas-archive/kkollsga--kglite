@@ -48,6 +48,7 @@
 
 use super::le_bytes::{le_i64_binary_search, le_u32_binary_search, read_le_i64, read_le_u32};
 use crate::datatypes::Value;
+use crate::graph::io::file::mappable::MappedSection;
 use crate::graph::schema::{
     heal_general_spellings, id_spellings, id_u32, InternedKey, StringInterner, TypeIdIndex,
 };
@@ -96,13 +97,10 @@ pub(crate) fn full_maps_built() -> usize {
     FULL_MAPS_BUILT.with(|count| count.get())
 }
 
-/// Mmap-backed read-only view of `id_indices.bin`.
+/// Read-only view of the id indexes of a graph: the mapping of a disk graph's
+/// `id_indices.bin`, or the per-type sections of a v9 `.kgl`.
 pub struct IdIndexBase {
-    mmap: Arc<Mmap>,
-    /// The file the mapping is of.
-    origin: PathBuf,
-    /// The layout version the file declares.
-    version: u32,
+    source: IdSource,
     /// type_name -> directory entry. Built once at load (88k entries × ~50 bytes ≈ 4 MB).
     /// Strings owned to keep the API HashMap-compatible without lifetime gymnastics.
     dir: HashMap<String, BaseEntry>,
@@ -112,9 +110,25 @@ pub struct IdIndexBase {
     /// decodes only on a miss.
     /// Integer variant never enters here — it's read directly from mmap.
     general_cache: RwLock<HashMap<String, Arc<FxHashMap<Value, NodeIndex>>>>,
-    /// Keeps the generation this file lies in from being pruned: a type the
-    /// writer left alone keeps serving from this mapping after later saves.
-    _pin: Option<Arc<super::generation::GenerationPin>>,
+}
+
+/// Where an [`IdIndexBase`]'s payload bytes live.
+enum IdSource {
+    /// One mapped file holding every type's payload.
+    File {
+        mmap: Arc<Mmap>,
+        /// The file the mapping is of.
+        origin: PathBuf,
+        /// The layout version the file declares.
+        version: u32,
+        /// Keeps the generation this file lies in from being pruned: a type the
+        /// writer left alone keeps serving from this mapping after later saves.
+        _pin: Option<Arc<super::generation::GenerationPin>>,
+    },
+    /// Integer and Int64Sorted entries only, each as a section of sorted
+    /// little-endian keys (`u32` or `i64`) and a section of the `u32` nodes
+    /// parallel to them; [`BaseEntry::section`] indexes this list.
+    Sections(Vec<(MappedSection, MappedSection)>),
 }
 
 /// One type's directory entry in `id_indices.bin`: where its payload lies.
@@ -124,6 +138,8 @@ pub struct BaseEntry {
     num_entries: u32,
     payload_off: u64,
     payload_len: u64,
+    /// Position in [`IdSource::Sections`]; unused for a file.
+    section: u32,
 }
 
 impl std::fmt::Debug for IdIndexBase {
@@ -146,14 +162,9 @@ impl IdIndexBase {
             let Value::UniqueId(wanted) = id else {
                 return None;
             };
-            let start = usize::try_from(entry.payload_off).ok()?;
-            let keys_end = start.checked_add(entry.num_entries as usize * 4)?;
-            let position = le_u32_binary_search(self.mmap.get(start..keys_end)?, *wanted)?;
-            return Some(NodeIndex::new(read_le_u32(
-                self.mmap
-                    .get(keys_end..keys_end + entry.num_entries as usize * 4)?,
-                position,
-            )? as usize));
+            let (keys, nodes) = self.integer_bytes(entry)?;
+            let position = le_u32_binary_search(keys, *wanted)?;
+            return Some(NodeIndex::new(read_le_u32(nodes, position)? as usize));
         }
         self.general_map(name, entry)?.get(id).copied()
     }
@@ -191,10 +202,103 @@ impl IdIndexBase {
     }
 
     fn int64_parts_of(&self, entry: &BaseEntry) -> Option<(&[u8], &[u8])> {
+        if let IdSource::Sections(sections) = &self.source {
+            let (keys, nodes) = sections.get(entry.section as usize)?;
+            return Some((keys.as_bytes(), nodes.as_bytes()));
+        }
         let keys_len = (entry.num_entries as usize).checked_mul(8)?;
         let start = usize::try_from(entry.payload_off).ok()?;
         let end = start.checked_add(usize::try_from(entry.payload_len).ok()?)?;
-        self.mmap.get(start..end)?.split_at_checked(keys_len)
+        self.file_bytes()?
+            .get(start..end)?
+            .split_at_checked(keys_len)
+    }
+
+    /// The whole mapped file, for a base that is one; a section base holds only
+    /// Integer and Int64Sorted entries, which read through their own parts.
+    fn file_bytes(&self) -> Option<&[u8]> {
+        match &self.source {
+            IdSource::File { mmap, .. } => Some(mmap),
+            IdSource::Sections(_) => None,
+        }
+    }
+
+    /// The file this base maps, when it is a disk graph's in the current
+    /// layout: one a save may link instead of rewriting.
+    fn current_origin(&self) -> Option<&Path> {
+        match &self.source {
+            IdSource::File {
+                origin, version, ..
+            } if *version == VERSION => Some(origin),
+            _ => None,
+        }
+    }
+
+    /// A base over the id sections of a v9 `.kgl`: `(type name, keys, nodes)`
+    /// triples where `keys` holds ascending, unique little-endian ids (`u32`
+    /// for an Integer entry, `i64` for an Int64Sorted one, by the section's
+    /// element type) and `nodes` the little-endian `u32` node index of each,
+    /// every node below `node_bound`. Each section's CRC32 is checked here, so
+    /// a damaged index is refused at load instead of answering a lookup
+    /// wrongly.
+    pub(crate) fn from_sections(
+        triples: Vec<(String, MappedSection, MappedSection)>,
+        node_bound: usize,
+    ) -> std::io::Result<Self> {
+        use crate::graph::io::file::mappable::SectionDtype;
+        let mut dir = HashMap::with_capacity(triples.len());
+        let mut sections = Vec::with_capacity(triples.len());
+        for (name, keys, nodes) in triples {
+            keys.verify()?;
+            nodes.verify()?;
+            let (variant, width) = match keys.dtype {
+                SectionDtype::U32 => (VARIANT_INTEGER, 4),
+                SectionDtype::I64 => (VARIANT_INT64, 8),
+                _ => return Err(invalid_index("an id section has an unsupported key type")),
+            };
+            let (key_bytes, node_bytes) = (keys.as_bytes(), nodes.as_bytes());
+            let count = key_bytes.len() / width;
+            if !key_bytes.len().is_multiple_of(width) || node_bytes.len() != count * 4 {
+                return Err(invalid_index(
+                    "an id section pair is not parallel runs of keys and u32 nodes",
+                ));
+            }
+            let mut previous = None;
+            for index in 0..count {
+                let key = if variant == VARIANT_INTEGER {
+                    i64::from(read_le_u32(key_bytes, index).unwrap())
+                } else {
+                    read_le_i64(key_bytes, index).unwrap()
+                };
+                if previous.is_some_and(|prior| key <= prior) {
+                    return Err(invalid_index("keys are not strictly increasing"));
+                }
+                previous = Some(key);
+                if read_le_u32(node_bytes, index).unwrap() as usize >= node_bound {
+                    return Err(invalid_index("an id names a node outside the graph"));
+                }
+            }
+            let num_entries =
+                u32::try_from(count).map_err(|_| invalid_index("entry count exceeds u32"))?;
+            keys.release_resident();
+            nodes.release_resident();
+            let entry = BaseEntry {
+                variant,
+                num_entries,
+                payload_off: 0,
+                payload_len: (count * (width + 4)) as u64,
+                section: sections.len() as u32,
+            };
+            if dir.insert(name, entry).is_some() {
+                return Err(invalid_index("duplicate type name"));
+            }
+            sections.push((keys, nodes));
+        }
+        Ok(Self {
+            source: IdSource::Sections(sections),
+            dir,
+            general_cache: RwLock::new(HashMap::new()),
+        })
     }
 
     /// Binary search of an Int64Sorted entry, in the mapping.
@@ -373,6 +477,7 @@ impl IdIndexBase {
                         num_entries,
                         payload_off,
                         payload_len,
+                        section: 0,
                     },
                 )
                 .is_some()
@@ -387,12 +492,14 @@ impl IdIndexBase {
         }
 
         Ok(Some(Self {
-            mmap: Arc::new(mmap),
-            origin: path,
-            version,
+            source: IdSource::File {
+                mmap: Arc::new(mmap),
+                origin: path,
+                version,
+                _pin: super::generation::GenerationPin::containing(dir),
+            },
             dir: dir_map,
             general_cache: RwLock::new(general_cache_map),
-            _pin: super::generation::GenerationPin::containing(dir),
         }))
     }
 
@@ -463,13 +570,17 @@ impl IdIndexBase {
     }
 
     fn integer_bytes(&self, entry: &BaseEntry) -> Option<(&[u8], &[u8])> {
+        if let IdSource::Sections(sections) = &self.source {
+            let (keys, nodes) = sections.get(entry.section as usize)?;
+            return Some((keys.as_bytes(), nodes.as_bytes()));
+        }
         let n = entry.num_entries as usize;
         let off = entry.payload_off as usize;
         let half = n * 4;
         if entry.payload_len != (half * 2) as u64 {
             return None;
         }
-        let bytes = self.mmap.get(off..off + half * 2)?;
+        let bytes = self.file_bytes()?.get(off..off + half * 2)?;
         Some(bytes.split_at(half))
     }
 
@@ -497,7 +608,7 @@ impl IdIndexBase {
         }
         let off = entry.payload_off as usize;
         let len = entry.payload_len as usize;
-        let blob = self.mmap.get(off..off + len)?;
+        let blob = self.file_bytes()?.get(off..off + len)?;
         let map: FxHashMap<Value, NodeIndex> = serde_codec::decode_exact_with(
             serde_codec::CURRENT_CODEC,
             blob,
@@ -618,11 +729,8 @@ impl IdIndexStore {
     /// one.
     pub(crate) fn unchanged_origin(&self) -> Option<&Path> {
         let untouched = self.removed.is_empty() && self.overlay.read().unwrap().is_empty();
-        let base = self
-            .base
-            .as_deref()
-            .filter(|base| base.version == VERSION)?;
-        untouched.then_some(base.origin.as_path())
+        let origin = self.base.as_deref()?.current_origin()?;
+        untouched.then_some(origin)
     }
 
     pub fn contains_key(&self, name: &str) -> bool {

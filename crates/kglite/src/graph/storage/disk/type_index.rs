@@ -73,16 +73,28 @@ pub(crate) fn buckets_materialized() -> usize {
     BUCKETS_MATERIALIZED.with(|count| count.get())
 }
 
-/// Mmap-backed read-only view of `type_indices.bin`.
+/// Read-only view of the type-member lists of a graph: the mapping of a disk
+/// graph's `type_indices.bin`, or the per-type sections of a v9 `.kgl`.
 #[derive(Debug)]
 pub struct TypeIndexBase {
-    mmap: Arc<Mmap>,
-    /// The file the mapping is of.
-    origin: PathBuf,
+    source: BaseSource,
     /// type_name -> (file-relative offset, num_entries). Built once at load.
     dir: HashMap<String, BaseEntry>,
-    /// Keeps the generation this file lies in from being pruned while it is mapped.
-    _pin: Option<std::sync::Arc<super::generation::GenerationPin>>,
+}
+
+/// Where a [`TypeIndexBase`]'s payload bytes live.
+#[derive(Debug)]
+enum BaseSource {
+    /// One mapped file holding every type's slice.
+    File {
+        mmap: Arc<Mmap>,
+        /// The file the mapping is of.
+        origin: PathBuf,
+        /// Keeps the generation this file lies in from being pruned while it is mapped.
+        _pin: Option<std::sync::Arc<super::generation::GenerationPin>>,
+    },
+    /// One section per type, each a run of little-endian `u32`s.
+    Sections(HashMap<String, crate::graph::io::file::mappable::MappedSection>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,11 +210,64 @@ impl TypeIndexBase {
         }
 
         Ok(Some(Self {
-            mmap: Arc::new(mmap),
-            origin: path,
+            source: BaseSource::File {
+                mmap: Arc::new(mmap),
+                origin: path,
+                _pin: super::generation::GenerationPin::containing(dir),
+            },
             dir: dir_map,
-            _pin: super::generation::GenerationPin::containing(dir),
         }))
+    }
+
+    /// A base over the per-type sections of a v9 `.kgl`: `(type name, section)`
+    /// pairs whose bytes are ascending little-endian `u32` node indices below
+    /// `node_bound`. Each section's CRC32 is checked here, so a damaged index
+    /// is refused at load instead of answering a query wrongly.
+    pub(crate) fn from_sections(
+        sections: Vec<(String, crate::graph::io::file::mappable::MappedSection)>,
+        node_bound: usize,
+    ) -> std::io::Result<Self> {
+        let mut dir = HashMap::with_capacity(sections.len());
+        let mut by_name = HashMap::with_capacity(sections.len());
+        for (name, section) in sections {
+            section.verify()?;
+            let bytes = section.as_bytes();
+            if !bytes.len().is_multiple_of(4) {
+                return Err(invalid_index("a type section is not a run of u32 values"));
+            }
+            let mut previous = None;
+            for node in le_u32_iter(bytes) {
+                if previous.is_some_and(|prior| node <= prior) || node as usize >= node_bound {
+                    return Err(invalid_index(
+                        "a type section is not ascending or names a node outside the graph",
+                    ));
+                }
+                previous = Some(node);
+            }
+            let num_entries = u32::try_from(bytes.len() / 4)
+                .map_err(|_| invalid_index("one type contains too many entries"))?;
+            section.release_resident();
+            dir.insert(
+                name.clone(),
+                BaseEntry {
+                    payload_off: 0,
+                    num_entries,
+                },
+            );
+            by_name.insert(name, section);
+        }
+        Ok(Self {
+            source: BaseSource::Sections(by_name),
+            dir,
+        })
+    }
+
+    /// The file this base maps, when it is a disk graph's.
+    fn origin(&self) -> Option<&Path> {
+        match &self.source {
+            BaseSource::File { origin, .. } => Some(origin),
+            BaseSource::Sections(_) => None,
+        }
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -213,11 +278,16 @@ impl TypeIndexBase {
     pub fn slice_for(&self, name: &str) -> Option<&[u8]> {
         let entry = self.dir.get(name)?;
         let n = entry.num_entries as usize;
-        let off = entry.payload_off as usize;
         if n == 0 {
             return Some(&[]);
         }
-        self.mmap.get(off..off.checked_add(n.checked_mul(4)?)?)
+        match &self.source {
+            BaseSource::File { mmap, .. } => {
+                let off = entry.payload_off as usize;
+                mmap.get(off..off.checked_add(n.checked_mul(4)?)?)
+            }
+            BaseSource::Sections(sections) => sections.get(name).map(|s| s.as_bytes()),
+        }
     }
 
     /// Materialize a base entry into an owned Vec, for the paths that must
@@ -570,7 +640,10 @@ impl TypeIndexStore {
     pub(crate) fn unchanged_origin(&self) -> Option<&Path> {
         let untouched =
             self.overlay.is_empty() && self.deltas.is_empty() && self.removed.is_empty();
-        untouched.then(|| self.base.as_deref().map(|base| base.origin.as_path()))?
+        if !untouched {
+            return None;
+        }
+        self.base.as_deref()?.origin()
     }
 
     /// Fold every bucket's level stack back into one, for the buckets this

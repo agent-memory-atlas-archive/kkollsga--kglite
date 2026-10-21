@@ -53,6 +53,7 @@ pub(super) fn decode_portable_topology(
     codec: serde_codec::CodecVersion,
     sections: &mut SectionCursor<'_>,
     metadata: FileMetadata,
+    indexes: Option<&mut index_sections::IndexSections>,
 ) -> io::Result<(DirGraph, PortableSectionPlan)> {
     let topology_compressed = sections.take(metadata.topology_compressed_size, TOPOLOGY_SECTION)?;
     let topology_raw = zstd_decompress(topology_compressed)?;
@@ -76,7 +77,19 @@ pub(super) fn decode_portable_topology(
     let mut dir_graph = DirGraph::from_graph(graph);
     dir_graph.interner = interner;
     metadata.apply_to(&mut dir_graph);
-    dir_graph.rebuild_type_indices_and_schemas();
+    // A mapped load serves the file's member lists and id index when they
+    // describe this topology; otherwise (and always into memory storage) they
+    // are rebuilt from the nodes.
+    let served = match indexes {
+        Some(indexes) if indexes.has_types() => {
+            dir_graph.rebuild_type_schemas();
+            indexes.install_node_indexes(&mut dir_graph)?
+        }
+        _ => false,
+    };
+    if !served {
+        dir_graph.rebuild_type_indices_and_schemas();
+    }
     dir_graph.build_connection_types_cache();
     Ok((dir_graph, plan))
 }

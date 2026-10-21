@@ -439,7 +439,11 @@ pub(crate) fn collect_mappable_sections(
     graph: &crate::graph::schema::DirGraph,
     layout: SaveLayout,
 ) -> io::Result<Vec<MappableSection<'_>>> {
-    super::embedding_sections::collect_embedding_sections(graph, layout)
+    let mut sections = super::embedding_sections::collect_embedding_sections(graph, layout)?;
+    if layout != SaveLayout::Compact {
+        sections.extend(super::index_sections::collect_index_sections(graph)?);
+    }
+    Ok(sections)
 }
 
 pub(crate) fn align_up(value: u64, align: u64) -> u64 {

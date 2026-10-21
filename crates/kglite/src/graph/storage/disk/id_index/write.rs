@@ -203,13 +203,38 @@ fn plan_untouched<'a>(
     if members.is_some_and(|members| base.entry_len(name).unwrap_or(0) < members) {
         return None;
     }
+    if base.file_bytes().is_none() {
+        // A section base keeps its keys and nodes apart, so there is no one
+        // slice to copy. An Int64Sorted entry streams through the merge with
+        // nothing to merge; an Integer entry is small enough to concatenate.
+        if entry.variant == VARIANT_INTEGER {
+            let (keys, nodes) = base.integer_bytes(entry)?;
+            return Some(Plan {
+                type_key,
+                variant: entry.variant,
+                num_entries: u64::from(entry.num_entries),
+                payload: Payload::Bytes([keys, nodes].concat()),
+            });
+        }
+        let (keys, nodes) = base.int64_parts_of(entry)?;
+        return Some(Plan {
+            type_key,
+            variant: entry.variant,
+            num_entries: u64::from(entry.num_entries),
+            payload: Payload::Merge {
+                keys,
+                nodes,
+                delta: Vec::new(),
+            },
+        });
+    }
     let start = usize::try_from(entry.payload_off).ok()?;
     let end = start.checked_add(usize::try_from(entry.payload_len).ok()?)?;
     Some(Plan {
         type_key,
         variant: entry.variant,
         num_entries: u64::from(entry.num_entries),
-        payload: Payload::Slice(base.mmap.get(start..end)?),
+        payload: Payload::Slice(base.file_bytes()?.get(start..end)?),
     })
 }
 

@@ -786,6 +786,7 @@ use storage_mode::recorded_storage_mode_tag;
 
 mod embedding_sections;
 mod fast_load_sidecars;
+mod index_sections;
 mod integrity;
 pub(crate) mod mappable;
 mod quantized_sections;
@@ -2049,6 +2050,7 @@ fn open_mappable_table(
     source: &LoadSource<'_>,
     metadata_end: usize,
     options: &LoadOptions,
+    into_mapped: bool,
 ) -> io::Result<mappable::MappableTable> {
     if metadata.mappable.is_empty() {
         return Ok(mappable::MappableTable::default());
@@ -2059,7 +2061,14 @@ fn open_mappable_table(
         )));
     }
     let base = data_region_base(metadata, metadata_end, source.bytes.len() as u64)?;
-    embedding_sections::open_table(&metadata.mappable, source.bytes, base, source.file, options)
+    embedding_sections::open_table(
+        &metadata.mappable,
+        source.bytes,
+        base,
+        source.file,
+        options,
+        into_mapped,
+    )
 }
 
 /// CRC32 over a v8 container's fixed 13-byte header and its metadata JSON —
@@ -2195,12 +2204,19 @@ fn load_portable_columnar(
             "portable header and metadata core-data versions disagree",
         ));
     }
+    // Whether the graph will be placed in mapped storage decides how the index
+    // sections are opened. A mode that does not parse is refused further down.
+    let into_mapped = match options.storage {
+        Some(requested) => requested == StorageMode::Mapped,
+        None => metadata.portable_storage_mode().ok() == Some(StorageMode::Mapped),
+    };
     let mappable_table = open_mappable_table(
         &metadata,
         format_name,
         source,
         metadata_start + metadata_len,
         options,
+        into_mapped,
     )?;
     match core_version {
         CURRENT_CORE_DATA_VERSION if metadata.edge_embeddings_compressed_size == 0 => {
@@ -2252,7 +2268,10 @@ fn load_portable_columnar(
         Some(requested) => requested,
         None => recorded_mode,
     };
-    let (mut dir_graph, plan) = decode_portable_topology(codec, &mut sections, metadata)?;
+    let mut indexes =
+        into_mapped.then(|| index_sections::IndexSections::from_table(&mappable_table));
+    let (mut dir_graph, plan) =
+        decode_portable_topology(codec, &mut sections, metadata, indexes.as_mut())?;
     column_sections::load_portable_columns(
         codec,
         &mut dir_graph,
@@ -2349,6 +2368,9 @@ mod embedding_load_validation_tests;
 #[cfg(test)]
 #[path = "file/embedding_mapped_tests.rs"]
 mod embedding_mapped_tests;
+#[cfg(test)]
+#[path = "file/index_sections_tests.rs"]
+mod index_sections_tests;
 #[cfg(test)]
 mod quantized_persistence_tests;
 

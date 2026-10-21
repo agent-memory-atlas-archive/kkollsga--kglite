@@ -44,6 +44,11 @@ pub(super) fn escape(part: &str) -> String {
     part.replace('%', "%25").replace(':', "%3A")
 }
 
+/// The inverse of [`escape`].
+pub(super) fn unescape(part: &str) -> String {
+    part.replace("%3A", ":").replace("%25", "%")
+}
+
 pub(super) fn section_name(scope: &str, first: &str, second: &str, part: &str) -> String {
     format!("{scope}:{}:{}:{part}", escape(first), escape(second))
 }
@@ -159,13 +164,16 @@ pub(super) fn collect_embedding_sections(
 /// whether its sections are mapped or copied (`LoadOptions::embeddings`). The
 /// decision is made once per store, from the vector section's length, so the
 /// norms always follow the vectors. Column sections are placed per column by
-/// `LoadOptions::columns`; sections of other classes go to the heap.
+/// `LoadOptions::columns`; index sections follow `columns` when the load is
+/// into mapped storage (`into_mapped`) and are otherwise never read; sections
+/// of other classes go to the heap.
 pub(super) fn open_table(
     entries: &[MapEntry],
     bytes: &[u8],
     base: u64,
     file: Option<&Arc<MappedFile>>,
     options: &LoadOptions,
+    into_mapped: bool,
 ) -> io::Result<MappableTable> {
     let columns_policy = options.columns;
     let lengths: HashMap<&str, u64> = entries.iter().map(|e| (e.name.as_str(), e.len)).collect();
@@ -173,6 +181,9 @@ pub(super) fn open_table(
     MappableTable::open_placed(entries, bytes, base, file, options.verify, |entry| {
         if entry.kind == super::column_sections::KIND_COLUMN {
             return columns.place(entry, file, columns_policy);
+        }
+        if entry.owner == super::index_sections::OWNER {
+            return super::index_sections::place(entry, file, columns_policy, into_mapped);
         }
         if !matches!(
             entry.kind,
