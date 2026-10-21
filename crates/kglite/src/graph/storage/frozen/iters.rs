@@ -76,6 +76,20 @@ impl<'a> FrozenEdges<'a> {
         hi: usize,
     ) -> Self {
         let (edges, types) = graph.csr(dir);
+        Self::over_slices(graph, node, dir, edges, types, lo, hi)
+    }
+
+    /// `over` with the direction's arrays already resolved.
+    #[inline(always)]
+    pub(crate) fn over_slices(
+        graph: &'a FrozenGraph,
+        node: NodeIndex,
+        dir: Direction,
+        edges: &'a [CsrEdge],
+        types: &'a [u16],
+        lo: usize,
+        hi: usize,
+    ) -> Self {
         FrozenEdges {
             graph,
             edges: edges.get(lo..hi).unwrap_or(&[]).iter(),

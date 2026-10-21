@@ -13,7 +13,7 @@ use crate::graph::storage::frozen::{
 };
 
 macro_rules! csr_iterator {
-    ($name:ident, $disk:ty, $frozen:ty, $item:ty, $lt:lifetime) => {
+    ($name:ident, $disk:ty, $frozen:ty, $item:ty, $lt:lifetime, $inline:meta) => {
         pub enum $name<$lt> {
             Disk($disk),
             Frozen($frozen),
@@ -22,9 +22,11 @@ macro_rules! csr_iterator {
         impl<$lt> Iterator for $name<$lt> {
             type Item = $item;
 
-            // Out of line: the arms of the `Graph*` enums are inlined into the heap
-            // backends' hottest loops, and this body is not theirs to carry.
-            #[inline(never)]
+            // The `Graph*` enums whose in-memory `next` is split off (`GraphEdges`,
+            // `GraphNeighbors`) reach this from their out-of-line `next_other`, so it
+            // inlines there; the others inline their arms into the heap backends' hottest
+            // loops and keep this body out of line.
+            #[$inline]
             fn next(&mut self) -> Option<$item> {
                 match self {
                     Self::Disk(iter) => iter.next(),
@@ -42,11 +44,11 @@ macro_rules! csr_iterator {
     };
 }
 
-csr_iterator!(CsrNodeIndices, DiskNodeIndices<'a>, FrozenNodeIndices<'a>, NodeIndex, 'a);
-csr_iterator!(CsrEdges, DiskEdges<'a>, FrozenEdges<'a>, GraphEdgeRef<'a>, 'a);
-csr_iterator!(CsrEdgeReferences, DiskEdgeReferences<'a>, FrozenEdgeRefs<'a>, GraphEdgeRef<'a>, 'a);
-csr_iterator!(CsrEdgeIndices, DiskEdgeIndices<'a>, FrozenEdgeIndices<'a>, EdgeIndex, 'a);
-csr_iterator!(CsrEdgesConnecting, DiskEdgesConnecting<'a>, FrozenEdgesConnecting<'a>, GraphEdgeRef<'a>, 'a);
+csr_iterator!(CsrNodeIndices, DiskNodeIndices<'a>, FrozenNodeIndices<'a>, NodeIndex, 'a, inline(never));
+csr_iterator!(CsrEdges, DiskEdges<'a>, FrozenEdges<'a>, GraphEdgeRef<'a>, 'a, inline);
+csr_iterator!(CsrEdgeReferences, DiskEdgeReferences<'a>, FrozenEdgeRefs<'a>, GraphEdgeRef<'a>, 'a, inline(never));
+csr_iterator!(CsrEdgeIndices, DiskEdgeIndices<'a>, FrozenEdgeIndices<'a>, EdgeIndex, 'a, inline(never));
+csr_iterator!(CsrEdgesConnecting, DiskEdgesConnecting<'a>, FrozenEdgesConnecting<'a>, GraphEdgeRef<'a>, 'a, inline(never));
 
 /// `DiskNeighbors` owns its peers, so it carries no lifetime.
 pub enum CsrNeighbors<'a> {
@@ -57,7 +59,7 @@ pub enum CsrNeighbors<'a> {
 impl Iterator for CsrNeighbors<'_> {
     type Item = NodeIndex;
 
-    #[inline(never)]
+    #[inline]
     fn next(&mut self) -> Option<NodeIndex> {
         match self {
             Self::Disk(iter) => iter.next(),

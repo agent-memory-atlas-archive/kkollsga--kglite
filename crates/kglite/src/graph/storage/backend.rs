@@ -1317,6 +1317,80 @@ impl std::fmt::Debug for GraphBackend {
 use crate::datatypes::values::Value;
 use std::collections::HashMap;
 
+/// Out-of-line non-`Memory` arms of the hottest `GraphRead` adjacency methods: the trait method keeps
+/// only the heap arm inline, so its size does not grow with the number of backends.
+impl GraphBackend {
+    #[inline(never)]
+    fn edges_directed_filtered_other(
+        &self,
+        idx: NodeIndex,
+        dir: petgraph::Direction,
+        conn_type_filter: Option<InternedKey>,
+    ) -> crate::graph::core::iterators::GraphEdges<'_> {
+        match self {
+            Self::Memory(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
+            Self::Forked(g) => {
+                GraphRead::edges_directed_filtered(g.as_ref(), idx, dir, conn_type_filter)
+            }
+            Self::Mapped(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
+            Self::Frozen(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
+            Self::Disk(g) => {
+                GraphRead::edges_directed_filtered(g.as_ref(), idx, dir, conn_type_filter)
+            }
+            Self::Recording(rg) => {
+                GraphRead::edges_directed_filtered(rg.as_ref(), idx, dir, conn_type_filter)
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn edges_directed_other(
+        &self,
+        idx: NodeIndex,
+        dir: petgraph::Direction,
+    ) -> crate::graph::core::iterators::GraphEdges<'_> {
+        match self {
+            Self::Memory(g) => GraphRead::edges_directed(&**g, idx, dir),
+            Self::Forked(g) => GraphRead::edges_directed(g.as_ref(), idx, dir),
+            Self::Mapped(g) => GraphRead::edges_directed(&**g, idx, dir),
+            Self::Frozen(g) => GraphRead::edges_directed(&**g, idx, dir),
+            Self::Disk(g) => GraphRead::edges_directed(g.as_ref(), idx, dir),
+            Self::Recording(rg) => GraphRead::edges_directed(rg.as_ref(), idx, dir),
+        }
+    }
+
+    #[inline(never)]
+    fn neighbors_directed_other(
+        &self,
+        idx: NodeIndex,
+        dir: petgraph::Direction,
+    ) -> crate::graph::core::iterators::GraphNeighbors<'_> {
+        match self {
+            Self::Memory(g) => GraphRead::neighbors_directed(&**g, idx, dir),
+            Self::Forked(g) => GraphRead::neighbors_directed(g.as_ref(), idx, dir),
+            Self::Mapped(g) => GraphRead::neighbors_directed(&**g, idx, dir),
+            Self::Frozen(g) => GraphRead::neighbors_directed(&**g, idx, dir),
+            Self::Disk(g) => GraphRead::neighbors_directed(g.as_ref(), idx, dir),
+            Self::Recording(rg) => GraphRead::neighbors_directed(rg.as_ref(), idx, dir),
+        }
+    }
+
+    #[inline(never)]
+    fn neighbors_undirected_other(
+        &self,
+        idx: NodeIndex,
+    ) -> crate::graph::core::iterators::GraphNeighbors<'_> {
+        match self {
+            Self::Memory(g) => GraphRead::neighbors_undirected(&**g, idx),
+            Self::Forked(g) => GraphRead::neighbors_undirected(g.as_ref(), idx),
+            Self::Mapped(g) => GraphRead::neighbors_undirected(&**g, idx),
+            Self::Frozen(g) => GraphRead::neighbors_undirected(&**g, idx),
+            Self::Disk(g) => GraphRead::neighbors_undirected(g.as_ref(), idx),
+            Self::Recording(rg) => GraphRead::neighbors_undirected(rg.as_ref(), idx),
+        }
+    }
+}
+
 impl GraphRead for GraphBackend {
     type NodeIndicesIter<'a> = crate::graph::core::iterators::GraphNodeIndices<'a>;
     type EdgeIndicesIter<'a> = crate::graph::core::iterators::GraphEdgeIndices<'a>;
@@ -1581,14 +1655,10 @@ impl GraphRead for GraphBackend {
         idx: NodeIndex,
         dir: petgraph::Direction,
     ) -> crate::graph::core::iterators::GraphEdges<'_> {
-        match self {
-            Self::Memory(g) => GraphRead::edges_directed(&**g, idx, dir),
-            Self::Forked(g) => GraphRead::edges_directed(g.as_ref(), idx, dir),
-            Self::Mapped(g) => GraphRead::edges_directed(&**g, idx, dir),
-            Self::Frozen(g) => GraphRead::edges_directed(&**g, idx, dir),
-            Self::Disk(g) => GraphRead::edges_directed(g.as_ref(), idx, dir),
-            Self::Recording(rg) => GraphRead::edges_directed(rg.as_ref(), idx, dir),
+        if let Self::Memory(g) = self {
+            return GraphRead::edges_directed(&**g, idx, dir);
         }
+        self.edges_directed_other(idx, dir)
     }
 
     #[inline]
@@ -1610,20 +1680,10 @@ impl GraphRead for GraphBackend {
         dir: petgraph::Direction,
         conn_type_filter: Option<InternedKey>,
     ) -> crate::graph::core::iterators::GraphEdges<'_> {
-        match self {
-            Self::Memory(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
-            Self::Forked(g) => {
-                GraphRead::edges_directed_filtered(g.as_ref(), idx, dir, conn_type_filter)
-            }
-            Self::Mapped(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
-            Self::Frozen(g) => GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter),
-            Self::Disk(g) => {
-                GraphRead::edges_directed_filtered(g.as_ref(), idx, dir, conn_type_filter)
-            }
-            Self::Recording(rg) => {
-                GraphRead::edges_directed_filtered(rg.as_ref(), idx, dir, conn_type_filter)
-            }
+        if let Self::Memory(g) = self {
+            return GraphRead::edges_directed_filtered(&**g, idx, dir, conn_type_filter);
         }
+        self.edges_directed_filtered_other(idx, dir, conn_type_filter)
     }
 
     #[inline]
@@ -1722,14 +1782,10 @@ impl GraphRead for GraphBackend {
         idx: NodeIndex,
         dir: petgraph::Direction,
     ) -> crate::graph::core::iterators::GraphNeighbors<'_> {
-        match self {
-            Self::Memory(g) => GraphRead::neighbors_directed(&**g, idx, dir),
-            Self::Forked(g) => GraphRead::neighbors_directed(g.as_ref(), idx, dir),
-            Self::Mapped(g) => GraphRead::neighbors_directed(&**g, idx, dir),
-            Self::Frozen(g) => GraphRead::neighbors_directed(&**g, idx, dir),
-            Self::Disk(g) => GraphRead::neighbors_directed(g.as_ref(), idx, dir),
-            Self::Recording(rg) => GraphRead::neighbors_directed(rg.as_ref(), idx, dir),
+        if let Self::Memory(g) = self {
+            return GraphRead::neighbors_directed(&**g, idx, dir);
         }
+        self.neighbors_directed_other(idx, dir)
     }
 
     #[inline]
@@ -1737,14 +1793,10 @@ impl GraphRead for GraphBackend {
         &self,
         idx: NodeIndex,
     ) -> crate::graph::core::iterators::GraphNeighbors<'_> {
-        match self {
-            Self::Memory(g) => GraphRead::neighbors_undirected(&**g, idx),
-            Self::Forked(g) => GraphRead::neighbors_undirected(g.as_ref(), idx),
-            Self::Mapped(g) => GraphRead::neighbors_undirected(&**g, idx),
-            Self::Frozen(g) => GraphRead::neighbors_undirected(&**g, idx),
-            Self::Disk(g) => GraphRead::neighbors_undirected(g.as_ref(), idx),
-            Self::Recording(rg) => GraphRead::neighbors_undirected(rg.as_ref(), idx),
+        if let Self::Memory(g) = self {
+            return GraphRead::neighbors_undirected(&**g, idx);
         }
+        self.neighbors_undirected_other(idx)
     }
 
     #[inline]

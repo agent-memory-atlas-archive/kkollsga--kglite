@@ -518,11 +518,11 @@ impl<'a> Iterator for DiskEdges<'a> {
     }
 }
 
-impl<'a> Iterator for GraphEdges<'a> {
-    type Item = GraphEdgeRef<'a>;
-
-    #[inline]
-    fn next(&mut self) -> Option<GraphEdgeRef<'a>> {
+impl<'a> GraphEdges<'a> {
+    /// Every arm but the heap one, out of line so the in-memory `next` stays small enough to
+    /// inline into the traversal loops.
+    #[inline(never)]
+    fn next_other(&mut self) -> Option<GraphEdgeRef<'a>> {
         match self {
             GraphEdges::InMemory(iter) => iter
                 .next()
@@ -530,6 +530,20 @@ impl<'a> Iterator for GraphEdges<'a> {
             GraphEdges::Csr(iter) => iter.next(),
             GraphEdges::Forked(iter) => iter.next(),
         }
+    }
+}
+
+impl<'a> Iterator for GraphEdges<'a> {
+    type Item = GraphEdgeRef<'a>;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<GraphEdgeRef<'a>> {
+        if let GraphEdges::InMemory(iter) = self {
+            return iter
+                .next()
+                .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight()));
+        }
+        self.next_other()
     }
 
     #[inline]
@@ -782,16 +796,28 @@ impl Iterator for DiskNeighbors {
     }
 }
 
-impl<'a> Iterator for GraphNeighbors<'a> {
-    type Item = NodeIndex;
-
-    #[inline]
-    fn next(&mut self) -> Option<NodeIndex> {
+impl<'a> GraphNeighbors<'a> {
+    /// Every arm but the heap one, out of line so the in-memory `next` stays small enough to
+    /// inline into the traversal loops.
+    #[inline(never)]
+    fn next_other(&mut self) -> Option<NodeIndex> {
         match self {
             GraphNeighbors::InMemory(iter) => iter.next(),
             GraphNeighbors::Csr(iter) => iter.next(),
             GraphNeighbors::Forked(iter) => iter.next(),
         }
+    }
+}
+
+impl<'a> Iterator for GraphNeighbors<'a> {
+    type Item = NodeIndex;
+
+    #[inline]
+    fn next(&mut self) -> Option<NodeIndex> {
+        if let GraphNeighbors::InMemory(iter) = self {
+            return iter.next();
+        }
+        self.next_other()
     }
 
     #[inline]

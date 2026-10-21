@@ -80,8 +80,9 @@ impl FrozenGraph {
             None => FrozenEdges::new(self, node, dir),
             Some(key) => match self.ordinal_of(key) {
                 Some(ordinal) => {
-                    let (lo, hi) = self.typed_run(node.index(), dir, ordinal);
-                    FrozenEdges::over(self, node, dir, lo, hi)
+                    let (off, adjacency, tys) = self.dir_arrays(dir);
+                    let (lo, hi) = Self::narrow(off, tys, node.index(), ordinal);
+                    FrozenEdges::over_slices(self, node, dir, adjacency, tys, lo, hi)
                 }
                 None => FrozenEdges::empty(self, node, dir),
             },

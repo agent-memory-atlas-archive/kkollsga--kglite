@@ -55,6 +55,10 @@ use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
 use crate::graph::storage::disk::csr::CsrEdge;
 use crate::graph::storage::mapped::mmap_vec::MmapPod;
+
+/// Longest sorted array (a node's type run, the type table) searched by forward scan rather than
+/// binary search.
+const SCAN_RUN_MAX: usize = 16;
 use crate::graph::storage::mapped::peer_base::PeerBase;
 use crate::graph::storage::mapped::MappedTypeIndex;
 use array::{FrozenArray, FrozenElement};
@@ -330,6 +334,11 @@ impl FrozenGraph {
     /// The ordinal of `key`, if any edge of the file has that type.
     #[inline]
     pub(crate) fn ordinal_of(&self, key: InternedKey) -> Option<u16> {
+        // A traversal asks for the same key at every node, so the scan's exit branch is
+        // predicted and costs less than a binary search's dependent load chain.
+        if self.types.len() <= SCAN_RUN_MAX {
+            return self.types.iter().position(|&k| k == key).map(|i| i as u16);
+        }
         self.types.binary_search(&key).ok().map(|i| i as u16)
     }
 
@@ -394,16 +403,51 @@ impl FrozenGraph {
         }
     }
 
+    /// The offsets, adjacency and type ordinals of one direction, resolved by a single branch.
+    #[inline(always)]
+    pub(crate) fn dir_arrays(&self, dir: Direction) -> (&[u32], &[CsrEdge], &[u16]) {
+        match dir {
+            Direction::Outgoing => (
+                self.out_off.as_slice(),
+                self.out_edges.as_slice(),
+                self.out_ty.as_slice(),
+            ),
+            Direction::Incoming => (
+                self.in_off.as_slice(),
+                self.in_edges.as_slice(),
+                self.in_ty.as_slice(),
+            ),
+        }
+    }
+
     /// `run`, narrowed to the entries of type ordinal `ordinal` by binary
     /// search over the type array (the run is sorted by ordinal).
     pub(crate) fn typed_run(&self, node: usize, dir: Direction, ordinal: u16) -> (usize, usize) {
-        let (lo, hi) = self.run(node, dir);
-        let (_, tys) = self.csr(dir);
+        let (off, _, tys) = self.dir_arrays(dir);
+        Self::narrow(off, tys, node, ordinal)
+    }
+
+    #[inline(always)]
+    fn narrow(off: &[u32], tys: &[u16], node: usize, ordinal: u16) -> (usize, usize) {
+        let (lo, hi) = match (off.get(node), off.get(node + 1)) {
+            (Some(&lo), Some(&hi)) => (lo as usize, hi as usize),
+            _ => (0, 0),
+        };
         let Some(run) = tys.get(lo..hi) else {
             return (0, 0);
         };
-        let start = run.partition_point(|&t| t < ordinal);
-        let end = start + run[start..].partition_point(|&t| t <= ordinal);
+        // A typical run is a handful of entries, where a forward scan beats two binary searches.
+        let (start, end) = if run.len() <= SCAN_RUN_MAX {
+            let start = run.iter().position(|&t| t >= ordinal).unwrap_or(run.len());
+            let len = run[start..].iter().take_while(|&&t| t == ordinal).count();
+            (start, start + len)
+        } else {
+            let start = run.partition_point(|&t| t < ordinal);
+            (
+                start,
+                start + run[start..].partition_point(|&t| t <= ordinal),
+            )
+        };
         (lo + start, lo + end)
     }
 
