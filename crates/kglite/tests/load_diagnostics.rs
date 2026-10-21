@@ -16,7 +16,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use kglite::api::io::{load_file, load_file_with, save_graph, LoadOptions, MapPolicy};
+use kglite::api::io::{
+    load_file, load_file_with, save_graph, save_graph_with_layout, LoadOptions, MapPolicy,
+    SaveLayout,
+};
 use kglite::api::mutation::{add_nodes, ColumnData, ColumnType, DataFrame};
 use kglite::api::storage::{new_dir_graph_in_mode, StorageMode};
 use kglite::api::{DirGraph, GraphRead};
@@ -55,6 +58,17 @@ fn doc_graph(rows: usize, body_len: usize) -> Arc<DirGraph> {
 fn save_to(graph: Arc<DirGraph>, path: &std::path::Path) {
     let mut graph = graph;
     save_graph(&mut graph, path.to_str().expect("utf-8 path")).expect("save");
+}
+
+fn save_mapped_to(graph: Arc<DirGraph>, path: &std::path::Path) {
+    let mut graph = graph;
+    save_graph_with_layout(
+        &mut graph,
+        path.to_str().expect("utf-8 path"),
+        true,
+        SaveLayout::Mapped,
+    )
+    .expect("save");
 }
 
 /// Every spill directory this process owns, right now.
@@ -105,11 +119,12 @@ fn only_a_load_that_spills_touches_the_spill_root() {
     );
     drop(loaded);
 
-    // A default save writes a column this large to the file's data region, and
-    // a load that asks for mapped columns maps it from there: nothing to spill
-    // either. (An unrequested policy decodes in memory mode, which spills.)
+    // A mapped-layout save writes a column this large to the file's data
+    // region, and a load that asks for mapped columns maps it from there:
+    // nothing to spill either. (An unrequested policy decodes in memory mode,
+    // which spills.)
     let big = root.path().join("big.kgl");
-    save_to(doc_graph(4_000, 128), &big);
+    save_mapped_to(doc_graph(4_000, 128), &big);
 
     let before = our_spill_dirs();
     let mapped = load_file_with(
