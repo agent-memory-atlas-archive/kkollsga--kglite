@@ -989,7 +989,13 @@ fn a_mapped_frozen_load_keeps_its_arrays_in_the_file() {
             "only the per-type templates and the sparse edge properties are heap: {templates_and_props} B"
         );
     }
+    // verify_graph checks only mapped data; Windows' copies were checked at
+    // load, so its report is empty.
     let report = verify_graph(&loaded);
+    if cfg!(windows) {
+        assert!(report.sections.is_empty(), "{:?}", report.sections);
+        return;
+    }
     for name in ["topo:nodes", "topo:out_edges", "topo:edges"] {
         assert!(
             report
