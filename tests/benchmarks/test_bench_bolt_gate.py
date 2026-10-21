@@ -93,13 +93,21 @@ PARAM_ROWS = 20_000
 #:
 #: The ratio does not carry across operating systems, because the server-built
 #: control costs 4.3 ms on macOS and 16.8 ms on a Linux runner while decoding
-#: costs 32 and 79 ms. Measured: macOS 7.5-7.8x over six runs, with decoding
-#: twice the payload at 15.1-15.8x; Linux 4.7x and 3.5x on two CI runs, with
-#: the doubled payload at 9.1x and 7.5x (the server-built control moved
-#: 16.8-22.9 ms between those runs, the Bolt side 79.5 ms in both). Each
-#: ceiling sits between the measured ratio and the doubled-payload ratio on
-#: its platform, about 25% clear of both, so it catches a decoder twice as slow.
+#: costs 32 and 42-79 ms. Measured: macOS 7.5-8.3x over nine runs (doubled 15.1-17.2x); Linux 4.7x,
+#: 3.5x and 2.5x on three CI runs (Bolt side 79.5, 79.5 and 42.4 ms, control
+#: 16.8-22.9 ms). The ceiling sits clear of the worst base reading on its
+#: platform. It is NOT calibrated against a doubled payload: that ratio
+#: (Linux 5.5-9.1x) overlaps the base readings of other runs
+#: (Linux 2.5-4.7x) because the decoder's speed moved 2x between runners, so no
+#: fixed absolute ceiling is green on every base and red on every mutation. The
+#: separation is proved relative to the same job's base reading instead, see
+#: ``MIN_DOUBLED_VS_BASE``.
 MAX_PARAMS_VS_SERVER_BUILT = 6.0 if sys.platform.startswith("linux") else 11.0
+#: A payload of twice the rows must read at least this multiple of the same
+#: job's base ratio (the ideal is 2.0x; measured 2.2x on a Linux run, with
+#: decode time scaling 42.4 -> 95.7 ms), so a runner whose decoder speed
+#: differs from the one the ceiling came from cannot hide a doubled decode.
+MIN_DOUBLED_VS_BASE = 1.5
 #: Reader p95 during a concurrent ``full`` writer may be this fraction of the
 #: writer's median commit latency.
 MAX_READER_P95_VS_FSYNC = 0.25
@@ -453,11 +461,11 @@ def _param_decode_ratio(server: _Server, embedded, decode_rows: int) -> dict:
     }
 
 
-def _assert_param_ratio(result: dict) -> None:
-    assert result["ratio"] <= MAX_PARAMS_VS_SERVER_BUILT, (
+def _assert_param_ratio(result: dict, ceiling: float = MAX_PARAMS_VS_SERVER_BUILT) -> None:
+    assert result["ratio"] <= ceiling, (
         f"UNWIND over {PARAM_ROWS} parameter maps took {result['bolt_ms']:.2f} ms over Bolt, "
         f"{result['ratio']:.1f}x the same query over server-built maps "
-        f"({result['server_built_ms']:.2f} ms); limit {MAX_PARAMS_VS_SERVER_BUILT}x"
+        f"({result['server_built_ms']:.2f} ms); limit {ceiling:.1f}x"
     )
 
 
@@ -468,13 +476,20 @@ def test_bolt_parameter_decode_stays_near_server_built_maps(server, embedded):
 
 
 def test_bolt_parameter_decode_guard_catches_a_slower_decoder(server, embedded):
-    """Red proof, run in CI: twice the payload costs a decoder twice as slow,
-    and the guard must reject it. A guard that stops separating a 2x decode
-    regression from noise fails here instead of passing silently."""
-    result = _param_decode_ratio(server, embedded, 2 * PARAM_ROWS)
-    _report("params-2x-mutation", **result)
+    """Red proof, run in CI: twice the payload costs a decoder twice as slow.
+    Measured against the same job's base reading, because the absolute ceiling
+    cannot separate the two across runners; a ratio that stops moving with the
+    decode cost fails here instead of passing silently."""
+    base = _param_decode_ratio(server, embedded, PARAM_ROWS)
+    doubled = _param_decode_ratio(server, embedded, 2 * PARAM_ROWS)
+    _report("params-2x-mutation", base_ratio=base["ratio"], **doubled)
+    assert doubled["ratio"] >= MIN_DOUBLED_VS_BASE * base["ratio"], (
+        f"doubling the payload moved the ratio from {base['ratio']:.2f}x to {doubled['ratio']:.2f}x "
+        f"(< {MIN_DOUBLED_VS_BASE}x): the ratio no longer tracks decode cost"
+    )
+    # The same-job ceiling a decoder this much slower would breach.
     with pytest.raises(AssertionError):
-        _assert_param_ratio(result)
+        _assert_param_ratio(doubled, ceiling=base["ratio"] * 1.25)
 
 
 # --- reader scaling ----------------------------------------------------------
