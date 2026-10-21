@@ -20,6 +20,7 @@ BASELINE = ROOT / "tests" / "api-baselines" / "python-api.json"
 TYPING_ONLY: set[str] = set()
 STUB_INTERNAL = {
     "_backend_is_forked",
+    "_backend_is_frozen",
     "_CliReportedAgentFailure",
     "_fail_wal_append",
     "_wal_next_lsn",

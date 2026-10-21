@@ -7,6 +7,9 @@
 //! `ForkedGraph`'s impls live alongside it in `forked.rs`.
 
 use crate::datatypes::Value;
+use crate::graph::core::csr_iterators::{
+    CsrEdgeIndices, CsrEdgeReferences, CsrEdges, CsrEdgesConnecting, CsrNeighbors, CsrNodeIndices,
+};
 use crate::graph::core::filtering::str_values_equal;
 use crate::graph::core::iterators::{
     GraphEdgeIndices, GraphEdgeReferences, GraphEdges, GraphEdgesConnecting, GraphNeighbors,
@@ -1432,17 +1435,17 @@ impl GraphRead for DiskGraph {
 
     #[inline]
     fn node_indices(&self) -> GraphNodeIndices<'_> {
-        GraphNodeIndices::Disk(self.node_indices_iter())
+        GraphNodeIndices::Csr(CsrNodeIndices::Disk(self.node_indices_iter()))
     }
 
     #[inline]
     fn edge_indices(&self) -> GraphEdgeIndices<'_> {
-        GraphEdgeIndices::Disk(self.edge_indices_iter())
+        GraphEdgeIndices::Csr(CsrEdgeIndices::Disk(self.edge_indices_iter()))
     }
 
     #[inline]
     fn edge_references(&self) -> GraphEdgeReferences<'_> {
-        GraphEdgeReferences::Disk(self.edge_references_iter())
+        GraphEdgeReferences::Csr(CsrEdgeReferences::Disk(self.edge_references_iter()))
     }
 
     #[inline]
@@ -1452,12 +1455,14 @@ impl GraphRead for DiskGraph {
 
     #[inline]
     fn edges_directed(&self, idx: NodeIndex, dir: Direction) -> GraphEdges<'_> {
-        GraphEdges::Disk(self.edges_directed_iter(idx, dir))
+        GraphEdges::Csr(CsrEdges::Disk(self.edges_directed_iter(idx, dir)))
     }
 
     #[inline]
     fn edges(&self, idx: NodeIndex) -> GraphEdges<'_> {
-        GraphEdges::Disk(self.edges_directed_iter(idx, Direction::Outgoing))
+        GraphEdges::Csr(CsrEdges::Disk(
+            self.edges_directed_iter(idx, Direction::Outgoing),
+        ))
     }
 
     #[inline]
@@ -1467,16 +1472,16 @@ impl GraphRead for DiskGraph {
         dir: Direction,
         conn_type_filter: Option<InternedKey>,
     ) -> GraphEdges<'_> {
-        GraphEdges::Disk(self.edges_directed_filtered_iter(
+        GraphEdges::Csr(CsrEdges::Disk(self.edges_directed_filtered_iter(
             idx,
             dir,
             conn_type_filter.map(|k| k.as_u64()),
-        ))
+        )))
     }
 
     #[inline]
     fn edges_connecting(&self, a: NodeIndex, b: NodeIndex) -> GraphEdgesConnecting<'_> {
-        GraphEdgesConnecting::Disk(self.edges_connecting_iter(a, b))
+        GraphEdgesConnecting::Csr(CsrEdgesConnecting::Disk(self.edges_connecting_iter(a, b)))
     }
 
     #[inline]
@@ -1523,12 +1528,12 @@ impl GraphRead for DiskGraph {
 
     #[inline]
     fn neighbors_directed(&self, idx: NodeIndex, dir: Direction) -> GraphNeighbors<'_> {
-        GraphNeighbors::Disk(self.neighbors_directed_iter(idx, dir))
+        GraphNeighbors::Csr(CsrNeighbors::Disk(self.neighbors_directed_iter(idx, dir)))
     }
 
     #[inline]
     fn neighbors_undirected(&self, idx: NodeIndex) -> GraphNeighbors<'_> {
-        GraphNeighbors::Disk(self.neighbors_undirected_iter(idx))
+        GraphNeighbors::Csr(CsrNeighbors::Disk(self.neighbors_undirected_iter(idx)))
     }
 
     #[inline]

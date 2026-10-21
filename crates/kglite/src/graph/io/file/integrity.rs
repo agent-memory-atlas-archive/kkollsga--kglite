@@ -188,6 +188,25 @@ pub fn verify_graph(graph: &DirGraph) -> IntegrityReport {
             store.numeric(),
         );
     }
+    if let Some(frozen) = graph.graph.as_frozen() {
+        for section in frozen.shared_sections() {
+            let result = section
+                .verify()
+                .and_then(|()| match section.modified_since_open() {
+                    Some(Ok(true)) => Err(invalid_data(
+                        "the source file's modification time changed since it was mapped",
+                    )),
+                    Some(Err(error)) => Err(error),
+                    _ => Ok(()),
+                });
+            report.sections.push(status(
+                section.name(),
+                section.bytes().len() as u64,
+                true,
+                result,
+            ));
+        }
+    }
     let mut stores = graph.column_stores_by_name();
     stores.sort_by(|a, b| a.0.cmp(b.0));
     let mut seen = std::collections::HashSet::new();

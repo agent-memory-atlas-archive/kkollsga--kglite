@@ -15,7 +15,7 @@ before upgrading.
   - The refusal reads "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
   - **Do:** save with `layout="compact"` (Rust: `SaveLayout::Compact`) for any file an older kglite must read. It writes the v8 container with everything compressed.
   - A graph below all of those sizes writes the same bytes as before. This release reads v8 and older files unchanged.
-  - The node and relationship thresholds add index sections (see Added): 4 bytes per node, 8 per indexed id and 16 per distinct relationship peer. A random 1M-node, 12M-relationship graph grows 110 to 147 MB; the `legal` operator graph grows 1.3 % and `sodir` 3.7 %.
+  - The node and relationship thresholds add index sections (see Added): 4 bytes per node, 8 per indexed id and 16 per distinct relationship peer. A random 1M-node, 12M-relationship graph grows 110 to 147 MB; the `legal` operator graph grows 1.3 % and `sodir` 3.7 %. The same thresholds also record the topology raw (see Added): about 40 bytes per node and 32 per relationship, which grows a random 1M-node, 12M-relationship graph from 147 to 575 MB and the `legal` and `sodir` operator graphs by 16-17 %.
   - A v9 file keeps those buffers raw and 64-byte aligned. Embeddings compress by under 10 %, so they add little; column text does not compress away. Measured on six operator graphs the file grew from 1.0x to 5.4x: `sodir` 134 to 389 MB, `rms` 18.5 to 99.7 MB, `legal` 196 to 265 MB. `layout="compact"` keeps the old size.
   - The size rule is the one a v8 load uses to spill a column to a temp file, so the file holds raw exactly what a load would otherwise copy into a per-process spill file.
 - **Property columns with a buffer of 256 KB or more are read from the file by default, in every storage mode.**
@@ -44,6 +44,15 @@ before upgrading.
   - A write to a node type layers over its recorded lists; the first relationship write drops the recorded counts, which are then built from the relationships on first use. Types with string ids or repeated ids build their id index on first use, as before.
   - A mapped load reads and checks every index section: a damaged one refuses the load, and `verify_file()` names it. The load costs about 1-2 % more time than before.
   - Peer counts of a mapped graph are shared between queries instead of copied for each one.
+- **A large graph's topology is stored raw in the `.kgl` and read from it in `mapped` storage.**
+  - A save records the node records, the out- and in-adjacency (sorted by relationship type) and the relationship endpoints for a graph of 65,536 nodes or more, or 262,144 relationships or more, at about 40 bytes per node and 32 per relationship on top of the compressed copy. `layout="compact"` records none.
+  - A load into `mapped` storage reads them in place and no longer decodes the compressed topology into the heap. A load into `memory` storage ignores them and decodes as before.
+  - Measured (release, macOS footprint, 1M nodes and 12M relationships, `mapped`): footprint after load 424 to 15 MB (`memory` storage: 428 MB), after the query mix 599 to 162 MB, load 0.72 to 0.35 s. At 3M nodes and 36M relationships: 1244-1278 to 18 MB after load and 1.1 to 1.0 s. Scans, sorts, filtered traversals and grouped aggregates run within +5.4 % of `memory` storage warm (some faster); the first touch of a page costs a page fault (a cold anchored two-hop expansion: 1.5 ms against 0.01 ms).
+  - The first write promotes the topology to the heap once, as a `mapped` load always did. A copy, a snapshot or a transaction that did not write keeps the file's topology, and a failed statement rolls back to the slots it vacated. A save of a graph that still serves its topology from the file does not promote it.
+  - A per-node typed degree count binary-searches its node's run in the file instead of building an adjacency index first (1M nodes: 194 ms to 0.3 ms on first use).
+  - A node's relationships of one type come back in the order `memory` storage returns them; those of different types come grouped by type.
+  - A damaged node section refuses the load. The other sections are checked at first use: `verify_integrity()`, a save and the write that promotes them refuse a damaged one, and `verify_file()` names it.
+  - A save skips the topology when the graph holds a node with an inline identity, more than 262,144 relationships with properties, or more than 1,024 node or relationship types. Relationship properties are decoded to a heap map at load.
 - **Embedding stores and large columns are read from the `.kgl` file instead of the heap.**
   - `kglite.load(path, embeddings=..., columns=..., verify=...)`; `embeddings` and `columns` are `"auto"`, `"mapped"` or `"memory"`, `verify` is `"lazy"` or `"eager"`. `open_session` takes the same options for its read-only form.
   - `auto` maps a store of 64 MB or more (a column of 256 KB or more) from a regular local file on Unix. `mapped` maps any size. `memory` copies to the heap; columns then spill to a temp file as in v8 loads.
@@ -106,6 +115,7 @@ before upgrading.
 
 ### Rust API
 
+- `GraphBackend` gains a `Frozen(Arc<FrozenGraph>)` variant and `GraphBackend::is_frozen()`: a `match` over every variant needs an arm for it. `NodeData` is `repr(C)` and `PropertyStorage` is `repr(u8)`; their size and field offsets are unchanged.
 - `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.
 - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`; `Precision`, `QuantStore` and `QuantizationInfo` are public.
 - `kglite::api::memory` (`ReleaseHooks`, `ReleaseScope`, `set_release_hooks`) lets a host that links its own allocator release memory after a graph load; with no hooks registered a scope does nothing.

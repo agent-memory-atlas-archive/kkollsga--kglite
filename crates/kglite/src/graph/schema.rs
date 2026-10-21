@@ -1206,7 +1206,12 @@ pub fn soft_alias_fallback(resolved: &str) -> Option<SoftAliasFallback> {
 /// they sit behind `ident`, which is `None` for the sentinel pair. Only the
 /// staging paths (RDF / N-Triples loaders, the `set_node_title` fallback,
 /// pre-column `.kgl` files, vacuum and fork placeholders) hold a `Some`.
+///
+/// `repr(C)` pins the field order (`node_type` at 0, `ident` at 8,
+/// `properties` at 16) so a frozen `.kgl` topology section can be read as a
+/// `[NodeData]` in place; `storage::frozen::node_record` asserts the layout.
 #[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
 pub struct NodeData {
     pub node_type: InternedKey,
     /// `(id, title)`; never a `(Null, Null)` pair — [`NodeData::set_ident`]

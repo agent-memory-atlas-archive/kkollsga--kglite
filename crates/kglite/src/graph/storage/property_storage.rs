@@ -91,6 +91,12 @@ impl ColumnarRow {
 
 /// The physical shape of one node's properties — **transient or real**; see
 /// the module docs for the distinction the two variants encode.
+///
+/// `repr(u8)` fixes the layout (a one-byte tag, then the payload at offset 4
+/// for `Columnar` and offset 8 for `Map`) because a frozen `.kgl` topology
+/// section holds `NodeData` records whose `Columnar` arm is read in place; see
+/// `storage::frozen::node_record`.
+#[repr(u8)]
 pub(crate) enum PropertyStorage {
     /// Transient staging: values held inline before they reach a store.
     /// Never a durable end state.

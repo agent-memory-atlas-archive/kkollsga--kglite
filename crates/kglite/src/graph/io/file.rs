@@ -791,6 +791,7 @@ mod integrity;
 pub(crate) mod mappable;
 mod quantized_sections;
 mod save_sections;
+mod topology_sections;
 use embedding_sections::NodeStoreRecord;
 use fast_load_sidecars::{decode_secondary_label_index, encode_secondary_label_index};
 pub(crate) use fast_load_sidecars::{
@@ -1368,6 +1369,23 @@ impl<'a> SectionCursor<'a> {
         self.verify(section, bytes)?;
         self.offset = end;
         Ok(bytes)
+    }
+
+    /// Step over the next `encoded_len` bytes without reading them: for a
+    /// section this load does not use (the compressed topology of a graph served
+    /// from the raw sections), so neither its CRC nor its pages are touched.
+    fn skip(&mut self, encoded_len: u64, section: &str) -> io::Result<()> {
+        let end = usize::try_from(encoded_len)
+            .ok()
+            .and_then(|len| self.offset.checked_add(len))
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or_else(|| {
+                invalid_data(format!(
+                    "file is truncated — {section} section runs past the end of the file"
+                ))
+            })?;
+        self.offset = end;
+        Ok(())
     }
 
     fn verify(&self, section: &str, bytes: &[u8]) -> io::Result<()> {
@@ -2270,8 +2288,13 @@ fn load_portable_columnar(
     };
     let mut indexes =
         into_mapped.then(|| index_sections::IndexSections::from_table(&mappable_table));
+    // A mapped load serves the graph from the file's raw topology when it
+    // recorded one, instead of decoding the compressed copy into the heap.
+    let frozen = into_mapped
+        .then(|| topology_sections::TopologySections::from_table(&mappable_table))
+        .flatten();
     let (mut dir_graph, plan) =
-        decode_portable_topology(codec, &mut sections, metadata, indexes.as_mut())?;
+        decode_portable_topology(codec, &mut sections, metadata, indexes.as_mut(), frozen)?;
     column_sections::load_portable_columns(
         codec,
         &mut dir_graph,
@@ -2298,12 +2321,14 @@ fn load_portable_columnar(
         &normalization_effects,
         &mappable_table,
     )?;
-    // Place the graph in its mode. The payload always deserializes into a
-    // memory backend (`GraphBackend`'s Deserialize), so a mapped target is
-    // swapped onto the mapped backend here — after the graph is complete, and
+    // Place the graph in its mode. The compressed payload always deserializes
+    // into a memory backend (`GraphBackend`'s Deserialize), so a mapped target
+    // is swapped onto the mapped backend here — after the graph is complete, and
     // by moving the topology rather than copying it. Memory (and a file that
     // recorded nothing, with nothing requested) is already what the decode
-    // produced, so it is a no-op.
+    // produced, so it is a no-op. A mapped load that found the file's raw
+    // topology sections never decoded the payload: its backend is already the
+    // frozen mapped one, which is a no-op here too.
     crate::graph::storage::mode::convert_dir_graph_to_mode(&mut dir_graph, target_mode)
         .map_err(io::Error::other)?;
     if let Some(indexes) = indexes.filter(|_| dir_graph.graph.is_mapped()) {
@@ -2373,8 +2398,40 @@ mod embedding_load_validation_tests;
 #[path = "file/embedding_mapped_tests.rs"]
 mod embedding_mapped_tests;
 #[cfg(test)]
+mod frozen_tests;
+#[cfg(test)]
 #[path = "file/index_sections_tests.rs"]
 mod index_sections_tests;
+
+/// Save `graph` and load it back into mapped storage with the topology sections
+/// the floors would otherwise withhold from a small graph, so a fixture can run
+/// on a frozen backend. The file is gone before this returns; a Unix mapping
+/// keeps its inode, and elsewhere the sections are copied at load.
+#[cfg(test)]
+pub(crate) fn reload_frozen_for_test(graph: DirGraph) -> DirGraph {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("frozen-fixture.kgl");
+    let mut shared = Arc::new(graph);
+    index_sections::with_floors(1, 1, || {
+        save_graph_with_layout(
+            &mut shared,
+            path.to_str().expect("utf-8 path"),
+            true,
+            SaveLayout::Auto,
+        )
+    })
+    .expect("save fixture");
+    let loaded = load_file_with(
+        path.to_str().expect("utf-8 path"),
+        &LoadOptions::new().with_storage(StorageMode::Mapped),
+    )
+    .expect("load fixture");
+    drop(tmp);
+    match Arc::try_unwrap(loaded) {
+        Ok(graph) => graph,
+        Err(_) => panic!("a fresh load is uniquely owned"),
+    }
+}
 #[cfg(test)]
 mod quantized_persistence_tests;
 

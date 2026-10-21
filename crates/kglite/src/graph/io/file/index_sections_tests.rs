@@ -14,17 +14,17 @@ use std::collections::HashMap;
 
 const DOCS: i64 = 120;
 
-fn opts() -> ExecuteOptions<'static> {
+pub(super) fn opts() -> ExecuteOptions<'static> {
     // A leaked empty map keeps the options 'static for the whole test binary.
     let empty: &'static HashMap<String, Value> = Box::leak(Box::new(HashMap::new()));
     ExecuteOptions::eager(empty)
 }
 
-fn run(graph: &mut DirGraph, query: &str) {
+pub(super) fn run(graph: &mut DirGraph, query: &str) {
     execute_mut(graph, query, &opts()).unwrap_or_else(|e| panic!("{query}: {e}"));
 }
 
-fn rows(graph: &DirGraph, query: &str) -> String {
+pub(super) fn rows(graph: &DirGraph, query: &str) -> String {
     format!(
         "{:?}",
         execute_read(graph, query, &opts())
@@ -67,7 +67,7 @@ fn add_unique_id_type(graph: &mut DirGraph, node_type: &str, ids: impl Iterator<
 /// `CREATE` appended to, `Tag` string ids,
 /// `Twin` repeated int64 ids, and `A:b%c` an int64 type whose name needs
 /// escaping in a section name. A deleted `Doc` leaves a hole in the node array.
-fn graph() -> DirGraph {
+pub(super) fn graph() -> DirGraph {
     let mut graph = DirGraph::new();
     add_unique_id_type(&mut graph, "Uni", (0..90).map(|i| 500 + i * 2));
     add_unique_id_type(&mut graph, "Mix", 1..40);
@@ -108,7 +108,7 @@ fn graph() -> DirGraph {
 
 /// Queries that touch every served structure: id lookups, type scans, typed
 /// and grouped edge aggregates in both directions.
-const PROBES: [&str; 16] = [
+pub(super) const PROBES: [&str; 16] = [
     "MATCH (d:Doc {id: 1015}) RETURN d.n",
     "MATCH (d:Doc {id: 1030}) RETURN d.n",
     "MATCH (d:Doc {id: 1360}) RETURN d.n",
@@ -128,7 +128,7 @@ const PROBES: [&str; 16] = [
 ];
 
 /// The probes' answers plus an id lookup in the type Cypher cannot spell.
-fn probe(graph: &DirGraph) -> Vec<String> {
+pub(super) fn probe(graph: &DirGraph) -> Vec<String> {
     let mut out: Vec<String> = PROBES.iter().map(|q| rows(graph, q)).collect();
     for id in [6990, 6975, 6974, 0] {
         out.push(format!(
@@ -139,13 +139,13 @@ fn probe(graph: &DirGraph) -> Vec<String> {
     out
 }
 
-fn save(graph: DirGraph, path: &std::path::Path, layout: SaveLayout) -> Arc<DirGraph> {
+pub(super) fn save(graph: DirGraph, path: &std::path::Path, layout: SaveLayout) -> Arc<DirGraph> {
     let mut arc = Arc::new(graph);
     save_graph_with_layout(&mut arc, path.to_str().unwrap(), true, layout).unwrap();
     arc
 }
 
-fn load(path: &std::path::Path, storage: StorageMode) -> Arc<DirGraph> {
+pub(super) fn load(path: &std::path::Path, storage: StorageMode) -> Arc<DirGraph> {
     load_file_with(
         path.to_str().unwrap(),
         &LoadOptions::new().with_storage(storage),
@@ -155,7 +155,7 @@ fn load(path: &std::path::Path, storage: StorageMode) -> Arc<DirGraph> {
 
 /// The graph a load returned, owned: its backend is the loaded one, not an
 /// overlay over it (which is what cloning the graph would give).
-fn load_owned(path: &std::path::Path, storage: StorageMode) -> DirGraph {
+pub(super) fn load_owned(path: &std::path::Path, storage: StorageMode) -> DirGraph {
     match Arc::try_unwrap(load(path, storage)) {
         Ok(graph) => graph,
         Err(_) => panic!("a fresh load is uniquely owned"),
@@ -165,7 +165,11 @@ fn load_owned(path: &std::path::Path, storage: StorageMode) -> DirGraph {
 fn saved(layout: SaveLayout) -> (tempfile::TempDir, std::path::PathBuf, Arc<DirGraph>) {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
-    let original = with_floors(50, 100, || save(graph(), &path, layout));
+    // These tests pin what a mapped load does with the index sections over a
+    // heap topology; the frozen topology has its own tests.
+    let original = topology_sections::without_topology(|| {
+        with_floors(50, 100, || save(graph(), &path, layout))
+    });
     (tmp, path, original)
 }
 

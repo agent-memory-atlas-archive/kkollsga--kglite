@@ -54,14 +54,25 @@ pub(super) fn decode_portable_topology(
     sections: &mut SectionCursor<'_>,
     metadata: FileMetadata,
     indexes: Option<&mut index_sections::IndexSections>,
+    frozen: Option<topology_sections::TopologySections>,
 ) -> io::Result<(DirGraph, PortableSectionPlan)> {
-    let topology_compressed = sections.take(metadata.topology_compressed_size, TOPOLOGY_SECTION)?;
-    let topology_raw = zstd_decompress(topology_compressed)?;
     let mut interner = StringInterner::new();
-    let graph: crate::graph::schema::GraphBackend = {
-        let _guard = SerdeDeserializeGuard::new(&mut interner);
-        codec_deser(codec, &topology_raw, topology_raw.capacity() as u64)?
+    let graph: crate::graph::schema::GraphBackend = match frozen {
+        // The file's raw topology serves the graph in place; the compressed
+        // copy of it is stepped over, unread.
+        Some(raw) => {
+            sections.skip(metadata.topology_compressed_size, TOPOLOGY_SECTION)?;
+            crate::graph::schema::GraphBackend::from_frozen(raw.build(codec, &mut interner)?)
+        }
+        None => {
+            let topology_compressed =
+                sections.take(metadata.topology_compressed_size, TOPOLOGY_SECTION)?;
+            let topology_raw = zstd_decompress(topology_compressed)?;
+            let _guard = SerdeDeserializeGuard::new(&mut interner);
+            codec_deser(codec, &topology_raw, topology_raw.capacity() as u64)?
+        }
     };
+    let is_frozen = graph.is_frozen();
     let plan = PortableSectionPlan {
         columns: metadata.column_sections.clone(),
         embeddings: metadata.embeddings_compressed_size,
@@ -89,6 +100,14 @@ pub(super) fn decode_portable_topology(
     };
     if !served {
         dir_graph.rebuild_type_indices_and_schemas();
+    }
+    if is_frozen {
+        // The records are read in place, so each must name the row the column
+        // loader will bind to it; see `check_rows_against_types`.
+        topology_sections::check_rows_against_types(&dir_graph)?;
+        if let Some(frozen) = dir_graph.graph.as_frozen() {
+            frozen.release_resident();
+        }
     }
     dir_graph.build_connection_types_cache();
     Ok((dir_graph, plan))

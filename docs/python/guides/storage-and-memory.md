@@ -1,6 +1,6 @@
 # Storage and memory
 
-A loaded graph keeps its topology and indexes on the heap and can serve its large vectors and columns straight from the `.kgl` file. This guide says what lives where, how to change it, and how to read the memory numbers.
+A graph loaded into `mapped` storage serves its topology, indexes, large vectors and columns straight from the `.kgl` file. A graph loaded into `memory` storage keeps the topology and indexes on the heap and serves only its large vectors and columns from the file. This guide says what lives where, how to change it, and how to read the memory numbers.
 
 ## What lives where
 
@@ -8,7 +8,7 @@ Placement follows the data, not the storage mode.
 
 | Data | Where it lives | Notes |
 |---|---|---|
-| Topology (nodes, relationships) | Heap in `memory` and `mapped`; mmap CSR in `disk` | 40 bytes per node and 32 per relationship on the heap |
+| Topology (nodes, relationships) | The `.kgl` file in `mapped` storage; heap in `memory`; mmap CSR in `disk` | A save records it for a graph of 65,536 nodes or 262,144 relationships or more. On the heap it costs 40 bytes per node and 32 per relationship |
 | Node type member lists and the id index of an all-`UniqueId` or all-int64 type | The `.kgl` file in `mapped` storage; heap in `memory` | A save records them for a graph of 65,536 nodes or more |
 | Peer counts per relationship type | The `.kgl` file in `mapped` storage; built on first use in `memory` | A save records them for 262,144 relationships or more |
 | Other indexes (property, string-id, HNSW structure) | Heap | Built or rebuilt at load |
@@ -17,7 +17,7 @@ Placement follows the data, not the storage mode.
 | Embedding stores of 64 MB or more | The `.kgl` file (`embeddings="auto"`) | Read in place, no copy |
 | Smaller embedding stores | Heap | `embeddings="mapped"` maps any size |
 
-A mapped region is read in place from the file. It costs no resident memory until a query touches its pages.
+A mapped region is read in place from the file. It costs no resident memory until a query touches its pages. The first write to a `mapped` graph that serves its topology from the file copies the topology to the heap once. From then on it behaves like any heap-topology `mapped` graph.
 
 ## The knobs
 
@@ -50,17 +50,30 @@ Meanings of the values:
 
 ## Container v9 and v8
 
-A default `save()` writes v9 when the graph holds an embedding store of 4 MiB or more, a column with a buffer of 256 KB or more, 65,536 nodes or more, or 262,144 relationships or more. Otherwise it is v8, with the same bytes as before.
+A default `save()` writes v9 when any of these holds. An embedding store of 4 MiB or more. A column with a buffer of 256 KB or more. 65,536 nodes or more. 262,144 relationships or more. Otherwise it is v8, with the same bytes as before.
 
-- The rule for "large" is the one a v8 load uses to spill a column to a temp file. A default file therefore maps exactly the columns that would otherwise be copied into a per-process spill file: many servers on one graph share the file's pages instead of each writing its own copy under `$TMPDIR`.
+- The rule for "large" is the one a v8 load uses to spill a column to a temp file. A default file therefore maps exactly the columns that would otherwise be copied into a per-process spill file. Many servers on one graph share the file's pages instead of each writing its own copy under `$TMPDIR`.
 - A v9 file stores the vectors, their norms and those column buffers uncompressed and 64-byte aligned, after the compressed sections. Smaller columns stay in the compressed sections and decode to the heap.
-- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away: on the operator graphs measured the file grows 1.4-5.4x (one 134 MB graph becomes 389 MB), almost all of it string bytes that zstd shrinks 3-7x.
+- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. On the operator graphs measured the file grows 1.4-5.4x (one 134 MB graph becomes 389 MB). Almost all of the growth is string bytes that zstd shrinks 3-7x.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
-- A graph of 65,536 nodes or more also records, per node type, the sorted member list, and for a type whose ids are all `UniqueId` or all int64 and unique, a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts.
+- A graph of 65,536 nodes or more also records the sorted member list of each node type. A type whose ids are all `UniqueId` or all unique int64 also gets a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts. Either size also records the topology raw, at about 40 bytes per node and 32 per relationship, on top of the compressed copy.
 - These sections cost 4 bytes per node, 8 per indexed id and 16 per distinct peer. Measured: a random 1M-node, 12M-relationship graph grows 110 to 147 MB; a 196 MB operator graph grows 1.3 % and a 134 MB one 3.7 %.
 - A kglite release before this one refuses a v9 file: "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
 - If a consumer must stay on an older kglite, or the file size matters more than a spill file, save with `layout="compact"`. It writes v8 with every column and vector compressed.
 - kglite reads v8 and older files unchanged. `embeddings=` and `columns=` have no effect on them.
+
+## Topology served from the file
+
+A save of a graph with 65,536 nodes or 262,144 relationships or more records the topology raw in the data region. A load into `mapped` storage reads it in place instead of decoding the compressed copy.
+
+- The file holds one 32-byte record per node slot and one endpoint record per relationship slot. It also holds an out- and an in-adjacency sorted by relationship type, so a typed expansion binary-searches its node's run. Node and relationship slots are the ones the graph held when it was saved, deleted slots included.
+- The heap holds only the per-type templates, the sparse map of relationships that carry properties, and what the declared indexes and small columns need. Relationship properties are still decoded to that map at load.
+- The first write promotes the topology to the heap, once. A copy, a snapshot or a transaction that did not write keeps sharing the file's topology; the writer promotes its own handle. A failed statement rolls back to the slots it vacated.
+- A save does not promote. It copies the topology out of the file, so it needs a transient heap graph the size of the topology.
+- The order a node's relationships come back in can differ from a `memory` load. Relationships of one type keep memory storage's newest-first order. Those of different types are grouped by type.
+- A save skips the sections in four cases. The graph is below the floors. It holds a node with an inline identity. It has more than 262,144 relationships with properties. It has more than 1,024 node or relationship types. `layout="compact"` writes none. A file without them loads as before.
+- A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the write that promotes them refuse a damaged section.
+- `columns="memory"` and `KGLITE_MMAP=0` copy the sections to the heap instead of mapping them.
 
 ## Indexes served from the file
 
@@ -84,9 +97,9 @@ The two metrics disagree about mapped files, so name the one you quote.
 
 - Clean file-backed pages are reclaimable under memory pressure and shared by every process that maps the same file.
 - Mapped pages are therefore cheaper than heap pages on both platforms, but only macOS footprint shows it as zero.
-- Measured on a 205 MB embedding store (50k vectors x 1024, macOS, release build): load 334 to 54 ms, and footprint after load 242 to 44 MB (76 MB after queries).
+- Measured on a 205 MB embedding store (50k vectors x 1024, macOS, release build): load 334 to 54 ms. Footprint after load 242 to 44 MB (76 MB after queries).
 - The first brute-force query after load costs about 13 ms more (15.5 against 2.5 ms), because it faults the pages in and checks the CRC. Warm queries match the heap.
-- A mapped string column is checked at load, which reads every page. The load drops those pages afterwards, so the resident set follows the rows queries read: the MCP server on a 389 MB file went from 656 to 330 MB RSS after boot. Linux uses `madvise(MADV_DONTNEED)` and macOS re-maps the range, which keeps the file in the OS cache so the next boot stays warm; the Linux path was not measured.
+- A mapped string column is checked at load, which reads every page. The load drops those pages afterwards, so the resident set follows the rows queries read. The MCP server on a 389 MB file went from 656 to 330 MB RSS after boot. Linux uses `madvise(MADV_DONTNEED)` and macOS re-maps the range, which keeps the file in the OS cache so the next boot stays warm; the Linux path was not measured.
 - Linux RSS and PSS were not measured for this release.
 
 ### Memory that stays charged after a free

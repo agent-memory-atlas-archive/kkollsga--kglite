@@ -387,6 +387,10 @@ pub(super) fn load_portable_columns(
         )?;
     }
     check_all_claimed(table, &claimed.into_inner())?;
-    attach_portable_column_stores(dir_graph);
+    // A frozen topology's records already carry their rows (checked against
+    // the type indexes when it was built) and no inline identity to clear.
+    if !dir_graph.graph.is_frozen() {
+        attach_portable_column_stores(dir_graph);
+    }
     Ok(())
 }

@@ -74,10 +74,26 @@ pub(crate) fn with_floors<R>(nodes: usize, edges: usize, body: impl FnOnce() -> 
     result
 }
 
-fn floors() -> (usize, usize) {
+/// Debug builds only: `KGLITE_RAW_SECTION_FLOORS=<nodes>,<edges>` replaces the
+/// floors, so a correctness run can record the index and topology sections for
+/// graphs of any size and put every mapped load of a saved graph on them.
+/// Release builds do not read it.
+#[cfg(debug_assertions)]
+const FLOORS_ENV_VAR: &str = "KGLITE_RAW_SECTION_FLOORS";
+
+pub(super) fn floors() -> (usize, usize) {
     #[cfg(test)]
     if let Some(floors) = FLOORS.with(|floors| floors.get()) {
         return floors;
+    }
+    #[cfg(debug_assertions)]
+    if let Some((nodes, edges)) = std::env::var(FLOORS_ENV_VAR)
+        .ok()
+        .as_deref()
+        .and_then(|value| value.split_once(','))
+        .and_then(|(n, e)| Some((n.trim().parse().ok()?, e.trim().parse().ok()?)))
+    {
+        return (nodes, edges);
     }
     (MIN_NODES, MIN_EDGES)
 }

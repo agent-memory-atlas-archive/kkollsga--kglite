@@ -3581,6 +3581,7 @@ pub mod kglite::api::storage
 pub enum kglite::api::storage::GraphBackend
 pub kglite::api::storage::GraphBackend::Disk(alloc::boxed::Box<kglite::api::storage::DiskGraph>)
 pub kglite::api::storage::GraphBackend::Forked(alloc::boxed::Box<kglite::graph::storage::forked::ForkedGraph>)
+pub kglite::api::storage::GraphBackend::Frozen(alloc::sync::Arc<kglite::graph::storage::frozen::FrozenGraph>)
 pub kglite::api::storage::GraphBackend::Mapped(alloc::sync::Arc<kglite::api::storage::MappedGraph>)
 pub kglite::api::storage::GraphBackend::Memory(alloc::sync::Arc<kglite::graph::storage::MemoryGraph>)
 pub kglite::api::storage::GraphBackend::Recording(alloc::boxed::Box<kglite::api::durable::RecordingGraph<kglite::api::storage::GraphBackend>>)
@@ -3591,6 +3592,7 @@ pub fn kglite::api::storage::GraphBackend::captures_before_images(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::for_each_edge_endpoint_key<F>(&self, F) where F: core::ops::function::FnMut(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)
 pub fn kglite::api::storage::GraphBackend::for_each_edge_of_conn_type<F>(&self, kglite::api::InternedKey, F) where F: core::ops::function::FnMut(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, u32, &[(kglite::api::InternedKey, kglite::datatypes::values::Value)]) -> bool
 pub fn kglite::api::storage::GraphBackend::is_forked(&self) -> bool
+pub fn kglite::api::storage::GraphBackend::is_frozen(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::needs_node_before_image(&self, petgraph::graph_impl::NodeIndex) -> bool
 pub fn kglite::api::storage::GraphBackend::new() -> Self
 pub fn kglite::api::storage::GraphBackend::note_node_before_image(&mut self, petgraph::graph_impl::NodeIndex, kglite::api::durable::BeforeImage)
@@ -5438,7 +5440,7 @@ pub fn kglite::api::MaterializedLabel::eq(&self, &kglite::api::MaterializedLabel
 impl core::fmt::Debug for kglite::api::MaterializedLabel
 pub fn kglite::api::MaterializedLabel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for kglite::api::MaterializedLabel
-pub struct kglite::api::NodeData
+#[repr(C)] pub struct kglite::api::NodeData
 pub kglite::api::NodeData::node_type: kglite::api::InternedKey
 impl kglite::api::NodeData
 pub fn kglite::api::NodeData::id(&self) -> alloc::borrow::Cow<'_, kglite::datatypes::values::Value>

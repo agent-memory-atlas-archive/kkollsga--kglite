@@ -557,6 +557,22 @@ fn seeded_mapped() -> DirGraph {
     graph
 }
 
+/// `seeded_columnar()` saved and reloaded into mapped storage, so its topology
+/// is served from the file's raw sections.
+///
+/// The first write promotes it to a heap `Mapped` graph, and a rolled-back
+/// statement has to restore the slots it vacated on the graph it *was*: this
+/// is the fixture that proves a promotion at the start of a statement leaves
+/// the journal able to put everything back where it was.
+fn seeded_frozen() -> DirGraph {
+    let graph = crate::graph::io::file::reload_frozen_for_test(seeded_columnar());
+    assert!(
+        graph.graph.is_frozen(),
+        "the fixture must start on a frozen topology, or the frozen arms are vacuous"
+    );
+    graph
+}
+
 /// `seeded()` plus one index of each user-created family over `Item`.
 ///
 /// The indexed shape is not exotic: an application indexes the property it

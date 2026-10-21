@@ -51,6 +51,16 @@ macro_rules! rollback_shapes {
                 fn mapped() {
                     assert_rolls_back(&mut seeded_mapped(), $query, $scope);
                 }
+
+                /// The **frozen** shape — a mapped load whose topology is the
+                /// file's raw sections, promoted to the heap by the statement's
+                /// first write. The fingerprint is taken before that promotion
+                /// and compared after the rollback, so a node or edge that comes
+                /// back on another slot is a failure.
+                #[test]
+                fn frozen() {
+                    assert_rolls_back(&mut seeded_frozen(), $query, $scope);
+                }
             }
         )*
     };

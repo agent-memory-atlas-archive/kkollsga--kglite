@@ -6,6 +6,9 @@
 // GraphEdgeRef implements petgraph::visit::EdgeRef so callers that import
 // that trait can call .source(), .target(), .weight(), .id() unchanged.
 
+use super::csr_iterators::{
+    CsrEdgeIndices, CsrEdgeReferences, CsrEdges, CsrEdgesConnecting, CsrNeighbors, CsrNodeIndices,
+};
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::disk::csr::{CsrEdge, TOMBSTONE_EDGE};
 use crate::graph::storage::disk::graph::DiskGraph;
@@ -209,7 +212,7 @@ impl<'a> EdgeRef for GraphEdgeRef<'a> {
 
 pub enum GraphNodeIndices<'a> {
     InMemory(petgraph::stable_graph::NodeIndices<'a, NodeData, u32>),
-    Disk(DiskNodeIndices<'a>),
+    Csr(CsrNodeIndices<'a>),
     /// A `GraphBackend::Forked` overlay that reused no vacated slot: the
     /// shared base's live indices, then the contiguous run appended past
     /// them. Every appended index is above every base index, so the
@@ -328,7 +331,7 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
     fn next(&mut self) -> Option<NodeIndex> {
         match self {
             GraphNodeIndices::InMemory(iter) => iter.next(),
-            GraphNodeIndices::Disk(iter) => iter.next(),
+            GraphNodeIndices::Csr(iter) => iter.next(),
             GraphNodeIndices::Forked { base, appended } => {
                 base.next().or_else(|| appended.next().map(NodeIndex::new))
             }
@@ -340,7 +343,7 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             GraphNodeIndices::InMemory(iter) => iter.size_hint(),
-            GraphNodeIndices::Disk(iter) => iter.size_hint(),
+            GraphNodeIndices::Csr(iter) => iter.size_hint(),
             GraphNodeIndices::Forked { base, appended } => {
                 let (blo, bhi) = base.size_hint();
                 let extra = appended.len();
@@ -363,7 +366,7 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
 
 pub enum GraphEdges<'a> {
     InMemory(petgraph::stable_graph::Edges<'a, EdgeData, petgraph::Directed, u32>),
-    Disk(DiskEdges<'a>),
+    Csr(CsrEdges<'a>),
     /// A fork with edge changes: overlay edges, then the base's.
     Forked(Box<ForkedEdges<'a>>),
 }
@@ -524,7 +527,7 @@ impl<'a> Iterator for GraphEdges<'a> {
             GraphEdges::InMemory(iter) => iter
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
-            GraphEdges::Disk(iter) => iter.next(),
+            GraphEdges::Csr(iter) => iter.next(),
             GraphEdges::Forked(iter) => iter.next(),
         }
     }
@@ -533,7 +536,7 @@ impl<'a> Iterator for GraphEdges<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             GraphEdges::InMemory(iter) => iter.size_hint(),
-            GraphEdges::Disk(iter) => iter.size_hint(),
+            GraphEdges::Csr(iter) => iter.size_hint(),
             GraphEdges::Forked(_) => (0, None),
         }
     }
@@ -545,7 +548,7 @@ impl<'a> Iterator for GraphEdges<'a> {
 
 pub enum GraphEdgeReferences<'a> {
     InMemory(petgraph::stable_graph::EdgeReferences<'a, EdgeData, u32>),
-    Disk(DiskEdgeReferences<'a>),
+    Csr(CsrEdgeReferences<'a>),
     Forked(Box<ForkedEdgeRefs<'a>>),
 }
 
@@ -598,7 +601,7 @@ impl<'a> Iterator for GraphEdgeReferences<'a> {
             GraphEdgeReferences::InMemory(iter) => iter
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
-            GraphEdgeReferences::Disk(iter) => iter.next(),
+            GraphEdgeReferences::Csr(iter) => iter.next(),
             GraphEdgeReferences::Forked(iter) => iter.next(),
         }
     }
@@ -610,7 +613,7 @@ impl<'a> Iterator for GraphEdgeReferences<'a> {
 
 pub enum GraphEdgeIndices<'a> {
     InMemory(petgraph::stable_graph::EdgeIndices<'a, EdgeData, u32>),
-    Disk(DiskEdgeIndices<'a>),
+    Csr(CsrEdgeIndices<'a>),
     Forked(Box<ForkedEdgeRefs<'a>>),
 }
 
@@ -653,7 +656,7 @@ impl<'a> Iterator for GraphEdgeIndices<'a> {
     fn next(&mut self) -> Option<EdgeIndex> {
         match self {
             GraphEdgeIndices::InMemory(iter) => iter.next(),
-            GraphEdgeIndices::Disk(iter) => iter.next(),
+            GraphEdgeIndices::Csr(iter) => iter.next(),
             GraphEdgeIndices::Forked(iter) => iter.next().map(|edge| edge.id()),
         }
     }
@@ -665,7 +668,7 @@ impl<'a> Iterator for GraphEdgeIndices<'a> {
 
 pub enum GraphEdgesConnecting<'a> {
     InMemory(petgraph::stable_graph::EdgesConnecting<'a, EdgeData, petgraph::Directed, u32>),
-    Disk(DiskEdgesConnecting<'a>),
+    Csr(CsrEdgesConnecting<'a>),
     Forked(Box<ForkedEdgesConnecting<'a>>),
 }
 
@@ -703,7 +706,7 @@ impl<'a> Iterator for GraphEdgesConnecting<'a> {
             GraphEdgesConnecting::InMemory(iter) => iter
                 .next()
                 .map(|er| GraphEdgeRef::new(er.source(), er.target(), er.id(), er.weight())),
-            GraphEdgesConnecting::Disk(iter) => iter.next(),
+            GraphEdgesConnecting::Csr(iter) => iter.next(),
             GraphEdgesConnecting::Forked(iter) => iter.next(),
         }
     }
@@ -715,7 +718,7 @@ impl<'a> Iterator for GraphEdgesConnecting<'a> {
 
 pub enum GraphNeighbors<'a> {
     InMemory(petgraph::stable_graph::Neighbors<'a, EdgeData, u32>),
-    Disk(DiskNeighbors),
+    Csr(CsrNeighbors<'a>),
     Forked(Box<ForkedNeighbors<'a>>),
 }
 
@@ -786,7 +789,7 @@ impl<'a> Iterator for GraphNeighbors<'a> {
     fn next(&mut self) -> Option<NodeIndex> {
         match self {
             GraphNeighbors::InMemory(iter) => iter.next(),
-            GraphNeighbors::Disk(iter) => iter.next(),
+            GraphNeighbors::Csr(iter) => iter.next(),
             GraphNeighbors::Forked(iter) => iter.next(),
         }
     }
@@ -795,7 +798,7 @@ impl<'a> Iterator for GraphNeighbors<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             GraphNeighbors::InMemory(iter) => iter.size_hint(),
-            GraphNeighbors::Disk(iter) => iter.size_hint(),
+            GraphNeighbors::Csr(iter) => iter.size_hint(),
             GraphNeighbors::Forked(_) => (0, None),
         }
     }

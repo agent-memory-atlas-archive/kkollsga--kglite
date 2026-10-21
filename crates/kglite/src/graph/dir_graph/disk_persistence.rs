@@ -240,6 +240,9 @@ impl DirGraph {
         // A forked backend has no single `StableDiGraph` to hand over, so
         // collapse it first. Free when the reader has already dropped.
         self.graph.flatten_fork();
+        // A frozen topology is read-only: the heap graph the conversion packs is
+        // what promotion builds.
+        self.graph.promote_frozen();
 
         // `from_stable_digraph` packs live heap edges densely in the same
         // order as petgraph's edge iterator. Preserve sidecar association
@@ -269,6 +272,7 @@ impl DirGraph {
                 )
             }
             GraphBackend::Forked(_) => unreachable!("flatten_fork collapsed the overlay above"),
+            GraphBackend::Frozen(_) => unreachable!("promote_frozen replaced it above"),
             GraphBackend::Disk(_) => return Err("Already in disk mode".to_string()),
             GraphBackend::Recording(_) => {
                 return Err(

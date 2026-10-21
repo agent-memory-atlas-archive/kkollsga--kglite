@@ -6,6 +6,7 @@
 //! via filtering/traversal helpers.
 
 pub mod calculations;
+pub(crate) mod csr_iterators;
 pub mod data_retrieval;
 pub mod filtering;
 pub mod fluent_filter;

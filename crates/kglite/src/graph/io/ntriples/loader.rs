@@ -201,6 +201,10 @@ fn apply_type_renames(
             backend.flatten_fork();
             apply_type_renames(backend, rename_map);
         }
+        GraphBackend::Frozen(_) => {
+            backend.promote_frozen();
+            apply_type_renames(backend, rename_map);
+        }
     }
 }
 

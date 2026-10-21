@@ -8,6 +8,8 @@
 //! - [`MappedGraph`] — mmap-columnar-spill variant (a distinct struct
 //!   rather than a type alias, so its trait impls can diverge from
 //!   memory's where the column ownership differs).
+//! - [`frozen::FrozenGraph`] — a read-only topology served from the raw
+//!   sections of a v9 `.kgl`; the first write promotes it to a `MappedGraph`.
 //! - [`crate::graph::storage::disk::graph::DiskGraph`] — CSR + mmap
 //!   columns.
 //!
@@ -25,6 +27,7 @@ pub(crate) mod forked_edges;
 #[cfg(test)]
 mod forked_model_tests;
 pub(crate) mod forked_slots;
+pub mod frozen;
 pub mod interner;
 pub mod lookups;
 pub mod mapped;

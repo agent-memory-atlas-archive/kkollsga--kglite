@@ -170,7 +170,7 @@ macro_rules! impl_mmap_pod_primitive {
     };
 }
 
-impl_mmap_pod_primitive!(u8, u32, u64, i32, i64, f64);
+impl_mmap_pod_primitive!(u8, u16, u32, u64, i32, i64, f64);
 
 /// Start of a `Shared` section's bytes, resolved once at construction.
 ///

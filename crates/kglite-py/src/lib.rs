@@ -926,6 +926,19 @@ fn _backend_is_forked(graph: &KnowledgeGraph) -> bool {
     graph.graph().graph.is_forked()
 }
 
+/// Whether `graph`'s topology is served from the raw sections of the `.kgl` it
+/// was loaded from, right now.
+///
+/// **A test hook, not an API**, in the same family as `_backend_is_forked`:
+/// a mapped load that kept the file's topology and one that decoded it into the
+/// heap answer every query alike, so the difference needs an observable that is
+/// not a footprint measurement. The first write promotes the topology to the
+/// heap and this turns `False`.
+#[pyfunction]
+fn _backend_is_frozen(graph: &KnowledgeGraph) -> bool {
+    graph.graph().graph.is_frozen()
+}
+
 /// Make the next write-ahead-log append on `graph` fail, as a disk that has
 /// just filled would.
 ///
@@ -1083,6 +1096,7 @@ fn kglite(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(allocator::trim_memory, m)?)?;
     m.add_function(wrap_pyfunction!(allocator::_seam_trim_count, m)?)?;
     m.add_function(wrap_pyfunction!(_backend_is_forked, m)?)?;
+    m.add_function(wrap_pyfunction!(_backend_is_frozen, m)?)?;
     m.add_function(wrap_pyfunction!(_fail_wal_append, m)?)?;
     m.add_function(wrap_pyfunction!(_wal_next_lsn, m)?)?;
     m.add(

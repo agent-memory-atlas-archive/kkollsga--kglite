@@ -1,0 +1,238 @@
+"""A mapped load that serves the topology from the `.kgl` file's raw sections.
+
+A save of a graph with 65,536 nodes or 262,144 relationships or more records
+its node records and adjacency as raw sections; a load into `mapped` storage
+reads them in place instead of decoding the compressed topology into the heap,
+and the first write promotes the graph to the heap topology mapped storage
+always had. The Rust suite covers the backend (every read against a heap load,
+slot identity, rollback shapes, damaged sections); these tests pin what the
+Python surface promises: answers do not change, a write works from the first
+statement, and transactions, copies, snapshots and saves behave.
+"""
+
+from __future__ import annotations
+
+import sys
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import kglite
+
+NODES = 70_000
+EDGES = 270_000
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Auto never maps on Windows")
+
+PROBES = [
+    "MATCH (d:Doc {id: 1234}) RETURN d.n",
+    "MATCH (d:Doc) RETURN count(d), sum(d.n)",
+    "MATCH (a:Doc)-[:LINKS]->(b:Doc) RETURN b.id AS i, count(a) AS c ORDER BY c DESC, i LIMIT 5",
+    "MATCH (a:Doc)-[:LINKS]->(b:Doc) RETURN a.id AS i, count(b) AS c ORDER BY c DESC, i LIMIT 5",
+    "MATCH (a:Doc {id: 77})-[:LINKS]->(b)-[:LINKS]->(c) RETURN count(c)",
+    "MATCH (a:Doc {id: 77})<-[:LINKS]-(b) RETURN count(b), min(b.id)",
+    "MATCH (a:Doc {id: 5})-[:LINKS*1..2]->(c) RETURN count(DISTINCT c)",
+    "MATCH (a:Doc)-[r]->(b) WHERE a.id < 200 RETURN count(r)",
+    "MATCH (t:Tag) RETURN t.id ORDER BY t.id LIMIT 3",
+    "MATCH (a:Doc)-[:HAS]->(t:Tag) RETURN t.id AS i, count(a) AS c ORDER BY c DESC, i LIMIT 3",
+]
+
+
+def _build() -> kglite.KnowledgeGraph:
+    rng = np.random.default_rng(5)
+    graph = kglite.KnowledgeGraph()
+    graph.add_nodes(
+        pd.DataFrame(
+            {
+                "id": np.arange(NODES),
+                "title": [f"d{i}" for i in range(NODES)],
+                "n": rng.integers(0, 100, NODES),
+            }
+        ),
+        "Doc",
+        "id",
+        "title",
+    )
+    graph.add_nodes(pd.DataFrame({"id": np.arange(40), "title": [f"t{i}" for i in range(40)]}), "Tag", "id", "title")
+    edges = pd.DataFrame({"s": rng.integers(0, NODES, EDGES), "t": rng.integers(0, NODES, EDGES)})
+    graph.add_relationships(edges, "LINKS", "Doc", "s", "Doc", "t", distinct=True)
+    tags = pd.DataFrame({"s": np.arange(0, NODES, 7), "t": np.arange(0, NODES, 7) % 40})
+    graph.add_relationships(tags, "HAS", "Doc", "s", "Tag", "t")
+    graph.cypher("MATCH (d:Doc {id: 4242}) DETACH DELETE d")
+    return graph
+
+
+@pytest.fixture(scope="module")
+def saved(tmp_path_factory):
+    path = str(tmp_path_factory.mktemp("topo") / "g.kgl")
+    _build().save(path)
+    return path
+
+
+def _answers(graph: kglite.KnowledgeGraph) -> list:
+    return [graph.cypher(q).to_list() for q in PROBES]
+
+
+def test_a_mapped_load_is_frozen_and_a_memory_load_is_not(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    assert kglite._backend_is_frozen(mapped)
+    assert not kglite._backend_is_frozen(memory)
+    assert mapped.graph_info()["storage_mode"] == "mapped"
+
+
+def test_a_frozen_graph_answers_like_a_memory_graph_and_stays_frozen(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    assert _answers(mapped) == _answers(memory)
+    assert kglite._backend_is_frozen(mapped), "reads never promote"
+    assert mapped.cypher("MATCH (d:Doc {id: 4242}) RETURN d.n").to_list() == []
+
+
+def test_the_first_write_promotes_and_the_graph_keeps_answering(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    writes = [
+        "CREATE (:Doc {id: 900000, n: 1, title: 'new'})",
+        "MATCH (a:Doc {id: 900000}), (b:Doc {id: 77}) CREATE (a)-[:LINKS]->(b)",
+        "MATCH (d:Doc {id: 100}) DETACH DELETE d",
+        "MATCH (d:Doc {id: 4243}) SET d.n = 777",
+        "CREATE (:Doc {id: 4242, n: 5, title: 'reuse'})",
+    ]
+    for i, write in enumerate(writes):
+        mapped.cypher(write)
+        memory.cypher(write)
+        if i == 0:
+            assert not kglite._backend_is_frozen(mapped)
+            assert mapped.graph_info()["storage_mode"] == "mapped"
+        assert _answers(mapped) == _answers(memory), write
+
+
+def test_a_failed_statement_leaves_a_frozen_graph_as_it_was(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    before = _answers(mapped)
+    with pytest.raises(Exception):
+        mapped.cypher(
+            "CREATE (:Doc {id: 800001, n: 1, title: 'a'}), "
+            "(:Doc {id: 800002, title: 'b', bad: duration({months: 2147483648})})"
+        )
+    assert _answers(mapped) == before
+    assert mapped.cypher("MATCH (d:Doc {id: 800001}) RETURN d.n").to_list() == []
+    mapped.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    assert mapped.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() == []
+
+
+def test_a_rolled_back_transaction_leaves_the_original_frozen(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    before = _answers(mapped)
+    tx = mapped.begin()
+    tx.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    tx.cypher("CREATE (:Doc {id: 910000, n: 1, title: 'tx'})")
+    assert tx.cypher("MATCH (d:Doc {id: 910000}) RETURN d.n").to_list() == [{"d.n": 1}]
+    tx.rollback()
+    assert _answers(mapped) == before
+    assert kglite._backend_is_frozen(mapped), "the transaction wrote to its own copy"
+
+
+def test_a_committed_transaction_applies_to_the_graph(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    tx = mapped.begin()
+    tx.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    tx.commit()
+    assert mapped.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() == []
+    assert mapped.cypher("MATCH (d:Doc) RETURN count(d) AS c").to_list() == [{"c": NODES - 2}]
+
+
+def test_a_snapshot_keeps_the_frozen_topology_through_a_write(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    snapshot = mapped.freeze()
+    before = [snapshot.cypher(q).to_list() for q in PROBES]
+    mapped.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    assert [snapshot.cypher(q).to_list() for q in PROBES] == before
+    assert snapshot.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() != []
+    assert mapped.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() == []
+
+
+def test_a_copy_is_independent_of_the_frozen_original(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    copy = mapped.copy()
+    copy.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    assert copy.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() == []
+    assert mapped.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() != []
+    assert kglite._backend_is_frozen(mapped)
+
+
+def test_a_save_of_a_frozen_graph_stays_frozen_and_reloads_the_same(saved, tmp_path):
+    mapped = kglite.load(saved, storage="mapped")
+    again = str(tmp_path / "again.kgl")
+    mapped.save(again)
+    assert kglite._backend_is_frozen(mapped), "a save does not promote"
+    reloaded = kglite.load(again, storage="mapped")
+    assert kglite._backend_is_frozen(reloaded)
+    assert _answers(reloaded) == _answers(mapped)
+
+
+def test_a_save_after_a_write_records_the_write(saved, tmp_path):
+    mapped = kglite.load(saved, storage="mapped")
+    mapped.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    mapped.cypher("CREATE (:Doc {id: 920000, n: 3, title: 'kept'})")
+    again = str(tmp_path / "after-write.kgl")
+    mapped.save(again)
+    memory = kglite.load(again, storage="memory")
+    reloaded = kglite.load(again, storage="mapped")
+    assert kglite._backend_is_frozen(reloaded)
+    assert _answers(reloaded) == _answers(memory) == _answers(mapped)
+    assert reloaded.cypher("MATCH (d:Doc {id: 920000}) RETURN d.n").to_list() == [{"d.n": 3}]
+
+
+def test_compact_layout_keeps_the_compressed_topology_only(saved, tmp_path):
+    graph = kglite.load(saved, storage="memory")
+    compact = str(tmp_path / "compact.kgl")
+    graph.save(compact, layout="compact")
+    mapped = kglite.load(compact, storage="mapped")
+    assert not kglite._backend_is_frozen(mapped)
+    assert _answers(mapped) == _answers(graph)
+
+
+def test_a_plain_load_follows_the_recorded_storage_mode(tmp_path):
+    graph = _build()
+    memory_path = str(tmp_path / "memory.kgl")
+    graph.save(memory_path)
+    assert not kglite._backend_is_frozen(kglite.load(memory_path))
+    mapped = kglite.load(memory_path, storage="mapped")
+    mapped_path = str(tmp_path / "mapped.kgl")
+    mapped.save(mapped_path)
+    assert kglite._backend_is_frozen(kglite.load(mapped_path))
+
+
+def test_graph_algorithms_run_on_a_frozen_graph(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    assert kglite._backend_is_frozen(mapped)
+    assert len(mapped.connected_components()) == len(memory.connected_components())
+
+
+def test_a_durable_open_of_a_frozen_file_logs_and_replays_its_writes(saved, tmp_path):
+    path = str(tmp_path / "app.kgl")
+    kglite.load(saved, storage="mapped").save(path)
+    graph = kglite.open(path, storage="mapped", durable="full")
+    assert kglite._backend_is_frozen(graph)
+    graph.cypher("CREATE (:Doc {id: 930000, n: 9, title: 'logged'})")
+    graph.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+    assert not kglite._backend_is_frozen(graph)
+    expected = _answers(graph)
+    del graph
+    reopened = kglite.open(path, storage="mapped", durable="full")
+    assert reopened.cypher("MATCH (d:Doc {id: 930000}) RETURN d.n").to_list() == [{"d.n": 9}]
+    assert reopened.cypher("MATCH (d:Doc {id: 100}) RETURN d.n").to_list() == []
+    assert _answers(reopened) == expected
+
+
+def test_vacuum_after_deletes_on_a_frozen_graph_keeps_every_answer(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    for graph in (mapped, memory):
+        graph.cypher("MATCH (d:Doc) WHERE d.id >= 100 AND d.id < 300 DETACH DELETE d")
+        graph.vacuum()
+    assert _answers(mapped) == _answers(memory)

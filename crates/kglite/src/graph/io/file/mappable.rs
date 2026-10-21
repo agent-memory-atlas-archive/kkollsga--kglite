@@ -65,6 +65,7 @@ pub(crate) enum SectionDtype {
     I64 = 8,
     F64 = 9,
     U8 = 10,
+    U16 = 11,
 }
 
 impl SectionDtype {
@@ -85,6 +86,7 @@ impl SectionDtype {
             8 => Self::I64,
             9 => Self::F64,
             10 => Self::U8,
+            11 => Self::U16,
             _ => return None,
         })
     }
@@ -93,7 +95,7 @@ impl SectionDtype {
     pub(crate) fn width(self) -> u64 {
         match self {
             Self::Raw | Self::I8 | Self::BitPacked | Self::U8 => 1,
-            Self::F16 => 2,
+            Self::F16 | Self::U16 => 2,
             Self::F32 | Self::U32 | Self::I32 => 4,
             Self::U64 | Self::I64 | Self::F64 => 8,
         }
@@ -442,6 +444,7 @@ pub(crate) fn collect_mappable_sections(
     let mut sections = super::embedding_sections::collect_embedding_sections(graph, layout)?;
     if layout != SaveLayout::Compact {
         sections.extend(super::index_sections::collect_index_sections(graph)?);
+        sections.extend(super::topology_sections::collect_topology_sections(graph)?);
     }
     Ok(sections)
 }

@@ -185,6 +185,9 @@ pub(super) fn open_table(
         if entry.owner == super::index_sections::OWNER {
             return super::index_sections::place(entry, file, columns_policy, into_mapped);
         }
+        if entry.owner == super::topology_sections::OWNER {
+            return super::topology_sections::place(entry, file, columns_policy, into_mapped);
+        }
         if !matches!(
             entry.kind,
             KIND_VECTORS

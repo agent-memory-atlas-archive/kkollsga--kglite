@@ -1207,10 +1207,10 @@ pub fn connected_components(graph: &DirGraph) -> Vec<Vec<NodeIndex>> {
     // disk/graph.rs, enforced by a debug assert); no-op on memory/mapped.
     let _arena_guard = graph.graph.begin_query();
     // A forked backend has no single `StableDiGraph` to hand petgraph — its
-    // nodes are base⊕overlay — so it takes the same generic `GraphRead`
-    // traversal the disk backend already uses. Same result, one dispatch per
-    // node instead of a direct petgraph walk.
-    if GraphRead::is_disk(&graph.graph) || graph.graph.is_forked() {
+    // nodes are base⊕overlay — and a frozen one has none at all, so both take
+    // the same generic `GraphRead` traversal the disk backend already uses.
+    // Same result, one dispatch per node instead of a direct petgraph walk.
+    if GraphRead::is_disk(&graph.graph) || graph.graph.is_forked() || graph.graph.is_frozen() {
         return strongly_connected_components(&graph.graph);
     }
     kosaraju_scc(graph.graph.as_stable_digraph())

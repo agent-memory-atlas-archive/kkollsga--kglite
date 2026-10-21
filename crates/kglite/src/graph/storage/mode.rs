@@ -211,6 +211,12 @@ pub fn convert_dir_graph_to_mode(
 ) -> Result<(), String> {
     let current = live_storage_mode(graph);
     if current == requested {
+        // A frozen topology arrives on the mapped backend without a swap, so the
+        // spill policy a swap would set (limit 0: columns written later spill)
+        // has to be set here.
+        if requested == StorageMode::Mapped && graph.graph.is_frozen() {
+            graph.memory_limit = Some(0);
+        }
         return Ok(());
     }
     if current == StorageMode::Disk || requested == StorageMode::Disk {
@@ -233,6 +239,9 @@ pub fn convert_dir_graph_to_mode(
     // A fold when the reader has gone, one deep copy of the base otherwise —
     // the reader's snapshot is never touched.
     graph.graph.flatten_fork();
+    // A frozen topology is read-only; the heap graph this swap moves is what
+    // promotion builds, so converting a frozen graph to memory pays it here.
+    graph.graph.promote_frozen();
     // The stores are backend-owned state; the new backend must
     // inherit them or every columnar node loses its properties, id and title.
     let carried_stores: Vec<(InternedKey, std::sync::Arc<ColumnStore>)> = graph
@@ -259,6 +268,7 @@ pub fn convert_dir_graph_to_mode(
             )
         }
         GraphBackend::Forked(_) => unreachable!("flatten_fork collapsed the overlay above"),
+        GraphBackend::Frozen(_) => unreachable!("promote_frozen replaced it above"),
         GraphBackend::Disk(_) | GraphBackend::Recording(_) => {
             unreachable!("refused above")
         }
