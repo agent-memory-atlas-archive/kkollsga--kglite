@@ -172,6 +172,38 @@ macro_rules! impl_mmap_pod_primitive {
 
 impl_mmap_pod_primitive!(u8, u32, u64, i32, i64, f64);
 
+/// Start of a `Shared` section's bytes, resolved once at construction.
+///
+/// Reading through `section.bytes()` chases four dependent pointers
+/// (`Arc` -> section -> `Arc<MappedFile>` -> mapping) and re-slices on every
+/// row; a spilled `Mapped` buffer reads through a single pointer. The cached
+/// start closes that gap on per-row column scans.
+///
+/// The pointer addresses the read-only file mapping that the sibling
+/// `section: Arc<SharedSection>` keeps alive and that is never remapped or
+/// written, so sharing it between threads is as sound as sharing the section.
+#[derive(Debug)]
+pub struct SectionStart<T>(*const T);
+
+// SAFETY: see the type docs - a read-only view into a mapping owned by the
+// `Arc<SharedSection>` stored next to it.
+unsafe impl<T> Send for SectionStart<T> {}
+// SAFETY: as above; the pointee is never mutated.
+unsafe impl<T> Sync for SectionStart<T> {}
+
+impl<T> Clone for SectionStart<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for SectionStart<T> {}
+
+impl<T> SectionStart<T> {
+    fn of(bytes: &[u8]) -> Self {
+        SectionStart(bytes.as_ptr().cast())
+    }
+}
+
 /// A resizable buffer of [`MmapPod`] values, optionally file-backed.
 ///
 /// Switching from Heap to Mapped writes current data to a file and mmaps it.
@@ -191,6 +223,7 @@ pub enum MmapOrVec<T: MmapPod> {
     },
     Shared {
         section: Arc<SharedSection>,
+        start: SectionStart<T>,
         len: usize,
         _phantom: std::marker::PhantomData<T>,
     },
@@ -245,10 +278,12 @@ impl<T: MmapPod> MmapOrVec<T> {
         let bytes = section.bytes();
         let size = std::mem::size_of::<T>();
         let (byte_len, address) = (bytes.len(), bytes.as_ptr() as usize);
+        let start = SectionStart::of(bytes);
         let fits =
             byte_len.is_multiple_of(size) && address.is_multiple_of(std::mem::align_of::<T>());
         fits.then(|| MmapOrVec::Shared {
             len: byte_len / size,
+            start,
             section,
             _phantom: std::marker::PhantomData,
         })
@@ -749,8 +784,8 @@ impl<T: MmapPod> MmapOrVec<T> {
             // holds a whole number of `T`s, `len` never exceeds that count, every
             // bit pattern is valid for an `MmapPod`, and the section's
             // `Arc<MappedFile>` keeps the read-only mapping alive while `self` is.
-            MmapOrVec::Shared { section, len, .. } => unsafe {
-                std::slice::from_raw_parts(section.bytes().as_ptr().cast::<T>(), *len)
+            MmapOrVec::Shared { start, len, .. } => unsafe {
+                std::slice::from_raw_parts(start.0, *len)
             },
             MmapOrVec::Mapped { len, .. } if *len == 0 => &[],
             // SAFETY: identical to `as_mut_slice` / `get` — the mmap holds
@@ -867,8 +902,14 @@ impl<T: MmapPod> MmapOrVec<T> {
     pub(crate) fn clone_snapshot(&self) -> io::Result<Self> {
         match self {
             MmapOrVec::Heap { data } => Ok(MmapOrVec::Heap { data: data.clone() }),
-            MmapOrVec::Shared { section, len, .. } => Ok(MmapOrVec::Shared {
+            MmapOrVec::Shared {
+                section,
+                start,
+                len,
+                ..
+            } => Ok(MmapOrVec::Shared {
                 section: Arc::clone(section),
+                start: *start,
                 len: *len,
                 _phantom: std::marker::PhantomData,
             }),
@@ -1103,8 +1144,14 @@ impl<T: MmapPod> Clone for MmapOrVec<T> {
     /// Heap copy (cloning a spill file doesn't make sense).
     fn clone(&self) -> Self {
         match self {
-            MmapOrVec::Shared { section, len, .. } => MmapOrVec::Shared {
+            MmapOrVec::Shared {
+                section,
+                start,
+                len,
+                ..
+            } => MmapOrVec::Shared {
                 section: Arc::clone(section),
+                start: *start,
                 len: *len,
                 _phantom: std::marker::PhantomData,
             },
@@ -1140,6 +1187,7 @@ pub enum MmapBytes {
     /// Read-only slice of a memory-mapped `.kgl` section; see [`MmapOrVec`].
     Shared {
         section: Arc<SharedSection>,
+        start: SectionStart<u8>,
         len: usize,
     },
 }
@@ -1149,6 +1197,7 @@ impl MmapBytes {
     pub(crate) fn shared(section: Arc<SharedSection>) -> Self {
         MmapBytes::Shared {
             len: section.bytes().len(),
+            start: SectionStart::of(section.bytes()),
             section,
         }
     }
@@ -1431,7 +1480,10 @@ impl MmapBytes {
     pub fn as_raw_bytes(&self) -> &[u8] {
         match self {
             MmapBytes::Heap { data } => data,
-            MmapBytes::Shared { section, len } => &section.bytes()[..*len],
+            // SAFETY: `start`/`len` describe the section's bytes, kept mapped by `section`.
+            MmapBytes::Shared { start, len, .. } => unsafe {
+                std::slice::from_raw_parts(start.0, *len)
+            },
             MmapBytes::Mapped { mmap, len, .. } => &mmap[..*len],
         }
     }
@@ -1480,8 +1532,13 @@ impl Clone for MmapBytes {
     /// Heap copy.
     fn clone(&self) -> Self {
         match self {
-            MmapBytes::Shared { section, len } => MmapBytes::Shared {
+            MmapBytes::Shared {
+                section,
+                start,
+                len,
+            } => MmapBytes::Shared {
                 section: Arc::clone(section),
+                start: *start,
                 len: *len,
             },
             _ => MmapBytes::Heap {
