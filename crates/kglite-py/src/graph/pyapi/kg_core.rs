@@ -689,7 +689,7 @@ impl KnowledgeGraph {
     ) -> PyResult<()> {
         let layout = io::SaveLayout::from_name(layout).ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "layout must be 'auto' or 'compact', got '{layout}'"
+                "layout must be 'auto', 'mapped' or 'compact', got '{layout}'"
             ))
         })?;
         // A graph whose log refused an append holds a statement the caller was

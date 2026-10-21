@@ -101,9 +101,9 @@ The header exposes:
     truncated mapping faults. Write to a new name and rename it over;
     `kglite_save_graph_durable` already does;
 - `kglite_save_graph_with_layout`: `kglite_save_graph_durable` plus a `layout`
-  (`0` default, `1` compact). Compact writes the v8 container that releases
-  before the v9 reader can open; the default writes v9 when a store is large
-  enough;
+  (`0` default, `1` compact, `2` mapped). Compact writes the v8 container that
+  releases before the v9 reader can open; the default writes v9 when an
+  embedding store is large enough; mapped also writes large columns raw;
 - `kglite_graph_verify_integrity`, which checks the CRC32 of every mapped
   section a graph serves and returns a JSON report;
 - `kglite_graph_storage_mode`, which reports the mode a graph handle is running

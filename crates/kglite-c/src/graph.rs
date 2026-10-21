@@ -494,7 +494,8 @@ pub unsafe extern "C" fn kglite_load_file_with_options(
 /// of 4 MiB or more saves as `.kgl` v9, whose raw vectors a load can map.
 /// `1` (compact) writes the v8 container with every section compressed, which
 /// every kglite release can read; use it for files older readers must open.
-/// Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
+/// `2` (mapped) is the default plus the large property columns raw, so a load
+/// can serve them from the file. Other values return `KGLITE_STATUS_CODE_INVALID_ARGUMENT`. A disk-backed
 /// graph ignores the layout. Everything else is as `kglite_save_graph_durable`.
 ///
 /// # Safety
@@ -518,11 +519,12 @@ pub unsafe extern "C" fn kglite_save_graph_with_layout(
             let layout = match layout {
                 0 => SaveLayout::Auto,
                 1 => SaveLayout::Compact,
+                2 => SaveLayout::Mapped,
                 other => {
                     if !out_error_msg.is_null() {
                         unsafe {
                             *out_error_msg = alloc_c_string(&format!(
-                                "layout {other} is not 0 (default) or 1 (compact)"
+                                "layout {other} is not 0 (default), 1 (compact) or 2 (mapped)"
                             ));
                         }
                     }

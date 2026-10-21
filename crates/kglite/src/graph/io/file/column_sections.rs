@@ -58,8 +58,8 @@ pub(super) fn encode_column_sections(
     layout: SaveLayout,
 ) -> io::Result<EncodedColumns<'_>> {
     let min_bytes = match layout {
-        SaveLayout::Compact => usize::MAX,
-        _ => COLUMN_MIN_BYTES,
+        SaveLayout::Mapped => COLUMN_MIN_BYTES,
+        _ => usize::MAX,
     };
     let mut meta_out = Vec::new();
     let mut data_out = Vec::new();

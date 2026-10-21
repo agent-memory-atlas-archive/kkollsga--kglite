@@ -11,13 +11,14 @@ before upgrading.
 
 ### Breaking changes and migration
 
-- **A graph with an embedding store of 4 MiB or more, or a property column of 256 KB or more, saves as `.kgl` container v9, which kglite releases before this one refuse.**
+- **A graph with an embedding store of 4 MiB or more saves as `.kgl` container v9, which kglite releases before this one refuse. `save(layout="mapped")` does the same for a property column of 256 KB or more.**
   - The refusal reads "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
   - **Do:** save with `layout="compact"` (Rust: `SaveLayout::Compact`) for any file an older kglite must read. It writes the v8 container with everything compressed.
-  - A graph with no store or column of that size writes the same bytes as before. This release reads v8 and older files unchanged.
-  - A v9 file keeps vectors, their norms and large columns raw and 64-byte aligned. Embeddings compress by under 10 %, so the file changes little; columns that do not delta-compress grow more (a 94 MB test graph became about 230 MB). See the Storage and memory guide.
+  - A graph with no store of that size writes the same bytes as before, and a default save never writes columns raw. This release reads v8 and older files unchanged.
+  - A v9 file keeps vectors and their norms raw and 64-byte aligned; embeddings compress by under 10 %, so the file changes little.
+  - `layout="mapped"` also keeps large columns raw. Columns that do not delta-compress grow the file 1.4-5.4x on the operator graphs measured (one 134 MB graph became 395 MB). It is opt-in because a mapped string column does not save memory: the load validates and so touches every string page. See the Storage and memory guide.
 - **Large property columns are mapped from the file only when you ask, in the default storage mode.**
-  - `columns=` left unset resolves to `memory` for an in-memory graph (as before this release) and to `auto` for `mapped` storage and the MCP server.
+  - `columns=` only affects a file saved with `layout="mapped"`; left unset it resolves to `memory` for an in-memory graph (as before this release) and to `auto` for `mapped` storage and the MCP server.
   - A column scan over mapped pages measured 4-9 % slower than over decoded ones, so the in-memory default stays on the heap. Pass `columns="auto"` or `"mapped"` to map.
   - `embeddings=` defaults to `auto` in every mode: a store of 64 MB or more is read in place from a regular local file.
 - **Result labels change for a store with a quantized copy.** Cypher and relationship search can report `search_method: "quantized"` (or `"quantized_mask"` under `FOR VALID_TIME AS OF`) and `actual_mode: "quantized"`. Without a copy the values are unchanged. **Do:** accept the new values, or pass `{exact: true}` to bypass the copy.
@@ -39,13 +40,13 @@ before upgrading.
   - A mapped store costs no resident memory until a search touches its pages, and a second graph loaded from the same file shares them. Searches, HNSW and `get_embedding` read the mapping through the same slices as a heap store.
   - The first write to a mapped store or column copies it to the heap. Clones, snapshots and transactions that did not write keep the mapping.
   - Byte buffers (`load_kgl_bytes`), non-regular files, network and FUSE filesystems, Windows (`auto`) and big-endian hosts load to the heap. `KGLITE_MMAP=0` forces the heap everywhere.
-  - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and decode at load. `save(layout="compact")` writes every column compressed in a v8 file.
+  - Integer columns that are four times smaller as deltas (monotonic ids) stay compressed and decode at load. A column is raw in the file only after `save(layout="mapped")`; the default and `"compact"` saves compress it.
   - Every section copied to the heap at load is CRC-checked in the same pass, and a corrupt one refuses the load. That covers string columns (also UTF-8-validated), decoded numeric columns and embedding stores read under `memory` or below the `auto` floor. A section that stays mapped is checked lazily: by `verify_integrity()`, at save, at a store's first search and before a write promotes it to the heap. A corrupt mapped store fails with an error naming it.
   - Saving over the path a graph is mapped from works: on Unix the old file stays readable until the graph drops it; on Windows the mapped stores are copied to the heap first.
   - Never overwrite a served `.kgl` in place (`cp`, `rsync --inplace`); a truncated mapping faults. Write a new file and rename it over, as `save()` does.
   - Surfaces: `--embeddings` and `--columns` on `kglite-mcp-server`, with manifest keys `extensions.embeddings.storage` and `extensions.columns.storage` (schemas under `docs/schemas/extensions/`); `kglite query --embeddings` and `--columns`; `list_embeddings()` and `embedding_diagnostics()` rows gain `storage`.
 - **`g.verify_integrity()` re-checks the mapped sections a graph serves.** It returns `{"ok": bool, "sections": [{"name", "bytes", "mapped", "error"}]}` and reports a source file whose modification time changed since it was mapped. A save, and the first write to a mapped store or column, refuse to copy a corrupt mapped section.
-- **`save(path, layout="auto" | "compact")`** chooses the container version; see Breaking.
+- **`save(path, layout="auto" | "mapped" | "compact")`** chooses the container version and whether columns are mappable; see Breaking.
 - **Embedding stores can carry a smaller scan copy: `f16`, `int8` or `binary`.**
   - `quantize_embeddings(node_type, text_column, precision, oversample=None, *, entity="node")` builds, replaces or (with `precision=None`) drops the copy; the `f32` vectors stay canonical.
   - Search scans the copy for `top_k * oversample` candidates, then re-scores them against the `f32` vectors. Returned scores are exact; only the candidate set is approximate, as with HNSW. Default oversample is 4, 4 and 10.
@@ -64,7 +65,7 @@ before upgrading.
   - Unix only. The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
 - **C ABI: four additive symbols.**
   - `kglite_load_file_with_options` takes a versioned `KgliteLoadOptions` (`embeddings`: 0 default, 1 auto, 2 mapped, 3 memory; `verify`: 0 default, 1 lazy, 2 eager; `columns` with the same values as `embeddings`, read as 0 by callers built earlier).
-  - `kglite_save_graph_with_layout` adds a `layout` (0 default, 1 compact) to `kglite_save_graph_durable`.
+  - `kglite_save_graph_with_layout` adds a `layout` (0 default, 1 compact, 2 mapped) to `kglite_save_graph_durable`.
   - `kglite_graph_verify_integrity` returns the integrity report as JSON.
   - `kglite_session_quantize_embeddings` builds or drops a copy; `kglite_session_list_embeddings` rows gain `storage` and `quantization`.
   - Existing symbols are unchanged.

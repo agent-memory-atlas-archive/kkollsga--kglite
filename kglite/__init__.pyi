@@ -981,7 +981,9 @@ def load(
     column's bytes are checked for corruption and valid UTF-8 at load, so a
     damaged file fails there; numeric columns are checked by
     :meth:`KnowledgeGraph.verify_integrity` and when the graph is saved.
-    ``save(layout="compact")`` writes columns compressed as before.
+    A column is stored raw only in a file written by
+    ``save(layout="mapped")``; the default and ``"compact"`` layouts compress
+    columns, so ``columns=`` has nothing to map in their files.
 
     **``storage`` is not a memory lever.** For a v8 file, or a v9 file loaded
     with ``columns="memory"``, mapped and memory cost the same resident memory
@@ -5374,7 +5376,7 @@ class KnowledgeGraph:
         path: str | None = None,
         *,
         fsync: bool = True,
-        layout: Literal["auto", "compact"] = "auto",
+        layout: Literal["auto", "mapped", "compact"] = "auto",
     ) -> None:
         """Serialise the graph to disk, atomically and durably.
 
@@ -5451,15 +5453,20 @@ class KnowledgeGraph:
                 the fsync'd write-ahead log, so skipping the flush could lose
                 both the checkpoint and the log on a crash.
             layout: ``"auto"`` (default) writes a v9 file when an embedding
-                store is 4 MiB or larger or a property column is 256 KB or
-                larger: those buffers are stored uncompressed, so a load can
-                map them. ``"compact"`` writes the
-                v8 container with every section compressed, which every kglite
-                release can read. Use ``"compact"`` for files that older
-                servers or tools must open; they refuse a v9 file with "File
-                uses .kgl container version 9, but this library only supports
-                up to version 8". A graph with nothing that large writes the
-                same bytes either way. Ignored for disk mode.
+                store is 4 MiB or larger: its vectors are stored uncompressed,
+                so a load can map them. Property columns stay compressed.
+                ``"mapped"`` also stores property columns of 256 KB or more
+                uncompressed, so ``columns="auto"`` / ``"mapped"`` can serve
+                them from the file; string columns grow the file 3-7x, and a
+                mapped load reads their pages at load time, so use it when the
+                file is much larger than the memory you want resident.
+                ``"compact"`` writes the v8 container with every section
+                compressed, which every kglite release can read. Use
+                ``"compact"`` for files that older servers or tools must open;
+                they refuse a v9 file with "File uses .kgl container version
+                9, but this library only supports up to version 8". A graph
+                with nothing that large writes the same bytes either way.
+                Ignored for disk mode.
 
         Raises:
             kglite.FileIoError: The write itself failed — a full disk, a
@@ -5468,8 +5475,8 @@ class KnowledgeGraph:
                 classifies the same way the load path does.
             ValueError: The call was refused before the path was touched — no
                 remembered path, or a write-ahead sidecar that runs ahead of
-                the target (above) — or ``layout`` is not ``"auto"`` or
-                ``"compact"``.
+                the target (above) — or ``layout`` is not ``"auto"``,
+                ``"mapped"`` or ``"compact"``.
         """
         ...
 

@@ -26,12 +26,13 @@ Four options control placement and the file layout. `kglite.load()` takes all fo
 | `embeddings=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Where embedding stores live |
 | `columns=` | `"auto"`, `"mapped"`, `"memory"` | `"memory"` in memory mode; `"auto"` in `mapped` mode and the MCP server | Where large property columns live |
 | `verify=` | `"lazy"`, `"eager"` | `"lazy"` | When section checksums run |
-| `layout=` (on `save()`) | `"auto"`, `"compact"` | `"auto"` | Which container version is written |
+| `layout=` (on `save()`) | `"auto"`, `"mapped"`, `"compact"` | `"auto"` | Which container version is written, and whether columns are mappable |
 
 ```python
 g = kglite.load("graph.kgl")                       # defaults
 g = kglite.load("graph.kgl", columns="auto")       # also serve large columns from the file
 g = kglite.load("graph.kgl", embeddings="memory")  # copy vectors to the heap
+g.save("graph.kgl", layout="mapped")               # also store large columns raw, mappable
 g.save("graph.kgl", layout="compact")              # v8 file older kglite can read
 report = g.verify_integrity()                      # {"ok": bool, "sections": [...]}
 ```
@@ -44,14 +45,15 @@ Meanings of the values:
 - `lazy` checks the CRC32 of a section that stays mapped at its first use: a search, a save, `verify_integrity()` or the write that promotes it to the heap. A section copied to the heap at load is always checked at load, as are string columns, which are also UTF-8-validated.
 - `eager` checks every section at open. `KGLITE_VERIFY=eager` sets it for a process.
 
-If you do not pass `columns=`, an in-memory graph decodes its columns. A scan over mapped column pages measured 4-9 % slower than over decoded ones (50k rows, release build), and in-memory speed is the core product. `Auto` stays the default for `mapped` storage and the MCP server.
+`columns=` only has an effect on a file saved with `layout="mapped"`. If you do not pass it, an in-memory graph decodes its columns. A scan over mapped column pages measured 4-9 % slower than over decoded ones (50k rows, release build), and in-memory speed is the core product. `Auto` stays the default for `mapped` storage and the MCP server.
 
 ## Container v9 and v8
 
-A file is v9 when it holds an embedding store of 4 MiB or more or a column of 256 KB or more. Otherwise it is v8, with the same bytes as before.
+A default `save()` writes v9 when the graph holds an embedding store of 4 MiB or more. Otherwise it is v8, with the same bytes as before. `layout="mapped"` also writes columns of 256 KB or more raw, so it writes v9 for those too.
 
-- A v9 file stores the vectors, their norms and the large columns uncompressed and 64-byte aligned, after the compressed sections.
-- Embeddings compress by under 10 %, so the file grows little. Columns that do not delta-compress (floats, strings, hashed ids) grow more; a test graph went from 94 to about 230 MB.
+- A v9 file stores the vectors and their norms (with `layout="mapped"`, also the large columns) uncompressed and 64-byte aligned, after the compressed sections.
+- Embeddings compress by under 10 %, so the file grows little. Columns that do not delta-compress (floats, strings, hashed ids) grow 1.4-5.4x on the operator graphs measured (one 134 MB graph became 395 MB); zstd shrinks their text 2.9-7.2x.
+- Columns are not mappable by default because a mapped string column does not save memory. The load validates UTF-8 and the checksum over every string page, which makes them resident, and the file is several times larger. Pass `layout="mapped"` when the file is far larger than the memory you want resident and the columns are mostly numeric.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
 - A kglite release before this one refuses a v9 file: "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
 - If a consumer must stay on an older kglite, save with `layout="compact"`. It writes v8 with every column and vector compressed.

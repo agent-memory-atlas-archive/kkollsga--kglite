@@ -53,7 +53,7 @@ pub(super) fn section_name(scope: &str, first: &str, second: &str, part: &str) -
 /// region. Needs consistent norms (they are written alongside) and a
 /// little-endian host (the section bytes are the in-memory bytes).
 pub(crate) fn store_goes_to_data_region(store: &EmbeddingStore, layout: SaveLayout) -> bool {
-    layout == SaveLayout::Auto
+    layout != SaveLayout::Compact
         && cfg!(target_endian = "little")
         && store.norms.len() == store.len()
         && store.data.len().saturating_mul(4) >= WRITE_MIN_BYTES

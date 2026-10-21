@@ -358,19 +358,25 @@ pub(crate) struct MappableSection<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum SaveLayout {
-    /// v9 when at least one store is large enough to leave the compressed
-    /// sections, otherwise v8 bytes. Mapped loads need v9.
+    /// v9 when an embedding store is large enough to leave the compressed
+    /// sections, otherwise v8 bytes. Property columns stay compressed: a mapped
+    /// string column costs more resident memory than its heap copy (the load
+    /// validates every page), and raw strings grow the file 2.9-7x.
     #[default]
     Auto,
+    /// [`SaveLayout::Auto`] plus the large property columns raw in the data
+    /// region, so a load can serve them from the file.
+    Mapped,
     /// Never emit v9: every section compressed, readable by older readers.
     Compact,
 }
 
 impl SaveLayout {
-    /// Parse a user-facing layout name (`"auto"` or `"compact"`).
+    /// Parse a user-facing layout name (`"auto"`, `"mapped"` or `"compact"`).
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "auto" => Some(SaveLayout::Auto),
+            "mapped" => Some(SaveLayout::Mapped),
             "compact" => Some(SaveLayout::Compact),
             _ => None,
         }

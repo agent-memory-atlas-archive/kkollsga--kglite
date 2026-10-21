@@ -216,6 +216,15 @@ fn save_layout_compact_writes_v8_and_other_values_are_refused() {
         );
         assert_eq!(magic(path), expected);
     }
+    let mapped = dir.join("mapped.kgl");
+    let mapped_c = c(mapped.to_str().unwrap());
+    assert_eq!(
+        unsafe {
+            kglite_save_graph_with_layout(graph, mapped_c.as_ptr(), 0, 2, std::ptr::null_mut())
+        },
+        KgliteStatusCode::Ok
+    );
+    assert_eq!(magic(&mapped), b"RGF\x09");
     let refused = c(dir.join("x.kgl").to_str().unwrap());
     assert_eq!(
         unsafe {
@@ -227,7 +236,7 @@ fn save_layout_compact_writes_v8_and_other_values_are_refused() {
 }
 
 /// A `.kgl` whose `Doc.score` / `Doc.ratio` columns are over the 256 KB floor
-/// and do not delta-compress, so a default save writes them to the data region.
+/// and do not delta-compress, so a mapped-layout save writes them to the data region.
 fn column_file(dir: &std::path::Path) -> PathBuf {
     let graph = kglite_graph_new();
     let mut session: *mut KgliteSession = std::ptr::null_mut();
@@ -253,13 +262,26 @@ fn column_file(dir: &std::path::Path) -> PathBuf {
         KgliteStatusCode::Ok
     );
     unsafe { kglite_cypher_result_free(result) };
-    let path = dir.join("columns.kgl");
-    let path_c = c(path.to_str().unwrap());
+    // A session save writes the default layout, which keeps columns
+    // compressed; layout 2 (mapped) re-saves them raw.
+    let base = dir.join("columns-base.kgl");
+    let base_c = c(base.to_str().unwrap());
     assert_eq!(
-        unsafe { kglite_session_save(session, path_c.as_ptr(), 0, std::ptr::null_mut()) },
+        unsafe { kglite_session_save(session, base_c.as_ptr(), 0, std::ptr::null_mut()) },
         KgliteStatusCode::Ok
     );
     unsafe { kglite_session_free(session) };
+    let (rc, loaded, _) = load(&base, None);
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    let path = dir.join("columns.kgl");
+    let path_c = c(path.to_str().unwrap());
+    assert_eq!(
+        unsafe {
+            kglite_save_graph_with_layout(loaded, path_c.as_ptr(), 0, 2, std::ptr::null_mut())
+        },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_graph_free(loaded) };
     path
 }
 

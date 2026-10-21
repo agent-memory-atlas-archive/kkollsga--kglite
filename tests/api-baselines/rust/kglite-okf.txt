@@ -2350,6 +2350,7 @@ impl core::fmt::Display for kglite::api::io::SaveError
 pub fn kglite::api::io::SaveError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub enum kglite::api::io::SaveLayout
 pub kglite::api::io::SaveLayout::Auto
+pub kglite::api::io::SaveLayout::Mapped
 pub kglite::api::io::SaveLayout::Compact
 impl kglite::api::io::SaveLayout
 pub fn kglite::api::io::SaveLayout::from_name(&str) -> core::option::Option<Self>
