@@ -19,6 +19,9 @@
 //!   each adjacency entry.
 //! - `topo:edges` (kind 16): `(src, dst, ordinal, 0)` per edge slot, 12 bytes;
 //!   `src == u32::MAX` marks a vacant slot.
+//! - `topo:type_mask` (kind 18): `u32`, `[out, in]` per node; bit `ordinal % 32`
+//!   is set when the node has an edge of that type in that direction. Optional:
+//!   a file without it is served by the run lookup alone.
 //! - `topo:edge_props` (kind 17): codec-encoded `(edge slot, EdgeData)` pairs
 //!   for the edges that carry properties; absent when none do.
 //!
@@ -54,6 +57,7 @@ pub(super) const KIND_ADJACENCY: u8 = 14;
 pub(super) const KIND_ADJACENCY_TYPES: u8 = 15;
 pub(super) const KIND_ENDPOINTS: u8 = 16;
 pub(super) const KIND_EDGE_PROPS: u8 = 17;
+pub(super) const KIND_TYPE_MASK: u8 = 18;
 
 const META: &str = "topo:meta";
 const NODES: &str = "topo:nodes";
@@ -65,6 +69,7 @@ const IN_EDGES: &str = "topo:in_edges";
 const OUT_TY: &str = "topo:out_ty";
 const IN_TY: &str = "topo:in_ty";
 const EDGES: &str = "topo:edges";
+const TYPE_MASK: &str = "topo:type_mask";
 const EDGE_PROPS: &str = "topo:edge_props";
 
 /// Version of the section set; a reader refuses a newer one by ignoring it.
@@ -333,6 +338,20 @@ fn collect_edges(graph: &DirGraph) -> Option<EdgeSide> {
     })
 }
 
+/// The presence masks of a save, `[out, in]` per node: bit `ordinal % 32` of
+/// each node's run, so a run of at most 32 types is recorded exactly.
+fn type_masks(out_off: &[u32], out_ty: &[u16], in_off: &[u32], in_ty: &[u16]) -> Vec<u32> {
+    let bound = out_off.len().saturating_sub(1);
+    let mut masks = vec![0u32; 2 * bound];
+    for (side, (off, tys)) in [(out_off, out_ty), (in_off, in_ty)].into_iter().enumerate() {
+        for node in 0..bound {
+            let run = &tys[off[node] as usize..off[node + 1] as usize];
+            masks[2 * node + side] = run.iter().fold(0u32, |m, &t| m | 1 << (t & 31));
+        }
+    }
+    masks
+}
+
 fn csr_bytes(edges: &[CsrEdge]) -> Vec<u8> {
     let mut out = Vec::with_capacity(edges.len() * 8);
     for edge in edges {
@@ -356,6 +375,17 @@ fn endpoint_bytes(endpoints: &[FrozenEndpoint]) -> Vec<u8> {
 #[cfg(test)]
 thread_local! {
     static DISABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NO_TYPE_MASK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `body` with the type-mask section left out of a save, the shape of a v9
+/// file written before it existed.
+#[cfg(test)]
+pub(crate) fn without_type_mask<R>(body: impl FnOnce() -> R) -> R {
+    NO_TYPE_MASK.with(|flag| flag.set(true));
+    let result = body();
+    NO_TYPE_MASK.with(|flag| flag.set(false));
+    result
 }
 
 /// Run `body` with topology sections switched off, so a test can save a file
@@ -469,6 +499,25 @@ pub(super) fn collect_topology_sections(
         edge_side.endpoints.len() * 3,
         endpoint_bytes(&edge_side.endpoints),
     ));
+    #[cfg(test)]
+    let write_mask = !NO_TYPE_MASK.with(|flag| flag.get());
+    #[cfg(not(test))]
+    let write_mask = true;
+    if write_mask {
+        let masks = type_masks(
+            &edge_side.out_off,
+            &edge_side.out_ty,
+            &edge_side.in_off,
+            &edge_side.in_ty,
+        );
+        out.push(owned(
+            TYPE_MASK,
+            KIND_TYPE_MASK,
+            SectionDtype::U32,
+            masks.len(),
+            le_u32(&masks),
+        ));
+    }
     if !edge_side.props.is_empty() {
         let encoded = {
             let _guard = SerdeSerializeGuard::new(&graph.interner);
@@ -508,6 +557,7 @@ pub(super) struct TopologySections {
     out_ty: MappedSection,
     in_ty: MappedSection,
     endpoints: MappedSection,
+    type_mask: Option<MappedSection>,
     edge_props: Option<MappedSection>,
 }
 
@@ -533,6 +583,7 @@ impl TopologySections {
             out_ty: get(OUT_TY, KIND_ADJACENCY_TYPES, SectionDtype::U16)?,
             in_ty: get(IN_TY, KIND_ADJACENCY_TYPES, SectionDtype::U16)?,
             endpoints: get(EDGES, KIND_ENDPOINTS, SectionDtype::U32)?,
+            type_mask: get(TYPE_MASK, KIND_TYPE_MASK, SectionDtype::U32),
             edge_props: get(EDGE_PROPS, KIND_EDGE_PROPS, SectionDtype::Raw),
         })
     }
@@ -590,6 +641,12 @@ impl TopologySections {
             out_ty: FrozenArray::from_section(&self.out_ty).ok_or_else(|| shaped(OUT_TY))?,
             in_ty: FrozenArray::from_section(&self.in_ty).ok_or_else(|| shaped(IN_TY))?,
             endpoints: FrozenArray::from_section(&self.endpoints).ok_or_else(|| shaped(EDGES))?,
+            type_mask: match &self.type_mask {
+                Some(section) => {
+                    Some(FrozenArray::from_section(section).ok_or_else(|| shaped(TYPE_MASK))?)
+                }
+                None => None,
+            },
             edge_count: usize::try_from(meta.edge_count).map_err(|_| shaped(META))?,
             types,
             edge_props,

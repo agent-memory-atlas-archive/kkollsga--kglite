@@ -514,6 +514,7 @@ fn a_mapped_load_of_a_recorded_topology_is_frozen_and_a_memory_load_is_not() {
         "topo:out_ty",
         "topo:in_ty",
         "topo:edges",
+        "topo:type_mask",
         "topo:edge_props",
     ] {
         assert!(
@@ -924,9 +925,9 @@ fn only_the_topology_owner_and_kinds_are_claimed() {
         .iter()
         .filter(|e| e.name.starts_with("topo:"))
         .collect();
-    assert_eq!(topo.len(), 11);
+    assert_eq!(topo.len(), 12);
     assert!(topo.iter().all(|e| e.owner == topology_sections::OWNER));
-    assert!(topo.iter().all(|e| (10..=17).contains(&e.kind)));
+    assert!(topo.iter().all(|e| (10..=18).contains(&e.kind)));
     assert!(topo.iter().all(|e| e.offset % 64 == 0), "64-byte aligned");
 }
 
@@ -972,8 +973,8 @@ fn a_mapped_frozen_load_keeps_its_arrays_in_the_file() {
     let GraphBackend::Frozen(backend) = &loaded.graph else {
         panic!("frozen");
     };
-    // nodes, both offset arrays, both adjacency arrays, both type arrays and
-    // the endpoint array are read in place. (The filler nodes reused every
+    // nodes, both offset arrays, both adjacency arrays, both type arrays, the
+    // endpoint array and the type mask are read in place. (The filler nodes reused every
     // vacated node slot, so this file has no alive bitset.)
     assert!(section_names(&path).iter().all(|n| n != "topo:alive"));
     // Windows copies every section (an open mapping blocks a save's rename),
@@ -981,7 +982,7 @@ fn a_mapped_frozen_load_keeps_its_arrays_in_the_file() {
     if cfg!(windows) {
         assert_eq!(backend.shared_sections().len(), 0);
     } else {
-        assert_eq!(backend.shared_sections().len(), 8);
+        assert_eq!(backend.shared_sections().len(), 9);
         let templates_and_props = backend.heap_bytes();
         assert!(
             templates_and_props < 8 * 1024,
@@ -1173,4 +1174,98 @@ fn a_frozen_load_carries_the_spill_policy_of_mapped_storage() {
     );
     let memory = load_owned(&path, StorageMode::Memory);
     assert_eq!(memory.memory_limit, None);
+}
+
+/// Every `(node, direction, type)` typed lookup of `frozen` against `memory`,
+/// as sorted edge slots. Returns how many lookups the mask proved empty and how
+/// many it let through to an empty run (a collision).
+fn compare_typed_lookups(frozen: &DirGraph, memory: &DirGraph, types: &[String]) -> (usize, usize) {
+    let GraphBackend::Frozen(backend) = &frozen.graph else {
+        panic!("frozen");
+    };
+    let (mut proven, mut collided) = (0, 0);
+    for slot in 0..memory.graph.node_bound() {
+        let node = NodeIndex::new(slot);
+        for dir in [Outgoing, Incoming] {
+            for name in types {
+                let key = InternedKey::from_str(name);
+                let ids = |g: &DirGraph| -> Vec<usize> {
+                    let mut v: Vec<usize> = g
+                        .graph
+                        .edges_directed_filtered(node, dir, Some(key))
+                        .filter(|e| e.connection_type() == key)
+                        .map(|e| e.id().index())
+                        .collect();
+                    v.sort();
+                    v
+                };
+                let (got, want) = (ids(frozen), ids(memory));
+                assert_eq!(got, want, "{name} {dir:?} at {slot}");
+                if want.is_empty() {
+                    match backend.ordinal_of(key) {
+                        Some(o) if backend.may_have_type(slot, dir, o) => collided += 1,
+                        _ => proven += 1,
+                    }
+                }
+            }
+        }
+    }
+    (proven, collided)
+}
+
+fn many_types_graph(count: usize) -> (DirGraph, Vec<String>) {
+    let mut g = DirGraph::new();
+    run(&mut g, "UNWIND range(1, 50) AS i CREATE (:A {id: i, n: i})");
+    let names: Vec<String> = (0..count).map(|t| format!("T{t:02}")).collect();
+    for (t, name) in names.iter().enumerate() {
+        run(
+            &mut g,
+            &format!(
+                "UNWIND range(1, 50) AS i MATCH (a:A {{id: i}}), (b:A {{id: (i * {m}) % 50 + 1}}) \
+                 WHERE i % {m} = 0 CREATE (a)-[:{name}]->(b)",
+                m = t + 2
+            ),
+        );
+    }
+    (g, names)
+}
+
+#[test]
+fn a_type_mask_never_hides_an_edge_when_ordinals_collide() {
+    // 40 connection types: ordinals 0..7 and 32..39 share mask bits, so a set bit
+    // is not proof of presence while a clear bit must be proof of absence.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("many.kgl");
+    let (graph, mut names) = many_types_graph(40);
+    with_floors(10, 10, || save(graph, &path, SaveLayout::Auto));
+    names.push("Absent".to_string());
+    let frozen = load_owned(&path, StorageMode::Mapped);
+    let memory = load_owned(&path, StorageMode::Memory);
+    assert_frozen(&frozen, true);
+    let (proven, collided) = compare_typed_lookups(&frozen, &memory, &names);
+    assert!(proven > 1000, "the mask must prove absences: {proven}");
+    assert!(collided > 0, "the fixture must exercise a collision");
+}
+
+#[test]
+fn a_file_without_the_type_mask_loads_frozen_and_answers_the_same() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("nomask.kgl");
+    let (graph, mut names) = many_types_graph(12);
+    topology_sections::without_type_mask(|| {
+        with_floors(10, 10, || save(graph, &path, SaveLayout::Auto))
+    });
+    let sections = section_names(&path);
+    assert!(sections.iter().any(|n| n == "topo:out_ty"));
+    assert!(sections.iter().all(|n| n != "topo:type_mask"));
+    names.push("Absent".to_string());
+    let frozen = load_owned(&path, StorageMode::Mapped);
+    let memory = load_owned(&path, StorageMode::Memory);
+    assert_frozen(&frozen, true);
+    let (proven, collided) = compare_typed_lookups(&frozen, &memory, &names);
+    assert!(
+        proven == memory.graph.node_bound() * 2,
+        "without a mask only an absent type is proven empty: {proven}"
+    );
+    assert!(collided > 1000, "empty runs fall through to the lookup");
 }

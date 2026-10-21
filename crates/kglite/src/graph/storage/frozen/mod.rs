@@ -119,6 +119,8 @@ pub(crate) struct FrozenParts {
     pub(crate) out_ty: FrozenArray<u16>,
     pub(crate) in_ty: FrozenArray<u16>,
     pub(crate) endpoints: FrozenArray<FrozenEndpoint>,
+    /// Per-node type presence masks, `[out, in]` per node; see `FrozenGraph::type_mask`.
+    pub(crate) type_mask: Option<FrozenArray<u32>>,
     pub(crate) edge_count: usize,
     /// Connection types, strictly ascending by key; ordinals index this.
     pub(crate) types: Vec<InternedKey>,
@@ -145,6 +147,11 @@ pub struct FrozenGraph {
     out_ty: FrozenArray<u16>,
     in_ty: FrozenArray<u16>,
     endpoints: FrozenArray<FrozenEndpoint>,
+    /// `[out, in]` presence masks per node: bit `ordinal % 32` is set when the
+    /// node has an edge of that type in that direction. A clear bit proves the
+    /// typed run empty with one load; a set bit may be a collision (more than 32
+    /// types) and falls through to the run lookup. `None` for a file without them.
+    type_mask: Option<FrozenArray<u32>>,
     edge_count: usize,
     types: Vec<InternedKey>,
     /// One property-less `EdgeData` per ordinal, so an edge reference can
@@ -181,6 +188,7 @@ impl FrozenGraph {
             out_ty,
             in_ty,
             endpoints,
+            type_mask,
             edge_count,
             types,
             edge_props,
@@ -200,6 +208,9 @@ impl FrozenGraph {
                     "an adjacency array does not hold one entry per edge",
                 ));
             }
+        }
+        if type_mask.as_ref().is_some_and(|m| m.len() != 2 * bound) {
+            return Err(invalid("the type mask does not hold two entries per node"));
         }
         if edge_count > endpoints.len() {
             return Err(invalid("more edges than edge slots"));
@@ -259,6 +270,7 @@ impl FrozenGraph {
             out_ty,
             in_ty,
             endpoints,
+            type_mask,
             edge_count,
             types,
             templates,
@@ -417,6 +429,20 @@ impl FrozenGraph {
                 self.in_edges.as_slice(),
                 self.in_ty.as_slice(),
             ),
+        }
+    }
+
+    /// Whether `node` may hold an edge of type `ordinal` in `dir`: `false` is a
+    /// proof of absence, `true` only means the run must be searched.
+    #[inline(always)]
+    pub(crate) fn may_have_type(&self, node: usize, dir: Direction, ordinal: u16) -> bool {
+        let Some(mask) = &self.type_mask else {
+            return true;
+        };
+        let at = 2 * node + usize::from(dir == Direction::Incoming);
+        match mask.as_slice().get(at) {
+            Some(bits) => bits >> (ordinal & 31) & 1 == 1,
+            None => true,
         }
     }
 
@@ -609,6 +635,7 @@ impl FrozenGraph {
             self.out_ty.shared_section(),
             self.in_ty.shared_section(),
             self.endpoints.shared_section(),
+            self.type_mask.as_ref().and_then(|a| a.shared_section()),
         ]
         .into_iter()
         .flatten()
@@ -628,6 +655,7 @@ impl FrozenGraph {
             + self.out_ty.heap_bytes()
             + self.in_ty.heap_bytes()
             + self.endpoints.heap_bytes()
+            + self.type_mask.as_ref().map_or(0, |m| m.heap_bytes())
             + self.templates.len() * std::mem::size_of::<EdgeData>()
             + self.edge_props.len() * 64
     }
@@ -648,6 +676,7 @@ impl Clone for FrozenGraph {
             out_ty: self.out_ty.clone(),
             in_ty: self.in_ty.clone(),
             endpoints: self.endpoints.clone(),
+            type_mask: self.type_mask.clone(),
             edge_count: self.edge_count,
             types: self.types.clone(),
             templates: self.templates.clone(),
@@ -721,6 +750,7 @@ mod tests {
                     pad: 0,
                 },
             ]),
+            type_mask: None,
             edge_count: 2,
             types: vec![InternedKey::from_str("E1"), InternedKey::from_str("E2")]
                 .into_iter()

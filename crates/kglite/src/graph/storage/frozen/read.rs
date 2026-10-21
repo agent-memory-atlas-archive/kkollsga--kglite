@@ -79,6 +79,9 @@ impl FrozenGraph {
         let edges = match filter {
             None => FrozenEdges::new(self, node, dir),
             Some(key) => match self.ordinal_of(key) {
+                Some(ordinal) if !self.may_have_type(node.index(), dir, ordinal) => {
+                    FrozenEdges::empty(self, node, dir)
+                }
                 Some(ordinal) => {
                     let (off, adjacency, tys) = self.dir_arrays(dir);
                     let (lo, hi) = Self::narrow(off, tys, node.index(), ordinal);
