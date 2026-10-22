@@ -157,6 +157,13 @@ pub struct ColumnStore {
     /// accessors ([`Self::row_count`] and every per-row reader) answer for the
     /// whole.
     tail: Option<Arc<ColumnStore>>,
+    /// The tail's full segments, oldest first, each exactly
+    /// [`tail::TAIL_SEGMENT_ROWS`] rows; `tail` is the open segment after
+    /// them. A fork shares the sealed segments and privatises only the one a
+    /// write lands in. See [`tail`] ("Segments").
+    sealed_tails: Vec<Arc<ColumnStore>>,
+    /// Bytes of the sealed segments, cached; see [`tail::SealedStats`].
+    sealed_stats: tail::SealedStats,
     /// Whether an append may start a heap tail; see [`tail`] ("Heap tails").
     append_tail: tail::AppendTail,
 }
@@ -247,6 +254,8 @@ impl Clone for ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: self.tail.clone(),
+            sealed_tails: self.sealed_tails.clone(),
+            sealed_stats: self.sealed_stats.clone(),
             append_tail: tail::AppendTail::Off,
         }
     }
@@ -284,6 +293,8 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            sealed_tails: Vec::new(),
+            sealed_stats: tail::SealedStats::default(),
             append_tail: tail::AppendTail::Off,
         }
     }
@@ -310,6 +321,8 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            sealed_tails: Vec::new(),
+            sealed_stats: tail::SealedStats::default(),
             append_tail: tail::AppendTail::Off,
         }
     }
@@ -335,6 +348,8 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            sealed_tails: Vec::new(),
+            sealed_stats: tail::SealedStats::default(),
             append_tail: tail::AppendTail::Off,
         }
     }
@@ -614,7 +629,9 @@ impl ColumnStore {
             Some(ref ms) => Some(ms.id_kind()),
             None => self.id_column.as_ref().map(|c| c.type_tag()),
         };
-        tail::whole_column_kind(base, self.tail.as_ref().and_then(|t| t.id_type_str()))
+        self.tail_parts().fold(base, |kind, part| {
+            tail::whole_column_kind(kind, part.id_type_str())
+        })
     }
 
     /// Type tag of the title column, read where [`Self::get_title`] reads it: the
@@ -626,12 +643,14 @@ impl ColumnStore {
             Some(column) => Some(column.type_tag()),
             None => self.mmap_store.as_ref().map(|ms| ms.title_kind()),
         };
-        tail::whole_column_kind(base, self.tail.as_ref().and_then(|t| t.title_type_str()))
+        self.tail_parts().fold(base, |kind, part| {
+            tail::whole_column_kind(kind, part.title_type_str())
+        })
     }
 
     /// Number of rows (including tombstoned), the tail's among them.
     pub fn row_count(&self) -> u32 {
-        self.row_count + self.tail.as_ref().map_or(0, |tail| tail.row_count())
+        self.row_count + self.tail_rows()
     }
 
     /// Whether this store still reads through an mmap base. A column-level
@@ -704,7 +723,7 @@ impl ColumnStore {
     #[allow(dead_code)] // Test-only.
     pub fn live_count(&self) -> u32 {
         self.row_count - self.tombstones.iter().filter(|&&t| t).count() as u32
-            + self.tail.as_ref().map_or(0, |tail| tail.live_count())
+            + self.tail_parts().map(|part| part.live_count()).sum::<u32>()
     }
 
     pub fn schema(&self) -> &Arc<TypeSchema> {
@@ -752,7 +771,7 @@ impl ColumnStore {
     pub fn push_row(&mut self, values: &[(InternedKey, Value)]) -> u32 {
         if let Some(tail) = self.tail_for_append() {
             let row = tail.push_row(values);
-            return self.row_count + row;
+            return self.row_count + self.sealed_tails.len() as u32 * tail::TAIL_SEGMENT_ROWS + row;
         }
         self.spillable_growth = true;
         #[cfg(test)]
@@ -1225,11 +1244,10 @@ impl ColumnStore {
     /// what shrinks (and the tail goes once it is empty); its base rows were
     /// never appended to and are never truncated.
     pub fn truncate_rows(&mut self, row_count: u32) {
-        if let Some(tail) = self.tail.as_mut() {
+        if self.tail.is_some() {
             // Appended rows live in the tail; the base part is never truncated.
             if let Some(keep) = row_count.checked_sub(self.row_count) {
-                Arc::make_mut(tail).truncate_rows(keep);
-                self.drop_empty_tail();
+                self.truncate_tail_rows(keep);
                 return;
             }
         }
@@ -1309,13 +1327,14 @@ impl ColumnStore {
                 }
             }
         }
-        if let Some(tail) = self.tail.as_deref() {
-            let offset = self.row_count;
+        let mut offset = self.row_count;
+        for part in self.tail_parts() {
             rows.extend(
-                tail.node_ref_candidate_rows(&mut hit as &mut dyn FnMut(&Value) -> bool)
+                part.node_ref_candidate_rows(&mut hit as &mut dyn FnMut(&Value) -> bool)
                     .into_iter()
                     .map(|row| row + offset),
             );
+            offset += part.row_count();
         }
         rows
     }
@@ -1473,7 +1492,7 @@ impl ColumnStore {
     /// Files are named by slot ([`spill_stem`]), never by property name: a
     /// property called `../../x` must not choose where its file is written.
     pub fn materialize_to_files(&mut self, dir: &Path) -> io::Result<()> {
-        if let Some(tail) = self.spillable_tail_mut() {
+        for tail in self.spillable_tails_mut() {
             Arc::make_mut(tail).materialize_to_files(dir)?;
         }
         // One directory per *store instance*, not per type: two stores of the
@@ -1537,8 +1556,8 @@ impl ColumnStore {
                 first_err.get_or_insert(e);
             }
         }
-        if let Some(tail) = self.tail.as_ref() {
-            if let Err(e) = tail.flush_and_release_pages() {
+        for part in self.tail_parts() {
+            if let Err(e) = part.flush_and_release_pages() {
                 first_err.get_or_insert(e);
             }
         }
@@ -1564,8 +1583,7 @@ impl ColumnStore {
 
     /// Whether any column is file-backed.
     pub fn is_mapped(&self) -> bool {
-        self.columns.iter().any(|c| c.is_mapped())
-            || self.tail.as_ref().is_some_and(|tail| tail.is_mapped())
+        self.columns.iter().any(|c| c.is_mapped()) || self.tail_parts().any(|part| part.is_mapped())
     }
 
     /// Heap-resident bytes across all columns (0 if fully mmap'd).
@@ -1581,6 +1599,7 @@ impl ColumnStore {
             + overflow_bytes
             + self.tombstones.len()
             + self.null_override_heap_bytes()
+            + self.sealed_totals().0
             + self.tail.as_ref().map_or(0, |tail| tail.heap_bytes())
     }
 
@@ -1615,9 +1634,15 @@ impl ColumnStore {
         col_bytes
             + id_bytes
             + title_bytes
-            + self
-                .spillable_tail()
-                .map_or(0, |tail| tail.spillable_heap_bytes())
+            + if self.tail_spill_due() {
+                self.sealed_totals().1
+                    + self
+                        .tail
+                        .as_ref()
+                        .map_or(0, |tail| tail.spillable_heap_bytes())
+            } else {
+                0
+            }
     }
 
     /// Whether this store may have grown spillable heap since the last
@@ -1633,9 +1658,11 @@ impl ColumnStore {
     #[inline]
     pub fn may_have_grown_spillable_heap(&self) -> bool {
         self.spillable_growth
-            || self
-                .spillable_tail()
-                .is_some_and(|tail| tail.may_have_grown_spillable_heap())
+            || (self.tail_spill_due()
+                && self
+                    .tail
+                    .as_ref()
+                    .is_some_and(|tail| tail.may_have_grown_spillable_heap()))
     }
 
     pub fn columns_ref(&self) -> impl ExactSizeIterator<Item = &TypedColumn> {

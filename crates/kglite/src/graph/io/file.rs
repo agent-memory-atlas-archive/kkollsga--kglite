@@ -1204,7 +1204,10 @@ pub fn save_graph_with_layout(
         let dir = crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph);
         return dir.save_disk(path);
     }
-    save_inmemory_with_layout(graph, path, fsync, layout).map_err(|e| SaveError::Io(e.to_string()))
+    save_inmemory_with_layout(graph, path, fsync, layout)
+        .map_err(|e| SaveError::Io(e.to_string()))?;
+    rebase::rebase_onto_saved(graph, path);
+    Ok(())
 }
 
 /// Convert an in-memory (or mapped) graph to disk-backed storage **and publish
@@ -2342,6 +2345,7 @@ fn load_portable_columnar(
 
 mod column_sections;
 mod columns;
+pub(crate) mod rebase;
 pub(crate) use columns::remap_column_stores_to_generation;
 use columns::{attach_portable_column_stores, load_disk_column_stores};
 

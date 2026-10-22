@@ -155,39 +155,8 @@ impl From<Arc<FrozenGraph>> for ForkBase {
     }
 }
 
-/// Overlay size, as a fraction of the base's nodes plus edges, past which an
-/// overlay over a frozen base collapses into a heap `Mapped` graph (the promote
-/// valve): 1/4. A base that folds back (`Memory`, `Mapped`) keeps the smaller
-/// caps in `forked.rs`.
-pub(crate) const FROZEN_VALVE_FRACTION: usize = 4;
-
 /// Overlay entries a small base is allowed regardless of its size.
 pub(crate) const VALVE_FLOOR: usize = 4096;
-
-#[cfg(test)]
-thread_local! {
-    static VALVE_FLOOR_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-}
-
-/// [`VALVE_FLOOR`] for an overlay over a frozen base: a test lowers it so a
-/// graph of a few hundred slots can reach the valve.
-#[inline]
-pub(crate) fn frozen_valve_floor() -> usize {
-    #[cfg(test)]
-    if let Some(floor) = VALVE_FLOOR_OVERRIDE.with(|floor| floor.get()) {
-        return floor;
-    }
-    VALVE_FLOOR
-}
-
-/// Run `body` with the frozen valve's floor replaced.
-#[cfg(test)]
-pub(crate) fn with_valve_floor<R>(floor: usize, body: impl FnOnce() -> R) -> R {
-    VALVE_FLOOR_OVERRIDE.with(|cell| cell.set(Some(floor)));
-    let result = body();
-    VALVE_FLOOR_OVERRIDE.with(|cell| cell.set(None));
-    result
-}
 
 /// One base edge: `(slot, source, target, weight)`.
 pub(crate) type BaseEdge<'a> = (EdgeIndex, NodeIndex, NodeIndex, &'a EdgeData);
@@ -366,7 +335,7 @@ impl ForkBase {
     }
 
     /// A genuine deep copy of the base. A frozen base becomes a heap `Mapped`
-    /// graph (the one materialisation of the promote valve).
+    /// graph (what a whole-graph operation collapses an overlay into).
     pub(crate) fn deep_clone(&self) -> Folded {
         match self {
             Self::Memory(g) => Folded::Memory(g.deep_clone()),

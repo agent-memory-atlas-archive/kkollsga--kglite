@@ -950,7 +950,8 @@ fn _backend_is_forked(graph: &KnowledgeGraph) -> bool {
 /// not a footprint measurement. The first write puts a write overlay over the
 /// topology and this turns `False`; with `include_overlay` it stays `True`
 /// through the overlay, which is what shows that a write copied nothing, until
-/// the overlay passes the promote valve or a whole-graph operation collapses it.
+/// a whole-graph operation collapses it; a save makes it `True` again without
+/// `include_overlay`, because the graph is then served from the saved file.
 #[pyfunction]
 #[pyo3(signature = (graph, include_overlay=false))]
 fn _backend_is_frozen(graph: &KnowledgeGraph, include_overlay: bool) -> bool {

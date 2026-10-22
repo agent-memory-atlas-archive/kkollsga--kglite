@@ -44,6 +44,8 @@ impl ColumnStore {
             spillable_growth: true,
             displaced: None,
             tail: None,
+            sealed_tails: Vec::new(),
+            sealed_stats: super::tail::SealedStats::default(),
             append_tail: super::tail::AppendTail::Off,
         })
     }

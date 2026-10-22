@@ -1002,8 +1002,10 @@ def load(
     memory (RSS) follows the working set the queries touch. A graph with a
     node that is not column-backed, more than 1,024 node or edge types, or more
     than 262,144 edges that carry properties records no topology and loads onto
-    the heap. Writes go to a copy-on-write overlay that collapses to a heap
-    graph once it holds a quarter of the graph, or on a whole-graph operation.
+    the heap. Writes go to a copy-on-write overlay whose heap and costs follow
+    the writes however many there are; a save serves the graph from the file it
+    wrote with an empty overlay, and a whole-graph operation collapses the
+    overlay to a heap graph.
     :meth:`KnowledgeGraph.graph_info` reports ``topology_mapped_bytes``,
     ``topology_heap_bytes`` and ``topology_overlay_entries``.
 
@@ -1659,10 +1661,11 @@ def _backend_is_frozen(graph: "KnowledgeGraph", include_overlay: bool = False) -
     file that recorded its topology keeps it in the file mapping; the first
     write puts a write overlay over it and this turns ``False``. With
     ``include_overlay`` it stays ``True`` while the overlay sits over the file's
-    topology, and turns ``False`` once the overlay has grown past the promote
-    valve (a quarter of the graph) or a whole-graph operation has collapsed it
-    into a heap graph. Every query answers the same either way, so tests assert
-    on this instead of on a footprint.
+    topology, and turns ``False`` once a whole-graph operation has collapsed it
+    into a heap graph. A save writes the merged graph and serves the graph from
+    that file again, so it is ``True`` without ``include_overlay`` after one.
+    Every query answers the same either way, so tests assert on this instead of
+    on a footprint.
     """
     ...
 

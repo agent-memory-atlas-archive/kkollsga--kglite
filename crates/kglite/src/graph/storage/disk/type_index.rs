@@ -614,6 +614,15 @@ pub struct TypeIndexStore {
 }
 
 impl TypeIndexStore {
+    /// Whether the store is exactly its file-served base: nothing written over it.
+    #[cfg(test)]
+    pub(crate) fn is_served_unmodified(&self) -> bool {
+        self.base.is_some()
+            && self.overlay.is_empty()
+            && self.deltas.is_empty()
+            && self.removed.is_empty()
+    }
+
     /// Identity of `name`'s current member bucket: equal across graphs only
     /// when no create, delete or rollback separates them.
     pub(crate) fn generation(&self, name: &str) -> u64 {

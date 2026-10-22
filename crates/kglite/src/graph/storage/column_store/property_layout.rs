@@ -76,7 +76,7 @@ impl ColumnStore {
                 }),
             }
         }
-        for tail_entry in self.tail.iter().flat_map(|tail| tail.layout_entries()) {
+        for tail_entry in self.tail_parts().flat_map(|part| part.layout_entries()) {
             match layout.iter_mut().find(|entry| entry.key == tail_entry.key) {
                 Some(entry) => entry.merge(tail_entry.kind, tail_entry.empty),
                 None => layout.push(tail_entry),

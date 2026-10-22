@@ -295,7 +295,7 @@ impl ColumnStore {
         for (_, key) in self
             .schema
             .iter()
-            .chain(self.tail.iter().flat_map(|tail| tail.schema.iter()))
+            .chain(self.tail_parts().flat_map(|part| part.schema.iter()))
         {
             if seen.insert(key) {
                 keys.push(key);

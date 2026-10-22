@@ -766,3 +766,147 @@ fn random_topology_operations_over_a_frozen_base_match_a_heap_load_in_order() {
 fn random_topology_operations_over_a_frozen_base_collapse_to_what_they_read() {
     frozen_model("frozen base, two connection types", false);
 }
+
+/// A cheaper dump for cases with thousands of slots: counts, bounds, the node
+/// and edge scans, every live edge's endpoints and weight, and each node's
+/// outgoing and incoming edges, in order. Misses nothing [`dump`] sees except
+/// the all-pairs `edges_connecting` probe, which is quadratic.
+fn dump_light<G: GraphRead>(g: &G) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "counts {} {} bounds {} {}",
+        g.node_count(),
+        g.edge_count(),
+        g.node_bound(),
+        g.edge_bound()
+    );
+    for n in g.node_indices() {
+        let _ = writeln!(out, "node {n:?} {:?}", g.node_weight(n));
+        for dir in [Direction::Outgoing, Direction::Incoming] {
+            let edges: Vec<_> = g.edges_directed(n, dir).map(|e| e.id()).collect();
+            let _ = writeln!(out, " {dir:?} {edges:?}");
+        }
+    }
+    for e in g.edge_references() {
+        let _ = writeln!(
+            out,
+            "edge {:?} {:?} {:?} {:?}",
+            e.id(),
+            e.source(),
+            e.target(),
+            e.weight().properties
+        );
+    }
+    out
+}
+
+/// One transaction-shaped case over a frozen base: random writes interleaved
+/// with `begin` (the snapshot a transaction forks from), `commit` (keep what
+/// was written) and `rollback` (return to the snapshot), nested to any depth.
+/// `bulk` writes go in first, so every transaction forks an overlay that
+/// already spans several pages of each shared map. The oracle is a flat heap
+/// graph put through the same sequence, and every snapshot must read exactly
+/// as it did when it was taken, however much was written after.
+fn run_frozen_tx_case(case: u64, steps: usize, bulk: usize) -> usize {
+    let mut rng = Rng::new(case ^ 0x7A5_0C0DE);
+    let mut maker = Maker::new();
+    maker.columnar = true;
+    maker.single_type = true;
+    let heap: MemoryGraph = holey_base(&mut rng, &mut maker);
+    let frozen = Arc::new(FrozenGraph::from_heap(heap.inner()));
+    let mut flat = frozen.to_mapped();
+    let mut fork = ForkedGraph::new(ForkBase::Frozen(frozen));
+    let light = bulk > 0;
+    let read = |fork: &ForkedGraph, flat: &MappedGraph| {
+        if light {
+            (dump_light(fork), dump_light(flat))
+        } else {
+            (dump(fork), dump(flat))
+        }
+    };
+    for _ in 0..bulk {
+        step(&mut rng, &mut maker, &mut fork, &mut flat);
+    }
+    let (left, right) = read(&fork, &flat);
+    assert_same(&left, &right, format!("case {case}: after the bulk writes"));
+    let mut stack: Vec<(ForkedGraph, MappedGraph, String)> = Vec::new();
+    let (mut began, mut rolled_back, mut trace) = (0, 0, Vec::new());
+    for i in 0..steps {
+        match rng.below(10) {
+            0 if stack.len() < 4 => {
+                let (as_dumped, _) = read(&fork, &flat);
+                stack.push((fork.clone(), flat.deep_clone(), as_dumped));
+                began += 1;
+                trace.push("begin");
+            }
+            1 if !stack.is_empty() => {
+                stack.pop();
+                trace.push("commit");
+            }
+            2 if !stack.is_empty() => {
+                let (snapshot, snapshot_flat, as_dumped) = stack.pop().unwrap();
+                let (restored, _) = read(&snapshot, &snapshot_flat);
+                assert_same(
+                    &restored,
+                    &as_dumped,
+                    format!("case {case} step {i}: a snapshot moved after {trace:?}"),
+                );
+                fork = snapshot;
+                flat = snapshot_flat;
+                rolled_back += 1;
+                trace.push("rollback");
+            }
+            _ => trace.push(step(&mut rng, &mut maker, &mut fork, &mut flat)),
+        }
+        if i % 7 == 6 {
+            let (left, right) = read(&fork, &flat);
+            assert_same(
+                &left,
+                &right,
+                format!("case {case} step {i}: the fork reads differently after {trace:?}"),
+            );
+        }
+    }
+    let (left, right) = read(&fork, &flat);
+    assert_same(
+        &left,
+        &right,
+        format!("case {case}: at the end of {trace:?}"),
+    );
+    // Every snapshot still open reads as it did, and a collapse of the final
+    // state carries the flat graph's free lists.
+    for (snapshot, snapshot_flat, as_dumped) in &stack {
+        let (restored, _) = read(snapshot, snapshot_flat);
+        assert_same(
+            &restored,
+            as_dumped,
+            format!("case {case}: an open snapshot moved"),
+        );
+    }
+    let mut collapsed = MappedGraph::unfold_for_test(fork.to_folded_graph());
+    assert_folded_like_flat(&mut collapsed, &mut flat, &format!("case {case} collapse"));
+    began * 1000 + rolled_back
+}
+
+#[test]
+fn transactions_over_a_frozen_base_match_a_heap_graph_through_commit_and_rollback() {
+    let (mut began, mut rolled_back) = (0, 0);
+    for case in 0..3_000 {
+        let tally = run_frozen_tx_case(case, 30 + (case as usize % 50), 0);
+        began += tally / 1000;
+        rolled_back += tally % 1000;
+    }
+    assert!(
+        began > 1_000 && rolled_back > 300,
+        "the generator barely begins or rolls back: vacuous"
+    );
+}
+
+#[test]
+fn transactions_after_thousands_of_writes_match_a_heap_graph() {
+    for case in 0..12 {
+        run_frozen_tx_case(case, 60, 2_500 + 400 * case as usize);
+    }
+}

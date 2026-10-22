@@ -30,20 +30,17 @@ pub(crate) enum ColumnSlot {
     Title,
 }
 
-/// Which column of a store a type change replaced: one of the store's own, or
-/// one of its tail's.
+/// Which column of a store a type change replaced: one of the store's own
+/// (`part` 0), or one of a tail segment's (`part` is the segment number plus one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ColumnRole {
-    pub(crate) in_tail: bool,
+    pub(crate) part: u32,
     pub(crate) column: ColumnSlot,
 }
 
 impl ColumnRole {
     fn own(column: ColumnSlot) -> Self {
-        Self {
-            in_tail: false,
-            column,
-        }
+        Self { part: 0, column }
     }
 }
 
@@ -57,7 +54,9 @@ pub(crate) struct DisplacedColumn {
 }
 
 impl ColumnStore {
-    /// Start recording replaced columns. Idempotent.
+    /// Start recording replaced columns. Idempotent. Sealed tail segments begin
+    /// recording when a write first reaches them (`tail_for_mut`), so a fork
+    /// does not privatise every segment to arm a log most never use.
     pub(crate) fn begin_displaced_log(&mut self) {
         self.displaced.get_or_insert_with(Vec::new);
         if let Some(tail) = self.tail.as_mut() {
@@ -68,6 +67,11 @@ impl ColumnStore {
     /// Stop recording. Anything still logged is dropped.
     pub(crate) fn end_displaced_log(&mut self) {
         self.displaced = None;
+        for part in self.sealed_tails.iter_mut() {
+            if part.displaced.is_some() {
+                Arc::make_mut(part).end_displaced_log();
+            }
+        }
         if let Some(tail) = self.tail.as_mut() {
             Arc::make_mut(tail).end_displaced_log();
         }
@@ -77,7 +81,7 @@ impl ColumnStore {
     #[inline]
     pub(crate) fn has_displaced(&self) -> bool {
         self.displaced.as_ref().is_some_and(|log| !log.is_empty())
-            || self.tail.as_ref().is_some_and(|tail| tail.has_displaced())
+            || self.tail_parts().any(|part| part.has_displaced())
     }
 
     /// Drain the log, oldest replacement first.
@@ -87,21 +91,29 @@ impl ColumnStore {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default();
-        if self.tail.as_ref().is_some_and(|tail| tail.has_displaced()) {
-            if let Some(tail) = self.tail.as_mut() {
-                log.extend(
-                    Arc::make_mut(tail)
-                        .take_displaced()
-                        .into_iter()
-                        .map(|displaced| DisplacedColumn {
-                            role: ColumnRole {
-                                in_tail: true,
-                                ..displaced.role
-                            },
-                            prior: displaced.prior,
-                        }),
-                );
+        let sealed = self.sealed_tails.len();
+        for (index, part) in self
+            .sealed_tails
+            .iter_mut()
+            .chain(self.tail.iter_mut())
+            .enumerate()
+        {
+            if !part.has_displaced() {
+                continue;
             }
+            debug_assert!(index <= sealed);
+            log.extend(
+                Arc::make_mut(part)
+                    .take_displaced()
+                    .into_iter()
+                    .map(|displaced| DisplacedColumn {
+                        role: ColumnRole {
+                            part: index as u32 + 1,
+                            ..displaced.role
+                        },
+                        prior: displaced.prior,
+                    }),
+            );
         }
         log
     }
@@ -109,9 +121,9 @@ impl ColumnStore {
     /// Put a replaced column back. The inverse of the replacement, for the
     /// rollback of the write that caused it.
     pub(crate) fn restore_displaced(&mut self, displaced: DisplacedColumn) {
-        if displaced.role.in_tail {
-            if let Some(tail) = self.tail.as_mut() {
-                Arc::make_mut(tail).restore_displaced(DisplacedColumn {
+        if displaced.role.part != 0 {
+            if let Some(part) = self.part_mut(displaced.role.part) {
+                part.restore_displaced(DisplacedColumn {
                     role: ColumnRole::own(displaced.role.column),
                     prior: displaced.prior,
                 });

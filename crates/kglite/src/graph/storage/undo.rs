@@ -406,9 +406,9 @@ pub enum UndoEntry {
         node_type: InternedKey,
         prior_schema: Arc<TypeSchema>,
         prior_column_count: usize,
-        /// The schema is the tail's: the written row is one appended to an
-        /// mmap-backed store, and the growth was the tail's own.
-        in_tail: bool,
+        /// Which part's schema grew: 0 is the store's own, `n` the tail's
+        /// segment `n - 1` (a row appended past the base).
+        part: u32,
     },
     /// A statement appended rows to a type's master store — one per node it
     /// created, now that construction is columnar. Undo truncates the store
@@ -433,7 +433,7 @@ pub enum UndoEntry {
         prior_column_count: usize,
         /// The tail's schema and column count when the store had a tail, which
         /// the appended rows may have grown beside truncating it.
-        prior_tail: Option<(Arc<TypeSchema>, usize)>,
+        prior_tail: Option<(u32, Arc<TypeSchema>, usize)>,
         /// The statement introduced the type's store itself. Undo drops it
         /// rather than leaving an empty one behind — the same distinction
         /// [`BucketAppended`](Self::BucketAppended) draws with
@@ -504,7 +504,7 @@ pub(crate) struct ColumnarPreImages {
     /// introduces at least one property the schema does not have yet. One entry
     /// covers any number of new keys in the same write: replay truncates back
     /// to `column_count` in a single step.
-    grown: Option<(Arc<TypeSchema>, usize, bool)>,
+    grown: Option<(Arc<TypeSchema>, usize, u32)>,
 }
 
 impl ColumnarPreImages {
@@ -537,12 +537,12 @@ impl ColumnarPreImages {
     /// Push the captured pre-images, schema entry first so reverse replay runs
     /// it last.
     pub(crate) fn record(self, journal: &mut UndoJournal, node_type: InternedKey, row_id: u32) {
-        if let Some((prior_schema, prior_column_count, in_tail)) = self.grown {
+        if let Some((prior_schema, prior_column_count, part)) = self.grown {
             journal.entries.push(UndoEntry::ColumnarSchemaGrown {
                 node_type,
                 prior_schema,
                 prior_column_count,
-                in_tail,
+                part,
             });
         }
         for (key, prior) in self.cells {
@@ -567,7 +567,7 @@ pub(crate) struct ColumnarAppendPreImage {
     row_count: u32,
     schema: Arc<TypeSchema>,
     column_count: usize,
-    tail: Option<(Arc<TypeSchema>, usize)>,
+    tail: Option<(u32, Arc<TypeSchema>, usize)>,
 }
 
 impl ColumnarAppendPreImage {
@@ -801,13 +801,12 @@ impl UndoJournal {
         key: InternedKey,
     ) {
         if store.slot_for_row(row_id, key).is_none() {
-            let (prior_schema, prior_column_count, in_tail) =
-                store.schema_pre_image_for_row(row_id);
+            let (prior_schema, prior_column_count, part) = store.schema_pre_image_for_row(row_id);
             self.entries.push(UndoEntry::ColumnarSchemaGrown {
                 node_type,
                 prior_schema,
                 prior_column_count,
-                in_tail,
+                part,
             });
         }
         #[cfg(test)]

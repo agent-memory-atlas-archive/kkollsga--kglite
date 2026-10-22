@@ -49,6 +49,12 @@ use std::sync::Arc;
 /// the store's reads through a tail.
 pub(crate) const HEAP_TAIL_MIN_ROWS: u32 = 16_384;
 
+/// Rows in each sealed segment of a tail. A fork privatises only the segment
+/// a write lands in, so the copy a transaction's first append pays is bounded
+/// by this, not by the rows the overlay already holds; the sealed segments
+/// are shared by reference.
+pub(crate) const TAIL_SEGMENT_ROWS: u32 = 2048;
+
 /// Heap a tail may hold before the spill pass moves it to files. The overlay's
 /// writer folds its tail into the store's own columns at the next commit, so a
 /// tail below this is gone before its files would be read; spilling it every
@@ -66,7 +72,8 @@ pub(crate) const MAPPED_SPILL_FLOOR: usize = 1 << 20;
 /// overlay never folds, so the heap its rows leave behind is the size of the
 /// writes by design; spilling it at 1 MiB made every transaction (a fork of the
 /// overlay) copy the whole tail and write it to fresh files, which its rollback
-/// then threw away. The valve at a quarter of the graph bounds it from above.
+/// then threw away. A save rebases the graph and empties the overlay, which
+/// bounds it from above.
 pub(crate) const FROZEN_OVERLAY_SPILL_FLOOR: usize = 64 << 20;
 
 /// The kind of an identity column whose base part has kind `base` and whose
@@ -87,6 +94,41 @@ pub(super) fn whole_column_kind(
     }
 }
 
+/// Heap and spillable bytes of a store's sealed tail segments, summed on first
+/// use after any change to them.
+///
+/// Every statement asks a store for both numbers (the memory-limit and spill
+/// checks), and a store that took a million writes holds hundreds of sealed
+/// segments: summing their columns each time made the cost of a statement grow
+/// with the writes before it. Sealed segments change only through
+/// [`ColumnStore::tail_for_mut`], a seal and a truncation, each of which
+/// invalidates.
+#[derive(Debug, Default)]
+pub(super) struct SealedStats {
+    heap: std::sync::atomic::AtomicUsize,
+    spillable: std::sync::atomic::AtomicUsize,
+    valid: std::sync::atomic::AtomicBool,
+}
+
+impl Clone for SealedStats {
+    fn clone(&self) -> Self {
+        use std::sync::atomic::Ordering::Relaxed;
+        Self {
+            heap: self.heap.load(Relaxed).into(),
+            spillable: self.spillable.load(Relaxed).into(),
+            valid: self.valid.load(Relaxed).into(),
+        }
+    }
+}
+
+impl SealedStats {
+    #[inline]
+    pub(super) fn invalidate(&self) {
+        self.valid
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Whether an append may start a heap tail. A clone starts `Off`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum AppendTail {
@@ -99,48 +141,137 @@ pub(crate) enum AppendTail {
 }
 
 impl ColumnStore {
-    /// The tail and the row inside it, when `row_id` is past the base part.
+    /// The tail part and the row inside it, when `row_id` is past the base part.
+    ///
+    /// The tail is a run of full sealed segments of [`TAIL_SEGMENT_ROWS`] rows
+    /// followed by the open one, so the part is found by division.
     #[inline]
     pub(super) fn tail_for(&self, row_id: u32) -> Option<(&ColumnStore, u32)> {
-        match self.tail.as_deref() {
-            Some(tail) if row_id >= self.row_count => Some((tail, row_id - self.row_count)),
-            _ => None,
+        let open = self.tail.as_deref()?;
+        let row = row_id.checked_sub(self.row_count)?;
+        if self.sealed_tails.is_empty() {
+            return Some((open, row));
+        }
+        Some(self.segmented_tail_for(open, row))
+    }
+
+    /// [`Self::tail_for`] once the tail has sealed segments; `row` is past the
+    /// base part. Out of line so the unsegmented read stays as small as it was.
+    #[inline(never)]
+    fn segmented_tail_for<'a>(&'a self, open: &'a ColumnStore, row: u32) -> (&'a ColumnStore, u32) {
+        match self.sealed_tails.get((row / TAIL_SEGMENT_ROWS) as usize) {
+            Some(sealed) => (sealed, row % TAIL_SEGMENT_ROWS),
+            None => (
+                open,
+                row - self.sealed_tails.len() as u32 * TAIL_SEGMENT_ROWS,
+            ),
         }
     }
 
-    /// Mutable form of [`Self::tail_for`]. Privatises the tail (`Arc::make_mut`),
-    /// which is the whole cost a fork's first append pays: the tail's own
-    /// columns are shared per column, and the base is not involved.
+    /// Mutable form of [`Self::tail_for`]. Privatises the part (`Arc::make_mut`),
+    /// which is the whole cost a fork's first write pays: that part's own
+    /// columns are shared per column, and no other part is involved.
     #[inline]
     pub(super) fn tail_for_mut(&mut self, row_id: u32) -> Option<(&mut ColumnStore, u32)> {
-        let base = self.row_count;
-        match self.tail.as_mut() {
-            Some(tail) if row_id >= base => Some((Arc::make_mut(tail), row_id - base)),
-            _ => None,
+        self.tail.as_ref()?;
+        let row = row_id.checked_sub(self.row_count)?;
+        if self.sealed_tails.is_empty() {
+            return Some((Arc::make_mut(self.tail.as_mut()?), row));
         }
+        Some(self.segmented_tail_for_mut(row))
     }
 
-    /// The tail, created empty on demand: a store that reads through an mmap
-    /// base always appends there, and a heap store marked by a writer overlay
-    /// does once [`Self::start_heap_tail`] decides for one.
+    /// [`Self::tail_for_mut`] once the tail has sealed segments.
+    #[inline(never)]
+    fn segmented_tail_for_mut(&mut self, row: u32) -> (&mut ColumnStore, u32) {
+        let sealed = self.sealed_tails.len();
+        let segment = (row / TAIL_SEGMENT_ROWS) as usize;
+        if segment < sealed {
+            let logging = self.displaced.is_some();
+            self.sealed_stats.invalidate();
+            self.spillable_growth = true;
+            let part = Arc::make_mut(&mut self.sealed_tails[segment]);
+            if logging {
+                part.begin_displaced_log();
+            }
+            return (part, row % TAIL_SEGMENT_ROWS);
+        }
+        let first = sealed as u32 * TAIL_SEGMENT_ROWS;
+        let open = self
+            .tail
+            .as_mut()
+            .expect("a segmented tail has an open segment");
+        (Arc::make_mut(open), row - first)
+    }
+
+    /// The part an append lands in: the open segment, sealed first when it is
+    /// full. A segment fills at `push_row`, so a row's id, title and property
+    /// pushes (which arrive before `push_row`) always meet the same segment.
     ///
-    /// `None` for any other store.
+    /// `None` for a heap store that has no tail and was not marked to start
+    /// one, which is every store of an ordinary in-memory graph: that test is
+    /// all they pay.
     #[inline]
     pub(super) fn tail_for_append(&mut self) -> Option<&mut ColumnStore> {
+        if self.tail.is_none()
+            && self.mmap_store.is_none()
+            && self.append_tail != AppendTail::Candidate
+        {
+            return None;
+        }
+        self.tail_for_append_slow()
+    }
+
+    /// The tail is created on demand: a store that reads through an mmap
+    /// base always appends there, and a heap store marked by a writer overlay
+    /// does once [`Self::start_heap_tail`] decides for one.
+    #[inline(never)]
+    fn tail_for_append_slow(&mut self) -> Option<&mut ColumnStore> {
         if self.mmap_store.is_none() {
             if self.tail.is_none() && !self.start_heap_tail() {
                 return None;
             }
-            return self.tail.as_mut().map(Arc::make_mut);
-        }
-        let tail = self.tail.get_or_insert_with(|| {
-            Arc::new(ColumnStore::new(
+        } else if self.tail.is_none() {
+            self.tail = Some(Arc::new(ColumnStore::new(
                 Arc::new(TypeSchema::new()),
                 &HashMap::new(),
                 &StringInterner::new(),
-            ))
-        });
-        Some(Arc::make_mut(tail))
+            )));
+        }
+        if self
+            .tail
+            .as_ref()
+            .is_some_and(|open| open.row_count >= TAIL_SEGMENT_ROWS)
+        {
+            self.seal_open_segment();
+        }
+        self.tail.as_mut().map(Arc::make_mut)
+    }
+
+    /// Seal the full open segment and start an empty one shaped like it.
+    fn seal_open_segment(&mut self) {
+        if let Some(full) = self.tail.take() {
+            self.tail = Some(Arc::new(full.heap_twin()));
+            self.sealed_tails.push(full);
+            self.sealed_stats.invalidate();
+        }
+    }
+
+    /// Every part of the tail, oldest first: the sealed segments, then the open one.
+    #[inline]
+    pub(super) fn tail_parts(&self) -> impl Iterator<Item = &Arc<ColumnStore>> {
+        self.sealed_tails.iter().chain(self.tail.iter())
+    }
+
+    /// The tail part with index `part - 1`, mutable. Part 0 is the store's own.
+    pub(super) fn part_mut(&mut self, part: u32) -> Option<&mut ColumnStore> {
+        let index = part.checked_sub(1)? as usize;
+        self.sealed_stats.invalidate();
+        self.spillable_growth = true;
+        match self.sealed_tails.get_mut(index) {
+            Some(sealed) => Some(Arc::make_mut(sealed)),
+            None => self.tail.as_mut().map(Arc::make_mut),
+        }
     }
 
     /// Give an mmap-backed store its tail, typed from the type's registered
@@ -169,15 +300,13 @@ impl ColumnStore {
                 .mmap_store
                 .as_ref()
                 .is_some_and(|base| base.column_kind(key).is_some())
-            || self
-                .tail
-                .as_deref()
-                .is_some_and(|tail| tail.has_property_column(key))
+            || self.tail_parts().any(|part| part.has_property_column(key))
     }
 
-    /// The schema slot of `key` in the part that holds `row_id`: the tail's own
-    /// schema for a row past the base, the store's for any other. A write to a
-    /// tail row grows the tail's schema, whatever the base part's schema holds.
+    /// The schema slot of `key` in the part that holds `row_id`: the tail
+    /// part's own schema for a row past the base, the store's for any other. A
+    /// write to a tail row grows that part's schema, whatever the base part's
+    /// schema holds.
     #[inline]
     pub(crate) fn slot_for_row(&self, row_id: u32, key: InternedKey) -> Option<u16> {
         match self.tail_for(row_id) {
@@ -186,42 +315,54 @@ impl ColumnStore {
         }
     }
 
-    /// The pre-growth schema of the part that holds `row_id` — the tail's for a
-    /// row past the base — with its column count and whether it is the tail's:
-    /// what [`Self::restore_schema_of`] needs to undo a growth of that part.
-    pub(crate) fn schema_pre_image_for_row(&self, row_id: u32) -> (Arc<TypeSchema>, usize, bool) {
+    /// The pre-growth schema of the part that holds `row_id` with its column
+    /// count and its part number (0: the store's own, `n`: tail segment
+    /// `n - 1`): what [`Self::restore_schema_of`] needs to undo a growth of it.
+    pub(crate) fn schema_pre_image_for_row(&self, row_id: u32) -> (Arc<TypeSchema>, usize, u32) {
         match self.tail_for(row_id) {
-            Some((tail, _)) => (tail.schema_arc(), tail.column_count(), true),
-            None => (self.schema_arc(), self.column_count(), false),
+            Some((tail, _)) => {
+                let row = row_id - self.row_count;
+                let part = (row / TAIL_SEGMENT_ROWS).min(self.sealed_tails.len() as u32) + 1;
+                (tail.schema_arc(), tail.column_count(), part)
+            }
+            None => (self.schema_arc(), self.column_count(), 0),
         }
     }
 
-    /// The tail's schema and column count, when the store has a tail.
-    pub(crate) fn tail_schema_pre_image(&self) -> Option<(Arc<TypeSchema>, usize)> {
+    /// The open segment's schema and column count with its part number, when
+    /// the store has a tail.
+    pub(crate) fn tail_schema_pre_image(&self) -> Option<(u32, Arc<TypeSchema>, usize)> {
         let tail = self.tail.as_deref()?;
-        Some((tail.schema_arc(), tail.column_count()))
+        Some((
+            self.sealed_tails.len() as u32 + 1,
+            tail.schema_arc(),
+            tail.column_count(),
+        ))
     }
 
-    /// [`Self::restore_schema`] on the tail (`in_tail`) or on the store's own
-    /// part. A no-op for a tail that is gone, which a rollback that removed its
-    /// only rows has already dropped.
+    /// [`Self::restore_schema`] on part `part` (0: the store's own part, `n`:
+    /// tail segment `n - 1`). A no-op for a part that is gone, which a
+    /// rollback that removed its only rows has already dropped.
     pub(crate) fn restore_schema_of(
         &mut self,
-        in_tail: bool,
+        part: u32,
         schema: Arc<TypeSchema>,
         column_count: usize,
     ) {
-        if !in_tail {
+        if part == 0 {
             self.restore_schema(schema, column_count);
-        } else if let Some(tail) = self.tail.as_mut() {
-            Arc::make_mut(tail).restore_schema(schema, column_count);
+        } else if let Some(tail) = self.part_mut(part) {
+            tail.restore_schema(schema, column_count);
         }
     }
 
-    /// Rows in the tail.
+    /// Rows in the tail, across every segment.
     #[inline]
     pub(crate) fn tail_rows(&self) -> u32 {
-        self.tail.as_ref().map_or(0, |tail| tail.row_count())
+        match self.tail.as_ref() {
+            None => 0,
+            Some(open) => self.sealed_tails.len() as u32 * TAIL_SEGMENT_ROWS + open.row_count(),
+        }
     }
 
     /// Whether any row has been appended past the base.
@@ -230,11 +371,26 @@ impl ColumnStore {
         self.tail_rows() > 0
     }
 
-    /// Drop a tail that holds no rows, so a store whose only append was rolled
-    /// back is a pure mmap base again and is re-emitted from its mapping.
-    pub(super) fn drop_empty_tail(&mut self) {
-        if self.tail.as_ref().is_some_and(|tail| tail.row_count() == 0) {
-            self.tail = None;
+    /// Shrink the tail to `keep` rows, un-sealing a segment when the cut falls
+    /// inside it, and drop a tail left with no rows so a store whose only
+    /// append was rolled back is a pure mmap base again and is re-emitted from
+    /// its mapping.
+    pub(super) fn truncate_tail_rows(&mut self, keep: u32) {
+        self.sealed_stats.invalidate();
+        while !self.sealed_tails.is_empty()
+            && keep < self.sealed_tails.len() as u32 * TAIL_SEGMENT_ROWS
+        {
+            self.tail = self.sealed_tails.pop();
+        }
+        let sealed_rows = self.sealed_tails.len() as u32 * TAIL_SEGMENT_ROWS;
+        if let Some(open) = self.tail.as_mut() {
+            Arc::make_mut(open).truncate_rows(keep - sealed_rows);
+        }
+        if self.tail.as_ref().is_some_and(|open| open.row_count() == 0) {
+            match self.sealed_tails.pop() {
+                Some(full) => self.tail = Some(full),
+                None => self.tail = None,
+            }
         }
     }
 
@@ -350,6 +506,10 @@ impl ColumnStore {
     /// the regions cannot hold: which is then flattened, reading through the
     /// routed per-row accessors, and so seeing the union.
     pub(crate) fn region_parts(&self) -> Option<RegionParts<'_>> {
+        debug_assert!(
+            self.sealed_tails.is_empty(),
+            "a save consolidates a segmented tail first (`with_consolidated_tail`)"
+        );
         let base = self.mmap_store.as_ref()?;
         let tail = self.tail.as_deref().filter(|tail| tail.row_count() > 0);
         if (self.columns.is_empty() && tail.is_none()) || !self.base_part_is_region_compatible(base)
@@ -367,6 +527,41 @@ impl ColumnStore {
             overlay: self,
             tail,
         })
+    }
+
+    /// This store with the tail's segments merged into one tail store, for a
+    /// reader that lays the tail out as a single run (a save): borrowed when
+    /// the tail is not segmented, else a copy whose tail holds every appended
+    /// row. Merged here, once per save, rather than on every fork.
+    pub(crate) fn with_consolidated_tail(&self) -> Cow<'_, ColumnStore> {
+        let Some(first) = self.sealed_tails.first() else {
+            return Cow::Borrowed(self);
+        };
+        let mut merged = first.heap_twin();
+        for part in self.tail_parts() {
+            merged.append_rows_of(part);
+        }
+        let mut whole = self.clone();
+        whole.sealed_tails.clear();
+        whole.sealed_stats.invalidate();
+        whole.tail = Some(Arc::new(merged));
+        Cow::Owned(whole)
+    }
+
+    /// Append every row of `part` (tombstones included) to this heap store.
+    fn append_rows_of(&mut self, part: &ColumnStore) {
+        for row in 0..part.row_count() {
+            if part.id_column.is_some() {
+                self.push_id(&part.get_id(row).unwrap_or(Value::Null));
+            }
+            if part.title_column.is_some() {
+                self.push_title(&part.get_title(row).unwrap_or(Value::Null));
+            }
+            let pushed = self.push_row(&part.row_properties(row));
+            if part.is_tombstoned(row) {
+                self.tombstone(pushed);
+            }
+        }
     }
 }
 
@@ -452,18 +647,43 @@ impl ColumnStore {
             .unwrap_or(false)
     }
 
-    /// The tail, once it holds enough heap for the spill pass to take
-    /// ([`HEAP_TAIL_SPILL_FLOOR`]); a smaller one waits for the fold.
-    pub(super) fn spillable_tail(&self) -> Option<&Arc<ColumnStore>> {
-        self.tail
-            .as_ref()
-            .filter(|tail| tail.spillable_heap_bytes() >= HEAP_TAIL_SPILL_FLOOR)
+    /// The sealed segments' heap and spillable bytes, summed once per change.
+    pub(super) fn sealed_totals(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let stats = &self.sealed_stats;
+        if !stats.valid.load(Relaxed) {
+            let heap = self.sealed_tails.iter().map(|part| part.heap_bytes()).sum();
+            let spillable = self
+                .sealed_tails
+                .iter()
+                .map(|part| part.spillable_heap_bytes())
+                .sum();
+            stats.heap.store(heap, Relaxed);
+            stats.spillable.store(spillable, Relaxed);
+            stats.valid.store(true, Relaxed);
+        }
+        (stats.heap.load(Relaxed), stats.spillable.load(Relaxed))
     }
 
-    pub(super) fn spillable_tail_mut(&mut self) -> Option<&mut Arc<ColumnStore>> {
-        self.tail
-            .as_mut()
-            .filter(|tail| tail.spillable_heap_bytes() >= HEAP_TAIL_SPILL_FLOOR)
+    /// Whether the tail as a whole holds enough heap for the spill pass to
+    /// take ([`HEAP_TAIL_SPILL_FLOOR`]); a smaller one waits for the fold.
+    pub(super) fn tail_spill_due(&self) -> bool {
+        let open = self
+            .tail
+            .as_ref()
+            .map_or(0, |tail| tail.spillable_heap_bytes());
+        self.sealed_totals().1 + open >= HEAP_TAIL_SPILL_FLOOR
+    }
+
+    /// The tail parts the spill pass takes: every part once the whole tail
+    /// passes the floor, none before.
+    pub(super) fn spillable_tails_mut(&mut self) -> impl Iterator<Item = &mut Arc<ColumnStore>> {
+        let due = self.tail_spill_due();
+        self.sealed_stats.invalidate();
+        self.sealed_tails
+            .iter_mut()
+            .chain(self.tail.iter_mut())
+            .filter(move |_| due)
     }
 
     /// Whether this is a heap store with a tail ([`Self::fold_heap_tail`]).
@@ -482,20 +702,14 @@ impl ColumnStore {
             return;
         }
         self.append_tail = AppendTail::Off;
-        let Some(tail) = self.tail.take() else {
-            return;
-        };
-        for row in 0..tail.row_count() {
-            if tail.id_column.is_some() {
-                self.push_id(&tail.get_id(row).unwrap_or(Value::Null));
-            }
-            if tail.title_column.is_some() {
-                self.push_title(&tail.get_title(row).unwrap_or(Value::Null));
-            }
-            let folded = self.push_row(&tail.row_properties(row));
-            if tail.is_tombstoned(row) {
-                self.tombstone(folded);
-            }
+        self.sealed_stats.invalidate();
+        let parts: Vec<Arc<ColumnStore>> = self
+            .sealed_tails
+            .drain(..)
+            .chain(self.tail.take())
+            .collect();
+        for part in &parts {
+            self.append_rows_of(part);
         }
     }
 

@@ -4,8 +4,9 @@ A save of a graph with 65,536 nodes or 262,144 relationships or more records
 its node records and adjacency as raw sections; a load into `mapped` storage
 reads them in place instead of decoding the compressed topology into the heap.
 A write puts a copy-on-write overlay over that topology, so the heap grows with
-the writes and not with the graph; past a quarter of the graph the overlay
-collapses into the heap topology mapped storage always had. The Rust suite
+the writes and not with the graph, however many there are; a save writes the
+merged graph and serves the graph from that file again, with an empty overlay.
+The Rust suite
 covers the backend (every read against a heap load, slot identity, rollback
 shapes, damaged sections, the overlay against a model); these tests pin what
 the Python surface promises: answers do not change, a write works from the
@@ -170,22 +171,52 @@ def test_transactions_over_the_overlay_match_a_memory_graph(saved):
     assert mapped.cypher("MATCH (d:Doc {id: 101}) RETURN d.n").to_list() != []
 
 
-def test_an_overlay_past_a_quarter_of_the_graph_collapses_into_the_heap_topology(saved):
+def test_an_overlay_past_a_quarter_of_the_graph_stays_an_overlay(saved):
     mapped = kglite.load(saved, storage="mapped")
     memory = kglite.load(saved, storage="memory")
     bulk = "UNWIND range(1, 100000) AS i CREATE (:Doc {id: 2000000 + i, n: i % 100, title: 'bulk'})"
     for graph in (mapped, memory):
         graph.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
-    assert kglite._backend_is_frozen(mapped, include_overlay=True)
-    for graph in (mapped, memory):
         graph.cypher(bulk)
-    assert not kglite._backend_is_frozen(mapped, include_overlay=True), "the valve collapsed the overlay"
-    assert not kglite._backend_is_forked(mapped)
+    assert kglite._backend_is_frozen(mapped, include_overlay=True), "size alone never collapses the overlay"
+    assert kglite._backend_is_forked(mapped)
     assert mapped.graph_info()["storage_mode"] == "mapped"
     assert _answers(mapped) == _answers(memory)
     mapped.cypher("MATCH (d:Doc {id: 2000001}) DETACH DELETE d")
     memory.cypher("MATCH (d:Doc {id: 2000001}) DETACH DELETE d")
     assert _answers(mapped) == _answers(memory)
+
+
+def test_transactions_after_many_writes_match_a_memory_graph(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    bulk = "UNWIND range(1, 20000) AS i CREATE (:Doc {id: 3000000 + i, n: i % 100, title: 'bulk'})"
+    links = "UNWIND range(1, 5000) AS i MATCH (a:Doc {id: 3000000 + i}), (b:Doc {id: i}) CREATE (a)-[:LINKS]->(b)"
+    for graph in (mapped, memory):
+        graph.cypher(bulk)
+        graph.cypher(links)
+        tx = graph.begin()
+        tx.cypher("CREATE (:Doc {id: 960000, n: 1, title: 'rolled'})")
+        tx.cypher("MATCH (d:Doc {id: 3000007}) DETACH DELETE d")
+        tx.rollback()
+        tx = graph.begin()
+        tx.cypher("CREATE (:Doc {id: 960001, n: 2, title: 'kept'})")
+        tx.cypher("MATCH (a:Doc {id: 960001}), (b:Doc {id: 3000008}) CREATE (a)-[:LINKS]->(b)")
+        tx.cypher("MATCH (d:Doc {id: 3000009}) SET d.n = 777")
+        tx.commit()
+        tx = graph.begin()
+        tx.cypher("MATCH (d:Doc {id: 3000010}) DETACH DELETE d")
+        tx.rollback()
+    assert kglite._backend_is_forked(mapped)
+    assert _answers(mapped) == _answers(memory)
+    for q in (
+        "MATCH (d:Doc {id: 960000}) RETURN d.n",
+        "MATCH (d:Doc {id: 960001})-[:LINKS]->(b) RETURN b.id",
+        "MATCH (d:Doc {id: 3000007}) RETURN d.n",
+        "MATCH (d:Doc {id: 3000009}) RETURN d.n",
+        "MATCH (d:Doc) WHERE d.id > 3000000 RETURN count(d), sum(d.n)",
+    ):
+        assert mapped.cypher(q).to_list() == memory.cypher(q).to_list(), q
 
 
 def test_a_snapshot_keeps_the_frozen_topology_through_a_write(saved):
@@ -228,7 +259,8 @@ def test_a_save_after_a_write_records_the_write(saved, tmp_path):
     assert kglite._backend_is_frozen(reloaded)
     assert _answers(reloaded) == _answers(memory) == _answers(mapped)
     assert reloaded.cypher("MATCH (d:Doc {id: 920000}) RETURN d.n").to_list() == [{"d.n": 3}]
-    assert kglite._backend_is_frozen(mapped, include_overlay=True), "the saved overlay keeps serving"
+    assert kglite._backend_is_frozen(mapped), "the graph serves from the file it saved"
+    assert not kglite._backend_is_forked(mapped), "with no overlay left"
 
 
 def test_the_overlay_keeps_taking_writes_and_saves_after_a_save(saved, tmp_path):
@@ -250,6 +282,32 @@ def test_the_overlay_keeps_taking_writes_and_saves_after_a_save(saved, tmp_path)
     final = kglite.load(second, storage="mapped")
     assert _answers(final) == _answers(kglite.load(second, storage="memory")) == _answers(memory)
     assert _answers(kglite.load(first, storage="mapped")) != _answers(final)
+
+
+def test_a_save_rebases_the_graph_and_a_held_snapshot_keeps_the_old_state(saved, tmp_path):
+    mapped = kglite.load(saved, storage="mapped")
+    memory = kglite.load(saved, storage="memory")
+    target = str(tmp_path / "rebase.kgl")
+    for graph in (mapped, memory):
+        graph.cypher("MATCH (d:Doc {id: 100}) DETACH DELETE d")
+        graph.cypher("CREATE (:Doc {id: 970000, n: 1, title: 'a'})")
+    snapshot = mapped.freeze()
+    before = _answers(snapshot)
+    mapped.cypher("CREATE (:Doc {id: 970001, n: 2, title: 'after the freeze'})")
+    memory.cypher("CREATE (:Doc {id: 970001, n: 2, title: 'after the freeze'})")
+    mapped.save(target)
+    assert kglite._backend_is_frozen(mapped) and not kglite._backend_is_forked(mapped)
+    assert _answers(mapped) == _answers(memory)
+    assert _answers(snapshot) == before, "the snapshot still reads the state it froze"
+    # More writes over the rebased graph, a save over the same file, a reload.
+    for graph in (mapped, memory):
+        graph.cypher("MATCH (d:Doc {id: 970000}) SET d.n = 9")
+        graph.cypher("MATCH (a:Doc {id: 970000}), (b:Doc {id: 79}) CREATE (a)-[:LINKS]->(b)")
+    assert kglite._backend_is_forked(mapped), "a write overlays the new file"
+    mapped.save(target)
+    assert kglite._backend_is_frozen(mapped) and not kglite._backend_is_forked(mapped)
+    assert _answers(mapped) == _answers(memory)
+    assert _answers(kglite.load(target, storage="mapped")) == _answers(memory)
 
 
 def test_compact_layout_keeps_the_compressed_topology_only(saved, tmp_path):

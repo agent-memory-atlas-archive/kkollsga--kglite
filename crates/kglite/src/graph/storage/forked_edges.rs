@@ -28,36 +28,81 @@
 //! log against the base and checks every slot petgraph hands back
 //! (`forked.rs`, "Slot identity").
 
-use std::sync::Arc;
-
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
-use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::graph::schema::EdgeData;
 use crate::graph::storage::fork_base::ForkBase;
+use crate::graph::storage::shared_tree::{PagedBits, PagedMap, PagedSet};
 
-/// A set of small integers as a flat bitmap, grown on demand.
+/// Words per chunk of a chunked [`OverlayBits`]: 32,768 bits, 4 KiB.
+const CHUNK_WORDS: usize = 512;
+
+/// A set of small integers as a bitmap, grown on demand.
 ///
 /// One bit test answers reads the overlay holds nothing for, which is nearly
 /// all of them; a hash probe costs about 2.6x more when the held keys are
 /// scattered (measured 2026-10-05, see `forked.rs` `OverlayNodes`). Flat rather
-/// than paged because a node scan tests it once per node, where a second
-/// dependent load measured +12 % on a scan under a held overlay.
+/// than paged for an overlay over a heap graph, because a node scan tests it
+/// once per node, where a second dependent load measured +12 % on a scan under
+/// a held overlay; and a flat probe that can fall through to a second layout
+/// must pay nothing when it lands in the words (an enum of the two layouts
+/// measured +6 % on the same scan).
+///
+/// An overlay over a frozen base is the other layout: its bitmap spans every
+/// node the writes ever reached (3 KB per 24,000 nodes) and each transaction
+/// forks it, so it is held in `Arc`ed chunks (`words` stays empty) that a fork
+/// shares and a write copies one of.
 #[derive(Clone, Default)]
 pub(crate) struct OverlayBits {
     words: Vec<u64>,
+    chunks: Vec<std::sync::Arc<[u64; CHUNK_WORDS]>>,
+    chunked: bool,
+}
+
+#[inline(never)]
+fn chunked_holds(chunks: &[std::sync::Arc<[u64; CHUNK_WORDS]>], idx: u32) -> bool {
+    chunks
+        .get((idx >> 15) as usize)
+        .is_some_and(|chunk| (chunk[((idx >> 6) as usize) % CHUNK_WORDS] >> (idx & 63)) & 1 == 1)
 }
 
 impl OverlayBits {
+    /// An empty set that forks in O(chunks).
+    pub(crate) fn chunked() -> Self {
+        Self {
+            chunked: true,
+            ..Self::default()
+        }
+    }
+
+    /// An empty set of the same layout.
+    pub(crate) fn emptied(&self) -> Self {
+        Self {
+            chunked: self.chunked,
+            ..Self::default()
+        }
+    }
+
     #[inline]
     pub(crate) fn holds(&self, idx: u32) -> bool {
-        self.words
-            .get((idx >> 6) as usize)
-            .is_some_and(|word| (word >> (idx & 63)) & 1 == 1)
+        match self.words.get((idx >> 6) as usize) {
+            Some(word) => (word >> (idx & 63)) & 1 == 1,
+            None => !self.chunks.is_empty() && chunked_holds(&self.chunks, idx),
+        }
     }
 
     pub(crate) fn set(&mut self, idx: u32) {
+        if self.chunked {
+            let chunk = (idx >> 15) as usize;
+            if chunk >= self.chunks.len() {
+                self.chunks
+                    .resize_with(chunk + 1, || std::sync::Arc::new([0; CHUNK_WORDS]));
+            }
+            std::sync::Arc::make_mut(&mut self.chunks[chunk])
+                [((idx >> 6) as usize) % CHUNK_WORDS] |= 1 << (idx & 63);
+            return;
+        }
         let word = (idx >> 6) as usize;
         if word >= self.words.len() {
             self.words.resize(word + 1, 0);
@@ -66,47 +111,14 @@ impl OverlayBits {
     }
 
     pub(crate) fn clear(&mut self, idx: u32) {
-        if let Some(word) = self.words.get_mut((idx >> 6) as usize) {
+        if self.chunked {
+            if let Some(chunk) = self.chunks.get_mut((idx >> 15) as usize) {
+                std::sync::Arc::make_mut(chunk)[((idx >> 6) as usize) % CHUNK_WORDS] &=
+                    !(1 << (idx & 63));
+            }
+        } else if let Some(word) = self.words.get_mut((idx >> 6) as usize) {
             *word &= !(1 << (idx & 63));
         }
-    }
-}
-
-/// Words per page of a [`PagedBits`]: 4096 bits, 512 bytes.
-const PAGE_WORDS: usize = 64;
-const PAGE_SHIFT: u32 = 12;
-
-/// A sparse set of integers as a paged bitmap. See [`OverlayBits`] for the dense kind.
-///
-/// One bit test answers reads the overlay holds nothing for, which is nearly
-/// all of them; a hash probe costs about 2.6x more when the held keys are
-/// scattered (measured 2026-10-05, see `forked.rs` `OverlayNodes`). The pages
-/// are allocated only where a bit is set and are shared between clones until
-/// one of them writes: a transaction clones the overlay, and a flat bitmap
-/// sized to the highest index (12M edge slots: 1.5 MB), or a page copied per
-/// scattered entry, would be paid by every one however few bits it sets.
-#[derive(Clone, Default)]
-pub(crate) struct PagedBits {
-    pages: Vec<Option<Arc<[u64; PAGE_WORDS]>>>,
-}
-
-impl PagedBits {
-    #[inline]
-    pub(crate) fn holds(&self, idx: u32) -> bool {
-        match self.pages.get((idx >> PAGE_SHIFT) as usize) {
-            Some(Some(page)) => (page[((idx >> 6) as usize) % PAGE_WORDS] >> (idx & 63)) & 1 == 1,
-            _ => false,
-        }
-    }
-
-    pub(crate) fn set(&mut self, idx: u32) {
-        let page = (idx >> PAGE_SHIFT) as usize;
-        if page >= self.pages.len() {
-            self.pages.resize_with(page + 1, || None);
-        }
-        let words =
-            Arc::make_mut(self.pages[page].get_or_insert_with(|| Arc::new([0; PAGE_WORDS])));
-        words[((idx >> 6) as usize) % PAGE_WORDS] |= 1 << (idx & 63);
     }
 }
 
@@ -126,7 +138,7 @@ pub(crate) struct OverlayEdge {
 
 /// One node's overlay-added edges in one direction, newest first.
 pub(crate) struct AddedChain<'a> {
-    added: &'a FxHashMap<u32, OverlayEdge>,
+    added: &'a PagedMap<OverlayEdge>,
     next: u32,
     outgoing: bool,
 }
@@ -142,7 +154,7 @@ impl<'a> Iterator for AddedChain<'a> {
         let slot = self.next;
         let edge = self
             .added
-            .get(&slot)
+            .get(slot)
             .expect("a chained overlay edge is always in the added map");
         self.next = if self.outgoing {
             edge.next_out
@@ -157,14 +169,14 @@ impl<'a> Iterator for AddedChain<'a> {
 /// nodes, and then every read takes the base's own iterators.
 #[derive(Clone, Default)]
 pub(crate) struct EdgeLayer {
-    pub(crate) added: FxHashMap<u32, OverlayEdge>,
+    pub(crate) added: PagedMap<OverlayEdge>,
     /// Per node, the newest added edge at it; the rest follow the chain in
     /// [`OverlayEdge`]. Chains instead of a `Vec` per node, so cloning an
     /// overlay (which a transaction does) allocates nothing per node.
-    out_head: FxHashMap<u32, u32>,
-    in_head: FxHashMap<u32, u32>,
-    pub(crate) removed: FxHashSet<u32>,
-    pub(crate) weights: FxHashMap<u32, EdgeData>,
+    out_head: PagedMap<u32>,
+    in_head: PagedMap<u32>,
+    pub(crate) removed: PagedSet,
+    pub(crate) weights: PagedMap<EdgeData>,
     pub(crate) touched: PagedBits,
     /// Nodes an overlay edge, a removed base edge or a re-weighted base edge is
     /// incident to. A node outside it reads exactly as the base reads it, so
@@ -203,7 +215,7 @@ impl EdgeLayer {
 
     /// One past the highest overlay-added slot, or 0.
     pub(crate) fn added_bound(&self) -> usize {
-        self.added.keys().max().map_or(0, |&slot| slot as usize + 1)
+        self.added.max_key().map_or(0, |slot| slot as usize + 1)
     }
 
     /// The overlay-added edges incident to `node` in `dir`, newest first.
@@ -215,7 +227,7 @@ impl EdgeLayer {
         };
         AddedChain {
             added: &self.added,
-            next: heads.get(&(node.index() as u32)).copied().unwrap_or(NIL),
+            next: heads.get(node.index() as u32).copied().unwrap_or(NIL),
             outgoing: dir == Direction::Outgoing,
         }
     }
@@ -243,7 +255,7 @@ impl EdgeLayer {
     /// Drop an overlay-added edge, unlinking it from both chains. Rollback and
     /// a tail delete remove what was added last, which heads its chains.
     pub(crate) fn take_added(&mut self, slot: u32) -> Option<OverlayEdge> {
-        let edge = self.added.remove(&slot)?;
+        let edge = self.added.remove(slot)?;
         self.unlink(slot, edge.src, edge.next_out, true);
         self.unlink(slot, edge.dst, edge.next_in, false);
         Some(edge)
@@ -256,19 +268,19 @@ impl EdgeLayer {
         } else {
             &mut self.in_head
         };
-        let Some(&head) = heads.get(&node) else {
+        let Some(&head) = heads.get(node) else {
             return;
         };
         if head == slot {
             if after == NIL {
-                heads.remove(&node);
+                heads.remove(node);
             } else {
                 heads.insert(node, after);
             }
             return;
         }
         let mut at = head;
-        while let Some(edge) = self.added.get_mut(&at) {
+        while let Some(edge) = self.added.get_mut(at) {
             let link = if outgoing {
                 &mut edge.next_out
             } else {
@@ -285,7 +297,7 @@ impl EdgeLayer {
     /// Mark a live base edge as no longer live in this view.
     pub(crate) fn tombstone(&mut self, slot: u32, src: u32, dst: u32) {
         self.removed.insert(slot);
-        self.weights.remove(&slot);
+        self.weights.remove(slot);
         self.touched.set(slot);
         self.dirty_nodes.set(src);
         self.dirty_nodes.set(dst);
@@ -302,8 +314,7 @@ impl EdgeLayer {
         self.dirty_nodes.set(src);
         self.dirty_nodes.set(dst);
         self.weights
-            .entry(slot)
-            .or_insert_with(|| base_weight.clone())
+            .get_or_insert_with(slot, || base_weight.clone())
     }
 
     /// The weight of `slot` as this view reads it.
@@ -317,13 +328,13 @@ impl EdgeLayer {
         if !self.touched.holds(raw) {
             return base.edge_weight(slot);
         }
-        if let Some(edge) = self.added.get(&raw) {
+        if let Some(edge) = self.added.get(raw) {
             return Some(&edge.weight);
         }
-        if self.removed.contains(&raw) {
+        if self.removed.contains(raw) {
             return None;
         }
-        self.weights.get(&raw).or_else(|| base.edge_weight(slot))
+        self.weights.get(raw).or_else(|| base.edge_weight(slot))
     }
 
     /// The endpoints of `slot` as this view reads them.
@@ -337,13 +348,13 @@ impl EdgeLayer {
         if !self.touched.holds(raw) {
             return base.edge_endpoints(slot);
         }
-        if let Some(edge) = self.added.get(&raw) {
+        if let Some(edge) = self.added.get(raw) {
             return Some((
                 NodeIndex::new(edge.src as usize),
                 NodeIndex::new(edge.dst as usize),
             ));
         }
-        if self.removed.contains(&raw) {
+        if self.removed.contains(raw) {
             return None;
         }
         base.edge_endpoints(slot)
@@ -351,7 +362,7 @@ impl EdgeLayer {
 
     /// Overlay-added slots in ascending order, for the whole-graph scans.
     pub(crate) fn added_sorted(&self) -> Vec<u32> {
-        let mut slots: Vec<u32> = self.added.keys().copied().collect();
+        let mut slots: Vec<u32> = self.added.keys().collect();
         slots.sort_unstable();
         slots
     }
@@ -362,46 +373,65 @@ mod tests {
     use super::*;
     use crate::graph::schema::InternedKey;
 
-    /// The paged bitmap behaves as a set across page and word boundaries, and
-    /// allocates only where a bit is set.
+    /// Both kinds of node bitmap hold exactly what was set and not cleared
+    /// across chunk boundaries, and a clone of a chunked one keeps what it had.
     #[test]
-    fn paged_bits_hold_exactly_what_was_set_across_pages() {
-        let held = [
-            0u32,
-            1,
-            63,
-            64,
-            4095,
-            4096,
-            4097,
-            8191,
-            8192,
-            1 << 20,
-            12_000_000,
-        ];
-        let mut bits = PagedBits::default();
-        assert!(
-            !bits.holds(0) && !bits.holds(12_000_000),
-            "empty holds nothing"
-        );
-        for &idx in &held {
-            bits.set(idx);
+    fn overlay_bits_of_both_kinds_agree_with_a_model_and_chunked_clones_are_isolated() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for kind in 0..2 {
+            let mut bits = if kind == 0 {
+                OverlayBits::default()
+            } else {
+                OverlayBits::chunked()
+            };
+            let mut model = std::collections::BTreeSet::new();
+            let mut snapshots = Vec::new();
+            for step in 0..4_000u64 {
+                let idx = next(300_000) as u32;
+                match next(6) {
+                    0..=2 => {
+                        bits.set(idx);
+                        model.insert(idx);
+                    }
+                    3 => {
+                        bits.clear(idx);
+                        model.remove(&idx);
+                    }
+                    4 if step % 7 == 0 && snapshots.len() < 5 => {
+                        snapshots.push((bits.clone(), model.clone()));
+                    }
+                    _ => {}
+                }
+                assert_eq!(
+                    bits.holds(idx),
+                    model.contains(&idx),
+                    "kind {kind} idx {idx}"
+                );
+            }
+            for probe in (0..300_000u32).step_by(7).chain(model.iter().copied()) {
+                assert_eq!(
+                    bits.holds(probe),
+                    model.contains(&probe),
+                    "kind {kind} probe {probe}"
+                );
+            }
+            for (snap, expected) in &snapshots {
+                for probe in (0..300_000u32).step_by(11).chain(expected.iter().copied()) {
+                    assert_eq!(
+                        snap.holds(probe),
+                        expected.contains(&probe),
+                        "snapshot {probe}"
+                    );
+                }
+            }
+            assert!(!bits.emptied().holds(*model.iter().next().unwrap_or(&0)));
         }
-        for idx in (0..9000).chain([1 << 20, (1 << 20) + 1, 11_999_999, 12_000_000, 12_000_001]) {
-            assert_eq!(bits.holds(idx), held.contains(&idx), "bit {idx}");
-        }
-        let pages = bits.pages.iter().flatten().count();
-        assert_eq!(
-            pages, 5,
-            "pages 0, 1, 2, 256 and 2929 are the only ones allocated"
-        );
-        let copy = bits.clone();
-        bits.set(12);
-        assert!(
-            !copy.holds(12) && bits.holds(12),
-            "a clone does not see a later write"
-        );
-        assert!(copy.holds(4097), "and keeps what it held");
     }
 
     /// Overlay edges chain newest first at both ends, and an edge leaves the

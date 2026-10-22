@@ -1,8 +1,7 @@
 //! Writes to a frozen graph: the copy-on-write overlay that serves them, what
 //! it keeps from a heap graph that took the same writes (every read, slot
-//! identity, rollback, transactions, the log), and the three ways it ends (a
-//! save keeps it, the promote valve collapses it, a whole-graph operation
-//! collapses it).
+//! identity, rollback, transactions, the log), and how it ends (a save keeps
+//! or rebases it, a whole-graph operation collapses it; size alone never does).
 
 use super::frozen_tests::{
     assert_reads_match, dump, flip_in_section, saved_topo, saved_topo_big, section_names,
@@ -14,7 +13,6 @@ use super::mappable::SaveLayout;
 use super::*;
 use crate::graph::schema::InternedKey;
 use crate::graph::session::{execute_mut, CommitOutcome, Session};
-use crate::graph::storage::fork_base::with_valve_floor;
 use crate::graph::storage::GraphRead;
 use crate::graph::wal::DurabilityLevel;
 use petgraph::Direction::Outgoing;
@@ -37,6 +35,14 @@ fn assert_overlay(graph: &DirGraph) {
     assert!(graph.graph.is_forked(), "an overlay");
     assert!(graph.graph.has_frozen_base(), "over the file's topology");
     assert!(!graph.graph.is_frozen(), "no longer served directly");
+    assert!(graph.graph.is_mapped(), "still mapped storage");
+}
+
+/// Served straight from a file again: no overlay, the topology is the file's.
+fn assert_rebased(graph: &DirGraph) {
+    assert!(graph.graph.is_frozen(), "served from the saved file");
+    assert!(!graph.graph.is_forked(), "no overlay");
+    assert!(graph.graph.overlay_entries().is_none());
     assert!(graph.graph.is_mapped(), "still mapped storage");
 }
 
@@ -215,55 +221,44 @@ fn a_reader_of_the_frozen_graph_never_sees_the_writer() {
 }
 
 #[test]
-fn the_valve_collapses_an_overlay_that_outgrows_a_quarter_of_its_base() {
+fn an_overlay_stays_an_overlay_far_past_a_quarter_of_its_base() {
     let (_tmp, path) = saved_topo();
-    // saved_topo holds a few hundred nodes and edges; a floor of 8 lets the
-    // fraction decide.
-    with_valve_floor(8, || {
-        let mut graph = load_owned(&path, StorageMode::Mapped);
-        let mut memory = load_owned(&path, StorageMode::Memory);
-        let slots = graph.graph.node_count() + graph.graph.edge_count();
-        let mut collapsed_at = None;
-        for i in 0..slots {
-            let step = format!("CREATE (:F {{id: {}, n: {i}}})", 10_000 + i);
-            run(&mut graph, &step);
-            run(&mut memory, &step);
-            if collapsed_at.is_none() && !graph.graph.is_forked() {
-                collapsed_at = Some(i + 1);
-            }
-            assert_eq!(dump(&graph), dump(&memory), "{step}");
-        }
-        let at = collapsed_at.expect("the overlay must collapse once it passes the fraction");
+    let mut graph = load_owned(&path, StorageMode::Mapped);
+    let mut memory = load_owned(&path, StorageMode::Memory);
+    let slots = graph.graph.node_count() + graph.graph.edge_count();
+    // Two bases' worth of node creates: well past the quarter at which the
+    // overlay used to collapse into a heap graph.
+    for i in 0..2 * slots {
+        let step = format!("CREATE (:F {{id: {}, n: {i}}})", 10_000 + i);
+        run(&mut graph, &step);
+        run(&mut memory, &step);
         assert!(
-            at > slots / 8 && at <= slots / 2,
-            "collapsed after {at} writes over {slots} slots: not near a quarter"
+            graph.graph.is_forked(),
+            "still an overlay after {} writes",
+            i + 1
         );
-        assert_collapsed(&graph);
-        assert_reads_match(&graph, &memory, "after the valve");
-        // The heap graph carries on as mapped storage always did.
-        run(&mut graph, SCRIPT[2]);
-        run(&mut memory, SCRIPT[2]);
-        assert_eq!(dump(&graph), dump(&memory));
-    });
+    }
+    assert_overlay(&graph);
+    assert_eq!(dump(&graph), dump(&memory));
+    assert_reads_match(&graph, &memory, "past the old valve point");
+    run(&mut graph, SCRIPT[2]);
+    run(&mut memory, SCRIPT[2]);
+    assert_eq!(dump(&graph), dump(&memory));
 }
 
 #[test]
-fn the_valve_keeps_a_rolled_back_statement_exact() {
+fn a_statement_that_fails_after_many_writes_rolls_back_exactly() {
     let (_tmp, path) = saved_topo();
-    with_valve_floor(8, || {
-        let mut graph = load_owned(&path, StorageMode::Mapped);
-        let before = dump(&graph);
-        // The statement crosses the valve part-way through, then fails: the
-        // journal moves with the collapse and still restores every slot.
-        let failed = execute_mut(
-            &mut graph,
-            "UNWIND range(1, 400) AS i CREATE (:F {id: 20000 + i, n: i}) \
-             WITH 1 AS one CREATE (:F {id: 99999, bad: duration({months: 2147483648})})",
-            &opts(),
-        );
-        assert!(failed.is_err());
-        assert_eq!(dump(&graph), before);
-    });
+    let mut graph = load_owned(&path, StorageMode::Mapped);
+    let before = dump(&graph);
+    let failed = execute_mut(
+        &mut graph,
+        "UNWIND range(1, 400) AS i CREATE (:F {id: 20000 + i, n: i}) \
+         WITH 1 AS one CREATE (:F {id: 99999, bad: duration({months: 2147483648})})",
+        &opts(),
+    );
+    assert!(failed.is_err());
+    assert_eq!(dump(&graph), before);
 }
 
 #[test]
@@ -283,7 +278,7 @@ fn a_whole_graph_operation_collapses_the_overlay_and_keeps_every_answer() {
 }
 
 #[test]
-fn a_save_after_writes_keeps_the_overlay_and_reloads_to_what_memory_holds() {
+fn a_save_after_writes_rebases_the_graph_onto_the_saved_file_and_reloads_to_what_memory_holds() {
     let (tmp, path) = saved_topo();
     let mut graph = load(&path, StorageMode::Mapped);
     {
@@ -294,15 +289,21 @@ fn a_save_after_writes_keeps_the_overlay_and_reloads_to_what_memory_holds() {
     }
     assert_overlay(&graph);
     let again = tmp.path().join("again.kgl");
+    // A reader of the graph as it stood before the save.
+    let held = std::sync::Arc::clone(&graph);
     with_floors(10, 10, || {
         save_graph_with_layout(&mut graph, again.to_str().unwrap(), true, SaveLayout::Auto)
     })
     .unwrap();
-    // The overlay sits over the old inode, which a rename does not disturb, so
-    // it stays valid and keeps answering.
-    assert_overlay(&graph);
+    // The graph now serves from the file it just wrote, with no overlay; the
+    // reader keeps the old overlay over the old mapping.
+    assert_rebased(&graph);
+    assert_overlay(&held);
     let reference = memory_after(&path, &SCRIPT);
     assert_eq!(dump(&graph), dump(&reference));
+    assert_eq!(dump(&held), dump(&reference));
+    assert_reads_match(&graph, &reference, "rebased vs memory");
+    drop(held);
 
     let names = {
         let bytes = std::fs::read(&again).unwrap();
@@ -325,12 +326,14 @@ fn a_save_after_writes_keeps_the_overlay_and_reloads_to_what_memory_holds() {
     assert_eq!(dump(&from_file), dump(&reference));
     assert_reads_match(&frozen, &from_file, "reloaded frozen vs reloaded memory");
 
-    // The saved overlay carries on: more writes, a second save, a second reload.
+    // The rebased graph carries on: more writes (a fresh overlay over the new
+    // file), a second save, a second reload.
     {
         let writer = crate::graph::handle::make_dir_graph_mut(&mut graph);
         run(writer, "MATCH (a:A {id: 1000}) DETACH DELETE a");
         run(writer, "CREATE (:A {id: 1000, n: 77, s: 'second'})");
     }
+    assert_overlay(&graph);
     let third = tmp.path().join("third.kgl");
     with_floors(10, 10, || {
         save_graph_with_layout(&mut graph, third.to_str().unwrap(), true, SaveLayout::Auto)
@@ -346,6 +349,149 @@ fn a_save_after_writes_keeps_the_overlay_and_reloads_to_what_memory_holds() {
     assert_eq!(
         dump(&load_owned(&third, StorageMode::Memory)),
         dump(&expected)
+    );
+    assert_rebased(&graph);
+    assert_eq!(dump(&graph), dump(&expected));
+
+    // Saving over the file the graph is now mapped from replaces the inode it
+    // reads; the rebase maps the new one, and the graph keeps answering.
+    {
+        let writer = crate::graph::handle::make_dir_graph_mut(&mut graph);
+        run(writer, "CREATE (:C {id: 7000, n: 9, s: 'same path'})");
+    }
+    run(
+        &mut expected,
+        "CREATE (:C {id: 7000, n: 9, s: 'same path'})",
+    );
+    with_floors(10, 10, || {
+        save_graph_with_layout(&mut graph, third.to_str().unwrap(), true, SaveLayout::Auto)
+    })
+    .unwrap();
+    assert_rebased(&graph);
+    assert_eq!(dump(&graph), dump(&expected));
+    assert_eq!(
+        dump(&load_owned(&third, StorageMode::Mapped)),
+        dump(&expected)
+    );
+}
+
+#[test]
+fn a_save_that_records_no_raw_topology_leaves_the_overlay_serving() {
+    let (tmp, path) = saved_topo();
+    let mut graph = load(&path, StorageMode::Mapped);
+    {
+        let writer = crate::graph::handle::make_dir_graph_mut(&mut graph);
+        for step in &SCRIPT[..4] {
+            run(writer, step);
+        }
+    }
+    // A graph this small records no raw sections under the default floors, so
+    // the saved file cannot serve the topology and there is nothing to rebase onto.
+    let small = tmp.path().join("small.kgl");
+    save_graph_with_layout(&mut graph, small.to_str().unwrap(), true, SaveLayout::Auto).unwrap();
+    assert_overlay(&graph);
+    assert_eq!(dump(&graph), dump(&memory_after(&path, &SCRIPT[..4])));
+    // The overlay it kept still saves, and now with the floors lowered it rebases.
+    let big = tmp.path().join("big.kgl");
+    with_floors(10, 10, || {
+        save_graph_with_layout(&mut graph, big.to_str().unwrap(), true, SaveLayout::Auto)
+    })
+    .unwrap();
+    assert_rebased(&graph);
+    assert_eq!(dump(&graph), dump(&memory_after(&path, &SCRIPT[..4])));
+}
+
+#[test]
+fn a_file_that_does_not_describe_the_live_graph_is_never_rebased_onto() {
+    let (_tmp, path) = saved_topo();
+    let mut graph = load(&path, StorageMode::Mapped);
+    {
+        let writer = crate::graph::handle::make_dir_graph_mut(&mut graph);
+        for step in &SCRIPT[..4] {
+            run(writer, step);
+        }
+    }
+    let before = dump(&graph);
+    // The file the graph was loaded from lacks every write: its slot space and
+    // counts differ from the live graph's.
+    let outcome = with_floors(10, 10, || {
+        super::rebase::rebase_onto_saved(&mut graph, path.to_str().unwrap())
+    });
+    assert!(
+        matches!(outcome, super::rebase::Rebase::Declined(_)),
+        "{outcome:?}"
+    );
+    assert_overlay(&graph);
+    assert_eq!(dump(&graph), before);
+    // A path that is not a graph declines as well.
+    let missing = path.with_file_name("missing.kgl");
+    assert!(matches!(
+        super::rebase::rebase_onto_saved(&mut graph, missing.to_str().unwrap()),
+        super::rebase::Rebase::Declined(_)
+    ));
+    assert_overlay(&graph);
+}
+
+#[test]
+fn a_rebase_returns_the_heap_to_what_a_fresh_load_holds() {
+    let (tmp, path) = {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("big.kgl");
+        let mut g = topo_graph();
+        run(
+            &mut g,
+            "UNWIND range(1, 20000) AS i CREATE (:F {id: i, n: i})",
+        );
+        with_floors(10, 10, || save(g, &path, SaveLayout::Auto));
+        (tmp, path)
+    };
+    let mut graph = load(&path, StorageMode::Mapped);
+    let fresh_entries = {
+        let writer = crate::graph::handle::make_dir_graph_mut(&mut graph);
+        run(
+            writer,
+            "UNWIND range(100001, 108000) AS i CREATE (:F {id: i, n: i})",
+        );
+        run(
+            writer,
+            "UNWIND range(1, 4000) AS i MATCH (a:F {id: i}), (b:F {id: i + 5000}) CREATE (a)-[:K1]->(b)",
+        );
+        writer.graph.overlay_entries().expect("an overlay")
+    };
+    assert!(
+        fresh_entries > 8000,
+        "the writes are in the overlay: {fresh_entries}"
+    );
+    assert!(
+        !graph.type_indices.is_served_unmodified() && !graph.id_indices.is_served_unmodified(),
+        "the writes changed the member lists and the id index"
+    );
+    let saved = tmp.path().join("rebased.kgl");
+    with_floors(10, 10, || {
+        save_graph_with_layout(&mut graph, saved.to_str().unwrap(), true, SaveLayout::Auto)
+    })
+    .unwrap();
+    assert_rebased(&graph);
+    assert_eq!(
+        rows(&graph, "MATCH (f:F) RETURN count(f)"),
+        "[[Int64(28000)]]"
+    );
+    assert_eq!(
+        rows(&graph, "MATCH (:F)-[r:K1]->(:F) RETURN count(r)"),
+        "[[Int64(4000)]]"
+    );
+    assert!(
+        graph.type_indices.is_served_unmodified() && graph.id_indices.is_served_unmodified(),
+        "the member lists and the id index are the file's again"
+    );
+    // Its backend is the one a load of the saved file builds.
+    let loaded = load_owned(&saved, StorageMode::Mapped);
+    assert_eq!(graph.graph.node_bound(), loaded.graph.node_bound());
+    assert_eq!(graph.graph.edge_bound(), loaded.graph.edge_bound());
+    assert_eq!(
+        graph.graph.as_frozen().unwrap().heap_bytes(),
+        loaded.graph.as_frozen().unwrap().heap_bytes(),
+        "the rebased topology holds what a fresh load of the file holds"
     );
 }
 
@@ -378,13 +524,14 @@ fn an_overlay_never_copies_a_damaged_base_section_into_a_save_or_the_heap() {
         let error = saved.expect_err(&format!("{name}: a save must not copy a damaged section"));
         assert!(error.to_string().contains("corrupt"), "{name}: {error}");
         assert!(!target.exists(), "{name}: a refused save leaves no file");
+        assert_overlay(&graph);
         let graph = std::sync::Arc::get_mut(&mut graph).expect("unique");
         let collapsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             graph.graph.flatten_fork();
         }));
         assert!(
             collapsed.is_err(),
-            "{name}: the valve must refuse a damaged section"
+            "{name}: a collapse must refuse a damaged section"
         );
         reached_overlay += 1;
     }
@@ -453,7 +600,31 @@ fn a_durable_session_over_a_frozen_file_replays_its_writes_after_a_crash() {
             })
             .unwrap();
         with_floors(10, 10, || reopened.save(&path_str, true)).unwrap();
+        assert_rebased(&reopened.snapshot());
+        assert_eq!(
+            logical(&reopened.snapshot()),
+            logical(&expected),
+            "{level:?}: the rebased graph reads as before the checkpoint"
+        );
+        // A write after the checkpoint is logged against the new file and an
+        // overlay over it; a crash then replays it.
+        reopened
+            .write_logged(|g| {
+                execute_mut(g, SCRIPT[7], &opts())
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+        assert_overlay(&reopened.snapshot());
         drop(reopened);
+        let after_crash =
+            Session::attach_log(load(&path, StorageMode::Mapped), &path_str, level).unwrap();
+        assert_eq!(
+            logical(&after_crash.snapshot()),
+            logical(&memory_after(&path, &SCRIPT[7..8])),
+            "{level:?}: the post-checkpoint write replays over the checkpoint file"
+        );
+        drop(after_crash);
         let after = load_owned(&path, StorageMode::Mapped);
         assert!(
             after.graph.is_frozen(),
@@ -630,7 +801,7 @@ fn transactions_over_an_overlay_do_not_spill_its_rows_to_files() {
         "UNWIND range(1, 30000) AS i CREATE (:F {id: i, n: i, s: 'row-' + toString(i)})",
     );
     with_floors(10, 10, || save(seed, &path, SaveLayout::Auto));
-    with_valve_floor(10_000_000, || {
+    {
         let session = Session::from_arc(load(&path, StorageMode::Mapped));
         let mut tx = session.begin();
         run(
@@ -668,5 +839,5 @@ fn transactions_over_an_overlay_do_not_spill_its_rows_to_files() {
             rows(&published, "MATCH (f:F) RETURN count(f)"),
             "[[Int64(50002)]]"
         );
-    });
+    }
 }

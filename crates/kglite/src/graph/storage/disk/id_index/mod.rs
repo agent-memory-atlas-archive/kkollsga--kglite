@@ -745,6 +745,15 @@ pub struct IdIndexStore {
     shared: Arc<SharedIdIndexes>,
 }
 
+impl IdIndexStore {
+    /// Whether the store is exactly its file-served base: nothing built or
+    /// written over it.
+    #[cfg(test)]
+    pub(crate) fn is_served_unmodified(&self) -> bool {
+        self.base.is_some() && self.removed.is_empty() && self.overlay.read().unwrap().is_empty()
+    }
+}
+
 impl Clone for IdIndexStore {
     /// **The fork seam for `id_indices`.**
     ///

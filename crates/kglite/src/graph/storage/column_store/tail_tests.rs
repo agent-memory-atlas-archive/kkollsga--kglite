@@ -749,9 +749,9 @@ fn replay(journal: crate::graph::storage::undo::UndoJournal, store: &mut ColumnS
             UndoEntry::ColumnarSchemaGrown {
                 prior_schema,
                 prior_column_count,
-                in_tail,
+                part,
                 ..
-            } => store.restore_schema_of(in_tail, prior_schema, prior_column_count),
+            } => store.restore_schema_of(part, prior_schema, prior_column_count),
             UndoEntry::ColumnarRowsAppended {
                 prior_row_count,
                 prior_schema,
@@ -761,8 +761,8 @@ fn replay(journal: crate::graph::storage::undo::UndoJournal, store: &mut ColumnS
             } => {
                 store.truncate_rows(prior_row_count);
                 store.restore_schema(prior_schema, prior_column_count);
-                if let Some((schema, count)) = prior_tail {
-                    store.restore_schema_of(true, schema, count);
+                if let Some((part, schema, count)) = prior_tail {
+                    store.restore_schema_of(part, schema, count);
                 }
             }
             other => panic!("unexpected entry: {other:?}"),
@@ -834,4 +834,354 @@ fn undoing_an_append_that_grew_the_tail_schema_drops_the_tail_column() {
         !store.has_property_column(key("brand_new")),
         "the rows are gone and so is the column they introduced"
     );
+}
+
+// ── Segmented tails ────────────────────────────────────────────────────────
+//
+// A tail past `TAIL_SEGMENT_ROWS` rows is a run of sealed, shared segments and
+// one open segment. Every case here pushes past two seals and compares each
+// reader with the plain heap store holding the same rows, which has no tail.
+
+const SEGMENT: i64 = tail::TAIL_SEGMENT_ROWS as i64;
+const MANY: i64 = 3 * SEGMENT + 700;
+
+fn appended_many(store: &mut ColumnStore, rows: std::ops::Range<i64>) {
+    for i in rows {
+        let row = push(store, i);
+        assert_eq!(row as i64, i, "a pushed row id continues the previous one");
+    }
+}
+
+fn segmented_fixture() -> Mapped {
+    let mut fixture = mapped_store(0..BASE);
+    appended_many(&mut fixture.store, BASE..BASE + MANY);
+    assert_eq!(fixture.store.sealed_tails.len(), 3, "three full segments");
+    fixture
+}
+
+fn assert_tail_shape(store: &ColumnStore) {
+    let open = store.tail.as_ref().map_or(0, |open| open.row_count());
+    assert!(
+        open <= tail::TAIL_SEGMENT_ROWS,
+        "the open segment fits one segment"
+    );
+    for sealed in &store.sealed_tails {
+        assert_eq!(
+            sealed.row_count(),
+            tail::TAIL_SEGMENT_ROWS,
+            "sealed segments are full"
+        );
+    }
+    assert_eq!(
+        store.tail_rows(),
+        store.sealed_tails.len() as u32 * tail::TAIL_SEGMENT_ROWS + open
+    );
+}
+
+#[test]
+fn a_segmented_tail_reads_as_the_union_of_its_segments() {
+    let fixture = segmented_fixture();
+    assert_tail_shape(&fixture.store);
+    assert_same_rows(&fixture.store, &heap_store(0..BASE + MANY));
+    assert_same_identity_kinds(&fixture.store, &heap_store(0..BASE + MANY));
+    assert_eq!(fixture.store.tail_rows() as i64, MANY);
+}
+
+#[test]
+fn a_fork_shares_every_sealed_segment_and_an_append_copies_only_the_open_one() {
+    let fixture = segmented_fixture();
+    let mut fork = fixture.store.clone();
+    let clones = column_clones_since_reset(|| {
+        push(&mut fork, BASE + MANY);
+    });
+    assert_eq!(clones, 1, "only the open segment was privatised");
+    for (mine, theirs) in fork.sealed_tails.iter().zip(&fixture.store.sealed_tails) {
+        assert!(Arc::ptr_eq(mine, theirs), "sealed segments stay shared");
+    }
+    assert_eq!(fork.row_count() as i64, BASE + MANY + 1);
+    assert_eq!(fixture.store.row_count() as i64, BASE + MANY);
+    assert_same_rows(&fixture.store, &heap_store(0..BASE + MANY));
+    assert_same_rows(&fork, &heap_store(0..BASE + MANY + 1));
+
+    // An append that fills the open segment seals it without touching the rest.
+    let room = tail::TAIL_SEGMENT_ROWS - fork.tail.as_ref().unwrap().row_count();
+    let mut next = BASE + MANY + 1;
+    for _ in 0..=room {
+        push(&mut fork, next);
+        next += 1;
+    }
+    assert_eq!(fork.sealed_tails.len(), 4);
+    assert_tail_shape(&fork);
+    assert_same_rows(&fork, &heap_store(0..next));
+}
+
+#[test]
+fn writes_tombstones_and_new_keys_route_to_sealed_open_and_base_rows() {
+    let mut fixture = segmented_fixture();
+    let store = &mut fixture.store;
+    let mut expected = heap_store(0..BASE + MANY);
+    let sealed_row = BASE as u32 + 5;
+    let middle_row = BASE as u32 + tail::TAIL_SEGMENT_ROWS + 9;
+    let open_row = (BASE + MANY - 3) as u32;
+    for (row, k, v) in [
+        (sealed_row, key("level"), Value::Int64(98)),
+        (sealed_row, key("remote"), Value::Boolean(true)),
+        (middle_row, key("nickname"), Value::String("Mid".into())),
+        (open_row, key("level"), Value::Int64(97)),
+        (open_row, key("remote"), Value::Boolean(false)),
+        (3, key("level"), Value::Int64(-7)),
+    ] {
+        assert!(store.set(row, k, &v, None), "set {row}");
+        assert!(expected.set(row, k, &v, None));
+    }
+    let title = Value::String("Renamed".to_string());
+    for row in [sealed_row + 1, middle_row, open_row, 4] {
+        assert!(store.set_title(row, &title));
+        assert!(expected.set_title(row, &title));
+    }
+    for row in [sealed_row + 2, middle_row + 1, open_row - 1] {
+        store.tombstone(row);
+        expected.tombstone(row);
+    }
+    assert_same_rows(store, &expected);
+    store.untombstone(middle_row + 1);
+    expected.untombstone(middle_row + 1);
+    let level = store
+        .slot(key("level"))
+        .expect("a SET made the overlay column");
+    assert!(store.set_at_slot(middle_row + 2, level, &Value::Int64(5)));
+    assert!(expected.set_at_slot(
+        middle_row + 2,
+        expected.slot(key("level")).unwrap(),
+        &Value::Int64(5)
+    ));
+    assert_same_rows(store, &expected);
+    assert!(!store.set((BASE + MANY) as u32, key("level"), &Value::Int64(1), None));
+}
+
+#[test]
+fn truncating_across_segment_boundaries_unseals_and_appends_continue() {
+    let fixture = segmented_fixture();
+    let keeps = [
+        BASE + MANY - 1,
+        BASE + 3 * SEGMENT,
+        BASE + 3 * SEGMENT - 1,
+        BASE + 2 * SEGMENT + 1,
+        BASE + 2 * SEGMENT,
+        BASE + SEGMENT,
+        BASE + 1,
+        BASE,
+    ];
+    for keep in keeps {
+        let mut store = fixture.store.clone();
+        store.truncate_rows(keep as u32);
+        assert_tail_shape(&store);
+        assert_eq!(store.row_count() as i64, keep, "keep {keep}");
+        let expected = heap_store(0..keep);
+        assert_same_rows(&store, &expected);
+        if keep == BASE {
+            assert!(store.tail.is_none() && store.pure_mmap_store().is_some());
+        }
+        // The next appends land on the rows the truncation vacated.
+        appended_many(&mut store, keep..keep + 5);
+        assert_tail_shape(&store);
+        assert_same_rows(&store, &heap_store(0..keep + 5));
+    }
+    assert_eq!(
+        fixture.store.row_count() as i64,
+        BASE + MANY,
+        "the source of the clones is untouched"
+    );
+}
+
+#[test]
+fn a_segmented_tail_saves_into_one_file_and_reloads_as_the_heap_store_does() {
+    let mut fixture = segmented_fixture();
+    fixture
+        .store
+        .set(BASE as u32 + 3, key("level"), &Value::Int64(1234), None);
+    let mut expected = heap_store(0..BASE + MANY);
+    expected.set(BASE as u32 + 3, key("level"), &Value::Int64(1234), None);
+    let reloaded = saved_and_reloaded(&fixture.store);
+    assert_same_rows(&reloaded.store, &expected);
+}
+
+#[test]
+fn undoing_a_write_that_grew_a_sealed_segments_schema_drops_the_column() {
+    use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
+    let mut fixture = segmented_fixture();
+    let store = &mut fixture.store;
+    let row = BASE as u32 + 11;
+    let mut journal = UndoJournal::new();
+    let brand_new = key("brand_new");
+    ColumnarPreImages::capture(store, row, ColumnarWrite::Cell(brand_new)).record(
+        &mut journal,
+        key("Employee"),
+        row,
+    );
+    assert!(store.set(row, brand_new, &Value::Int64(7), None));
+    assert_eq!(store.get(row, brand_new), Some(Value::Int64(7)));
+    replay(journal, store);
+    assert_eq!(store.get(row, brand_new), None);
+    assert!(!store.has_property_column(brand_new));
+    assert_same_rows(store, &heap_store(0..BASE + MANY));
+}
+
+#[test]
+fn undoing_an_append_across_segment_boundaries_restores_the_tail() {
+    use crate::graph::storage::undo::{ColumnarAppendPreImage, UndoJournal};
+    let mut fixture = segmented_fixture();
+    let store = &mut fixture.store;
+    let mut journal = UndoJournal::new();
+    ColumnarAppendPreImage::capture(store).record(&mut journal, key("Employee"), false);
+    appended_many(store, BASE + MANY..BASE + MANY + 2 * SEGMENT);
+    store.push_id(&Value::Int64(1));
+    store.push_title(&Value::String("x".into()));
+    store.push_row(&[(key("brand_new"), Value::Int64(1))]);
+    assert!(store.has_property_column(key("brand_new")));
+    replay(journal, store);
+    assert_tail_shape(store);
+    assert_eq!(store.row_count() as i64, BASE + MANY);
+    assert!(!store.has_property_column(key("brand_new")));
+    assert_same_rows(store, &heap_store(0..BASE + MANY));
+}
+
+#[test]
+fn a_type_change_in_a_sealed_segment_is_logged_and_restored() {
+    let mut fixture = segmented_fixture();
+    let store = &mut fixture.store;
+    store.begin_displaced_log();
+    let row = BASE as u32 + 1;
+    assert!(store.set(row, key("level"), &Value::String("L2".to_string()), None));
+    assert!(store.has_displaced());
+    let log = store.take_displaced();
+    assert!(!log.is_empty());
+    store.end_displaced_log();
+    assert!(store.set(row, key("level"), &Value::Int64(1), None));
+    for displaced in log.into_iter().rev() {
+        store.restore_displaced(displaced);
+    }
+    assert_same_rows(store, &heap_store(0..BASE + MANY));
+}
+
+/// A random run of appends, sets, tombstones, truncations and forks over a
+/// segmented tail reads as the plain heap store the same run builds, and no
+/// fork's write reaches the store it came from.
+#[test]
+fn random_writes_over_a_segmented_tail_match_a_heap_store() {
+    let mut state = 0xD1B5_4A32_D192_ED03u64;
+    let mut next = move |n: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % n
+    };
+    for round in 0..6 {
+        let mut fixture = mapped_store(0..BASE);
+        let store = &mut fixture.store;
+        let mut expected = heap_store(0..BASE);
+        let mut rows = BASE;
+        for _ in 0..140 {
+            match next(8) {
+                0..=2 => {
+                    let n = 1 + next(900) as i64;
+                    appended_many(store, rows..rows + n);
+                    appended_many(&mut expected, rows..rows + n);
+                    rows += n;
+                }
+                3 => {
+                    let row = next(rows as u64) as u32;
+                    let value = Value::Int64(next(1000) as i64);
+                    assert_eq!(
+                        store.set(row, key("level"), &value, None),
+                        expected.set(row, key("level"), &value, None)
+                    );
+                }
+                4 => {
+                    let row = next(rows as u64) as u32;
+                    let value = Value::Boolean(next(2) == 0);
+                    store.set(row, key("remote"), &value, None);
+                    expected.set(row, key("remote"), &value, None);
+                }
+                5 => {
+                    // A base row of an mmap store takes no tombstone of its own
+                    // (its node is what goes), so only appended rows are marked.
+                    let row = (BASE as u64 + next((rows - BASE + 1) as u64)) as u32;
+                    if (row as i64) < rows {
+                        store.tombstone(row);
+                        expected.tombstone(row);
+                    }
+                }
+                6 => {
+                    let keep = BASE + next((rows - BASE + 1) as u64) as i64;
+                    store.truncate_rows(keep as u32);
+                    expected.truncate_rows(keep as u32);
+                    rows = keep;
+                }
+                _ => {
+                    // A fork writes; the original must not move.
+                    let mut fork = store.clone();
+                    let row = next(rows as u64) as u32;
+                    fork.set(row, key("level"), &Value::Int64(-1), None);
+                    appended_many(&mut fork, rows..rows + 3);
+                    fork.truncate_rows(rows as u32);
+                    assert_eq!(
+                        store.get(row, key("level")),
+                        expected.get(row, key("level"))
+                    );
+                }
+            }
+            assert_tail_shape(store);
+            assert_eq!(store.row_count(), expected.row_count(), "round {round}");
+        }
+        assert_same_rows(store, &expected);
+    }
+}
+
+/// The sealed segments' cached byte totals agree with a fresh sum after every
+/// kind of change that reaches a sealed segment, so the statement-level memory
+/// checks see what a walk of the segments would.
+fn assert_totals_current(store: &ColumnStore, what: &str) {
+    let fresh = store.clone();
+    fresh.sealed_stats.invalidate();
+    assert_eq!(
+        store.heap_bytes(),
+        fresh.heap_bytes(),
+        "heap bytes after {what}"
+    );
+    assert_eq!(
+        store.spillable_heap_bytes(),
+        fresh.spillable_heap_bytes(),
+        "spillable bytes after {what}"
+    );
+    assert_eq!(
+        store.sealed_totals(),
+        fresh.sealed_totals(),
+        "totals after {what}"
+    );
+}
+
+#[test]
+fn the_cached_totals_of_the_sealed_segments_follow_every_change_to_them() {
+    let mut fixture = segmented_fixture();
+    let store = &mut fixture.store;
+    assert_totals_current(store, "the appends");
+    assert!(store.sealed_totals().0 > 0);
+    // A write that widens a column of a sealed segment changes its bytes.
+    let row = BASE as u32 + 3;
+    assert!(store.set(
+        row,
+        key("level"),
+        &Value::String("a-longer-text-value".into()),
+        None
+    ));
+    assert_totals_current(store, "a type change in a sealed segment");
+    store.truncate_rows((BASE + SEGMENT) as u32 + 5);
+    assert_totals_current(store, "a truncation that unseals");
+    appended_many(store, BASE + SEGMENT + 5..BASE + 3 * SEGMENT);
+    assert_totals_current(store, "appends that seal again");
+    let mut fork = store.clone();
+    assert!(fork.set(row, key("level"), &Value::Int64(1), None));
+    assert_totals_current(&fork, "a fork's write");
+    assert_totals_current(store, "a fork's write, on the source");
 }

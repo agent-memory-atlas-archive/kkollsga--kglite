@@ -35,10 +35,10 @@ fn base_ref<'a>(
 ) -> Option<GraphEdgeRef<'a>> {
     let raw = id.index() as u32;
     if layer.touched.holds(raw) {
-        if layer.removed.contains(&raw) {
+        if layer.removed.contains(raw) {
             return None;
         }
-        if let Some(own) = layer.weights.get(&raw) {
+        if let Some(own) = layer.weights.get(raw) {
             return Some(GraphEdgeRef::new(source, target, id, own));
         }
     }
@@ -191,12 +191,24 @@ impl<'a> Iterator for ForkedEdgeRefs<'a> {
             (Some(base), Some(slot)) if (slot as usize) < base.id().index() => {
                 self.pending = Some(base);
                 self.next_added += 1;
-                Some(overlay_ref(slot, &self.layer.added[&slot]))
+                Some(overlay_ref(
+                    slot,
+                    self.layer
+                        .added
+                        .get(slot)
+                        .expect("an overlay edge slot is held"),
+                ))
             }
             (Some(base), _) => Some(base),
             (None, Some(slot)) => {
                 self.next_added += 1;
-                Some(overlay_ref(slot, &self.layer.added[&slot]))
+                Some(overlay_ref(
+                    slot,
+                    self.layer
+                        .added
+                        .get(slot)
+                        .expect("an overlay edge slot is held"),
+                ))
             }
             (None, None) => None,
         }

@@ -199,7 +199,8 @@ pub(crate) fn write_unified_columns(
     }
 
     for type_name in to_write {
-        let Some(mut plan) = plan_type(type_name, &column_stores[type_name]) else {
+        let store = column_stores[type_name].with_consolidated_tail();
+        let Some(mut plan) = plan_type(type_name, &store) else {
             continue;
         };
         plan.file = columns_meta::type_file_name(type_name, &mut used_files);

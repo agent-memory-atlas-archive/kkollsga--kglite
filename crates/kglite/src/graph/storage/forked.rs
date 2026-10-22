@@ -17,10 +17,12 @@
 //! The third base is a `Frozen` topology served from a `.kgl`'s raw sections,
 //! which is how a mapped graph takes writes without copying itself. It has no
 //! petgraph, so the overlay over it **never folds back**: it persists, its
-//! heap is the size of the writes, and a save writes the merged graph out. Its
-//! exits are the promote valve (past a quarter of the base,
-//! `FROZEN_VALVE_FRACTION`) and whole-graph operations, both of which collapse
-//! it through [`ForkedGraph::materialise`] into a heap `Mapped` graph.
+//! heap is the size of the writes, and a save writes the merged graph out and
+//! rebases the graph onto that file (`io/file/rebase.rs`). A whole-graph
+//! operation collapses it through [`ForkedGraph::materialise`] into a heap
+//! `Mapped` graph; its size never does. Every map in the delta is a shared
+//! paged container (`shared_tree.rs`), so a fork of the overlay costs the same
+//! at any number of writes.
 //!
 //! ## The structural fact that forces this shape
 //!
@@ -101,9 +103,7 @@ use crate::graph::core::iterators::{
 };
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
-use crate::graph::storage::fork_base::{
-    base_read, frozen_valve_floor, FoldTarget, Folded, ForkBase, FROZEN_VALVE_FRACTION, VALVE_FLOOR,
-};
+use crate::graph::storage::fork_base::{base_read, FoldTarget, Folded, ForkBase, VALVE_FLOOR};
 use crate::graph::storage::forked_edge_iters::{
     ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
 };
@@ -111,6 +111,7 @@ use crate::graph::storage::forked_edges::{EdgeLayer, OverlayBits};
 use crate::graph::storage::forked_slots::ExtraSlots;
 use crate::graph::storage::frozen::FrozenNodeIndices;
 use crate::graph::storage::property_storage::PropertyStorage;
+use crate::graph::storage::shared_tree::{OpLog, PagedMap};
 use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
 
@@ -169,7 +170,41 @@ struct Delta {
     dead: OverlayBits,
     dead_count: usize,
     edges: EdgeLayer,
-    ops: Vec<Op>,
+    ops: OpLog<Op>,
+}
+
+impl Delta {
+    /// An empty delta; over a frozen base its node bitmaps are chunked so a
+    /// fork shares them.
+    fn new(chunked: bool) -> Self {
+        let bits = || {
+            if chunked {
+                OverlayBits::chunked()
+            } else {
+                OverlayBits::default()
+            }
+        };
+        Delta {
+            nodes: OverlayNodes {
+                map: PagedMap::default(),
+                present: bits(),
+            },
+            dead: bits(),
+            ..Delta::default()
+        }
+    }
+
+    /// An empty delta of the same kind.
+    fn emptied(&self) -> Self {
+        Delta {
+            nodes: OverlayNodes {
+                map: PagedMap::default(),
+                present: self.nodes.present.emptied(),
+            },
+            dead: self.dead.emptied(),
+            ..Delta::default()
+        }
+    }
 }
 
 /// The overlay's node weights, keyed by raw index, with a bitmap in front.
@@ -182,7 +217,7 @@ struct Delta {
 /// is allocated on the first insert and grows to the highest index held.
 #[derive(Clone, Default)]
 struct OverlayNodes {
-    map: FxHashMap<u32, NodeData>,
+    map: PagedMap<NodeData>,
     present: OverlayBits,
 }
 
@@ -195,7 +230,7 @@ impl OverlayNodes {
     #[inline]
     fn get(&self, idx: u32) -> Option<&NodeData> {
         if self.holds(idx) {
-            self.map.get(&idx)
+            self.map.get(idx)
         } else {
             None
         }
@@ -203,7 +238,7 @@ impl OverlayNodes {
 
     #[inline]
     fn get_mut(&mut self, idx: u32) -> Option<&mut NodeData> {
-        self.map.get_mut(&idx)
+        self.map.get_mut(idx)
     }
 
     fn insert(&mut self, idx: u32, data: NodeData) {
@@ -213,11 +248,11 @@ impl OverlayNodes {
 
     fn remove(&mut self, idx: u32) -> Option<NodeData> {
         self.present.clear(idx);
-        self.map.remove(&idx)
+        self.map.remove(idx)
     }
 
-    fn drain(&mut self) -> impl Iterator<Item = (u32, NodeData)> + '_ {
-        self.present = OverlayBits::default();
+    fn drain(&mut self) -> Vec<(u32, NodeData)> {
+        self.present = self.present.emptied();
         self.map.drain()
     }
 
@@ -269,7 +304,7 @@ impl Overlay<'_> {
         // What `node_bound()` / `edge_bound()` would read before each add.
         let mut node_bound = target.graph().node_bound();
         let mut edge_bound = EdgeIndexable::edge_bound(target.graph());
-        for op in &self.delta.ops {
+        for op in self.delta.ops.iter() {
             match *op {
                 Op::AddNode(idx) => match mirror.predict_next_node(node_bound) {
                     Some(predicted) if predicted.index() == idx as usize => {
@@ -349,7 +384,7 @@ impl Overlay<'_> {
                 *weight = data;
             }
         }
-        *self.delta = Delta::default();
+        *self.delta = self.delta.emptied();
         *target.column_stores_mut() = std::mem::take(self.column_stores);
         // The base's stores went with the assignment above, so on compaction
         // each overlay store's columns are its own again and folding its heap
@@ -446,7 +481,7 @@ impl Overlay<'_> {
     /// disagreed with petgraph *after* removals ran, which `check` rules out
     /// for any mirror that tracks petgraph.
     fn unwind_adds<T: FoldTarget>(&self, target: &mut T, done: usize, reason: String) -> String {
-        let ops = &self.delta.ops[..done];
+        let ops: Vec<Op> = self.delta.ops.iter().take(done).copied().collect();
         assert!(
             ops.iter()
                 .all(|op| matches!(op, Op::AddNode(_) | Op::AddEdge { .. })),
@@ -600,11 +635,12 @@ impl ForkedGraph {
     /// Fork `base` — O(types), no node or edge is copied.
     pub(crate) fn new(base: impl Into<ForkBase>) -> Self {
         let base = base.into();
+        let base_is_frozen = base.is_frozen();
         let column_stores = base.column_stores().clone();
         let slot_mirror = base.slot_mirror().clone();
         Self {
             base,
-            delta: Delta::default(),
+            delta: Delta::new(base_is_frozen),
             column_stores,
             undo: None,
             slot_mirror,
@@ -645,27 +681,22 @@ impl ForkedGraph {
         self.delta_exceeds(64)
     }
 
-    /// The floor keeps a small graph from collapsing on every few edits.
+    /// The floor keeps a small graph from collapsing on every few edits. An
+    /// overlay over a frozen base never collapses on size: it has no fold-back
+    /// to pay twice, and its fork, reads and heap stay proportional to what was
+    /// written.
     fn delta_exceeds(&self, base_fraction: usize) -> bool {
-        let (fraction, floor) = if self.base.is_frozen() {
-            (FROZEN_VALVE_FRACTION, frozen_valve_floor())
-        } else {
-            (base_fraction, VALVE_FLOOR)
-        };
-        self.delta_len() > floor.max((self.base.node_count() + self.base.edge_count()) / fraction)
+        if self.base.is_frozen() {
+            return false;
+        }
+        self.delta_len()
+            > VALVE_FLOOR.max((self.base.node_count() + self.base.edge_count()) / base_fraction)
     }
 
     /// Operations, node weights and edge weights the overlay holds: what a
     /// collapse or a clone has to copy.
     pub(crate) fn delta_len(&self) -> usize {
         self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len()
-    }
-
-    /// Whether the overlay over a frozen base has outgrown the promote valve.
-    /// Always `false` over a heap base, whose overlay folds back instead.
-    #[inline]
-    pub(crate) fn frozen_valve_tripped(&self) -> bool {
-        self.base.is_frozen() && self.delta_exceeds(FROZEN_VALVE_FRACTION)
     }
 
     /// The overlay's own state, borrowed apart from its base.
@@ -721,7 +752,8 @@ impl ForkedGraph {
                 )))
             }
             // A frozen base has no petgraph to fold into; the overlay lives on
-            // until a save or the promote valve ([`Self::materialise`]).
+            // until a save rebases it or a whole-graph operation collapses it
+            // ([`Self::materialise`]).
             ForkBase::Frozen(_) => None,
         }
     }
@@ -779,7 +811,7 @@ impl ForkedGraph {
             }
         };
         let layer = &self.delta.edges;
-        for &slot in &layer.removed {
+        for slot in layer.removed.iter() {
             let slot = EdgeIndex::new(slot as usize);
             if let (Some((source, target)), Some(weight)) =
                 (self.base.edge_endpoints(slot), self.base.edge_weight(slot))
@@ -789,7 +821,7 @@ impl ForkedGraph {
                 }
             }
         }
-        for (&slot, weight) in &layer.weights {
+        for (slot, weight) in layer.weights.iter() {
             let slot = EdgeIndex::new(slot as usize);
             if let (Some((source, target)), Some(file)) =
                 (self.base.edge_endpoints(slot), self.base.edge_weight(slot))
@@ -1004,12 +1036,12 @@ impl ForkedGraph {
         let (src, dst, weight) = match self.delta.edges.take_added(raw) {
             Some(edge) => (edge.src, edge.dst, need_weight.then_some(edge.weight)),
             None => {
-                if self.delta.edges.removed.contains(&raw) {
+                if self.delta.edges.removed.contains(raw) {
                     return None;
                 }
                 let (src, dst) = self.base.edge_endpoints(idx)?;
                 let base_weight = self.base.edge_weight(idx)?;
-                let own = self.delta.edges.weights.remove(&raw);
+                let own = self.delta.edges.weights.remove(raw);
                 let weight = need_weight.then(|| own.unwrap_or_else(|| base_weight.clone()));
                 self.delta
                     .edges
@@ -1145,7 +1177,7 @@ impl GraphRead for ForkedGraph {
         let removed = &self.delta.edges.removed;
         while !removed.is_empty()
             && bound > 0
-            && (removed.contains(&(bound as u32 - 1))
+            && (removed.contains(bound as u32 - 1)
                 || base.edge_weight(EdgeIndex::new(bound - 1)).is_none())
         {
             bound -= 1;
@@ -1478,10 +1510,10 @@ impl GraphWrite for ForkedGraph {
             self.capture_edge_weight(idx);
         }
         let edges = &mut self.delta.edges;
-        if edges.added.contains_key(&raw) {
-            return edges.added.get_mut(&raw).map(|edge| &mut edge.weight);
+        if edges.added.contains_key(raw) {
+            return edges.added.get_mut(raw).map(|edge| &mut edge.weight);
         }
-        if edges.removed.contains(&raw) {
+        if edges.removed.contains(raw) {
             return None;
         }
         let base = self.base.edge_weight(idx)?;

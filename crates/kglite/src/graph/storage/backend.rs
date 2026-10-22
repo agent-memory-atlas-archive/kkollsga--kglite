@@ -107,9 +107,9 @@ pub enum GraphBackend {
     /// The same variant serves a **frozen graph that has taken a write**: the
     /// base is the `Frozen` topology, no reader is involved, and
     /// [`try_compact`](Self::try_compact) never folds it (there is no petgraph
-    /// to fold into). It ends at a save, the promote valve
-    /// ([`ForkedGraph::frozen_valve_tripped`]) or a whole-graph operation
-    /// ([`flatten_fork`](Self::flatten_fork)).
+    /// to fold into). It ends at a save, which rebases the graph onto the file
+    /// it wrote ([`rebase_frozen`](Self::rebase_frozen)), or a whole-graph
+    /// operation ([`flatten_fork`](Self::flatten_fork)); its size never ends it.
     ///
     /// `is_mapped`, `supports_undo_journal` and
     /// `supports_checkpoint_free_mutation` answer exactly as the `Memory`,
@@ -130,9 +130,9 @@ pub enum GraphBackend {
     /// the backend into a [`Forked`](Self::Forked) overlay over this topology
     /// ([`overlay_frozen`](Self::overlay_frozen)): nothing is copied, and the
     /// heap holds only what is written. The overlay never folds back; a save
-    /// writes its merge out, and the promote valve collapses it into a heap
-    /// [`Mapped`](Self::Mapped) graph once it passes a quarter of the base. See
-    /// [`crate::graph::storage::frozen`].
+    /// writes its merge out and serves the graph from that file again, and a
+    /// whole-graph operation collapses it into a heap [`Mapped`](Self::Mapped)
+    /// graph. See [`crate::graph::storage::frozen`].
     ///
     /// `is_mapped` answers `true`, like the overlay and the heap variant it
     /// becomes.
@@ -624,9 +624,9 @@ impl GraphBackend {
     /// sections. Idempotent and a no-op on every other variant.
     ///
     /// The overlay does not fold back (a frozen base has no petgraph to fold
-    /// into). It ends at a save, where its merge is written out, or at the
-    /// promote valve ([`ForkedGraph::frozen_valve_tripped`]), which collapses it
-    /// into a heap `Mapped` graph once.
+    /// into). It ends at a save, where its merge is written out and the graph
+    /// is rebased onto that file, or at a whole-graph operation, which collapses
+    /// it into a heap `Mapped` graph once.
     pub(crate) fn overlay_frozen(&mut self) {
         match self {
             GraphBackend::Frozen(frozen) => {
@@ -663,10 +663,35 @@ impl GraphBackend {
         }
     }
 
+    /// Replace the frozen topology this graph reads, and the overlay over it,
+    /// with `fresh`: the topology and column stores of the file the graph was
+    /// just saved to, which describe the same graph. `false` (and nothing
+    /// changed) when `fresh` is not a frozen backend or this graph has no
+    /// frozen base. A write-capture wrapper keeps its state; only what it wraps
+    /// is replaced.
+    pub(crate) fn rebase_frozen(&mut self, fresh: GraphBackend) -> bool {
+        if !matches!(fresh, GraphBackend::Frozen(_)) {
+            return false;
+        }
+        match self {
+            GraphBackend::Recording(rg) => rg.inner_mut().rebase_frozen(fresh),
+            GraphBackend::Frozen(_) => {
+                *self = fresh;
+                true
+            }
+            GraphBackend::Forked(forked) if forked.frozen_base().is_some() => {
+                *self = fresh;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The frozen topology this graph reads, whether it is served directly or
     /// sits under a write overlay, looking through a write-capture wrapper.
     /// Public as a **diagnostic**: `is_frozen` turns false at the first write,
-    /// this stays true until the promote valve or a whole-graph operation
+    /// this stays true until a save rebases the graph (which makes it
+    /// [`is_frozen`](Self::is_frozen) again) or a whole-graph operation
     /// collapses the overlay.
     pub fn has_frozen_base(&self) -> bool {
         self.frozen_base().is_some()
@@ -2355,13 +2380,7 @@ impl GraphWrite for GraphBackend {
     fn add_node(&mut self, data: NodeData) -> NodeIndex {
         match self {
             Self::Memory(g) => GraphWrite::add_node(unique_heap_backend(g), data),
-            Self::Forked(g) => {
-                let result = GraphWrite::add_node(g.as_mut(), data);
-                if g.frozen_valve_tripped() {
-                    self.flatten_fork();
-                }
-                result
-            }
+            Self::Forked(g) => GraphWrite::add_node(g.as_mut(), data),
             Self::Mapped(g) => GraphWrite::add_node(unique_heap_backend(g), data),
             Self::Frozen(_) => {
                 self.overlay_frozen();
