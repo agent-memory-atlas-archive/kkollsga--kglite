@@ -621,34 +621,7 @@ impl CypherExecutor<'_> {
             return Err(missing_text_index_error(self.graph, node_type, &prop_name));
         };
 
-        if store.is_stale(self.graph) {
-            if !self.graph.read_only && store.can_auto_refresh(self.graph) {
-                text_indexes::refresh_text_index(self.graph, node_type, &prop_name);
-            } else {
-                // "up to": the delta over-counts — it is a watermark gap plus a
-                // dirty set, and a slot in either may turn out to hold no
-                // document at all.
-                let reason = if self.graph.read_only {
-                    "and this graph is read-only, so a query cannot catch it up".to_string()
-                } else {
-                    format!(
-                        "over its auto_refresh_limit of {}",
-                        store.auto_refresh_limit()
-                    )
-                };
-                self.warn(format!(
-                    "text index '{}.{}' is stale: up to {} documents are unindexed, {} — a new \
-                     node scores null and a changed one scores its previously indexed text. \
-                     Rebuild with build_text_index('{}', '{}').",
-                    node_type,
-                    prop_name,
-                    store.delta_size(self.graph),
-                    reason,
-                    node_type,
-                    prop_name,
-                ));
-            }
-        }
+        self.catch_up_text_index(false, node_type, &prop_name);
 
         let view = store.read();
         // Read under the guard, for the reason `score_text_bm25_row` documents.

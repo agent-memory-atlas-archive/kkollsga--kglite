@@ -1448,3 +1448,87 @@ mod distinct_as_a_name {
         parse_cypher("MATCH p=shortestPath((a)-[*]->(b)) RETURN p").unwrap();
     }
 }
+
+mod positional_call_and_search {
+    use super::*;
+
+    fn call_keys(query: &str) -> Vec<String> {
+        let parsed = parse_cypher(query).unwrap();
+        let Clause::Call(call) = &parsed.clauses[0] else {
+            panic!("expected CALL");
+        };
+        call.parameters.iter().map(|(key, _)| key.clone()).collect()
+    }
+
+    #[test]
+    fn positional_call_arguments_bind_to_the_declared_keys() {
+        assert_eq!(
+            call_keys("CALL db.index.fulltext.queryNodes($i, $q, {limit: $n}) YIELD node"),
+            ["indexName", "queryString", "options"]
+        );
+        // optional trailing options may be left off; the name is case-insensitive
+        assert_eq!(
+            call_keys("CALL DB.index.fulltext.querynodes('i', 'q') YIELD node"),
+            ["indexName", "queryString"]
+        );
+        assert_eq!(
+            call_keys("CALL db.index.vector.queryNodes('i', 3, [0.1, 0.2]) YIELD node"),
+            ["indexName", "numberOfNearestNeighbours", "query"]
+        );
+        // the map form is untouched
+        assert_eq!(
+            call_keys(
+                "CALL db.index.fulltext.queryNodes({indexName: 'i', queryString: 'q'}) YIELD node"
+            ),
+            ["indexName", "queryString"]
+        );
+    }
+
+    #[test]
+    fn positional_call_arity_and_unlisted_procedures_are_refused() {
+        let message = |q: &str| parse_cypher(q).unwrap_err().to_string();
+        assert!(message("CALL db.index.fulltext.queryNodes('i') YIELD node")
+            .contains("takes 2 to 3 arguments but 1 argument was given"));
+        assert!(
+            message("CALL db.index.vector.queryNodes('i', 2) YIELD node")
+                .contains("takes 3 arguments but 2 arguments were given")
+        );
+        assert!(
+            message("CALL db.index.fulltext.queryNodes('i', 'q', {}, 1) YIELD node")
+                .contains("but 4 arguments were given")
+        );
+        let unlisted = message("CALL pagerank(0.85) YIELD node");
+        assert!(unlisted.contains("map syntax"), "{unlisted}");
+        assert!(
+            unlisted.contains("db.index.fulltext.queryNodes"),
+            "{unlisted}"
+        );
+    }
+
+    #[test]
+    fn keywords_are_map_literal_keys() {
+        for key in ["limit", "skip", "where", "return", "match", "with"] {
+            parse_cypher(&format!("RETURN {{{key}: 5}} AS m"))
+                .unwrap_or_else(|e| panic!("{key}: {e}"));
+        }
+        // a keyword *value* still reads as a keyword
+        assert!(parse_cypher("RETURN {x: limit} AS m").is_err());
+    }
+
+    #[test]
+    fn the_search_clause_is_refused_by_name() {
+        for query in [
+            "MATCH (e) SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) SCORE AS s RETURN e, s",
+            "MATCH (e) WHERE e.x = 1 SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e",
+        ] {
+            let error = parse_cypher(query).unwrap_err().to_string();
+            assert!(
+                error.contains("SEARCH clause is not supported"),
+                "{query}: {error}"
+            );
+            assert!(error.contains("db.index.vector.queryNodes"), "{error}");
+        }
+        // a variable that happens to be called search still parses
+        parse_cypher("MATCH (search) RETURN search").unwrap();
+    }
+}

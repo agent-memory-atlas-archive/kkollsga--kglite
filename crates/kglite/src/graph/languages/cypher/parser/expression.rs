@@ -1,7 +1,7 @@
 //! Cypher parser: expressions (arithmetic, function calls, CASE, list operations).
 
 use super::super::ast::*;
-use super::super::tokenizer::{describe_token_opt, CypherToken};
+use super::super::tokenizer::{describe_token_opt, token_to_keyword_name, CypherToken};
 use super::{describe_with_hint, CypherParser};
 use crate::datatypes::values::Value;
 
@@ -987,10 +987,23 @@ impl CypherParser {
 
         if !self.check(&CypherToken::RBrace) {
             loop {
-                // expect_name accepts soft-reservable keywords as keys
-                // (`{order: 1}`, `{contains: 2}`) per KG-2, canonicalised
-                // to their uppercase word — same as pattern property maps.
-                let key = self.expect_name("key name in map literal")?;
+                // Any keyword is a key here, because a token followed by `:`
+                // after `{` or `,` can only be one — `{limit: 5}` in a
+                // procedure's options map, `{where: 1}`. The soft-reservable
+                // set `expect_name` accepts (KG-2) stays narrower for the
+                // positions where a keyword could also be a value.
+                let key = match (self.peek(), self.peek_at(1)) {
+                    (Some(token), Some(CypherToken::Colon))
+                        if token_to_keyword_name(token).is_some() =>
+                    {
+                        let canonical = token_to_keyword_name(token).unwrap_or_default();
+                        self.advance();
+                        self.keyword_lexeme_at(self.pos - 1)
+                            .map(str::to_string)
+                            .unwrap_or(canonical)
+                    }
+                    _ => self.expect_name("key name in map literal")?,
+                };
                 self.expect(&CypherToken::Colon)?;
                 let expr = self.parse_expression_with_predicates()?;
                 entries.push((key, expr));

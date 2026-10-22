@@ -145,17 +145,21 @@ pub(crate) fn show_procedures_result_set(yield_items: &[YieldItem]) -> Result<Re
                     Value::String(super::procedure_registry::procedure_mode(spec.name).to_string())
                 }
                 "worksOnSystem" => Value::Boolean(false),
-                // The input side is hard-coded because every KGLite procedure
-                // takes exactly one optional config map.
-                "signature" => Value::String(format!(
-                    "{}(config = {{}} :: MAP?) :: ({})",
-                    spec.name,
-                    spec.columns
-                        .iter()
-                        .map(|c| format!("{c} :: ANY?"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )),
+                // Every KGLite procedure takes one optional config map, except
+                // the Neo4j-named ones with a positional signature.
+                "signature" => {
+                    let input = super::procedure_positional::positional_signature(spec.name)
+                        .map(|signature| signature.input_text())
+                        .unwrap_or_else(|| format!("{}(config = {{}} :: MAP?)", spec.name));
+                    Value::String(format!(
+                        "{input} :: ({})",
+                        spec.columns
+                            .iter()
+                            .map(|c| format!("{c} :: ANY?"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                }
                 _ => unreachable!("validated against SHOW_PROCEDURES_COLUMNS"),
             };
             row.projected.insert(alias.to_string(), value);

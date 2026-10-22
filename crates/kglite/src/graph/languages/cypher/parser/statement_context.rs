@@ -81,6 +81,9 @@ impl CypherParser {
                 "{} must lead the statement; a UNION arm or a CALL {{ }} body cannot carry it",
                 describe_token(token)
             ),
+            CypherToken::Identifier(word) if word.eq_ignore_ascii_case("SEARCH") => {
+                super::SEARCH_CLAUSE_UNSUPPORTED.to_string()
+            }
             CypherToken::Identifier(word) if word.eq_ignore_ascii_case("FOR") => {
                 "FOR <axis> AS OF is a statement prefix; a UNION arm or a CALL { } body cannot \
                  set its own context (one context per statement)"

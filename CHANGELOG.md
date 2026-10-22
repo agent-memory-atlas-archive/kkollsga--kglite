@@ -11,6 +11,13 @@ before upgrading.
 
 ### Added
 
+- **Neo4j-named index search and positional `CALL` arguments.**
+  - `CALL db.index.fulltext.queryNodes(indexName, queryString, {limit, skip})` and `queryRelationships` rank the BM25 index of that name, matching documents only, best first, yielding `node` or `relationship` and `score`. `CALL db.index.vector.queryNodes(indexName, k, vector)` and `queryRelationships` rank the vector index's store, yielding the same columns.
+  - `indexName` is the name `SHOW INDEXES` lists for a `FULLTEXT` or `VECTOR` row: `Label.property`, or `relationship:TYPE.property`. A name that matches no index of that kind is an error listing the ones that exist. Unknown options, a non-positive `k` and a non-numeric vector are errors.
+  - Scores are KGLite's BM25 and the store's metric, not Lucene's or Neo4j's `(1 + cos) / 2`; they rank in the same order. A full-text query is tokenized, not parsed as Lucene syntax. Disk graphs have no BM25 index, so only the vector procedures run there.
+  - Any procedure in the registry with a declared positional signature takes `CALL proc(a, b, c)`; trailing options may be left off. The four above are the first; every other procedure keeps its single config map and refuses positional arguments naming where they work. `SHOW PROCEDURES` lists the positional signature.
+  - A keyword is a legal key in a map literal: `{limit: 5}`, `{skip: 1}`, `{where: 1}` were syntax errors.
+  - The Cypher 25 `SEARCH` clause stays unsupported; it now fails with a message pointing at the procedures instead of an error at `LIMIT`.
 - **`SHOW INDEXES | CONSTRAINTS | PROCEDURES | FUNCTIONS` take a full pipeline.**
   - `SHOW <listing> YIELD <columns | *> [WHERE …] [RETURN … [ORDER BY …] [SKIP …] [LIMIT …]]` runs as the `CALL` of the procedure that lists the same rows, so filtering, projection, ordering and paging are those of `CALL … YIELD`. `SHOW <listing> WHERE …` reads as `YIELD *`.
   - `BRIEF`, `VERBOSE` and a `RETURN` without `YIELD` are refused with an error rather than ignored. Before, `SHOW INDEXES` and `SHOW CONSTRAINTS` refused every modifier and `SHOW PROCEDURES` / `SHOW FUNCTIONS` took only a YIELD projection.
@@ -41,6 +48,7 @@ before upgrading.
 
 ### Changed
 
+- **`--neo4j-compat` reports a 2026.x kernel and a Cypher dialect row.** `dbms.components()` returns `Neo4j Kernel` / `2026.10.0` / `community` plus `Cypher` / `["5", "25"]` (it was one `Neo4j Kernel` / `5.26.0` row), and the handshake agent is `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`. Clients that gate on the kernel version, GraphBridge's search preflight among them, now see a release that advertises Cypher 25. The default identity is unchanged.
 - **`elementId(n) = <row value>` seeks the node per driving row.** `UNWIND $rows AS row MATCH (n:L) WHERE elementId(n) = row.id` (also `WITH row`, `OPTIONAL MATCH`, untyped `MATCH (n)`, and the `SET` / `DELETE` that follow) scanned the label once per row. The planner now records the value as a per-row anchor, so each row starts at its node. On 100k nodes, 1 000 rows took 40.6 s and now take 0.8 ms; 50 rows took 2.1 s and now take 0.05 ms. The `WHERE` stays, so a null, non-numeric, out-of-range, deleted or other-label value matches nothing, as before. A value that is not `row.x`, a variable, `toString`, `toInteger` or `elementId` of one is left to the scan.
 - **Bolt reports `WriteBudgetExceeded` as `Neo.ClientError.General.ReadOnly`**, not `Neo.TransientError.General.OutOfMemoryError`. Drivers retry a transient error for their whole retry window, and only a save clears this one. The Rust `KgErrorCode::neo4j_status_code()` and the C `kglite_status_code_neo4j_status` return the same string. A load that exceeds its memory ceiling keeps the transient code.
 - **The `[0.21.0]` measurements now quote the final records.** Footprint, load, query-mix, warm-ratio, cold-expansion, first-lookup, save-time and MCP figures in the Added section, and the 1.35x to 5.38x column-growth range, replace numbers taken from intermediate runs.

@@ -591,6 +591,18 @@ impl<'a> CypherExecutor<'a> {
                     &clause.yield_items,
                     self.retrieval_filter()?.as_deref(),
                 )?,
+                "db.index.fulltext.querynodes" => {
+                    self.fulltext_index_query(false, &params, &clause.yield_items)?
+                }
+                "db.index.fulltext.queryrelationships" => {
+                    self.fulltext_index_query(true, &params, &clause.yield_items)?
+                }
+                "db.index.vector.querynodes" => {
+                    self.vector_index_query(false, &params, &clause.yield_items)?
+                }
+                "db.index.vector.queryrelationships" => {
+                    self.vector_index_query(true, &params, &clause.yield_items)?
+                }
                 "db.node_text_index.list" => super::node_text_index_procedures::list(
                     self.graph,
                     &params,
@@ -633,7 +645,7 @@ impl<'a> CypherExecutor<'a> {
         })
     }
 
-    fn execute_edge_embedding_query(
+    pub(super) fn execute_edge_embedding_query(
         &self,
         params: &HashMap<String, Value>,
         yields: &[YieldItem],

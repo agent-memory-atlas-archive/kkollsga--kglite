@@ -1344,6 +1344,33 @@ folded once for the whole query rather than evaluated per row.
 > is not), since ranks discard the magnitudes. Fuse the scores directly when the
 > magnitudes carry information you want.
 
+### Neo4j-named index search — `db.index.*`
+
+Four procedures take Neo4j's positional form and run over the `FULLTEXT` and `VECTOR` indexes `SHOW INDEXES` lists.
+
+| Call | Yields | Index |
+|---|---|---|
+| `db.index.fulltext.queryNodes(indexName, queryString [, {limit, skip}])` | `node`, `score` | a `FULLTEXT` row named `Label.property` |
+| `db.index.fulltext.queryRelationships(indexName, queryString [, {limit, skip}])` | `relationship`, `score` | a `FULLTEXT` row named `relationship:TYPE.property` |
+| `db.index.vector.queryNodes(indexName, k, vector)` | `node`, `score` | a `VECTOR` row named `Label.property` |
+| `db.index.vector.queryRelationships(indexName, k, vector)` | `relationship`, `score` | a `VECTOR` row named `relationship:TYPE.property` |
+
+```cypher
+CALL db.index.fulltext.queryNodes('Doc.text', $q, {limit: 10}) YIELD node, score
+RETURN node.id, score ORDER BY score DESC
+
+CALL db.index.vector.queryNodes('Doc.text', 5, $vector) YIELD node, score
+RETURN node.id, score
+```
+
+- **Rules.** Rows come best first. A name that is not a listed index of that kind is an error naming the ones that exist; `limit` and `skip` are the only full-text options, and any other key is an error.
+- **Full-text.** Only documents that share a term with the query are returned. The query is tokenized by the index, not parsed as Lucene syntax. Scores are KGLite's BM25, so they rank as Neo4j's do but have other values. Memory and mapped graphs only: a disk graph has no BM25 index.
+- **Vector.** `k` is a positive integer; `vector` is a list of numbers of the store's dimension. The score is the store's metric (cosine similarity for a cosine store), not Neo4j's `(1 + cos) / 2`. The search is the one `db.node_embeddings.query` runs: HNSW when the index is online.
+- **Under `FOR VALID_TIME AS OF`** both lanes return only elements valid at the instant.
+- **`SEARCH`.** The Cypher 25 `SEARCH e IN (VECTOR INDEX …)` clause is not supported and says so; use the vector procedures.
+
+**Positional `CALL` arguments.** `CALL proc(a, b, c)` binds by position to the procedure's declared parameters, and trailing optional ones may be left off. Only procedures with a declared signature take it: the four above, and `SHOW PROCEDURES` lists their signatures. Every other procedure takes one config map (`CALL proc({key: value})`), and positional arguments to it are an error that says so. A wrong argument count names the signature.
+
 ### Vector math over list properties — `dot` / `cosine` / `norm`
 
 `vector_score` and `embedding_norm` read the **embedding store**
@@ -3243,6 +3270,7 @@ an error that lists the choices; `BRIEF`, `VERBOSE` and a `RETURN` without
 
 **Bolt server only:** `CALL dbms.components()`, `CALL dbms.showCurrentUser()`,
 and `SHOW DATABASES` are answered by `kglite-bolt-server`. `dbms.components()`
+reports one row, or under `--neo4j-compat` a `Neo4j Kernel` and a `Cypher` row, and
 also takes `YIELD`, `WHERE`, `RETURN`, `ORDER BY` and `LIMIT $param`. They report server
 facts (identity, configured user, served database) and are not available
 in-process. See the
@@ -3429,6 +3457,10 @@ Parameters and examples are in the sections above and in
 | `db.cdc.current` | `id` | Cursor addressing the newest published change — the position to start from to see only future changes |
 | `db.cdc.earliest` | `id` | Cursor addressing the oldest change still retained — the position to resync from after a cursor expires |
 | `db.cdc.query` | `id`, `seq`, `operation`, `elementType`, `nodeType`, `nodeId`, `relationshipType`, `srcType`, `srcId`, `tgtType`, `tgtId`, `state` | Changes published after a cursor, oldest first. |
+| `db.index.fulltext.queryNodes` | `node`, `score` | BM25 search over a node FULLTEXT index named as SHOW INDEXES lists it ('Label.property'). |
+| `db.index.fulltext.queryRelationships` | `relationship`, `score` | BM25 search over a relationship FULLTEXT index named as SHOW INDEXES lists it ('relationship:TYPE.property'). |
+| `db.index.vector.queryNodes` | `node`, `score` | Nearest nodes to a vector in a node VECTOR index named as SHOW INDEXES lists it ('Label.property'). |
+| `db.index.vector.queryRelationships` | `relationship`, `score` | Nearest relationships to a vector in a relationship VECTOR index named as SHOW INDEXES lists it ('relationship:TYPE.property'). |
 
 <!-- END GENERATED: procedure-reference -->
 

@@ -1062,11 +1062,15 @@ impl CypherParser {
         let parameters = if self.check(&CypherToken::LBrace) {
             self.parse_create_properties(true)?
         } else if !self.check(&CypherToken::RParen) {
-            return Err(format!(
-                "CALL parameters must use map syntax: CALL {}({{key: value, ...}}). \
-                 Example: CALL {}({{damping_factor: 0.85}})",
-                procedure_name, procedure_name
-            ));
+            let mut args = vec![self.parse_expression()?];
+            while self.check(&CypherToken::Comma) {
+                self.advance();
+                args.push(self.parse_expression()?);
+            }
+            crate::graph::languages::cypher::executor::procedure_positional::bind_positional_arguments(
+                &procedure_name,
+                args,
+            )?
         } else {
             Vec::new()
         };

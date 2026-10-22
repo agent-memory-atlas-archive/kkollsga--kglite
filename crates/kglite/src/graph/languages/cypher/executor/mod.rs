@@ -1094,6 +1094,7 @@ pub(crate) mod group_count;
 mod group_count_tests;
 pub mod helpers;
 mod identity_fields;
+mod index_search_procedures;
 mod interrupt;
 #[cfg(test)]
 #[path = "keys_map_tests.rs"]
@@ -1116,6 +1117,7 @@ pub(crate) mod ontology_procedures;
 pub(crate) mod ordering;
 mod path_binding;
 mod procedure_params;
+pub(crate) mod procedure_positional;
 mod procedure_registry;
 pub(crate) mod row_cursor;
 pub(crate) mod statement_clock;

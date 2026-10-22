@@ -12,7 +12,7 @@
 use super::super::*;
 use crate::datatypes::values::Value;
 use crate::graph::storage::GraphRead;
-use crate::graph::text_indexes::edge_text::{edge_text_index_store, refresh_edge_text_index};
+use crate::graph::text_indexes::edge_text::edge_text_index_store;
 
 impl<'a> CypherExecutor<'a> {
     /// `text_bm25` whose first argument is not a bound node: a relationship
@@ -125,28 +125,7 @@ impl<'a> CypherExecutor<'a> {
         let Some(store) = edge_text_index_store(self.graph, rel_type, &prop_name) else {
             return Err(missing_edge_text_index_error(rel_type, &prop_name));
         };
-        if store.relationship_is_stale(self.graph) {
-            if !self.graph.read_only && store.relationship_can_auto_refresh(self.graph) {
-                refresh_edge_text_index(self.graph, rel_type, &prop_name);
-            } else {
-                let reason = if self.graph.read_only {
-                    "and this graph is read-only, so a query cannot catch it up".to_string()
-                } else {
-                    format!(
-                        "over its auto_refresh_limit of {}",
-                        store.auto_refresh_limit()
-                    )
-                };
-                self.warn(format!(
-                    "relationship text index '{rel_type}.{prop_name}' is stale: up to {} \
-                     documents are unindexed, {reason} — a new relationship scores null and a \
-                     changed one scores its previously indexed text. Refresh with \
-                     CALL db.relationship_text_index.refresh({{type: '{rel_type}', text_column: \
-                     '{prop_name}'}}).",
-                    store.relationship_delta_size(self.graph),
-                ));
-            }
-        }
+        self.catch_up_text_index(true, rel_type, &prop_name);
         let view = store.read();
         let generation = store.generation();
         let (prepared, admitted_docs) = match query_text.as_deref() {

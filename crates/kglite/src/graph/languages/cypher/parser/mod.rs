@@ -830,6 +830,12 @@ pub(super) fn describe_with_hint_opt(token: Option<&CypherToken>) -> String {
     }
 }
 
+/// The Cypher 25 `SEARCH <var> IN (VECTOR INDEX …)` clause is not implemented;
+/// the procedures are the supported spelling of the same search.
+pub(super) const SEARCH_CLAUSE_UNSUPPORTED: &str = "The Cypher 25 SEARCH clause is not supported. \
+     Search an index with CALL db.index.vector.queryNodes(indexName, k, vector) or \
+     CALL db.index.fulltext.queryNodes(indexName, query, {limit: k}) instead";
+
 const BLOCK_COMMENT_UNSUPPORTED: &str =
     "Block comments (/* ... */) are not supported; use a // line comment instead";
 

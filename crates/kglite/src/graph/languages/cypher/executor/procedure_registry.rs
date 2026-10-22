@@ -861,6 +861,32 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "state",
         ],
     },
+    // ── Neo4j-named index search (db.index.*), over the indexes SHOW INDEXES
+    // lists. Positional arguments: see `procedure_positional`. ──
+    ProcedureSpec {
+        name: "db.index.fulltext.queryNodes",
+        aliases: &[],
+        description: "BM25 search over a node FULLTEXT index named as SHOW INDEXES lists it ('Label.property'). CALL db.index.fulltext.queryNodes(indexName, queryString, {limit, skip}); matching nodes only, best first.",
+        columns: &["node", "score"],
+    },
+    ProcedureSpec {
+        name: "db.index.fulltext.queryRelationships",
+        aliases: &[],
+        description: "BM25 search over a relationship FULLTEXT index named as SHOW INDEXES lists it ('relationship:TYPE.property'). CALL db.index.fulltext.queryRelationships(indexName, queryString, {limit, skip}); matching relationships only, best first.",
+        columns: &["relationship", "score"],
+    },
+    ProcedureSpec {
+        name: "db.index.vector.queryNodes",
+        aliases: &[],
+        description: "Nearest nodes to a vector in a node VECTOR index named as SHOW INDEXES lists it ('Label.property'). CALL db.index.vector.queryNodes(indexName, numberOfNearestNeighbours, query); best first, scored by the store's metric.",
+        columns: &["node", "score"],
+    },
+    ProcedureSpec {
+        name: "db.index.vector.queryRelationships",
+        aliases: &[],
+        description: "Nearest relationships to a vector in a relationship VECTOR index named as SHOW INDEXES lists it ('relationship:TYPE.property'). CALL db.index.vector.queryRelationships(indexName, numberOfNearestNeighbours, query); best first.",
+        columns: &["relationship", "score"],
+    },
 ];
 
 /// The procedures that **mutate** and must therefore route to the write
@@ -1002,6 +1028,10 @@ const MASK_ROUTED_PROCEDURES: &[&str] = &[
     "db.node_embeddings.query",
     "db.embeddings.query",
     "db.relationship_embeddings.query",
+    "db.index.fulltext.queryNodes",
+    "db.index.fulltext.queryRelationships",
+    "db.index.vector.queryNodes",
+    "db.index.vector.queryRelationships",
 ];
 
 /// Whether `name` (canonical spelling or alias, any case) runs on the valid
