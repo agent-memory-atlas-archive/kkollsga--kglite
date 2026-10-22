@@ -612,9 +612,39 @@ fn resident_mb() -> Option<f64> {
     )
 }
 
+/// Run the named test alone in a fresh copy of this test binary and require it
+/// to pass. A resident-set reading in a process that other tests allocate in
+/// moves by tens of MB under it; a child holds only this test's pages.
+#[cfg(unix)]
+fn in_isolated_process(test: &str, body: impl FnOnce()) {
+    const CHILD: &str = "KGLITE_ISOLATED_RSS_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        return body();
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test, "--exact", "--test-threads=1", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "isolated run failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn releasing_a_validated_range_drops_its_resident_pages_and_keeps_the_bytes() {
+    in_isolated_process(
+        "graph::io::file::mappable_tests::releasing_a_validated_range_drops_its_resident_pages_and_keeps_the_bytes",
+        release_probe,
+    );
+}
+
+#[cfg(unix)]
+fn release_probe() {
     const MB: usize = 1 << 20;
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("big.bin");
