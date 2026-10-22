@@ -357,6 +357,9 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// outranks.
 #[pyfunction]
 #[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, write_budget=write_budget::WriteBudgetArg::Default))]
+#[pyo3(
+    text_signature = "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, write_budget='default')"
+)]
 // One keyword per documented option; the Python signature is the contract.
 #[allow(clippy::too_many_arguments)]
 fn load(
@@ -468,6 +471,9 @@ fn load_rdf(
 /// `write_budget` apply to the load form only; `auto_checkpoint_wal_mib` to the durable form only.
 #[pyfunction]
 #[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None, write_budget=write_budget::WriteBudgetArg::Default))]
+#[pyo3(
+    text_signature = "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None, write_budget='default')"
+)]
 // One keyword per documented option; the load and durable forms share the signature.
 #[allow(clippy::too_many_arguments)]
 fn open_session(

@@ -2012,7 +2012,7 @@
     },
     "load": {
       "kind": "function",
-      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, write_budget=Ellipsis)"
+      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, write_budget='default')"
     },
     "load_rdf": {
       "kind": "function",
@@ -2024,7 +2024,7 @@
     },
     "open_session": {
       "kind": "function",
-      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None, write_budget=Ellipsis)"
+      "signature": "(path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None, write_budget='default')"
     },
     "outline": {
       "kind": "function",
