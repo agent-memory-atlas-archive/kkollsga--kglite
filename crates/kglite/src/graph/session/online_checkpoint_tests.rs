@@ -388,7 +388,7 @@ fn concurrent_writers_lose_nothing_across_repeated_checkpoints() {
             std::thread::spawn(move || {
                 let mut acked = Vec::new();
                 let mut i = 0;
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) && i < 400 {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) && i < 9_999 {
                     let id = w * 10_000 + i;
                     let params = HashMap::new();
                     let opts = ExecuteOptions::eager(&params);
@@ -408,8 +408,16 @@ fn concurrent_writers_lose_nothing_across_repeated_checkpoints() {
             })
         })
         .collect();
+    // The writers keep committing until the policy has fired twice, however
+    // slowly this thread is scheduled; the cap turns a policy that never fires
+    // into a failure instead of a hang.
     let mut runs = 0;
-    while writers.iter().any(|w| !w.is_finished()) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while runs < 2 && writers.iter().any(|w| !w.is_finished()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the checkpoint policy fired {runs} times in 120 s while writers were committing"
+        );
         if session.maybe_checkpoint_online().unwrap().is_some() {
             runs += 1;
         }
