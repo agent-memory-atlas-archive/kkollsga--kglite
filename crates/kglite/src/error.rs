@@ -359,9 +359,13 @@ impl KgErrorCode {
             // reachable through a Bolt managed transaction, and the wire
             // mapping exists so a Neo4j-compatible binding reports the
             // condition Neo4j reports rather than an unknown-error catch-all.
-            KgErrorCode::LoadMemoryLimit | KgErrorCode::WriteBudgetExceeded => {
-                "Neo.TransientError.General.OutOfMemoryError"
-            }
+            KgErrorCode::LoadMemoryLimit => "Neo.TransientError.General.OutOfMemoryError",
+            // Not the transient memory code: a driver retries a transient
+            // failure for its whole retry window, and this refusal lasts until
+            // the graph is saved, which no retry does. `General.ReadOnly` is a
+            // permanent `ClientError` that says "writes are refused for now,
+            // reads still work", the same signal the read-only refusal gives.
+            KgErrorCode::WriteBudgetExceeded => "Neo.ClientError.General.ReadOnly",
             KgErrorCode::FileNotFound
             | KgErrorCode::FileFormat
             | KgErrorCode::FileIo
@@ -1162,6 +1166,15 @@ mod tests {
             KgErrorCode::LoadMemoryLimit.neo4j_status_code(),
             "Neo.TransientError.General.OutOfMemoryError"
         );
+    }
+
+    /// A write-budget refusal lasts until a save, so it must not be published
+    /// under a `TransientError` class that drivers retry.
+    #[test]
+    fn write_budget_refusal_is_a_client_error_on_the_wire() {
+        let status = KgErrorCode::WriteBudgetExceeded.neo4j_status_code();
+        assert_eq!(status, "Neo.ClientError.General.ReadOnly");
+        assert!(!status.starts_with("Neo.TransientError."));
     }
 
     #[test]

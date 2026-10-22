@@ -42,7 +42,7 @@
 //! | `FileFormat`              | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
 //! | `FileIo`                  | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
 //! | `LoadMemoryLimit`         | `Neo.TransientError.General.OutOfMemoryError`       | TransientError |
-//! | `WriteBudgetExceeded`     | `Neo.TransientError.General.OutOfMemoryError`       | TransientError |
+//! | `WriteBudgetExceeded`     | `Neo.ClientError.General.ReadOnly`                  | ClientError    |
 //! | `InvalidArgument`         | `Neo.ClientError.Statement.ArgumentError`           | ClientError    |
 //! | `MissingArgument`         | `Neo.ClientError.Statement.ParameterMissing`        | ClientError    |
 //! | `Internal`                | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
@@ -299,6 +299,11 @@ mod tests {
                     message: "m".into(),
                 },
                 "Neo.DatabaseError.General.UnknownError",
+            ),
+            // A refusal that lasts until a save must not be a class drivers retry.
+            (
+                KgError::WriteBudgetExceeded("at the budget".into()),
+                "Neo.ClientError.General.ReadOnly",
             ),
         ] {
             let BoltError::Query { code, .. } = kg_to_bolt(err) else {
