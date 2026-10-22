@@ -40,6 +40,9 @@ The tables below are generated from the source, so they list every key the insta
 | `topology_mapped_bytes` | int | always | Bytes of the topology read in place from the file mapping after a `"mapped"` load of a v9 file. |
 | `topology_heap_bytes` | int | always | Heap bytes of the topology: the node and edge arrays of a heap graph (40 and 32 bytes per slot), or for a mapped topology only what the load copied or decoded. `0` on a disk graph. |
 | `topology_overlay_entries` | int | always | Operations, node weights and edge weights held by the write overlay over a mapped topology. |
+| `write_budget_bytes` | int or None | always | The `write_budget` limit in bytes; `None` when the load asked for none or no budget applies. |
+| `write_budget_used_bytes` | int | always | Estimated heap, in bytes, of the writes since the load or the last save that rebased the graph; `0` when no budget applies. |
+| `write_budget_state` | str | always | `"ok"`, `"warning"` (half the limit), `"exceeded"` (writes refused until a save), `"unlimited"` or `"not_applicable"` (in-memory storage, a graph with no mapped topology, a durable session). |
 | `memory_limit` | int or None | always | Configured memory limit (None if unset). |
 | `columnar_total_rows` | int | always | Total property-column rows, including rows orphaned by deleted nodes. |
 | `columnar_live_rows` | int | always | Rows backed by live nodes. |

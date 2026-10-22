@@ -118,6 +118,10 @@ pub struct GraphState {
     /// `extensions.topology.storage`), on the same terms as
     /// [`Self::embeddings_policy`].
     pub(crate) topology_policy: Option<MapPolicy>,
+    /// The operator's unsaved-write budget (`--write-budget` /
+    /// `extensions.write_budget.limit`) for every opened `.kgl`; `None` is the
+    /// engine's default.
+    pub(crate) write_budget: Option<kglite::api::io::WriteBudgetSetting>,
     /// External workspace-graph lifecycle extension. Set once at boot and
     /// carried by every clone so lazy watch rebuilds use the same producer.
     pub(crate) workspace_graph_hooks: Option<Arc<WorkspaceGraphHooks>>,
@@ -227,6 +231,16 @@ impl GraphState {
     /// form, set once at boot like [`Self::with_embeddings_policy`].
     pub fn with_topology_policy(mut self, policy: Option<MapPolicy>) -> Self {
         self.topology_policy = policy;
+        self
+    }
+
+    /// The unsaved-write budget every opened `.kgl` takes. Builder form, set
+    /// once at boot like [`Self::with_topology_policy`].
+    pub fn with_write_budget(
+        mut self,
+        setting: Option<kglite::api::io::WriteBudgetSetting>,
+    ) -> Self {
+        self.write_budget = setting;
         self
     }
 
@@ -474,6 +488,9 @@ impl GraphState {
         }
         if let Some(policy) = self.topology_policy {
             load_options = load_options.with_topology(policy);
+        }
+        if let Some(setting) = self.write_budget {
+            load_options = load_options.with_write_budget(setting);
         }
         let opened = open_or_create_graph_in_mode_with(
             path,

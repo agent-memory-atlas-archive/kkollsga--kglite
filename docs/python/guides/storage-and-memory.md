@@ -21,7 +21,7 @@ A mapped region is read in place from the file. It costs no resident memory unti
 
 ## The knobs
 
-Five options control placement and the file layout. `kglite.load()` takes all five. `open_session(...)` (read-only form) takes the first four. The MCP server (`--embeddings`, `--columns`, `--topology`) and `kglite query` take `embeddings`, `columns` and `topology`. The C ABI's `KgliteLoadOptions` has the same three fields.
+Six options control placement, the file layout and the write budget. `kglite.load()` takes all six. `open_session(...)` (read-only form) takes every one except `layout=`. The MCP server, `kglite query` and the C ABI's `KgliteLoadOptions` take `embeddings`, `columns`, `topology` and `write_budget` (`--embeddings`, `--columns`, `--topology`, `--write-budget`).
 
 | Option | Values | Default | Effect |
 |---|---|---|---|
@@ -29,6 +29,7 @@ Five options control placement and the file layout. `kglite.load()` takes all fi
 | `columns=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Where large property columns live |
 | `topology=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Whether a `mapped` load reads the topology and index sections in place |
 | `verify=` | `"lazy"`, `"eager"` | `"lazy"` | When section checksums run |
+| `write_budget=` | bytes, `None`, `"default"` | `"default"` | Ceiling on unsaved writes held over a mapped file |
 | `layout=` (on `save()`) | `"auto"`, `"compact"` | `"auto"` | Which container version is written, and whether large buffers are stored raw |
 
 ```python
@@ -94,6 +95,7 @@ Mapped topology changes two numbers differently.
 - `topology_mapped_bytes`: bytes read in place from the file. `0` for a heap topology, `topology="memory"` and `KGLITE_MMAP=0`.
 - `topology_heap_bytes`: the node and edge arrays of a heap graph (40 and 32 bytes per slot). For a mapped topology, only what the load copied or decoded.
 - `topology_overlay_entries`: writes held by the overlay. They are heap, and `0` before the first write and after a save.
+- `write_budget_bytes`, `write_budget_used_bytes`, `write_budget_state`: the unsaved-write budget (see below).
 
 ## Indexes served from the file
 
@@ -105,6 +107,40 @@ A load into `mapped` storage serves the recorded indexes from the file. A load i
 - A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
 - `topology="memory"` ignores them and builds what a `memory` load builds. `KGLITE_MMAP=0` copies them to the heap instead of mapping them; the load still skips the scan.
 - A damaged index section refuses a `mapped` load, because the load reads and checks every one.
+
+## Unsaved-write budget
+
+A graph that serves its topology from a file bounds the memory its unsaved writes hold. Past the limit it refuses writes and asks for a save.
+
+Two modes decide whether the budget applies.
+
+| Mode | How you open it | Budget |
+|---|---|---|
+| Read-only mapped | `kglite.load(path)`, `open_session(path)` | Yes: saves flush, writes accumulate in memory until then |
+| Live | `open_session(path, durable=...)` | No: the writer lease, write-ahead log and checkpoints release the memory |
+
+Memory storage, a graph that decoded its topology (`topology="memory"`, a v8 file, a file below the section floors) and a durable session carry no budget.
+
+A whole-graph operation such as `vacuum()` collapses the overlay into the heap and ends the metering, because the graph then holds no mapped topology.
+
+```python
+g = kglite.load("graph.kgl", storage="mapped")                  # limit: max(512 MiB, half the file)
+g = kglite.load("graph.kgl", storage="mapped", write_budget=2 << 30)
+g = kglite.load("graph.kgl", storage="mapped", write_budget=None)  # no limit
+g.graph_info()["write_budget_state"]   # "ok", "warning", "exceeded", "unlimited", "not_applicable"
+```
+
+What happens as writes accumulate:
+
+- The reading is an estimate of the heap the unsaved writes hold (overlay entries at 128 bytes each plus new column heap), not an allocator measurement. `write_budget_used_bytes` reports it.
+- At half the limit, the write that crossed it emits `kglite.WriteBudgetWarning`. It warns once per upward crossing and re-arms after a save.
+- At the limit, writes raise `kglite.WriteBudgetExceededError`. Reads keep working.
+- A Cypher statement that would cross the limit is rolled back, so the graph is unchanged. A rolled-back statement leaves its overlay entries until the next save, so the graph then reads as at the limit.
+- A fluent loader such as `add_nodes` is refused only when the graph is already at the limit, so one call can overshoot by its own size.
+- `save()` writes the changes out, serves the graph from the file it wrote and resets the budget against the new file size.
+- If the save cannot rebase (`layout="compact"`, Windows), the file is written but the memory stays. The error then says a save did not release it; reload the saved file, open it durable or raise the budget.
+
+The MCP server takes `--write-budget` (or `extensions.write_budget.limit`) and appends the warning to the write's response. `kglite query --write-budget` and the C ABI field `write_budget` set it too. The CLI and manifest accept `default`, `unlimited` or a size such as `2GiB`.
 
 ## Footprint and RSS
 

@@ -1206,7 +1206,9 @@ pub fn save_graph_with_layout(
     }
     save_inmemory_with_layout(graph, path, fsync, layout)
         .map_err(|e| SaveError::Io(e.to_string()))?;
-    rebase::rebase_onto_saved(graph, path);
+    if let rebase::Rebase::Declined(reason) = rebase::rebase_onto_saved(graph, path) {
+        graph.note_write_budget_retained(reason);
+    }
     Ok(())
 }
 
@@ -1442,7 +1444,12 @@ pub fn load_file(path: &str) -> io::Result<Arc<DirGraph>> {
 /// [`LoadOptions`] before reaching for `storage` as a memory lever — it is not
 /// one for a `.kgl`.
 pub fn load_file_with(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGraph>> {
-    with_load_advisories(load_file_inner(path, options)?)
+    let mut graph = with_load_advisories(load_file_inner(path, options)?)?;
+    if let Some(g) = Arc::get_mut(&mut graph) {
+        let file_bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+        g.enroll_write_budget(options.write_budget, file_bytes);
+    }
+    Ok(graph)
 }
 
 /// Record the data advisories of a graph that was just loaded, while it is
@@ -2410,6 +2417,8 @@ mod frozen_tests;
 #[cfg(test)]
 #[path = "file/index_sections_tests.rs"]
 mod index_sections_tests;
+#[cfg(test)]
+mod write_budget_tests;
 
 /// Save `graph` and load it back into mapped storage with the topology sections
 /// the floors would otherwise withhold from a small graph, so a fixture can run

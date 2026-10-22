@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/write_budget.json",
+  "title": "extensions.write_budget",
+  "description": "The ceiling on unsaved writes a graph served from a mapped .kgl holds in memory. 'limit' is 'default' (max(512 MiB, half the file)), 'unlimited', a byte count, or a size with a K, M or G suffix such as '2GiB'. A warning comes at half the limit; at the limit writes fail until the graph is saved. The --write-budget flag overrides it. The setting is runtime only and never written into a .kgl file; an in-memory graph and a graph with no mapped topology carry no budget.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "type": ["string", "integer"],
+      "minimum": 0,
+      "description": "'default', 'unlimited', a byte count or a size such as '2GiB'."
+    }
+  }
+}

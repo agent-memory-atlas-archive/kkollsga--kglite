@@ -31,6 +31,7 @@ Exception
     ├── kglite.FileIoError
     │   └── kglite.WriterLeaseHeldError
     ├── kglite.LoadMemoryLimitError
+    ├── kglite.WriteBudgetExceededError
     ├── kglite.ArgumentError
     │   └── kglite.ReadOnlyError
     ├── kglite.NotDurableError          (also a ValueError)
@@ -267,6 +268,25 @@ Load failures are classifiable:
 | A missing engine-managed path | `FileError` |
 | Malformed, truncated, or unsupported saved data | `FileFormatError` |
 | Other I/O failures | `FileIoError` |
+
+### Write budget
+
+A write to a read-only mapped load raises `WriteBudgetExceededError` (code `WriteBudgetExceeded`) once its unsaved writes reach `write_budget`. A `WriteBudgetWarning` (a `UserWarning`) comes at half the limit, once per upward crossing.
+
+- The graph is unchanged and reads keep working. A Cypher statement that crosses the limit is rolled back.
+- The write is fine; the memory is full. Calling `save()` releases it and the same write then succeeds.
+- A durable session (`open_session(path, durable=...)`) has no budget.
+
+```python
+g = kglite.load("graph.kgl", storage="mapped")
+try:
+    g.cypher(big_write)
+except kglite.WriteBudgetExceededError:
+    g.save("graph.kgl")          # writes the changes out and releases the memory
+    g.cypher(big_write)
+```
+
+See {doc}`guides/storage-and-memory` for the limit, the estimate and the modes.
 
 ### Load memory ceiling
 

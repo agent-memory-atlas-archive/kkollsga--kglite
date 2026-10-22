@@ -123,6 +123,16 @@ enum KgliteStatusCode
    */
   KGLITE_STATUS_CODE_NOT_DURABLE = 25,
   /**
+   * A write was refused because the unsaved writes of a mapped load reached
+   * the load's write budget (`KgliteLoadOptions.write_budget`). The graph
+   * is unchanged and reads keep working; saving the graph releases the
+   * memory. Its own code rather than a `LoadMemoryLimit`: the load
+   * succeeded long ago and the same statement works after a save. Appended
+   * to keep the existing discriminants stable across this ABI major
+   * version.
+   */
+  KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED = 26,
+  /**
    * A string argument failed UTF-8 validation. The C-side
    * caller passed a `*const c_char` whose bytes didn't decode
    * as UTF-8 — typically a corrupted buffer or a non-UTF-8
@@ -379,6 +389,16 @@ typedef struct KgliteLoadOptions {
    * reads as `0`.
    */
   uint32_t topology;
+  /**
+   * The ceiling, in bytes, on unsaved writes a mapped load holds in memory
+   * before writes are refused with `KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED`
+   * until the graph is saved: `0` default (`max(512 MiB, half the file)`),
+   * `UINT64_MAX` no limit, any other value that many bytes (`1` refuses
+   * every write). Applies to a graph whose topology is served from the
+   * file's sections; an in-memory graph ignores it. A caller built before
+   * this field existed reads as `0`.
+   */
+  uint64_t write_budget;
 } KgliteLoadOptions;
 
 /**

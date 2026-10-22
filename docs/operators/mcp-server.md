@@ -449,6 +449,15 @@ the property columns of a v9 `.kgl` live. A default save writes every column wit
 - A v8 or older file and an in-memory graph ignore it.
 - Write a new file and rename it over the served one.
 
+### Write budget
+
+`--write-budget default|unlimited|SIZE` (or `extensions.write_budget.limit`) bounds the unsaved writes a mapped graph holds in memory. `SIZE` is a count of bytes or a number with a `K`, `M` or `G` suffix, such as `2GiB`.
+
+- The default is `max(512 MiB, half the file)`.
+- At half the limit the write that crossed it answers with a `warning:` line, once per upward crossing, and the server logs it on stderr.
+- At the limit a write fails with `write_budget_exceeded` until `save_graph` writes the changes out; reads keep working.
+- An in-memory graph and a graph with no mapped topology carry no budget.
+
 ### The writer lease, and several servers on one file
 
 A `.kgl` has one writer at a time, guarded by an advisory lock on a

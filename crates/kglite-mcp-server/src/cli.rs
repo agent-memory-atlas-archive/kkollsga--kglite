@@ -167,6 +167,16 @@ pub(crate) struct Cli {
           value_parser = parse_embeddings_policy)]
     pub(crate) topology: Option<kglite::api::io::MapPolicy>,
 
+    /// Ceiling on the unsaved writes a mapped load holds in memory: `default`
+    /// (`max(512 MiB, half the file)`), `unlimited`, or a size such as `2GiB`.
+    /// At half the limit a write answers with a warning; at the limit writes
+    /// are refused until `save_graph`. Overrides `extensions.write_budget.limit`
+    /// in the manifest. Only a graph whose topology is served from the file's
+    /// sections is metered; an in-memory graph is not.
+    #[arg(long = "write-budget", value_name = "default|unlimited|SIZE",
+          value_parser = kglite::api::io::WriteBudgetSetting::parse)]
+    pub(crate) write_budget: Option<kglite::api::io::WriteBudgetSetting>,
+
     /// Check that this build can boot with these flags, then exit: runs the
     /// side-effect-free prefix of boot (flags, mode paths, manifest, env file,
     /// codecs, ontology) and stops before any graph, listener or embedder.

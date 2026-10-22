@@ -416,6 +416,7 @@ impl Session {
             }
         })?;
         drop(_callback_write);
+        crate::write_budget::announce(py, &self.inner.snapshot());
         marshal_result(py, result, qopts.to_df, qopts.output_csv)
     }
 }

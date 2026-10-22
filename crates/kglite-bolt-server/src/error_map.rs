@@ -42,6 +42,7 @@
 //! | `FileFormat`              | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
 //! | `FileIo`                  | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |
 //! | `LoadMemoryLimit`         | `Neo.TransientError.General.OutOfMemoryError`       | TransientError |
+//! | `WriteBudgetExceeded`     | `Neo.TransientError.General.OutOfMemoryError`       | TransientError |
 //! | `InvalidArgument`         | `Neo.ClientError.Statement.ArgumentError`           | ClientError    |
 //! | `MissingArgument`         | `Neo.ClientError.Statement.ParameterMissing`        | ClientError    |
 //! | `Internal`                | `Neo.DatabaseError.General.UnknownError`            | DatabaseError  |

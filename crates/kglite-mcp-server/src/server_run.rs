@@ -35,6 +35,7 @@ const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "embeddings",
     "columns",
     "topology",
+    "write_budget",
 ];
 
 /// Manifest `extensions:` keys this build does not read, for the boot warning.
@@ -282,6 +283,41 @@ fn boot_topology_policy(
     cli: &Cli,
 ) -> Result<Option<kglite::api::io::MapPolicy>> {
     boot_map_policy(manifest, "topology", cli.topology)
+}
+
+/// The unsaved-write budget of every `.kgl` the server opens: `--write-budget`,
+/// else `extensions.write_budget.limit`, else `None` (the engine's default).
+fn boot_write_budget(
+    manifest: Option<&mcp_methods::server::Manifest>,
+    cli: &Cli,
+) -> Result<Option<kglite::api::io::WriteBudgetSetting>> {
+    let Some(raw) = manifest.and_then(|m| m.extensions.get("write_budget")) else {
+        return Ok(cli.write_budget);
+    };
+    let map = raw
+        .as_object()
+        .context("extensions.write_budget must be a map with an optional 'limit' key")?;
+    if let Some(unknown) = map.keys().find(|name| name.as_str() != "limit") {
+        anyhow::bail!("extensions.write_budget: unknown key '{unknown}'; the only key is 'limit'");
+    }
+    let configured = match map.get("limit") {
+        None => None,
+        Some(value) => {
+            let text = match value {
+                serde_json::Value::String(text) => text.clone(),
+                serde_json::Value::Number(number) => number.to_string(),
+                _ => anyhow::bail!(
+                    "extensions.write_budget.limit must be 'default', 'unlimited' or a size"
+                ),
+            };
+            Some(
+                kglite::api::io::WriteBudgetSetting::parse(&text).map_err(|message| {
+                    anyhow::anyhow!("extensions.write_budget.limit: {message}")
+                })?,
+            )
+        }
+    };
+    Ok(cli.write_budget.or(configured))
 }
 
 /// `extensions.writable: true` — the manifest half of the write opt-in.
@@ -984,6 +1020,7 @@ struct BootPrefix {
     embeddings_policy: Option<kglite::api::io::MapPolicy>,
     columns_policy: Option<kglite::api::io::MapPolicy>,
     topology_policy: Option<kglite::api::io::MapPolicy>,
+    write_budget: Option<kglite::api::io::WriteBudgetSetting>,
     ontology: Option<BoundOntology>,
 }
 
@@ -1030,6 +1067,7 @@ fn boot_prefix(cli: &Cli, read_only_pin: bool) -> Result<BootPrefix> {
     let embeddings_policy = boot_embeddings_policy(manifest.as_ref(), cli)?;
     let columns_policy = boot_columns_policy(manifest.as_ref(), cli)?;
     let topology_policy = boot_topology_policy(manifest.as_ref(), cli)?;
+    let write_budget = boot_write_budget(manifest.as_ref(), cli)?;
     let ontology = boot_ontology(manifest.as_ref(), &manifest_base_dir(manifest.as_ref()))?;
     Ok(BootPrefix {
         mode,
@@ -1042,6 +1080,7 @@ fn boot_prefix(cli: &Cli, read_only_pin: bool) -> Result<BootPrefix> {
         embeddings_policy,
         columns_policy,
         topology_policy,
+        write_budget,
         ontology,
     })
 }
@@ -1079,6 +1118,7 @@ fn boot_graph(
         embeddings_policy,
         columns_policy,
         topology_policy,
+        write_budget,
         ontology,
     } = boot_prefix(cli, read_only_pin)?;
 
@@ -1095,6 +1135,7 @@ fn boot_graph(
         .with_embeddings_policy(embeddings_policy)
         .with_columns_policy(columns_policy)
         .with_topology_policy(topology_policy)
+        .with_write_budget(write_budget)
         // Declared here rather than from `builtins` (built below, after the
         // csv_http boot it needs) because `bind_mode` performs the boot open
         // a few lines down — a policy set later would arrive after the lease
@@ -1799,7 +1840,7 @@ mod boot_manifest_tests {
             "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
              recipe_tools: true\n  value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
-             fetch_images: {}\n  valid_time: {}\n  embeddings: {}\n  columns: {}\n  topology: {}\n",
+             fetch_images: {}\n  valid_time: {}\n  embeddings: {}\n  columns: {}\n  topology: {}\n  write_budget: {}\n",
         );
         assert!(
             unknown_extension_keys(Some(&all_keys)).is_empty(),
@@ -2267,6 +2308,47 @@ mod boot_manifest_tests {
                 "{body}"
             );
         }
+    }
+
+    #[test]
+    fn write_budget_reads_flag_over_manifest_and_defaults_to_none() {
+        use kglite::api::io::WriteBudgetSetting;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bare = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        let flag = Cli::parse_from([
+            "kglite-mcp-server",
+            "--graph",
+            "g.kgl",
+            "--write-budget",
+            "unlimited",
+        ]);
+        assert_eq!(boot_write_budget(None, &bare).unwrap(), None);
+        assert_eq!(
+            boot_write_budget(None, &flag).unwrap(),
+            Some(WriteBudgetSetting::Unlimited)
+        );
+        let sized = manifest_with(
+            tmp.path(),
+            "name: a\nextensions:\n  write_budget:\n    limit: 2GiB\n",
+        );
+        assert_eq!(
+            boot_write_budget(Some(&sized), &bare).unwrap(),
+            Some(WriteBudgetSetting::Bytes(2 << 30))
+        );
+        assert_eq!(
+            boot_write_budget(Some(&sized), &flag).unwrap(),
+            Some(WriteBudgetSetting::Unlimited),
+            "the flag overrides the manifest"
+        );
+        assert!(KNOWN_EXTENSION_KEYS.contains(&"write_budget"));
+        for body in ["limit: lots", "limit: [1]", "size: 5"] {
+            let manifest = manifest_with(
+                tmp.path(),
+                &format!("name: m\nextensions:\n  write_budget:\n    {body}\n"),
+            );
+            assert!(boot_write_budget(Some(&manifest), &bare).is_err(), "{body}");
+        }
+        assert!(Cli::try_parse_from(["kglite-mcp-server", "--write-budget", "huge"]).is_err());
     }
 
     #[test]

@@ -393,6 +393,7 @@ const fn kg_error_category(code: KgErrorCode) -> &'static str {
         KgErrorCode::FileFormat => "file_format",
         KgErrorCode::FileIo => "file_io",
         KgErrorCode::LoadMemoryLimit => "load_memory_limit",
+        KgErrorCode::WriteBudgetExceeded => "write_budget_exceeded",
         KgErrorCode::InvalidArgument => "invalid_argument",
         KgErrorCode::MissingArgument => "missing_argument",
         KgErrorCode::Internal => "internal",

@@ -222,6 +222,11 @@ pub struct LoadOptions {
     /// them) loads as it does under `Auto`. Into memory storage the sections
     /// are never read, whatever the policy.
     pub topology: MapPolicy,
+    /// The ceiling on unsaved writes a mapped load holds in memory before it
+    /// refuses writes and asks for a save. Applies to a graph whose topology
+    /// is served from the file's sections; `Default` is `max(512 MiB, half the
+    /// file)`, a warning comes at half the limit. See `dir_graph::write_budget`.
+    pub write_budget: crate::graph::dir_graph::WriteBudgetSetting,
     /// CRC32 verification of mappable sections; `KGLITE_VERIFY=eager` sets
     /// the default. See [`Verify`].
     pub verify: Verify,
@@ -239,6 +244,7 @@ impl LoadOptions {
             embeddings: DEFAULT_EMBEDDINGS_POLICY,
             columns: MapPolicy::Auto,
             topology: MapPolicy::Auto,
+            write_budget: crate::graph::dir_graph::WriteBudgetSetting::Default,
             verify: verify_default(),
         }
     }
@@ -279,6 +285,15 @@ impl LoadOptions {
     /// Choose how the topology and index sections of a v9 container are held.
     pub fn with_topology(mut self, policy: MapPolicy) -> Self {
         self.topology = policy;
+        self
+    }
+
+    /// Choose the unsaved-write budget of the loaded graph.
+    pub fn with_write_budget(
+        mut self,
+        setting: crate::graph::dir_graph::WriteBudgetSetting,
+    ) -> Self {
+        self.write_budget = setting;
         self
     }
 

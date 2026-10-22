@@ -47,6 +47,9 @@ pub struct QueryOptions {
     /// Whether a mapped load reads the topology and index sections in place
     /// (`--topology`); `None` leaves the default (`auto`).
     pub topology: Option<kglite::api::io::MapPolicy>,
+    /// The unsaved-write budget of the loaded graph (`--write-budget`); `None`
+    /// leaves the engine's default.
+    pub write_budget: Option<kglite::api::io::WriteBudgetSetting>,
 }
 
 /// `graph` with the operator's valid-time default set. The graph is the
@@ -90,6 +93,11 @@ pub fn execute(
     // run. A statement that *failed* returns above, having already rolled its
     // captured ops back, so nothing uncommitted can be published from here.
     kglite::api::cdc::drain_at_commit(g);
+    // The REPL keeps one graph across statements, so this is where it learns
+    // the unsaved writes reached half of their budget.
+    if let Some(warning) = g.take_write_budget_warning() {
+        eprintln!("warning: {warning}");
+    }
     Ok(outcome)
 }
 

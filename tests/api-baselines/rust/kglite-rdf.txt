@@ -2395,6 +2395,23 @@ impl core::fmt::Debug for kglite::api::io::Verify
 pub fn kglite::api::io::Verify::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for kglite::api::io::Verify
 impl core::marker::StructuralPartialEq for kglite::api::io::Verify
+pub enum kglite::api::io::WriteBudgetSetting
+pub kglite::api::io::WriteBudgetSetting::Bytes(u64)
+pub kglite::api::io::WriteBudgetSetting::Default
+pub kglite::api::io::WriteBudgetSetting::Unlimited
+impl kglite::api::io::WriteBudgetSetting
+pub fn kglite::api::io::WriteBudgetSetting::parse(&str) -> core::result::Result<Self, alloc::string::String>
+impl core::clone::Clone for kglite::api::io::WriteBudgetSetting
+pub fn kglite::api::io::WriteBudgetSetting::clone(&self) -> kglite::api::io::WriteBudgetSetting
+impl core::cmp::Eq for kglite::api::io::WriteBudgetSetting
+impl core::cmp::PartialEq for kglite::api::io::WriteBudgetSetting
+pub fn kglite::api::io::WriteBudgetSetting::eq(&self, &kglite::api::io::WriteBudgetSetting) -> bool
+impl core::default::Default for kglite::api::io::WriteBudgetSetting
+pub fn kglite::api::io::WriteBudgetSetting::default() -> kglite::api::io::WriteBudgetSetting
+impl core::fmt::Debug for kglite::api::io::WriteBudgetSetting
+pub fn kglite::api::io::WriteBudgetSetting::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::io::WriteBudgetSetting
+impl core::marker::StructuralPartialEq for kglite::api::io::WriteBudgetSetting
 pub enum kglite::api::io::WriteRefusal
 pub kglite::api::io::WriteRefusal::Contended(kglite::api::io::LeaseRefusal)
 pub kglite::api::io::WriteRefusal::Io(core::io::error::Error)
@@ -2550,6 +2567,7 @@ pub kglite::api::io::LoadOptions::max_load_bytes: core::option::Option<u64>
 pub kglite::api::io::LoadOptions::storage: core::option::Option<kglite::api::storage::StorageMode>
 pub kglite::api::io::LoadOptions::topology: kglite::api::io::MapPolicy
 pub kglite::api::io::LoadOptions::verify: kglite::api::io::Verify
+pub kglite::api::io::LoadOptions::write_budget: kglite::api::io::WriteBudgetSetting
 impl kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::new() -> Self
 pub fn kglite::api::io::LoadOptions::with_columns(self, kglite::api::io::MapPolicy) -> Self
@@ -2559,6 +2577,7 @@ pub fn kglite::api::io::LoadOptions::with_max_load_bytes(self, core::option::Opt
 pub fn kglite::api::io::LoadOptions::with_storage(self, kglite::api::storage::StorageMode) -> Self
 pub fn kglite::api::io::LoadOptions::with_topology(self, kglite::api::io::MapPolicy) -> Self
 pub fn kglite::api::io::LoadOptions::with_verify(self, kglite::api::io::Verify) -> Self
+pub fn kglite::api::io::LoadOptions::with_write_budget(self, kglite::api::io::WriteBudgetSetting) -> Self
 impl core::clone::Clone for kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::clone(&self) -> kglite::api::io::LoadOptions
 impl core::cmp::Eq for kglite::api::io::LoadOptions
@@ -4600,6 +4619,7 @@ pub kglite::api::KgError::TransactionConflict
 pub kglite::api::KgError::TransactionConflict::base_version: u64
 pub kglite::api::KgError::TransactionConflict::current_version: u64
 pub kglite::api::KgError::Validation(kglite::api::ValidationError)
+pub kglite::api::KgError::WriteBudgetExceeded(alloc::string::String)
 pub kglite::api::KgError::WriterLeaseHeld
 pub kglite::api::KgError::WriterLeaseHeld::holder: kglite::api::io::LeaseHolder
 pub kglite::api::KgError::WriterLeaseHeld::message: alloc::string::String
@@ -4655,6 +4675,7 @@ pub kglite::api::KgErrorCode::ReadOnly
 pub kglite::api::KgErrorCode::Schema
 pub kglite::api::KgErrorCode::TransactionConflict
 pub kglite::api::KgErrorCode::Validation
+pub kglite::api::KgErrorCode::WriteBudgetExceeded
 pub kglite::api::KgErrorCode::WriterLeaseHeld
 impl kglite::error::KgErrorCode
 pub const kglite::error::KgErrorCode::ALL: &'static [kglite::error::KgErrorCode]
@@ -4912,6 +4933,23 @@ impl serde_core::ser::Serialize for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::Value
 pub fn kglite::datatypes::values::Value::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub enum kglite::api::WriteBudgetState
+pub kglite::api::WriteBudgetState::Exceeded
+pub kglite::api::WriteBudgetState::NotApplicable
+pub kglite::api::WriteBudgetState::Ok
+pub kglite::api::WriteBudgetState::Unlimited
+pub kglite::api::WriteBudgetState::Warning
+impl kglite::api::WriteBudgetState
+pub const fn kglite::api::WriteBudgetState::as_str(self) -> &'static str
+impl core::clone::Clone for kglite::api::WriteBudgetState
+pub fn kglite::api::WriteBudgetState::clone(&self) -> kglite::api::WriteBudgetState
+impl core::cmp::Eq for kglite::api::WriteBudgetState
+impl core::cmp::PartialEq for kglite::api::WriteBudgetState
+pub fn kglite::api::WriteBudgetState::eq(&self, &kglite::api::WriteBudgetState) -> bool
+impl core::fmt::Debug for kglite::api::WriteBudgetState
+pub fn kglite::api::WriteBudgetState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::WriteBudgetState
+impl core::marker::StructuralPartialEq for kglite::api::WriteBudgetState
 pub struct kglite::api::CardinalityDecl
 pub kglite::api::CardinalityDecl::max: core::option::Option<u64>
 pub kglite::api::CardinalityDecl::min: core::option::Option<u64>
@@ -5167,6 +5205,10 @@ pub fn kglite::api::DirGraph::shapes_for_type(&self, &str) -> alloc::vec::Vec<(a
 pub fn kglite::api::DirGraph::upsert_node_type_metadata(&mut self, &str, std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>)
 pub fn kglite::api::DirGraph::with_write_provenance<R>(&mut self, core::option::Option<&str>, core::option::Option<&str>, impl core::ops::function::FnOnce(&mut Self) -> R) -> R
 impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::check_write_budget(&self) -> core::result::Result<(), kglite::error::KgError>
+pub fn kglite::api::DirGraph::settle_write_budget(&self, bool) -> core::result::Result<(), kglite::error::KgError>
+pub fn kglite::api::DirGraph::take_write_budget_warning(&self) -> core::option::Option<alloc::string::String>
+impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::compact_disk(&mut self) -> core::result::Result<usize, alloc::string::String>
 pub fn kglite::api::DirGraph::enable_disk_mode(&mut self) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::DirGraph::ensure_disk_edges_built(&mut self) -> core::result::Result<(), alloc::string::String>
@@ -5366,6 +5408,9 @@ pub kglite::api::GraphInfo::topology_heap_bytes: usize
 pub kglite::api::GraphInfo::topology_mapped_bytes: usize
 pub kglite::api::GraphInfo::topology_overlay_entries: usize
 pub kglite::api::GraphInfo::type_count: usize
+pub kglite::api::GraphInfo::write_budget_bytes: core::option::Option<u64>
+pub kglite::api::GraphInfo::write_budget_state: kglite::api::WriteBudgetState
+pub kglite::api::GraphInfo::write_budget_used_bytes: u64
 impl core::clone::Clone for kglite::api::GraphInfo
 pub fn kglite::api::GraphInfo::clone(&self) -> kglite::api::GraphInfo
 impl core::fmt::Debug for kglite::api::GraphInfo
@@ -6903,6 +6948,7 @@ pub kglite::error::KgError::TransactionConflict
 pub kglite::error::KgError::TransactionConflict::base_version: u64
 pub kglite::error::KgError::TransactionConflict::current_version: u64
 pub kglite::error::KgError::Validation(kglite::api::ValidationError)
+pub kglite::error::KgError::WriteBudgetExceeded(alloc::string::String)
 pub kglite::error::KgError::WriterLeaseHeld
 pub kglite::error::KgError::WriterLeaseHeld::holder: kglite::api::io::LeaseHolder
 pub kglite::error::KgError::WriterLeaseHeld::message: alloc::string::String
@@ -6958,6 +7004,7 @@ pub kglite::error::KgErrorCode::ReadOnly
 pub kglite::error::KgErrorCode::Schema
 pub kglite::error::KgErrorCode::TransactionConflict
 pub kglite::error::KgErrorCode::Validation
+pub kglite::error::KgErrorCode::WriteBudgetExceeded
 pub kglite::error::KgErrorCode::WriterLeaseHeld
 impl kglite::error::KgErrorCode
 pub const kglite::error::KgErrorCode::ALL: &'static [kglite::error::KgErrorCode]

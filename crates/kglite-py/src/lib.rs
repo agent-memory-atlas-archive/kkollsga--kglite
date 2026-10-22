@@ -29,6 +29,7 @@ mod graphgen;
 mod okf;
 mod util;
 mod warning_policy;
+mod write_budget;
 
 // Re-exported so `crate::error::*` paths across pyapi/, error_py.rs and the
 // datatypes shims resolve unchanged.
@@ -241,12 +242,13 @@ fn load_options_from_args(
     max_load_mb: Option<u64>,
     placement: (Option<&str>, Option<&str>, Option<&str>),
     verify: Option<&str>,
+    write_budget: &write_budget::WriteBudgetArg,
 ) -> PyResult<kglite_core::api::io::LoadOptions> {
     let (embeddings, columns, topology) = placement;
     use kglite_core::api::io::{MapPolicy, Verify};
     let argument =
         |message: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message));
-    let mut options = kglite_core::api::io::LoadOptions::new();
+    let mut options = write_budget.apply(kglite_core::api::io::LoadOptions::new());
     if let Some(name) = embeddings {
         let policy = MapPolicy::from_name(name).ok_or_else(|| {
             argument(format!(
@@ -342,6 +344,10 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// a v9 file reads its topology and index sections in place or decodes the
 /// compressed topology onto the heap.
 ///
+/// `write_budget` (bytes, `None` for no limit, or `'default'`) bounds the unsaved
+/// writes a mapped load holds in memory: a warning at half the limit, then
+/// writes raise `WriteBudgetExceededError` until `save()` releases them.
+///
 /// `max_load_mb` is a ceiling **in megabytes** — not bytes. Metadata-known
 /// terms refuse before decoding. A legacy portable stored-reference
 /// normalization term is checked after decoding but before the private graph
@@ -349,7 +355,7 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// estimate and ceiling. `KGLITE_MAX_LOAD_MB` sets a process-wide default this
 /// outranks.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, write_budget=write_budget::WriteBudgetArg::Default))]
 // One keyword per documented option; the Python signature is the contract.
 #[allow(clippy::too_many_arguments)]
 fn load(
@@ -362,6 +368,7 @@ fn load(
     columns: Option<&str>,
     topology: Option<&str>,
     verify: Option<&str>,
+    write_budget: write_budget::WriteBudgetArg,
 ) -> PyResult<KnowledgeGraph> {
     let options = load_options_from_args(
         storage,
@@ -369,6 +376,7 @@ fn load(
         max_load_mb,
         (embeddings, columns, topology),
         verify,
+        &write_budget,
     )?;
     let inner = py
         .detach(|| kglite_core::api::io::load_file_with(&path, &options))
@@ -455,10 +463,10 @@ fn load_rdf(
 /// owns the writer lease, replays the log, and routes `execute()` writes
 /// through group commit with the GIL released.
 ///
-/// `defer_index_rebuild`, `max_load_mb`, `embeddings`, `columns`, `topology` and `verify` apply to the
-/// load form only; `auto_checkpoint_wal_mib` to the durable form only.
+/// `defer_index_rebuild`, `max_load_mb`, `embeddings`, `columns`, `topology`, `verify` and
+/// `write_budget` apply to the load form only; `auto_checkpoint_wal_mib` to the durable form only.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None, write_budget=write_budget::WriteBudgetArg::Default))]
 // One keyword per documented option; the load and durable forms share the signature.
 #[allow(clippy::too_many_arguments)]
 fn open_session(
@@ -473,6 +481,7 @@ fn open_session(
     verify: Option<&str>,
     durable: Option<Bound<'_, PyAny>>,
     auto_checkpoint_wal_mib: Option<u64>,
+    write_budget: write_budget::WriteBudgetArg,
 ) -> PyResult<Session> {
     let Some(durable) = durable else {
         if auto_checkpoint_wal_mib.is_some() {
@@ -486,6 +495,7 @@ fn open_session(
             max_load_mb,
             (embeddings, columns, topology),
             verify,
+            &write_budget,
         )?;
         let inner = py
             .detach(|| kglite_core::api::io::load_file_with(&path, &options))
@@ -500,10 +510,11 @@ fn open_session(
         || columns.is_some()
         || topology.is_some()
         || verify.is_some()
+        || !write_budget.is_default()
     {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "defer_index_rebuild, max_load_mb, embeddings, columns, topology and verify apply to the \
-             read-only load form; a durable session (durable=...) opens through the writer \
+            "defer_index_rebuild, max_load_mb, embeddings, columns, topology, verify and write_budget \
+             apply to the read-only load form; a durable session (durable=...) opens through the writer \
              path, which takes none.",
         ));
     }
@@ -546,6 +557,7 @@ fn from_bytes(
         max_load_mb,
         (None, None, None),
         None,
+        &write_budget::WriteBudgetArg::Default,
     )?;
     py.detach(|| kglite_core::api::io::load_kgl_bytes_with(data, &options))
         .map(KnowledgeGraph::from_arc)

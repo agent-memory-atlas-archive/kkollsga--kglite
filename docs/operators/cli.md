@@ -95,6 +95,10 @@ flag.
 
 `kglite query --topology {auto|mapped|memory}` chooses whether a graph saved in mapped storage reads its topology and index sections in place. `auto` and `mapped` read them, so the query holds no heap copy of the topology. `memory` ignores them, decodes the compressed topology and rebuilds the indexes. A v8 or older file and an in-memory graph ignore the flag.
 
+### Write budget
+
+`kglite query --write-budget {default|unlimited|SIZE}` bounds the unsaved writes a mapped load holds in memory, for example `2GiB`. The default is `max(512 MiB, half the file)`. At half the limit the command prints a `warning:` line on stderr. At the limit a write is refused. A graph in memory storage, or one that decodes its topology, carries no budget.
+
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

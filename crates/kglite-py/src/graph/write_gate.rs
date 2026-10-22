@@ -146,8 +146,16 @@ impl KnowledgeGraph {
         f: impl FnOnce(&mut DirGraph, &mut CursorState) -> PyResult<T>,
     ) -> PyResult<T> {
         self.check_durable_owner()?;
+        // A graph at its unsaved-write budget refuses the call before it
+        // starts; a call may overshoot by its own size (the Cypher route rolls
+        // its statement back instead, see `dir_graph::write_budget`).
+        self.inner
+            .check_write_budget()
+            .map_err(crate::error_py::kg_to_pyerr)?;
         let out = f(raw_graph_mut(&mut self.inner), &mut self.cursor)?;
         self.commit_wal()?;
+        let _ = self.inner.settle_write_budget(false);
+        Python::attach(|py| crate::write_budget::announce(py, &self.inner));
         Ok(out)
     }
 
@@ -199,7 +207,9 @@ impl KnowledgeGraph {
         working.set_version(current_version + 1);
         self.inner = Arc::new(working);
         self.cursor.selection = kglite_core::api::CowSelection::new();
-        self.commit_wal()
+        self.commit_wal()?;
+        Python::attach(|py| crate::write_budget::announce(py, &self.inner));
+        Ok(())
     }
 
     /// Log whatever the capture layer still holds, without mutating anything:

@@ -143,6 +143,27 @@ class LoadMemoryLimitError(KgError):
     ceiling. See :func:`estimate_load_memory`.
     """
 
+class WriteBudgetExceededError(KgError):
+    """A write was refused because the unsaved writes of a read-only mapped load
+    reached ``write_budget``.
+
+    The graph is exactly as it was before the refused write, reads keep working,
+    and the same write succeeds once memory is released: :meth:`KnowledgeGraph.save`
+    writes the changes out and releases the memory they hold, or reopen the
+    graph with ``open_session(path, durable=...)`` for continuous writes, or
+    raise ``write_budget`` on :func:`load`. ``code`` is ``"WriteBudgetExceeded"``.
+    See "Unsaved-write budget" on :func:`load`.
+    """
+
+class WriteBudgetWarning(UserWarning):
+    """Unsaved writes over a read-only mapped load reached half of
+    ``write_budget``.
+
+    Emitted through :mod:`warnings` once per upward crossing and re-armed by a
+    :meth:`KnowledgeGraph.save` that releases the memory. At the budget, further
+    writes raise :class:`WriteBudgetExceededError`.
+    """
+
 class ArgumentError(KgError):
     """A user-supplied argument violated a precondition."""
 
@@ -897,6 +918,7 @@ def load(
     columns: Literal["auto", "mapped", "memory"] | None = None,
     topology: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
+    write_budget: int | Literal["default"] | None = "default",
 ) -> KnowledgeGraph:
     """Load a graph from a binary file previously saved with ``save()``.
 
@@ -942,6 +964,13 @@ def load(
             a file saved with ``layout="compact"`` and a graph loaded into
             in-memory storage ignore it. ``KGLITE_MMAP=0`` always gives the
             heap. See "Mapped topology" below.
+        write_budget: The most memory, in bytes, that writes not yet saved may
+            hold over a graph read from a file's mapped topology. ``"default"``
+            (the default) is ``max(512 MiB, half the file's size)``; an int is
+            that many bytes (``0`` refuses every write); ``None`` removes the
+            limit. At half the limit a write emits :class:`WriteBudgetWarning`,
+            at the limit it raises :class:`WriteBudgetExceededError`. See
+            "Unsaved-write budget" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
             mapped section's CRC32 on its first use (search, save, write); a
             section copied to the heap is always checked at load. ``"eager"``
@@ -959,7 +988,7 @@ def load(
             pre-publication legacy normalization check.
         ArgumentError: ``storage`` is an unknown mode, or ``"disk"``;
             ``embeddings``, ``columns``, ``topology`` or ``verify`` is not one of
-            its names.
+            its names; ``write_budget`` is not an int, ``None`` or ``"default"``.
 
     **Mapped embeddings.** A graph saved with an embedding store of 4 MiB or
     more is a v9 file: the vectors and their norms sit uncompressed in the
@@ -1008,6 +1037,33 @@ def load(
     overlay to a heap graph.
     :meth:`KnowledgeGraph.graph_info` reports ``topology_mapped_bytes``,
     ``topology_heap_bytes`` and ``topology_overlay_entries``.
+
+    **Unsaved-write budget.** A graph read from a file's mapped topology keeps
+    its writes in heap memory until a save writes them out, so a read-only load
+    that keeps writing grows without bound. ``write_budget`` bounds it. The
+    reading is an estimate of the heap the unsaved writes hold, reported by
+    :meth:`KnowledgeGraph.graph_info` as ``write_budget_used_bytes`` beside
+    ``write_budget_bytes`` and ``write_budget_state`` (``"ok"``, ``"warning"``,
+    ``"exceeded"``, ``"unlimited"`` or ``"not_applicable"``).
+
+    - At half the limit the write that crossed it emits
+      :class:`WriteBudgetWarning`, once per upward crossing.
+    - A Cypher statement that would cross the limit is rolled back and raises
+      :class:`WriteBudgetExceededError`, and a write made while the graph is at
+      the limit raises it before anything runs. Reads keep working. A rolled-back
+      statement leaves its overlay entries until the next save, so the graph then
+      reads as at the limit. A fluent loader such as ``add_nodes`` is refused
+      only when the graph is already at the limit, so one call can overshoot by
+      its own size.
+    - :meth:`KnowledgeGraph.save` writes the changes out, serves the graph from
+      the file it wrote and starts the budget over (limit included, as the file
+      has a new size). A save that cannot rebase (``layout="compact"``, Windows)
+      writes the file but keeps the memory, and the error says so.
+
+    A graph with no mapped topology has no overlay to meter and carries no
+    budget: in-memory storage, ``topology="memory"``, a v8 file, a file below
+    the section floors, and a durable session (``open_session(path,
+    durable=...)``, whose checkpoints release the memory).
 
     **``storage`` is not a memory lever.** For a v8 file, or a v9 file loaded
     with ``columns="memory"``, mapped and memory cost the same resident memory
@@ -1125,6 +1181,7 @@ def open_session(
     columns: Literal["auto", "mapped", "memory"] | None = None,
     topology: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
+    write_budget: int | Literal["default"] | None = "default",
     durable: bool | Literal["full", "normal", "off"] | None = None,
     auto_checkpoint_wal_mib: int | None = None,
 ) -> "Session":
@@ -1174,6 +1231,8 @@ def open_session(
         columns: As on :func:`load`. Read-only form only.
         topology: As on :func:`load`. Read-only form only.
         verify: As on :func:`load`. Read-only form only.
+        write_budget: As on :func:`load`. Read-only form only; a durable session
+            has no budget.
         durable: ``"full"`` (every commit survives power loss), ``"normal"``
             (survives the process dying, not an OS crash), ``"off"`` (no log;
             persistence is :meth:`Session.save` and :meth:`Session.close`), or
@@ -4158,6 +4217,15 @@ class KnowledgeGraph:
                 - ``topology_overlay_entries``: Operations, node weights and
                   edge weights held by the write overlay over a mapped
                   topology. These are heap; ``0`` before the first write
+                - ``write_budget_bytes``: The ``write_budget`` limit in bytes;
+                  ``None`` when the load asked for none or no budget applies
+                - ``write_budget_used_bytes``: Estimated heap, in bytes, of the
+                  writes since the load or the last save that rebased the
+                  graph; ``0`` when no budget applies
+                - ``write_budget_state``: ``"ok"``, ``"warning"`` (half the
+                  limit), ``"exceeded"`` (writes refused until a save),
+                  ``"unlimited"`` or ``"not_applicable"`` (in-memory storage, a
+                  graph with no mapped topology, a durable session)
                 - ``memory_limit``: Configured memory limit (None if unset)
                 - ``columnar_total_rows``: Total property-column rows, including
                   rows orphaned by deleted nodes

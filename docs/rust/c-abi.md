@@ -102,6 +102,12 @@ The header exposes:
     `auto` and `mapped` read them in place from a regular local file (Windows
     copies them) and `memory` ignores them, decoding the topology and
     rebuilding the indexes. A v8 or older file and an in-memory graph ignore it.
+  - `write_budget` (a further additive `uint64_t`) bounds the unsaved writes a
+    mapped load holds in memory: `0` is the default (`max(512 MiB, half the
+    file)`), `UINT64_MAX` is no limit, any other value is that many bytes. A
+    write past the limit returns `KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED`
+    (26) with the graph unchanged; saving the graph releases the memory. An
+    in-memory graph ignores it.
   - Do not overwrite a loaded file in place (`cp`, `rsync --inplace`): a
     truncated mapping faults. Write to a new name and rename it over;
     `kglite_save_graph_durable` already does;

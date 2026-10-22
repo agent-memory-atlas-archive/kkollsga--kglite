@@ -668,6 +668,9 @@ fn mut_statement(
     }
 
     if is_mutation {
+        // A graph at its unsaved-write budget refuses before anything runs;
+        // the late check below covers the statement that crosses it.
+        graph.check_write_budget()?;
         // A `&mut DirGraph` reached here without passing `make_dir_graph_mut`
         // (a transaction working copy, an embedder's owned graph). Build a
         // deferred load's indexes before the statement writes into them —
@@ -765,6 +768,12 @@ fn mut_statement(
                 return Err(error);
             }
         };
+        // The statement that crosses the write budget is undone like any other
+        // late failure; one with no checkpoint to restore only warns.
+        if let Err(error) = graph.settle_write_budget(!matches!(slot, StatementCheckpoint::None)) {
+            std::mem::replace(slot, StatementCheckpoint::None).rollback(graph);
+            return Err(error);
+        }
         if !parked {
             std::mem::replace(slot, StatementCheckpoint::None).commit(graph);
         }

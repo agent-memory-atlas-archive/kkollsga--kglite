@@ -98,5 +98,6 @@ pub(crate) fn rebase_onto_saved(graph: &mut Arc<DirGraph>, path: &str) -> Rebase
     if let Ok(mut dirs) = dir.temp_dirs.lock() {
         dirs.extend(spill_dirs);
     }
+    dir.reset_write_budget_after_rebase(std::fs::metadata(path).map_or(0, |m| m.len()));
     Rebase::Done
 }

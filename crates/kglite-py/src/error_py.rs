@@ -40,6 +40,7 @@
 //!     ├── kglite.FileIoError
 //!     │   └── kglite.WriterLeaseHeldError
 //!     ├── kglite.LoadMemoryLimitError
+//!     ├── kglite.WriteBudgetExceededError
 //!     ├── kglite.ArgumentError
 //!     │   └── kglite.ReadOnlyError
 //!     ├── kglite.NotDurableError               (also a ValueError)
@@ -239,6 +240,13 @@ pyo3::create_exception!(
     "A .kgl load exceeded max_load_mb / KGLITE_MAX_LOAD_MB at the metadata precheck or the pre-publication legacy portable-normalization check. The file is valid."
 );
 
+pyo3::create_exception!(
+    kglite,
+    WriteBudgetExceededError,
+    KgError,
+    "A write was refused because the unsaved writes of a read-only mapped load reached `write_budget`. The graph is unchanged and reads keep working; `save()` releases the memory, or reopen with `open_session(path, durable=...)` for continuous writes."
+);
+
 // ── No write-ahead log ───────────────────────────────────────────────
 
 /// `kglite.NotDurableError`, a subclass of both `KgError` and `ValueError`.
@@ -404,6 +412,7 @@ fn kg_to_pyerr_class(e: RustKgError, message: String) -> PyErr {
         RustKgError::FileFormat { .. } => FileFormatError::new_err(message),
         RustKgError::FileIo(_) => FileIoError::new_err(message),
         RustKgError::LoadMemoryLimit(_) => LoadMemoryLimitError::new_err(message),
+        RustKgError::WriteBudgetExceeded(_) => WriteBudgetExceededError::new_err(message),
         RustKgError::InvalidArgument { .. } | RustKgError::Argument(_) => {
             ArgumentError::new_err(message)
         }
@@ -587,6 +596,14 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
         "LoadMemoryLimitError",
         py.get_type::<LoadMemoryLimitError>(),
     )?;
+    m.add(
+        "WriteBudgetExceededError",
+        py.get_type::<WriteBudgetExceededError>(),
+    )?;
+    m.add(
+        "WriteBudgetWarning",
+        py.get_type::<crate::write_budget::WriteBudgetWarning>(),
+    )?;
 
     // Argument validation
     m.add("ArgumentError", py.get_type::<ArgumentError>())?;
@@ -667,6 +684,8 @@ fn register_class_codes(py: Python<'_>) -> PyResult<()> {
         .setattr("code", C::ReadOnly.as_str())?;
     py.get_type::<LoadMemoryLimitError>()
         .setattr("code", C::LoadMemoryLimit.as_str())?;
+    py.get_type::<WriteBudgetExceededError>()
+        .setattr("code", C::WriteBudgetExceeded.as_str())?;
     py.get_type::<ArgumentError>()
         .setattr("code", C::InvalidArgument.as_str())?;
     py.get_type::<MissingArgumentError>()

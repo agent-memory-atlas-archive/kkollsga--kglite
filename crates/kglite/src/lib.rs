@@ -72,6 +72,9 @@ pub mod api {
     pub use crate::graph::dir_graph::GraphInfo;
     /// The old→new node-index mapping `DirGraph::vacuum` returns.
     pub use crate::graph::dir_graph::NodeRemap;
+    /// Where a graph stands against its unsaved-write budget
+    /// (`GraphInfo::write_budget_state`).
+    pub use crate::graph::dir_graph::WriteBudgetState;
     #[cfg(feature = "fastembed")]
     pub use crate::graph::embedder::fastembed::FastEmbedAdapter;
     pub use crate::graph::embedder::Embedder;
@@ -688,6 +691,9 @@ pub mod api {
     /// callbacks, embedding-vector file export/import, and streaming
     /// disk subset export.
     pub mod io {
+        /// The unsaved-write budget of a mapped load, chosen with
+        /// `LoadOptions::with_write_budget`.
+        pub use crate::graph::dir_graph::WriteBudgetSetting;
         pub use crate::graph::durability::same_checkpoint_path;
         /// Relationship embedding carry for the embedding export / import and
         /// `copy_embeddings_with_relationships_from`: relationship stores travel

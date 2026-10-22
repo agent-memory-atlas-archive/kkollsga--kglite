@@ -16,6 +16,7 @@ impl DirGraph {
         let edge_count = self.graph.edge_count();
         let edge_bound = self.graph.edge_bound();
         let node_tombstones = node_bound - node_count;
+        let budget = self.write_budget_report();
 
         GraphInfo {
             node_count,
@@ -45,6 +46,9 @@ impl DirGraph {
             topology_mapped_bytes: topology.mapped_bytes,
             topology_heap_bytes: topology.heap_bytes,
             topology_overlay_entries: topology.overlay_entries,
+            write_budget_bytes: budget.limit,
+            write_budget_used_bytes: budget.used,
+            write_budget_state: budget.state,
         }
     }
 }
@@ -119,4 +123,14 @@ pub struct GraphInfo {
     /// Operations, node weights and edge weights the copy-on-write overlay
     /// over a frozen base holds. `0` when no write has touched the topology.
     pub topology_overlay_entries: usize,
+    /// The limit, in bytes, on unsaved writes held over the mapped file: the
+    /// `write_budget` the graph was loaded with (default `max(512 MiB, half
+    /// the file)`). `None` when no budget applies or the load asked for none;
+    /// [`Self::write_budget_state`] says which.
+    pub write_budget_bytes: Option<u64>,
+    /// Estimated heap, in bytes, of the writes since the load or the last
+    /// save that rebased the graph. `0` when no budget applies.
+    pub write_budget_used_bytes: u64,
+    /// Where the graph stands against the budget; see [`WriteBudgetState`].
+    pub write_budget_state: super::WriteBudgetState,
 }

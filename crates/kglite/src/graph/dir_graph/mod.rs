@@ -678,6 +678,10 @@ pub struct DirGraph {
     /// the janitor that reclaims it).
     #[serde(skip)]
     pub spill_dir: Option<std::path::PathBuf>,
+    /// The unsaved-write budget a read-only mapped load enrolled this graph in
+    /// (`write_budget`); `None` when none applies.
+    #[serde(skip)]
+    pub(crate) write_budget: Option<write_budget::WriteBudget>,
     /// Temp directories created during load or spill that should be cleaned up on drop.
     /// Uses Arc so clones share ownership — only the last clone cleans up.
     #[serde(skip)]
@@ -1019,6 +1023,7 @@ impl DirGraph {
             stored_valid_time_default: Default::default(),
             memory_limit: None,
             spill_dir: None,
+            write_budget: None,
             temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
             read_only: false,
             schema_locked: false,
@@ -2369,6 +2374,8 @@ pub struct IndexStats {
 
 mod info;
 pub use info::GraphInfo;
+pub(crate) mod write_budget;
+pub use write_budget::{WriteBudgetSetting, WriteBudgetState};
 
 #[cfg(test)]
 #[path = "dir_graph_tests.rs"]

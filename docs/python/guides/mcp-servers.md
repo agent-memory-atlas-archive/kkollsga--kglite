@@ -1172,6 +1172,7 @@ Machine-readable JSON Schema (Draft 2020-12) for each first-class block lives un
 - [`recipe_tools.json`][schema-recipe-tools]
 - [`topology.json`][schema-topology]
 - [`valid_time.json`][schema-valid-time]
+- [`write_budget.json`][schema-write-budget]
 - [`value_codecs.json`][schema-value-codecs]
 
 The schemas are anchored to the Python parsers by the regression test `tests/test_extensions_schemas.py`. Any drift between "what the parser accepts" and "what the schema accepts" surfaces as a test failure on the next CI run.
@@ -1186,6 +1187,7 @@ The schemas are anchored to the Python parsers by the regression test `tests/tes
 [schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
 [schema-topology]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/topology.json
 [schema-valid-time]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/valid_time.json
+[schema-write-budget]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/write_budget.json
 [schema-value-codecs]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/value_codecs.json
 
 #### `extensions.cypher_recipes`
@@ -1420,6 +1422,21 @@ This key decides whether a graph saved in mapped storage reads its topology and 
 - `--topology {auto|mapped|memory}` overrides the manifest.
 - The setting is runtime only. Every `.kgl` the server opens takes it, including reloads. A v8 or older file and an in-memory graph ignore it.
 - A malformed value, or a key other than `storage`, fails the boot.
+
+#### `extensions.write_budget`
+
+```yaml
+extensions:
+  write_budget:
+    limit: 2GiB   # 'default', 'unlimited', or a size
+```
+
+This key bounds the unsaved writes a mapped graph holds in memory.
+
+- `default` is `max(512 MiB, half the file)`; a size is bytes or a number with a `K`, `M` or `G` suffix.
+- A write warns at half the limit and fails with `write_budget_exceeded` at the limit, until `save_graph` writes the changes out.
+- `--write-budget {default|unlimited|SIZE}` overrides the manifest.
+- A malformed value, or a key other than `limit`, fails the boot.
 
 #### `extensions.<other>` (passthrough)
 

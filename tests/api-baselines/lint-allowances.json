@@ -297,7 +297,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/lib.rs::fn:load:fn load( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, topology: Option<&str>, verify: Option<&str>, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/lib.rs::fn:load:fn load( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, topology: Option<&str>, verify: Option<&str>, write_budget: write_budget::WriteBudgetArg, ) -> PyResult<KnowledgeGraph>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -305,7 +305,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/lib.rs::fn:open_session:fn open_session( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, topology: Option<&str>, verify: Option<&str>, durable: Option<Bound<'_, PyAny>>, auto_checkpoint_wal_mib: Option<u64>, )::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/lib.rs::fn:open_session:fn open_session( py: Python<'_>, path: String, storage: Option<&str>, defer_index_rebuild: Option<bool>, max_load_mb: Option<u64>, embeddings: Option<&str>, columns: Option<&str>, topology: Option<&str>, verify: Option<&str>, durable: Option<Bound<'_, PyAny>>, auto_checkpoint_wal_mib: Option<u64>, w::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -425,6 +425,14 @@
       "classification": "api-shape"
     },
     {
+      "identity": "crates/kglite/src/graph/dir_graph/write_budget.rs::fn:check_write_budget:pub fn check_write_budget(&self) -> Result<(), KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
+      "identity": "crates/kglite/src/graph/dir_graph/write_budget.rs::fn:settle_write_budget:pub fn settle_write_budget(&self, can_refuse: bool) -> Result<(), KgError>::clippy::result_large_err",
+      "classification": "api-shape"
+    },
+    {
       "identity": "crates/kglite/src/graph/edge_vector_index.rs::fn:build_relationship_vector_index:pub fn build_relationship_vector_index( graph: &mut DirGraph, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> Result<crate::graph::embeddings::VectorIndexReport, Stri::clippy::too_many_arguments",
       "classification": "transitional"
     },
@@ -471,6 +479,10 @@
     {
       "identity": "crates/kglite/src/graph/introspection/reporting.rs::enum:OperationReport::clippy::enum_variant_names",
       "classification": "transitional"
+    },
+    {
+      "identity": "crates/kglite/src/graph/io/file/write_budget_tests.rs::fn:create:fn create(graph: &mut DirGraph, id: usize) -> Result<(), KgError>::clippy::result_large_err",
+      "classification": "api-shape"
     },
     {
       "identity": "crates/kglite/src/graph/io/ntriples/column_builder.rs::fn:flush_type_entries:fn flush_type_entries( type_name: &str, entries: &[BufferedEntry], writers: &mut HashMap<String, TypeWriter>, mmap: &mut MmapMut, row_ids: &mut Vec<(petgraph::graph::NodeIndex, u32)>, ) -> usize::clippy::too_many_arguments",

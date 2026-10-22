@@ -134,6 +134,13 @@ pub enum KgErrorCode {
     // is not broken.
     LoadMemoryLimit,
 
+    // A write refused because a read-only mapped load holds as many unsaved
+    // writes as its write budget allows. Split from `LoadMemoryLimit` (a load
+    // refused before it ran) and from `ReadOnly` (the handle takes writes): the
+    // statement was fine and the graph is intact, and a save releases the
+    // memory so the same statement succeeds afterwards.
+    WriteBudgetExceeded,
+
     InvalidArgument,
     MissingArgument,
 
@@ -168,6 +175,7 @@ impl KgErrorCode {
         KgErrorCode::FileFormat,
         KgErrorCode::FileIo,
         KgErrorCode::LoadMemoryLimit,
+        KgErrorCode::WriteBudgetExceeded,
         KgErrorCode::InvalidArgument,
         KgErrorCode::MissingArgument,
         KgErrorCode::Internal,
@@ -202,6 +210,7 @@ impl KgErrorCode {
             KgErrorCode::FileFormat => "FileFormat",
             KgErrorCode::FileIo => "FileIo",
             KgErrorCode::LoadMemoryLimit => "LoadMemoryLimit",
+            KgErrorCode::WriteBudgetExceeded => "WriteBudgetExceeded",
             KgErrorCode::InvalidArgument => "InvalidArgument",
             KgErrorCode::MissingArgument => "MissingArgument",
             KgErrorCode::Internal => "Internal",
@@ -224,7 +233,7 @@ impl KgErrorCode {
     /// - `Schema`, `Validation`, `Expr`, `ConstraintViolation`,
     ///   `ConstraintCreationFailed`, `OntologyViolation`, `CypherExecution` → 422 Unprocessable
     ///   Entity
-    /// - `LoadMemoryLimit` → 507 Insufficient Storage
+    /// - `LoadMemoryLimit`, `WriteBudgetExceeded` → 507 Insufficient Storage
     /// - `Cancelled` → 499 Client Closed Request
     /// - `FileFormat`, `FileIo`, `DurabilityFailed`, `Internal` → 500 Internal Server Error
     ///
@@ -261,7 +270,7 @@ impl KgErrorCode {
             // stored data is fine; this server cannot hold what serving it
             // would take. Retrying it unchanged fails the same way, so it is
             // deliberately not a 4xx the client is invited to repeat.
-            KgErrorCode::LoadMemoryLimit => 507,
+            KgErrorCode::LoadMemoryLimit | KgErrorCode::WriteBudgetExceeded => 507,
 
             // A statement that failed on what it was given — a malformed
             // `valid_at` date, a property the type does not have, an
@@ -350,7 +359,9 @@ impl KgErrorCode {
             // reachable through a Bolt managed transaction, and the wire
             // mapping exists so a Neo4j-compatible binding reports the
             // condition Neo4j reports rather than an unknown-error catch-all.
-            KgErrorCode::LoadMemoryLimit => "Neo.TransientError.General.OutOfMemoryError",
+            KgErrorCode::LoadMemoryLimit | KgErrorCode::WriteBudgetExceeded => {
+                "Neo.TransientError.General.OutOfMemoryError"
+            }
             KgErrorCode::FileNotFound
             | KgErrorCode::FileFormat
             | KgErrorCode::FileIo
@@ -569,6 +580,12 @@ pub enum KgError {
     /// the ways out — see `graph::io::file`'s `load_memory_refusal`.
     LoadMemoryLimit(String),
 
+    /// A write was refused because the graph's unsaved writes reached its
+    /// write budget (`LoadOptions::write_budget`). The statement was not
+    /// applied (or was rolled back), reads keep working, and saving the graph
+    /// releases the memory. The message names the figures and the ways out.
+    WriteBudgetExceeded(String),
+
     /// A user-supplied argument violated a precondition with full
     /// structured context — argument name, what was expected, what
     /// was found. Used when the call site can naturally populate all
@@ -661,6 +678,7 @@ impl KgError {
             KgError::FileFormat { .. } => KgErrorCode::FileFormat,
             KgError::FileIo(_) => KgErrorCode::FileIo,
             KgError::LoadMemoryLimit(_) => KgErrorCode::LoadMemoryLimit,
+            KgError::WriteBudgetExceeded(_) => KgErrorCode::WriteBudgetExceeded,
             KgError::InvalidArgument { .. } | KgError::Argument(_) => KgErrorCode::InvalidArgument,
             KgError::MissingArgument(_) => KgErrorCode::MissingArgument,
             KgError::InternerCollision(_) => KgErrorCode::Internal,
@@ -777,6 +795,9 @@ impl fmt::Display for KgError {
             KgError::FileIo(e) => write!(f, "File I/O error: {}", e),
             KgError::LoadMemoryLimit(message) => {
                 write!(f, "Load refused by the memory ceiling: {message}")
+            }
+            KgError::WriteBudgetExceeded(message) => {
+                write!(f, "Write refused by the write budget: {message}")
             }
             KgError::InvalidArgument {
                 argument,
@@ -1021,9 +1042,10 @@ mod tests {
             KgErrorCode::FileFormat => 20,
             KgErrorCode::FileIo => 21,
             KgErrorCode::LoadMemoryLimit => 22,
-            KgErrorCode::InvalidArgument => 23,
-            KgErrorCode::MissingArgument => 24,
-            KgErrorCode::Internal => 25,
+            KgErrorCode::WriteBudgetExceeded => 23,
+            KgErrorCode::InvalidArgument => 24,
+            KgErrorCode::MissingArgument => 25,
+            KgErrorCode::Internal => 26,
         }
     }
 
@@ -1194,6 +1216,7 @@ mod tests {
             KgErrorCode::FileFormat,
             KgErrorCode::FileIo,
             KgErrorCode::LoadMemoryLimit,
+            KgErrorCode::WriteBudgetExceeded,
             KgErrorCode::InvalidArgument,
             KgErrorCode::MissingArgument,
             KgErrorCode::Internal,

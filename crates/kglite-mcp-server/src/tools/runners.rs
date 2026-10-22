@@ -161,9 +161,10 @@ pub(crate) fn run_cypher_write_output(
     opts.git_sha = authz.git_sha;
     opts.modified_by = authz.modified_by;
     policy.apply_deadline(&mut opts);
-    let executed = {
+    let (executed, budget_warning) = {
         let dir = kglite::api::make_dir_graph_mut(active.kg.dir_mut());
         let executed = kglite::api::session::execute_mut(dir, query, &opts);
+        let budget_warning = dir.take_write_budget_warning();
         if executed.is_ok() {
             // This tool call is the server's commit boundary, so this is where
             // a change stream learns about the write — a no-op unless `CALL
@@ -173,7 +174,7 @@ pub(crate) fn run_cypher_write_output(
             // buffer from growing for the life of a long-running server.
             kglite::api::cdc::drain_at_commit(dir);
         }
-        executed
+        (executed, budget_warning)
     };
     // `KgError`'s Display already prefixes `Cypher execution error: …` — pass it
     // through verbatim rather than re-prefixing (which produced the triple wrap).
@@ -204,6 +205,12 @@ pub(crate) fn run_cypher_write_output(
             return Err(message);
         }
     };
+    // The write-budget warning rides the response like a query warning, and the
+    // server's own stderr, so the agent and the operator both see it.
+    let budget_block = budget_warning.map_or_else(String::new, |warning| {
+        eprintln!("warning: {warning}");
+        format!("\nwarning: {warning}\n")
+    });
     // A mutation with no RETURN yields no rows — acknowledge with a write
     // summary (nodes/edges/props changed) instead of the bare "No results."
     // that a *read* matching nothing returns, so an agent can tell a
@@ -216,9 +223,10 @@ pub(crate) fn run_cypher_write_output(
         // response the write tool can give without it.
         let identity = active.identity_footer();
         let text = format!(
-            "{}{}{}",
+            "{}{}{}{}",
             format_mutation_ack(&outcome.result),
             cypher_diagnostics_block(&outcome.result),
+            budget_block,
             // The read path has self-identified its graph since the footer
             // shipped; a write needs it more, not less — an agent that mutates
             // the wrong graph has no later call that can tell it so.
@@ -231,7 +239,7 @@ pub(crate) fn run_cypher_write_output(
     Ok(cypher_tool_output(
         &outcome,
         query,
-        format!("{rendered}{identity}"),
+        format!("{rendered}{budget_block}{identity}"),
         identity,
     ))
 }

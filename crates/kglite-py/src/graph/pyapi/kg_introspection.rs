@@ -416,6 +416,9 @@ impl KnowledgeGraph {
             dict.set_item("topology_mapped_bytes", info.topology_mapped_bytes)?;
             dict.set_item("topology_heap_bytes", info.topology_heap_bytes)?;
             dict.set_item("topology_overlay_entries", info.topology_overlay_entries)?;
+            dict.set_item("write_budget_bytes", info.write_budget_bytes)?;
+            dict.set_item("write_budget_used_bytes", info.write_budget_used_bytes)?;
+            dict.set_item("write_budget_state", info.write_budget_state.as_str())?;
             dict.set_item("memory_limit", self.graph().memory_limit)?;
             dict.set_item("columnar_total_rows", info.columnar_total_rows)?;
             dict.set_item("columnar_live_rows", info.columnar_live_rows)?;

@@ -13,6 +13,7 @@ use kglite::api::introspection::{compute_schema, schema_overview_to_json};
 use kglite::api::io::{
     load_file, load_file_with, load_kgl_bytes, refuse_foreign_writer, save_graph, save_graph_with,
     save_graph_with_layout, verify_graph, write_kgl_to, LoadOptions, MapPolicy, SaveLayout, Verify,
+    WriteBudgetSetting,
 };
 #[cfg(feature = "rdf")]
 use kglite::api::io::{load_rdf as core_load_rdf, RdfConfig};
@@ -384,6 +385,14 @@ pub struct KgliteLoadOptions {
     /// in-memory graph ignore it. A caller built before this field existed
     /// reads as `0`.
     pub topology: u32,
+    /// The ceiling, in bytes, on unsaved writes a mapped load holds in memory
+    /// before writes are refused with `KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED`
+    /// until the graph is saved: `0` default (`max(512 MiB, half the file)`),
+    /// `UINT64_MAX` no limit, any other value that many bytes (`1` refuses
+    /// every write). Applies to a graph whose topology is served from the
+    /// file's sections; an in-memory graph ignores it. A caller built before
+    /// this field existed reads as `0`.
+    pub write_budget: u64,
 }
 
 fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, String> {
@@ -432,6 +441,11 @@ fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, S
         2 => load = load.with_topology(MapPolicy::Mapped),
         3 => load = load.with_topology(MapPolicy::Memory),
         other => return Err(format!("KgliteLoadOptions.topology {other} is not 0..=3")),
+    }
+    match local.write_budget {
+        0 => {}
+        u64::MAX => load = load.with_write_budget(WriteBudgetSetting::Unlimited),
+        bytes => load = load.with_write_budget(WriteBudgetSetting::Bytes(bytes)),
     }
     Ok(load)
 }

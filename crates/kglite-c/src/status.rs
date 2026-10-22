@@ -93,6 +93,14 @@ pub enum KgliteStatusCode {
     /// it. Appended to keep the existing discriminants stable across this ABI
     /// major version.
     NotDurable = 25,
+    /// A write was refused because the unsaved writes of a mapped load reached
+    /// the load's write budget (`KgliteLoadOptions.write_budget`). The graph
+    /// is unchanged and reads keep working; saving the graph releases the
+    /// memory. Its own code rather than a `LoadMemoryLimit`: the load
+    /// succeeded long ago and the same statement works after a save. Appended
+    /// to keep the existing discriminants stable across this ABI major
+    /// version.
+    WriteBudgetExceeded = 26,
 
     // 100+: C-ABI-only errors.
     /// A string argument failed UTF-8 validation. The C-side
@@ -150,6 +158,7 @@ impl KgliteStatusCode {
             KgErrorCode::WriterLeaseHeld => Self::WriterLeaseHeld,
             KgErrorCode::ReadOnly => Self::ReadOnly,
             KgErrorCode::NotDurable => Self::NotDurable,
+            KgErrorCode::WriteBudgetExceeded => Self::WriteBudgetExceeded,
         }
     }
 
@@ -171,6 +180,7 @@ impl KgliteStatusCode {
             Self::WriterLeaseHeld => KgErrorCode::WriterLeaseHeld,
             Self::ReadOnly => KgErrorCode::ReadOnly,
             Self::NotDurable => KgErrorCode::NotDurable,
+            Self::WriteBudgetExceeded => KgErrorCode::WriteBudgetExceeded,
             Self::CypherSyntax => KgErrorCode::CypherSyntax,
             Self::CypherTimeout => KgErrorCode::CypherTimeout,
             Self::CypherExecution => KgErrorCode::CypherExecution,
@@ -285,6 +295,7 @@ fn static_name(code: KgliteStatusCode) -> Option<&'static CStr> {
         KgliteStatusCode::DurabilityFailed => c"DurabilityFailed",
         KgliteStatusCode::ReadOnly => c"ReadOnly",
         KgliteStatusCode::NotDurable => c"NotDurable",
+        KgliteStatusCode::WriteBudgetExceeded => c"WriteBudgetExceeded",
         KgliteStatusCode::InvalidUtf8 => c"InvalidUtf8",
         KgliteStatusCode::NullPointer => c"NullPointer",
         KgliteStatusCode::WriterLeaseHeld => c"WriterLeaseHeld",
@@ -361,6 +372,7 @@ mod tests {
         KgliteStatusCode::DurabilityFailed,
         KgliteStatusCode::ReadOnly,
         KgliteStatusCode::NotDurable,
+        KgliteStatusCode::WriteBudgetExceeded,
         KgliteStatusCode::InvalidUtf8,
         KgliteStatusCode::NullPointer,
         KgliteStatusCode::WriterLeaseHeld,

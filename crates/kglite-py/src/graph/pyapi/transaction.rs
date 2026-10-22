@@ -275,6 +275,11 @@ impl Transaction {
         .map_err(|error| crate::error_py::kg_to_pyerr(*error))?;
 
         crate::warning_policy::announce(py, result.diagnostics.as_ref())?;
+        if is_mut {
+            if let Some(working) = tx.current() {
+                crate::write_budget::announce(py, working);
+            }
+        }
         if pre_parsed.explain {
             let view = crate::graph::pyapi::result_view::ResultView::from_cypher_result(result);
             return Py::new(py, view).map(|v| v.into_any());

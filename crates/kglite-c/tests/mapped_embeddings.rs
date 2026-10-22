@@ -126,6 +126,7 @@ fn options(embeddings: u32, verify: u32) -> KgliteLoadOptions {
         verify,
         columns: 0,
         topology: 0,
+        write_budget: 0,
     }
 }
 
@@ -417,4 +418,61 @@ fn the_topology_option_chooses_whether_sections_are_read_in_place() {
         "topology reads as default, which is auto"
     );
     unsafe { kglite_graph_free(graph) };
+}
+
+/// Run one write through a session over `graph`, returning its status. The
+/// session consumes the graph handle.
+fn write_status(graph: *mut KgliteGraph, query: &str) -> KgliteStatusCode {
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { kglite_session_new(graph, &mut session) },
+        KgliteStatusCode::Ok
+    );
+    let query = c(query);
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    let status = unsafe {
+        kglite_session_execute_mut(
+            session,
+            query.as_ptr(),
+            std::ptr::null(),
+            &mut result,
+            std::ptr::null_mut(),
+        )
+    };
+    if !result.is_null() {
+        unsafe { kglite_cypher_result_free(result) };
+    }
+    unsafe { kglite_session_free(session) };
+    status
+}
+
+#[test]
+fn the_write_budget_option_refuses_writes_at_the_limit() {
+    if !cfg!(unix) {
+        return; // Windows copies the topology sections: no overlay to meter.
+    }
+    let dir = scratch("write-budget");
+    let path = topology_file(&dir);
+    let write = "CREATE (:Doc {id: 900001, n: 1})";
+
+    for (budget, expected, label) in [
+        (0u64, KgliteStatusCode::Ok, "default"),
+        (u64::MAX, KgliteStatusCode::Ok, "no limit"),
+        (1, KgliteStatusCode::WriteBudgetExceeded, "one byte"),
+    ] {
+        let mut opts = options(0, 0);
+        opts.write_budget = budget;
+        let (rc, graph, _) = load(&path, Some(&opts));
+        assert_eq!(rc, KgliteStatusCode::Ok);
+        assert_eq!(write_status(graph, write), expected, "{label}");
+    }
+
+    // A caller built before `write_budget` existed declares the shorter
+    // struct, and the field reads as the default.
+    let mut old = options(0, 0);
+    old.write_budget = 1;
+    old.struct_size = 8 + 4 * std::mem::size_of::<u32>();
+    let (rc, graph, _) = load(&path, Some(&old));
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert_eq!(write_status(graph, write), KgliteStatusCode::Ok);
 }

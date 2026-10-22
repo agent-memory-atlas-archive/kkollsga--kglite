@@ -36,6 +36,12 @@ before upgrading.
 
 ### Added
 
+- **A read-only mapped load refuses writes once its unsaved writes grow past a budget, and asks for a save.**
+  - `kglite.load(path, write_budget=...)` and `open_session(path, write_budget=...)` take bytes, `None` (no limit) or `"default"`. The default is `max(512 MiB, half the file)`.
+  - At half the limit a write emits `kglite.WriteBudgetWarning`, once per upward crossing. At the limit a write raises `kglite.WriteBudgetExceededError` (code `WriteBudgetExceeded`, HTTP 507); a Cypher statement that crosses it is rolled back, and reads keep working.
+  - `save()` writes the changes out, serves the graph from the new file and starts the budget over. A save that cannot rebase (`layout="compact"`, Windows) keeps the memory, and the error says so.
+  - Memory storage, a graph with no mapped topology and a durable session (`open_session(path, durable=...)`) carry no budget.
+  - `graph_info()` reports `write_budget_bytes`, `write_budget_used_bytes` and `write_budget_state`. `kglite-mcp-server --write-budget` (and `extensions.write_budget.limit`), `kglite query --write-budget` and the additive `write_budget` field of `KgliteLoadOptions` (`0` default, `UINT64_MAX` no limit) set it elsewhere; the C ABI adds `KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED = 26`. See the Storage and memory guide.
 - **A large graph's topology and indexes are stored raw in the `.kgl` and read from it in `mapped` storage.**
   - A save of a graph with 65,536 nodes or 262,144 relationships or more records the node records, the out- and in-adjacency (sorted by relationship type) and the relationship endpoints, at about 40 bytes per node and 32 per relationship on top of the compressed copy. It also records the type member lists and an id index per type (65,536 nodes or more; ids all `UniqueId`, all int64 or all strings, and unique) and the peer counts per relationship type and direction (262,144 relationships or more). `layout="compact"` records none.
   - A load into `mapped` storage reads them in place. It no longer decodes the compressed topology, groups every node by type or builds a hash map of every id. A load into `memory` storage ignores them and builds what it always built.
@@ -113,6 +119,7 @@ before upgrading.
 
 ### Rust API
 
+- `KgError::WriteBudgetExceeded(String)` and `KgErrorCode::WriteBudgetExceeded` are new variants; an exhaustive `match` needs an arm. `LoadOptions::with_write_budget(WriteBudgetSetting)`, `WriteBudgetSetting::parse`, `WriteBudgetState`, `DirGraph::take_write_budget_warning` and the `GraphInfo` fields `write_budget_bytes`, `write_budget_used_bytes` and `write_budget_state` are new.
 - `GraphInfo` gains `topology_mapped_bytes`, `topology_heap_bytes` and `topology_overlay_entries`; a struct literal needs them. `LoadOptions` gains the `topology` field.
 - `GraphBackend` gains a `Frozen(Arc<FrozenGraph>)` variant, `GraphBackend::is_frozen()` and `GraphBackend::has_frozen_base()` (true under a write overlay too): a `match` over every variant needs an arm for it. `NodeData` is `repr(C)` and `PropertyStorage` is `repr(u8)`; their size and field offsets are unchanged.
 - `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.

@@ -2013,6 +2013,30 @@ fn the_topology_policy_decides_whether_an_opened_graph_reads_its_sections() {
     assert!(!topology_is_frozen(&memory));
 }
 
+#[test]
+fn the_write_budget_policy_reaches_an_opened_graph() {
+    use kglite::api::io::WriteBudgetSetting;
+    if !cfg!(unix) {
+        return; // Windows copies the sections: no overlay to meter.
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("big.kgl");
+    seed_big_topology(&p);
+    let state_of = |setting| {
+        let state = GraphState::default().with_write_budget(setting);
+        state.open_or_create(&p, None).unwrap();
+        state
+            .with_active(|active| active.kg.dir().graph_info())
+            .expect("active graph")
+    };
+    let default = state_of(None);
+    assert_eq!(default.write_budget_bytes, Some(512 << 20));
+    let sized = state_of(Some(WriteBudgetSetting::Bytes(4096)));
+    assert_eq!(sized.write_budget_bytes, Some(4096));
+    let free = state_of(Some(WriteBudgetSetting::Unlimited));
+    assert_eq!(free.write_budget_bytes, None);
+}
+
 thread_local! {
     static SCOPES: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
 }

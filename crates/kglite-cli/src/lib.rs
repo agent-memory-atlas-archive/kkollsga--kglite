@@ -177,6 +177,13 @@ enum Command {
               value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
                   .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
         topology: Option<kglite::api::io::MapPolicy>,
+        /// Ceiling on the unsaved writes a mapped load holds in memory:
+        /// `default` (`max(512 MiB, half the file)`), `unlimited`, or a size such
+        /// as `2GiB`. Past it a write is refused. Unset means `default`. An
+        /// in-memory graph, or one that decodes its topology, is not metered.
+        #[arg(long, value_name = "default|unlimited|SIZE",
+              value_parser = kglite::api::io::WriteBudgetSetting::parse)]
+        write_budget: Option<kglite::api::io::WriteBudgetSetting>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -542,6 +549,7 @@ fn dispatch(command: &Command) -> Result<()> {
             embeddings,
             columns,
             topology,
+            write_budget,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -556,6 +564,7 @@ fn dispatch(command: &Command) -> Result<()> {
                 embeddings: *embeddings,
                 columns: *columns,
                 topology: *topology,
+                write_budget: *write_budget,
                 ..QueryOptions::default()
             },
             agent_response::AgentOptions {
@@ -766,16 +775,18 @@ fn fresh_graph() -> Result<DirGraph> {
 }
 
 fn load_graph(path: &Path) -> Result<Arc<DirGraph>> {
-    load_graph_placed(path, None, None, None)
+    load_graph_placed(path, None, None, None, None)
 }
 
 /// [`load_graph`] with the operator's placement of embeddings (`--embeddings`)
-/// property columns (`--columns`) and topology sections (`--topology`).
+/// property columns (`--columns`), topology sections (`--topology`) and
+/// unsaved-write budget (`--write-budget`).
 fn load_graph_placed(
     path: &Path,
     embeddings: Option<kglite::api::io::MapPolicy>,
     columns: Option<kglite::api::io::MapPolicy>,
     topology: Option<kglite::api::io::MapPolicy>,
+    write_budget: Option<kglite::api::io::WriteBudgetSetting>,
 ) -> Result<Arc<DirGraph>> {
     let p = path.to_string_lossy().to_string();
     let mut options = kglite::api::io::LoadOptions::new();
@@ -787,6 +798,9 @@ fn load_graph_placed(
     }
     if let Some(policy) = topology {
         options = options.with_topology(policy);
+    }
+    if let Some(setting) = write_budget {
+        options = options.with_write_budget(setting);
     }
     kglite::api::io::load_file_with(&p, &options).with_context(|| format!("failed to open {p}"))
 }
@@ -811,7 +825,13 @@ fn run_export_sqlite(graph_path: &Path, output: Option<&Path>) -> Result<()> {
 
 fn run_query(path: &Path, query: &str, mode: Mode, options: QueryOptions) -> Result<()> {
     let graph = exec::with_valid_time_default(
-        load_graph_placed(path, options.embeddings, options.columns, options.topology)?,
+        load_graph_placed(
+            path,
+            options.embeddings,
+            options.columns,
+            options.topology,
+            options.write_budget,
+        )?,
         options.valid_time_default,
     );
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
@@ -840,7 +860,13 @@ fn run_agent_query(
         kglite::api::cypher::QueryWarningSink::Silent,
         || {
             let graph = exec::with_valid_time_default(
-                load_graph_placed(path, options.embeddings, options.columns, options.topology)?,
+                load_graph_placed(
+                    path,
+                    options.embeddings,
+                    options.columns,
+                    options.topology,
+                    options.write_budget,
+                )?,
                 options.valid_time_default,
             );
             let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
@@ -1983,7 +2009,7 @@ mod tests {
         .is_err());
 
         let frozen = |policy| {
-            load_graph_placed(&path, None, None, policy)
+            load_graph_placed(&path, None, None, policy, None)
                 .unwrap()
                 .graph
                 .is_frozen()
@@ -1992,6 +2018,39 @@ mod tests {
         // the graph from the frozen backend.
         assert!(frozen(default), "auto reads the topology sections");
         assert!(!frozen(memory), "--topology memory decodes the topology");
+    }
+
+    #[test]
+    fn the_write_budget_flag_parses_to_a_setting() {
+        use kglite::api::io::WriteBudgetSetting;
+        let budget_of = |extra: &[&str]| {
+            let mut args = vec!["kglite", "query", "g.kgl", "RETURN 1"];
+            args.extend_from_slice(extra);
+            let Some(Command::Query { write_budget, .. }) =
+                Cli::try_parse_from(args).unwrap().command
+            else {
+                panic!("a query command");
+            };
+            write_budget
+        };
+        assert_eq!(budget_of(&[]), None);
+        assert_eq!(
+            budget_of(&["--write-budget", "512M"]),
+            Some(WriteBudgetSetting::Bytes(512 << 20))
+        );
+        assert_eq!(
+            budget_of(&["--write-budget", "unlimited"]),
+            Some(WriteBudgetSetting::Unlimited)
+        );
+        assert!(Cli::try_parse_from([
+            "kglite",
+            "query",
+            "g.kgl",
+            "RETURN 1",
+            "--write-budget",
+            "x"
+        ])
+        .is_err());
     }
 
     #[test]
