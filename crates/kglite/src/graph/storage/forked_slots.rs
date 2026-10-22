@@ -116,12 +116,10 @@ pub struct ExtraIter<'a> {
 
 impl ExtraIter<'_> {
     fn next_run(&mut self) -> Option<u32> {
-        while let Some(slot) = self.run.next() {
-            if self.holes.is_empty() || !self.holes.contains(slot) {
-                return Some(slot);
-            }
-        }
-        None
+        let holes = self.holes;
+        self.run
+            .by_ref()
+            .find(|slot| holes.is_empty() || !holes.contains(*slot))
     }
 }
 
