@@ -26,8 +26,12 @@ test-hooks = ["kglite/test-seam"]
 kglite = { path = "../kglite", default-features = false }
 # napi8: type tags (class identity checks on params; below it napi's tag check
 # is a silent no-op), on top of napi6 BigInt/own-key enumeration and napi5 `create_date`.
-napi = { version = "3.14.2", default-features = false, features = ["napi8", "dyn-symbols"] }
-napi-derive = "3.6.12"
+# The floors travel as a pair: napi-derive 3.6.13 requires napi-derive-backend 6.1.6,
+# whose generated code calls `napi::bindgen_prelude::defer_native_borrow_scope`,
+# added in napi 3.15.0 (napi 3.14.2 with derive 3.6.12 fails to compile once the
+# backend resolves to 6.1.6).
+napi = { version = "3.15.0", default-features = false, features = ["napi8", "dyn-symbols"] }
+napi-derive = "3.6.13"
 # `Value::DateTime`/`Value::Timestamp` carry chrono types; same version as the engine.
 chrono = { version = "0.4.45", default-features = false }
 # Same allocator and v2 pin as kglite-py and kglite-c; see kglite-py/src/lib.rs.
