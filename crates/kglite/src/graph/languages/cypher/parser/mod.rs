@@ -480,7 +480,17 @@ impl CypherParser {
             });
         }
 
-        let (clauses, output_format) = self.parse_clause_sequence(false)?;
+        // `SHOW <listing> YIELD ...` is the CALL that opens the pipeline the
+        // clause loop then continues (WHERE, RETURN, ORDER BY, SKIP, LIMIT).
+        let leading_show = if self.show_listing_opens_pipeline() {
+            Some(self.parse_show_listing_call()?)
+        } else {
+            None
+        };
+        let (mut clauses, output_format) = self.parse_clause_sequence(false)?;
+        if let Some(call) = leading_show {
+            clauses.insert(0, call);
+        }
 
         if clauses.is_empty() {
             return Err("Empty query".to_string());

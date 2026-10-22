@@ -122,8 +122,8 @@
     {
       "path": "crates/kglite/src/graph/languages/cypher/executor/call_clause.rs",
       "qualified_name": "crate::CypherExecutor<'a>::execute_resolved_call_once",
-      "lines": 465,
-      "branches": 94,
+      "lines": 450,
+      "branches": 88,
       "nesting": 5
     },
     {

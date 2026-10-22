@@ -27,12 +27,21 @@ def bare_columns(g, call):
         "db.relationshipTypes()",
         "db.graph_stats()",
         "db.temporal.declarations()",
-        "db.indexes()",
     ],
 )
 def test_yield_star_columns_equal_the_bare_call(graph, call):
     """The registry backs both forms, so they must agree column for column."""
     assert list(graph.cypher(f"CALL {call} YIELD * RETURN *").columns) == bare_columns(graph, f"CALL {call}")
+
+
+def test_yield_star_on_a_show_listing_adds_the_columns_a_bare_call_omits(graph):
+    """db.indexes() and db.constraints() back SHOW commands whose bare form is
+    Neo4j's default shape; YIELD * yields every column, bare columns first."""
+    for call in ("db.indexes()", "db.constraints()"):
+        bare = bare_columns(graph, f"CALL {call}")
+        star = list(graph.cypher(f"CALL {call} YIELD * RETURN *").columns)
+        assert star[: len(bare)] == bare
+        assert len(star) > len(bare)
 
 
 def test_operator_case_on_a_declared_graph(graph):

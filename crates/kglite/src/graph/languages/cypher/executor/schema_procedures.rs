@@ -43,6 +43,8 @@ pub(super) fn execute_schema_procedure(
                 );
             Ok(constraints_to_rows(&constraints, yield_items))
         }
+        "dbms.procedures" => Ok(super::schema_ddl::show_procedures_result_set(yield_items)?.rows),
+        "dbms.functions" => Ok(super::schema_ddl::show_functions_result_set(yield_items)?.rows),
         "db.propertykeys" => {
             let keys =
                 crate::graph::introspection::schema_overview::collect_property_keys(executor.graph);

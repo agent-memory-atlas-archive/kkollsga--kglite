@@ -9,6 +9,16 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **`SHOW INDEXES | CONSTRAINTS | PROCEDURES | FUNCTIONS` take a full pipeline.**
+  - `SHOW <listing> YIELD <columns | *> [WHERE …] [RETURN … [ORDER BY …] [SKIP …] [LIMIT …]]` runs as the `CALL` of the procedure that lists the same rows, so filtering, projection, ordering and paging are those of `CALL … YIELD`. `SHOW <listing> WHERE …` reads as `YIELD *`.
+  - `BRIEF`, `VERBOSE` and a `RETURN` without `YIELD` are refused with an error rather than ignored. Before, `SHOW INDEXES` and `SHOW CONSTRAINTS` refused every modifier and `SHOW PROCEDURES` / `SHOW FUNCTIONS` took only a YIELD projection.
+  - `CALL dbms.procedures()` and `CALL dbms.functions()` are new procedures listing the same rows.
+  - `db.indexes()` and `SHOW INDEXES` add `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead` and `readCount`. `populationPercent` is `100.0` on an `ONLINE` index and `options` carries a vector index's dimension and similarity function; the rest are `null`.
+  - `db.constraints()` and `SHOW CONSTRAINTS` add `id`, `ownedIndex` and `options`, always `null`. A bare `SHOW INDEXES`, `SHOW CONSTRAINTS` and bare `CALL` of either keep their columns; the added ones come with a `YIELD` that names them or with `YIELD *`.
+- **`CALL dbms.components() YIELD … RETURN … LIMIT $limit` works on the Bolt server.** The bare call and the YIELD-only form were answered directly; the same row now runs under any `WHERE`, `RETURN`, `ORDER BY` or `LIMIT` that follows the YIELD.
+
 ### Fixed
 
 - **Embedding writes count against the write budget.**

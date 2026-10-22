@@ -330,6 +330,107 @@ pub(super) fn parse_server_facts_call(query: &str) -> Option<ServerFactsCall> {
     None
 }
 
+/// Rewrite `CALL dbms.components() [YIELD cols] <WHERE|RETURN|WITH ...>` into
+/// a query the engine answers: the one row `dbms.components()` reports becomes
+/// a literal `UNWIND`, and the YIELD columns (with their aliases) a `WITH`, so
+/// filtering, projection, ordering and paging reuse the engine's pipeline.
+/// `None` for the bare call and the YIELD-only forms (answered directly by
+/// [`parse_server_facts_call`]) and for anything this does not recognise,
+/// which falls through to the engine unchanged.
+pub(super) fn components_pipeline_rewrite(
+    query: &str,
+    name: &str,
+    versions: &[&str],
+    edition: &str,
+) -> Option<String> {
+    let mut body = query.trim();
+    if let Some(stripped) = body.strip_suffix(';') {
+        body = stripped.trim_end();
+    }
+    let rest = strip_keyword_ci(body, "call")?;
+    let rest = strip_keyword_ci(rest, "dbms.components")?;
+    let rest = rest.strip_prefix('(')?.trim_start();
+    let rest = rest.strip_prefix(')')?.trim_start();
+    let (yielded, tail) = match strip_keyword_ci(rest, "yield") {
+        Some(after) => {
+            let at = first_clause_keyword(after)?;
+            (Some(after[..at].trim()), &after[at..])
+        }
+        None => (None, rest),
+    };
+    let first_word = tail.split(|c: char| !c.is_ascii_alphabetic()).next()?;
+    if !["where", "return", "with"]
+        .iter()
+        .any(|k| first_word.eq_ignore_ascii_case(k))
+    {
+        return None;
+    }
+    let mut projected: Vec<(&str, &str)> = Vec::new();
+    match yielded {
+        None | Some("*") => {
+            projected.extend(COMPONENTS_COLUMNS.iter().map(|c| (*c, *c)));
+        }
+        Some(list) => {
+            for raw in list.split(',') {
+                let mut words = raw.split_whitespace();
+                let column = words.next()?;
+                COMPONENTS_COLUMNS.iter().find(|c| **c == column)?;
+                let alias = match (words.next(), words.next(), words.next()) {
+                    (None, ..) => column,
+                    (Some(kw), Some(alias), None) if kw.eq_ignore_ascii_case("as") => alias,
+                    _ => return None,
+                };
+                if projected.iter().any(|(_, a)| *a == alias) {
+                    return None;
+                }
+                projected.push((column, alias));
+            }
+        }
+    }
+    let quote = |text: &str| format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"));
+    let versions: Vec<String> = versions.iter().map(|v| quote(v)).collect();
+    let with: Vec<String> = projected
+        .iter()
+        .map(|(column, alias)| format!("__components.{column} AS {alias}"))
+        .collect();
+    Some(format!(
+        "UNWIND [{{name: {}, versions: [{}], edition: {}}}] AS __components WITH {} {}",
+        quote(name),
+        versions.join(", "),
+        quote(edition),
+        with.join(", "),
+        tail
+    ))
+}
+
+/// Byte offset of the first `WHERE`, `RETURN` or `WITH` word in `text`.
+fn first_clause_keyword(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        if bytes[start].is_ascii_alphabetic() && (start == 0 || !is_word_byte(bytes[start - 1])) {
+            let end = text[start..]
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .map_or(text.len(), |n| start + n);
+            let word = &text[start..end];
+            if ["where", "return", "with"]
+                .iter()
+                .any(|k| word.eq_ignore_ascii_case(k))
+            {
+                return Some(start);
+            }
+            start = end;
+        } else {
+            start += 1;
+        }
+    }
+    None
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
 /// Convert the engine's EXPLAIN step rows into Neo4j's nested Bolt plan
 /// shape: each node `{operatorType, args, identifiers, children}`, with the
 /// FINAL pipeline step as the root (Neo4j's root is the last operator) and

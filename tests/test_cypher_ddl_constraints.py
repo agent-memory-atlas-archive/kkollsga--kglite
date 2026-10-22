@@ -336,15 +336,22 @@ def test_show_constraints_matches_db_constraints(graph) -> None:
         "CALL db.constraints() YIELD name, type, entityType, labelsOrTypes, properties, propertyType "
         "RETURN name, type, entityType, labelsOrTypes, properties, propertyType"
     ).to_list()
+    assert graph.cypher("CALL db.constraints()").columns == list(_constraint_rows(graph)[0])
+    star = graph.cypher("SHOW CONSTRAINTS YIELD *").to_list()[0]
+    assert {"id", "ownedIndex", "options"} <= set(star) and star["id"] is None
     assert procedure == _constraint_rows(graph)
 
 
-def test_show_constraints_rejects_yield_and_points_at_the_right_procedure(graph) -> None:
-    with pytest.raises(kglite.CypherSyntaxError) as exc:
-        graph.cypher("SHOW CONSTRAINTS YIELD name")
-    message = str(exc.value)
-    assert "db.constraints()" in message, message
-    assert "db.indexes()" not in message, message
+def test_show_constraints_takes_a_yield_pipeline_and_refuses_what_it_cannot_honour(graph) -> None:
+    graph.cypher("CREATE CONSTRAINT u FOR (p:Person) REQUIRE p.name IS UNIQUE")
+    graph.cypher("CREATE CONSTRAINT e FOR (p:Person) REQUIRE p.age IS NOT NULL")
+    rows = graph.cypher("SHOW CONSTRAINTS YIELD name, type WHERE type = 'UNIQUENESS' RETURN name, type").to_list()
+    assert rows == [{"name": "u", "type": "UNIQUENESS"}]
+    ordered = graph.cypher("SHOW CONSTRAINTS YIELD name RETURN name ORDER BY name DESC LIMIT 1").to_list()
+    assert ordered == [{"name": "u"}]
+    for tail in ("BRIEF", "VERBOSE"):
+        with pytest.raises(kglite.CypherSyntaxError, match="YIELD or WHERE"):
+            graph.cypher(f"SHOW CONSTRAINTS {tail}")
 
 
 def test_show_constraints_works_on_a_read_only_graph(graph) -> None:
@@ -850,3 +857,43 @@ def test_an_ordinary_property_still_gets_the_data_scan() -> None:
     g.add_nodes(pd.DataFrame({"id": [1], "title": ["a"], "age": ["thirty"]}), "Person", "id", "title")
     with pytest.raises(kglite.ConstraintCreationError, match="existing"):
         g.cypher("CREATE CONSTRAINT c FOR (p:Person) REQUIRE p.age IS :: INTEGER")
+
+
+@pytest.mark.parametrize(
+    "statement,columns",
+    [
+        (
+            "SHOW CONSTRAINTS YIELD type, entityType, labelsOrTypes, properties "
+            "RETURN type, entityType, labelsOrTypes, properties",
+            ["type", "entityType", "labelsOrTypes", "properties"],
+        ),
+        (
+            "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties, propertyType "
+            "RETURN name, type, entityType, labelsOrTypes, properties, propertyType ORDER BY name LIMIT $limit",
+            ["name", "type", "entityType", "labelsOrTypes", "properties", "propertyType"],
+        ),
+        (
+            "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties "
+            "RETURN name, type, entityType, labelsOrTypes, properties, null AS propertyType ORDER BY name LIMIT $limit",
+            ["name", "type", "entityType", "labelsOrTypes", "properties", "propertyType"],
+        ),
+        (
+            "SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, owningConstraint "
+            "RETURN name, state, type, entityType, labelsOrTypes, properties, owningConstraint "
+            "ORDER BY name LIMIT $limit",
+            ["name", "state", "type", "entityType", "labelsOrTypes", "properties", "owningConstraint"],
+        ),
+        (
+            "SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, indexProvider, options "
+            "WHERE name = $index "
+            "RETURN name, state, type, entityType, labelsOrTypes, properties, indexProvider, options LIMIT 2",
+            ["name", "state", "type", "entityType", "labelsOrTypes", "properties", "indexProvider", "options"],
+        ),
+    ],
+)
+def test_the_graphbridge_show_statements_run_verbatim(graph, statement, columns) -> None:
+    graph.cypher("CREATE CONSTRAINT u FOR (p:Person) REQUIRE p.name IS UNIQUE")
+    graph.cypher("CREATE INDEX FOR (p:Person) ON (p.age)")
+    result = graph.cypher(statement, params={"limit": 10, "index": "Person.age"})
+    assert result.columns == columns
+    assert len(result) >= 1

@@ -131,9 +131,9 @@ mod writer_slot;
 use admission::wait_timeout_error;
 use auto_commit::{access_mode_error, is_write_statement};
 use intercepts::{
-    backup_stream, checkpoint_stream, parse_backup_call, parse_checkpoint_call,
-    parse_server_facts_call, server_facts_stream, BackupArg, BackupCall, CheckpointCall,
-    ServerFactsCall, ServerFactsVerb,
+    backup_stream, checkpoint_stream, components_pipeline_rewrite, parse_backup_call,
+    parse_checkpoint_call, parse_server_facts_call, server_facts_stream, BackupArg, BackupCall,
+    CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
 use result_stream::{decode_params, finish_stream, off_async_worker};
 use writer_slot::{ReapedHandles, SharedPermit, WriterPermit, WriterSlot};
@@ -668,6 +668,18 @@ impl BoltBackend for KgliteBackend {
         if let Some(call) = parse_server_facts_call(trimmed) {
             return Ok(self.run_server_facts(&call));
         }
+        // The same row under a full YIELD ... WHERE/RETURN pipeline runs in the
+        // engine over a literal row, so every clause after the CALL behaves as
+        // it does for any other query.
+        let (components_name, components_version) =
+            self.identity.components_row(env!("CARGO_PKG_VERSION"));
+        let components_query = components_pipeline_rewrite(
+            trimmed,
+            &components_name,
+            &[components_version.as_str()],
+            COMPONENTS_EDITION,
+        );
+        let query = components_query.as_deref().unwrap_or(query);
 
         // Held to the end of this function: the token's flag slot is recycled
         // when its last clone drops (see `inflight.rs`).
@@ -1995,6 +2007,150 @@ mod tests {
                 "must fall through to the engine: {query:?}"
             );
         }
+    }
+
+    /// The pipeline forms are rewritten for the engine; the forms the direct
+    /// answer covers, other procedures and malformed YIELDs are left alone.
+    #[test]
+    fn components_pipeline_rewrite_recognizes_only_the_pipeline_forms() {
+        let rewrite = |q: &str| components_pipeline_rewrite(q, "N", &["1.0"], "community");
+        let out = rewrite(
+            "CALL dbms.components() YIELD name, versions AS v WHERE name = 'N' RETURN name, v LIMIT $limit",
+        )
+        .expect("a pipeline");
+        assert_eq!(
+            out,
+            "UNWIND [{name: 'N', versions: ['1.0'], edition: 'community'}] AS __components \
+             WITH __components.name AS name, __components.versions AS v \
+             WHERE name = 'N' RETURN name, v LIMIT $limit"
+        );
+        assert!(rewrite("call DBMS.COMPONENTS() return 1").is_some());
+        for query in [
+            "CALL dbms.components()",
+            "CALL dbms.components() YIELD name",
+            "CALL dbms.components() YIELD nope RETURN nope",
+            "CALL dbms.components() YIELD name, name RETURN name",
+            "CALL dbms.components() YIELD name AS a, edition AS a RETURN a",
+            "CALL dbms.components(true) YIELD name RETURN name",
+            "CALL dbms.componentsExtra() YIELD name RETURN name",
+            "CALL dbms.components() ORDER BY 1",
+            "RETURN 'CALL dbms.components() YIELD name RETURN name' AS s",
+        ] {
+            assert_eq!(rewrite(query), None, "{query:?}");
+        }
+    }
+
+    /// The statement a Neo4j client sends, end to end through `execute`.
+    #[tokio::test]
+    async fn components_with_a_full_yield_pipeline_answers() {
+        let backend = memory_backend();
+        let session = SessionHandle("components-session".into());
+        let params = HashMap::from([("limit".to_string(), BoltValue::Integer(5))]);
+        let stream = backend
+            .execute(
+                &session,
+                "CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition LIMIT $limit",
+                &params,
+                &BoltDict::new(),
+                None,
+            )
+            .await
+            .expect("the pipeline runs");
+        assert_eq!(stream.metadata.columns, ["name", "versions", "edition"]);
+        assert_eq!(stream.records.len(), 1);
+        let (name, version) = backend.identity.components_row(env!("CARGO_PKG_VERSION"));
+        assert_eq!(stream.records[0].values[0], BoltValue::String(name));
+        assert_eq!(
+            stream.records[0].values[1],
+            BoltValue::List(vec![BoltValue::String(version)])
+        );
+        assert_eq!(
+            stream.records[0].values[2],
+            BoltValue::String("community".to_string())
+        );
+        let filtered = backend
+            .execute(
+                &session,
+                "CALL dbms.components() YIELD edition WHERE edition = 'enterprise' RETURN edition",
+                &HashMap::new(),
+                &BoltDict::new(),
+                None,
+            )
+            .await
+            .expect("a WHERE that matches nothing");
+        assert!(filtered.records.is_empty());
+    }
+
+    /// The SHOW statements GraphBridge sends, verbatim, through the Bolt entry
+    /// point.
+    #[tokio::test]
+    async fn show_listing_pipelines_answer_over_bolt() {
+        let backend = memory_backend();
+        let session = SessionHandle("show-session".into());
+        mutate_and_finish(
+            &backend,
+            &session,
+            "CREATE (:Doc {id: 1, title: 't'})",
+            true,
+        )
+        .await;
+        mutate_and_finish(
+            &backend,
+            &session,
+            "CREATE CONSTRAINT doc_title FOR (d:Doc) REQUIRE d.title IS UNIQUE",
+            true,
+        )
+        .await;
+        mutate_and_finish(
+            &backend,
+            &session,
+            "CREATE INDEX doc_title_idx FOR (d:Doc) ON (d.title)",
+            true,
+        )
+        .await;
+        let limit = HashMap::from([("limit".to_string(), BoltValue::Integer(10))]);
+        for (query, columns) in [
+            (
+                "SHOW CONSTRAINTS YIELD type, entityType, labelsOrTypes, properties RETURN type, entityType, labelsOrTypes, properties",
+                4,
+            ),
+            (
+                "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties, propertyType RETURN name, type, entityType, labelsOrTypes, properties, propertyType ORDER BY name LIMIT $limit",
+                6,
+            ),
+            (
+                "SHOW CONSTRAINTS YIELD name, type, entityType, labelsOrTypes, properties RETURN name, type, entityType, labelsOrTypes, properties, null AS propertyType ORDER BY name LIMIT $limit",
+                6,
+            ),
+            (
+                "SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, owningConstraint RETURN name, state, type, entityType, labelsOrTypes, properties, owningConstraint ORDER BY name LIMIT $limit",
+                7,
+            ),
+        ] {
+            let stream = backend
+                .execute(&session, query, &limit, &BoltDict::new(), None)
+                .await
+                .unwrap_or_else(|e| panic!("{query}: {e:?}"));
+            assert_eq!(stream.metadata.columns.len(), columns, "{query}");
+            assert!(!stream.records.is_empty(), "{query}");
+        }
+        let named = HashMap::from([(
+            "index".to_string(),
+            BoltValue::String("Doc.title".to_string()),
+        )]);
+        let stream = backend
+            .execute(
+                &session,
+                "SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, indexProvider, options WHERE name = $index RETURN name, state, type, entityType, labelsOrTypes, properties, indexProvider, options LIMIT 2",
+                &named,
+                &BoltDict::new(),
+                None,
+            )
+            .await
+            .expect("the filtered index listing");
+        assert_eq!(stream.metadata.columns.len(), 8);
+        assert!(!stream.records.is_empty());
+        assert!(stream.records.len() <= 2, "LIMIT 2 applies");
     }
 
     /// components_row follows the identity — and the row can never disagree

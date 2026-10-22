@@ -432,11 +432,10 @@ impl IndexKind {
 
 /// One index entry surfaced by `db.indexes()`.
 ///
-/// Field shape mirrors Neo4j's `db.indexes()` minimal subset:
-/// `name, type, entityType, labelsOrTypes, properties, state`, plus the two
-/// KGLite-specific freshness columns. Degenerate Neo4j columns (`uniqueness`,
-/// `populationPercent`, `indexProvider`) are omitted until a Bolt client
-/// demands them.
+/// Field shape mirrors Neo4j's `SHOW INDEXES`: `name, type, entityType,
+/// labelsOrTypes, properties, state`, plus the KGLite-specific freshness
+/// columns. The Neo4j columns KGLite has no state for (`id`, `indexProvider`,
+/// `owningConstraint`, `lastRead`, `readCount`) project as null.
 #[derive(Debug, Clone)]
 pub(crate) struct IndexInfo {
     /// Stable string ID — `"<node_type>.<property>"` for node equality/range,
@@ -475,6 +474,9 @@ pub(crate) struct IndexInfo {
     /// answer different questions ("what will a query fix by itself?" versus
     /// "what needs `embed_texts`?") and adding them would misreport both.
     pub unembedded: Option<usize>,
+    /// `(dimension, metric)` of the embedding store a `VECTOR` row indexes;
+    /// `None` on every other kind. Feeds the `options` column.
+    pub vector_config: Option<(usize, String)>,
 }
 
 /// All indexes installed on the graph, in deterministic order.
@@ -515,6 +517,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: None,
             delta: None,
             unembedded: None,
+            vector_config: None,
         });
     }
     for (node_type, properties, state) in graph.list_composite_indexes_with_state() {
@@ -528,6 +531,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: None,
             delta: None,
             unembedded: None,
+            vector_config: None,
         });
     }
     for (node_type, property, state) in graph.list_range_indexes_with_state() {
@@ -541,6 +545,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: None,
             delta: None,
             unembedded: None,
+            vector_config: None,
         });
     }
     for (node_type, property, store) in crate::graph::text_indexes::list_text_indexes(graph) {
@@ -554,6 +559,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: Some(store.is_stale(graph)),
             delta: Some(store.delta_size(graph)),
             unembedded: None,
+            vector_config: None,
         });
     }
     for (rel_type, property, store) in
@@ -569,6 +575,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: Some(store.relationship_is_stale(graph)),
             delta: Some(store.relationship_delta_size(graph)),
             unembedded: None,
+            vector_config: None,
         });
     }
     // Only stores that actually carry an HNSW index get a row. A store without
@@ -589,6 +596,18 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             stale: Some(status.stale),
             delta: Some(status.delta),
             unembedded: Some(status.unembedded),
+            vector_config: graph
+                .embeddings
+                .get(&crate::graph::embeddings::store_key(
+                    &status.node_type,
+                    &status.text_column,
+                ))
+                .map(|store| {
+                    (
+                        store.dimension,
+                        store.metric.clone().unwrap_or_else(|| "cosine".into()),
+                    )
+                }),
         });
     }
     for status in crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
@@ -602,12 +621,24 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             ),
             kind: IndexKind::Vector,
             entity_type: "RELATIONSHIP",
-            labels_or_types: vec![status.connection_type],
-            properties: vec![status.text_property],
+            labels_or_types: vec![status.connection_type.clone()],
+            properties: vec![status.text_property.clone()],
             state: "ONLINE",
             stale: Some(status.stale),
             delta: Some(status.delta),
             unembedded: Some(status.unembedded),
+            vector_config: graph
+                .edge_embeddings
+                .get(&crate::graph::edge_embeddings::edge_store_key(
+                    &status.connection_type,
+                    &status.text_property,
+                ))
+                .map(|store| {
+                    (
+                        store.dimension(),
+                        store.metric().unwrap_or("cosine").to_string(),
+                    )
+                }),
         });
     }
 
@@ -623,9 +654,9 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
 ///
 /// Field shape mirrors Neo4j's `SHOW CONSTRAINTS` subset KGLite can answer:
 /// `name, type, entityType, labelsOrTypes, properties, propertyType`. Neo4j also
-/// returns `id` and `ownedIndex`; KGLite has no equivalent state for either (a
-/// unique constraint *is* its index rather than owning a separate one), so they
-/// are omitted rather than filled with invented values. Documented in CYPHER.md.
+/// returns `id`, `ownedIndex` and `options`; KGLite has no equivalent state for
+/// them (a unique constraint *is* its index rather than owning a separate one),
+/// so they project as null rather than as invented values. Documented in CYPHER.md.
 #[derive(Debug, Clone)]
 pub(crate) struct ConstraintInfo {
     /// The name its author gave it, or the canonical `Label.property` /

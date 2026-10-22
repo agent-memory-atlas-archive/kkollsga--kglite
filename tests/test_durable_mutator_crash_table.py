@@ -568,7 +568,7 @@ EXEMPT: dict[str, str] = {
 _COVERED = {c for r in ROWS for c in r.covers} | set(EXEMPT)
 _GATE_CALL = re.compile(
     r"\.(logged_write_with_cursor|logged_write_lazy|logged_write|renumbering_write|logged_publish"
-    r"|unlogged_write_lazy|unlogged_write)\b"
+    r"|unlogged_write_lazy|unlogged_metered_write|unlogged_write)\b"
 )
 _FN = re.compile(r"\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+(\w+)")
 

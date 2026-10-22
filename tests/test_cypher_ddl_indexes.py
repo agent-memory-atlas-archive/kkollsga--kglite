@@ -235,6 +235,9 @@ def test_show_indexes_columns_match_db_indexes(graph) -> None:
         "CALL db.indexes() YIELD name, type, entityType, labelsOrTypes, properties, state, stale, delta, unembedded"
     )
     assert show.to_list() == call.to_list()
+    # Bare, the listing is the default shape; YIELD * adds Neo4j's other columns.
+    assert graph.cypher("CALL db.indexes()").columns == show.columns
+    assert graph.cypher("SHOW INDEXES YIELD *").columns[: len(show.columns)] == show.columns
 
 
 def test_show_indexes_is_a_read_not_a_mutation(graph) -> None:
@@ -249,9 +252,14 @@ def test_show_indexes_spellings(graph, statement) -> None:
     assert len(graph.cypher(statement).to_list()) == 1
 
 
-def test_show_indexes_modifiers_point_at_db_indexes(graph) -> None:
-    with pytest.raises(kglite.CypherSyntaxError, match=r"db\.indexes\(\)"):
-        graph.cypher("SHOW INDEXES YIELD name WHERE name = 'x'")
+def test_show_indexes_takes_a_yield_pipeline_and_refuses_what_it_cannot_honour(graph) -> None:
+    graph.cypher("CREATE INDEX FOR (p:Person) ON (p.city)")
+    rows = graph.cypher("SHOW INDEXES YIELD name, type WHERE name = 'Person.city' RETURN name, type").to_list()
+    assert rows == [{"name": "Person.city", "type": "PROPERTY"}]
+    assert graph.cypher("SHOW INDEXES YIELD name WHERE name = 'x' RETURN name").to_list() == []
+    for tail in ("BRIEF", "VERBOSE"):
+        with pytest.raises(kglite.CypherSyntaxError, match="YIELD or WHERE"):
+            graph.cypher(f"SHOW INDEXES {tail}")
 
 
 # ── DROP INDEX ───────────────────────────────────────────────────────

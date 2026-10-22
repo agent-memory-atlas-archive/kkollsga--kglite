@@ -105,7 +105,7 @@ impl CypherParser {
         if self.check(&CypherToken::Create) && self.create_opens_schema_ddl() {
             return self.parse_create_schema_ddl().map(Some);
         }
-        if !self.identifier_opens_schema_ddl() {
+        if !self.identifier_opens_schema_ddl() || self.show_listing_opens_pipeline() {
             return Ok(None);
         }
         if self.peek_soft_word("DROP") {
@@ -267,6 +267,88 @@ impl CypherParser {
         Ok(name)
     }
 
+    /// The procedure a `SHOW` listing noun reads, or `None` for a noun that is
+    /// not one of the four yieldable listings (`SHOW ONTOLOGY` has none).
+    fn show_listing_procedure(word: &str) -> Option<&'static str> {
+        if is_index_or_constraint_noun(word) {
+            return Some(if word.to_ascii_uppercase().starts_with("INDEX") {
+                "db.indexes"
+            } else {
+                "db.constraints"
+            });
+        }
+        match registry_noun_for_word(word) {
+            Some("PROCEDURES") => Some("dbms.procedures"),
+            Some("FUNCTIONS") => Some("dbms.functions"),
+            _ => None,
+        }
+    }
+
+    /// True when the `SHOW` at the current position is a listing of indexes,
+    /// constraints, procedures or functions followed by `YIELD` or `WHERE`:
+    /// the forms that continue as a pipeline. Peek-only.
+    pub(super) fn show_listing_opens_pipeline(&self) -> bool {
+        if !self.peek_soft_word("SHOW") {
+            return false;
+        }
+        let noun_offset = if self.peek_at(1) == Some(&CypherToken::All) {
+            2
+        } else {
+            1
+        };
+        self.soft_word_at(noun_offset)
+            .is_some_and(|noun| Self::show_listing_procedure(noun).is_some())
+            && matches!(
+                self.peek_at(noun_offset + 1),
+                Some(CypherToken::Yield) | Some(CypherToken::Where)
+            )
+    }
+
+    /// Parse `SHOW <listing> YIELD <cols | *> [WHERE ...]` as the `CALL` of the
+    /// procedure that lists the same rows, leaving WHERE / RETURN / ORDER BY /
+    /// SKIP / LIMIT to the ordinary clause loop, so filtering, projection,
+    /// ordering and paging are exactly those of `CALL ... YIELD`. `SHOW <listing>
+    /// WHERE ...` reads as `YIELD *`. Precondition:
+    /// [`Self::show_listing_opens_pipeline`].
+    pub(super) fn parse_show_listing_call(&mut self) -> Result<Clause, String> {
+        self.expect_soft_word("SHOW", "SHOW statement")?;
+        if self.check(&CypherToken::All) {
+            self.advance();
+        }
+        let noun = self
+            .soft_word_at(0)
+            .map(str::to_string)
+            .ok_or_else(|| "Expected a SHOW listing".to_string())?;
+        let procedure = Self::show_listing_procedure(&noun)
+            .ok_or_else(|| format!("SHOW {noun} does not support YIELD or WHERE"))?;
+        self.advance();
+        let yield_items = if self.check(&CypherToken::Yield) {
+            self.advance();
+            let items = if self.check(&CypherToken::Star) {
+                self.advance();
+                if self.check(&CypherToken::Comma) || self.check(&CypherToken::As) {
+                    return Err("YIELD * cannot be combined with named columns or an \
+                        alias; write YIELD * alone, or list the columns you want"
+                        .to_string());
+                }
+                super::super::executor::call_clause::yield_star_items(procedure, procedure)
+            } else {
+                self.parse_yield_items()?
+            };
+            if items.is_empty() {
+                return Err("YIELD requires at least one column name".to_string());
+            }
+            items
+        } else {
+            super::super::executor::call_clause::yield_star_items(procedure, procedure)
+        };
+        Ok(Clause::Call(CallClause {
+            procedure_name: procedure.to_string(),
+            parameters: Vec::new(),
+            yield_items,
+        }))
+    }
+
     /// Parse `SHOW INDEXES` / `SHOW CONSTRAINTS` (and the `ALL` and singular
     /// spellings). Precondition: [`Self::identifier_opens_schema_ddl`] returned
     /// true with `SHOW`.
@@ -278,40 +360,30 @@ impl CypherParser {
             self.advance();
         }
 
-        // `SHOW PROCEDURES [YIELD …]` / `SHOW FUNCTIONS [YIELD …]` — reads over
-        // the procedure and function registries. Unlike the INDEXES/CONSTRAINTS
-        // forms below, these accept a YIELD projection: Neo4j clients (Browser
-        // and G.V() autocomplete) send it, and a registry read has a natural
-        // column subset. WHERE and the other modifiers are still rejected.
+        // `SHOW PROCEDURES` / `SHOW FUNCTIONS` / `SHOW ONTOLOGY` — reads over
+        // the registries. With YIELD or WHERE the first two never get here:
+        // [`Self::show_listing_opens_pipeline`] sends them down the CALL path.
         if let Some(noun) = self.soft_word_at(0).and_then(registry_noun_for_word) {
             self.advance();
-            let yield_items = if self.check(&CypherToken::Yield) {
-                self.advance();
-                let items = self.parse_yield_items()?;
-                if items.is_empty() {
-                    return Err("YIELD requires at least one column name".to_string());
-                }
-                items
-            } else {
-                Vec::new()
-            };
             if self.has_tokens() && !self.check(&CypherToken::Semicolon) {
                 return Err(format!(
-                    "SHOW {noun} supports at most a YIELD projection; WHERE and \
-                     other modifiers are not supported"
+                    "SHOW {noun} takes no modifiers other than YIELD or WHERE{}",
+                    if noun == "ONTOLOGY" {
+                        "; SHOW ONTOLOGY does not support them, project with RETURN over \
+                         CALL ontology_audit() instead"
+                    } else {
+                        ""
+                    }
                 ));
             }
             return Ok(Clause::Schema(match noun {
-                "PROCEDURES" => SchemaCommand::ShowProcedures { yield_items },
-                "FUNCTIONS" => SchemaCommand::ShowFunctions { yield_items },
-                _ => {
-                    if !yield_items.is_empty() {
-                        return Err("SHOW ONTOLOGY does not support YIELD; project with RETURN \
-                             over CALL ontology_audit() instead"
-                            .to_string());
-                    }
-                    SchemaCommand::ShowOntology
-                }
+                "PROCEDURES" => SchemaCommand::ShowProcedures {
+                    yield_items: Vec::new(),
+                },
+                "FUNCTIONS" => SchemaCommand::ShowFunctions {
+                    yield_items: Vec::new(),
+                },
+                _ => SchemaCommand::ShowOntology,
             }));
         }
 
@@ -327,23 +399,9 @@ impl CypherParser {
         // silently ignoring the filter and returning every row — keeps the
         // failure honest, and `CALL db.indexes()` already accepts YIELD.
         if self.has_tokens() && !self.check(&CypherToken::Semicolon) {
-            // Point at the procedure that lists the *same* objects. Naming
-            // `db.indexes()` for `SHOW CONSTRAINTS` would send the reader to a
-            // listing of the wrong thing.
-            let (procedure, columns) = if noun.starts_with("INDEX") {
-                (
-                    "db.indexes()",
-                    "name, type, entityType, labelsOrTypes, properties, state, stale, delta",
-                )
-            } else {
-                (
-                    "db.constraints()",
-                    "name, type, entityType, labelsOrTypes, properties",
-                )
-            };
             return Err(format!(
-                "SHOW {noun} does not support YIELD / WHERE / BRIEF / VERBOSE modifiers; \
-                 use `CALL {procedure} YIELD {columns}` for filtering and projection"
+                "SHOW {noun} takes YIELD or WHERE, then RETURN / ORDER BY / SKIP / LIMIT; \
+                 BRIEF, VERBOSE and other modifiers are not supported"
             ));
         }
         Ok(Clause::Schema(command))
@@ -804,46 +862,107 @@ mod tests {
     }
 
     #[test]
-    fn show_functions_accepts_both_spellings_and_a_yield_projection() {
-        assert_eq!(
-            schema("SHOW FUNCTIONS"),
-            SchemaCommand::ShowFunctions {
-                yield_items: Vec::new()
-            }
-        );
-        assert_eq!(
-            schema("SHOW FUNCTION"),
-            SchemaCommand::ShowFunctions {
-                yield_items: Vec::new()
-            }
-        );
-        // The exact query G.V() sends on connect (measured 2026-08-15).
-        let SchemaCommand::ShowFunctions { yield_items } =
-            schema("SHOW FUNCTIONS YIELD name, description, signature")
-        else {
-            panic!("not a ShowFunctions");
-        };
-        let names: Vec<&str> = yield_items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, ["name", "description", "signature"]);
-        assert!(yield_items.iter().all(|i| i.alias.is_none()));
-
-        let SchemaCommand::ShowFunctions { yield_items } =
-            schema("SHOW FUNCTIONS YIELD name AS fn")
-        else {
-            panic!("not a ShowFunctions");
-        };
-        assert_eq!(yield_items[0].alias.as_deref(), Some("fn"));
+    fn show_functions_accepts_both_spellings() {
+        for input in ["SHOW FUNCTIONS", "SHOW FUNCTION", "SHOW ALL FUNCTIONS"] {
+            assert_eq!(
+                schema(input),
+                SchemaCommand::ShowFunctions {
+                    yield_items: Vec::new()
+                },
+                "{input}"
+            );
+        }
     }
 
-    /// FUNCTIONS is a SHOW-only noun, and the modifier rejection names the
-    /// noun the reader typed rather than a hard-coded PROCEDURES.
+    /// The first clause of a `SHOW <listing> YIELD|WHERE ...` statement: the
+    /// `CALL` of the procedure listing the same rows, then the ordinary tail.
+    fn show_call(input: &str) -> (CallClause, Vec<Clause>) {
+        let query =
+            parse_cypher(input).unwrap_or_else(|e| panic!("`{input}` failed to parse: {e}"));
+        let mut clauses = query.clauses.into_iter();
+        match clauses.next() {
+            Some(Clause::Call(call)) => (call, clauses.collect()),
+            other => panic!("`{input}` parsed as {other:?}, not a CALL"),
+        }
+    }
+
+    /// The exact query G.V() sends on connect (measured 2026-08-15), and the
+    /// alias form, still read as a projection.
     #[test]
-    fn show_functions_rejects_modifiers_and_drop() {
-        assert!(parse_error("SHOW FUNCTIONS WHERE name = 'toUpper'")
-            .contains("SHOW FUNCTIONS supports at most a YIELD projection"));
-        assert!(parse_error("SHOW PROCEDURES WHERE name = 'pagerank'")
-            .contains("SHOW PROCEDURES supports at most a YIELD projection"));
+    fn show_listing_yield_is_the_call_of_its_registry_procedure() {
+        let (call, tail) = show_call("SHOW FUNCTIONS YIELD name, description, signature");
+        assert_eq!(call.procedure_name, "dbms.functions");
+        let names: Vec<&str> = call.yield_items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["name", "description", "signature"]);
+        assert!(tail.is_empty());
+        let (call, _) = show_call("SHOW FUNCTIONS YIELD name AS fn");
+        assert_eq!(call.yield_items[0].alias.as_deref(), Some("fn"));
+        for (input, procedure) in [
+            ("SHOW PROCEDURES YIELD name", "dbms.procedures"),
+            ("SHOW ALL INDEXES YIELD name", "db.indexes"),
+            ("SHOW INDEX YIELD name", "db.indexes"),
+            ("SHOW CONSTRAINTS YIELD name", "db.constraints"),
+            ("SHOW CONSTRAINT YIELD name", "db.constraints"),
+        ] {
+            assert_eq!(show_call(input).0.procedure_name, procedure, "{input}");
+        }
+    }
+
+    #[test]
+    fn show_listing_where_return_order_skip_limit_follow_the_yield() {
+        let (call, tail) = show_call(
+            "SHOW INDEXES YIELD name, type WHERE type = 'RANGE' \
+             RETURN name ORDER BY name SKIP 1 LIMIT $limit",
+        );
+        assert_eq!(call.procedure_name, "db.indexes");
+        let kinds: Vec<&str> = tail
+            .iter()
+            .map(|c| match c {
+                Clause::Where(_) => "where",
+                Clause::Return(_) => "return",
+                Clause::OrderBy(_) => "order",
+                Clause::Skip(_) => "skip",
+                Clause::Limit(_) => "limit",
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["where", "return", "order", "skip", "limit"]);
+    }
+
+    /// `YIELD *` and a bare WHERE stand for every column, in declared order.
+    #[test]
+    fn show_listing_yield_star_and_bare_where_yield_every_column() {
+        let (star, _) = show_call("SHOW CONSTRAINTS YIELD *");
+        let (bare, tail) = show_call("SHOW CONSTRAINTS WHERE type = 'UNIQUENESS'");
+        let names = |call: &CallClause| -> Vec<String> {
+            call.yield_items.iter().map(|i| i.name.clone()).collect()
+        };
+        assert_eq!(names(&star), names(&bare));
+        assert!(names(&star).contains(&"ownedIndex".to_string()));
+        assert_eq!(tail.len(), 1);
+        assert!(parse_cypher("SHOW CONSTRAINTS YIELD *, name").is_err());
+        assert!(parse_cypher("SHOW CONSTRAINTS YIELD name, *").is_err());
+    }
+
+    /// A modifier the pipeline cannot honour is refused, never ignored.
+    #[test]
+    fn show_listing_modifiers_without_yield_or_where_are_refused() {
+        for noun in ["INDEXES", "CONSTRAINTS", "PROCEDURES", "FUNCTIONS"] {
+            for tail in ["VERBOSE", "BRIEF", "RETURN 1", "LIMIT 1"] {
+                let err = parse_error(&format!("SHOW {noun} {tail}"));
+                assert!(err.contains("YIELD or WHERE"), "SHOW {noun} {tail}: {err}");
+            }
+        }
+        assert!(parse_error("SHOW ONTOLOGY YIELD x").contains("SHOW ONTOLOGY"));
         assert!(!parse_error("DROP FUNCTIONS").is_empty());
+    }
+
+    /// A SHOW listing is a statement opener: later in a pipeline it stays an
+    /// error, as every schema command does.
+    #[test]
+    fn show_listing_pipeline_is_only_a_statement_opener() {
+        assert!(parse_cypher("MATCH (n) SHOW INDEXES YIELD name").is_err());
+        assert!(parse_cypher("CALL { SHOW INDEXES YIELD name RETURN name } RETURN 1").is_err());
     }
 
     #[test]
@@ -1180,21 +1299,6 @@ mod tests {
         let err = parse_error("DROP INDEX ON :Person(email)");
         assert!(err.contains("Neo4j 3.x"), "got: {err}");
         assert!(err.contains("DROP INDEX FOR"), "got: {err}");
-    }
-
-    #[test]
-    fn show_indexes_modifiers_point_at_db_indexes() {
-        let err = parse_error("SHOW INDEXES YIELD name");
-        assert!(err.contains("db.indexes()"), "got: {err}");
-    }
-
-    /// The rejection must name the procedure listing the *same* objects, never
-    /// `db.indexes()`.
-    #[test]
-    fn show_constraints_modifiers_point_at_db_constraints() {
-        let err = parse_error("SHOW CONSTRAINTS YIELD name");
-        assert!(err.contains("db.constraints()"), "got: {err}");
-        assert!(!err.contains("db.indexes()"), "got: {err}");
     }
 
     #[test]

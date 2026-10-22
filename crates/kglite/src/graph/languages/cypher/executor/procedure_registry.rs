@@ -689,6 +689,13 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "stale",
             "delta",
             "unembedded",
+            "id",
+            "populationPercent",
+            "indexProvider",
+            "owningConstraint",
+            "options",
+            "lastRead",
+            "readCount",
         ],
     },
     ProcedureSpec {
@@ -702,6 +709,33 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
             "labelsOrTypes",
             "properties",
             "propertyType",
+            "id",
+            "ownedIndex",
+            "options",
+        ],
+    },
+    ProcedureSpec {
+        name: "dbms.procedures",
+        aliases: &[],
+        description: "Every registered procedure with its mode and signature, the rows SHOW PROCEDURES lists",
+        columns: &[
+            "name",
+            "description",
+            "mode",
+            "worksOnSystem",
+            "signature",
+        ],
+    },
+    ProcedureSpec {
+        name: "dbms.functions",
+        aliases: &[],
+        description: "Every scalar function with its category, signature and aliases, the rows SHOW FUNCTIONS lists",
+        columns: &[
+            "name",
+            "category",
+            "description",
+            "signature",
+            "aliases",
         ],
     },
     ProcedureSpec {
@@ -879,6 +913,20 @@ pub(super) const MUTATING_PROCEDURES: &[&str] = &[
     "db.ontology.clear",
 ];
 
+/// The columns a bare `CALL proc()` (and the bare `SHOW` form of a listing)
+/// returns. They are the whole declared list except for the four listings
+/// behind a `SHOW` command, whose Neo4j-only extras are yieldable by name or
+/// through `YIELD *` but not part of the default shape.
+pub(super) fn default_columns(spec: &ProcedureSpec) -> &'static [&'static str] {
+    match spec.name {
+        "db.indexes" => super::show_indexes::SHOW_INDEXES_COLUMNS,
+        "db.constraints" => super::schema_ddl::SHOW_CONSTRAINTS_COLUMNS,
+        "dbms.procedures" => super::schema_ddl::SHOW_PROCEDURES_DEFAULT,
+        "dbms.functions" => super::schema_ddl::SHOW_FUNCTIONS_DEFAULT,
+        _ => spec.columns,
+    }
+}
+
 /// Whether `name` (canonical spelling or alias, any case) is a mutating
 /// procedure.
 pub(super) fn is_mutating_procedure(name: &str) -> bool {
@@ -904,6 +952,8 @@ const CONTEXT_FREE_PROCEDURES: &[&str] = &[
     "db.relationshipTypes",
     "db.indexes",
     "db.constraints",
+    "dbms.procedures",
+    "dbms.functions",
     "db.propertyKeys",
     "db.schema",
     "db.schema.visualization",
@@ -1005,6 +1055,32 @@ pub(super) fn procedure_mode(name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A listing's bare form returns a subset of what its procedure yields,
+    /// and the registry spells out the full list (the docs table is rendered
+    /// from the source text); every default must be one of those columns.
+    #[test]
+    fn the_show_defaults_are_columns_of_their_procedures() {
+        for procedure in [
+            "db.indexes",
+            "db.constraints",
+            "dbms.procedures",
+            "dbms.functions",
+        ] {
+            let spec = find_procedure(procedure).unwrap();
+            let defaults = default_columns(spec);
+            assert!(!defaults.is_empty(), "{procedure}");
+            assert!(
+                defaults.iter().all(|c| spec.columns.contains(c)),
+                "{procedure}"
+            );
+            assert!(defaults.len() <= spec.columns.len(), "{procedure}");
+        }
+        assert_eq!(
+            default_columns(find_procedure("db.labels").unwrap()),
+            ["label"]
+        );
+    }
 
     /// Canonical names and aliases must be unique across the table — a
     /// duplicate would make `find_procedure` silently answer with whichever

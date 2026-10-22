@@ -3140,8 +3140,10 @@ feeds autocomplete.
 |-----------|---------------|---------|
 | `CALL db.labels()` | `label` | One row per node-type ("label") in the graph, sorted alphabetically |
 | `CALL db.relationshipTypes()` | `relationshipType` | One row per connection-type ("relationship type") in the graph, sorted alphabetically |
-| `CALL db.indexes()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded` | One row per index installed on the graph, sorted by `name`. `stale`/`delta` are non-null on the opt-in kinds (`FULLTEXT`, `VECTOR`); `unembedded` on `VECTOR` alone. `SHOW INDEXES` returns the same rows — see [Cypher index DDL](#cypher-index-ddl) |
-| `CALL db.constraints()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType` | One row per declared constraint, sorted by `name`. `SHOW CONSTRAINTS` returns the same rows — see [Cypher constraint DDL](#cypher-constraint-ddl) |
+| `CALL db.indexes()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded`, `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead`, `readCount` | One row per index installed on the graph, sorted by `name`. `stale`/`delta` are non-null on the opt-in kinds (`FULLTEXT`, `VECTOR`); `unembedded` on `VECTOR` alone. A bare call returns the first nine; the last seven are Neo4j 5's remaining columns, yieldable by name or with `YIELD *` (see [`SHOW INDEXES`](#show-indexes)). `SHOW INDEXES` returns the same rows — see [Cypher index DDL](#cypher-index-ddl) |
+| `CALL db.constraints()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType`, `id`, `ownedIndex`, `options` | One row per declared constraint, sorted by `name`. A bare call returns the first six; `id`, `ownedIndex` and `options` are yieldable and always `null`. `SHOW CONSTRAINTS` returns the same rows — see [Cypher constraint DDL](#cypher-constraint-ddl) |
+| `CALL dbms.procedures()` | `name`, `description`, `mode`, `worksOnSystem`, `signature` | The registry rows `SHOW PROCEDURES` lists |
+| `CALL dbms.functions()` | `name`, `category`, `description`, `signature`, `aliases` | The function rows `SHOW FUNCTIONS` lists |
 | `CALL db.propertyKeys()` | `propertyKey` | One row per declared property name (node + relationship), sorted alphabetically |
 | `CALL db.schema()` | `nodeType`, `properties` | One row per node-type with its sorted list of property names — the in-language counterpart of Python `describe()` |
 | `CALL db.schema.visualization()` | `nodes`, `relationships` | One row: virtual nodes (one per label; `name`/`indexes`/`constraints` properties) and virtual relationships per observed (source label, type, target label) combination — what Neo4j Browser's schema tab renders |
@@ -3164,17 +3166,27 @@ declared column of the procedure, in declared order. It is legal anywhere a
 mixing it with named columns (`YIELD *, kind`) or aliasing it is an error, and an
 unknown procedure keeps its usual error.
 
-**`SHOW PROCEDURES [YIELD …]`** lists every procedure from the same registry
-`CALL list_procedures()` reads. Neo4j's default columns are `name`,
-`description`, `mode`, `worksOnSystem`. `signature` is yieldable.
+**`SHOW PROCEDURES`** lists every procedure from the same registry
+`CALL list_procedures()` reads. Its default columns are `name`, `description`,
+`mode`, `worksOnSystem`; `signature` is yieldable.
 
-**`SHOW FUNCTIONS [YIELD …]`** lists every scalar and aggregate function from a
+**`SHOW FUNCTIONS`** lists every scalar and aggregate function from a
 registry whose every entry is test-verified to dispatch. The default columns are
 `name`, `category`, `description`. `signature` and `aliases` are yieldable. IDEs
 use both listings for autocomplete.
 
+**`SHOW INDEXES | CONSTRAINTS | PROCEDURES | FUNCTIONS` takes a pipeline.**
+`SHOW <listing> YIELD <columns | *> [WHERE …] [RETURN … [ORDER BY …] [SKIP …] [LIMIT …]]`
+runs as the `CALL` of the procedure that lists the same rows
+(`db.indexes()`, `db.constraints()`, `dbms.procedures()`, `dbms.functions()`),
+so filtering, projection, ordering and paging behave exactly as after
+`CALL … YIELD`. `YIELD *` yields every column, including the ones a bare listing omits. `SHOW <listing> WHERE …` reads as `YIELD *`. An unknown column is
+an error that lists the choices; `BRIEF`, `VERBOSE` and a `RETURN` without
+`YIELD` are refused, because KGLite would otherwise ignore them.
+
 **Bolt server only:** `CALL dbms.components()`, `CALL dbms.showCurrentUser()`,
-and `SHOW DATABASES` are answered by `kglite-bolt-server`. They report server
+and `SHOW DATABASES` are answered by `kglite-bolt-server`. `dbms.components()`
+also takes `YIELD`, `WHERE`, `RETURN`, `ORDER BY` and `LIMIT $param`. They report server
 facts (identity, configured user, served database) and are not available
 in-process. See the
 [Bolt server guide](https://kglite.readthedocs.io/en/latest/operators/bolt-server.html).
@@ -3340,8 +3352,10 @@ Parameters and examples are in the sections above and in
 | `list_procedures` | `name`, `description`, `yield_columns` | List all available procedures |
 | `db.labels` | `label` | All node-type names ('labels') in the graph, sorted |
 | `db.relationshipTypes` | `relationshipType` | All connection-type names ('relationship types') in the graph, sorted |
-| `db.indexes` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded` | All indexes in the graph (equality, composite, range, text, vector), sorted by name |
-| `db.constraints` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType` | All declared constraints (UNIQUENESS, NODE_KEY, NODE_PROPERTY_EXISTENCE, NODE_PROPERTY_TYPE, RELATIONSHIP_PROPERTY_EXISTENCE, RELATIONSHIP_PROPERTY_TYPE), sorted by name |
+| `db.indexes` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded`, `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead`, `readCount` | All indexes in the graph (equality, composite, range, text, vector), sorted by name |
+| `db.constraints` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType`, `id`, `ownedIndex`, `options` | All declared constraints (UNIQUENESS, NODE_KEY, NODE_PROPERTY_EXISTENCE, NODE_PROPERTY_TYPE, RELATIONSHIP_PROPERTY_EXISTENCE, RELATIONSHIP_PROPERTY_TYPE), sorted by name |
+| `dbms.procedures` | `name`, `description`, `mode`, `worksOnSystem`, `signature` | Every registered procedure with its mode and signature, the rows SHOW PROCEDURES lists |
+| `dbms.functions` | `name`, `category`, `description`, `signature`, `aliases` | Every scalar function with its category, signature and aliases, the rows SHOW FUNCTIONS lists |
 | `db.propertyKeys` | `propertyKey` | All property keys declared in the graph (node + relationship), sorted |
 | `db.schema` | `nodeType`, `properties` | One row per node type with its sorted property-name list |
 | `db.schema.visualization` | `nodes`, `relationships` | Schema graph for visualization: one row with virtual nodes (one per label; properties name/indexes/constraints) and virtual relationships (one per observed source-label/type/target-label combination). |
@@ -4544,6 +4558,9 @@ rows and columns as `CALL db.indexes()`:
 | `stale` | whether the index is behind the graph. `null` on `PROPERTY` / `RANGE` rows, which are maintained on every write and have no staleness to report |
 | `delta` | how many documents (or vectors) the index would re-read to catch up — an upper bound. `null` alongside a `null` `stale` |
 | `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
+| `populationPercent` | `100.0` for an `ONLINE` index, `null` for a `DEFERRED` one |
+| `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; `null` elsewhere |
+| `id`, `indexProvider`, `owningConstraint`, `lastRead`, `readCount` | always `null` |
 
 `stale` / `delta` are KGLite-specific. They describe the catch-up contract both
 opt-in index kinds share: the index does not follow writes eagerly. It records
@@ -4578,12 +4595,12 @@ delete them. A relationship vector index uses the unambiguous canonical name
 `relationship:SUPPORTS.evidence`. It appears with `entityType: RELATIONSHIP`
 through both `SHOW INDEXES` and `CALL db.indexes()`.
 
-Neo4j 5 also returns `id`, `populationPercent`, `indexProvider`,
-`owningConstraint`, `lastRead`, and `readCount`. KGLite has no equivalent state
-for any of them, so they are **omitted** rather than filled with invented
-values. For filtering and projection use `CALL db.indexes() YIELD …`. `SHOW
-INDEXES` rejects `YIELD` / `WHERE` / `BRIEF` / `VERBOSE` rather than accepting a
-filter it would ignore.
+A bare `SHOW INDEXES` returns the first nine columns. The last seven are Neo4j 5's own, returned when `YIELD` names them or is `*`. KGLite keeps no state for `id`,
+`indexProvider`, `owningConstraint` (a constraint is its index rather than
+owning one), `lastRead` or `readCount`, so they are `null`, not invented values.
+`SHOW INDEXES YIELD … [WHERE …] [RETURN …]` filters, projects, orders and pages
+like `CALL db.indexes() YIELD …`; `BRIEF` and `VERBOSE` are refused rather than
+ignored.
 
 #### Forms that are rejected
 
@@ -4859,17 +4876,17 @@ by a write scope. It returns the same rows and columns as
 | `labelsOrTypes` | single-element list holding the node type — or the relationship type on a relationship row |
 | `properties` | constrained property names, in declaration order |
 | `propertyType` | the declared type on a `NODE_PROPERTY_TYPE` / `RELATIONSHIP_PROPERTY_TYPE` row, `null` on every other kind |
+| `id`, `ownedIndex`, `options` | always `null` |
 
 A node key is **one** row (`NODE_KEY`), not a uniqueness row plus an existence
 row. A declared property type is its own row, never folded into another, so a
 property can be `UNIQUE` **and** typed.
 
-Neo4j 5 also returns `id` and `ownedIndex`. KGLite has no equivalent state for
-either (a unique constraint *is* its index rather than owning a separate one), so
-they are **omitted** rather than filled with invented values. For filtering and
-projection use `CALL db.constraints() YIELD …`. `SHOW CONSTRAINTS` rejects
-`YIELD` / `WHERE` / `BRIEF` / `VERBOSE` rather than accepting a filter it would
-ignore.
+A bare `SHOW CONSTRAINTS` returns the first six columns; `YIELD` adds `id`, `ownedIndex` and `options`. KGLite keeps no state for them (a unique constraint
+*is* its index rather than owning a separate one), so they are `null`, not
+invented values. `SHOW CONSTRAINTS YIELD … [WHERE …] [RETURN …]` filters,
+projects, orders and pages like `CALL db.constraints() YIELD …`; `BRIEF` and
+`VERBOSE` are refused rather than ignored.
 
 #### Forms that are rejected
 

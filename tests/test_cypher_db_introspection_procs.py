@@ -316,8 +316,9 @@ def test_show_procedures_agrees_with_list_procedures(small_graph):
 def test_show_procedures_rejects_unknown_yield_and_where(small_graph):
     with pytest.raises(Exception, match="does not yield"):
         small_graph.cypher("SHOW PROCEDURES YIELD nope")
-    with pytest.raises(Exception, match="YIELD projection"):
-        small_graph.cypher("SHOW PROCEDURES WHERE name = 'x'")
+    assert small_graph.cypher("SHOW PROCEDURES WHERE name = 'x'").to_list() == []
+    with pytest.raises(Exception, match="YIELD or WHERE"):
+        small_graph.cypher("SHOW PROCEDURES VERBOSE")
 
 
 def test_list_procedures_advertises_true_columns(small_graph):
@@ -510,8 +511,10 @@ def test_show_functions_listing_case_matches_the_callable(small_graph):
 def test_show_functions_rejects_unknown_yield_and_where(small_graph):
     with pytest.raises(Exception, match="does not yield"):
         small_graph.cypher("SHOW FUNCTIONS YIELD nope")
-    with pytest.raises(Exception, match="YIELD projection"):
-        small_graph.cypher("SHOW FUNCTIONS WHERE name = 'toUpper'")
+    rows = small_graph.cypher("SHOW FUNCTIONS YIELD name WHERE name = 'toUpper' RETURN name").to_list()
+    assert rows == [{"name": "toUpper"}]
+    with pytest.raises(Exception, match="YIELD or WHERE"):
+        small_graph.cypher("SHOW FUNCTIONS VERBOSE")
 
 
 def test_functions_and_procedures_are_separate_registries(small_graph):

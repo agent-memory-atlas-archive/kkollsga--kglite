@@ -1083,33 +1083,18 @@ impl<'a> CypherExecutor<'a> {
                 }
                 rows
             }
-            // Neo4j schema introspection procedures, each yielding a single
-            // string column (`label` / `relationshipType`). The underlying
-            // helpers in `introspection::schema_overview` are the single
-            // source of truth and are also consumed by `describe()`.
-            "db.labels" => super::schema_procedures::execute_schema_procedure(
-                self,
-                proc_name,
-                &params,
-                &clause.yield_items,
-            )?,
-            "db.relationshiptypes" => super::schema_procedures::execute_schema_procedure(
-                self,
-                proc_name,
-                &params,
-                &clause.yield_items,
-            )?,
-            // db.constraints() lists every declared constraint, sharing its
-            // collector with `SHOW CONSTRAINTS` the way db.indexes() shares one
-            // with `SHOW INDEXES`.
-            "db.indexes" | "db.constraints" => super::schema_procedures::execute_schema_procedure(
-                self,
-                proc_name,
-                &params,
-                &clause.yield_items,
-            )?,
-            // db.propertyKeys() — every declared property name, one per row.
-            "db.propertykeys" => super::schema_procedures::execute_schema_procedure(
+            // Neo4j schema introspection and registry listings. The helpers in
+            // `introspection::schema_overview` are the single source of truth
+            // and are also consumed by `describe()`; `db.indexes`,
+            // `db.constraints`, `dbms.procedures` and `dbms.functions` share
+            // their rows with the `SHOW` commands.
+            "db.labels"
+            | "db.relationshiptypes"
+            | "db.indexes"
+            | "db.constraints"
+            | "dbms.procedures"
+            | "dbms.functions"
+            | "db.propertykeys" => super::schema_procedures::execute_schema_procedure(
                 self,
                 proc_name,
                 &params,
@@ -1854,7 +1839,9 @@ pub(crate) fn resolve_yield_items(
 ) -> Result<Vec<YieldItem>, String> {
     let valid = valid_yield_columns(proc_name, display_name)?;
     if requested.is_empty() {
-        return Ok(valid
+        let defaults = super::procedure_registry::find_procedure(proc_name)
+            .map_or(valid, super::procedure_registry::default_columns);
+        return Ok(defaults
             .iter()
             .map(|name| YieldItem {
                 name: (*name).to_string(),
@@ -1887,7 +1874,17 @@ pub(crate) fn yield_star_items(proc_name: &str, display_name: &str) -> Vec<Yield
             alias: None,
         }];
     }
-    resolve_yield_items(proc_name, display_name, &[]).unwrap_or_default()
+    valid_yield_columns(proc_name, display_name)
+        .map(|columns| {
+            columns
+                .iter()
+                .map(|name| YieldItem {
+                    name: (*name).to_string(),
+                    alias: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The YIELD columns a procedure exposes, or an unknown-procedure error.
@@ -1926,29 +1923,8 @@ pub(super) fn indexes_to_rows(
         let mut row = ResultRow::new();
         for item in yield_items {
             let alias = item.alias.as_deref().unwrap_or(&item.name);
-            let val = match item.name.as_str() {
-                "name" => Value::String(info.name.clone()),
-                "type" => Value::String(info.kind.neo4j_type().to_string()),
-                "entityType" => Value::String(info.entity_type.to_string()),
-                "labelsOrTypes" => Value::List(
-                    info.labels_or_types
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-                "properties" => {
-                    Value::List(info.properties.iter().cloned().map(Value::String).collect())
-                }
-                "state" => Value::String(info.state.to_string()),
-                "stale" => info.stale.map_or(Value::Null, Value::Boolean),
-                "delta" => info
-                    .delta
-                    .map_or(Value::Null, |delta| Value::Int64(delta as i64)),
-                "unembedded" => info
-                    .unembedded
-                    .map_or(Value::Null, |count| Value::Int64(count as i64)),
-                _ => continue, // unreachable in practice (validator gate)
+            let Some(val) = super::show_indexes::index_cell(info, &item.name) else {
+                continue; // unreachable in practice (validator gate)
             };
             row.projected.insert(alias.to_string(), val);
         }
@@ -1968,28 +1944,8 @@ pub(super) fn constraints_to_rows(
         let mut row = ResultRow::new();
         for item in yield_items {
             let alias = item.alias.as_deref().unwrap_or(&item.name);
-            let val = match item.name.as_str() {
-                "name" => Value::String(info.name.clone()),
-                "type" => Value::String(info.neo4j_type().to_string()),
-                "entityType" => Value::String(info.entity_type().to_string()),
-                "labelsOrTypes" => Value::List(
-                    info.labels_or_types
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-                "properties" => {
-                    Value::List(info.properties.iter().cloned().map(Value::String).collect())
-                }
-                // Null for every kind that is not a declared property type,
-                // matching both Neo4j and the `SHOW CONSTRAINTS` row shape this
-                // procedure is required to mirror exactly.
-                "propertyType" => info
-                    .property_type
-                    .map(|declared| Value::String(declared.name().to_string()))
-                    .unwrap_or(Value::Null),
-                _ => continue, // unreachable in practice (validator gate)
+            let Some(val) = super::schema_ddl::constraint_cell(info, &item.name) else {
+                continue; // unreachable in practice (validator gate)
             };
             row.projected.insert(alias.to_string(), val);
         }

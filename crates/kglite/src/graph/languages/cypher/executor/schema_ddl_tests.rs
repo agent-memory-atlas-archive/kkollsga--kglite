@@ -927,8 +927,8 @@ fn show_constraints_reports_the_declared_property_type() {
     )
     .unwrap();
 
-    // The column exists, and last — dropping Neo4j's two unserved columns
-    // from its order leaves exactly this.
+    // The bare listing ends at `propertyType`, as it did before the yieldable
+    // extras (`id`, `ownedIndex`, `options`) were added.
     assert_eq!(SHOW_CONSTRAINTS_COLUMNS.last(), Some(&"propertyType"));
 
     let result = show_constraints_result_set(&graph);

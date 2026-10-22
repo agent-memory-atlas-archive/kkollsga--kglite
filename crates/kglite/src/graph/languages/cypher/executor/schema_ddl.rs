@@ -99,14 +99,15 @@ pub(crate) fn is_schema_read(command: &SchemaCommand) -> bool {
 /// `signature` is yieldable but not in the default set, matching Neo4j —
 /// G.V() sends `SHOW PROCEDURES YIELD name, description, signature`
 /// (measured 2026-08-15).
-const SHOW_PROCEDURES_COLUMNS: [&str; 5] =
-    ["name", "description", "mode", "worksOnSystem", "signature"];
+pub(crate) const SHOW_PROCEDURES_COLUMNS: &[&str] =
+    &["name", "description", "mode", "worksOnSystem", "signature"];
 
-const SHOW_PROCEDURES_DEFAULT: [&str; 4] = ["name", "description", "mode", "worksOnSystem"];
+pub(crate) const SHOW_PROCEDURES_DEFAULT: &[&str] =
+    &["name", "description", "mode", "worksOnSystem"];
 
 /// `SHOW PROCEDURES [YIELD …]` — a read over the procedure registry, the
 /// same table `list_procedures` and CALL YIELD validation consume.
-fn show_procedures_result_set(yield_items: &[YieldItem]) -> Result<ResultSet, String> {
+pub(crate) fn show_procedures_result_set(yield_items: &[YieldItem]) -> Result<ResultSet, String> {
     let default_items: Vec<YieldItem>;
     let items: &[YieldItem] = if yield_items.is_empty() {
         default_items = SHOW_PROCEDURES_DEFAULT
@@ -173,17 +174,17 @@ fn show_procedures_result_set(yield_items: &[YieldItem]) -> Result<ResultSet, St
 /// extras — G.V() sends `SHOW FUNCTIONS YIELD name, description, signature`
 /// (measured 2026-08-15), and `aliases` is the one thing Neo4j's shape cannot
 /// express about this engine (`toUpper`/`toUpperCase` are one function).
-const SHOW_FUNCTIONS_COLUMNS: [&str; 5] =
-    ["name", "category", "description", "signature", "aliases"];
+pub(crate) const SHOW_FUNCTIONS_COLUMNS: &[&str] =
+    &["name", "category", "description", "signature", "aliases"];
 
-const SHOW_FUNCTIONS_DEFAULT: [&str; 3] = ["name", "category", "description"];
+pub(crate) const SHOW_FUNCTIONS_DEFAULT: &[&str] = &["name", "category", "description"];
 
 /// `SHOW FUNCTIONS [YIELD …]` — a read over the function registry, whose every
 /// entry is gated against the real scalar dispatcher (see
 /// `scalar_functions::function_registry`). One row per canonical name; an alias
 /// is reported in that row's `aliases` list rather than as a row of its own,
 /// matching Neo4j's canonical-names-only listing.
-fn show_functions_result_set(yield_items: &[YieldItem]) -> Result<ResultSet, String> {
+pub(crate) fn show_functions_result_set(yield_items: &[YieldItem]) -> Result<ResultSet, String> {
     let default_items: Vec<YieldItem>;
     let items: &[YieldItem] = if yield_items.is_empty() {
         default_items = SHOW_FUNCTIONS_DEFAULT
@@ -1457,17 +1458,14 @@ fn unknown_constraint_message(graph: &DirGraph, name: &str) -> String {
 // SHOW CONSTRAINTS
 // ============================================================================
 
-/// Columns `SHOW CONSTRAINTS` projects, in order. Identical to
-/// `CALL db.constraints()` — one collector, one row shape.
+/// Columns a bare `SHOW CONSTRAINTS` and a bare `CALL db.constraints()` return.
+/// `propertyType` carries the declared type of a `NODE_PROPERTY_TYPE` row and
+/// null for every other kind, as in Neo4j.
 ///
-/// Neo4j 5's `SHOW CONSTRAINTS` also returns `id` and `ownedIndex`. KGLite has
-/// no equivalent state for either — a unique constraint *is* its index rather
-/// than owning a separate one — so they are omitted rather than filled with
-/// invented values. `propertyType` *is* served: it carries the declared type of
-/// a `NODE_PROPERTY_TYPE` row and null for every other kind, matching Neo4j,
-/// and sits last exactly as it does there (Neo4j's order is
-/// `id, name, type, entityType, labelsOrTypes, properties, ownedIndex,
-/// propertyType` — dropping the two unserved columns leaves this).
+/// `YIELD` also accepts Neo4j 5's `id`, `ownedIndex` and `options`, which
+/// `YIELD *` includes (see [`constraint_cell`]). KGLite keeps no such state (a
+/// unique constraint *is* its index rather than owning a separate one), so they
+/// are null. The registry entry of `db.constraints` spells out the full list.
 /// Documented in CYPHER.md.
 pub(crate) const SHOW_CONSTRAINTS_COLUMNS: &[&str] = &[
     "name",
@@ -1483,7 +1481,15 @@ pub(crate) fn show_constraints_result_set(graph: &DirGraph) -> ResultSet {
     let mut out = ResultSet::new();
     out.rows = collect_constraints_structured(graph)
         .iter()
-        .map(constraint_info_to_row)
+        .map(|info| {
+            let mut row = ResultRow::new();
+            for column in SHOW_CONSTRAINTS_COLUMNS {
+                if let Some(value) = constraint_cell(info, column) {
+                    row.projected.insert((*column).to_string(), value);
+                }
+            }
+            row
+        })
         .collect();
     out.columns = SHOW_CONSTRAINTS_COLUMNS
         .iter()
@@ -1492,41 +1498,24 @@ pub(crate) fn show_constraints_result_set(graph: &DirGraph) -> ResultSet {
     out
 }
 
-fn constraint_info_to_row(info: &ConstraintInfo) -> ResultRow {
-    let mut row = ResultRow::new();
-    row.projected
-        .insert("name".to_string(), Value::String(info.name.clone()));
-    row.projected.insert(
-        "type".to_string(),
-        Value::String(info.neo4j_type().to_string()),
-    );
-    row.projected.insert(
-        "entityType".to_string(),
-        Value::String(info.entity_type().to_string()),
-    );
-    row.projected.insert(
-        "labelsOrTypes".to_string(),
-        Value::List(
-            info.labels_or_types
-                .iter()
-                .cloned()
-                .map(Value::String)
-                .collect(),
-        ),
-    );
-    row.projected.insert(
-        "properties".to_string(),
-        Value::List(info.properties.iter().cloned().map(Value::String).collect()),
-    );
-    // Null, not absent, for every kind that is not a declared property type —
-    // see `SHOW_CONSTRAINTS_COLUMNS`.
-    row.projected.insert(
-        "propertyType".to_string(),
-        info.property_type
+/// One cell of a constraint row, or `None` for a name outside
+/// the registry's list for `db.constraints` (the YIELD validator rejects those first).
+pub(crate) fn constraint_cell(info: &ConstraintInfo, column: &str) -> Option<Value> {
+    let strings =
+        |items: &[String]| Value::List(items.iter().cloned().map(Value::String).collect());
+    Some(match column {
+        "name" => Value::String(info.name.clone()),
+        "type" => Value::String(info.neo4j_type().to_string()),
+        "entityType" => Value::String(info.entity_type().to_string()),
+        "labelsOrTypes" => strings(&info.labels_or_types),
+        "properties" => strings(&info.properties),
+        "propertyType" => info
+            .property_type
             .map(|declared| Value::String(declared.name().to_string()))
             .unwrap_or(Value::Null),
-    );
-    row
+        "id" | "ownedIndex" | "options" => Value::Null,
+        _ => return None,
+    })
 }
 
 pub(super) fn constraints_added(count: usize) -> MutationStats {
