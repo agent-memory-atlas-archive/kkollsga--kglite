@@ -405,6 +405,42 @@ def test_graph_info_reports_mapped_heap_and_overlay_topology_bytes(saved):
     assert heap["topology_overlay_entries"] == 0
 
 
+def test_graph_info_says_where_the_topology_is_served_from_and_why(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    info = mapped.graph_info()
+    assert (info["topology_status"], info["topology_heap_reason"]) == ("mapped", None)
+    # `n` holds small integers: stored delta-compressed, which is by design
+    # listed here and does not warn on save.
+    assert [row["part"] for row in info["mapped_fallbacks"]] == ["columns:Doc.n"]
+    mapped.cypher("CREATE (:Doc {id: 900002, n: 1, title: 'new'})")
+    assert mapped.graph_info()["topology_status"] == "overlay"
+
+    memory = kglite.load(saved, storage="memory").graph_info()
+    assert (memory["topology_status"], memory["topology_heap_reason"]) == ("heap", "memory storage")
+    assert memory["mapped_fallbacks"] == []
+    policy = kglite.load(saved, storage="mapped", topology="memory").graph_info()
+    assert policy["topology_status"] == "heap"
+    assert 'topology="memory"' in policy["topology_heap_reason"]
+
+
+def test_a_save_that_drops_a_part_warns_and_the_load_reports_it(tmp_path):
+    graph = _build()
+    graph.cypher("CREATE (:Doc {id: 800001, n: 1}), (:Mix {id: 'a'}), (:Mix {id: 7})")
+    path = str(tmp_path / "mixed.kgl")
+    with pytest.warns(kglite.MappedFallbackWarning, match=r"indexes:id:Mix \(ids of both integer and string kinds\)"):
+        graph.save(path)
+    info = kglite.load(path, storage="mapped").graph_info()
+    assert info["topology_status"] == "mapped"
+    assert {"part": "indexes:id:Mix", "reason": "ids of both integer and string kinds"} in info["mapped_fallbacks"]
+
+    graph.cypher("MATCH (m:Mix) DETACH DELETE m")
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", kglite.MappedFallbackWarning)
+        graph.save(str(tmp_path / "repaired.kgl"))
+
+
 def test_the_environment_kill_switch_puts_the_topology_on_the_heap(saved):
     probe = (
         "import sys, kglite; g = kglite.load(sys.argv[1], storage='mapped', topology='mapped');"

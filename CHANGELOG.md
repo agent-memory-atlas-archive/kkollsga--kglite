@@ -36,6 +36,10 @@ before upgrading.
 
 ### Added
 
+- **`graph_info()` says where the topology is served from and what a mapped graph holds without a mapped form, and `save()` warns when it drops one.**
+  - `topology_status` is `"mapped"`, `"overlay"`, `"heap"` or `"disk"`; `topology_heap_reason` names the cause of a heap topology (memory storage, `topology="memory"`, a file below the size floors, an inline node identity, more than 65,535 types, copied sections, a collapse by `vacuum()`); `mapped_fallbacks` lists `{"part", "reason"}` rows for the topology, `indexes:id:<Type>`, `indexes:nodes`, `indexes:peers`, `columns:<Type>.<column>` and heap `embeddings:<Type>.<property>` stores.
+  - The writer records the parts it dropped in the file, so a load reports them without recomputing. A file without any writes the same bytes as before.
+  - A save that dropped a part emits `kglite.MappedFallbackWarning` naming each part and the reason. `kglite-mcp-server` (`save_graph`, `save_graph_as`) and `kglite okf build` print the same text to stderr. Integer columns kept delta-compressed are listed but do not warn. See the Storage and memory guide.
 - **A read-only mapped load refuses writes once its unsaved writes grow past a budget, and asks for a save.**
   - `kglite.load(path, write_budget=...)` and `open_session(path, write_budget=...)` take bytes, `None` (no limit) or `"default"`. The default is `max(512 MiB, half the file)`.
   - At half the limit a write emits `kglite.WriteBudgetWarning`, once per upward crossing. At the limit a write raises `kglite.WriteBudgetExceededError` (code `WriteBudgetExceeded`, HTTP 507); a Cypher statement that crosses it is rolled back, and reads keep working.
@@ -54,7 +58,7 @@ before upgrading.
   - **A save serves the graph from the file it wrote.** The save writes the merged graph, maps it, and replaces the topology, column stores, member lists and id index with the file's, so the overlay is empty and the graph costs what a fresh load of that file costs. After 1,000,000 writes the footprint goes from 475 MB to 25 MB (a fresh load: 16 MB) and every read and write cell matches a fresh load of the saved file. A snapshot taken before the save keeps its state and the old mapping. This covers `save()` to any path, including the checkpoint of a durable graph. The background checkpoint and a file that records no raw topology (a graph below the floors, `layout="compact"`) keep the overlay; Windows copies sections instead of mapping them and keeps it too.
   - A copy, a snapshot or a transaction that did not write keeps the file's topology, and a failed statement rolls back to the slots it vacated. A write to a node type layers over its recorded lists; the first relationship write drops the recorded counts, which are then built on first use.
   - A damaged node or index section refuses the load. The other topology sections are checked at first use: `verify_integrity()`, a save and the collapse of a write overlay refuse a damaged one, and `verify_file()` names it. A mapped load costs about 1-2 % more time reading the index sections. Peer counts of a mapped graph are shared between queries instead of copied for each one.
-  - A save skips the topology when the graph holds a node with an inline identity, more than 262,144 relationships with properties, or more than 1,024 node or relationship types. Relationship properties are decoded to a heap map at load. Windows copies the sections instead of mapping them.
+  - A save skips the topology when the graph holds a node with an inline identity or more than 65,535 node or relationship types. A graph with relationship properties keeps its topology mapped: the properties are decoded to a heap map at load (about 64 bytes per property relationship), and the section is zstd-compressed in the file. Windows copies the sections instead of mapping them.
   - **`topology=` chooses whether a `mapped` load reads the sections.** `kglite.load(path, topology=...)` and `open_session(...)` take `"auto"` (default), `"mapped"` or `"memory"`; `memory` ignores the sections, decodes the compressed topology and rebuilds the indexes. A v8 file, a `compact` file and a graph loaded into `memory` storage ignore it. `KGLITE_MMAP=0` copies the sections to the heap.
   - `graph_info()` reports `topology_mapped_bytes`, `topology_heap_bytes` and `topology_overlay_entries`. See the Storage and memory guide.
 - **Embedding stores and large columns are read from the `.kgl` file instead of the heap.**
@@ -113,6 +117,16 @@ before upgrading.
   - The purge delay is not lowered process-wide: purge-on-free regressed in-memory benchmark cells by up to 145 %. A standalone `kglite-mcp-server` binary registers nothing and is unchanged.
 - **Per-value column aggregates (`sum`, `max` and filters over a property column) are back at the 0.20.1 speed** after the shared-column variant added 3-6 % (about 1 ns per row) to the heap read path. Measured in-memory, 300k rows, release build.
 
+- **A graph that grows through writes keeps its mapped structure through the next save.**
+  - A `DETACH DELETE` on a mapped load followed by a save no longer writes a second, always-null `id` and `title` column for the type (+44 % column bytes at 140k rows).
+  - A Cypher `CREATE` with an int id on a type loaded from a DataFrame (`UniqueId` ids) widens the type's ids to int64 as a `memory` graph does, and the id index writer treats the two as one key class. Before, one such `CREATE` dropped the type's id index at the next save: +131 MB of heap per 1M nodes and a 28-77 ms first lookup.
+  - A type with repeated ids keeps its id index. The index answers with the node a `memory` load returns (the last one); the nodes it shadows are named in an extra `idx:id:<Type>:shadowed` section, which older readers ignore and answer from a lazy build.
+  - A graph with more than 262,144 relationships that carry properties keeps its mapped topology (the cap is gone). More than 1,024 and up to 65,535 node or relationship types keep it too. More than 1,024 types still record no member lists, id indexes or peer counts.
+  - The relationship-property section is zstd-compressed (3.1 to 0.25 MB on one operator graph); files with the uncompressed form still load.
+  - A tombstone on a row of an mmap-backed column store's base part is held instead of ignored.
+  - A statement that fails or is refused by the write budget gives its overlay entries back: repeated failures keep the overlay and the column heap flat, and `write_budget_used_bytes` reads what it read before the statement. Before, the undo left the entries until the next save.
+  - A load that keeps the file mapped releases the resident pages of the compressed sections it decoded (1M nodes, 12M relationships: resident set 1,300 to 1,241 MB).
+
 ### Security
 
 - **Dependency updates close RUSTSEC advisories.** `rustls-webpki` 0.103.16 fixes RUSTSEC-2026-0382. `webpki-root-certs` 1.0.10 fixes RUSTSEC-2026-0383, and `webpki-roots` 1.0.10 fixes RUSTSEC-2026-0381; mcp-methods 0.5.1 moved to `ureq` 3, which removes the last `webpki-roots` 0.26 copy.
@@ -120,7 +134,7 @@ before upgrading.
 ### Rust API
 
 - `KgError::WriteBudgetExceeded(String)` and `KgErrorCode::WriteBudgetExceeded` are new variants; an exhaustive `match` needs an arm. `LoadOptions::with_write_budget(WriteBudgetSetting)`, `WriteBudgetSetting::parse`, `WriteBudgetState`, `DirGraph::take_write_budget_warning` and the `GraphInfo` fields `write_budget_bytes`, `write_budget_used_bytes` and `write_budget_state` are new.
-- `GraphInfo` gains `topology_mapped_bytes`, `topology_heap_bytes` and `topology_overlay_entries`; a struct literal needs them. `LoadOptions` gains the `topology` field.
+- `GraphInfo` gains `topology_mapped_bytes`, `topology_heap_bytes`, `topology_overlay_entries`, `topology_status`, `topology_heap_reason` and `mapped_fallbacks`; a struct literal needs them. `MappedFallback` and `DirGraph::take_save_notice` are new. `LoadOptions` gains the `topology` field.
 - `GraphBackend` gains a `Frozen(Arc<FrozenGraph>)` variant, `GraphBackend::is_frozen()` and `GraphBackend::has_frozen_base()` (true under a write overlay too): a `match` over every variant needs an arm for it. `NodeData` is `repr(C)` and `PropertyStorage` is `repr(u8)`; their size and field offsets are unchanged.
 - `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.
 - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`; `Precision`, `QuantStore` and `QuantizationInfo` are public.

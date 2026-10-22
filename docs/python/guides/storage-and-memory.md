@@ -71,15 +71,16 @@ A default `save()` writes v9 when any of these holds. An embedding store of 4 Mi
 A save of a graph with 65,536 nodes or 262,144 relationships or more records the topology raw in the data region. A load into `mapped` storage reads it in place instead of decoding the compressed copy.
 
 - The file holds one 32-byte record per node slot and one endpoint record per relationship slot. It also holds an out- and an in-adjacency sorted by relationship type, so a typed expansion binary-searches its node's run. Node and relationship slots are the ones the graph held when it was saved, deleted slots included.
-- The heap holds only the per-type templates, the sparse map of relationships that carry properties, and what the declared indexes and small columns need. Relationship properties are still decoded to that map at load.
+- The heap holds only the per-type templates, the map of relationships that carry properties, and what the declared indexes and small columns need. Relationship properties are decoded to that map at load; the section is zstd-compressed in the file (3.1 to 0.25 MB on one operator graph). A graph with a numeric property on every relationship keeps its topology mapped and pays about 64 bytes per property relationship on the heap.
 - A write puts an overlay over the file's topology instead of copying it. The heap grows with the writes, in step with the data and without a step at any size. A copy, a snapshot or a transaction that did not write keeps sharing the file's topology. A failed statement rolls back to the slots it vacated. A whole-graph operation such as `vacuum()` collapses the overlay into a heap topology, once.
 - A transaction forks the overlay in time that does not depend on the writes before it. Commit of a one-node transaction: 24 µs on a fresh load, 29 µs after 100,000 writes and 42 µs after 1,000,000, against 25, 26 and 37 µs in `memory` storage (1M nodes, 12M relationships).
 - A save copies the topology out of the file and the overlay's writes with it, so it needs a transient heap graph the size of the topology. It then serves the graph from the file it wrote: the overlay is empty, the footprint is a fresh load's (1M writes: 475 MB before the save, 25 MB after; a fresh load 16 MB) and every cost resets. A snapshot taken before the save keeps its state and the old mapping. A save to any path does this, including a durable graph's checkpoint. The background checkpoint, a graph below the floors, `layout="compact"` and Windows keep the overlay.
 - The order a node's relationships come back in can differ from a `memory` load. Relationships of one type keep memory storage's newest-first order. Those of different types are grouped by type.
-- A save skips the sections in four cases. The graph is below the floors. It holds a node with an inline identity. It has more than 262,144 relationships with properties. It has more than 1,024 node or relationship types. `layout="compact"` writes none. A file without them loads as before.
+- A save skips the sections in three cases. The graph is below the floors. It holds a node with an inline identity. It has more than 65,535 node or relationship types (the type is a 16-bit number in the file). `layout="compact"` writes none. A file without them loads as before. Relationships with properties no longer matter: the properties stay on the heap, and the topology is still served from the file.
 - A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the collapse of a write overlay refuse a damaged section.
 - `topology="memory"` ignores the sections. `KGLITE_MMAP=0` copies them to the heap instead of mapping them, and the graph still serves from the copies.
 - `layout="compact"` writes the v8 file with the compressed topology and no raw sections.
+- A save that wrote a part without a mapped form emits `kglite.MappedFallbackWarning` (a stderr line in `kglite-mcp-server` and `kglite okf build`, and in the `save_graph` response) naming the part and the reason. Integer columns kept delta-compressed are listed in `mapped_fallbacks` but do not warn. Fix the cause and save again to restore the mapped form.
 
 ### Reading the memory numbers
 
@@ -95,6 +96,9 @@ Mapped topology changes two numbers differently.
 - `topology_mapped_bytes`: bytes read in place from the file. `0` for a heap topology, `topology="memory"` and `KGLITE_MMAP=0`.
 - `topology_heap_bytes`: the node and edge arrays of a heap graph (40 and 32 bytes per slot). For a mapped topology, only what the load copied or decoded.
 - `topology_overlay_entries`: writes held by the overlay. They are heap, and `0` before the first write and after a save.
+- `topology_status`: `"mapped"` (served from the file), `"overlay"` (the file plus a write overlay), `"heap"` or `"disk"`.
+- `topology_heap_reason`: why a `"heap"` topology is on the heap. It names the storage mode, `topology="memory"`, what the file recorded (below the size floors, an inline node identity, more than 65,535 types), sections the platform copied, or a collapse by a whole-graph operation such as `vacuum()`.
+- `mapped_fallbacks`: the parts of a mapped graph held without a mapped form, as `{"part", "reason"}` rows: the topology, `indexes:id:<Type>`, `indexes:nodes`, `indexes:peers`, `columns:<Type>.<column>` (mixed values, relocated string cells, delta-compressed integers) and `embeddings:<Type>.<property>` stores on the heap. The save that wrote the file records the list; a load reports it.
 - `write_budget_bytes`, `write_budget_used_bytes`, `write_budget_state`: the unsaved-write budget (see below).
 
 ## Indexes served from the file
@@ -103,7 +107,7 @@ A load into `mapped` storage serves the recorded indexes from the file. A load i
 
 - The first `{id: ...}` lookup on a recorded type costs nothing to build and holds no heap: a binary search in the mapping. Before, it built a hash map of every id (1M ids: 23 ms and +83 MB, now 0.2 ms).
 - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning every relationship (1M nodes, 12M relationships, `b.id, count(a)` over one type: 590 ms and +261 MB before, 235 ms and +179 MB after; `memory` storage takes 560 ms and +227 MB).
-- A type with repeated ids, or ids of mixed kinds, has no recorded id index and builds one on first use, as before.
+- A type with repeated ids is recorded with the node a lookup returns on a `memory` load (the last one); the nodes it shadows are named in a small extra section. A type whose ids are `UniqueId` and int64 together is recorded as int64. A type with integer and string ids, or ids of another kind, has no recorded id index and builds one on first use, as before. More than 1,024 node types or relationship types record no member lists, id indexes or peer counts.
 - A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
 - `topology="memory"` ignores them and builds what a `memory` load builds. `KGLITE_MMAP=0` copies them to the heap instead of mapping them; the load still skips the scan.
 - A damaged index section refuses a `mapped` load, because the load reads and checks every one.

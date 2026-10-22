@@ -75,7 +75,15 @@ fn synthetic_sections() -> Vec<MappableSection<'static>> {
 
 fn v9_bytes(sections: Vec<MappableSection<'_>>) -> Vec<u8> {
     let mut out = Vec::new();
-    write_kgl_container(&graph(4), &mut out, None, SaveLayout::Auto, sections).unwrap();
+    write_kgl_container(
+        &graph(4),
+        &mut out,
+        None,
+        SaveLayout::Auto,
+        sections,
+        Vec::new(),
+    )
+    .unwrap();
     out
 }
 
@@ -105,7 +113,10 @@ fn a_graph_with_no_mappable_section_still_writes_v8_bytes() {
         &mut compact,
         None,
         SaveLayout::Compact,
-        collect_mappable_sections(&g, SaveLayout::Compact).unwrap(),
+        collect_mappable_sections(&g, SaveLayout::Compact)
+            .unwrap()
+            .sections,
+        Vec::new(),
     )
     .unwrap();
     assert_eq!(default, compact);

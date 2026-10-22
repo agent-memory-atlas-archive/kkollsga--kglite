@@ -34,6 +34,7 @@ use super::mappable::{
 };
 use super::*;
 use crate::datatypes::Value;
+use crate::graph::dir_graph::MappedFallback;
 use crate::graph::schema::InternedKey;
 use crate::graph::storage::disk::id_index::{string_keys, IdIndexBase, IdIndexStore};
 use crate::graph::storage::disk::type_index::{TypeIndexBase, TypeIndexStore};
@@ -155,6 +156,8 @@ struct TypeScan {
     kind: Option<IdKind>,
     /// False once an id of another spelling, or a node without one, is seen.
     uniform: bool,
+    /// Why the type has no id section, once `uniform` is false.
+    abandoned: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -183,8 +186,16 @@ impl TypeScan {
             Value::UniqueId(id) => (IdKind::Unique, i64::from(*id)),
             Value::Int64(id) => (IdKind::Int64, *id),
             Value::String(id) if id.len() <= u32::MAX as usize => (IdKind::Str, 0),
+            Value::String(_) => {
+                self.abandon("a string id longer than 4 GiB");
+                return;
+            }
+            Value::Null => {
+                self.abandon("a node without an id");
+                return;
+            }
             _ => {
-                self.abandon();
+                self.abandon("ids that are neither integers nor strings");
                 return;
             }
         };
@@ -197,7 +208,7 @@ impl TypeScan {
                 self.kind = Some(IdKind::Int64);
             }
             _ => {
-                self.abandon();
+                self.abandon("ids of both integer and string kinds");
                 return;
             }
         }
@@ -208,34 +219,41 @@ impl TypeScan {
         }
     }
 
-    fn abandon(&mut self) {
+    fn abandon(&mut self, reason: &'static str) {
         self.uniform = false;
+        self.abandoned.get_or_insert(reason);
         self.ids = Vec::new();
         self.strings = StringIds::default();
     }
 }
 
-/// The index sections a save of `graph` writes: none for a small graph or on
-/// a big-endian host (the bytes are the format's, not the host's).
+/// The index sections a save of `graph` writes, and the parts it left out of
+/// them that a graph at or above the floors could have had: none for a small
+/// graph or on a big-endian host (the bytes are the format's, not the host's).
 pub(super) fn collect_index_sections(
     graph: &DirGraph,
-) -> io::Result<Vec<MappableSection<'static>>> {
+) -> io::Result<(Vec<MappableSection<'static>>, Vec<MappedFallback>)> {
     let mut out = Vec::new();
+    let mut fallbacks = Vec::new();
     if !cfg!(target_endian = "little") {
-        return Ok(out);
+        return Ok((out, fallbacks));
     }
     let (min_nodes, min_edges) = floors();
     if graph.graph.node_count() >= min_nodes && graph.graph.node_bound() <= u32::MAX as usize {
-        push_node_sections(graph, &mut out);
+        push_node_sections(graph, &mut out, &mut fallbacks);
     }
     if graph.graph.edge_count() >= min_edges && graph.graph.node_bound() <= u32::MAX as usize {
-        push_peer_sections(graph, &mut out);
+        push_peer_sections(graph, &mut out, &mut fallbacks);
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    Ok((out, fallbacks))
 }
 
-fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>) {
+fn push_node_sections(
+    graph: &DirGraph,
+    out: &mut Vec<MappableSection<'static>>,
+    fallbacks: &mut Vec<MappedFallback>,
+) {
     let mut scans: FxHashMap<InternedKey, TypeScan> = FxHashMap::default();
     {
         let _guard = graph.graph.begin_query();
@@ -255,6 +273,10 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
         }
     }
     if scans.len() > MAX_TYPES {
+        fallbacks.push(MappedFallback::new(
+            "indexes:nodes",
+            "more than 1,024 node types: no member lists or id indexes are recorded",
+        ));
         return;
     }
     for (type_key, mut scan) in scans {
@@ -266,6 +288,9 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
             scan.members.len(),
             scan.members.iter().flat_map(|n| n.to_le_bytes()).collect(),
         ));
+        if let (false, Some(reason)) = (scan.uniform, scan.abandoned) {
+            fallbacks.push(MappedFallback::new(format!("indexes:id:{name}"), reason));
+        }
         let Some(kind) = scan
             .kind
             .filter(|_| scan.uniform && !(scan.ids.is_empty() && scan.strings.entries.is_empty()))
@@ -441,12 +466,20 @@ pub(super) fn count_peers_hashed(graph: &DirGraph) -> FxHashMap<InternedKey, Pee
         .collect()
 }
 
-fn push_peer_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>) {
+fn push_peer_sections(
+    graph: &DirGraph,
+    out: &mut Vec<MappableSection<'static>>,
+    fallbacks: &mut Vec<MappedFallback>,
+) {
     let per_type = {
         let _guard = graph.graph.begin_query();
         count_peers_dense(graph).unwrap_or_else(|| count_peers_hashed(graph))
     };
     if per_type.len() > MAX_TYPES {
+        fallbacks.push(MappedFallback::new(
+            "indexes:peers",
+            "more than 1,024 connection types: no peer counts are recorded",
+        ));
         return;
     }
     for (conn, (by_target, by_source)) in per_type {

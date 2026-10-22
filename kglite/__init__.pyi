@@ -155,6 +155,18 @@ class WriteBudgetExceededError(KgError):
     See "Unsaved-write budget" on :func:`load`.
     """
 
+class MappedFallbackWarning(UserWarning):
+    """A save wrote part of the graph without a mapped form.
+
+    Emitted by :meth:`KnowledgeGraph.save` when the topology, an id or type
+    index, or a column could not be recorded in the form a mapped load reads in
+    place: more than 65,535 node or connection types, an inline node identity,
+    ids of both integer and string kinds, a column of mixed values, and the
+    like. The message names each part and the reason. A mapped load of the file
+    holds those parts on the heap; ``graph_info()["mapped_fallbacks"]`` lists
+    them. Integer columns kept delta-compressed are listed there but do not warn.
+    """
+
 class WriteBudgetWarning(UserWarning):
     """Unsaved writes over a read-only mapped load reached half of
     ``write_budget``.
@@ -4217,6 +4229,22 @@ class KnowledgeGraph:
                 - ``topology_overlay_entries``: Operations, node weights and
                   edge weights held by the write overlay over a mapped
                   topology. These are heap; ``0`` before the first write
+                - ``topology_status``: Where the topology is served from:
+                  ``"mapped"`` (a ``.kgl``'s sections), ``"overlay"`` (those
+                  sections with a write overlay over them), ``"heap"`` or
+                  ``"disk"``
+                - ``topology_heap_reason``: ``None`` unless the status is
+                  ``"heap"``; then why: memory storage, ``topology="memory"``,
+                  what the file recorded (a graph below the size floors, an
+                  inline node identity, more than 65,535 types), sections the
+                  platform copied, or a collapse by a whole-graph operation
+                - ``mapped_fallbacks``: A list of ``{"part", "reason"}`` for
+                  each part of a mapped graph held without a mapped form: what
+                  the file records as written that way (the topology,
+                  ``indexes:id:<Type>``, ``indexes:nodes``, ``indexes:peers``,
+                  ``columns:<Type>.<column>``) and the embedding stores on the
+                  heap now (``embeddings:<Type>.<property>``). Empty outside
+                  mapped storage. At most 50 entries, the rest folded into one
                 - ``write_budget_bytes``: The ``write_budget`` limit in bytes;
                   ``None`` when the load asked for none or no budget applies
                 - ``write_budget_used_bytes``: Estimated heap, in bytes, of the
@@ -5554,6 +5582,15 @@ class KnowledgeGraph:
         ``open(..., lock=False)`` opts out of every lease check, this one
         included. Its caller must coordinate writers across the read-modify-save
         interval; an unlocked save can replace another writer's checkpoint.
+
+        **A save warns when it drops a part to a form a mapped load cannot read
+        in place.** A graph of 65,536 nodes or 262,144 relationships or more
+        records its topology, id and type indexes and large columns raw. When a
+        part cannot be (more than 65,535 types, an inline node identity, ids of
+        both integer and string kinds, a column of mixed values) the save emits
+        :class:`MappedFallbackWarning` naming the part and the reason. The file
+        records the same list, and ``graph_info()["mapped_fallbacks"]`` reports
+        it after a load.
 
         Args:
             path: Output file path (typically ``*.kgl``). May be omitted if the

@@ -26,6 +26,7 @@ mod datatypes;
 mod error_py;
 mod graph;
 mod graphgen;
+mod mapped_fallback;
 mod okf;
 mod util;
 mod warning_policy;

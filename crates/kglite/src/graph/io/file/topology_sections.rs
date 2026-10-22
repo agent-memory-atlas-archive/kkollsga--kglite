@@ -22,13 +22,16 @@
 //! - `topo:type_mask` (kind 18): `u32`, `[out, in]` per node; bit `ordinal % 32`
 //!   is set when the node has an edge of that type in that direction. Optional:
 //!   a file without it is served by the run lookup alone.
-//! - `topo:edge_props` (kind 17): codec-encoded `(edge slot, EdgeData)` pairs
-//!   for the edges that carry properties; absent when none do.
+//! - `topo:edge_props` (kind 19): codec-encoded `(edge slot, EdgeData)` pairs
+//!   for the edges that carry properties, zstd-compressed (level 3); absent when
+//!   none do. Kind 17 is the same payload uncompressed, which a load still reads.
+//!   Either way the load decodes it to a heap map: properties are not mapped.
 //!
 //! A save writes them for a graph of at least the index floors (nodes or edges)
 //! whose every node is a column-backed node without an inline identity, whose
-//! rows follow node order, and whose edge properties are few. Anything else
-//! stays on the compressed topology alone. A load into mapped storage that
+//! rows follow node order, and that holds at most 65,535 node types and as many
+//! connection types (the `u16` ordinal). Anything else stays on the compressed
+//! topology alone, and the reason is recorded in the file. A load into mapped storage that
 //! finds a complete, well-formed set serves the graph from it and never reads
 //! the compressed section; a memory load never reads these.
 
@@ -39,6 +42,7 @@ use super::mappable::{
     MapEntry, MappableSection, MappableTable, MappedSection, Placement, SectionDtype,
 };
 use super::*;
+use crate::graph::dir_graph::MappedFallback;
 use crate::graph::schema::{EdgeData, InternedKey};
 use crate::graph::storage::disk::csr::CsrEdge;
 use crate::graph::storage::frozen::array::FrozenArray;
@@ -56,8 +60,10 @@ pub(super) const KIND_OFFSETS: u8 = 13;
 pub(super) const KIND_ADJACENCY: u8 = 14;
 pub(super) const KIND_ADJACENCY_TYPES: u8 = 15;
 pub(super) const KIND_ENDPOINTS: u8 = 16;
+/// Edge properties, uncompressed: the form written before the section was compressed.
 pub(super) const KIND_EDGE_PROPS: u8 = 17;
 pub(super) const KIND_TYPE_MASK: u8 = 18;
+pub(super) const KIND_EDGE_PROPS_ZSTD: u8 = 19;
 
 const META: &str = "topo:meta";
 const NODES: &str = "topo:nodes";
@@ -75,13 +81,9 @@ const EDGE_PROPS: &str = "topo:edge_props";
 /// Version of the section set; a reader refuses a newer one by ignoring it.
 const VERSION: u32 = 1;
 
-/// Types (node or connection) beyond which a save records nothing.
-const MAX_TYPES: usize = 1024;
-
-/// Edges with properties beyond which a save records nothing: they are decoded
-/// to a heap map at load, so a graph made of them gains nothing from the
-/// sections until edge-property columns are mappable.
-const MAX_PROPERTY_EDGES: usize = 262_144;
+/// Types (node or connection) beyond which a save records nothing: a
+/// connection type is a `u16` ordinal in the adjacency arrays.
+const MAX_TYPES: usize = u16::MAX as usize;
 
 #[derive(Serialize, Deserialize)]
 struct Meta {
@@ -147,7 +149,7 @@ struct NodeSide {
     type_names: Vec<String>,
 }
 
-fn collect_nodes(graph: &DirGraph) -> Option<NodeSide> {
+fn collect_nodes(graph: &DirGraph) -> Result<NodeSide, &'static str> {
     let bound = graph.graph.node_bound();
     let mut records = Vec::with_capacity(bound * node_record::RECORD_BYTES);
     let mut next_row: FxHashMap<InternedKey, u32> = FxHashMap::default();
@@ -158,13 +160,16 @@ fn collect_nodes(graph: &DirGraph) -> Option<NodeSide> {
         match graph.graph.node_weight(NodeIndex::new(slot)) {
             None => node_record::encode_vacant(&mut records),
             Some(node) => {
-                let row = node.properties.columnar_row_id()?;
+                let row = node
+                    .properties
+                    .columnar_row_id()
+                    .ok_or("a node's properties are not column-backed")?;
                 if node.ident.is_some() {
-                    return None;
+                    return Err("a node holds an inline identity");
                 }
                 let expected = next_row.entry(node.node_type).or_insert(0);
                 if row != *expected {
-                    return None;
+                    return Err("a node's column row is not its rank within its type");
                 }
                 *expected += 1;
                 node_record::encode_record(&mut records, node.node_type, row);
@@ -173,15 +178,19 @@ fn collect_nodes(graph: &DirGraph) -> Option<NodeSide> {
             }
         }
     }
-    if next_row.len() > MAX_TYPES {
-        return None;
+    if next_row.len() > max_types() {
+        return Err("more than 65,535 node types");
     }
     let mut type_names = Vec::with_capacity(next_row.len());
     for key in next_row.keys() {
-        type_names.push(graph.interner.try_resolve(*key)?.to_string());
+        let name = graph
+            .interner
+            .try_resolve(*key)
+            .ok_or("a node type has no interned name")?;
+        type_names.push(name.to_string());
     }
     type_names.sort();
-    Some(NodeSide {
+    Ok(NodeSide {
         records,
         alive: (live != bound).then_some(words),
         node_count: live,
@@ -257,7 +266,7 @@ fn build_csr(
     (offsets, edges, types)
 }
 
-fn collect_edges(graph: &DirGraph) -> Option<EdgeSide> {
+fn collect_edges(graph: &DirGraph) -> Result<EdgeSide, &'static str> {
     let node_bound = graph.graph.node_bound();
     let edge_bound = graph.graph.edge_bound();
     let _guard = graph.graph.begin_query();
@@ -276,15 +285,16 @@ fn collect_edges(graph: &DirGraph) -> Option<EdgeSide> {
         }
         edge_count += 1;
     }
-    if keys.len() > MAX_TYPES || property_edges > MAX_PROPERTY_EDGES {
-        return None;
+    if keys.len() > max_types() {
+        return Err("more than 65,535 connection types");
     }
     let mut ordered: Vec<InternedKey> = keys.into_iter().collect();
     ordered.sort();
     let conn_names = ordered
         .iter()
         .map(|key| graph.interner.try_resolve(*key).map(str::to_string))
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Option<Vec<_>>>()
+        .ok_or("a connection type has no interned name")?;
     let ordinal: FxHashMap<InternedKey, u16> = ordered
         .iter()
         .enumerate()
@@ -304,12 +314,14 @@ fn collect_edges(graph: &DirGraph) -> Option<EdgeSide> {
         let slot = edge.id().index();
         let (src, dst) = (edge.source().index(), edge.target().index());
         if src >= node_bound || dst >= node_bound || slot >= edge_bound {
-            return None;
+            return Err("an edge endpoint lies beyond the node array");
         }
         endpoints[slot] = FrozenEndpoint {
             src: src as u32,
             dst: dst as u32,
-            ty: *ordinal.get(&edge.connection_type())?,
+            ty: *ordinal
+                .get(&edge.connection_type())
+                .ok_or("a connection type has no ordinal")?,
             pad: 0,
         };
         let weight = edge.weight();
@@ -323,7 +335,7 @@ fn collect_edges(graph: &DirGraph) -> Option<EdgeSide> {
         build_csr(&endpoints, node_bound, edge_count, true, multi_type);
     let (in_off, in_edges, in_ty) =
         build_csr(&endpoints, node_bound, edge_count, false, multi_type);
-    Some(EdgeSide {
+    Ok(EdgeSide {
         edge_bound,
         edge_count,
         endpoints,
@@ -376,6 +388,36 @@ fn endpoint_bytes(endpoints: &[FrozenEndpoint]) -> Vec<u8> {
 thread_local! {
     static DISABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static NO_TYPE_MASK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RAW_EDGE_PROPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TYPE_CAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `body` with the type cap a save applies replaced, so a test can reach
+/// the refusal without building 65,536 types.
+#[cfg(test)]
+pub(crate) fn with_type_cap<R>(cap: usize, body: impl FnOnce() -> R) -> R {
+    TYPE_CAP.with(|flag| flag.set(Some(cap)));
+    let result = body();
+    TYPE_CAP.with(|flag| flag.set(None));
+    result
+}
+
+fn max_types() -> usize {
+    #[cfg(test)]
+    if let Some(cap) = TYPE_CAP.with(|flag| flag.get()) {
+        return cap;
+    }
+    MAX_TYPES
+}
+
+/// Run `body` with the edge-property section written uncompressed (kind 17),
+/// the shape of a v9 file written before it was compressed.
+#[cfg(test)]
+pub(crate) fn with_raw_edge_props<R>(body: impl FnOnce() -> R) -> R {
+    RAW_EDGE_PROPS.with(|flag| flag.set(true));
+    let result = body();
+    RAW_EDGE_PROPS.with(|flag| flag.set(false));
+    result
 }
 
 /// Run `body` with the type-mask section left out of a save, the shape of a v9
@@ -399,33 +441,43 @@ pub(crate) fn without_topology<R>(body: impl FnOnce() -> R) -> R {
     result
 }
 
-/// The topology sections a save of `graph` writes: none for a graph below the
-/// floors, one that cannot be frozen, or on a big-endian host.
+/// The topology sections a save of `graph` writes, and the reason it wrote
+/// none when a graph at or above the floors could not be recorded. A graph
+/// below the floors, a big-endian host and a layout that asks for none are not
+/// reasons: nothing was dropped.
 pub(super) fn collect_topology_sections(
     graph: &DirGraph,
-) -> io::Result<Vec<MappableSection<'static>>> {
+) -> io::Result<(Vec<MappableSection<'static>>, Option<MappedFallback>)> {
+    let none = |reason: Option<&str>| {
+        Ok((
+            Vec::new(),
+            reason.map(|reason| MappedFallback::new("topology", reason)),
+        ))
+    };
     if !cfg!(target_endian = "little") {
-        return Ok(Vec::new());
+        return none(None);
     }
     #[cfg(test)]
     if DISABLED.with(|flag| flag.get()) {
-        return Ok(Vec::new());
+        return none(None);
     }
     let (min_nodes, min_edges) = super::index_sections::floors();
     let (nodes, edges) = (graph.graph.node_count(), graph.graph.edge_count());
     if nodes < min_nodes && edges < min_edges {
-        return Ok(Vec::new());
+        return none(None);
     }
     if graph.graph.node_bound() >= u32::MAX as usize
         || graph.graph.edge_bound() >= u32::MAX as usize
     {
-        return Ok(Vec::new());
+        return none(Some("node or edge slots beyond 4,294,967,294"));
     }
-    let Some(node_side) = collect_nodes(graph) else {
-        return Ok(Vec::new());
+    let node_side = match collect_nodes(graph) {
+        Ok(side) => side,
+        Err(reason) => return none(Some(reason)),
     };
-    let Some(edge_side) = collect_edges(graph) else {
-        return Ok(Vec::new());
+    let edge_side = match collect_edges(graph) {
+        Ok(side) => side,
+        Err(reason) => return none(Some(reason)),
     };
     let meta = Meta {
         version: VERSION,
@@ -523,15 +575,27 @@ pub(super) fn collect_topology_sections(
             let _guard = SerdeSerializeGuard::new(&graph.interner);
             codec_ser(serde_codec::CodecVersion::PostcardV1, &edge_side.props)?
         };
+        #[cfg(test)]
+        let raw = RAW_EDGE_PROPS.with(|flag| flag.get());
+        #[cfg(not(test))]
+        let raw = false;
+        let (kind, payload) = if raw {
+            (KIND_EDGE_PROPS, encoded)
+        } else {
+            (
+                KIND_EDGE_PROPS_ZSTD,
+                zstd::encode_all(encoded.as_slice(), 3)?,
+            )
+        };
         out.push(owned(
             EDGE_PROPS,
-            KIND_EDGE_PROPS,
+            kind,
             SectionDtype::Raw,
-            encoded.len(),
-            encoded,
+            payload.len(),
+            payload,
         ));
     }
-    Ok(out)
+    Ok((out, None))
 }
 
 /// Where a load puts one topology section: the rule the index sections follow
@@ -558,7 +622,8 @@ pub(super) struct TopologySections {
     in_ty: MappedSection,
     endpoints: MappedSection,
     type_mask: Option<MappedSection>,
-    edge_props: Option<MappedSection>,
+    /// The section and whether it is zstd-compressed (kind 19) or raw (kind 17).
+    edge_props: Option<(MappedSection, bool)>,
 }
 
 impl TopologySections {
@@ -584,7 +649,12 @@ impl TopologySections {
             in_ty: get(IN_TY, KIND_ADJACENCY_TYPES, SectionDtype::U16)?,
             endpoints: get(EDGES, KIND_ENDPOINTS, SectionDtype::U32)?,
             type_mask: get(TYPE_MASK, KIND_TYPE_MASK, SectionDtype::U32),
-            edge_props: get(EDGE_PROPS, KIND_EDGE_PROPS, SectionDtype::Raw),
+            edge_props: get(EDGE_PROPS, KIND_EDGE_PROPS_ZSTD, SectionDtype::Raw)
+                .map(|section| (section, true))
+                .or_else(|| {
+                    get(EDGE_PROPS, KIND_EDGE_PROPS, SectionDtype::Raw)
+                        .map(|section| (section, false))
+                }),
         })
     }
 
@@ -620,11 +690,17 @@ impl TopologySections {
             .map(|name| InternedKey::from_str(name))
             .collect();
         let edge_props = match &self.edge_props {
-            Some(section) => {
+            Some((section, compressed)) => {
                 section.verify()?;
+                let inflated;
+                let bytes = if *compressed {
+                    inflated = zstd_decompress(section.as_bytes())?;
+                    inflated.as_slice()
+                } else {
+                    section.as_bytes()
+                };
                 let _guard = SerdeDeserializeGuard::new(interner);
-                let decoded: Vec<(u32, EdgeData)> =
-                    codec_deser(codec, section.as_bytes(), section.as_bytes().len() as u64)?;
+                let decoded: Vec<(u32, EdgeData)> = codec_deser(codec, bytes, bytes.len() as u64)?;
                 decoded.into_iter().collect::<FxHashMap<_, _>>()
             }
             None => FxHashMap::default(),

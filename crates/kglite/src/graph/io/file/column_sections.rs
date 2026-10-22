@@ -38,6 +38,8 @@ pub(super) struct EncodedColumns<'g> {
     pub(super) meta: Vec<PortableColumnSection>,
     pub(super) compressed: Vec<Vec<u8>>,
     pub(super) mappable: Vec<MappableSection<'g>>,
+    /// Large columns written without a data-region form, and why.
+    pub(super) fallbacks: Vec<crate::graph::dir_graph::MappedFallback>,
 }
 
 /// Column sections, one per node type sorted by type name (the backend's map
@@ -56,6 +58,7 @@ pub(super) fn encode_column_sections(
     let mut meta_out = Vec::new();
     let mut data_out = Vec::new();
     let mut sections = Vec::new();
+    let mut fallbacks = Vec::new();
     let mut stores: Vec<(&str, &Arc<ColumnStore>)> = graph.column_stores_by_name();
     stores.sort_by(|a, b| a.0.cmp(b.0));
     for (type_name, store) in stores {
@@ -102,6 +105,17 @@ pub(super) fn encode_column_sections(
             columns: cols,
         });
         data_out.push(compressed);
+        for (column, reason) in &split.declined {
+            let column = match column.as_str() {
+                "__id__" => "id",
+                "__title__" => "title",
+                other => other,
+            };
+            fallbacks.push(crate::graph::dir_graph::MappedFallback::new(
+                format!("columns:{type_name}.{column}"),
+                *reason,
+            ));
+        }
         for column in split.columns {
             for part in column.parts {
                 sections.push(MappableSection {
@@ -120,6 +134,7 @@ pub(super) fn encode_column_sections(
         meta: meta_out,
         compressed: data_out,
         mappable: sections,
+        fallbacks,
     })
 }
 

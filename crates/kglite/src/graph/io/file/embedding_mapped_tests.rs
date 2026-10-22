@@ -445,11 +445,20 @@ fn an_unclaimed_section_refuses_the_load() {
         data: std::borrow::Cow::Owned(vec![0u8; 8]),
     };
     let mut bytes = Vec::new();
-    super::save_sections::write_kgl_container(&graph, &mut bytes, None, SaveLayout::Auto, {
-        let mut sections = mappable::collect_mappable_sections(&graph, SaveLayout::Auto).unwrap();
-        sections.push(stray);
-        sections
-    })
+    super::save_sections::write_kgl_container(
+        &graph,
+        &mut bytes,
+        None,
+        SaveLayout::Auto,
+        {
+            let mut sections = mappable::collect_mappable_sections(&graph, SaveLayout::Auto)
+                .unwrap()
+                .sections;
+            sections.push(stray);
+            sections
+        },
+        Vec::new(),
+    )
     .unwrap();
     let error = load_kgl_bytes(&bytes).err().unwrap();
     assert!(error.to_string().contains("names no store"), "{error}");

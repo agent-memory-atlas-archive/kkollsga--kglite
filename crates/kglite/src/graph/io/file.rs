@@ -431,6 +431,10 @@ pub(crate) struct FileMetadata {
     /// absent from the JSON — in every container that carries no such section.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mappable: Vec<mappable::MapEntry>,
+    /// Parts this save wrote without a mapped form and why; empty, and so
+    /// absent from the JSON, when there are none. A load reports them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mapped_fallbacks: Vec<crate::graph::dir_graph::MappedFallback>,
     /// Declared quantized scan copies of embedding stores (see
     /// `quantized_sections`); absent from the JSON when no store has one, so
     /// a graph without quantization keeps its bytes.
@@ -580,6 +584,7 @@ impl FileMetadata {
             timeseries_data_version: 2,
             topology_compressed_size: 0,
             mappable: Vec::new(),
+            mapped_fallbacks: Vec::new(),
             quantization: quantized_sections::collect_records(graph),
             column_sections: Vec::new(),
             embeddings_compressed_size: 0,
@@ -670,6 +675,7 @@ impl FileMetadata {
         graph.source_build_version = self.source_build_version;
         graph.source_options = self.source_options;
         graph.user_schema_version = self.user_schema_version;
+        graph.mapped_origin.fallbacks = Arc::new(self.mapped_fallbacks);
         graph.checkpoint_lsn = self.checkpoint_lsn;
         graph.cdc_handoff = self.cdc_handoff;
         graph.spatial_configs = self.spatial_configs;
@@ -784,7 +790,7 @@ pub(crate) use metadata_sidecars::{
 };
 use storage_mode::recorded_storage_mode_tag;
 
-mod embedding_sections;
+pub(crate) mod embedding_sections;
 mod fast_load_sidecars;
 mod index_sections;
 mod integrity;
@@ -1204,6 +1210,7 @@ pub fn save_graph_with_layout(
         let dir = crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph);
         return dir.save_disk(path);
     }
+    graph.clear_save_notice();
     save_inmemory_with_layout(graph, path, fsync, layout)
         .map_err(|e| SaveError::Io(e.to_string()))?;
     if let rebase::Rebase::Declined(reason) = rebase::rebase_onto_saved(graph, path) {
@@ -2269,6 +2276,15 @@ fn load_portable_columnar(
     if let Some(file) = source.file {
         sections.release_consumed(file);
     }
+    let origin = &mut dir_graph.mapped_origin;
+    origin.was_frozen = dir_graph.graph.is_frozen();
+    origin.topology_reason = (!origin.was_frozen).then(|| {
+        crate::graph::dir_graph::mapped_report::not_served_reason(
+            target_mode == StorageMode::Mapped,
+            options.topology == MapPolicy::Memory,
+            &origin.fallbacks,
+        )
+    });
     Ok(Arc::new(dir_graph))
 }
 
@@ -2345,6 +2361,8 @@ mod frozen_tests;
 mod index_sections_tests;
 #[cfg(test)]
 mod load_release_tests;
+#[cfg(test)]
+mod mapped_report_tests;
 #[cfg(test)]
 mod rollback_overlay_tests;
 #[cfg(test)]

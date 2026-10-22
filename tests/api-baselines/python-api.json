@@ -51,6 +51,7 @@
     "FileError",
     "FileFormatError",
     "FileIoError",
+    "MappedFallbackWarning",
     "WriteBudgetExceededError",
     "WriteBudgetWarning",
     "WriterLeaseHeldError",
@@ -1503,6 +1504,16 @@
           "type": "str"
         }
       },
+      "module": "kglite"
+    },
+    "MappedFallbackWarning": {
+      "bases": [
+        "UserWarning"
+      ],
+      "constructible": true,
+      "constructor": null,
+      "kind": "class",
+      "members": {},
       "module": "kglite"
     },
     "MissingArgumentError": {

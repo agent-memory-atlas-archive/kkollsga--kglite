@@ -416,6 +416,16 @@ impl KnowledgeGraph {
             dict.set_item("topology_mapped_bytes", info.topology_mapped_bytes)?;
             dict.set_item("topology_heap_bytes", info.topology_heap_bytes)?;
             dict.set_item("topology_overlay_entries", info.topology_overlay_entries)?;
+            dict.set_item("topology_status", info.topology_status)?;
+            dict.set_item("topology_heap_reason", info.topology_heap_reason)?;
+            let fallbacks = pyo3::types::PyList::empty(py);
+            for fallback in &info.mapped_fallbacks {
+                let row = PyDict::new(py);
+                row.set_item("part", &fallback.part)?;
+                row.set_item("reason", &fallback.reason)?;
+                fallbacks.append(row)?;
+            }
+            dict.set_item("mapped_fallbacks", fallbacks)?;
             dict.set_item("write_budget_bytes", info.write_budget_bytes)?;
             dict.set_item("write_budget_used_bytes", info.write_budget_used_bytes)?;
             dict.set_item("write_budget_state", info.write_budget_state.as_str())?;

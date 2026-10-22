@@ -856,6 +856,7 @@ impl KnowledgeGraph {
             }
             (io::SaveError::Io(message), None) => file_io_err(std::io::Error::other(message)),
         })?;
+        crate::mapped_fallback::announce(py, self.graph());
         crate::allocator::release_after_seam(py);
         Ok(())
     }

@@ -252,3 +252,144 @@ fn a_property_spelled_id_or_title_beside_declared_fields_survives_a_delete_and_s
         "the delete adds no column"
     );
 }
+
+fn section_entry(path: &std::path::Path, name: &str) -> mappable::MapEntry {
+    let bytes = std::fs::read(path).unwrap();
+    let head = metadata_head::read_metadata_head(&bytes, "test").unwrap();
+    head.mappable
+        .iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("{name} in {:?}", section_names(path)))
+        .clone()
+}
+
+/// `n` edges, every one with a property, between two nodes of a frame-loaded
+/// type, plus the frame itself.
+fn graph_with_property_edges(n: usize) -> DirGraph {
+    let mut graph = DirGraph::new();
+    add_unique_id_type(&mut graph, "Doc", 0..400);
+    run(
+        &mut graph,
+        &format!(
+            "MATCH (a:Doc {{id: 1}}), (b:Doc {{id: 2}}) \
+             UNWIND range(1, {n}) AS i CREATE (a)-[:L {{w: i, tag: 'edge'}}]->(b)"
+        ),
+    );
+    graph
+}
+
+#[test]
+fn a_graph_with_many_property_edges_keeps_its_mapped_topology() {
+    // One edge more than the cap this replaced.
+    let n = 262_145;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("weighted.kgl");
+    with_floors(10, 10, || {
+        save(graph_with_property_edges(n), &path, SaveLayout::Auto)
+    });
+    let names = section_names(&path);
+    assert!(
+        names.iter().any(|name| name == "topo:edges"),
+        "topology sections are written: {names:?}"
+    );
+    let props = section_entry(&path, "topo:edge_props");
+    assert_eq!(props.kind, 19, "the properties are compressed");
+    assert!(
+        props.len < 4 * n as u64,
+        "{n} edges compress to {}",
+        props.len
+    );
+
+    let mapped = load_owned(&path, StorageMode::Mapped);
+    assert!(mapped.graph.is_frozen(), "served from the file");
+    let memory = load_owned(&path, StorageMode::Memory);
+    for q in [
+        "MATCH ()-[r:L]->() RETURN count(r), sum(r.w), min(r.tag)",
+        "MATCH (a:Doc {id: 1})-[r:L]->(b) WHERE r.w > 262140 RETURN r.w ORDER BY r.w",
+    ] {
+        assert_eq!(rows(&mapped, q), rows(&memory, q), "{q}");
+    }
+    assert!(
+        mapped.graph_info().topology_heap_bytes > 0,
+        "properties are heap"
+    );
+}
+
+#[test]
+fn compressed_and_uncompressed_edge_properties_both_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (zstd_path, raw_path) = (tmp.path().join("z.kgl"), tmp.path().join("r.kgl"));
+    with_floors(10, 10, || {
+        save(
+            graph_with_property_edges(3000),
+            &zstd_path,
+            SaveLayout::Auto,
+        );
+        topology_sections::with_raw_edge_props(|| {
+            save(graph_with_property_edges(3000), &raw_path, SaveLayout::Auto)
+        });
+    });
+    let (zstd_entry, raw_entry) = (
+        section_entry(&zstd_path, "topo:edge_props"),
+        section_entry(&raw_path, "topo:edge_props"),
+    );
+    assert_eq!((zstd_entry.kind, raw_entry.kind), (19, 17));
+    assert!(
+        zstd_entry.len * 4 < raw_entry.len,
+        "{} vs {}",
+        zstd_entry.len,
+        raw_entry.len
+    );
+    let reference = load_owned(&raw_path, StorageMode::Memory);
+    for path in [&zstd_path, &raw_path] {
+        let mapped = load_owned(path, StorageMode::Mapped);
+        assert!(mapped.graph.is_frozen());
+        assert_eq!(dump(&mapped), dump(&reference));
+    }
+}
+
+/// `types` node types of one node each and `types` connection types of one
+/// edge each, over a chain, in one statement.
+fn graph_with_many_types(types: usize) -> DirGraph {
+    let mut graph = DirGraph::new();
+    let nodes: Vec<String> = (0..types)
+        .map(|i| format!("(n{i}:T{i} {{id: {i}, n: {}}})", i % 7))
+        .collect();
+    let edges: Vec<String> = (1..types)
+        .map(|i| format!("(n{})-[:R{}]->(n{i})", i - 1, i - 1))
+        .collect();
+    run(
+        &mut graph,
+        &format!("CREATE {}, {}", nodes.join(", "), edges.join(", ")),
+    );
+    graph
+}
+
+#[test]
+fn a_graph_with_thousands_of_types_keeps_its_mapped_topology() {
+    let types = 2_000;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("types.kgl");
+    with_floors(10, 10, || {
+        save(graph_with_many_types(types), &path, SaveLayout::Auto)
+    });
+    let names = section_names(&path);
+    assert!(
+        names.iter().any(|name| name == "topo:out_ty"),
+        "more than 1,024 node and connection types still record the topology"
+    );
+    let mapped = load_owned(&path, StorageMode::Mapped);
+    let memory = load_owned(&path, StorageMode::Memory);
+    assert!(mapped.graph.is_frozen());
+    assert_eq!(dump(&mapped), dump(&memory));
+    for i in [0, 31, 32, 33, 1023, 1024, 1500, 1998] {
+        let q = format!("MATCH (a)-[r:R{i}]->(b) RETURN a.id, b.id, type(r)");
+        assert_eq!(rows(&mapped, &q), rows(&memory, &q), "{q}");
+        let miss = format!("MATCH (a:T{})-[r:R{i}]->(b) RETURN count(r)", i + 1);
+        assert_eq!(rows(&mapped, &miss), rows(&memory, &miss), "{miss}");
+    }
+    assert_eq!(
+        rows(&mapped, "MATCH ()-[r]->() RETURN count(r)"),
+        rows(&memory, "MATCH ()-[r]->() RETURN count(r)")
+    );
+}

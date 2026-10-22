@@ -17,6 +17,7 @@ impl DirGraph {
         let edge_bound = self.graph.edge_bound();
         let node_tombstones = node_bound - node_count;
         let budget = self.write_budget_report();
+        let (topology_status, topology_heap_reason) = self.topology_report();
 
         GraphInfo {
             node_count,
@@ -46,6 +47,9 @@ impl DirGraph {
             topology_mapped_bytes: topology.mapped_bytes,
             topology_heap_bytes: topology.heap_bytes,
             topology_overlay_entries: topology.overlay_entries,
+            topology_status,
+            topology_heap_reason,
+            mapped_fallbacks: self.mapped_fallback_report(),
             write_budget_bytes: budget.limit,
             write_budget_used_bytes: budget.used,
             write_budget_state: budget.state,
@@ -123,6 +127,21 @@ pub struct GraphInfo {
     /// Operations, node weights and edge weights the copy-on-write overlay
     /// over a frozen base holds. `0` when no write has touched the topology.
     pub topology_overlay_entries: usize,
+    /// Where the topology is served from: `"mapped"` (a `.kgl`'s sections),
+    /// `"overlay"` (those sections with a write overlay over them), `"heap"`
+    /// (see [`Self::topology_heap_reason`]) or `"disk"` (the disk backend's
+    /// files).
+    pub topology_status: &'static str,
+    /// Why the topology is on the heap: the storage mode, the load policy,
+    /// what the file recorded (a graph below the size floors, an inline node
+    /// identity, more than 65,535 types), a copy the platform made, or a
+    /// collapse by a whole-graph operation. `None` unless the status is `"heap"`.
+    pub topology_heap_reason: Option<String>,
+    /// The parts of a mapped graph held without a mapped form, each with its
+    /// reason: what the file records as written that way (topology, id and
+    /// type indexes, columns) and the embedding stores on the heap now. Empty
+    /// outside mapped storage. A save lists the same parts in a warning.
+    pub mapped_fallbacks: Vec<super::MappedFallback>,
     /// The limit, in bytes, on unsaved writes held over the mapped file: the
     /// `write_budget` the graph was loaded with (default `max(512 MiB, half
     /// the file)`). `None` when no budget applies or the load asked for none;

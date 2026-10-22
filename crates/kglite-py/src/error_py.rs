@@ -604,6 +604,10 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
         "WriteBudgetWarning",
         py.get_type::<crate::write_budget::WriteBudgetWarning>(),
     )?;
+    m.add(
+        "MappedFallbackWarning",
+        py.get_type::<crate::mapped_fallback::MappedFallbackWarning>(),
+    )?;
 
     // Argument validation
     m.add("ArgumentError", py.get_type::<ArgumentError>())?;

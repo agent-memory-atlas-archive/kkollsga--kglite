@@ -1025,7 +1025,7 @@ fn only_the_topology_owner_and_kinds_are_claimed() {
         .collect();
     assert_eq!(topo.len(), 12);
     assert!(topo.iter().all(|e| e.owner == topology_sections::OWNER));
-    assert!(topo.iter().all(|e| (10..=18).contains(&e.kind)));
+    assert!(topo.iter().all(|e| (10..=19).contains(&e.kind)));
     assert!(topo.iter().all(|e| e.offset % 64 == 0), "64-byte aligned");
 }
 

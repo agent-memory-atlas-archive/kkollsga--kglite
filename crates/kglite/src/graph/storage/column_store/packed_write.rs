@@ -2,6 +2,7 @@
 //! disk sidecars); the reader is [`ColumnStore::load_packed`].
 
 use super::*;
+use crate::graph::dir_graph::mapped_report::DELTA_COLUMN_REASON;
 
 impl ColumnStore {
     /// Serialize all columns to a packed byte buffer for the v3 file format.
@@ -154,6 +155,9 @@ impl ColumnStore {
             let delta_wins = delta_blob
                 .as_ref()
                 .is_some_and(|blob| blob.len().saturating_mul(4) <= col.len().saturating_mul(9));
+            if delta_wins {
+                split.note_declined(col_name, col.len(), DELTA_COLUMN_REASON);
+            }
             if !delta_wins && split.claim(col_name, col) {
                 let tag = format!("{}{MAP_TAG_SUFFIX}", col.type_tag());
                 buf.extend_from_slice(&(col_name.len() as u16).to_le_bytes());

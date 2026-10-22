@@ -682,6 +682,14 @@ pub struct DirGraph {
     /// (`write_budget`); `None` when none applies.
     #[serde(skip)]
     pub(crate) write_budget: Option<write_budget::WriteBudget>,
+    /// What the load recorded about the parts of this graph that are not
+    /// served from a mapping; see [`mapped_report`].
+    #[serde(skip)]
+    pub(crate) mapped_origin: mapped_report::MappedOrigin,
+    /// The notice a save parked about the parts it wrote without a mapped
+    /// form. Shared by clones, like the write-budget warning.
+    #[serde(skip)]
+    pub(crate) save_notice: Arc<std::sync::Mutex<Option<String>>>,
     /// Temp directories created during load or spill that should be cleaned up on drop.
     /// Uses Arc so clones share ownership — only the last clone cleans up.
     #[serde(skip)]
@@ -1024,6 +1032,8 @@ impl DirGraph {
             memory_limit: None,
             spill_dir: None,
             write_budget: None,
+            mapped_origin: Default::default(),
+            save_notice: Default::default(),
             temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
             read_only: false,
             schema_locked: false,
@@ -2401,6 +2411,8 @@ pub struct IndexStats {
 
 mod info;
 pub use info::GraphInfo;
+pub(crate) mod mapped_report;
+pub use mapped_report::MappedFallback;
 pub(crate) mod write_budget;
 pub use write_budget::{WriteBudgetSetting, WriteBudgetState};
 

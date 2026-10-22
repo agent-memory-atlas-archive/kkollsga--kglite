@@ -435,18 +435,33 @@ impl SaveLayout {
     }
 }
 
+/// What a save of a graph writes into the data region, and the parts a graph
+/// at or above the size floors could have had there and does not.
+pub(crate) struct MappableSet<'a> {
+    pub(crate) sections: Vec<MappableSection<'a>>,
+    pub(crate) fallbacks: Vec<crate::graph::dir_graph::MappedFallback>,
+}
+
 /// The mappable sections a save of `graph` emits under `layout`. `Compact`
-/// always yields none.
+/// always yields none, and no fallbacks: nothing was dropped.
 pub(crate) fn collect_mappable_sections(
     graph: &crate::graph::schema::DirGraph,
     layout: SaveLayout,
-) -> io::Result<Vec<MappableSection<'_>>> {
+) -> io::Result<MappableSet<'_>> {
     let mut sections = super::embedding_sections::collect_embedding_sections(graph, layout)?;
+    let mut fallbacks = Vec::new();
     if layout != SaveLayout::Compact {
-        sections.extend(super::index_sections::collect_index_sections(graph)?);
-        sections.extend(super::topology_sections::collect_topology_sections(graph)?);
+        let (indexes, skipped) = super::index_sections::collect_index_sections(graph)?;
+        sections.extend(indexes);
+        fallbacks.extend(skipped);
+        let (topology, skipped) = super::topology_sections::collect_topology_sections(graph)?;
+        sections.extend(topology);
+        fallbacks.extend(skipped);
     }
-    Ok(sections)
+    Ok(MappableSet {
+        sections,
+        fallbacks,
+    })
 }
 
 pub(crate) fn align_up(value: u64, align: u64) -> u64 {

@@ -358,6 +358,9 @@ fn build(directory: &Path, output: &Path, dialect: OkfDialect) -> Result<()> {
         .with_context(|| format!("failed to build {}", directory.display()))?;
     kglite::api::io::save_graph(&mut built.graph, &output.to_string_lossy())
         .with_context(|| format!("failed to save {}", output.display()))?;
+    if let Some(notice) = built.graph.take_save_notice() {
+        eprintln!("warning: {notice}");
+    }
     eprint!("{}", built.report.render());
     exec::write_stdout(&format!("wrote {}", output.display()))?;
     Ok(())

@@ -110,6 +110,13 @@ fn encode_optional_sections(
     })
 }
 
+/// What the metadata records about the data region: its section table and the
+/// parts the save wrote without a mapped form.
+struct DataRegionRecord {
+    entries: Vec<MapEntry>,
+    fallbacks: Vec<crate::graph::dir_graph::MappedFallback>,
+}
+
 /// Canonical metadata JSON: round-trips through `serde_json::Value`, whose
 /// object map is a BTreeMap, so every nested `HashMap<String, T>` emits with
 /// sorted keys. Prevents per-process HashMap randomization from producing
@@ -122,7 +129,7 @@ fn build_metadata_json(
     column_meta: Vec<PortableColumnSection>,
     column_data: &[Vec<u8>],
     optional: &OptionalSections,
-    mappable: Vec<MapEntry>,
+    region: DataRegionRecord,
 ) -> io::Result<Vec<u8>> {
     let keys = [
         EMBEDDINGS_SECTION,
@@ -146,7 +153,8 @@ fn build_metadata_json(
         metadata.checkpoint_lsn = lsn;
     }
     metadata.section_digests = digests;
-    metadata.mappable = mappable;
+    metadata.mappable = region.entries;
+    metadata.mapped_fallbacks = region.fallbacks;
     metadata.topology_compressed_size = topology.len() as u64;
     metadata.column_sections = column_meta;
     metadata.embeddings_compressed_size = compressed_len(&optional.embeddings);
@@ -179,12 +187,14 @@ pub fn write_kgl_to_layout<W: Write>(
     checkpoint_lsn: Option<u64>,
     layout: SaveLayout,
 ) -> io::Result<()> {
+    let set = collect_mappable_sections(graph, layout)?;
     write_kgl_container(
         graph,
         writer,
         checkpoint_lsn,
         layout,
-        collect_mappable_sections(graph, layout)?,
+        set.sections,
+        set.fallbacks,
     )
 }
 
@@ -198,6 +208,7 @@ pub(super) fn write_kgl_container<W: Write>(
     checkpoint_lsn: Option<u64>,
     layout: SaveLayout,
     mappable: Vec<MappableSection<'_>>,
+    mut fallbacks: Vec<crate::graph::dir_graph::MappedFallback>,
 ) -> io::Result<()> {
     validate_column_keys_registered(graph)?;
     let codec = serde_codec::CodecVersion::PostcardV1;
@@ -206,6 +217,9 @@ pub(super) fn write_kgl_container<W: Write>(
     let (column_meta, column_data) = (columns.meta, columns.compressed);
     let mut mappable = mappable;
     mappable.extend(columns.mappable);
+    fallbacks.extend(columns.fallbacks);
+    let fallbacks = crate::graph::dir_graph::mapped_report::finalize(fallbacks);
+    graph.park_save_notice(&fallbacks);
     let optional = encode_optional_sections(graph, codec, layout)?;
     let core_version = optional.core_version;
     let (entries, _region_len) = plan_data_region(&mappable)?;
@@ -216,7 +230,10 @@ pub(super) fn write_kgl_container<W: Write>(
         column_meta,
         &column_data,
         &optional,
-        entries.clone(),
+        DataRegionRecord {
+            entries: entries.clone(),
+            fallbacks,
+        },
     )?;
 
     // Header: magic (4B) + codec (1B) + core_data_version (4B) +

@@ -449,7 +449,19 @@ pub(crate) fn run_save(
     // `compute_schema` only needs `&DirGraph` — no second make_mut.
     let overview = compute_schema(graph.kg.dir());
     Ok(format!(
-        "Saved {path_str} ({} nodes, {} edges).",
-        overview.node_count, overview.edge_count
+        "Saved {path_str} ({} nodes, {} edges).{}",
+        overview.node_count,
+        overview.edge_count,
+        save_notice_block(graph.kg.dir())
     ))
+}
+
+/// The warning a save parked about the parts it wrote without a mapped form,
+/// as a response block and a stderr line (the write-budget warning's two
+/// channels), or nothing.
+pub(crate) fn save_notice_block(dir: &kglite::api::DirGraph) -> String {
+    dir.take_save_notice().map_or_else(String::new, |notice| {
+        eprintln!("warning: {notice}");
+        format!("\nwarning: {notice}\n")
+    })
 }

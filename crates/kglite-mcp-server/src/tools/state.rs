@@ -659,8 +659,10 @@ impl GraphState {
         let path_str = path.to_string_lossy().into_owned();
         let overview = compute_schema(active.kg.dir());
         Ok(format!(
-            "Saved {path_str} ({} nodes, {} edges); save target rebound here.",
-            overview.node_count, overview.edge_count
+            "Saved {path_str} ({} nodes, {} edges); save target rebound here.{}",
+            overview.node_count,
+            overview.edge_count,
+            super::runners::save_notice_block(active.kg.dir())
         ))
     }
 

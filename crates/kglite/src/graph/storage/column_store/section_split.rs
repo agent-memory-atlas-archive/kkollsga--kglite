@@ -44,7 +44,17 @@ pub(crate) struct SplitColumn<'a> {
 pub(crate) struct ColumnSplit<'a> {
     pub(crate) columns: Vec<SplitColumn<'a>>,
     claims: bool,
+    /// Large columns the split could have taken and did not, with why: no
+    /// section form, or a delta-compressed integer form that wins. Only a
+    /// split that claims records them; `layout="compact"` asked for the
+    /// compressed form.
+    pub(crate) declined: Vec<(String, &'static str)>,
 }
+
+/// Rows from which a column is large enough that a decline is worth a report:
+/// the row count at which a fixed-width column's buffer reaches
+/// [`buffer_leaves_heap`].
+const REPORT_MIN_ROWS: usize = super::typed_column::MMAP_THRESHOLD / 8;
 
 impl<'a> ColumnSplit<'a> {
     /// A split that claims the columns a load would otherwise spill (see
@@ -53,6 +63,7 @@ impl<'a> ColumnSplit<'a> {
         ColumnSplit {
             columns: Vec::new(),
             claims,
+            declined: Vec::new(),
         }
     }
 
@@ -60,6 +71,7 @@ impl<'a> ColumnSplit<'a> {
     pub(crate) fn into_owned(self) -> ColumnSplit<'static> {
         ColumnSplit {
             claims: self.claims,
+            declined: self.declined,
             columns: self
                 .columns
                 .into_iter()
@@ -81,6 +93,14 @@ impl<'a> ColumnSplit<'a> {
         }
     }
 
+    /// Record a column of `rows` rows that stays in the compressed section,
+    /// when the split claims columns and the column is large.
+    pub(crate) fn note_declined(&mut self, name: &str, rows: usize, reason: &'static str) {
+        if self.claims && rows >= REPORT_MIN_ROWS {
+            self.declined.push((name.to_string(), reason));
+        }
+    }
+
     /// Take `col` for the data region if it is a fixed-width or string column
     /// with a buffer that [`buffer_leaves_heap`]. Little-endian hosts only: the
     /// section bytes are the in-memory bytes.
@@ -89,6 +109,7 @@ impl<'a> ColumnSplit<'a> {
             return false;
         }
         let Some(parts) = col.split_parts() else {
+            self.note_declined(name, col.len(), no_section_form(col));
             return false;
         };
         if !self.claims
@@ -103,6 +124,17 @@ impl<'a> ColumnSplit<'a> {
             parts,
         });
         true
+    }
+}
+
+/// Why a column has no data-region form.
+fn no_section_form(col: &TypedColumn) -> &'static str {
+    match col {
+        TypedColumn::Mixed { .. } => "values of mixed kinds have no raw form",
+        TypedColumn::Str { relocated, .. } if !relocated.is_empty() => {
+            "string cells were rewritten in place; a save of the reloaded graph writes the raw form"
+        }
+        _ => "buffers of inconsistent length have no raw form",
     }
 }
 
