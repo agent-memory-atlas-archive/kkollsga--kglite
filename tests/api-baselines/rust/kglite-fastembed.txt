@@ -5253,6 +5253,8 @@ impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::set_valid_time_default(&mut self, kglite::api::temporal::ValidTimeDefault, bool)
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::take_constraint_error(&mut self, &str) -> core::option::Option<kglite::error::KgError>
+impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::take_save_notice(&self) -> core::option::Option<alloc::string::String>
 impl core::clone::Clone for kglite::api::DirGraph
 pub fn kglite::api::DirGraph::clone(&self) -> kglite::api::DirGraph
 impl core::default::Default for kglite::api::DirGraph
@@ -5361,13 +5363,16 @@ pub kglite::api::GraphInfo::edge_property_overlay_rows: usize
 pub kglite::api::GraphInfo::edge_tombstones: usize
 pub kglite::api::GraphInfo::edges_mapped: bool
 pub kglite::api::GraphInfo::fragmentation_ratio: f64
+pub kglite::api::GraphInfo::mapped_fallbacks: alloc::vec::Vec<kglite::api::MappedFallback>
 pub kglite::api::GraphInfo::node_capacity: usize
 pub kglite::api::GraphInfo::node_count: usize
 pub kglite::api::GraphInfo::node_tombstones: usize
 pub kglite::api::GraphInfo::property_index_count: usize
 pub kglite::api::GraphInfo::topology_heap_bytes: usize
+pub kglite::api::GraphInfo::topology_heap_reason: core::option::Option<alloc::string::String>
 pub kglite::api::GraphInfo::topology_mapped_bytes: usize
 pub kglite::api::GraphInfo::topology_overlay_entries: usize
+pub kglite::api::GraphInfo::topology_status: &'static str
 pub kglite::api::GraphInfo::type_count: usize
 pub kglite::api::GraphInfo::write_budget_bytes: core::option::Option<u64>
 pub kglite::api::GraphInfo::write_budget_state: kglite::api::WriteBudgetState
@@ -5427,6 +5432,21 @@ pub fn kglite::api::KnowledgeGraph::embedder(&self) -> core::option::Option<&all
 pub fn kglite::api::KnowledgeGraph::from_arc(alloc::sync::Arc<kglite::api::DirGraph>) -> Self
 pub fn kglite::api::KnowledgeGraph::set_embedder_native(&mut self, alloc::sync::Arc<dyn kglite::api::Embedder>)
 pub fn kglite::api::KnowledgeGraph::source_location(&self, &str, core::option::Option<&str>) -> kglite::api::code_entities::SourceLookup
+pub struct kglite::api::MappedFallback
+pub kglite::api::MappedFallback::part: alloc::string::String
+pub kglite::api::MappedFallback::reason: alloc::string::String
+impl core::clone::Clone for kglite::api::MappedFallback
+pub fn kglite::api::MappedFallback::clone(&self) -> kglite::api::MappedFallback
+impl core::cmp::Eq for kglite::api::MappedFallback
+impl core::cmp::PartialEq for kglite::api::MappedFallback
+pub fn kglite::api::MappedFallback::eq(&self, &kglite::api::MappedFallback) -> bool
+impl core::fmt::Debug for kglite::api::MappedFallback
+pub fn kglite::api::MappedFallback::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::MappedFallback
+impl serde_core::ser::Serialize for kglite::api::MappedFallback
+pub fn kglite::api::MappedFallback::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::MappedFallback
+pub fn kglite::api::MappedFallback::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::MaterializedLabel
 pub kglite::api::MaterializedLabel::label: alloc::string::String
 pub kglite::api::MaterializedLabel::stamped: usize

@@ -70,6 +70,9 @@ pub mod api {
     /// reading only — the auto-vacuum trigger takes the worst of all three
     /// garbage populations.
     pub use crate::graph::dir_graph::GraphInfo;
+    /// A part of a mapped graph held without a mapped form, and why
+    /// (`GraphInfo::mapped_fallbacks`).
+    pub use crate::graph::dir_graph::MappedFallback;
     /// The old→new node-index mapping `DirGraph::vacuum` returns.
     pub use crate::graph::dir_graph::NodeRemap;
     /// Where a graph stands against its unsaved-write budget

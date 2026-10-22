@@ -150,8 +150,9 @@ impl DirGraph {
             {
                 out.push(MappedFallback::new(
                     format!("embeddings:{node_type}.{property}"),
-                    "held on the heap: below the 64 MiB load floor, or copied by a write; \
-                     a save and a mapped load map it a store of 4 MiB or more",
+                    "held on the heap: below the 64 MiB load floor, or copied there by a \
+                     write; a save writes a store of 4 MiB or more raw, and a mapped load maps \
+                     one of 64 MiB or more",
                 ));
             }
         }
