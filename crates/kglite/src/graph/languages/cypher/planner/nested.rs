@@ -6,7 +6,8 @@ use crate::graph::core::pattern_matching::PatternElement;
 /// **Pass:** `optimize_nested_queries` — Recurse into UNION right-arms and
 /// `CALL { }` bodies, inheriting diagnostic pass disables. A pattern that
 /// reaches an import — as an anchor, or through a property map
-/// (`{city: p.city}`, `{city: city}`) — disables the graph-global fusions
+/// (`{city: p.city}`, `{city: city}`), or a body that reads an import in any
+/// clause (WHERE, RETURN, ORDER BY) — disables the graph-global fusions
 /// that cannot consume a per-row seed; legacy set arms also retain their
 /// importing WITH boundaries.
 pub(super) fn pass_optimize_nested_queries(query: &mut CypherQuery, ctx: &PassCtx) {
@@ -20,6 +21,7 @@ pub(super) fn pass_optimize_nested_queries(query: &mut CypherQuery, ctx: &PassCt
                 ctx.disabled,
                 (ctx.initial_scope, ctx.global_scope),
                 ctx.plan_instant,
+                ctx.nested,
             ),
             Clause::CallSubquery { import, body } => {
                 optimize_call_body(import, body, &visible, ctx);
@@ -46,7 +48,9 @@ fn optimize_call_body(
     };
     let import_names: Vec<String> = imports.iter().cloned().collect();
     let anchors = import_pattern_anchors(body, &import_names);
-    let seeded_pattern = !anchors.is_empty() || pattern_reads_import(body, &import_names);
+    let seeded_pattern = !anchors.is_empty()
+        || pattern_reads_import(body, &import_names)
+        || body_references_import(body, &imports);
     let empty_globals = HashSet::new();
     let body_globals = if matches!(
         import,
@@ -75,6 +79,7 @@ fn optimize_call_body(
         &disabled,
         (&imports, body_globals),
         ctx.plan_instant,
+        true,
     );
 }
 
@@ -124,6 +129,17 @@ fn collect_import_pattern_anchors(
             }
         }
     }
+}
+
+/// Whether any clause of the body (WHERE, RETURN, ORDER BY, aggregate
+/// arguments, set arms) references an import by name. The fused node-scan
+/// operators run with no seed row, so such a read would see null.
+fn body_references_import(body: &CypherQuery, imports: &HashSet<String>) -> bool {
+    let mut refs = HashSet::new();
+    for clause in &body.clauses {
+        simplification::collect_clause_variables(clause, &mut refs);
+    }
+    imports.iter().any(|name| refs.contains(name))
 }
 
 /// Whether any MATCH pattern in this subquery/set tree reads an import through

@@ -70,6 +70,9 @@ pub struct PassCtx<'a> {
     /// The context instant when it is a literal, inherited by nested scopes.
     plan_instant: Option<Instant>,
     valid_counts: Option<&'a HashMap<String, usize>>,
+    /// This scope is a `CALL` body (or a set arm inside one): its leading
+    /// MATCH runs on a seed row, not an empty input.
+    nested: bool,
 }
 
 type PassFn = fn(&mut CypherQuery, &PassCtx);
@@ -273,16 +276,7 @@ pub fn mark_lazy_eligibility(query: &mut CypherQuery) {
     // Don't mark for mutation queries — CREATE/SET/DELETE/REMOVE/MERGE go
     // through `execute_mutable`, which doesn't read the lazy descriptor
     // and would produce empty rows.
-    if query.clauses.iter().any(|c| {
-        matches!(
-            c,
-            Clause::Create(_)
-                | Clause::Set(_)
-                | Clause::Delete(_)
-                | Clause::Remove(_)
-                | Clause::Merge(_)
-        )
-    }) {
+    if simplification::has_write_clause(query) {
         return;
     }
     mark_return_lazy_eligible(query);
@@ -321,6 +315,7 @@ pub fn optimize_with_disabled(
         disabled,
         (empty_scope, empty_scope),
         None,
+        false,
     );
 }
 
@@ -331,6 +326,7 @@ fn optimize_with_disabled_scoped(
     disabled: &HashSet<String>,
     (initial_scope, global_scope): (&HashSet<String>, &HashSet<String>),
     plan_instant: Option<Instant>,
+    nested: bool,
 ) {
     query.optimizer_tags.clear();
     // A statement with a context (and each scope lowering gave a template)
@@ -352,6 +348,7 @@ fn optimize_with_disabled_scoped(
         guarded: query.guard.is_some(),
         plan_instant,
         valid_counts: valid_counts.as_ref(),
+        nested,
     };
     for (name, pass_fn) in PASSES {
         if disabled.contains(*name) || (ctx.guarded && !guard::is_safe(name)) {
@@ -554,8 +551,10 @@ fn pass_reorder_match_patterns(query: &mut CypherQuery, ctx: &PassCtx) {
 /// as an early-stop hint on the leading `MATCH`. WHY-BAIL: a RETURN form needs
 /// a single MATCH (multi-MATCH + WHERE on a late-bound var silently drops
 /// rows); a WITH that aggregates, is DISTINCT or windowed, or keeps a WHERE.
+/// A residual WHERE also bails in a `CALL` body and in a mutation query: only
+/// the top-level read route folds it ahead of the cap.
 fn pass_push_limit_into_match(query: &mut CypherQuery, ctx: &PassCtx) {
-    push_limit_into_match(query, ctx.graph, ctx.params)
+    push_limit_into_match(query, ctx.graph, ctx.params, ctx.nested)
 }
 
 /// **Pass:** `push_limit_into_aggregate` — Stamp `group_limit_hint`

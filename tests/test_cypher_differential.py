@@ -288,6 +288,18 @@ def cross_type_key_graph():
 
 
 @pytest.fixture
+def call_limit_graph():
+    """Six :A and six :B nodes keyed k=1..6 (B also carries g=k%2), and one :R
+    edge per B (rid=1..6) in a ring. Every correlated filter below keeps rows
+    that lie past the first two :B nodes / :R edges in scan order, which is
+    where a LIMIT hint stamped ahead of the filter drops them."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher("UNWIND range(1, 6) AS k CREATE (:A {k: k}), (:B {k: k, g: k % 2})").to_list()
+    graph.cypher("MATCH (x:B), (y:B) WHERE y.k = x.k % 6 + 1 CREATE (x)-[:R {rid: x.k}]->(y)").to_list()
+    return graph
+
+
+@pytest.fixture
 def shared_id_graph():
     """Id 7 on three node types with different incident counts, so an
     anchor that settles on one type answers differently from the matcher's
@@ -5984,6 +5996,126 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (c:Company) "
         "CALL { MATCH (n:Person) WHERE n.age > 30 RETURN count(n) AS pc } "
         "RETURN c.name AS cn, pc ORDER BY cn LIMIT 2",
+        None,
+    ),
+    # ── CALL bodies over a WHERE the LIMIT hint / node-scan fusions must not outrun ──
+    (
+        "call_limit_where_correlated_scoped",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k = a.k RETURN b.k AS x LIMIT 2 } RETURN a.k AS ak, x ORDER BY ak",
+        None,
+    ),
+    (
+        "call_limit_where_correlated_legacy_import",
+        "call_limit_graph",
+        "MATCH (a:A) CALL { WITH a MATCH (b:B) WHERE b.k = a.k RETURN b.k AS x LIMIT 2 }"
+        " RETURN a.k AS ak, x ORDER BY ak",
+        None,
+    ),
+    (
+        "call_limit_where_correlated_with_limit_count",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k = a.k WITH b LIMIT 2 RETURN count(*) AS n }"
+        " RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_limit_where_correlated_skip_zero",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k = a.k WITH b SKIP 0 LIMIT 1 RETURN b.k AS x }"
+        " RETURN a.k AS ak, x ORDER BY ak",
+        None,
+    ),
+    (
+        "call_limit_where_uncorrelated",
+        "call_limit_graph",
+        "CALL { MATCH (b:B) WHERE b.k + 0 > 4 RETURN b.k AS x LIMIT 2 } RETURN x ORDER BY x",
+        None,
+    ),
+    (
+        "call_limit_where_uncorrelated_with_limit",
+        "call_limit_graph",
+        "CALL { MATCH (b:B) WHERE b.k + 0 > 4 WITH b LIMIT 2 RETURN b.k AS x } RETURN x ORDER BY x",
+        None,
+    ),
+    (
+        "call_limit_where_relationship_form",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH ()-[c:R]->() WHERE c.rid = a.k WITH c LIMIT 2 RETURN count(*) AS n }"
+        " RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_limit_where_identified_edge_graphbridge",
+        "call_limit_graph",
+        "MATCH (s:B)-[r:R]->(t:B) CALL (r) { MATCH ()-[candidate:R]->() "
+        "WHERE candidate.rid = r.rid WITH candidate LIMIT 2 RETURN count(*) AS d } RETURN r.rid AS c0, d ORDER BY c0",
+        None,
+    ),
+    (
+        "call_limit_where_union_arms_seeded",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k = a.k RETURN b.k AS x LIMIT 2 "
+        "UNION ALL MATCH (b:B) WHERE b.k = a.k + 1 RETURN b.k AS x LIMIT 2 } RETURN a.k AS ak, x ORDER BY ak, x",
+        None,
+    ),
+    (
+        "call_import_in_where_count_ge",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k >= a.k RETURN count(*) AS n } RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_where_count_untyped",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b) WHERE b.k >= a.k RETURN count(*) AS n } RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_where_count_legacy",
+        "call_limit_graph",
+        "MATCH (a:A) CALL { WITH a MATCH (b:B) WHERE b.k >= a.k RETURN count(*) AS n } RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_where_count_in_list",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k IN [a.k, a.k + 1] RETURN count(*) AS n }"
+        " RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_aggregate_arg_sum",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) RETURN sum(b.k + a.k) AS n } RETURN a.k AS ak, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_where_grouped_limit",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k >= a.k RETURN b.g AS g, count(*) AS n ORDER BY g LIMIT 1 }"
+        " RETURN a.k AS ak, g, n ORDER BY ak",
+        None,
+    ),
+    (
+        "call_import_in_where_top_k",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) WHERE b.k >= a.k RETURN b.k AS x ORDER BY x DESC LIMIT 2 }"
+        " RETURN a.k AS ak, x ORDER BY ak, x",
+        None,
+    ),
+    (
+        "call_import_in_order_by_top_k",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) RETURN b.k AS x ORDER BY abs(b.k - a.k), x LIMIT 2 }"
+        " RETURN a.k AS ak, x ORDER BY ak, x",
+        None,
+    ),
+    (
+        "call_import_in_return_top_k",
+        "call_limit_graph",
+        "MATCH (a:A) CALL (a) { MATCH (b:B) RETURN b.k + a.k AS x ORDER BY x DESC LIMIT 2 }"
+        " RETURN a.k AS ak, x ORDER BY ak, x",
         None,
     ),
     # ── CALL { } Neo4j-conformance shapes ──

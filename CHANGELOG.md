@@ -21,6 +21,10 @@ before upgrading.
 
 ### Fixed
 
+- **A `LIMIT` after a `WHERE` the executor cannot fold no longer drops rows.**
+  - `CALL { MATCH (b:B) WHERE … RETURN … LIMIT n }` (scoped, legacy `WITH a` and uncorrelated spellings, seeded `UNION` arms, node and relationship patterns) capped the matcher at `n` candidates before the `WHERE` ran, so a body returned too few rows or none: `CALL (r) { MATCH ()-[c:R]->() WHERE c.rid = r.rid WITH c LIMIT 2 RETURN count(*) }` counted 0 for every edge past the first two.
+  - `MATCH (b:B) WHERE b.k + 0 > 2 WITH b LIMIT 2 DELETE b` (and `SET`) matched nothing and changed nothing. The early stop now applies only to top-level reads and to bodies and mutations whose `WHERE` the pattern fully applies.
+- **A correlated `CALL` body that reads an import outside its pattern returns the right count and order.** `CALL (a) { MATCH (b:B) WHERE b.k >= a.k RETURN count(*) }`, `… WHERE b.k IN [a.k, a.k + 1] …`, `RETURN sum(b.k + a.k)` and top-k bodies ordering on `a` answered 0 or no rows because the fused node scan ran without the outer row.
 - **A durable graph opens after a kill that lands between a checkpoint's log truncation and its header write.** The log is then empty or shorter than its header, and the open failed with `failed to read the write-ahead log … failed to fill whole buffer`. Such a log holds no commits; the open now treats it as empty and rewrites the header.
 - **Embedding writes count against the write budget.**
   - `set_embeddings`, `import_embeddings`, `embed_texts`, `copy_embeddings_from`, `quantize_embeddings`, their relationship twins and the C ABI's `kglite_session_set_embeddings`, `kglite_session_add_embeddings` and `kglite_session_quantize_embeddings` are refused once the graph is at its limit. `embed_texts` skipped the check.

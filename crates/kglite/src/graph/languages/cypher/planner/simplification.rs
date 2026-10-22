@@ -424,16 +424,23 @@ fn projection_preserves_rows(clause: &Clause) -> bool {
 /// each upstream row gets its own capped expansion; multi-MATCH RETURN
 /// queries and correlated/filtered comma-pattern shapes, which interact
 /// incorrectly with the per-row `max_matches` bound and can return fewer rows
-/// than LIMIT requests (see the safety notes in the body); only the
-/// provably-safe shapes are rewritten.
+/// than LIMIT requests (see the safety notes in the body); a residual WHERE
+/// in a CALL body or a mutation query, which never fold it ahead of the cap;
+/// only the provably-safe shapes are rewritten.
 pub(super) fn push_limit_into_match(
     query: &mut CypherQuery,
     _graph: &DirGraph,
     params: &HashMap<String, Value>,
+    nested: bool,
 ) {
     if query.clauses.len() < 3 {
         return;
     }
+    let mutation = has_write_clause(query)
+        || query
+            .clauses
+            .iter()
+            .any(|c| matches!(c, Clause::Foreach { .. }));
     let mut i = 0;
     while i + 2 < query.clauses.len() {
         let Some(window) = find_limit_window(&query.clauses, i) else {
@@ -532,9 +539,18 @@ pub(super) fn push_limit_into_match(
             continue;
         }
 
-        // The executor inlines pushable WHERE predicates into the pattern
-        // (`push_where_into_match` runs earlier in the optimizer), so the
-        // hint is exact in both with-WHERE and without-WHERE cases.
+        // A surviving WHERE is folded ahead of the cap only on the top-level
+        // read route, where the first MATCH runs on an empty input. A CALL
+        // body's first MATCH joins the seed row and the mutation executor has
+        // no fold, so there the matcher would stop at `hint` candidates
+        // before the WHERE ran and return too few rows.
+        if (nested || mutation)
+            && has_where
+            && !single_node_where_subsumed(&query.clauses[i], &query.clauses[i + 1], params)
+        {
+            i += 1;
+            continue;
+        }
         if let Clause::Match(ref mut m) = query.clauses[i] {
             m.limit_hint = Some(hint);
         }
@@ -550,6 +566,21 @@ pub(super) fn push_limit_into_match(
             query.clauses.remove(i + 1);
         }
     }
+}
+
+/// Whether the query has a CREATE/SET/DELETE/REMOVE/MERGE clause, so it runs
+/// through the mutation executor.
+pub(super) fn has_write_clause(query: &CypherQuery) -> bool {
+    query.clauses.iter().any(|c| {
+        matches!(
+            c,
+            Clause::Create(_)
+                | Clause::Set(_)
+                | Clause::Delete(_)
+                | Clause::Remove(_)
+                | Clause::Merge(_)
+        )
+    })
 }
 
 /// Whether `where_clause` is the pushdown's safety net over a single-node
