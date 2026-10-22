@@ -1870,4 +1870,37 @@ mod node_footprint_tests {
             "{per_node:.1} heap bytes per columnar node"
         );
     }
+
+    #[test]
+    fn an_int_id_that_fits_the_compact_key_stays_in_the_compact_index() {
+        let mut index = TypeIdIndex::Integer(
+            (0..100u32)
+                .map(|k| (k, NodeIndex::new(k as usize)))
+                .collect(),
+        );
+        // Int64 and an integral float are the id a `UniqueId` is: no demotion.
+        index.insert(Value::Int64(500), NodeIndex::new(500));
+        index.insert(Value::Float64(501.0), NodeIndex::new(501));
+        index.insert(Value::Int64(7), NodeIndex::new(900));
+        assert!(matches!(index, TypeIdIndex::Integer(_)), "still compact");
+        assert_eq!(index.len(), 102);
+        for (id, node) in [
+            (Value::UniqueId(500), 500),
+            (Value::Int64(500), 500),
+            (Value::Int64(501), 501),
+            (Value::UniqueId(7), 900),
+            (Value::Int64(7), 900),
+            (Value::Int64(8), 8),
+        ] {
+            assert_eq!(index.get(&id), Some(NodeIndex::new(node)), "{id:?}");
+        }
+        // An id with no compact key (negative, past u32, not an integer) demotes.
+        index.insert(Value::Int64(1 << 40), NodeIndex::new(1000));
+        assert!(matches!(index, TypeIdIndex::General(_)));
+        assert_eq!(index.get(&Value::UniqueId(7)), Some(NodeIndex::new(900)));
+        assert_eq!(
+            index.get(&Value::Int64(1 << 40)),
+            Some(NodeIndex::new(1000))
+        );
+    }
 }

@@ -569,8 +569,14 @@ impl TypeIdIndex {
     pub fn insert(&mut self, id: Value, idx: NodeIndex) {
         match self {
             TypeIdIndex::Integer(map) => {
-                if let Value::UniqueId(u) = id {
-                    map.insert(u, idx);
+                // An integer id that fits the compact key is the same id
+                // whatever its spelling (`get` coerces the lookup the same
+                // way), so it stays in the compact map. Demoting for it
+                // rebuilt the whole map as `Value` keys: a `CREATE` with an int
+                // id on a type whose ids a DataFrame load stored as `UniqueId`
+                // cost O(type) time and about 100 bytes per id of heap.
+                if let Some(key) = id_u32(&id) {
+                    map.insert(key, idx);
                 } else {
                     let mut general: FxHashMap<Value, NodeIndex> =
                         map.drain().map(|(k, v)| (Value::UniqueId(k), v)).collect();

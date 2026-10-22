@@ -393,3 +393,33 @@ fn a_graph_with_thousands_of_types_keeps_its_mapped_topology() {
         rows(&memory, "MATCH ()-[r]->() RETURN count(r)")
     );
 }
+
+#[test]
+fn a_sustained_commit_loop_never_flattens_the_id_index_into_the_heap() {
+    use crate::graph::session::Session;
+    use crate::graph::storage::disk::id_index_layer::flattens;
+    let (_tmp, path) = saved_frame_graph();
+    let session = Session::from_arc(load(&path, StorageMode::Mapped));
+    // The published graph has a second holder after every commit, as it does
+    // under a binding that keeps its own handle; publication cannot fold it.
+    let mut handle = session.snapshot();
+    let before = flattens();
+    for i in 0..200 {
+        let mut tx = session.begin();
+        run(
+            tx.working_mut().unwrap(),
+            &format!("CREATE (:Doc {{id: {}, n: 1}})", 900_000 + i),
+        );
+        session.commit(tx, true);
+        handle = session.snapshot();
+    }
+    assert_eq!(
+        flattens(),
+        before,
+        "no commit paid O(type) for the id index"
+    );
+    let found = rows(&handle, "MATCH (d:Doc {id: 900199}) RETURN d.n");
+    assert!(found.contains("Int64(1)"), "{found}");
+    let old = rows(&handle, "MATCH (d:Doc {id: 4}) RETURN d.n");
+    assert!(old.contains("Int64(8)"), "{old}");
+}

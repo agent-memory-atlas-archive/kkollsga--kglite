@@ -52,6 +52,19 @@ use super::id_index::{BaseEntry, IdIndexBase};
 use crate::datatypes::Value;
 use crate::graph::schema::TypeIdIndex;
 
+#[cfg(test)]
+thread_local! {
+    /// Depth-cap flattens on this thread: each is O(type) and, over a mapped
+    /// index, puts every id on the heap.
+    static FLATTENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Depth-cap flattens on this thread since the process started.
+#[cfg(test)]
+pub(crate) fn flattens() -> usize {
+    FLATTENS.with(|count| count.get())
+}
+
 /// A deleted id, recorded in the delta so it masks the shared base.
 ///
 /// `NodeIndex::end()` is petgraph's own "no node" sentinel (`usize::MAX`); a
@@ -441,7 +454,17 @@ impl TypeEntry {
     /// depth-cap flatten below, and reaching it takes `MAX_CHAIN_DEPTH`
     /// uncompacted rounds.
     pub fn share(&mut self) -> Arc<TypeEntry> {
+        // Fold what no other graph still reads: a fork after a commit finds the
+        // chain its own last fork left, and the readers of the graph before
+        // that one are gone by now. O(delta), and a no-op for a flat entry or
+        // a base another graph holds. Without it a commit loop whose published
+        // graph has a second holder (a binding's handle) never compacts at
+        // publication, and the chain reaches the cap every `MAX_CHAIN_DEPTH`
+        // forks.
+        self.try_compact();
         if self.depth() >= MAX_CHAIN_DEPTH {
+            #[cfg(test)]
+            FLATTENS.with(|count| count.set(count.get() + 1));
             // Flatten first: this is the only O(N_type) path, and reaching it
             // needs MAX_CHAIN_DEPTH consecutive fork-after-write rounds with a
             // reader held throughout.
