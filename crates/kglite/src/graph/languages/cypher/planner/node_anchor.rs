@@ -12,6 +12,10 @@
 //! search-space constraint and nothing else — the predicate stays in the
 //! WHERE, so an anchor that is stale, out of range, or simply wrong removes no
 //! row that the predicate would have kept.
+//!
+//! A value that is not a literal or `$param` but reads only names bound before
+//! the clause (`UNWIND $rows AS row MATCH (n) WHERE elementId(n) = row.id`) is
+//! recorded as a [`NodeAnchor::Row`] and resolved per driving row.
 
 use super::super::ast::*;
 use crate::datatypes::values::Value;
@@ -55,7 +59,7 @@ pub(super) fn anchor_element_id(query: &mut CypherQuery, params: &HashMap<String
         if vars.is_empty() {
             continue;
         }
-        let mut anchors: Vec<(String, NodeIndex)> = Vec::new();
+        let mut anchors: Vec<(String, NodeAnchor)> = Vec::new();
         for predicate in &predicates {
             collect_anchors(predicate, &vars, params, &mut anchors);
         }
@@ -92,7 +96,7 @@ fn collect_anchors(
     predicate: &Predicate,
     vars: &[String],
     params: &HashMap<String, Value>,
-    out: &mut Vec<(String, NodeIndex)>,
+    out: &mut Vec<(String, NodeAnchor)>,
 ) {
     match predicate {
         Predicate::And(left, right) => {
@@ -104,14 +108,14 @@ fn collect_anchors(
             operator: ComparisonOp::Equals,
             right,
         } => {
-            if let Some((var, slot)) = anchor_from_operands(left, right, vars, params)
+            if let Some((var, anchor)) = anchor_from_operands(left, right, vars, params)
                 .or_else(|| anchor_from_operands(right, left, vars, params))
             {
                 // First anchor wins: two conflicting `elementId(v) = …`
                 // conjuncts cannot both hold, and the retained predicate
                 // rejects whichever candidate the anchor picks.
                 if !out.iter().any(|(v, _)| *v == var) {
-                    out.push((var, slot));
+                    out.push((var, anchor));
                 }
             }
         }
@@ -125,7 +129,7 @@ fn anchor_from_operands(
     value: &Expression,
     vars: &[String],
     params: &HashMap<String, Value>,
-) -> Option<(String, NodeIndex)> {
+) -> Option<(String, NodeAnchor)> {
     let Expression::FunctionCall { name, args, .. } = call else {
         return None;
     };
@@ -138,8 +142,38 @@ fn anchor_from_operands(
     if !vars.iter().any(|v| v == var) {
         return None;
     }
-    let slot = slot_from_expression(value, params)?;
-    Some((var.clone(), NodeIndex::new(slot)))
+    if let Some(slot) = slot_from_expression(value, params) {
+        return Some((var.clone(), NodeAnchor::Slot(NodeIndex::new(slot))));
+    }
+    row_anchorable(value, vars).then(|| (var.clone(), NodeAnchor::Row(value.clone())))
+}
+
+/// An expression that is deterministic and reads only names bound before this
+/// clause: a variable or property access (`row.id`), `toString` /
+/// `toInteger` of one, or `elementId` of one. Evaluating it twice — once to
+/// seed, once in the retained predicate — must agree, so anything else
+/// (`rand()`, arithmetic over unknown functions, subqueries) is left to the
+/// predicate. A name this clause's own patterns bind is excluded: it has no
+/// value before the match runs.
+fn row_anchorable(expr: &Expression, vars: &[String]) -> bool {
+    match expr {
+        Expression::Variable(v) | Expression::PropertyAccess { variable: v, .. } => {
+            !vars.iter().any(|n| n == v)
+        }
+        Expression::FunctionCall {
+            name,
+            args,
+            distinct: false,
+            ..
+        } if args.len() == 1
+            && ["toString", "toInteger", "elementId"]
+                .iter()
+                .any(|f| name.eq_ignore_ascii_case(f)) =>
+        {
+            row_anchorable(&args[0], vars)
+        }
+        _ => false,
+    }
 }
 
 /// The slot a literal or bound parameter denotes.

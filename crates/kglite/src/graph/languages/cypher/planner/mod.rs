@@ -413,18 +413,19 @@ fn pass_push_where_into_match(query: &mut CypherQuery, ctx: &PassCtx) {
 }
 
 /// **Pass:** `anchor_element_id` — Record the slot named by
-/// `WHERE elementId(v) = <literal|$param>` on the MATCH clause, so the
-/// executor seeds it as a pre-binding instead of scanning for it.
+/// `WHERE elementId(v) = <literal|$param|row expression>` on the MATCH clause,
+/// so the executor seeds it as a pre-binding instead of scanning for it.
 ///
 /// **Precondition:** a `Clause::Match`/`Clause::OptionalMatch` with a WHERE —
 /// its own (the scoped `OPTIONAL MATCH` form) or the adjacent standalone one.
 ///
 /// **Pattern matched:** an `Equals` comparison, either operand order, between
 /// `elementId(v)` — where `v` is a node variable of *this* clause's patterns —
-/// and a value that parses to a non-negative slot. Only the predicate's `And`
-/// spine is descended.
+/// and a non-negative slot value, or a deterministic expression over
+/// earlier-bound names (`row.id`, `toString(x)`) kept as `NodeAnchor::Row` and
+/// resolved per driving row. Only the predicate's `And` spine is descended.
 ///
-/// **Rewrite:** pushes `(v, NodeIndex)` onto `MatchClause::node_anchors`. The
+/// **Rewrite:** pushes `(v, NodeAnchor)` onto `MatchClause::node_anchors`. The
 /// predicate is left standing, so this narrows the candidate set without
 /// owning the answer: an out-of-range or stale slot resolves to no node, which
 /// is what the retained predicate would have concluded.

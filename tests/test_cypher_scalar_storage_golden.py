@@ -144,3 +144,32 @@ def test_deleted_relationship_keeps_its_type_within_the_statement(scalar_graph):
     reuse = "MATCH (a:A {id: 5})-[r]->() DELETE r CREATE (a)-[s:V]->(a) RETURN type(s) AS t"
     _rows(scalar_graph, "CREATE (:A {id: 5})-[:U]->(:B {id: 6})")
     assert _rows(scalar_graph, reuse) == [{"t": "V"}]
+
+
+def test_row_element_id_anchor_golden(scalar_graph):
+    """`elementId(n) = row.id` seeds the node per driving row in every storage
+    mode; a slot past the end, null, non-numeric or on a node of another label
+    matches nothing, and the mutation path reaches the same node."""
+    _rows(scalar_graph, "UNWIND range(0, 4) AS i CREATE (:L {id: i + 10, k: i})")
+    _rows(scalar_graph, "UNWIND range(5, 6) AS i CREATE (:M {id: i + 10, k: i})")
+    ids = ["0", "2", "5", "999999", "abc", None, 4]
+    for count in (len(ids), 70):  # below and above the 64-row transient-index threshold
+        rows = [{"id": v} for v in (ids * 10)[:count]]
+        typed = "UNWIND $rows AS row MATCH (n:L) WHERE elementId(n) = row.id RETURN count(n) AS c"
+        got = _rows(scalar_graph, typed, params={"rows": rows})
+        assert got == [{"c": sum(1 for r in rows if r["id"] in ("0", "2"))}]
+        assert got == _rows(scalar_graph, typed, params={"rows": rows}, disable_optimizer=True)
+    untyped = "UNWIND $rows AS row MATCH (n) WHERE elementId(n) = row.id RETURN n.k AS k ORDER BY k"
+    assert _rows(scalar_graph, untyped, params={"rows": [{"id": v} for v in ids]}) == [{"k": 0}, {"k": 2}, {"k": 5}]
+    _rows(
+        scalar_graph,
+        "UNWIND $rows AS row MATCH (n:L) WHERE elementId(n) = row.id SET n.hit = true",
+        params={"rows": [{"id": v} for v in ids]},
+    )
+    assert _rows(scalar_graph, "MATCH (n) WHERE n.hit = true RETURN n.k AS k ORDER BY k") == [{"k": 0}, {"k": 2}]
+    _rows(
+        scalar_graph,
+        "UNWIND $rows AS row MATCH (n:L) WHERE elementId(n) = row.id DELETE n",
+        params={"rows": [{"id": v} for v in ids]},
+    )
+    assert _rows(scalar_graph, "MATCH (n:L) RETURN n.k AS k ORDER BY k") == [{"k": 1}, {"k": 3}, {"k": 4}]

@@ -564,15 +564,28 @@ pub struct MatchClause {
     /// planner pass — pushdown, top-K fusion, spatial fusion, relationship
     /// pushdown — matching on the adjacency it already understands.
     pub where_clause: Option<WhereClause>,
-    /// Planner-resolved slot anchors from `WHERE elementId(v) = <literal|$param>`
-    /// — `(variable, slot)` pairs the executor seeds as pre-bindings.
+    /// Planner-resolved anchors from `WHERE elementId(v) = <literal|$param|row
+    /// expression>` — `(variable, anchor)` pairs the executor seeds as
+    /// pre-bindings (a [`NodeAnchor::Row`] is resolved per driving row).
     ///
     /// A **search-space constraint only**: the predicate that produced the
     /// anchor is never removed, so a stale or wrong anchor cannot change which
     /// rows the query answers — only which rows it has to visit. An anchor
     /// naming a slot that does not exist simply matches nothing, which is what
     /// the predicate would have decided anyway.
-    pub node_anchors: Vec<(String, petgraph::graph::NodeIndex)>,
+    pub node_anchors: Vec<(String, NodeAnchor)>,
+}
+
+/// How a [`MatchClause::node_anchors`] entry names its slot.
+#[derive(Debug, Clone)]
+pub enum NodeAnchor {
+    /// Resolved at plan time from a literal or `$param`.
+    Slot(petgraph::graph::NodeIndex),
+    /// A deterministic expression over the incoming row's names
+    /// (`elementId(n) = row.id`), evaluated on each driving row. A value that
+    /// is not a valid slot seeds nothing and leaves the retained predicate to
+    /// decide.
+    Row(Expression),
 }
 
 /// Path variable assignment: `p = shortestPath(pattern)`

@@ -991,6 +991,118 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     # `WHERE m.key = row.key` over a map-valued UNWIND row is pushed as the
     # same correlated reference `{key: row.key}` parses to, so it reaches the
     # query-local index; the answers must stay those of the per-row WHERE.
+    # `elementId(n) = <row expression>` is anchored per driving row (the
+    # slot resolved on each row); the predicate stays, so every shape must
+    # answer what the unanchored scan does — slots of other labels, past the
+    # end, null / non-numeric / integer values, below and above 64 rows.
+    (
+        "element_id_row_anchor_typed_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_typed_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_untyped_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_untyped_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_commuted_and_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE r.id = elementId(n) AND n.n >= 0 RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_commuted_and_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE r.id = elementId(n) AND n.n >= 0 RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_with_row_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r WITH r MATCH (n:J) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_with_row_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r WITH r MATCH (n:J) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_optional_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r OPTIONAL MATCH (n:F) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_optional_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r OPTIONAL MATCH (n:F) WHERE elementId(n) = r.id RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_or_declines_few",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE elementId(n) = r.id OR n.n = 0 RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 12))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
+    (
+        "element_id_row_anchor_or_declines_many",
+        "cross_type_key_graph",
+        "UNWIND $rows AS r MATCH (n:F) WHERE elementId(n) = r.id OR n.n = 0 RETURN r.id AS i, n.n AS n ORDER BY i, n",
+        {
+            "rows": [{"id": str(i)} for i in list(range(0, 400, 3))]
+            + [{"id": v} for v in (None, "abc", 4, 2.5, -1, "999999")]
+        },
+    ),
     (
         "where_map_row_key_int_probe_float_key",
         "cross_type_key_graph",

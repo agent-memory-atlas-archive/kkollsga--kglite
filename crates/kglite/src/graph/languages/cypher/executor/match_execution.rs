@@ -546,7 +546,7 @@ impl<'a> CypherExecutor<'a> {
                         // the move/merge below.
                         let matches = {
                             let base = seeded.as_ref().unwrap_or(&existing_row.node_bindings);
-                            let anchored = match_clause::seed_clause_node_anchors(clause, base);
+                            let anchored = self.seed_row_anchors(clause, base, &existing_row);
                             let pre_bindings = anchored.as_ref().unwrap_or(base);
                             self.materializing_executor(
                                 self.budget_probe_limit(remaining),
@@ -960,7 +960,7 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<Vec<crate::graph::core::pattern_matching::PatternMatch>, String> {
         let seeded = match_clause::seed_prebound_pattern_vars(pat, cur);
         let base = seeded.as_ref().unwrap_or(&cur.node_bindings);
-        let anchored = match_clause::seed_clause_node_anchors(clause, base);
+        let anchored = self.seed_row_anchors(clause, base, cur);
         let pre_bindings = anchored.as_ref().unwrap_or(base);
         // The PatternExecutor holds the disk arena guard (drop glue) and
         // borrows `seen`; both end within each `run` call, before the caller

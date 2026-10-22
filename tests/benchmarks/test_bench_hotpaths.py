@@ -508,6 +508,57 @@ def test_bench_element_id_out_of_range_miss(benchmark, hot_graph):
 
 
 # ---------------------------------------------------------------------------
+# elementId() per-row anchoring — `UNWIND $rows ... WHERE elementId(n) = row.id`
+# ---------------------------------------------------------------------------
+#
+# GraphBridge's ExecuteUpdate/ExecuteDelete shape. Without the per-row anchor
+# each driving row scans the label (rows x nodes: seconds for 1 000 rows on
+# 100k nodes); anchored it is one seek per row. The literal-anchor cell is the
+# control: it never reaches the per-row path.
+
+
+@pytest.fixture(scope="module")
+def row_anchor_graph():
+    graph = KnowledgeGraph()
+    n = 100_000
+    graph.add_nodes(
+        pd.DataFrame({"nid": list(range(n)), "name": [f"N{i}" for i in range(n)]}),
+        "Item",
+        "nid",
+        "name",
+    )
+    return graph
+
+
+def _row_anchor_bench(benchmark, graph, count):
+    rows = [{"id": str(i * 37)} for i in range(count)]
+    query = "UNWIND $rows AS row MATCH (n:Item) WHERE elementId(n) = row.id RETURN count(n) AS c"
+    result = benchmark.pedantic(
+        lambda: graph.cypher(query, params={"rows": rows}), rounds=5, iterations=1, warmup_rounds=1
+    )
+    assert result.to_list() == [{"c": count}]
+
+
+@pytest.mark.benchmark
+def test_bench_element_id_row_anchor_50_rows(benchmark, row_anchor_graph):
+    _row_anchor_bench(benchmark, row_anchor_graph, 50)
+
+
+@pytest.mark.benchmark
+def test_bench_element_id_row_anchor_1000_rows(benchmark, row_anchor_graph):
+    _row_anchor_bench(benchmark, row_anchor_graph, 1000)
+
+
+@pytest.mark.benchmark
+def test_bench_element_id_row_anchor_literal_control(benchmark, row_anchor_graph):
+    """Control: a literal slot anchors at plan time, independent of the per-row path."""
+    result = benchmark(
+        lambda: row_anchor_graph.cypher("MATCH (n:Item) WHERE elementId(n) = '1234' RETURN count(n) AS c")
+    )
+    assert result.to_list() == [{"c": 1}]
+
+
+# ---------------------------------------------------------------------------
 # IN membership over a large list
 # ---------------------------------------------------------------------------
 #

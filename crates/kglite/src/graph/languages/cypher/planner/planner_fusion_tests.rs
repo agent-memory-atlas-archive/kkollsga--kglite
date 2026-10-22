@@ -1094,7 +1094,10 @@ fn anchors_of(query: &str, params: &HashMap<String, Value>) -> Vec<(String, usiz
             _ => None,
         })
         .flatten()
-        .map(|(v, idx)| (v.clone(), idx.index()))
+        .filter_map(|(v, a)| match a {
+            NodeAnchor::Slot(idx) => Some((v.clone(), idx.index())),
+            NodeAnchor::Row(_) => None,
+        })
         .collect()
 }
 
@@ -1465,4 +1468,60 @@ fn optional_match_aggregate_merges_repeated_group_keys() {
             vec![Value::String("c".into()), Value::Int64(1)],
         ]
     );
+}
+
+/// Per-clause anchor kinds after a full optimizer run: `slot`, `row`.
+fn anchor_kinds_of(query: &str) -> Vec<(String, &'static str)> {
+    let mut parsed = parse_cypher(query).unwrap();
+    optimize(&mut parsed, &DirGraph::new(), &HashMap::new());
+    parsed
+        .clauses
+        .iter()
+        .filter_map(|c| match c {
+            Clause::Match(m) | Clause::OptionalMatch(m) => Some(&m.node_anchors),
+            _ => None,
+        })
+        .flatten()
+        .map(|(v, a)| {
+            (
+                v.clone(),
+                match a {
+                    NodeAnchor::Slot(_) => "slot",
+                    NodeAnchor::Row(_) => "row",
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn test_element_id_row_anchor_records_deterministic_prior_bound_expressions() {
+    let row = vec![("n".to_string(), "row")];
+    for q in [
+        "UNWIND $r AS row MATCH (n:L) WHERE elementId(n) = row.id RETURN n",
+        "UNWIND $r AS row MATCH (n) WHERE row.id = elementId(n) RETURN n",
+        "UNWIND $r AS x MATCH (n:L) WHERE elementId(n) = x RETURN n",
+        "UNWIND $r AS x MATCH (n:L) WHERE elementId(n) = toString(x) RETURN n",
+        "UNWIND $r AS row MATCH (n:L) WHERE elementId(n) = row.id AND n.k = 1 RETURN n",
+        "UNWIND $r AS row OPTIONAL MATCH (n:L) WHERE elementId(n) = row.id RETURN n",
+    ] {
+        assert_eq!(anchor_kinds_of(q), row, "{q}");
+    }
+}
+
+#[test]
+fn test_element_id_row_anchor_declines_unsafe_values() {
+    for q in [
+        // Non-deterministic: seed and predicate would see different values.
+        "UNWIND $r AS row MATCH (n:L) WHERE elementId(n) = toString(toInteger(rand() * 3)) RETURN n",
+        // The clause's own variable has no value before the match runs.
+        "MATCH (m:L) MATCH (n:L) WHERE elementId(n) = elementId(n) RETURN n",
+        "UNWIND $r AS row MATCH (n:L)-[]->(m:L) WHERE elementId(n) = elementId(m) RETURN n",
+        // Not a conjunct.
+        "UNWIND $r AS row MATCH (n:L) WHERE elementId(n) = row.id OR n.k = 1 RETURN n",
+        // Arbitrary expression shapes stay with the predicate.
+        "UNWIND $r AS row MATCH (n:L) WHERE elementId(n) = row.a + row.b RETURN n",
+    ] {
+        assert!(anchor_kinds_of(q).is_empty(), "{q}");
+    }
 }

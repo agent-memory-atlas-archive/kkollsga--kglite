@@ -1648,5 +1648,14 @@
   },
   "tests/test_valid_time_comparison_rule.py::test_aware_frame_bounds_are_stored_as_utc_instants[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_row_element_id_anchor_golden[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_row_element_id_anchor_golden[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_cypher_scalar_storage_golden.py::test_row_element_id_anchor_golden[disk]": {
+    "owner": "storage-parity"
   }
 }

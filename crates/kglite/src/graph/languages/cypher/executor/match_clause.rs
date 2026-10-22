@@ -382,7 +382,10 @@ pub(super) fn seed_clause_node_anchors(
         return None;
     }
     let mut extended: Option<Bindings<NodeIndex>> = None;
-    for (var, idx) in &clause.node_anchors {
+    for (var, anchor) in &clause.node_anchors {
+        let NodeAnchor::Slot(idx) = anchor else {
+            continue; // a Row anchor needs a driving row
+        };
         if base.contains_key(var) {
             continue; // an existing binding always wins
         }
@@ -392,6 +395,49 @@ pub(super) fn seed_clause_node_anchors(
         }
     }
     extended
+}
+
+impl CypherExecutor<'_> {
+    /// [`seed_clause_node_anchors`] for a driving row: also resolves the
+    /// clause's [`NodeAnchor::Row`] anchors (`elementId(n) = row.id`) against
+    /// `cur`, so the matcher starts at that node instead of scanning for it.
+    ///
+    /// A row value that is not a slot (null, a name, a float, a negative
+    /// number) or an expression that fails to evaluate seeds nothing; the
+    /// retained predicate then decides — and reports any error — exactly as it
+    /// would unanchored. A slot that is out of range, tombstoned, or holds a
+    /// node of another label matches nothing, as for a literal anchor.
+    pub(super) fn seed_row_anchors(
+        &self,
+        clause: &MatchClause,
+        base: &Bindings<NodeIndex>,
+        cur: &ResultRow,
+    ) -> Option<Bindings<NodeIndex>> {
+        if clause.node_anchors.is_empty() {
+            return None;
+        }
+        let mut extended = seed_clause_node_anchors(clause, base);
+        for (var, anchor) in &clause.node_anchors {
+            let NodeAnchor::Row(expr) = anchor else {
+                continue;
+            };
+            let current = extended.as_ref().unwrap_or(base);
+            if current.contains_key(var) {
+                continue;
+            }
+            let slot = match self.evaluate_expression(expr, cur) {
+                Ok(Value::String(s)) => s.parse::<usize>().ok(),
+                Ok(Value::Int64(n)) => usize::try_from(n).ok(),
+                _ => None,
+            };
+            if let Some(slot) = slot {
+                extended
+                    .get_or_insert_with(|| base.clone())
+                    .insert(var.clone(), NodeIndex::new(slot));
+            }
+        }
+        extended
+    }
 }
 
 /// When a pattern re-uses a variable that is already bound on the incoming
@@ -638,7 +684,7 @@ impl<'a> CypherExecutor<'a> {
                 };
                 let seeded = seed_prebound_pattern_vars(pat, cur);
                 let base = seeded.as_ref().unwrap_or(&cur.node_bindings);
-                let anchored = seed_clause_node_anchors(clause, base);
+                let anchored = self.seed_row_anchors(clause, base, cur);
                 let pre_bindings = anchored.as_ref().unwrap_or(base);
                 let matches = self
                     .materializing_executor(
