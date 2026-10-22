@@ -632,6 +632,34 @@ pub struct UndoJournal {
     /// Node embedding stores whose pre-statement state is already captured:
     /// the capture is a whole-store clone, so only the first one is paid.
     captured_node_stores: HashSet<(String, String)>,
+    /// What a write overlay over a frozen base keeps of this statement after
+    /// its inverse edits ran; see [`OverlayResidue`].
+    residue: OverlayResidue,
+}
+
+/// The entries a rolled-back statement leaves in a write overlay that never
+/// folds away, recorded as the statement runs.
+///
+/// The journal restores what the statement changed, slot for slot, by writing
+/// the inverse operations through the overlay, which only grows: every
+/// operation and inverse is an entry in its operation log, and an edge weight
+/// copied on first touch stays copied. None of that is logical state, and over a
+/// frozen base it is heap that only a save releases, so repeated failures
+/// would grow it without bound. For a statement that removed nothing the
+/// inverse edits are exact (a created slot is freed again, a free-list slot
+/// popped by a create is pushed back), so the log can be cut back to where the
+/// statement found it and the edge weights it copied can be dropped. A
+/// statement that removed a node or edge leaves a representation (a
+/// tombstone, a revived entry) that no entry removal undoes, and keeps its
+/// entries.
+#[derive(Debug, Default)]
+pub(crate) struct OverlayResidue {
+    /// Operation-log length when the statement began; `None` outside an overlay.
+    pub(crate) ops_mark: Option<usize>,
+    /// Edge slots whose weight the statement copied into the overlay.
+    pub(crate) copied_edge_weights: Vec<u32>,
+    /// The statement removed a node or an edge.
+    pub(crate) removed: bool,
 }
 
 impl UndoJournal {
@@ -687,7 +715,27 @@ impl UndoJournal {
 
     #[inline]
     pub fn note_node_removed(&mut self, idx: NodeIndex, prior: NodeData) {
+        self.residue.removed = true;
         self.entries.push(UndoEntry::NodeRemoved { idx, prior });
+    }
+
+    /// Record where the overlay's operation log stood when the statement began.
+    #[inline]
+    pub(crate) fn note_ops_mark(&mut self, len: usize) {
+        self.residue.ops_mark = Some(len);
+    }
+
+    /// The overlay copied a base edge's weight on this statement's first write
+    /// to it.
+    #[inline]
+    pub(crate) fn note_copied_edge_weight(&mut self, slot: u32) {
+        self.residue.copied_edge_weights.push(slot);
+    }
+
+    /// Hand over what the statement left in an overlay, for the rollback to
+    /// clear once the journal has run.
+    pub(crate) fn take_residue(&mut self) -> OverlayResidue {
+        std::mem::take(&mut self.residue)
     }
 
     #[inline]
@@ -716,6 +764,7 @@ impl UndoJournal {
         tgt: NodeIndex,
         prior: EdgeData,
     ) {
+        self.residue.removed = true;
         self.entries.push(UndoEntry::EdgeRemoved {
             idx,
             src,

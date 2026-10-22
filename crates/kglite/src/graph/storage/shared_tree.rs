@@ -365,6 +365,22 @@ impl<T: Copy> OpLog<T> {
             .flat_map(|chunk| chunk.iter())
             .chain(self.open.iter())
     }
+
+    /// Drop every entry past `len`. A sealed chunk the cut falls inside is
+    /// reopened (its kept prefix copied); chunks past it are dropped, and a
+    /// clone that holds them keeps reading them.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        if len >= self.len() {
+            return;
+        }
+        let kept_sealed = len / LOG_CHUNK;
+        if kept_sealed >= self.sealed.len() {
+            self.open.truncate(len - self.sealed.len() * LOG_CHUNK);
+            return;
+        }
+        self.open = self.sealed[kept_sealed][..len - kept_sealed * LOG_CHUNK].to_vec();
+        self.sealed.truncate(kept_sealed);
+    }
 }
 
 #[cfg(test)]
@@ -473,6 +489,41 @@ mod tests {
             "a clone does not see a later write"
         );
         assert!(copy.holds(4097), "and keeps what it held");
+    }
+
+    /// Truncating drops the entries past the cut across chunk boundaries and
+    /// appends continue from there; a clone taken before keeps what it read.
+    #[test]
+    fn op_log_truncates_across_chunks() {
+        let total = LOG_CHUNK * 3 + 17;
+        for cut in [
+            0,
+            5,
+            LOG_CHUNK - 1,
+            LOG_CHUNK,
+            LOG_CHUNK + 1,
+            LOG_CHUNK * 2,
+            total - 1,
+            total,
+            total + 9,
+        ] {
+            let mut log: OpLog<u32> = OpLog::default();
+            for i in 0..total as u32 {
+                log.push(i);
+            }
+            let before = log.clone();
+            log.truncate(cut);
+            let kept = cut.min(total);
+            assert_eq!(log.len(), kept, "cut {cut}");
+            assert!(log.iter().copied().eq(0..kept as u32), "cut {cut}");
+            log.push(7777);
+            assert_eq!(log.len(), kept + 1);
+            assert_eq!(log.iter().last(), Some(&7777));
+            assert!(
+                before.iter().copied().eq(0..total as u32),
+                "a clone is unmoved"
+            );
+        }
     }
 
     /// A log reads back in order across chunk boundaries, and a clone shares

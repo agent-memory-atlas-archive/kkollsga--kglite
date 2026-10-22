@@ -112,7 +112,7 @@ use crate::graph::storage::forked_slots::ExtraSlots;
 use crate::graph::storage::frozen::FrozenNodeIndices;
 use crate::graph::storage::property_storage::PropertyStorage;
 use crate::graph::storage::shared_tree::{OpLog, PagedMap};
-use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
+use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, OverlayResidue, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
 
 /// A writer's copy-on-write view over a base another holder is still reading.
@@ -135,26 +135,6 @@ pub struct ForkedGraph {
     /// Continues the base's mirror. Predictions must stay in step across the
     /// fork or the fold-back would allocate different slots.
     slot_mirror: super::slot_mirror::SlotMirror,
-}
-
-/// The overlay's node and edge delta as a statement found it, for a rollback
-/// to put back ([`ForkedGraph::mark`]).
-///
-/// The undo journal restores what the statement changed, slot for slot, by
-/// writing the inverse operations through the overlay, which only ever grows:
-/// every create, delete and weight copy the statement made stays behind as
-/// entries (an operation, a node weight, a re-weighted edge) that read as the
-/// graph they started from. Over a frozen base the overlay is never folded, so
-/// those entries are heap that only a save releases, and a statement refused
-/// again and again would grow it without bound. The delta is shared paged
-/// containers, so a clone costs a few `Arc` bumps and holding it makes the
-/// statement's first write to each page copy that page.
-///
-/// Column stores are not part of it: the journal's row-append and cell entries
-/// already truncate them back. The slot mirror is not either: the replay left
-/// it predicting the slots the restored delta would allocate next.
-pub(crate) struct OverlayMark {
-    delta: Delta,
 }
 
 /// One topology operation, in the order the writer issued it.
@@ -719,22 +699,6 @@ impl ForkedGraph {
         self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len()
     }
 
-    /// The delta as it stands, when the overlay sits over a frozen base: the
-    /// one overlay that is never folded away, and so the one whose entries
-    /// outlive a rolled-back statement. `None` over a heap base.
-    pub(crate) fn mark(&self) -> Option<OverlayMark> {
-        self.base.frozen().is_some().then(|| OverlayMark {
-            delta: self.delta.clone(),
-        })
-    }
-
-    /// Put the delta back as [`Self::mark`] took it, after the journal has
-    /// restored the logical state: the entries the statement and its undo
-    /// added disappear.
-    pub(crate) fn restore_mark(&mut self, mark: OverlayMark) {
-        self.delta = mark.delta;
-    }
-
     /// The overlay's own state, borrowed apart from its base.
     fn overlay(&mut self) -> Overlay<'_> {
         Overlay {
@@ -924,7 +888,27 @@ impl ForkedGraph {
 
     #[inline]
     pub(crate) fn begin_undo(&mut self) {
-        self.undo = Some(Box::new(UndoJournal::new()));
+        let mut journal = Box::new(UndoJournal::new());
+        journal.note_ops_mark(self.delta.ops.len());
+        self.undo = Some(journal);
+    }
+
+    /// Give back what a rolled-back statement left in this overlay, once the
+    /// journal has restored the logical state (see [`OverlayResidue`]): cut the
+    /// operation log to where the statement found it and drop the edge weights
+    /// it copied from the base. Does nothing for a statement that removed a node
+    /// or an edge, and for an overlay over a heap base, which folds away.
+    pub(crate) fn clear_residue(&mut self, residue: OverlayResidue) {
+        let Some(mark) = residue.ops_mark else {
+            return;
+        };
+        if residue.removed || self.base.frozen().is_none() {
+            return;
+        }
+        self.delta.ops.truncate(mark);
+        for slot in residue.copied_edge_weights {
+            self.delta.edges.weights.remove(slot);
+        }
     }
 
     #[inline]
@@ -1554,6 +1538,11 @@ impl GraphWrite for ForkedGraph {
         }
         let base = self.base.edge_weight(idx)?;
         let (src, dst) = self.base.edge_endpoints(idx)?;
+        if let Some(journal) = self.undo.as_deref_mut() {
+            if !edges.weights.contains_key(raw) {
+                journal.note_copied_edge_weight(raw);
+            }
+        }
         Some(edges.weight_mut(raw, (src.index() as u32, dst.index() as u32), base))
     }
 

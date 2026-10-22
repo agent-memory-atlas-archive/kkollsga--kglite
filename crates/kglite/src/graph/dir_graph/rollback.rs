@@ -128,7 +128,6 @@ use super::DirGraph;
 use crate::datatypes::Value;
 use crate::graph::schema::{InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
-use crate::graph::storage::forked::OverlayMark;
 use crate::graph::storage::undo::{BucketId, UndoEntry, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite};
 
@@ -289,9 +288,6 @@ pub(crate) enum StatementCheckpoint {
         /// WAL ops.
         recorded_ops: Option<usize>,
         edge_embedding_base_capture: Option<bool>,
-        /// The write overlay over a frozen base as the statement found it; see
-        /// [`OverlayMark`](crate::graph::storage::forked::OverlayMark).
-        overlay: Option<Box<OverlayMark>>,
         cdc: Option<CdcCheckpoint>,
     },
     /// A disk statement whose column-store writes all pass through the two
@@ -431,7 +427,6 @@ impl StatementCheckpoint {
         let edge_embedding_base_capture = graph.graph.records_edge_embedding_bases();
         let shell = Box::new(graph.schema_shell());
         graph.graph.begin_undo();
-        let overlay = graph.graph.overlay_mark().map(Box::new);
         for store in graph
             .text_indexes
             .values()
@@ -443,7 +438,6 @@ impl StatementCheckpoint {
             shell,
             recorded_ops,
             edge_embedding_base_capture,
-            overlay,
             cdc,
         }
     }
@@ -521,17 +515,18 @@ impl StatementCheckpoint {
                 shell,
                 recorded_ops,
                 edge_embedding_base_capture,
-                overlay,
                 cdc,
             } => {
-                let journal = graph.graph.take_undo();
+                let mut journal = graph.graph.take_undo();
+                let residue = journal.as_mut().map(|journal| journal.take_residue());
                 let fallout = journal
                     .map(|journal| replay(graph, *journal))
                     .unwrap_or_default();
                 // The replay restored what the statement changed; this drops
-                // the entries the statement and its undo left in the overlay.
-                if let Some(mark) = overlay {
-                    graph.graph.restore_overlay_mark(*mark);
+                // the entries the statement and its undo left in a write
+                // overlay over a frozen base.
+                if let Some(residue) = residue {
+                    graph.graph.clear_overlay_residue(residue);
                 }
                 // `text_indexes` is parked, so each store here is the live one
                 // a mid-statement refresh may have folded the reversed writes

@@ -648,22 +648,13 @@ impl GraphBackend {
         }
     }
 
-    /// The write overlay's delta, to put back after a rolled-back statement;
-    /// see [`super::forked::OverlayMark`]. Looks through a write-capture wrapper;
-    /// `None` without an overlay over a frozen base.
-    pub(crate) fn overlay_mark(&self) -> Option<super::forked::OverlayMark> {
+    /// Clear what a rolled-back statement left in the write overlay over a
+    /// frozen base; see [`super::undo::OverlayResidue`]. Looks through a
+    /// write-capture wrapper.
+    pub(crate) fn clear_overlay_residue(&mut self, residue: super::undo::OverlayResidue) {
         match self {
-            GraphBackend::Forked(forked) => forked.mark(),
-            GraphBackend::Recording(rg) => rg.inner().overlay_mark(),
-            _ => None,
-        }
-    }
-
-    /// Put back the delta [`Self::overlay_mark`] took.
-    pub(crate) fn restore_overlay_mark(&mut self, mark: super::forked::OverlayMark) {
-        match self {
-            GraphBackend::Forked(forked) => forked.restore_mark(mark),
-            GraphBackend::Recording(rg) => rg.inner_mut().restore_overlay_mark(mark),
+            GraphBackend::Forked(forked) => forked.clear_residue(residue),
+            GraphBackend::Recording(rg) => rg.inner_mut().clear_overlay_residue(residue),
             _ => {}
         }
     }
