@@ -3,6 +3,7 @@
 //! budget setting), and how embedding writes count against the unsaved-write
 //! budget and are released by that rebase.
 
+#[cfg(not(windows))]
 use super::frozen_tests::flip_in_section;
 use super::index_sections::with_floors;
 use super::index_sections_tests::{opts, rows, run};
@@ -10,6 +11,7 @@ use super::mappable::SaveLayout;
 use super::*;
 use crate::datatypes::values::Value;
 use crate::error::KgErrorCode;
+#[cfg(not(windows))]
 use crate::graph::dir_graph::write_budget::{limit_for, WRITE_BUDGET_FLOOR_BYTES};
 use crate::graph::dir_graph::{WriteBudgetSetting, WriteBudgetState};
 use crate::graph::embeddings::{add_embeddings, set_embeddings};
@@ -78,6 +80,7 @@ fn load_with(path: &std::path::Path, options: LoadOptions) -> Arc<DirGraph> {
     .unwrap()
 }
 
+#[cfg(not(windows))]
 fn columns_mapped(graph: &DirGraph) -> bool {
     graph
         .column_store("Big")
@@ -89,6 +92,7 @@ fn embeddings_mapped(graph: &DirGraph) -> bool {
 }
 
 /// Write one node, save to a fresh path (which rebases) and return the path.
+#[cfg(not(windows))]
 fn write_and_save(
     graph: &mut Arc<DirGraph>,
     dir: &std::path::Path,
