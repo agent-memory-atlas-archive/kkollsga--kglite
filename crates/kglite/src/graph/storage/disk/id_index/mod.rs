@@ -72,6 +72,9 @@ const VERSION_2: u32 = 2;
 const VARIANT_INTEGER: u8 = 0;
 const VARIANT_GENERAL: u8 = 1;
 pub(crate) const VARIANT_INT64: u8 = 2;
+/// Sorted string ids. Only a `.kgl` id section base carries it: the directory
+/// file's loader refuses the tag, so the file format is unchanged.
+pub(crate) const VARIANT_STRING: u8 = 3;
 /// Bytes per id of an Int64Sorted payload: an `i64` key and a `u32` node.
 const INT64_ENTRY_BYTES: usize = 12;
 const HEADER_BYTES: usize = 32;
@@ -125,9 +128,10 @@ enum IdSource {
         /// writer left alone keeps serving from this mapping after later saves.
         _pin: Option<Arc<super::generation::GenerationPin>>,
     },
-    /// Integer and Int64Sorted entries only, each as a section of sorted
-    /// little-endian keys (`u32` or `i64`) and a section of the `u32` nodes
-    /// parallel to them; [`BaseEntry::section`] indexes this list.
+    /// Integer, Int64Sorted and string entries only, each as a section of
+    /// sorted keys (little-endian `u32` or `i64`, or the offsets-and-bytes
+    /// layout of [`string_keys`]) and a section of the `u32` nodes parallel to
+    /// them; [`BaseEntry::section`] indexes this list.
     Sections(Vec<(MappedSection, MappedSection)>),
 }
 
@@ -158,6 +162,9 @@ impl IdIndexBase {
         if entry.variant == VARIANT_INT64 {
             return self.lookup_int64_exact_at(entry, id);
         }
+        if entry.variant == VARIANT_STRING {
+            return self.lookup_string_at(entry, id);
+        }
         if entry.variant == VARIANT_INTEGER {
             let Value::UniqueId(wanted) = id else {
                 return None;
@@ -179,20 +186,71 @@ impl IdIndexBase {
         Some(entry.num_entries as usize)
     }
 
-    /// Whether `name` is an Int64Sorted entry of this file.
-    pub(crate) fn is_int64(&self, name: &str) -> bool {
-        self.dir
-            .get(name)
-            .is_some_and(|entry| entry.variant == VARIANT_INT64)
-    }
-
-    /// `name`'s directory entry when it is an Int64Sorted one: what a delta
-    /// layered over the mapping keeps, so a probe does not look the name up.
+    /// `name`'s directory entry when it is an Int64Sorted one.
     pub(crate) fn int64_entry(&self, name: &str) -> Option<BaseEntry> {
         self.dir
             .get(name)
             .filter(|entry| entry.variant == VARIANT_INT64)
             .copied()
+    }
+
+    /// `name`'s directory entry when it is searched in the mapping (Int64Sorted
+    /// or string): what a delta layered over the mapping keeps, so a probe does
+    /// not look the name up.
+    pub(crate) fn sorted_entry(&self, name: &str) -> Option<BaseEntry> {
+        self.dir
+            .get(name)
+            .filter(|entry| matches!(entry.variant, VARIANT_INT64 | VARIANT_STRING))
+            .copied()
+    }
+
+    /// Whether `name` is searched in the mapping and edited through a delta.
+    pub(crate) fn is_sorted(&self, name: &str) -> bool {
+        self.sorted_entry(name).is_some()
+    }
+
+    /// `(keys, nodes)` of a string entry, in the layout of [`string_keys`].
+    fn string_parts_of(&self, entry: &BaseEntry) -> Option<(&[u8], &[u8])> {
+        if entry.variant != VARIANT_STRING {
+            return None;
+        }
+        let IdSource::Sections(sections) = &self.source else {
+            return None;
+        };
+        let (keys, nodes) = sections.get(entry.section as usize)?;
+        Some((keys.as_bytes(), nodes.as_bytes()))
+    }
+
+    /// Binary search of a string entry, in the mapping. Only a string id
+    /// matches: a string has no other spelling.
+    #[inline(never)]
+    pub(crate) fn lookup_string_at(&self, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
+        let Value::String(wanted) = id else {
+            return None;
+        };
+        let (keys, nodes) = self.string_parts_of(entry)?;
+        let position = string_keys::search(keys, entry.num_entries as usize, wanted.as_bytes())?;
+        Some(NodeIndex::new(read_le_u32(nodes, position)? as usize))
+    }
+
+    /// [`Self::lookup`] on a mapped-search `entry` already in hand.
+    pub(crate) fn lookup_sorted_at(&self, entry: &BaseEntry, id: &Value) -> Option<NodeIndex> {
+        match entry.variant {
+            VARIANT_STRING => self.lookup_string_at(entry, id),
+            _ => self.lookup_int64_at(entry, id),
+        }
+    }
+
+    /// [`Self::lookup_exact`] on a mapped-search `entry` already in hand.
+    pub(crate) fn lookup_sorted_exact_at(
+        &self,
+        entry: &BaseEntry,
+        id: &Value,
+    ) -> Option<NodeIndex> {
+        match entry.variant {
+            VARIANT_STRING => self.lookup_string_at(entry, id),
+            _ => self.lookup_int64_exact_at(entry, id),
+        }
     }
 
     /// `(keys, node indices)` of an Int64Sorted entry — little-endian `i64`s and
@@ -251,6 +309,26 @@ impl IdIndexBase {
         for (name, keys, nodes) in triples {
             keys.verify()?;
             nodes.verify()?;
+            if keys.dtype == SectionDtype::U8 {
+                let count = string_keys::validate(keys.as_bytes(), nodes.as_bytes(), node_bound)?;
+                let num_entries =
+                    u32::try_from(count).map_err(|_| invalid_index("entry count exceeds u32"))?;
+                let payload_len = (keys.as_bytes().len() + nodes.as_bytes().len()) as u64;
+                keys.release_resident();
+                nodes.release_resident();
+                let entry = BaseEntry {
+                    variant: VARIANT_STRING,
+                    num_entries,
+                    payload_off: 0,
+                    payload_len,
+                    section: sections.len() as u32,
+                };
+                if dir.insert(name, entry).is_some() {
+                    return Err(invalid_index("duplicate type name"));
+                }
+                sections.push((keys, nodes));
+                continue;
+            }
             let (variant, width) = match keys.dtype {
                 SectionDtype::U32 => (VARIANT_INTEGER, 4),
                 SectionDtype::I64 => (VARIANT_INT64, 8),
@@ -516,6 +594,7 @@ impl IdIndexBase {
             // it denotes (`UniqueId`, `Int64` and a whole `Float64` alike) and
             // matches nothing else, so the same rule is one search here.
             VARIANT_INT64 => self.lookup_int64_at(entry, id),
+            VARIANT_STRING => self.lookup_string_at(entry, id),
             _ => None,
         }
     }
@@ -560,6 +639,20 @@ impl IdIndexBase {
                 for index in 0..entry.num_entries as usize {
                     map.insert(
                         Value::Int64(read_le_i64(keys, index)?),
+                        NodeIndex::new(read_le_u32(nodes, index)? as usize),
+                    );
+                }
+                Some(TypeIdIndex::General(map))
+            }
+            VARIANT_STRING => {
+                let (keys, nodes) = self.string_parts_of(entry)?;
+                let count = entry.num_entries as usize;
+                let mut map: FxHashMap<Value, NodeIndex> =
+                    FxHashMap::with_capacity_and_hasher(count, Default::default());
+                for index in 0..count {
+                    let key = string_keys::key_at(keys, count, index)?;
+                    map.insert(
+                        Value::String(String::from_utf8(key.to_vec()).ok()?),
                         NodeIndex::new(read_le_u32(nodes, index)? as usize),
                     );
                 }
@@ -913,7 +1006,7 @@ impl IdIndexStore {
 
     /// Number of ids indexed for `name` where [`Self::evict_entries`] can edit
     /// the index in place, or `None` where it cannot: the type's overlay entry,
-    /// or an Int64Sorted entry of the mapped file, which an edit layers a delta
+    /// or an Int64Sorted or string entry of the mapped indexes, which an edit layers a delta
     /// over ([`Self::entry_or_default`]) and leaves in the mapping. Any other
     /// base variant would be copied onto the heap to edit, which is no cheaper
     /// than the rebuild an invalidation causes.
@@ -925,7 +1018,7 @@ impl IdIndexStore {
             return None;
         }
         let base = self.base.as_deref()?;
-        base.is_int64(name).then(|| base.entry_len(name))?
+        base.is_sorted(name).then(|| base.entry_len(name))?
     }
 
     /// Drop `entries` (`id -> node`) from `name`'s index in place, instead of
@@ -1079,10 +1172,13 @@ impl IdIndexStore {
     }
 }
 
+pub(crate) mod string_keys;
 mod write;
 pub use write::write_id_indices_bin;
 
 #[cfg(test)]
 mod int64_tests;
+#[cfg(test)]
+mod string_tests;
 #[cfg(test)]
 mod validation_tests;

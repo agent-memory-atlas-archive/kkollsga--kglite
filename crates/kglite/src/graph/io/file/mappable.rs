@@ -552,6 +552,27 @@ pub(crate) struct MappedSection {
 }
 
 impl MappedSection {
+    /// A heap section over `bytes` with its true CRC32, for a test that hands a
+    /// consumer crafted section contents.
+    #[cfg(test)]
+    pub(crate) fn heap_for_test(
+        name: &str,
+        kind: u8,
+        dtype: SectionDtype,
+        elem_count: u64,
+        bytes: Vec<u8>,
+    ) -> Self {
+        MappedSection {
+            name: name.to_string(),
+            owner: "indexes".to_string(),
+            kind,
+            dtype,
+            elem_count,
+            crc32: section_digest(&bytes),
+            bytes: SectionBytes::Heap(Arc::new(bytes)),
+        }
+    }
+
     pub(crate) fn is_mapped(&self) -> bool {
         matches!(self.bytes, SectionBytes::Mapped { .. })
     }

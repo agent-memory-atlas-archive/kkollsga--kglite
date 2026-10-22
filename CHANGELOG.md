@@ -37,11 +37,11 @@ before upgrading.
 ### Added
 
 - **A large graph's type member lists, id index and relationship peer counts are stored in the `.kgl` and read from it in `mapped` storage.**
-  - A save records them for a graph of 65,536 nodes or more (member lists, and an id index for each type whose ids are all `UniqueId` or all int64 and unique) and 262,144 relationships or more (counts per relationship type and direction). `layout="compact"` records none.
+  - A save records them for a graph of 65,536 nodes or more (member lists, and an id index for each type whose ids are all `UniqueId`, all int64 or all strings, and unique) and 262,144 relationships or more (counts per relationship type and direction). `layout="compact"` records none.
   - A load into `mapped` storage serves them from the file. It no longer groups every node by type, and the first `{id: ...}` lookup no longer builds a hash map of every id. A load into `memory` storage ignores them and builds what it always built.
   - Measured (release, macOS footprint, 1M nodes and 12M relationships, `mapped`): the first id lookup fell from 23 ms and +83 MB to 0.2 ms and +0 MB; the footprint after the query mix fell from 799 to 671-684 MB (`memory` storage: 773-816 MB). At 3M nodes and 36M relationships the first id lookup fell from 61 ms and +224 MB to 0.2 ms and +0 MB.
   - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning the relationships. `b.id, count(a)` over 12M relationships fell from 590 ms and +261 MB to 235 ms and +179 MB (`memory` storage: 560 ms and +227 MB). On the `legal` operator graph the first `CITES` aggregation fell from 12 to 3.3 ms, and the first id lookup on `sodir` from 2.4 to 0.03 ms.
-  - A write to a node type layers over its recorded lists; the first relationship write drops the recorded counts, which are then built from the relationships on first use. Types with string ids or repeated ids build their id index on first use, as before.
+  - A write to a node type layers over its recorded lists; the first relationship write drops the recorded counts, which are then built from the relationships on first use. Types with repeated ids, or ids of mixed kinds, build their id index on first use, as before.
   - A mapped load reads and checks every index section: a damaged one refuses the load, and `verify_file()` names it. The load costs about 1-2 % more time than before.
   - Peer counts of a mapped graph are shared between queries instead of copied for each one.
 - **A large graph's topology is stored raw in the `.kgl` and read from it in `mapped` storage.**

@@ -9,7 +9,7 @@ Placement follows the data, not the storage mode.
 | Data | Where it lives | Notes |
 |---|---|---|
 | Topology (nodes, relationships) | The `.kgl` file in `mapped` storage; heap in `memory`; mmap CSR in `disk` | A save records it for a graph of 65,536 nodes or 262,144 relationships or more. On the heap it costs 40 bytes per node and 32 per relationship |
-| Node type member lists and the id index of an all-`UniqueId` or all-int64 type | The `.kgl` file in `mapped` storage; heap in `memory` | A save records them for a graph of 65,536 nodes or more |
+| Node type member lists and the id index of an all-`UniqueId`, all-int64 or all-string type | The `.kgl` file in `mapped` storage; heap in `memory` | A save records them for a graph of 65,536 nodes or more |
 | Peer counts per relationship type | The `.kgl` file in `mapped` storage; built on first use in `memory` | A save records them for 262,144 relationships or more |
 | Other indexes (property, string-id, HNSW structure) | Heap | Built or rebuilt at load |
 | Small columns (under 256 KB) | Heap | Stored inside the compressed sections |
@@ -56,7 +56,7 @@ A default `save()` writes v9 when any of these holds. An embedding store of 4 Mi
 - A v9 file stores the vectors, their norms and those column buffers uncompressed and 64-byte aligned, after the compressed sections. Smaller columns stay in the compressed sections and decode to the heap.
 - Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. On the operator graphs measured the file grows 1.4-5.4x (one 134 MB graph becomes 389 MB). Almost all of the growth is string bytes that zstd shrinks 3-7x.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
-- A graph of 65,536 nodes or more also records the sorted member list of each node type. A type whose ids are all `UniqueId` or all unique int64 also gets a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts. Either size also records the topology raw, at about 40 bytes per node and 32 per relationship, on top of the compressed copy.
+- A graph of 65,536 nodes or more also records the sorted member list of each node type. A type whose ids are all `UniqueId`, all unique int64 or all unique strings also gets a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts. Either size also records the topology raw, at about 40 bytes per node and 32 per relationship, on top of the compressed copy.
 - These sections cost 4 bytes per node, 8 per indexed id and 16 per distinct peer. Measured: a random 1M-node, 12M-relationship graph grows 110 to 147 MB; a 196 MB operator graph grows 1.3 % and a 134 MB one 3.7 %.
 - A kglite release before this one refuses a v9 file: "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
 - If a consumer must stay on an older kglite, or the file size matters more than a spill file, save with `layout="compact"`. It writes v8 with every column and vector compressed.
@@ -82,7 +82,7 @@ A load into `mapped` storage serves the recorded indexes from the file. A load i
 
 - The first `{id: ...}` lookup on a recorded type costs nothing to build and holds no heap: a binary search in the mapping. Before, it built a hash map of every id (1M ids: 23 ms and +83 MB, now 0.2 ms).
 - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning every relationship (1M nodes, 12M relationships, `b.id, count(a)` over one type: 590 ms and +261 MB before, 235 ms and +179 MB after; `memory` storage takes 560 ms and +227 MB).
-- A type with string ids or repeated ids has no recorded id index and builds one on first use, as before.
+- A type with repeated ids, or ids of mixed kinds, has no recorded id index and builds one on first use, as before.
 - A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
 - `columns="memory"` and `KGLITE_MMAP=0` copy these sections to the heap instead of mapping them; the load still skips the scan.
 - A damaged index section refuses a `mapped` load, because the load reads and checks every one.

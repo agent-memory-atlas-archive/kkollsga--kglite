@@ -64,7 +64,9 @@ fn add_unique_id_type(graph: &mut DirGraph, node_type: &str, ids: impl Iterator<
 
 /// `Doc` has unique int64 ids (so it gets an id section), `Uni` unique
 /// `UniqueId` ids (a `u32`-keyed one), `Mix` a `UniqueId` column a Cypher
-/// `CREATE` appended to, `Tag` string ids,
+/// `CREATE` appended to, `Tag` string ids, `Str` string ids that share
+/// prefixes and include the empty and non-ASCII strings, `MixId` a string and an
+/// int64 id (no id section), `Dup` repeated string ids,
 /// `Twin` repeated int64 ids, and `A:b%c` an int64 type whose name needs
 /// escaping in a section name. A deleted `Doc` leaves a hole in the node array.
 pub(super) fn graph() -> DirGraph {
@@ -87,6 +89,19 @@ pub(super) fn graph() -> DirGraph {
     run(
         &mut graph,
         "UNWIND range(1, 25) AS i CREATE (:`A:b%c` {id: 7000 - i, n: i})",
+    );
+    run(
+        &mut graph,
+        "UNWIND ['', 'a', 'ab', 'abc', 'abd', 'b', 'é', 'éa', '日本語', 'Z', 'a b'] \
+         AS s CREATE (:Str {id: s, n: size(s)})",
+    );
+    run(
+        &mut graph,
+        "CREATE (:MixId {id: 'x', n: 1}), (:MixId {id: 5, n: 2})",
+    );
+    run(
+        &mut graph,
+        "UNWIND range(1, 6) AS i CREATE (:Dup {id: 'd' + toString(i % 3), n: i})",
     );
     run(
         &mut graph,
@@ -127,9 +142,29 @@ pub(super) const PROBES: [&str; 16] = [
     "MATCH (a:Doc)-[:LINKS]->(b:Doc) RETURN count(*)",
 ];
 
+/// String-id lookups: hits, misses, the prefix neighbours of a hit, and the
+/// types that stay on the lazy build.
+const STRING_PROBES: [&str; 14] = [
+    "MATCH (s:Str {id: ''}) RETURN s.n",
+    "MATCH (s:Str {id: 'ab'}) RETURN s.n",
+    "MATCH (s:Str {id: 'abc'}) RETURN s.n",
+    "MATCH (s:Str {id: 'abcd'}) RETURN s.n",
+    "MATCH (s:Str {id: 'a b'}) RETURN s.n",
+    "MATCH (s:Str {id: 'éa'}) RETURN s.n",
+    "MATCH (s:Str {id: '日本語'}) RETURN s.n",
+    "MATCH (s:Str {id: 7}) RETURN s.n",
+    "MATCH (s:Str) RETURN count(s), sum(s.n)",
+    "MATCH (t:Tag {id: 'tag-20'}) RETURN t.n",
+    "MATCH (t:Tag {id: 'tag-21'}) RETURN t.n",
+    "MATCH (m:MixId {id: 'x'}) RETURN m.n",
+    "MATCH (m:MixId {id: 5}) RETURN m.n",
+    "MATCH (d:Dup {id: 'd1'}) RETURN count(d)",
+];
+
 /// The probes' answers plus an id lookup in the type Cypher cannot spell.
 pub(super) fn probe(graph: &DirGraph) -> Vec<String> {
     let mut out: Vec<String> = PROBES.iter().map(|q| rows(graph, q)).collect();
+    out.extend(STRING_PROBES.iter().map(|q| rows(graph, q)));
     for id in [6990, 6975, 6974, 0] {
         out.push(format!(
             "{:?}",
@@ -217,6 +252,10 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
         "idx:id:Uni:keys",
         "idx:id:Uni:nodes",
         "idx:id:A%3Ab%25c:keys",
+        "idx:id:Tag:keys",
+        "idx:id:Tag:nodes",
+        "idx:id:Str:keys",
+        "idx:id:Str:nodes",
         "idx:peer:LINKS:out",
         "idx:peer:LINKS:in",
         "idx:peer:TAGS:out",
@@ -228,10 +267,12 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
         );
     }
     assert!(
-        names.iter().all(|n| !["idx:id:Tag", "idx:id:Twin"]
+        names
             .iter()
-            .any(|p| n.starts_with(p))),
-        "string and repeated ids are left to the lazy build: {names:?}"
+            .all(|n| !["idx:id:Twin", "idx:id:Dup", "idx:id:MixId"]
+                .iter()
+                .any(|p| n.starts_with(p))),
+        "repeated and mixed ids are left to the lazy build: {names:?}"
     );
 
     let compact = tmp.path().join("compact.kgl");
@@ -294,10 +335,18 @@ fn a_mapped_load_serves_the_recorded_indexes_and_answers_like_the_original() {
         mapped.id_indices.contains_key("Mix"),
         "a row appended to a UniqueId column keeps that spelling"
     );
-    assert!(
-        !mapped.id_indices.contains_key("Tag") && !mapped.id_indices.contains_key("Twin"),
-        "types the file recorded no id index for are built on first use"
-    );
+    for name in ["Tag", "Str"] {
+        assert!(
+            mapped.id_indices.contains_key(name) && mapped.id_indices.overlay_len(name).is_none(),
+            "the {name} string-id index is served from the file, with no heap copy"
+        );
+    }
+    for name in ["Twin", "Dup", "MixId"] {
+        assert!(
+            !mapped.id_indices.contains_key(name),
+            "{name}: types the file recorded no id index for are built on first use"
+        );
+    }
     assert!(peer_base_present(&mapped));
 
     assert_eq!(probe(&mapped), probe(&original));
@@ -404,6 +453,11 @@ fn writes_rollback_and_resave_match(overlay: bool) {
 
     let steps = [
         "CREATE (:Doc {id: 5000, n: 5000})",
+        "CREATE (:Str {id: 'abe', n: 3}), (:Tag {id: 'tag-99', n: 99})",
+        "MATCH (s:Str {id: 'ab'}) SET s.n = 77",
+        "MATCH (s:Str {id: 'abc'}) DETACH DELETE s",
+        "CREATE (:Str {id: 'abc', n: 8})",
+        "MATCH (t:Tag {id: 'tag-3'}) DETACH DELETE t",
         "MATCH (d:Doc {id: 1015}) SET d.n = 111",
         "MATCH (d:Doc {id: 1006}) DETACH DELETE d",
         "MATCH (a:Doc {id: 1357}), (b:Doc {id: 1360}) CREATE (a)-[:LINKS]->(b)",
@@ -427,6 +481,11 @@ fn writes_rollback_and_resave_match(overlay: bool) {
             "MATCH (d:Doc) RETURN count(d), sum(d.n)",
             "MATCH (u:Uni {id: 509}) RETURN u.n",
             "MATCH (u:Uni {id: 508}) RETURN u.n",
+            "MATCH (s:Str {id: 'abe'}) RETURN s.n",
+            "MATCH (s:Str {id: 'abc'}) RETURN s.n",
+            "MATCH (t:Tag {id: 'tag-3'}) RETURN t.n",
+            "MATCH (t:Tag {id: 'tag-99'}) RETURN t.n",
+            "MATCH (s:Str) RETURN count(s), sum(s.n)",
         ] {
             assert_eq!(rows(&mapped, q), rows(&memory, q), "{q} after: {step}");
         }
@@ -511,6 +570,9 @@ fn a_damaged_index_section_refuses_a_mapped_load() {
         "idx:id:Doc:nodes",
         "idx:id:Uni:keys",
         "idx:id:Uni:nodes",
+        "idx:id:Str:keys",
+        "idx:id:Str:nodes",
+        "idx:id:Tag:keys",
         "idx:peer:LINKS:out",
         "idx:peer:LINKS:in",
     ] {
@@ -640,13 +702,16 @@ fn section_bases_write_the_disk_index_files_they_serve() {
         ("Doc", Value::Int64(1360)),
         ("Uni", Value::UniqueId(508)),
         ("A:b%c", Value::Int64(6990)),
+        ("Tag", Value::String("tag-7".into())),
+        ("Str", Value::String("\u{e9}a".into())),
+        ("Str", Value::String(String::new())),
     ] {
         let served = mapped.id_indices.lookup(node_type, &id);
         assert!(served.is_some(), "{node_type} {id:?}");
         assert_eq!(ids.lookup(node_type, &id), served, "{node_type} {id:?}");
     }
     assert_eq!(ids.lookup("Doc", &Value::Int64(1030)), None);
-    for node_type in ["Doc", "Uni", "Tag", "Twin", "A:b%c"] {
+    for node_type in ["Doc", "Uni", "Tag", "Str", "Twin", "A:b%c"] {
         let Some(TypeNodesRef::Mmap(served)) = mapped.type_indices.get(node_type) else {
             panic!("{node_type} members are served from the file");
         };

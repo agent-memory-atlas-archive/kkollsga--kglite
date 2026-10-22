@@ -66,7 +66,7 @@ fn tombstone() -> NodeIndex {
 pub enum TypeEntry {
     /// Uniquely owned by this graph — the steady state.
     Owned(TypeIdIndex),
-    /// A delta over an Int64Sorted entry of the published `id_indices.bin`, which
+    /// A delta over an Int64Sorted or string entry of the mapped id indexes, which
     /// stays in the mapping: reads chain delta -> mapped binary search, writes
     /// touch only `delta`, and a save merges the sorted delta into the sorted
     /// entry while it streams the next file. This is what the first write to a
@@ -171,7 +171,7 @@ impl From<TypeIdIndex> for TypeEntry {
 
 /// What a delta reads through to when its own map has no answer.
 enum Under<'a> {
-    /// An Int64Sorted entry of the mapped file, in hand.
+    /// An Int64Sorted or string entry of the mapped indexes, in hand.
     Mapped {
         base: &'a IdIndexBase,
         name: &'a str,
@@ -184,14 +184,14 @@ enum Under<'a> {
 impl Under<'_> {
     fn get(&self, id: &Value) -> Option<NodeIndex> {
         match self {
-            Under::Mapped { base, entry, .. } => base.lookup_int64_at(entry, id),
+            Under::Mapped { base, entry, .. } => base.lookup_sorted_at(entry, id),
             Under::Shared(entry) => entry.get(id),
         }
     }
 
     fn get_exact(&self, id: &Value) -> Option<NodeIndex> {
         match self {
-            Under::Mapped { base, entry, .. } => base.lookup_int64_exact_at(entry, id),
+            Under::Mapped { base, entry, .. } => base.lookup_sorted_exact_at(entry, id),
             Under::Shared(entry) => entry.get_exact(id),
         }
     }
@@ -258,10 +258,10 @@ fn apply_delta(target: &mut impl IdMap, delta: &TypeIdIndex) {
 }
 
 impl TypeEntry {
-    /// A delta over the Int64Sorted entry `name` of `base`, or `None` when the
+    /// A delta over the Int64Sorted or string entry `name` of `base`, or `None` when the
     /// file has no such entry.
     pub(crate) fn over_base(base: Arc<IdIndexBase>, name: &str) -> Option<Self> {
-        let entry = base.int64_entry(name)?;
+        let entry = base.sorted_entry(name)?;
         Some(TypeEntry::OverBase {
             base,
             name: Arc::from(name),

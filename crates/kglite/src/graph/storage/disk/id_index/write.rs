@@ -10,7 +10,8 @@
 
 use super::{
     IdIndexBase, IdIndexStore, DIR_ENTRY_BYTES, HEADER_BYTES, INT64_ENTRY_BYTES, MAGIC,
-    MAX_GENERAL_INDEX_DECODE_BYTES, VARIANT_GENERAL, VARIANT_INT64, VARIANT_INTEGER, VERSION,
+    MAX_GENERAL_INDEX_DECODE_BYTES, VARIANT_GENERAL, VARIANT_INT64, VARIANT_INTEGER,
+    VARIANT_STRING, VERSION,
 };
 use crate::datatypes::Value;
 use crate::graph::schema::{canonical_id, mixed_numeric_kinds, StringInterner, TypeIdIndex};
@@ -203,6 +204,12 @@ fn plan_untouched<'a>(
     if members.is_some_and(|members| base.entry_len(name).unwrap_or(0) < members) {
         return None;
     }
+    if entry.variant == VARIANT_STRING {
+        // No file variant: written as the general blob.
+        return plan_owned(type_key, &base.materialize(name)?, members)
+            .ok()
+            .flatten();
+    }
     if base.file_bytes().is_none() {
         // A section base keeps its keys and nodes apart, so there is no one
         // slice to copy. An Int64Sorted entry streams through the merge with
@@ -375,6 +382,11 @@ pub fn write_id_indices_bin(
                 .and_then(|base| plan_untouched(type_key, base, &name, members)),
             Some(TypeEntry::Owned(index)) => plan_owned(type_key, index, members)?,
             Some(entry) => match entry.delta_over_mapping() {
+                // A string entry has no file variant: it is written merged, as
+                // the general blob.
+                Some((base, base_name, _)) if base.int64_entry(base_name).is_none() => {
+                    plan_owned(type_key, &entry.materialize(), members)?
+                }
                 Some((base, base_name, delta)) => {
                     match plan_over_base(type_key, base, base_name, &delta, members)? {
                         Ok(plan) => plan,

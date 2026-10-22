@@ -163,3 +163,68 @@ def test_a_damaged_index_section_refuses_a_mapped_load(saved, tmp_path):
     assert kglite.load(damaged, storage="memory").cypher(PROBES[3]).to_list() == (
         kglite.load(saved, storage="memory").cypher(PROBES[3]).to_list()
     )
+
+
+STRING_PROBES = [
+    "MATCH (p:Page {id: 'page-1234'}) RETURN p.n",
+    "MATCH (p:Page {id: 'page-12345'}) RETURN p.n",
+    "MATCH (p:Page {id: 'page-123456'}) RETURN p.n",
+    "MATCH (p:Page {id: 'page-'}) RETURN p.n",
+    "MATCH (p:Page {id: 'sider-åø'}) RETURN p.n",
+    "MATCH (p:Page {id: '日本語'}) RETURN p.n",
+    "MATCH (p:Page {id: ''}) RETURN p.n",
+    "MATCH (p:Page {id: 1234}) RETURN p.n",
+    "MATCH (p:Page) RETURN count(p), sum(p.n)",
+]
+
+
+def _build_strings() -> kglite.KnowledgeGraph:
+    ids = [f"page-{i}" for i in range(NODES)] + ["", "page-", "sider-åø", "日本語"]
+    graph = kglite.KnowledgeGraph()
+    frame = pd.DataFrame({"id": ids, "title": ids, "n": np.arange(len(ids))})
+    graph.add_nodes(frame, "Page", "id", "title")
+    return graph
+
+
+@pytest.fixture(scope="module")
+def saved_strings(tmp_path_factory):
+    path = str(tmp_path_factory.mktemp("idxs") / "s.kgl")
+    _build_strings().save(path)
+    return path
+
+
+def _string_answers(graph: kglite.KnowledgeGraph) -> list:
+    return [graph.cypher(q).to_list() for q in STRING_PROBES]
+
+
+def test_string_ids_are_recorded_and_served_like_memory(saved_strings):
+    names = _section_names(saved_strings)
+    assert "idx:id:Page:keys" in names and "idx:id:Page:nodes" in names, names
+    memory = kglite.load(saved_strings, storage="memory")
+    mapped = kglite.load(saved_strings, storage="mapped")
+    assert _string_answers(mapped) == _string_answers(memory)
+    assert mapped.cypher(STRING_PROBES[0]).to_list() == [{"p.n": 1234}]
+    assert mapped.cypher(STRING_PROBES[2]).to_list() == []
+    assert mapped.cypher(STRING_PROBES[7]).to_list() == []
+
+
+def test_writes_to_string_ids_after_a_mapped_load_match_memory(saved_strings, tmp_path):
+    memory = kglite.load(saved_strings, storage="memory")
+    mapped = kglite.load(saved_strings, storage="mapped")
+    steps = [
+        "CREATE (:Page {id: 'page-new', n: -1})",
+        "MATCH (p:Page {id: 'page-1234'}) SET p.n = 999",
+        "MATCH (p:Page {id: 'page-12345'}) DETACH DELETE p",
+        "CREATE (:Page {id: 'page-12345', n: 5})",
+    ]
+    for step in steps:
+        memory.cypher(step)
+        mapped.cypher(step)
+        assert _string_answers(mapped) == _string_answers(memory), step
+        for probe in ["page-new", "page-12345", "page-1234"]:
+            q = f"MATCH (p:Page {{id: '{probe}'}}) RETURN p.n"
+            assert mapped.cypher(q).to_list() == memory.cypher(q).to_list(), (step, probe)
+    again = str(tmp_path / "again.kgl")
+    mapped.save(again)
+    reloaded = kglite.load(again, storage="mapped")
+    assert _string_answers(reloaded) == _string_answers(memory)

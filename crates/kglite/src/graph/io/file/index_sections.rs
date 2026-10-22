@@ -11,9 +11,10 @@
 //! Sections (owner `indexes`, little-endian):
 //! - `idx:type:<T>`: `u32` node indices of type `T`, ascending (kind 6).
 //! - `idx:id:<T>:keys` / `idx:id:<T>:nodes`: the sorted unique ids of a type
-//!   whose ids are all `UniqueId` (`u32` keys) or all `Int64` (`i64` keys), and
-//!   the `u32` node of each (kinds 7 and 8). Any other id leaves the type to
-//!   the lazy build.
+//!   whose ids are all `UniqueId` (`u32` keys), all `Int64` (`i64` keys) or all
+//!   strings (`u64` offsets then the key bytes, kind 19; see
+//!   `id_index::string_keys`), and the `u32` node of each (kind 8). Any other
+//!   id leaves the type to the lazy build.
 //! - `idx:peer:<C>:out` / `idx:peer:<C>:in`: `(u32 node, u32 count)` pairs for
 //!   connection type `C`, grouped by edge target and by edge source (kind 9).
 //!
@@ -34,7 +35,7 @@ use super::mappable::{
 use super::*;
 use crate::datatypes::Value;
 use crate::graph::schema::InternedKey;
-use crate::graph::storage::disk::id_index::{IdIndexBase, IdIndexStore};
+use crate::graph::storage::disk::id_index::{string_keys, IdIndexBase, IdIndexStore};
 use crate::graph::storage::disk::type_index::{TypeIndexBase, TypeIndexStore};
 use crate::graph::storage::mapped::peer_base::PeerBase;
 
@@ -45,6 +46,7 @@ pub(super) const KIND_TYPE_MEMBERS: u8 = 6;
 pub(super) const KIND_ID_KEYS: u8 = 7;
 pub(super) const KIND_ID_NODES: u8 = 8;
 pub(super) const KIND_PEERS: u8 = 9;
+pub(super) const KIND_ID_STRINGS: u8 = 19;
 
 /// A save records the type and id indexes of a graph with at least this many
 /// live nodes. Below it the rebuild is too cheap to be worth file bytes, and
@@ -135,6 +137,8 @@ enum IdKind {
     Unique,
     /// `Value::Int64`: `i64` keys.
     Int64,
+    /// `Value::String`: byte-ordered keys, held in [`TypeScan::strings`].
+    Str,
 }
 
 /// What one pass over a type's nodes collects.
@@ -143,9 +147,31 @@ struct TypeScan {
     members: Vec<u32>,
     /// `(id, node)` while every id seen so far has the same spelling.
     ids: Vec<(i64, u32)>,
+    /// String ids: the bytes of every id seen, and `(start, len, node)` into them.
+    strings: StringIds,
     kind: Option<IdKind>,
     /// False once an id of another spelling, or a node without one, is seen.
     uniform: bool,
+}
+
+#[derive(Default)]
+struct StringIds {
+    bytes: Vec<u8>,
+    entries: Vec<(usize, u32, u32)>,
+}
+
+impl StringIds {
+    fn push(&mut self, id: &str, node: u32) {
+        let Ok(len) = u32::try_from(id.len()) else {
+            return;
+        };
+        self.entries.push((self.bytes.len(), len, node));
+        self.bytes.extend_from_slice(id.as_bytes());
+    }
+
+    fn key(&self, entry: &(usize, u32, u32)) -> &[u8] {
+        &self.bytes[entry.0..entry.0 + entry.1 as usize]
+    }
 }
 
 impl TypeScan {
@@ -153,18 +179,25 @@ impl TypeScan {
         let (kind, value) = match id {
             Value::UniqueId(id) => (IdKind::Unique, i64::from(*id)),
             Value::Int64(id) => (IdKind::Int64, *id),
+            Value::String(id) if id.len() <= u32::MAX as usize => (IdKind::Str, 0),
             _ => {
-                self.uniform = false;
-                self.ids = Vec::new();
+                self.abandon();
                 return;
             }
         };
-        if *self.kind.get_or_insert(kind) == kind {
-            self.ids.push((value, node));
+        if *self.kind.get_or_insert(kind) != kind {
+            self.abandon();
+        } else if let Value::String(id) = id {
+            self.strings.push(id, node);
         } else {
-            self.uniform = false;
-            self.ids = Vec::new();
+            self.ids.push((value, node));
         }
+    }
+
+    fn abandon(&mut self) {
+        self.uniform = false;
+        self.ids = Vec::new();
+        self.strings = StringIds::default();
     }
 }
 
@@ -219,9 +252,16 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
             scan.members.len(),
             scan.members.iter().flat_map(|n| n.to_le_bytes()).collect(),
         ));
-        let Some(kind) = scan.kind.filter(|_| scan.uniform && !scan.ids.is_empty()) else {
+        let Some(kind) = scan
+            .kind
+            .filter(|_| scan.uniform && !(scan.ids.is_empty() && scan.strings.entries.is_empty()))
+        else {
             continue;
         };
+        if kind == IdKind::Str {
+            push_string_ids(name, &mut scan.strings, out);
+            continue;
+        }
         scan.ids.sort_unstable_by_key(|(id, _)| *id);
         // A repeated id has no single owner, so the index would pick a node
         // the lazy build picks differently; the type is left to the lazy build.
@@ -244,6 +284,7 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
                     .flat_map(|(id, _)| (*id as u32).to_le_bytes())
                     .collect(),
             ),
+            IdKind::Str => unreachable!("string ids are written by push_string_ids"),
         };
         out.push(owned(
             id_section_name(name, "keys"),
@@ -260,6 +301,31 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
             scan.ids.iter().flat_map(|(_, n)| n.to_le_bytes()).collect(),
         ));
     }
+}
+
+/// The id sections of a type whose ids are all strings, unless one repeats.
+fn push_string_ids(name: &str, ids: &mut StringIds, out: &mut Vec<MappableSection<'static>>) {
+    let mut entries = std::mem::take(&mut ids.entries);
+    entries.sort_unstable_by(|a, b| ids.key(a).cmp(ids.key(b)));
+    if entries.windows(2).any(|w| ids.key(&w[0]) == ids.key(&w[1])) {
+        return;
+    }
+    let count = entries.len();
+    let (keys, nodes) = string_keys::encode(entries.iter().map(|e| (ids.key(e), e.2)));
+    out.push(owned(
+        id_section_name(name, "keys"),
+        KIND_ID_STRINGS,
+        SectionDtype::U8,
+        keys.len(),
+        keys,
+    ));
+    out.push(owned(
+        id_section_name(name, "nodes"),
+        KIND_ID_NODES,
+        SectionDtype::U32,
+        count,
+        nodes,
+    ));
 }
 
 /// Counts per node for one connection type: `(by_target, by_source)`.
@@ -412,7 +478,8 @@ impl IndexSections {
                         found.types.push((unescape(stem), section.clone()));
                     }
                 }
-                (KIND_ID_KEYS, SectionDtype::I64 | SectionDtype::U32) => {
+                (KIND_ID_KEYS, SectionDtype::I64 | SectionDtype::U32)
+                | (KIND_ID_STRINGS, SectionDtype::U8) => {
                     let stem = name
                         .strip_prefix("idx:id:")
                         .and_then(|rest| rest.strip_suffix(":keys"));
@@ -466,10 +533,10 @@ impl IndexSections {
         let types = TypeIndexBase::from_sections(std::mem::take(&mut self.types), bound)?;
         let ids: Vec<_> = std::mem::take(&mut self.ids)
             .into_iter()
-            .filter(|(name, keys, _)| {
+            .filter(|(name, _, nodes)| {
                 types
                     .slice_for(name)
-                    .is_some_and(|members| members.len() / 4 == keys.elem_count as usize)
+                    .is_some_and(|members| members.len() / 4 == nodes.elem_count as usize)
             })
             .collect();
         let id_base = IdIndexBase::from_sections(ids, bound)?;
