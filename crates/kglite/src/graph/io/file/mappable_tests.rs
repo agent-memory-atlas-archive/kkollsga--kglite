@@ -677,3 +677,53 @@ fn release_probe() {
     file.release_resident(10, 20);
     assert_eq!(file.bytes()[10], content[10]);
 }
+
+/// A payload large enough to take the parallel CRC path, as a heap section
+/// carrying its true digest (the digest comes from the sequential function).
+fn big_section(len: usize) -> MappedSection {
+    let bytes: Vec<u8> = (0..len as u64)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    MappedSection::heap_for_test("big", 0, SectionDtype::Raw, len as u64, bytes)
+}
+
+#[test]
+fn a_large_section_checksum_matches_the_sequential_digest_at_every_boundary() {
+    // Below the parallel threshold, at it, one past it, and a length that is
+    // not a multiple of the chunk size: every digest must equal the sequential
+    // CRC32 the writer recorded, or a clean file would be refused.
+    for len in [
+        0,
+        1,
+        (8 << 20) - 1,
+        8 << 20,
+        (8 << 20) + 1,
+        (4 << 20) * 5 + 4093,
+    ] {
+        big_section(len)
+            .verify()
+            .unwrap_or_else(|e| panic!("{len}: {e}"));
+    }
+}
+
+#[test]
+fn a_flipped_byte_in_any_chunk_of_a_large_section_fails_the_checksum() {
+    let clean = big_section((4 << 20) * 5 + 4093);
+    let len = clean.as_bytes().len();
+    // First byte, either side of each chunk boundary, and the last byte.
+    let mut positions = vec![0, len - 1];
+    for boundary in (1..=5).map(|k| k * (4 << 20)) {
+        positions.extend([boundary - 1, boundary]);
+    }
+    for position in positions {
+        let mut bytes = clean.as_bytes().to_vec();
+        bytes[position] ^= 0x01;
+        let mut damaged =
+            MappedSection::heap_for_test("big", 0, SectionDtype::Raw, len as u64, bytes);
+        damaged.crc32 = clean.crc32;
+        let error = damaged
+            .verify()
+            .expect_err(&format!("a flip at {position} must be caught"));
+        assert!(error.to_string().contains("corrupt"), "{error}");
+    }
+}

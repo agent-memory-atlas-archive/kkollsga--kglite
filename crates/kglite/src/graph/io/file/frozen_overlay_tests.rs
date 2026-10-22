@@ -861,3 +861,88 @@ fn transactions_over_an_overlay_do_not_spill_its_rows_to_files() {
         );
     }
 }
+
+/// Load a damaged big file mapped, optionally write to it, and return the
+/// error its save raises (the target must not exist afterwards).
+fn save_error_after(path: &std::path::Path, name: &str, checked_first: bool, write: bool) -> bool {
+    let Ok(mut graph) = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new().with_storage(StorageMode::Mapped),
+    ) else {
+        return false;
+    };
+    if checked_first {
+        let verdict = graph
+            .graph
+            .frozen_base()
+            .expect("a frozen base")
+            .verify_sections();
+        assert!(
+            verdict.is_err(),
+            "{name}: the explicit check sees the damage"
+        );
+    }
+    if write {
+        run(
+            crate::graph::handle::make_dir_graph_mut(&mut graph),
+            "CREATE (:A {id: 7000, n: 1, s: 'w'})",
+        );
+    }
+    let target = path.with_file_name("refused.kgl");
+    let saved = with_floors(10, 10, || {
+        save_graph_with_layout(&mut graph, target.to_str().unwrap(), true, SaveLayout::Auto)
+    });
+    let error = saved.expect_err(&format!("{name}: a damaged source must fail the save"));
+    assert!(error.to_string().contains("corrupt"), "{name}: {error}");
+    assert!(!target.exists(), "{name}: a refused save publishes nothing");
+    true
+}
+
+#[test]
+fn a_save_refuses_a_damaged_source_section_whether_or_not_it_was_checked_before() {
+    let names: Vec<String> = section_names(&saved_topo_big().1)
+        .into_iter()
+        .filter(|n| n.starts_with("topo:") && n != "topo:nodes")
+        .collect();
+    let mut reached = 0;
+    for name in &names {
+        for (checked_first, write) in [(false, false), (true, false), (false, true), (true, true)] {
+            let (_tmp, path) = saved_topo_big();
+            flip_in_section(&path, name);
+            reached += usize::from(save_error_after(&path, name, checked_first, write));
+        }
+    }
+    // A section the load already reads refuses there instead; Windows copies
+    // every section and refuses them all at load.
+    if cfg!(windows) {
+        assert_eq!(reached, 0, "Windows verifies every section at load");
+    } else {
+        assert!(
+            reached >= 16,
+            "lazily checked sections reach the save: {reached}"
+        );
+    }
+}
+
+#[test]
+fn a_clean_source_saves_after_an_explicit_check_and_the_check_is_remembered() {
+    let (_tmp, path) = saved_topo_big();
+    let mut graph = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new().with_storage(StorageMode::Mapped),
+    )
+    .unwrap();
+    let frozen = graph.graph.frozen_base().expect("a frozen base");
+    frozen.verify_sections().unwrap();
+    frozen.verify_sections().unwrap();
+    let again = path.with_file_name("again.kgl");
+    with_floors(10, 10, || {
+        save_graph_with_layout(&mut graph, again.to_str().unwrap(), true, SaveLayout::Auto)
+    })
+    .unwrap();
+    let count = "MATCH (n) RETURN count(n) AS c";
+    assert_eq!(
+        rows(&load(&again, StorageMode::Memory), count),
+        rows(&load(&path, StorageMode::Memory), count)
+    );
+}

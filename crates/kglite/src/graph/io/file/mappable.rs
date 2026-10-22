@@ -641,9 +641,38 @@ impl MappedSection {
     }
 }
 
+/// Payload size from which [`parallel_digest`] splits the CRC across threads.
+const PARALLEL_DIGEST_MIN: usize = 8 << 20;
+/// Bytes each parallel digest task covers.
+const PARALLEL_DIGEST_CHUNK: usize = 4 << 20;
+
+/// [`section_digest`] of `bytes`, computed in parallel chunks above
+/// [`PARALLEL_DIGEST_MIN`]. The chunk digests are joined with the CRC32
+/// combine identity, so the value equals the sequential digest; the point is
+/// to overlap the page faults of a cold mapping, which dominate the pass.
+fn parallel_digest(bytes: &[u8]) -> u32 {
+    use rayon::prelude::*;
+    if bytes.len() < PARALLEL_DIGEST_MIN {
+        return section_digest(bytes);
+    }
+    let parts: Vec<crc32fast::Hasher> = bytes
+        .par_chunks(PARALLEL_DIGEST_CHUNK)
+        .map(|chunk| {
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(chunk);
+            hasher
+        })
+        .collect();
+    let mut total = crc32fast::Hasher::new();
+    for part in &parts {
+        total.combine(part);
+    }
+    total.finalize()
+}
+
 /// Compare `bytes` with the CRC32 a writer recorded for the section `name`.
 fn check_digest(name: &str, bytes: &[u8], recorded: u32) -> io::Result<()> {
-    let actual = section_digest(bytes);
+    let actual = parallel_digest(bytes);
     if actual != recorded {
         return Err(invalid_data(format!(
             "the mappable section '{name}' of this .kgl file is corrupt — it does not match the \

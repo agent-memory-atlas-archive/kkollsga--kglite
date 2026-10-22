@@ -4,7 +4,7 @@
 
 use super::mappable::{
     collect_mappable_sections, plan_data_region, write_data_region, MapEntry, MappableSection,
-    SaveLayout,
+    MappableSet, SaveLayout,
 };
 use super::*;
 
@@ -42,15 +42,21 @@ fn compress_some(payload: Option<Vec<u8>>) -> io::Result<Option<Vec<u8>>> {
     payload.map(|p| zstd_compress(&p)).transpose()
 }
 
+/// The topology of a frozen graph, or of an overlay over one, is copied out
+/// of sections that were not checksummed at load; refuse to write a damaged
+/// one into a new file. Each section is checked once per mapping (the result
+/// is cached on the section), so a repeat call is free. The serializer repeats
+/// the check but can only report a generic error.
+fn verify_topology_sources(graph: &DirGraph) -> io::Result<()> {
+    match graph.graph.frozen_base() {
+        Some(frozen) => frozen.verify_sections(),
+        None => Ok(()),
+    }
+}
+
 /// Topology with node properties stripped into the column sections.
 fn encode_topology(graph: &DirGraph, codec: serde_codec::CodecVersion) -> io::Result<Vec<u8>> {
-    // The topology of a frozen graph, or of an overlay over one, is copied out
-    // of sections that were not checksummed at load; refuse to write a damaged
-    // one into a new file. The serializer repeats the check but can only
-    // report a generic error.
-    if let Some(frozen) = graph.graph.frozen_base() {
-        frozen.verify_sections()?;
-    }
+    verify_topology_sources(graph)?;
     let topology_raw = {
         let _strip = StripPropertiesGuard::new();
         let _guard = SerdeSerializeGuard::new(&graph.interner);
@@ -179,6 +185,30 @@ pub fn write_kgl_to_stamped<W: Write>(
     write_kgl_to_layout(graph, writer, checkpoint_lsn, SaveLayout::Auto)
 }
 
+/// Collect the mappable sections while the source-section checksum pass runs
+/// on a second thread: the pass is page-fault bound and independent of the
+/// collection. A thread rather than `rayon::join`, which would move the
+/// collection off this thread. A graph with no frozen base has nothing to
+/// check and spawns nothing. Nothing is written before both results are read,
+/// and a collection error is reported ahead of a checksum error, as when the
+/// two ran in sequence.
+fn collect_beside_verify(
+    graph: &DirGraph,
+    layout: SaveLayout,
+) -> (io::Result<MappableSet<'_>>, io::Result<()>) {
+    if graph.graph.frozen_base().is_none() {
+        return (collect_mappable_sections(graph, layout), Ok(()));
+    }
+    std::thread::scope(|scope| {
+        let verifier = scope.spawn(|| verify_topology_sources(graph));
+        let collected = collect_mappable_sections(graph, layout);
+        let verified = verifier
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("the section checksum pass panicked")));
+        (collected, verified)
+    })
+}
+
 /// [`write_kgl_to_stamped`] under an explicit [`SaveLayout`]: `Compact` writes
 /// the v8 container every kglite release can read.
 pub fn write_kgl_to_layout<W: Write>(
@@ -187,7 +217,9 @@ pub fn write_kgl_to_layout<W: Write>(
     checkpoint_lsn: Option<u64>,
     layout: SaveLayout,
 ) -> io::Result<()> {
-    let set = collect_mappable_sections(graph, layout)?;
+    let (collected, verified) = collect_beside_verify(graph, layout);
+    let set = collected?;
+    verified?;
     write_kgl_container(
         graph,
         writer,

@@ -104,6 +104,7 @@ before upgrading.
 - **`import_embeddings` peaks lower.** The file bytes are freed once decoded and entries are consumed as they are copied. Loading a graph with embeddings reserves each decompressed section once instead of growing it by doubling.
 - **`export_embeddings` writes atomically.** It writes a temp file beside the target, fsyncs it, then renames it into place, so a crash leaves the previous `.kgle` intact.
 - **The MCP server reads stdio through mcp-methods 0.5.0's transport.** Line framing, BOM and CRLF handling and the repair of overflowing query numbers behave as before; the repair scanner lives in its own module with unit tests. `kglite-mcp-server` and `kglite-cli` now require `mcp-methods` 0.5.1.
+- **Saving a `mapped` graph is faster.** The check that the old file's topology sections are intact now runs on several threads and beside section collection; a damaged section still fails the save before anything is published. Synthetic 1M-node, 12M-relationship graph, release build, macOS: save 3.3 to 1.9 s (in-memory save 1.6 s). The saved bytes are unchanged.
 
 ### Fixed
 
