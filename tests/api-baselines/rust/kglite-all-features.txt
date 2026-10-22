@@ -3591,6 +3591,7 @@ pub fn kglite::api::storage::GraphBackend::backfill_node_before_labels(&mut self
 pub fn kglite::api::storage::GraphBackend::captures_before_images(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::for_each_edge_endpoint_key<F>(&self, F) where F: core::ops::function::FnMut(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, kglite::api::InternedKey)
 pub fn kglite::api::storage::GraphBackend::for_each_edge_of_conn_type<F>(&self, kglite::api::InternedKey, F) where F: core::ops::function::FnMut(petgraph::graph_impl::NodeIndex, petgraph::graph_impl::NodeIndex, u32, &[(kglite::api::InternedKey, kglite::datatypes::values::Value)]) -> bool
+pub fn kglite::api::storage::GraphBackend::has_frozen_base(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::is_forked(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::is_frozen(&self) -> bool
 pub fn kglite::api::storage::GraphBackend::needs_node_before_image(&self, petgraph::graph_impl::NodeIndex) -> bool

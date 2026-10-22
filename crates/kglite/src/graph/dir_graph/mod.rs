@@ -15,7 +15,9 @@ use crate::graph::schema::{
     EmbeddingStore, GraphBackend, IndexKey, InternedKey, NodeData, PropertyStorage, SaveMetadata,
     SchemaDefinition, SpatialConfig, StringInterner, TypeIdIndex, TypeSchema,
 };
-use crate::graph::storage::column_store::{ColumnStore, MAPPED_SPILL_FLOOR};
+use crate::graph::storage::column_store::{
+    ColumnStore, FROZEN_OVERLAY_SPILL_FLOOR, MAPPED_SPILL_FLOOR,
+};
 use crate::graph::storage::disk::id_index::IdIndexStore;
 use crate::graph::storage::disk::type_index::TypeIndexStore;
 
@@ -1901,8 +1903,16 @@ impl DirGraph {
     /// with heap once per fork (7 % of single-event transactions at 1-2 ms
     /// against 15 us). An unforked mapped graph keeps the zero limit, so its
     /// columns stay file-backed as `StorageMode::Mapped` promises.
+    ///
+    /// A write overlay over a frozen topology never folds, so its valve bounds
+    /// the heap it leaves and the limit is never below
+    /// [`FROZEN_OVERLAY_SPILL_FLOOR`]: each transaction forks the overlay, and
+    /// below that floor each one spilled the whole tail to new files.
     pub fn maybe_spill_columns(&mut self) {
         let limit = match self.memory_limit {
+            Some(l) if self.graph.has_frozen_base() && self.graph.is_forked() => {
+                l.max(FROZEN_OVERLAY_SPILL_FLOOR)
+            }
             Some(l) if self.graph.is_mapped() && self.graph.is_forked() => {
                 l.max(MAPPED_SPILL_FLOOR)
             }

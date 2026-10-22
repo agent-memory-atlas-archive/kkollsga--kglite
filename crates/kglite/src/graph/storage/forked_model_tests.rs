@@ -17,8 +17,10 @@
 //!   same free lists: its slot mirror is compared outright, and a probe batch
 //!   of adds must land on the same slots in both.
 //!
-//! Every case runs twice, once over a `Memory` base and once over a `Mapped`
-//! one: the overlay's slot arithmetic is shared, but the fold target differs.
+//! Every case runs over a `Memory` base and over a `Mapped` one (the overlay's
+//! slot arithmetic is shared, but the fold target differs), and over a `Frozen`
+//! base, whose copy-on-write overlay never folds back: the oracle there is the
+//! heap graph a promotion builds, and the collapse is the only way out.
 //!
 //! The generator is a fixed-seed xorshift, so a failure names its case and
 //! replays exactly.
@@ -30,10 +32,12 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
 
 use crate::datatypes::Value;
-use crate::graph::schema::{EdgeData, NodeData};
+use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::fork_base::{FoldTarget, Folded, ForkBase};
 use crate::graph::storage::forked::ForkedGraph;
+use crate::graph::storage::frozen::FrozenGraph;
 use crate::graph::storage::interner::StringInterner;
+use crate::graph::storage::property_storage::{ColumnarRow, PropertyStorage};
 use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
 
 /// What the model needs from a base beyond [`FoldTarget`]: construction, a
@@ -110,11 +114,32 @@ impl Rng {
 struct Maker {
     interner: StringInterner,
     serial: i64,
+    /// Nodes are column-backed records, the only shape a frozen base holds.
+    columnar: bool,
+    /// Every edge has one connection type, so a frozen base lists a node's
+    /// edges in the order a heap graph does and the comparison can be exact.
+    single_type: bool,
 }
 
 impl Maker {
+    fn new() -> Self {
+        Maker {
+            interner: StringInterner::new(),
+            serial: 0,
+            columnar: false,
+            single_type: false,
+        }
+    }
+
     fn node(&mut self) -> NodeData {
         self.serial += 1;
+        if self.columnar {
+            return NodeData {
+                node_type: InternedKey::from_str("Item"),
+                ident: None,
+                properties: PropertyStorage::Columnar(ColumnarRow::new(self.serial as u32)),
+            };
+        }
         NodeData::new(
             Value::Int64(self.serial),
             Value::String(format!("n{}", self.serial)),
@@ -126,7 +151,7 @@ impl Maker {
 
     fn edge(&mut self, rng: &mut Rng) -> EdgeData {
         self.serial += 1;
-        let kind = ["R", "S"][rng.below(2)];
+        let kind = ["R", "S"][if self.single_type { 0 } else { rng.below(2) }];
         let mut props = HashMap::new();
         props.insert("w".to_string(), Value::Int64(self.serial));
         EdgeData::new(kind.to_string(), props, &mut self.interner)
@@ -135,6 +160,13 @@ impl Maker {
 
 /// Everything a read can observe, as text: equal text means equal order too.
 fn dump<G: GraphRead>(g: &G) -> String {
+    dump_with(g, false)
+}
+
+/// [`dump`], with each node's edge and neighbour lists put in slot order when
+/// `sorted`: a frozen base groups a node's edges by connection type, so only
+/// the set a node holds is comparable with a heap graph's.
+fn dump_with<G: GraphRead>(g: &G, sorted: bool) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(
@@ -150,7 +182,7 @@ fn dump<G: GraphRead>(g: &G) -> String {
     for &n in &nodes {
         let _ = writeln!(out, "node {n:?} {:?}", g.node_weight(n));
         for dir in [Direction::Outgoing, Direction::Incoming] {
-            let edges: Vec<_> = g
+            let mut edges: Vec<_> = g
                 .edges_directed(n, dir)
                 .map(|e| {
                     (
@@ -161,17 +193,32 @@ fn dump<G: GraphRead>(g: &G) -> String {
                     )
                 })
                 .collect();
+            if sorted {
+                edges.sort_by_key(|e| e.0.index());
+            }
             let _ = writeln!(out, " {dir:?} {edges:?}");
-            let peers: Vec<_> = g.neighbors_directed(n, dir).collect();
+            let mut peers: Vec<_> = g.neighbors_directed(n, dir).collect();
+            if sorted {
+                peers.sort();
+            }
             let _ = writeln!(out, " peers {dir:?} {peers:?}");
         }
-        let both: Vec<_> = g.neighbors_undirected(n).collect();
+        let mut both: Vec<_> = g.neighbors_undirected(n).collect();
+        let mut default: Vec<_> = g.edges(n).map(|e| e.id()).collect();
+        if sorted {
+            both.sort();
+            default.sort();
+        }
         let _ = writeln!(out, " undirected {both:?}");
-        let default: Vec<_> = g.edges(n).map(|e| e.id()).collect();
         let _ = writeln!(out, " edges() {default:?}");
         for &m in &nodes {
-            let between: Vec<_> = g.edges_connecting(n, m).map(|e| e.id()).collect();
-            let found = g.find_edge(n, m);
+            let mut between: Vec<_> = g.edges_connecting(n, m).map(|e| e.id()).collect();
+            let mut found = g.find_edge(n, m);
+            if sorted {
+                between.sort();
+                // `find_edge` returns the first of the parallel edges.
+                found = between.first().copied().and(found).map(|_| between[0]);
+            }
             let _ = writeln!(out, " {n:?}->{m:?} {between:?} {found:?}");
         }
     }
@@ -353,7 +400,12 @@ impl<G: GraphWrite> FnMutWeight for G {
 
     fn set_node_title_direct(&mut self, n: NodeIndex, title: Value) {
         if let Some(w) = self.node_weight_mut(n) {
-            w.set_title(title);
+            w.set_title(title.clone());
+            // A column-backed record keeps its title in a store, so give the
+            // write something the dump can see.
+            if matches!(w.properties, PropertyStorage::Columnar(_)) {
+                w.ident = Some(Box::new((title.clone(), title)));
+            }
         }
     }
 }
@@ -371,10 +423,8 @@ fn assert_folded_like_flat<B: Base>(folded: &mut B, flat: &mut B, label: &str) {
         "{label}: the folded free lists differ from the flat graph's"
     );
     // The mirror could be wrong on both sides; the probe asks petgraph.
-    let mut maker = Maker {
-        interner: StringInterner::new(),
-        serial: 1_000_000,
-    };
+    let mut maker = Maker::new();
+    maker.serial = 1_000_000;
     let mut rng = Rng::new(7);
     let nodes: Vec<NodeIndex> = (0..4)
         .map(|_| {
@@ -397,10 +447,7 @@ fn assert_folded_like_flat<B: Base>(folded: &mut B, flat: &mut B, label: &str) {
 
 fn run_case<B: Base>(case: u64, steps: usize) -> (usize, usize) {
     let mut rng = Rng::new(case);
-    let mut maker = Maker {
-        interner: StringInterner::new(),
-        serial: 0,
-    };
+    let mut maker = Maker::new();
     let base: B = holey_base(&mut rng, &mut maker);
     let mut flat = base.deep();
     let reader = case.is_multiple_of(2);
@@ -479,4 +526,243 @@ fn random_topology_operations_match_a_graph_that_never_forks() {
 #[test]
 fn random_topology_operations_match_a_graph_that_never_forks_over_a_mapped_base() {
     model_over::<MappedGraph>("mapped base");
+}
+
+/// Per-peer edge counts of every connection type and direction: the fork's
+/// answer (the file's counts corrected by the overlay) against `reference`'s.
+fn assert_peer_counts_agree<G: GraphRead>(fork: &ForkedGraph, reference: &G, label: &str) {
+    for ty in ["R", "S"] {
+        let conn = InternedKey::from_str(ty);
+        for dir in [Direction::Outgoing, Direction::Incoming] {
+            assert_eq!(
+                fork.count_edges_grouped_by_peer(conn, dir, None),
+                reference.count_edges_grouped_by_peer(conn, dir, None),
+                "{label}: peer counts of {ty} {dir:?}"
+            );
+        }
+    }
+}
+
+/// One case over a frozen base with one connection type: the fork's reads, slot
+/// identity and collapse against `flat`, the heap graph a promotion of the same
+/// base builds. With one type a frozen base lists a node's edges in the order a
+/// heap graph does, so every read is compared in order and every add must land
+/// on the slot the heap graph hands out.
+fn run_frozen_case(case: u64, steps: usize) -> (usize, usize) {
+    let mut rng = Rng::new(case ^ 0xF20_2E17);
+    let mut maker = Maker::new();
+    maker.columnar = true;
+    maker.single_type = true;
+    let heap: MemoryGraph = holey_base(&mut rng, &mut maker);
+    let frozen = Arc::new(FrozenGraph::from_heap(heap.inner()));
+    let mut flat = frozen.to_mapped();
+    // Both free lists are what a heap load of the same vacancy pattern holds.
+    assert_eq!(
+        format!("{:?}", frozen.slot_mirror()),
+        flat.mirror_text(),
+        "case {case}: the frozen mirror differs from a heap load's"
+    );
+    let held = Arc::clone(&frozen);
+    let held_dump = dump(&*held);
+    let mut fork = ForkedGraph::new(ForkBase::Frozen(frozen));
+    assert_same(
+        &dump(&fork),
+        &dump(&flat),
+        format!("case {case}: a fresh fork"),
+    );
+    let (mut removals, mut trace) = (0, Vec::new());
+    for i in 0..steps {
+        let label = step(&mut rng, &mut maker, &mut fork, &mut flat);
+        trace.push(label);
+        removals += usize::from(label.starts_with("remove"));
+        if i % 9 == 8 || i + 1 == steps {
+            assert_same(
+                &dump(&fork),
+                &dump(&flat),
+                format!("case {case} step {i}: the fork reads differently after {trace:?}"),
+            );
+            assert_peer_counts_agree(
+                &fork,
+                &flat,
+                &format!("case {case} step {i} after {trace:?}"),
+            );
+        }
+    }
+    assert_same(
+        &dump(&*held),
+        &held_dump,
+        format!("case {case}: the frozen base moved"),
+    );
+    assert!(
+        fork.fold_in_place().is_none(),
+        "case {case}: an overlay over a frozen base must not fold"
+    );
+    // The way out: a copy collapsed into a heap graph, then the overlay itself
+    // (which the second collapse consumes). Each must read like the flat graph
+    // and carry its free lists.
+    let mut copied = MappedGraph::unfold_for_test(fork.to_folded_graph());
+    assert_folded_like_flat(
+        &mut copied,
+        &mut flat.deep_clone(),
+        &format!("case {case} copy"),
+    );
+    let mut collapsed = MappedGraph::unfold_for_test(fork.to_folded_graph());
+    probe_alike(
+        &mut fork.clone(),
+        &mut collapsed,
+        &format!("case {case} probe"),
+    );
+    let mut consumed = MappedGraph::unfold_for_test(fork.materialise());
+    assert_folded_like_flat(&mut consumed, &mut flat, &format!("case {case} collapse"));
+    (steps, removals)
+}
+
+/// A frozen base groups a node's edges by connection type, which a heap graph
+/// cannot reproduce, so edges freed with a node leave in another order and the
+/// slots later adds reuse differ from a heap graph's. With two types the
+/// oracle is therefore the overlay's own collapse: the same operations, the
+/// reads compared as sets, and every add must land on the slot the collapse's
+/// petgraph allocates.
+fn run_frozen_solo_case(case: u64, steps: usize) -> (usize, usize) {
+    let mut rng = Rng::new(case ^ 0x501_0C45E);
+    let mut maker = Maker::new();
+    maker.columnar = true;
+    let heap: MemoryGraph = holey_base(&mut rng, &mut maker);
+    let frozen = Arc::new(FrozenGraph::from_heap(heap.inner()));
+    let reference = frozen.to_mapped();
+    assert_same(
+        &dump_with(
+            &ForkedGraph::new(ForkBase::Frozen(Arc::clone(&frozen))),
+            true,
+        ),
+        &dump_with(&reference, true),
+        format!("case {case}: a fresh fork"),
+    );
+    let mut fork = ForkedGraph::new(ForkBase::Frozen(frozen));
+    let (mut removals, mut trace) = (0, Vec::new());
+    for i in 0..steps {
+        let label = step_solo(&mut rng, &mut maker, &mut fork);
+        trace.push(label);
+        removals += usize::from(label.starts_with("remove"));
+        if i % 9 == 8 || i + 1 == steps {
+            let collapsed = MappedGraph::unfold_for_test(fork.to_folded_graph());
+            assert_same(
+                &dump_with(&fork, true),
+                &dump_with(&collapsed, true),
+                format!("case {case} step {i}: the collapse reads differently after {trace:?}"),
+            );
+            assert_peer_counts_agree(
+                &fork,
+                &collapsed,
+                &format!("case {case} step {i} after {trace:?}"),
+            );
+        }
+    }
+    let mut collapsed = MappedGraph::unfold_for_test(fork.to_folded_graph());
+    probe_alike(&mut fork, &mut collapsed, &format!("case {case} probe"));
+    (steps, removals)
+}
+
+/// [`step`] without an oracle: the same operation mix on the fork alone.
+fn step_solo(rng: &mut Rng, maker: &mut Maker, fork: &mut ForkedGraph) -> &'static str {
+    let live = live_nodes(fork);
+    let edges = live_edges(fork);
+    match rng.below(20) {
+        0..=3 => {
+            GraphWrite::add_node(fork, maker.node());
+            "add_node"
+        }
+        4..=10 if !live.is_empty() => {
+            let (a, b) = (live[rng.below(live.len())], live[rng.below(live.len())]);
+            GraphWrite::add_edge(fork, a, b, maker.edge(rng));
+            "add_edge"
+        }
+        11..=14 if !edges.is_empty() => {
+            GraphWrite::remove_edge(fork, edges[rng.below(edges.len())]);
+            "remove_edge"
+        }
+        15 | 16 if live.len() > 1 => {
+            GraphWrite::remove_node(fork, live[rng.below(live.len())]);
+            "remove_node"
+        }
+        17 | 18 if !edges.is_empty() => {
+            maker.serial += 1;
+            fork.set_edge_marker(edges[rng.below(edges.len())], Value::Int64(maker.serial));
+            "edge_weight_mut"
+        }
+        19 if !live.is_empty() => {
+            maker.serial += 1;
+            let title = Value::String(format!("t{}", maker.serial));
+            fork.set_node_title_direct(live[rng.below(live.len())], title);
+            "node_weight_mut"
+        }
+        _ => "noop",
+    }
+}
+
+/// Four nodes and four edges added to the live overlay and to its collapsed
+/// copy must land on the same slots: the overlay's predictions are what the
+/// collapse's petgraph allocates.
+fn probe_alike(fork: &mut ForkedGraph, collapsed: &mut MappedGraph, label: &str) {
+    let mut maker = Maker::new();
+    maker.serial = 2_000_000;
+    maker.columnar = true;
+    let mut rng = Rng::new(11);
+    let nodes: Vec<NodeIndex> = (0..4)
+        .map(|_| {
+            let data = maker.node();
+            let from_collapsed = GraphWrite::add_node(collapsed, data.clone());
+            assert_eq!(
+                GraphWrite::add_node(fork, data),
+                from_collapsed,
+                "{label}: probe node"
+            );
+            from_collapsed
+        })
+        .collect();
+    for i in 0..4 {
+        let data = maker.edge(&mut rng);
+        let (a, b) = (nodes[i], nodes[(i + 1) % 4]);
+        let from_collapsed = GraphWrite::add_edge(collapsed, a, b, data.clone());
+        assert_eq!(
+            GraphWrite::add_edge(fork, a, b, data),
+            from_collapsed,
+            "{label}: probe edge"
+        );
+    }
+}
+
+impl MappedGraph {
+    fn unfold_for_test(folded: Result<Folded, String>) -> MappedGraph {
+        match folded.unwrap_or_else(|e| panic!("collapse refused: {e}")) {
+            Folded::Mapped(g) => g,
+            Folded::Memory(_) => panic!("a frozen base collapsed into a memory graph"),
+        }
+    }
+}
+
+fn frozen_model(label: &str, single_type: bool) {
+    let (mut ops, mut removals) = (0, 0);
+    for case in 0..6_000 {
+        let steps = 20 + (case as usize % 50);
+        let (steps, removed) = if single_type {
+            run_frozen_case(case, steps)
+        } else {
+            run_frozen_solo_case(case, steps)
+        };
+        ops += steps;
+        removals += removed;
+    }
+    assert!(removals > ops / 10, "the generator rarely removes: vacuous");
+    eprintln!("forked model test ({label}): 6000 cases, {ops} operations, {removals} removals");
+}
+
+#[test]
+fn random_topology_operations_over_a_frozen_base_match_a_heap_load_in_order() {
+    frozen_model("frozen base, one connection type", true);
+}
+
+#[test]
+fn random_topology_operations_over_a_frozen_base_collapse_to_what_they_read() {
+    frozen_model("frozen base, two connection types", false);
 }

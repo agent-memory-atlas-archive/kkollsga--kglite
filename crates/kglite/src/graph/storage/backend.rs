@@ -104,9 +104,16 @@ pub enum GraphBackend {
     /// collapsed back to the variant it forked from by
     /// [`try_compact`](Self::try_compact) the moment the reader drops.
     ///
+    /// The same variant serves a **frozen graph that has taken a write**: the
+    /// base is the `Frozen` topology, no reader is involved, and
+    /// [`try_compact`](Self::try_compact) never folds it (there is no petgraph
+    /// to fold into). It ends at a save, the promote valve
+    /// ([`ForkedGraph::frozen_valve_tripped`]) or a whole-graph operation
+    /// ([`flatten_fork`](Self::flatten_fork)).
+    ///
     /// `is_mapped`, `supports_undo_journal` and
-    /// `supports_checkpoint_free_mutation` answer exactly as the `Memory` or
-    /// `Mapped` arm it was forked from would. `is_memory` answers `false` for
+    /// `supports_checkpoint_free_mutation` answer exactly as the `Memory`,
+    /// `Mapped` or `Frozen` arm it was forked from would. `is_memory` answers `false` for
     /// every fork, so memory-only executor routes take their generic path
     /// while a view is held. Answering `false` to `supports_undo_journal` would
     /// send every statement taken while a view is held to
@@ -119,12 +126,16 @@ pub enum GraphBackend {
     /// memory is the pages a query touches, not the size of the graph.
     ///
     /// Immutable and shared by `Arc`, so a clone is a refcount bump. The first
-    /// write (any [`GraphWrite`] method, or the start of an undo journal)
-    /// promotes it to a heap [`Mapped`](Self::Mapped) backend, once; from then on
-    /// the graph behaves exactly as a mapped graph always has. See
+    /// write (any [`GraphWrite`] method, or the start of an undo journal) turns
+    /// the backend into a [`Forked`](Self::Forked) overlay over this topology
+    /// ([`overlay_frozen`](Self::overlay_frozen)): nothing is copied, and the
+    /// heap holds only what is written. The overlay never folds back; a save
+    /// writes its merge out, and the promote valve collapses it into a heap
+    /// [`Mapped`](Self::Mapped) graph once it passes a quarter of the base. See
     /// [`crate::graph::storage::frozen`].
     ///
-    /// `is_mapped` answers `true`, like the heap variant it promotes to.
+    /// `is_mapped` answers `true`, like the overlay and the heap variant it
+    /// becomes.
     Frozen(Arc<FrozenGraph>),
     Disk(Box<DiskGraph>),
     // Write-capture wrapper: the production backend of every graph opened with
@@ -420,7 +431,8 @@ impl GraphBackend {
     /// *properties* to mmap (`memory_limit = Some(0)`), not the node/edge graph,
     /// which stays heap-resident. A `Frozen` topology is the one mapped graph
     /// whose nodes are not: it answers `true` because its first write, which is
-    /// `begin_undo`, promotes it to the heap `Mapped` graph described here.
+    /// `begin_undo`, makes it an overlay (`Forked`, below) whose journal reverses
+    /// through the overlay's own writes.
     ///
     /// `Disk` cannot: it has no petgraph at all — it mutates a CSR + mmap layout
     /// through generation overlays and arena-staged writes, its slots carry no
@@ -440,8 +452,8 @@ impl GraphBackend {
     pub(crate) fn supports_undo_journal(&self) -> bool {
         match self {
             GraphBackend::Memory(_) | GraphBackend::Mapped(_) => true,
-            // A frozen graph promotes to `Mapped` before its first write, and
-            // `begin_undo` is that write, so the journal it opens is `Mapped`'s.
+            // A frozen graph becomes an overlay before its first write, and
+            // `begin_undo` is that write, so the journal it opens is `Forked`'s.
             GraphBackend::Frozen(_) => true,
             // MUST be true — see the `Forked` variant doc. `UndoEntry` keys are
             // the `NodeIndex`/`EdgeIndex` the overlay still hands out, and
@@ -606,17 +618,68 @@ impl GraphBackend {
         }
     }
 
+    /// Turn a frozen topology into a copy-on-write overlay over it, which is
+    /// what every write to a frozen graph does. O(1): nothing is copied, the
+    /// overlay holds only what is written and reads the rest from the mapped
+    /// sections. Idempotent and a no-op on every other variant.
+    ///
+    /// The overlay does not fold back (a frozen base has no petgraph to fold
+    /// into). It ends at a save, where its merge is written out, or at the
+    /// promote valve ([`ForkedGraph::frozen_valve_tripped`]), which collapses it
+    /// into a heap `Mapped` graph once.
+    pub(crate) fn overlay_frozen(&mut self) {
+        match self {
+            GraphBackend::Frozen(frozen) => {
+                let overlay = ForkedGraph::new(Arc::clone(frozen));
+                *self = GraphBackend::Forked(Box::new(overlay));
+            }
+            GraphBackend::Recording(rg) => rg.inner_mut().overlay_frozen(),
+            _ => {}
+        }
+    }
+
+    /// Entries the write overlay holds (see [`ForkedGraph::delta_len`]), looking
+    /// through a write-capture wrapper; `None` without an overlay.
+    #[cfg(test)]
+    pub(crate) fn overlay_entries(&self) -> Option<usize> {
+        match self {
+            GraphBackend::Forked(forked) => Some(forked.delta_len()),
+            GraphBackend::Recording(rg) => rg.inner().overlay_entries(),
+            _ => None,
+        }
+    }
+
     /// `true` while the topology is served from a `.kgl`'s raw sections.
     ///
     /// Public as a **diagnostic**, like [`is_forked`](Self::is_forked): the
     /// observable that tells a mapped load that kept the file's topology from
-    /// one that decoded it, and from a frozen graph a write has since promoted.
+    /// one that decoded it. Strict: it turns false at the first write, when the
+    /// graph becomes an overlay over that topology ([`Self::has_frozen_base`]).
     #[inline]
     pub fn is_frozen(&self) -> bool {
         match self {
             GraphBackend::Frozen(_) => true,
             GraphBackend::Recording(rg) => rg.inner().is_frozen(),
             _ => false,
+        }
+    }
+
+    /// The frozen topology this graph reads, whether it is served directly or
+    /// sits under a write overlay, looking through a write-capture wrapper.
+    /// Public as a **diagnostic**: `is_frozen` turns false at the first write,
+    /// this stays true until the promote valve or a whole-graph operation
+    /// collapses the overlay.
+    pub fn has_frozen_base(&self) -> bool {
+        self.frozen_base().is_some()
+    }
+
+    /// [`Self::has_frozen_base`], with the topology.
+    pub(crate) fn frozen_base(&self) -> Option<&Arc<FrozenGraph>> {
+        match self {
+            GraphBackend::Frozen(frozen) => Some(frozen),
+            GraphBackend::Forked(forked) => forked.frozen_base(),
+            GraphBackend::Recording(rg) => rg.inner().frozen_base(),
+            _ => None,
         }
     }
 
@@ -639,7 +702,7 @@ impl GraphBackend {
             GraphBackend::Forked(g) => g.begin_undo(),
             GraphBackend::Mapped(g) => unique_heap_backend(g).begin_undo(),
             GraphBackend::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 self.begin_undo();
             }
             GraphBackend::Recording(rg) => rg.inner_mut().begin_undo(),
@@ -1127,10 +1190,13 @@ impl GraphBackend {
                 .cached_edge_counts_grouped_by_peer(conn_type, dir, deadline)?,
             GraphBackend::Mapped(graph) => Some(graph.peer_counts(conn_type, dir)),
             GraphBackend::Frozen(graph) => Some(graph.peer_counts(conn_type, dir)),
-            // Cold by design: the fork keeps no peer-count cache of its own, so
+            // Cold by design: a fork keeps no peer-count cache of its own, so
             // the writer can never publish a count into a reader's snapshot.
-            // The owned fallback is correct, just uncached.
-            GraphBackend::Forked(_) | GraphBackend::Disk(_) => None,
+            // The owned fallback is correct, just uncached. An overlay over a
+            // frozen file with no edge write shares the file's own cache,
+            // which a write cannot reach.
+            GraphBackend::Forked(forked) => forked.untouched_peer_counts(conn_type, dir),
+            GraphBackend::Disk(_) => None,
         })
     }
 }
@@ -1263,7 +1329,9 @@ impl Serialize for GraphBackend {
             }
             // Serialization needs one concrete `StableDiGraph`, so the overlay is
             // folded into a throwaway copy. O(V+E) — but so is writing the file,
-            // and the bytes are identical to the unforked graph's.
+            // and the bytes are identical to the unforked graph's. Over a frozen
+            // base the copy is the same transient heap graph the `Frozen` arm
+            // builds (its sections are checksummed first), plus the overlay.
             GraphBackend::Forked(g) => g
                 .to_folded_graph()
                 .map_err(serde::ser::Error::custom)?
@@ -1319,7 +1387,29 @@ use std::collections::HashMap;
 
 /// Out-of-line non-`Memory` arms of the hottest `GraphRead` adjacency methods: the trait method keeps
 /// only the heap arm inline, so its size does not grow with the number of backends.
+/// The overlay's arm of `node_type_of`, a direct call: inlined it grows every site
+/// that reads a node's type, and the dispatch above it is hot in the matcher.
+#[inline(never)]
+fn forked_node_type_of(graph: &ForkedGraph, idx: NodeIndex) -> Option<InternedKey> {
+    GraphRead::node_type_of(graph, idx)
+}
+
 impl GraphBackend {
+    /// The arms of [`GraphRead::node_type_of`] that are not a plain petgraph,
+    /// out of line: with the overlay's and the frozen base's bodies inlined at
+    /// every call, the matcher's per-node reads of a heap graph measured +5-9 %.
+    #[inline(never)]
+    fn node_type_of_other(&self, idx: NodeIndex) -> Option<InternedKey> {
+        match self {
+            Self::Memory(g) => GraphRead::node_type_of(&**g, idx),
+            Self::Mapped(g) => GraphRead::node_type_of(&**g, idx),
+            Self::Forked(g) => GraphRead::node_type_of(g.as_ref(), idx),
+            Self::Frozen(g) => GraphRead::node_type_of(&**g, idx),
+            Self::Disk(g) => GraphRead::node_type_of(g.as_ref(), idx),
+            Self::Recording(rg) => GraphRead::node_type_of(rg.as_ref(), idx),
+        }
+    }
+
     #[inline(never)]
     fn edges_directed_filtered_other(
         &self,
@@ -1521,11 +1611,9 @@ impl GraphRead for GraphBackend {
     fn node_type_of(&self, idx: NodeIndex) -> Option<InternedKey> {
         match self {
             Self::Memory(g) => GraphRead::node_type_of(&**g, idx),
-            Self::Forked(g) => GraphRead::node_type_of(g.as_ref(), idx),
             Self::Mapped(g) => GraphRead::node_type_of(&**g, idx),
-            Self::Frozen(g) => GraphRead::node_type_of(&**g, idx),
-            Self::Disk(g) => GraphRead::node_type_of(g.as_ref(), idx),
-            Self::Recording(rg) => GraphRead::node_type_of(rg.as_ref(), idx),
+            Self::Forked(g) => forked_node_type_of(g, idx),
+            other => other.node_type_of_other(idx),
         }
     }
 
@@ -2124,7 +2212,7 @@ impl GraphWrite for GraphBackend {
                 GraphWrite::set_node_property(unique_heap_backend(g), idx, key, value)
             }
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::set_node_property(self, idx, key, value)
             }
             Self::Disk(g) => GraphWrite::set_node_property(g.as_mut(), idx, key, value),
@@ -2139,7 +2227,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::set_node_title(g.as_mut(), idx, value),
             Self::Mapped(g) => GraphWrite::set_node_title(unique_heap_backend(g), idx, value),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::set_node_title(self, idx, value)
             }
             Self::Disk(g) => GraphWrite::set_node_title(g.as_mut(), idx, value),
@@ -2158,7 +2246,7 @@ impl GraphWrite for GraphBackend {
                 GraphWrite::set_node_property_if_absent(unique_heap_backend(g), idx, key, value)
             }
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::set_node_property_if_absent(self, idx, key, value)
             }
             Self::Disk(g) => GraphWrite::set_node_property_if_absent(g.as_mut(), idx, key, value),
@@ -2175,7 +2263,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::remove_node_property(g.as_mut(), idx, key),
             Self::Mapped(g) => GraphWrite::remove_node_property(unique_heap_backend(g), idx, key),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::remove_node_property(self, idx, key)
             }
             Self::Disk(g) => GraphWrite::remove_node_property(g.as_mut(), idx, key),
@@ -2190,7 +2278,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::clear_node_property(g.as_mut(), idx, key),
             Self::Mapped(g) => GraphWrite::clear_node_property(unique_heap_backend(g), idx, key),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::clear_node_property(self, idx, key)
             }
             Self::Disk(g) => GraphWrite::clear_node_property(g.as_mut(), idx, key),
@@ -2209,7 +2297,7 @@ impl GraphWrite for GraphBackend {
                 GraphWrite::replace_node_properties(unique_heap_backend(g), idx, pairs)
             }
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::replace_node_properties(self, idx, pairs)
             }
             Self::Disk(g) => GraphWrite::replace_node_properties(g.as_mut(), idx, pairs),
@@ -2224,7 +2312,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::node_weight_mut(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::node_weight_mut(unique_heap_backend(g), idx),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::node_weight_mut(self, idx)
             }
             Self::Disk(g) => GraphWrite::node_weight_mut(g.as_mut(), idx),
@@ -2239,7 +2327,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::node_weight_mut_silent(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::node_weight_mut_silent(unique_heap_backend(g), idx),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::node_weight_mut_silent(self, idx)
             }
             Self::Disk(g) => GraphWrite::node_weight_mut_silent(g.as_mut(), idx),
@@ -2256,7 +2344,7 @@ impl GraphWrite for GraphBackend {
             Self::Forked(g) => GraphWrite::edge_weight_mut(g.as_mut(), idx),
             Self::Mapped(g) => GraphWrite::edge_weight_mut(unique_heap_backend(g), idx),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::edge_weight_mut(self, idx)
             }
             Self::Disk(g) => GraphWrite::edge_weight_mut(g.as_mut(), idx),
@@ -2268,10 +2356,16 @@ impl GraphWrite for GraphBackend {
     fn add_node(&mut self, data: NodeData) -> NodeIndex {
         match self {
             Self::Memory(g) => GraphWrite::add_node(unique_heap_backend(g), data),
-            Self::Forked(g) => GraphWrite::add_node(g.as_mut(), data),
+            Self::Forked(g) => {
+                let result = GraphWrite::add_node(g.as_mut(), data);
+                if g.frozen_valve_tripped() {
+                    self.flatten_fork();
+                }
+                result
+            }
             Self::Mapped(g) => GraphWrite::add_node(unique_heap_backend(g), data),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::add_node(self, data)
             }
             Self::Disk(g) => GraphWrite::add_node(g.as_mut(), data),
@@ -2292,7 +2386,7 @@ impl GraphWrite for GraphBackend {
             }
             Self::Mapped(g) => GraphWrite::remove_node(unique_heap_backend(g), idx),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::remove_node(self, idx)
             }
             Self::Disk(g) => GraphWrite::remove_node(g.as_mut(), idx),
@@ -2313,7 +2407,7 @@ impl GraphWrite for GraphBackend {
             }
             Self::Mapped(g) => GraphWrite::add_edge(unique_heap_backend(g), a, b, data),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::add_edge(self, a, b, data)
             }
             Self::Disk(g) => GraphWrite::add_edge(g.as_mut(), a, b, data),
@@ -2334,7 +2428,7 @@ impl GraphWrite for GraphBackend {
             }
             Self::Mapped(g) => GraphWrite::remove_edge(unique_heap_backend(g), idx),
             Self::Frozen(_) => {
-                self.promote_frozen();
+                self.overlay_frozen();
                 GraphWrite::remove_edge(self, idx)
             }
             Self::Disk(g) => GraphWrite::remove_edge(g.as_mut(), idx),

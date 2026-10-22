@@ -17,7 +17,7 @@ use petgraph::Direction::{Incoming, Outgoing};
 /// connection types (one with properties), a deleted node and edge in the
 /// middle and a node created and deleted at the very end, so that both node
 /// and edge arrays hold interior and trailing vacant slots.
-fn topo_graph() -> DirGraph {
+pub(super) fn topo_graph() -> DirGraph {
     let mut g = DirGraph::new();
     for (t, n) in [("A", 60), ("B", 40), ("C", 30)] {
         run(
@@ -79,7 +79,7 @@ fn topo_graph() -> DirGraph {
 
 /// `topo_graph` plus enough edge-free nodes that the file passes the size
 /// below which a load reads it into a buffer instead of mapping it.
-fn saved_topo_big() -> (tempfile::TempDir, std::path::PathBuf) {
+pub(super) fn saved_topo_big() -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("big.kgl");
     let mut g = topo_graph();
@@ -92,14 +92,14 @@ fn saved_topo_big() -> (tempfile::TempDir, std::path::PathBuf) {
     (tmp, path)
 }
 
-fn saved_topo() -> (tempfile::TempDir, std::path::PathBuf) {
+pub(super) fn saved_topo() -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("g.kgl");
     with_floors(10, 10, || save(topo_graph(), &path, SaveLayout::Auto));
     (tmp, path)
 }
 
-fn section_names(path: &std::path::Path) -> Vec<String> {
+pub(super) fn section_names(path: &std::path::Path) -> Vec<String> {
     let bytes = std::fs::read(path).unwrap();
     let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
     metadata.mappable.iter().map(|e| e.name.clone()).collect()
@@ -192,13 +192,13 @@ fn node_dump(graph: &DirGraph) -> Vec<String> {
     out
 }
 
-fn dump(graph: &DirGraph) -> (Vec<String>, Vec<String>) {
+pub(super) fn dump(graph: &DirGraph) -> (Vec<String>, Vec<String>) {
     (node_dump(graph), all_edges(graph))
 }
 
 /// Everything a reader can ask the backend of `frozen`, compared with the same
 /// question asked of `reference` (a heap graph over the same file).
-fn assert_reads_match(frozen: &DirGraph, reference: &DirGraph, label: &str) {
+pub(super) fn assert_reads_match(frozen: &DirGraph, reference: &DirGraph, label: &str) {
     let (f, r) = (&frozen.graph, &reference.graph);
     assert_eq!(f.node_count(), r.node_count(), "{label} node_count");
     assert_eq!(f.edge_count(), r.edge_count(), "{label} edge_count");
@@ -456,9 +456,11 @@ fn assert_conn_aggregates_match(
                 "{label} grouped {dir:?}"
             );
         }
-        assert_eq!(
-            f.lookup_peer_counts(*conn),
-            r.lookup_peer_counts(*conn),
+        // `None` is the answer of a graph that keeps no record (an overlay
+        // that wrote an edge): the caller scans, which the groups above cover.
+        let looked_up = f.lookup_peer_counts(*conn);
+        assert!(
+            looked_up.is_none() || looked_up == r.lookup_peer_counts(*conn),
             "{label} lookup_peer_counts"
         );
     }
@@ -800,7 +802,7 @@ fn heap_placed_sections_serve_the_same_graph() {
     );
 }
 
-fn flip_in_section(path: &std::path::Path, name: &str) {
+pub(super) fn flip_in_section(path: &std::path::Path, name: &str) {
     let mut bytes = std::fs::read(path).unwrap();
     let metadata = metadata_head::read_metadata_head(&bytes, "test").unwrap();
     let end = 13 + u32::from_le_bytes(bytes[9..13].try_into().unwrap()) as usize;

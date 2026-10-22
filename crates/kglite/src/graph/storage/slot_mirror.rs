@@ -169,6 +169,17 @@ impl SlotMirror {
         }
     }
 
+    /// The mirror of a graph whose free lists are the given vacant slots, in
+    /// ascending order (so the highest slot heads each list), which is the
+    /// state a petgraph deserialization of that vacancy pattern builds.
+    pub(crate) fn from_vacancies(free_nodes: Vec<u32>, free_edges: Vec<u32>) -> Self {
+        Self {
+            free_nodes,
+            free_edges,
+            synced: true,
+        }
+    }
+
     /// Whether predictions are trustworthy: the free-list order is known.
     #[inline]
     pub(crate) fn is_synced(&self) -> bool {

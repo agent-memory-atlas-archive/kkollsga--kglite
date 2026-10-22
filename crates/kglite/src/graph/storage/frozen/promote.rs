@@ -3,13 +3,13 @@
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;
 
-use super::{FrozenGraph, VACANT};
+use super::FrozenGraph;
 use crate::graph::schema::{EdgeData, NodeData};
 use crate::graph::storage::interner::InternedKey;
 use crate::graph::storage::property_storage::{ColumnarRow, PropertyStorage};
 use crate::graph::storage::MappedGraph;
 
-fn placeholder_node() -> NodeData {
+pub(super) fn placeholder_node() -> NodeData {
     NodeData {
         node_type: InternedKey::from_u64(0),
         ident: None,
@@ -41,12 +41,9 @@ impl FrozenGraph {
         let mut vacant_edges = Vec::new();
         for slot in 0..edge_bound {
             let live = self.endpoint_slots()[slot];
-            let ends = (live.src != VACANT
-                && (live.src as usize) < node_bound
-                && (live.dst as usize) < node_bound
-                && self.node_is_alive(live.src as usize)
-                && self.node_is_alive(live.dst as usize))
-            .then_some((live.src as usize, live.dst as usize));
+            let ends = self
+                .edge_is_live(slot)
+                .then_some((live.src as usize, live.dst as usize));
             let added = match ends {
                 Some((src, dst)) => graph.add_edge(
                     NodeIndex::new(src),

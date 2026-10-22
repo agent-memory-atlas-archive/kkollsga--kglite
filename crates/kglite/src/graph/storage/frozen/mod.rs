@@ -15,7 +15,8 @@
 //! vacant); a vacant edge has `src == VACANT` in its endpoint record. The free
 //! lists are not stored, because a heap load does not preserve them either:
 //! petgraph's deserializer rebuilds both from the vacancy pattern alone, highest
-//! slot first, and [`FrozenGraph::to_mapped`] reproduces exactly that order.
+//! slot first, and [`FrozenGraph::to_mapped`] and [`FrozenGraph::slot_mirror`]
+//! reproduce exactly that order.
 //!
 //! ## Adjacency
 //!
@@ -29,8 +30,12 @@
 //! ## Writes
 //!
 //! A frozen graph is never mutated. The first write to a graph holding one
-//! promotes it to a heap [`MappedGraph`](crate::graph::storage::MappedGraph)
-//! (see `GraphBackend::promote_frozen`); a clone shares the frozen data by `Arc`.
+//! puts a copy-on-write overlay over it (`GraphBackend::overlay_frozen`,
+//! `ForkBase::Frozen`): the overlay holds what was written and reads the rest
+//! from here, so the heap grows with the writes, not the graph. It is the same
+//! overlay a held reader gets over a heap graph, except that it never folds
+//! back. [`FrozenGraph::to_mapped`] is the way out, taken once by the promote
+//! valve or a whole-graph operation; a clone shares the frozen data by `Arc`.
 
 pub(crate) mod array;
 mod iters;
@@ -40,7 +45,7 @@ mod read;
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
@@ -61,6 +66,7 @@ use crate::graph::storage::mapped::mmap_vec::MmapPod;
 const SCAN_RUN_MAX: usize = 16;
 use crate::graph::storage::mapped::peer_base::PeerBase;
 use crate::graph::storage::mapped::MappedTypeIndex;
+use crate::graph::storage::slot_mirror::SlotMirror;
 use array::{FrozenArray, FrozenElement};
 use node_record::NodeSlab;
 
@@ -166,6 +172,9 @@ pub struct FrozenGraph {
     peer_base: Option<Arc<PeerBase>>,
     /// Per-connection-type peer-count blocks, filled on first use.
     type_index: RwLock<HashMap<u64, Arc<MappedTypeIndex>>>,
+    /// The free lists a heap load of this graph would have, built on the first
+    /// write (an overlay allocates by this prediction); see [`Self::slot_mirror`].
+    slot_mirror: OnceLock<SlotMirror>,
 }
 
 impl FrozenGraph {
@@ -279,7 +288,49 @@ impl FrozenGraph {
             column_stores: FxHashMap::default(),
             peer_base: None,
             type_index: RwLock::new(HashMap::new()),
+            slot_mirror: OnceLock::new(),
         })
+    }
+
+    /// The free lists petgraph's deserializer builds from this graph's vacancy
+    /// pattern, which is exactly what [`Self::to_stable_graph`] produces, so an
+    /// overlay allocating by this prediction lands on the slots its fold into
+    /// that graph hands out. Built on first use: a read-only session never pays
+    /// for it, and a graph with no vacancy never scans.
+    ///
+    /// The scan is skipped when the counts show no hole and every node is
+    /// alive. A crafted file whose endpoints name a slot past the node bound
+    /// would then disagree with `to_stable_graph` (which treats such an edge as
+    /// vacant), and the fold that follows refuses it: an abort of that write,
+    /// never an out-of-bounds read.
+    pub(crate) fn slot_mirror(&self) -> &SlotMirror {
+        self.slot_mirror.get_or_init(|| {
+            let no_holes = self.node_alive.is_none() && self.edge_count == self.endpoints.len();
+            if no_holes {
+                return SlotMirror::from_vacancies(Vec::new(), Vec::new());
+            }
+            let bound = self.node_bound_len();
+            let free_nodes = (0..bound as u32)
+                .filter(|&slot| !self.node_is_alive(slot as usize))
+                .collect();
+            let free_edges = (0..self.endpoints.len() as u32)
+                .filter(|&slot| !self.edge_is_live(slot as usize))
+                .collect();
+            SlotMirror::from_vacancies(free_nodes, free_edges)
+        })
+    }
+
+    /// Whether edge `slot` holds an edge in the heap graph this one converts
+    /// to: an endpoint record whose both ends are live nodes.
+    pub(crate) fn edge_is_live(&self, slot: usize) -> bool {
+        let Some(ep) = self.endpoint(slot) else {
+            return false;
+        };
+        let bound = self.node_bound_len();
+        (ep.src as usize) < bound
+            && (ep.dst as usize) < bound
+            && self.node_is_alive(ep.src as usize)
+            && self.node_is_alive(ep.dst as usize)
     }
 
     #[inline(always)]
@@ -685,6 +736,7 @@ impl Clone for FrozenGraph {
             column_stores: self.column_stores.clone(),
             peer_base: self.peer_base.clone(),
             type_index: RwLock::new(HashMap::new()),
+            slot_mirror: OnceLock::new(),
         }
     }
 }
@@ -701,6 +753,119 @@ impl std::fmt::Debug for FrozenGraph {
 
 #[cfg(test)]
 impl FrozenGraph {
+    /// The frozen form of a heap graph whose nodes are all column-backed
+    /// records: every slot, vacancy and edge slot kept, each node's run sorted
+    /// by type ordinal then slot descending, with the type mask. What a save
+    /// of that graph and a mapped load of the file produce, built in memory so
+    /// a randomised test needs no file.
+    pub(crate) fn from_heap(
+        graph: &petgraph::stable_graph::StableDiGraph<NodeData, EdgeData>,
+    ) -> Self {
+        use petgraph::visit::{EdgeIndexable, NodeIndexable};
+        let (node_bound, edge_bound) = (graph.node_bound(), graph.edge_bound());
+        let mut nodes = Vec::with_capacity(node_bound);
+        let mut words = vec![0u64; node_bound.div_ceil(64)];
+        let mut node_count = 0;
+        for slot in 0..node_bound {
+            match graph.node_weight(NodeIndex::new(slot)) {
+                Some(node) => {
+                    nodes.push(node.clone());
+                    words[slot >> 6] |= 1 << (slot & 63);
+                    node_count += 1;
+                }
+                None => nodes.push(promote::placeholder_node()),
+            }
+        }
+        let mut types: Vec<InternedKey> = graph
+            .edge_weights()
+            .map(|weight| weight.connection_type)
+            .collect();
+        types.sort();
+        types.dedup();
+        let ordinal = |key: InternedKey| types.binary_search(&key).expect("collected") as u16;
+        let vacant = FrozenEndpoint {
+            src: VACANT,
+            dst: 0,
+            ty: 0,
+            pad: 0,
+        };
+        let mut endpoints = vec![vacant; edge_bound];
+        let mut edge_props = FxHashMap::default();
+        let mut edge_count = 0;
+        for edge in petgraph::visit::IntoEdgeReferences::edge_references(graph) {
+            use petgraph::visit::EdgeRef;
+            let slot = edge.id().index();
+            endpoints[slot] = FrozenEndpoint {
+                src: edge.source().index() as u32,
+                dst: edge.target().index() as u32,
+                ty: ordinal(edge.weight().connection_type),
+                pad: 0,
+            };
+            if !edge.weight().properties.is_empty() {
+                edge_props.insert(slot as u32, edge.weight().clone());
+            }
+            edge_count += 1;
+        }
+        let csr = |outgoing: bool| {
+            let mut offsets = vec![0u32; node_bound + 1];
+            let (mut edges, mut tys) = (Vec::new(), Vec::new());
+            for node in 0..node_bound {
+                let mut run: Vec<(u16, std::cmp::Reverse<u32>, u32)> = endpoints
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ep)| {
+                        ep.src != VACANT
+                            && (if outgoing { ep.src } else { ep.dst }) as usize == node
+                    })
+                    .map(|(slot, ep)| {
+                        let peer = if outgoing { ep.dst } else { ep.src };
+                        (ep.ty, std::cmp::Reverse(slot as u32), peer)
+                    })
+                    .collect();
+                run.sort();
+                for (ty, std::cmp::Reverse(slot), peer) in run {
+                    edges.push(CsrEdge {
+                        peer,
+                        edge_idx: slot,
+                    });
+                    tys.push(ty);
+                }
+                offsets[node + 1] = edges.len() as u32;
+            }
+            (offsets, edges, tys)
+        };
+        let (out_off, out_edges, out_ty) = csr(true);
+        let (in_off, in_edges, in_ty) = csr(false);
+        let mut mask = vec![0u32; 2 * node_bound];
+        for (side, (off, tys)) in [(&out_off, &out_ty), (&in_off, &in_ty)]
+            .into_iter()
+            .enumerate()
+        {
+            for node in 0..node_bound {
+                for &ty in &tys[off[node] as usize..off[node + 1] as usize] {
+                    mask[2 * node + side] |= 1 << (ty & 31);
+                }
+            }
+        }
+        FrozenGraph::new(FrozenParts {
+            nodes: NodeSlab::owned(nodes),
+            node_count,
+            node_alive: (node_count != node_bound).then(|| FrozenArray::from_vec(words)),
+            out_off: FrozenArray::from_vec(out_off),
+            in_off: FrozenArray::from_vec(in_off),
+            out_edges: FrozenArray::from_vec(out_edges),
+            in_edges: FrozenArray::from_vec(in_edges),
+            out_ty: FrozenArray::from_vec(out_ty),
+            in_ty: FrozenArray::from_vec(in_ty),
+            endpoints: FrozenArray::from_vec(endpoints),
+            type_mask: Some(FrozenArray::from_vec(mask)),
+            edge_count,
+            types,
+            edge_props,
+        })
+        .expect("a heap graph converts to a well-formed frozen graph")
+    }
+
     /// This graph with its node records replaced, to build a topology whose
     /// records disagree with the rest of a loaded graph.
     pub(crate) fn with_nodes(&self, nodes: Vec<NodeData>) -> FrozenGraph {

@@ -14,6 +14,14 @@
 //! differs: a `Mapped` target also drops its lazy type and property indexes
 //! (`FoldTarget::after_fold`).
 //!
+//! The third base is a `Frozen` topology served from a `.kgl`'s raw sections,
+//! which is how a mapped graph takes writes without copying itself. It has no
+//! petgraph, so the overlay over it **never folds back**: it persists, its
+//! heap is the size of the writes, and a save writes the merged graph out. Its
+//! exits are the promote valve (past a quarter of the base,
+//! `FROZEN_VALVE_FRACTION`) and whole-graph operations, both of which collapse
+//! it through [`ForkedGraph::materialise`] into a heap `Mapped` graph.
+//!
 //! ## The structural fact that forces this shape
 //!
 //! The copy-on-write has to be **writer-side**. A reader holds
@@ -93,12 +101,15 @@ use crate::graph::core::iterators::{
 };
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
-use crate::graph::storage::fork_base::{base_read, FoldTarget, Folded, ForkBase};
+use crate::graph::storage::fork_base::{
+    base_read, frozen_valve_floor, FoldTarget, Folded, ForkBase, FROZEN_VALVE_FRACTION, VALVE_FLOOR,
+};
 use crate::graph::storage::forked_edge_iters::{
     ForkedEdgeRefs, ForkedEdges, ForkedEdgesConnecting, ForkedNeighbors,
 };
 use crate::graph::storage::forked_edges::{EdgeLayer, OverlayBits};
 use crate::graph::storage::forked_slots::ExtraSlots;
+use crate::graph::storage::frozen::FrozenNodeIndices;
 use crate::graph::storage::property_storage::PropertyStorage;
 use crate::graph::storage::undo::{ColumnarPreImages, ColumnarWrite, UndoJournal};
 use crate::graph::storage::{GraphRead, GraphWrite, MappedGraph, MemoryGraph};
@@ -493,7 +504,11 @@ impl ForkedGraph {
         deadline: Option<std::time::Instant>,
         exclude_self: bool,
     ) -> Result<usize, String> {
-        if self.delta.edges.is_clean() {
+        // A peer's type is read from the overlay, so a count that filters on it
+        // takes the base's answer only while no edge differs anywhere.
+        let untouched = self.delta.edges.is_clean()
+            || (other_node_type.is_none() && !self.delta.edges.touches(node));
+        if untouched {
             return self.base.count_edges_filtered_impl(
                 node,
                 dir,
@@ -537,10 +552,10 @@ impl ForkedGraph {
         &self,
         mut f: impl FnMut(NodeIndex, NodeIndex, InternedKey),
     ) {
-        use petgraph::visit::{EdgeRef, IntoEdgeReferences};
         if self.delta.edges.is_clean() {
-            for er in self.base.inner().edge_references() {
-                f(er.source(), er.target(), er.weight().connection_type);
+            let mut base = self.base.edge_references();
+            while let Some((_, source, target, weight)) = base.next_edge() {
+                f(source, target, weight.connection_type);
             }
             return;
         }
@@ -556,17 +571,11 @@ impl ForkedGraph {
         conn_type: InternedKey,
         mut f: impl FnMut(NodeIndex, NodeIndex, u32, &[(InternedKey, Value)]) -> bool,
     ) {
-        use petgraph::visit::{EdgeRef, IntoEdgeReferences};
         if self.delta.edges.is_clean() {
-            for er in self.base.inner().edge_references() {
-                let w = er.weight();
+            let mut base = self.base.edge_references();
+            while let Some((id, source, target, w)) = base.next_edge() {
                 if w.connection_type == conn_type
-                    && !f(
-                        er.source(),
-                        er.target(),
-                        er.id().index() as u32,
-                        w.properties.as_slice(),
-                    )
+                    && !f(source, target, id.index() as u32, w.properties.as_slice())
                 {
                     return;
                 }
@@ -638,10 +647,25 @@ impl ForkedGraph {
 
     /// The floor keeps a small graph from collapsing on every few edits.
     fn delta_exceeds(&self, base_fraction: usize) -> bool {
-        const FLOOR: usize = 4096;
-        let delta = self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len();
-        let base = self.base.inner();
-        delta > FLOOR.max((base.node_count() + base.edge_count()) / base_fraction)
+        let (fraction, floor) = if self.base.is_frozen() {
+            (FROZEN_VALVE_FRACTION, frozen_valve_floor())
+        } else {
+            (base_fraction, VALVE_FLOOR)
+        };
+        self.delta_len() > floor.max((self.base.node_count() + self.base.edge_count()) / fraction)
+    }
+
+    /// Operations, node weights and edge weights the overlay holds: what a
+    /// collapse or a clone has to copy.
+    pub(crate) fn delta_len(&self) -> usize {
+        self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len()
+    }
+
+    /// Whether the overlay over a frozen base has outgrown the promote valve.
+    /// Always `false` over a heap base, whose overlay folds back instead.
+    #[inline]
+    pub(crate) fn frozen_valve_tripped(&self) -> bool {
+        self.base.is_frozen() && self.delta_exceeds(FROZEN_VALVE_FRACTION)
     }
 
     /// The overlay's own state, borrowed apart from its base.
@@ -696,6 +720,9 @@ impl ForkedGraph {
                     MappedGraph::new(),
                 )))
             }
+            // A frozen base has no petgraph to fold into; the overlay lives on
+            // until a save or the promote valve ([`Self::materialise`]).
+            ForkBase::Frozen(_) => None,
         }
     }
 
@@ -708,7 +735,7 @@ impl ForkedGraph {
     /// overlay is then untouched and the copy is dropped.
     pub(crate) fn materialise(&mut self) -> Result<Folded, String> {
         #[cfg(test)]
-        super::backend::note_nodes_copied(self.base.inner().node_count());
+        super::backend::note_nodes_copied(self.base.node_count());
         let mut owned = self.base.deep_clone();
         self.overlay().apply_to(&mut owned)?;
         Ok(owned)
@@ -728,6 +755,96 @@ impl ForkedGraph {
         let mut owned = self.base.deep_clone();
         clone.overlay().apply_to(&mut owned)?;
         Ok(owned)
+    }
+
+    /// Peer counts of `conn_type` over a frozen base with edge writes: the
+    /// file's counts, corrected by what the overlay added, removed and
+    /// re-typed. O(overlay + peers) where a walk of every edge is O(edges).
+    fn peer_counts_over_frozen(
+        &self,
+        frozen: &crate::graph::storage::frozen::FrozenGraph,
+        conn_type: InternedKey,
+        dir: petgraph::Direction,
+    ) -> HashMap<u32, i64> {
+        let mut counts = (*frozen.peer_counts(conn_type, dir)).clone();
+        let peer_of = |source: NodeIndex, target: NodeIndex| match dir {
+            petgraph::Direction::Outgoing => target,
+            petgraph::Direction::Incoming => source,
+        };
+        let mut bump = |peer: NodeIndex, by: i64| {
+            let slot = counts.entry(peer.index() as u32).or_insert(0);
+            *slot += by;
+            if *slot == 0 {
+                counts.remove(&(peer.index() as u32));
+            }
+        };
+        let layer = &self.delta.edges;
+        for &slot in &layer.removed {
+            let slot = EdgeIndex::new(slot as usize);
+            if let (Some((source, target)), Some(weight)) =
+                (self.base.edge_endpoints(slot), self.base.edge_weight(slot))
+            {
+                if weight.connection_type == conn_type {
+                    bump(peer_of(source, target), -1);
+                }
+            }
+        }
+        for (&slot, weight) in &layer.weights {
+            let slot = EdgeIndex::new(slot as usize);
+            if let (Some((source, target)), Some(file)) =
+                (self.base.edge_endpoints(slot), self.base.edge_weight(slot))
+            {
+                let (was, is) = (file.connection_type, weight.connection_type);
+                if was != is {
+                    let peer = peer_of(source, target);
+                    if was == conn_type {
+                        bump(peer, -1);
+                    }
+                    if is == conn_type {
+                        bump(peer, 1);
+                    }
+                }
+            }
+        }
+        for edge in layer.added.values() {
+            if edge.weight.connection_type == conn_type {
+                let (source, target) = (
+                    NodeIndex::new(edge.src as usize),
+                    NodeIndex::new(edge.dst as usize),
+                );
+                bump(peer_of(source, target), 1);
+            }
+        }
+        counts
+    }
+
+    /// The frozen base, while the overlay holds no edge write: its recorded
+    /// per-connection-type peer counts and sources then describe this view
+    /// exactly (a node write moves no edge, and removing a node removes its
+    /// edges first).
+    #[inline]
+    fn untouched_frozen_base(&self) -> Option<&crate::graph::storage::frozen::FrozenGraph> {
+        if self.delta.edges.is_clean() {
+            self.base.frozen().map(|frozen| &**frozen)
+        } else {
+            None
+        }
+    }
+
+    /// The frozen base's cached peer counts for `conn_type`, while it
+    /// describes this view; see [`Self::untouched_frozen_base`].
+    pub(crate) fn untouched_peer_counts(
+        &self,
+        conn_type: InternedKey,
+        dir: petgraph::Direction,
+    ) -> Option<Arc<HashMap<u32, i64>>> {
+        Some(self.untouched_frozen_base()?.peer_counts(conn_type, dir))
+    }
+
+    /// The frozen topology this overlay sits over, if that is its base.
+    #[inline]
+    pub(crate) fn frozen_base(&self) -> Option<&Arc<crate::graph::storage::frozen::FrozenGraph>> {
+        self.base.frozen()
     }
 
     /// Whether the base is a `Mapped` backend, which this overlay then reports
@@ -764,7 +881,7 @@ impl ForkedGraph {
             if self.delta.dead_count != 0 && self.delta.dead.holds(raw) {
                 return None;
             }
-            let base = self.base.inner().node_weight(idx)?.clone();
+            let base = self.base.node_weight(idx)?.clone();
             self.delta.nodes.insert(raw, base);
         }
         self.delta.nodes.get_mut(raw)
@@ -790,7 +907,7 @@ impl ForkedGraph {
             base, delta, undo, ..
         } = self;
         if let Some(journal) = undo.as_deref_mut() {
-            journal.note_edge_weight(idx, || delta.edges.weight(base.inner(), idx).cloned());
+            journal.note_edge_weight(idx, || delta.edges.weight(base, idx).cloned());
         }
     }
 
@@ -845,7 +962,7 @@ impl ForkedGraph {
     fn take_node(&mut self, idx: NodeIndex) -> Option<NodeData> {
         let raw = idx.index() as u32;
         let own = self.delta.nodes.remove(raw);
-        match self.base.inner().node_weight(idx) {
+        match self.base.node_weight(idx) {
             Some(base) => {
                 if self.delta.dead_count != 0 && self.delta.dead.holds(raw) {
                     return None;
@@ -890,11 +1007,13 @@ impl ForkedGraph {
                 if self.delta.edges.removed.contains(&raw) {
                     return None;
                 }
-                let (src, dst) = self.base.inner().edge_endpoints(idx)?;
-                let base_weight = self.base.inner().edge_weight(idx)?;
+                let (src, dst) = self.base.edge_endpoints(idx)?;
+                let base_weight = self.base.edge_weight(idx)?;
                 let own = self.delta.edges.weights.remove(&raw);
                 let weight = need_weight.then(|| own.unwrap_or_else(|| base_weight.clone()));
-                self.delta.edges.tombstone(raw);
+                self.delta
+                    .edges
+                    .tombstone(raw, src.index() as u32, dst.index() as u32);
                 (src.index() as u32, dst.index() as u32, weight)
             }
         };
@@ -951,13 +1070,34 @@ impl std::fmt::Debug for ForkedGraph {
             f,
             "ForkedGraph {{ base: {} nodes / {} edges, overlay: {} node weights, \
              {} nodes allocated, {} edges added, {} removed }}",
-            self.base.inner().node_count(),
-            self.base.inner().edge_count(),
+            self.base.node_count(),
+            self.base.edge_count(),
             self.delta.nodes.len(),
             self.delta.extra.len(),
             self.delta.edges.added.len(),
             self.delta.edges.removed.len()
         )
+    }
+}
+
+/// The node scan of an overlay over a petgraph base.
+fn heap_node_indices<'a>(
+    base: &'a petgraph::stable_graph::StableDiGraph<NodeData, EdgeData>,
+    delta: &'a Delta,
+    appended: Option<std::ops::Range<u32>>,
+    dead: Option<&'a OverlayBits>,
+) -> GraphNodeIndices<'a> {
+    let nodes = base.node_indices();
+    match appended {
+        Some(run) => GraphNodeIndices::Forked {
+            base: Box::new(nodes),
+            appended: run.start as usize..run.end as usize,
+        },
+        None => GraphNodeIndices::ForkedMerged(Box::new(ForkedMergedIndices::new(
+            nodes,
+            delta.extra.iter(),
+            dead,
+        ))),
     }
 }
 
@@ -973,19 +1113,19 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn node_count(&self) -> usize {
-        self.base.inner().node_count() - self.delta.dead_count + self.delta.extra.len()
+        self.base.node_count() - self.delta.dead_count + self.delta.extra.len()
     }
 
     #[inline]
     fn edge_count(&self) -> usize {
-        (self.base.inner().edge_count() as isize + self.delta.edges.count_delta()) as usize
+        (self.base.edge_count() as isize + self.delta.edges.count_delta()) as usize
     }
 
     /// One past the highest live slot, as petgraph's own `node_bound()` reads
     /// (`StableGraph` trims to the last live node). A removed trailing base
     /// node walks the bound down over the dead and vacant slots below it.
     fn node_bound(&self) -> usize {
-        let base = self.base.inner();
+        let base = &self.base;
         let mut bound = base.node_bound();
         if self.delta.dead_count != 0 {
             while bound > 0
@@ -1000,8 +1140,8 @@ impl GraphRead for ForkedGraph {
 
     /// One past the highest live edge slot; see [`Self::node_bound`].
     fn edge_bound(&self) -> usize {
-        let base = self.base.inner();
-        let mut bound = EdgeIndexable::edge_bound(base);
+        let base = &self.base;
+        let mut bound = base.edge_bound();
         let removed = &self.delta.edges.removed;
         while !removed.is_empty()
             && bound > 0
@@ -1029,7 +1169,7 @@ impl GraphRead for ForkedGraph {
         match self.delta.nodes.get(raw) {
             Some(data) => Some(data),
             None if self.delta.dead_count != 0 && self.delta.dead.holds(raw) => None,
-            None => self.base.inner().node_weight(idx),
+            None => self.base.node_weight(idx),
         }
     }
 
@@ -1063,8 +1203,11 @@ impl GraphRead for ForkedGraph {
         &self,
         idx: NodeIndex,
         dir: petgraph::Direction,
-        _conn_type_filter: Option<InternedKey>,
+        conn_type_filter: Option<InternedKey>,
     ) -> Self::EdgesIter<'_> {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(idx) {
+            return base_read!(self.base, g => GraphRead::edges_directed_filtered(g, idx, dir, conn_type_filter));
+        }
         GraphRead::edges_directed(self, idx, dir)
     }
 
@@ -1088,6 +1231,9 @@ impl GraphRead for ForkedGraph {
     ) -> Result<HashMap<u32, i64>, String> {
         if self.delta.edges.is_clean() {
             return base_read!(self.base, g => GraphRead::count_edges_grouped_by_peer(g, conn_type, dir, deadline));
+        }
+        if let Some(frozen) = self.base.frozen() {
+            return Ok(self.peer_counts_over_frozen(frozen, conn_type, dir));
         }
         let mut counts: HashMap<u32, i64> = HashMap::new();
         for (i, edge) in GraphRead::edge_references(self).enumerate() {
@@ -1119,6 +1265,22 @@ impl GraphRead for ForkedGraph {
         self.count_edges(node, dir, conn_type, other_node_type, deadline, false)
     }
 
+    /// The file's recorded sources, while no edge differs from the file's. A
+    /// heap base keeps no such record, so a fork over one answers `None` and
+    /// the caller scans.
+    fn sources_for_conn_type_bounded(
+        &self,
+        conn_type: InternedKey,
+        max: Option<usize>,
+    ) -> Option<Vec<u32>> {
+        self.untouched_frozen_base()?
+            .sources_for_conn_type_bounded(conn_type, max)
+    }
+
+    fn lookup_peer_counts(&self, conn_type: InternedKey) -> Option<HashMap<u32, i64>> {
+        self.untouched_frozen_base()?.lookup_peer_counts(conn_type)
+    }
+
     #[inline]
     fn column_store(&self, type_key: InternedKey) -> Option<&Arc<ColumnStore>> {
         self.column_stores.get(&type_key)
@@ -1136,23 +1298,32 @@ impl GraphRead for ForkedGraph {
     /// a chain suffices; otherwise they are merged in.
     #[inline]
     fn node_indices(&self) -> Self::NodeIndicesIter<'_> {
-        let base = self.base.inner().node_indices();
         let delta = &self.delta;
-        if delta.dead_count == 0 {
-            if let Some(run) = delta.extra.as_single_run() {
-                if run.is_empty() || run.start as usize >= self.base.inner().node_bound() {
-                    return GraphNodeIndices::Forked {
+        let appended = if delta.dead_count == 0 {
+            delta
+                .extra
+                .as_single_run()
+                .filter(|run| run.is_empty() || run.start as usize >= self.base.node_bound())
+        } else {
+            None
+        };
+        let dead = (delta.dead_count != 0).then_some(&delta.dead);
+        match &self.base {
+            ForkBase::Memory(g) => heap_node_indices(g.inner(), delta, appended, dead),
+            ForkBase::Mapped(g) => heap_node_indices(g.inner(), delta, appended, dead),
+            ForkBase::Frozen(g) => {
+                let base = FrozenNodeIndices::new(g);
+                match appended {
+                    Some(run) => GraphNodeIndices::FrozenForked {
                         base: Box::new(base),
                         appended: run.start as usize..run.end as usize,
-                    };
+                    },
+                    None => GraphNodeIndices::FrozenForkedMerged(Box::new(
+                        ForkedMergedIndices::new(base, delta.extra.iter(), dead),
+                    )),
                 }
             }
         }
-        GraphNodeIndices::ForkedMerged(Box::new(ForkedMergedIndices::new(
-            base,
-            delta.extra.iter(),
-            (delta.dead_count != 0).then_some(&delta.dead),
-        )))
     }
 
     #[inline]
@@ -1162,7 +1333,7 @@ impl GraphRead for ForkedGraph {
         }
         GraphEdgeIndices::Forked(Box::new(ForkedEdgeRefs::new(
             &self.delta.edges,
-            petgraph::visit::IntoEdgeReferences::edge_references(self.base.inner()),
+            self.base.edge_references(),
         )))
     }
 
@@ -1173,7 +1344,7 @@ impl GraphRead for ForkedGraph {
         }
         GraphEdgeReferences::Forked(Box::new(ForkedEdgeRefs::new(
             &self.delta.edges,
-            petgraph::visit::IntoEdgeReferences::edge_references(self.base.inner()),
+            self.base.edge_references(),
         )))
     }
 
@@ -1186,14 +1357,14 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn edges_directed(&self, idx: NodeIndex, dir: petgraph::Direction) -> Self::EdgesIter<'_> {
-        if self.delta.edges.is_clean() {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(idx) {
             return base_read!(self.base, g => GraphRead::edges_directed(g, idx, dir));
         }
         GraphEdges::Forked(Box::new(ForkedEdges::new(
             &self.delta.edges,
             idx,
             dir,
-            self.base.inner().edges_directed(idx, dir),
+            self.base.edges_directed(idx, dir),
         )))
     }
 
@@ -1204,7 +1375,7 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn edges_connecting(&self, a: NodeIndex, b: NodeIndex) -> Self::EdgesConnectingIter<'_> {
-        if self.delta.edges.is_clean() {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(a) {
             return base_read!(self.base, g => GraphRead::edges_connecting(g, a, b));
         }
         GraphEdgesConnecting::Forked(Box::new(ForkedEdgesConnecting::new(
@@ -1212,9 +1383,7 @@ impl GraphRead for ForkedGraph {
                 &self.delta.edges,
                 a,
                 petgraph::Direction::Outgoing,
-                self.base
-                    .inner()
-                    .edges_directed(a, petgraph::Direction::Outgoing),
+                self.base.edges_directed(a, petgraph::Direction::Outgoing),
             ),
             b,
         )))
@@ -1222,12 +1391,12 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn edge_weight(&self, idx: EdgeIndex) -> Option<&EdgeData> {
-        self.delta.edges.weight(self.base.inner(), idx)
+        self.delta.edges.weight(&self.base, idx)
     }
 
     #[inline]
     fn find_edge(&self, a: NodeIndex, b: NodeIndex) -> Option<EdgeIndex> {
-        if self.delta.edges.is_clean() {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(a) {
             return base_read!(self.base, g => GraphRead::find_edge(g, a, b));
         }
         GraphRead::edges_connecting(self, a, b)
@@ -1237,7 +1406,7 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn edge_endpoints(&self, idx: EdgeIndex) -> Option<(NodeIndex, NodeIndex)> {
-        self.delta.edges.endpoints(self.base.inner(), idx)
+        self.delta.edges.endpoints(&self.base, idx)
     }
 
     #[inline]
@@ -1246,7 +1415,7 @@ impl GraphRead for ForkedGraph {
         idx: NodeIndex,
         dir: petgraph::Direction,
     ) -> Self::NeighborsIter<'_> {
-        if self.delta.edges.is_clean() {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(idx) {
             return base_read!(self.base, g => GraphRead::neighbors_directed(g, idx, dir));
         }
         let walk = |dir| {
@@ -1254,7 +1423,7 @@ impl GraphRead for ForkedGraph {
                 &self.delta.edges,
                 idx,
                 dir,
-                self.base.inner().edges_directed(idx, dir),
+                self.base.edges_directed(idx, dir),
             )
         };
         let (out, inn) = match dir {
@@ -1266,7 +1435,7 @@ impl GraphRead for ForkedGraph {
 
     #[inline]
     fn neighbors_undirected(&self, idx: NodeIndex) -> Self::NeighborsIter<'_> {
-        if self.delta.edges.is_clean() {
+        if self.delta.edges.is_clean() || !self.delta.edges.touches(idx) {
             return base_read!(self.base, g => GraphRead::neighbors_undirected(g, idx));
         }
         let walk = |dir| {
@@ -1274,7 +1443,7 @@ impl GraphRead for ForkedGraph {
                 &self.delta.edges,
                 idx,
                 dir,
-                self.base.inner().edges_directed(idx, dir),
+                self.base.edges_directed(idx, dir),
             )
         };
         GraphNeighbors::Forked(Box::new(ForkedNeighbors::new(
@@ -1315,8 +1484,9 @@ impl GraphWrite for ForkedGraph {
         if edges.removed.contains(&raw) {
             return None;
         }
-        let base = self.base.inner().edge_weight(idx)?;
-        Some(edges.weight_mut(raw, base))
+        let base = self.base.edge_weight(idx)?;
+        let (src, dst) = self.base.edge_endpoints(idx)?;
+        Some(edges.weight_mut(raw, (src.index() as u32, dst.index() as u32), base))
     }
 
     #[inline]
@@ -1498,10 +1668,7 @@ impl GraphWrite for ForkedGraph {
         }
         // The bound only matters when no slot has been vacated, so the exact
         // `edge_bound` (a scan of the overlay's edges) is not needed here.
-        let bound_before = self
-            .delta
-            .edges
-            .append_bound(EdgeIndexable::edge_bound(self.base.inner()));
+        let bound_before = self.delta.edges.append_bound(self.base.edge_bound());
         let idx = self
             .slot_mirror
             .predict_next_edge(bound_before)
@@ -1615,7 +1782,7 @@ mod tests {
             "the overlay must keep its append"
         );
         assert!(GraphRead::node_weight(&forked, appended).is_some());
-        assert_eq!(forked.base.inner().node_count(), 3, "the base is unchanged");
+        assert_eq!(forked.base.node_count(), 3, "the base is unchanged");
     }
 
     /// `GraphBackend::try_compact` on the same overlay keeps a forked backend

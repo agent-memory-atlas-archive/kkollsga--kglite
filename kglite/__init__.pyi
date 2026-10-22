@@ -1626,13 +1626,17 @@ def _backend_is_forked(graph: "KnowledgeGraph") -> bool:
     """
     ...
 
-def _backend_is_frozen(graph: "KnowledgeGraph") -> bool:
+def _backend_is_frozen(graph: "KnowledgeGraph", include_overlay: bool = False) -> bool:
     """Whether ``graph``'s topology is served from the raw sections of its ``.kgl``.
 
     Internal test hook, not part of the public Python API. A mapped load of a
     file that recorded its topology keeps it in the file mapping; the first
-    write promotes it to the heap and this turns ``False``. Every query answers
-    the same either way, so tests assert on this instead of on a footprint.
+    write puts a write overlay over it and this turns ``False``. With
+    ``include_overlay`` it stays ``True`` while the overlay sits over the file's
+    topology, and turns ``False`` once the overlay has grown past the promote
+    valve (a quarter of the graph) or a whole-graph operation has collapsed it
+    into a heap graph. Every query answers the same either way, so tests assert
+    on this instead of on a footprint.
     """
     ...
 

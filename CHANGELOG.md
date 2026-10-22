@@ -48,10 +48,10 @@ before upgrading.
   - A save records the node records, the out- and in-adjacency (sorted by relationship type) and the relationship endpoints for a graph of 65,536 nodes or more, or 262,144 relationships or more, at about 40 bytes per node and 32 per relationship on top of the compressed copy. `layout="compact"` records none.
   - A load into `mapped` storage reads them in place and no longer decodes the compressed topology into the heap. A load into `memory` storage ignores them and decodes as before.
   - Measured (release, macOS footprint, 1M nodes and 12M relationships, `mapped`): footprint after load 424 to 15 MB (`memory` storage: 428 MB), after the query mix 599 to 162 MB, load 0.72 to 0.35 s. At 3M nodes and 36M relationships: 1244-1278 to 18 MB after load and 1.1 to 1.0 s. Scans, sorts, filtered traversals and grouped aggregates run within +5.4 % of `memory` storage warm (some faster); the first touch of a page costs a page fault (a cold anchored two-hop expansion: 1.5 ms against 0.01 ms).
-  - The first write promotes the topology to the heap once, as a `mapped` load always did. A copy, a snapshot or a transaction that did not write keeps the file's topology, and a failed statement rolls back to the slots it vacated. A save of a graph that still serves its topology from the file does not promote it.
+  - A write puts an overlay over the file's topology instead of copying it, so the heap holds the writes and not the graph. The overlay collapses into the heap topology a `mapped` load always had (once) when it passes a quarter of the graph's nodes plus relationships, or on a whole-graph operation such as `vacuum()`. A copy, a snapshot or a transaction that did not write keeps the file's topology, a failed statement rolls back to the slots it vacated, and a save writes the merged graph and leaves the overlay serving.
   - A per-node typed degree count binary-searches its node's run in the file instead of building an adjacency index first (1M nodes: 194 ms to 0.3 ms on first use).
   - A node's relationships of one type come back in the order `memory` storage returns them; those of different types come grouped by type.
-  - A damaged node section refuses the load. The other sections are checked at first use: `verify_integrity()`, a save and the write that promotes them refuse a damaged one, and `verify_file()` names it.
+  - A damaged node section refuses the load. The other sections are checked at first use: `verify_integrity()`, a save and the collapse of a write overlay refuse a damaged one, and `verify_file()` names it.
   - A save skips the topology when the graph holds a node with an inline identity, more than 262,144 relationships with properties, or more than 1,024 node or relationship types. Relationship properties are decoded to a heap map at load.
 - **Embedding stores and large columns are read from the `.kgl` file instead of the heap.**
   - `kglite.load(path, embeddings=..., columns=..., verify=...)`; `embeddings` and `columns` are `"auto"`, `"mapped"` or `"memory"`, `verify` is `"lazy"` or `"eager"`. `open_session` takes the same options for its read-only form.
@@ -115,7 +115,7 @@ before upgrading.
 
 ### Rust API
 
-- `GraphBackend` gains a `Frozen(Arc<FrozenGraph>)` variant and `GraphBackend::is_frozen()`: a `match` over every variant needs an arm for it. `NodeData` is `repr(C)` and `PropertyStorage` is `repr(u8)`; their size and field offsets are unchanged.
+- `GraphBackend` gains a `Frozen(Arc<FrozenGraph>)` variant, `GraphBackend::is_frozen()` and `GraphBackend::has_frozen_base()` (true under a write overlay too): a `match` over every variant needs an arm for it. `NodeData` is `repr(C)` and `PropertyStorage` is `repr(u8)`; their size and field offsets are unchanged.
 - `ServerExtensions::with_identity(name, version)` sets the name and version the server reports, so an embedder's notice names its own package.
 - `EmbeddingStore` gains `quantize`, `drop_quantization`, `set_oversample`, `precision` and `quantization_info`; `Precision`, `QuantStore` and `QuantizationInfo` are public.
 - `kglite::api::memory` (`ReleaseHooks`, `ReleaseScope`, `set_release_hooks`) lets a host that links its own allocator release memory after a graph load; with no hooks registered a scope does nothing.

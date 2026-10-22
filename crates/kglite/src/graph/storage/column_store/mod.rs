@@ -22,7 +22,7 @@ pub(crate) use section_split::{
     ColumnSectionSource, ColumnSplit, PackedDecode, PartData, MAP_TAG_SUFFIX,
 };
 mod tail;
-pub(crate) use tail::{RegionParts, MAPPED_SPILL_FLOOR};
+pub(crate) use tail::{RegionParts, FROZEN_OVERLAY_SPILL_FLOOR, MAPPED_SPILL_FLOOR};
 #[cfg(test)]
 mod heap_tail_tests;
 #[cfg(test)]

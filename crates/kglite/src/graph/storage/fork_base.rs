@@ -1,5 +1,5 @@
-//! The two heap backends a [`ForkedGraph`](super::forked::ForkedGraph) can sit
-//! over, and the seam the fold-back writes through.
+//! The bases a [`ForkedGraph`](super::forked::ForkedGraph) can sit over, and
+//! the seam the fold-back writes through.
 //!
 //! `Memory` and `Mapped` hold the same `StableDiGraph<NodeData, EdgeData>`,
 //! column-store map, slot mirror and undo journal; they differ in the lazy
@@ -8,18 +8,27 @@
 //! reads and writes. The one behavioural difference is
 //! [`FoldTarget::after_fold`]: a fold rewrites the graph without going through
 //! the `GraphWrite` hooks that keep those indexes honest.
+//!
+//! `Frozen` is the third base: a read-only topology served from a `.kgl`'s raw
+//! sections. It has no petgraph, so it is never a fold *target*; an overlay over
+//! it does not fold back, and a collapse copies it into a heap `MappedGraph`
+//! first ([`ForkBase::deep_clone`]).
 
 use std::sync::Arc;
 
-use petgraph::stable_graph::StableDiGraph;
+use petgraph::graph::{EdgeIndex, NodeIndex};
+use petgraph::stable_graph::{EdgeReferences, Edges, StableDiGraph};
+use petgraph::visit::{EdgeIndexable, EdgeRef, NodeIndexable};
+use petgraph::{Directed, Direction};
 use rustc_hash::FxHashMap;
 use serde::{Serialize, Serializer};
 
 use crate::graph::schema::{EdgeData, InternedKey, NodeData};
 use crate::graph::storage::column_store::ColumnStore;
+use crate::graph::storage::frozen::{FrozenEdgeRefs, FrozenEdges, FrozenGraph};
 use crate::graph::storage::slot_mirror::SlotMirror;
 use crate::graph::storage::undo::UndoJournal;
-use crate::graph::storage::{MappedGraph, MemoryGraph};
+use crate::graph::storage::{GraphRead, MappedGraph, MemoryGraph};
 
 /// The graph an overlay is folded into: a heap backend that owns the petgraph,
 /// the store map, the slot mirror and the journal slot.
@@ -119,12 +128,13 @@ pub(crate) fn can_fork(base: &impl FoldTarget) -> bool {
 /// exists.
 ///
 /// An enum rather than a type parameter so `GraphBackend::Forked` stays one
-/// variant. The base is dispatched with a two-way branch that is the same on
+/// variant. The base is dispatched with a short branch that is the same on
 /// every access of one overlay; the un-forked `Memory` backend, the case the
 /// engine is tuned for, never goes through it.
 pub(crate) enum ForkBase {
     Memory(Arc<MemoryGraph>),
     Mapped(Arc<MappedGraph>),
+    Frozen(Arc<FrozenGraph>),
 }
 
 impl From<Arc<MemoryGraph>> for ForkBase {
@@ -139,12 +149,171 @@ impl From<Arc<MappedGraph>> for ForkBase {
     }
 }
 
+impl From<Arc<FrozenGraph>> for ForkBase {
+    fn from(base: Arc<FrozenGraph>) -> Self {
+        Self::Frozen(base)
+    }
+}
+
+/// Overlay size, as a fraction of the base's nodes plus edges, past which an
+/// overlay over a frozen base collapses into a heap `Mapped` graph (the promote
+/// valve): 1/4. A base that folds back (`Memory`, `Mapped`) keeps the smaller
+/// caps in `forked.rs`.
+pub(crate) const FROZEN_VALVE_FRACTION: usize = 4;
+
+/// Overlay entries a small base is allowed regardless of its size.
+pub(crate) const VALVE_FLOOR: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    static VALVE_FLOOR_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`VALVE_FLOOR`] for an overlay over a frozen base: a test lowers it so a
+/// graph of a few hundred slots can reach the valve.
+#[inline]
+pub(crate) fn frozen_valve_floor() -> usize {
+    #[cfg(test)]
+    if let Some(floor) = VALVE_FLOOR_OVERRIDE.with(|floor| floor.get()) {
+        return floor;
+    }
+    VALVE_FLOOR
+}
+
+/// Run `body` with the frozen valve's floor replaced.
+#[cfg(test)]
+pub(crate) fn with_valve_floor<R>(floor: usize, body: impl FnOnce() -> R) -> R {
+    VALVE_FLOOR_OVERRIDE.with(|cell| cell.set(Some(floor)));
+    let result = body();
+    VALVE_FLOOR_OVERRIDE.with(|cell| cell.set(None));
+    result
+}
+
+/// One base edge: `(slot, source, target, weight)`.
+pub(crate) type BaseEdge<'a> = (EdgeIndex, NodeIndex, NodeIndex, &'a EdgeData);
+
+/// One node's edges in one direction, in the base's own order.
+pub(crate) enum BaseEdges<'a> {
+    Heap(Edges<'a, EdgeData, Directed, u32>),
+    Frozen(FrozenEdges<'a>),
+}
+
+impl<'a> BaseEdges<'a> {
+    #[inline]
+    pub(crate) fn next_edge(&mut self) -> Option<BaseEdge<'a>> {
+        match self {
+            Self::Heap(iter) => iter
+                .next()
+                .map(|er| (er.id(), er.source(), er.target(), er.weight())),
+            Self::Frozen(iter) => iter
+                .next()
+                .map(|er| (er.id(), er.source(), er.target(), er.weight())),
+        }
+    }
+}
+
+/// Every live base edge in ascending slot order.
+pub(crate) enum BaseEdgeRefs<'a> {
+    Heap(EdgeReferences<'a, EdgeData, u32>),
+    Frozen(FrozenEdgeRefs<'a>),
+}
+
+impl<'a> BaseEdgeRefs<'a> {
+    #[inline]
+    pub(crate) fn next_edge(&mut self) -> Option<BaseEdge<'a>> {
+        match self {
+            Self::Heap(iter) => iter
+                .next()
+                .map(|er| (er.id(), er.source(), er.target(), er.weight())),
+            Self::Frozen(iter) => iter
+                .next()
+                .map(|er| (er.id(), er.source(), er.target(), er.weight())),
+        }
+    }
+}
+
 impl ForkBase {
     #[inline(always)]
-    pub(crate) fn inner(&self) -> &StableDiGraph<NodeData, EdgeData> {
+    pub(crate) fn node_count(&self) -> usize {
         match self {
-            Self::Memory(g) => g.inner(),
-            Self::Mapped(g) => g.inner(),
+            Self::Memory(g) => g.inner().node_count(),
+            Self::Mapped(g) => g.inner().node_count(),
+            Self::Frozen(g) => g.live_node_count(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn edge_count(&self) -> usize {
+        match self {
+            Self::Memory(g) => g.inner().edge_count(),
+            Self::Mapped(g) => g.inner().edge_count(),
+            Self::Frozen(g) => g.live_edge_count(),
+        }
+    }
+
+    /// The base's own `node_bound()`: one past its highest live node.
+    #[inline(always)]
+    pub(crate) fn node_bound(&self) -> usize {
+        match self {
+            Self::Memory(g) => g.inner().node_bound(),
+            Self::Mapped(g) => g.inner().node_bound(),
+            Self::Frozen(g) => g.node_bound_len(),
+        }
+    }
+
+    /// The base's own `edge_bound()`: one past its highest live edge.
+    #[inline(always)]
+    pub(crate) fn edge_bound(&self) -> usize {
+        match self {
+            Self::Memory(g) => EdgeIndexable::edge_bound(g.inner()),
+            Self::Mapped(g) => EdgeIndexable::edge_bound(g.inner()),
+            Self::Frozen(g) => g.edge_bound_len(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn node_weight(&self, idx: NodeIndex) -> Option<&NodeData> {
+        match self {
+            Self::Memory(g) => g.inner().node_weight(idx),
+            Self::Mapped(g) => g.inner().node_weight(idx),
+            Self::Frozen(g) => GraphRead::node_weight(&**g, idx),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn edge_weight(&self, idx: EdgeIndex) -> Option<&EdgeData> {
+        match self {
+            Self::Memory(g) => g.inner().edge_weight(idx),
+            Self::Mapped(g) => g.inner().edge_weight(idx),
+            Self::Frozen(g) => GraphRead::edge_weight(&**g, idx),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn edge_endpoints(&self, idx: EdgeIndex) -> Option<(NodeIndex, NodeIndex)> {
+        match self {
+            Self::Memory(g) => g.inner().edge_endpoints(idx),
+            Self::Mapped(g) => g.inner().edge_endpoints(idx),
+            Self::Frozen(g) => GraphRead::edge_endpoints(&**g, idx),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn edges_directed(&self, idx: NodeIndex, dir: Direction) -> BaseEdges<'_> {
+        match self {
+            Self::Memory(g) => BaseEdges::Heap(g.inner().edges_directed(idx, dir)),
+            Self::Mapped(g) => BaseEdges::Heap(g.inner().edges_directed(idx, dir)),
+            Self::Frozen(g) => BaseEdges::Frozen(FrozenEdges::new(g, idx, dir)),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn edge_references(&self) -> BaseEdgeRefs<'_> {
+        use petgraph::visit::IntoEdgeReferences;
+        match self {
+            Self::Memory(g) => BaseEdgeRefs::Heap(g.inner().edge_references()),
+            Self::Mapped(g) => BaseEdgeRefs::Heap(g.inner().edge_references()),
+            Self::Frozen(g) => BaseEdgeRefs::Frozen(FrozenEdgeRefs::new(g)),
         }
     }
 
@@ -153,6 +322,7 @@ impl ForkBase {
         match self {
             Self::Memory(g) => &g.column_stores,
             Self::Mapped(g) => &g.column_stores,
+            Self::Frozen(g) => &g.column_stores,
         }
     }
 
@@ -161,12 +331,28 @@ impl ForkBase {
         match self {
             Self::Memory(g) => &g.slot_mirror,
             Self::Mapped(g) => &g.slot_mirror,
+            Self::Frozen(g) => g.slot_mirror(),
         }
     }
 
+    /// Whether the base reports as a mapped backend (`Mapped` and `Frozen`).
     #[inline]
     pub(crate) fn is_mapped(&self) -> bool {
-        matches!(self, Self::Mapped(_))
+        !matches!(self, Self::Memory(_))
+    }
+
+    #[inline]
+    pub(crate) fn is_frozen(&self) -> bool {
+        matches!(self, Self::Frozen(_))
+    }
+
+    /// The frozen topology under the overlay, if that is the base.
+    #[inline]
+    pub(crate) fn frozen(&self) -> Option<&Arc<FrozenGraph>> {
+        match self {
+            Self::Frozen(g) => Some(g),
+            _ => None,
+        }
     }
 
     /// Another handle on the same base (an `Arc` bump, no copy).
@@ -175,14 +361,17 @@ impl ForkBase {
         match self {
             Self::Memory(g) => Self::Memory(Arc::clone(g)),
             Self::Mapped(g) => Self::Mapped(Arc::clone(g)),
+            Self::Frozen(g) => Self::Frozen(Arc::clone(g)),
         }
     }
 
-    /// A genuine deep copy of the base.
+    /// A genuine deep copy of the base. A frozen base becomes a heap `Mapped`
+    /// graph (the one materialisation of the promote valve).
     pub(crate) fn deep_clone(&self) -> Folded {
         match self {
             Self::Memory(g) => Folded::Memory(g.deep_clone()),
             Self::Mapped(g) => Folded::Mapped(g.deep_clone()),
+            Self::Frozen(g) => Folded::Mapped(g.to_mapped()),
         }
     }
 
@@ -212,12 +401,20 @@ impl ForkBase {
                 deadline,
                 exclude_self,
             ),
+            Self::Frozen(g) => g.count_edges_filtered_impl(
+                node,
+                dir,
+                conn_type,
+                other_node_type,
+                deadline,
+                exclude_self,
+            ),
         }
     }
 }
 
-/// Run `$e` with `$g` bound to the base as a `&MemoryGraph` / `&MappedGraph`.
-/// Both arms must produce the same type.
+/// Run `$e` with `$g` bound to the base as a `&MemoryGraph` / `&MappedGraph` /
+/// `&FrozenGraph`. Every arm must produce the same type.
 macro_rules! base_read {
     ($base:expr, $g:ident => $e:expr) => {
         match &$base {
@@ -226,6 +423,10 @@ macro_rules! base_read {
                 $e
             }
             $crate::graph::storage::fork_base::ForkBase::Mapped($g) => {
+                let $g = &**$g;
+                $e
+            }
+            $crate::graph::storage::fork_base::ForkBase::Frozen($g) => {
                 let $g = &**$g;
                 $e
             }

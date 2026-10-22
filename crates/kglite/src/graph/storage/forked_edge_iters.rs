@@ -7,13 +7,12 @@
 //! not clean; a fork that wrote only nodes hands out the base's own iterators.
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
-use petgraph::stable_graph::{EdgeReferences, Edges};
-use petgraph::visit::EdgeRef;
-use petgraph::{Directed, Direction};
+use petgraph::Direction;
 
 use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::schema::EdgeData;
-use crate::graph::storage::forked_edges::{EdgeLayer, OverlayEdge};
+use crate::graph::storage::fork_base::{BaseEdgeRefs, BaseEdges};
+use crate::graph::storage::forked_edges::{AddedChain, EdgeLayer, OverlayEdge};
 
 #[inline]
 fn overlay_ref(slot: u32, edge: &OverlayEdge) -> GraphEdgeRef<'_> {
@@ -50,8 +49,8 @@ fn base_ref<'a>(
 /// base's list.
 pub struct ForkedEdges<'a> {
     layer: &'a EdgeLayer,
-    added: std::iter::Rev<std::slice::Iter<'a, u32>>,
-    base: Edges<'a, EdgeData, Directed, u32>,
+    added: AddedChain<'a>,
+    base: BaseEdges<'a>,
 }
 
 impl<'a> ForkedEdges<'a> {
@@ -59,11 +58,11 @@ impl<'a> ForkedEdges<'a> {
         layer: &'a EdgeLayer,
         node: NodeIndex,
         dir: Direction,
-        base: Edges<'a, EdgeData, Directed, u32>,
+        base: BaseEdges<'a>,
     ) -> Self {
         Self {
             layer,
-            added: layer.list(node, dir).iter().rev(),
+            added: layer.chain(node, dir),
             base,
         }
     }
@@ -73,18 +72,11 @@ impl<'a> Iterator for ForkedEdges<'a> {
     type Item = GraphEdgeRef<'a>;
 
     fn next(&mut self) -> Option<GraphEdgeRef<'a>> {
-        if let Some(&slot) = self.added.next() {
-            let edge = self
-                .layer
-                .added
-                .get(&slot)
-                .expect("a listed overlay edge is always in the added map");
+        if let Some((slot, edge)) = self.added.next() {
             return Some(overlay_ref(slot, edge));
         }
-        for er in self.base.by_ref() {
-            if let Some(found) =
-                base_ref(self.layer, er.id(), er.source(), er.target(), er.weight())
-            {
+        while let Some((id, source, target, weight)) = self.base.next_edge() {
+            if let Some(found) = base_ref(self.layer, id, source, target, weight) {
                 return Some(found);
             }
         }
@@ -159,14 +151,14 @@ impl<'a> Iterator for ForkedEdgesConnecting<'a> {
 /// because a base slot the overlay reused is in the base's `removed` set.
 pub struct ForkedEdgeRefs<'a> {
     layer: &'a EdgeLayer,
-    base: EdgeReferences<'a, EdgeData, u32>,
+    base: BaseEdgeRefs<'a>,
     pending: Option<GraphEdgeRef<'a>>,
     added: Vec<u32>,
     next_added: usize,
 }
 
 impl<'a> ForkedEdgeRefs<'a> {
-    pub(crate) fn new(layer: &'a EdgeLayer, base: EdgeReferences<'a, EdgeData, u32>) -> Self {
+    pub(crate) fn new(layer: &'a EdgeLayer, base: BaseEdgeRefs<'a>) -> Self {
         Self {
             layer,
             base,
@@ -180,10 +172,8 @@ impl<'a> ForkedEdgeRefs<'a> {
         if let Some(read_ahead) = self.pending.take() {
             return Some(read_ahead);
         }
-        for er in self.base.by_ref() {
-            if let Some(found) =
-                base_ref(self.layer, er.id(), er.source(), er.target(), er.weight())
-            {
+        while let Some((id, source, target, weight)) = self.base.next_edge() {
+            if let Some(found) = base_ref(self.layer, id, source, target, weight) {
                 return Some(found);
             }
         }

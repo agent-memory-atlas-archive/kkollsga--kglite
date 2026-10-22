@@ -17,6 +17,7 @@ use crate::graph::storage::forked_edge_iters::{
 };
 use crate::graph::storage::forked_edges::OverlayBits;
 use crate::graph::storage::forked_slots::ExtraIter;
+use crate::graph::storage::frozen::FrozenNodeIndices;
 use crate::graph::storage::mapped::mmap_vec::MmapOrVec;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -224,14 +225,23 @@ pub enum GraphNodeIndices<'a> {
     },
     /// A `GraphBackend::Forked` overlay that removed base nodes or took slots
     /// inside the base's range.
-    ForkedMerged(Box<ForkedMergedIndices<'a>>),
+    ForkedMerged(
+        Box<ForkedMergedIndices<'a, petgraph::stable_graph::NodeIndices<'a, NodeData, u32>>>,
+    ),
+    /// [`Forked`](Self::Forked) over a frozen base.
+    FrozenForked {
+        base: Box<FrozenNodeIndices<'a>>,
+        appended: std::ops::Range<usize>,
+    },
+    /// [`ForkedMerged`](Self::ForkedMerged) over a frozen base.
+    FrozenForkedMerged(Box<ForkedMergedIndices<'a, FrozenNodeIndices<'a>>>),
 }
 
 /// Ascending merge of a base's live indices, minus the base nodes the overlay
 /// removed, with every slot the overlay allocated where the base holds no
 /// live node (a vacated slot it reused, or a fresh slot past the bound).
-pub struct ForkedMergedIndices<'a> {
-    base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
+pub struct ForkedMergedIndices<'a, B> {
+    base: B,
     /// A base index read ahead while a smaller overlay slot was yielded.
     pending: Option<NodeIndex>,
     extra: ExtraIter<'a>,
@@ -241,12 +251,8 @@ pub struct ForkedMergedIndices<'a> {
     dead: Option<&'a OverlayBits>,
 }
 
-impl<'a> ForkedMergedIndices<'a> {
-    pub(crate) fn new(
-        base: petgraph::stable_graph::NodeIndices<'a, NodeData, u32>,
-        mut extra: ExtraIter<'a>,
-        dead: Option<&'a OverlayBits>,
-    ) -> Self {
+impl<'a, B: Iterator<Item = NodeIndex>> ForkedMergedIndices<'a, B> {
+    pub(crate) fn new(base: B, mut extra: ExtraIter<'a>, dead: Option<&'a OverlayBits>) -> Self {
         let next_extra = extra.next().map_or(usize::MAX, |idx| idx as usize);
         Self {
             base,
@@ -287,6 +293,15 @@ impl<'a> ForkedMergedIndices<'a> {
         }
     }
 
+    /// `size_hint` of the merge: removed base nodes make the base's lower bound
+    /// too high.
+    fn size_hint_merged(&self) -> (usize, Option<usize>) {
+        let (blo, bhi) = self.base.size_hint();
+        let extra = self.remaining_extra();
+        let blo = if self.dead.is_some() { 0 } else { blo };
+        (blo + extra, bhi.map(|h| h + extra))
+    }
+
     fn remaining_extra(&self) -> usize {
         self.extra.len() + usize::from(self.next_extra != usize::MAX)
     }
@@ -324,11 +339,11 @@ impl<'a> Iterator for DiskNodeIndices<'a> {
     }
 }
 
-impl<'a> Iterator for GraphNodeIndices<'a> {
-    type Item = NodeIndex;
-
-    #[inline]
-    fn next(&mut self) -> Option<NodeIndex> {
+impl GraphNodeIndices<'_> {
+    /// Every arm but the heap one, out of line so the heap arm of `next` stays
+    /// small enough to inline into the scan loops.
+    #[inline(never)]
+    fn next_other(&mut self) -> Option<NodeIndex> {
         match self {
             GraphNodeIndices::InMemory(iter) => iter.next(),
             GraphNodeIndices::Csr(iter) => iter.next(),
@@ -336,6 +351,23 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
                 base.next().or_else(|| appended.next().map(NodeIndex::new))
             }
             GraphNodeIndices::ForkedMerged(iter) => iter.next_index(),
+            GraphNodeIndices::FrozenForked { base, appended } => {
+                base.next().or_else(|| appended.next().map(NodeIndex::new))
+            }
+            GraphNodeIndices::FrozenForkedMerged(iter) => iter.next_index(),
+        }
+    }
+}
+
+impl<'a> Iterator for GraphNodeIndices<'a> {
+    type Item = NodeIndex;
+
+    #[inline]
+    fn next(&mut self) -> Option<NodeIndex> {
+        match self {
+            GraphNodeIndices::InMemory(iter) => iter.next(),
+            GraphNodeIndices::ForkedMerged(iter) => iter.next_index(),
+            other => other.next_other(),
         }
     }
 
@@ -349,13 +381,13 @@ impl<'a> Iterator for GraphNodeIndices<'a> {
                 let extra = appended.len();
                 (blo + extra, bhi.map(|h| h + extra))
             }
-            GraphNodeIndices::ForkedMerged(iter) => {
-                let (blo, bhi) = iter.base.size_hint();
-                let extra = iter.remaining_extra();
-                // Removed base nodes make the base's lower bound too high.
-                let blo = if iter.dead.is_some() { 0 } else { blo };
+            GraphNodeIndices::ForkedMerged(iter) => iter.size_hint_merged(),
+            GraphNodeIndices::FrozenForked { base, appended } => {
+                let (blo, bhi) = base.size_hint();
+                let extra = appended.len();
                 (blo + extra, bhi.map(|h| h + extra))
             }
+            GraphNodeIndices::FrozenForkedMerged(iter) => iter.size_hint_merged(),
         }
     }
 }

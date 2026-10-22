@@ -17,7 +17,7 @@ Placement follows the data, not the storage mode.
 | Embedding stores of 64 MB or more | The `.kgl` file (`embeddings="auto"`) | Read in place, no copy |
 | Smaller embedding stores | Heap | `embeddings="mapped"` maps any size |
 
-A mapped region is read in place from the file. It costs no resident memory until a query touches its pages. The first write to a `mapped` graph that serves its topology from the file copies the topology to the heap once. From then on it behaves like any heap-topology `mapped` graph.
+A mapped region is read in place from the file. It costs no resident memory until a query touches its pages. A write to a `mapped` graph that serves its topology from the file puts an overlay over it, so the heap holds the writes and not the topology. Past a quarter of the graph's nodes plus relationships the overlay collapses into a heap topology, once; from then on the graph behaves like any heap-topology `mapped` graph.
 
 ## The knobs
 
@@ -68,11 +68,12 @@ A save of a graph with 65,536 nodes or 262,144 relationships or more records the
 
 - The file holds one 32-byte record per node slot and one endpoint record per relationship slot. It also holds an out- and an in-adjacency sorted by relationship type, so a typed expansion binary-searches its node's run. Node and relationship slots are the ones the graph held when it was saved, deleted slots included.
 - The heap holds only the per-type templates, the sparse map of relationships that carry properties, and what the declared indexes and small columns need. Relationship properties are still decoded to that map at load.
-- The first write promotes the topology to the heap, once. A copy, a snapshot or a transaction that did not write keeps sharing the file's topology; the writer promotes its own handle. A failed statement rolls back to the slots it vacated.
-- A save does not promote. It copies the topology out of the file, so it needs a transient heap graph the size of the topology.
+- A write puts an overlay over the file's topology instead of copying it. The heap grows with the writes. The overlay collapses into a heap topology, once, when it passes a quarter of the graph's nodes plus relationships or on a whole-graph operation such as `vacuum()`. A copy, a snapshot or a transaction that did not write keeps sharing the file's topology. A failed statement rolls back to the slots it vacated.
+- A transaction copies the overlay's writes when it starts: 43 µs at 1,000 writes and 0.66 ms at 100,000, against 22 µs in `memory` storage (1M nodes, 12M relationships).
+- A save copies the topology out of the file and the overlay's writes with it, so it needs a transient heap graph the size of the topology. The overlay keeps serving afterwards; a reload of the saved file starts from an empty overlay.
 - The order a node's relationships come back in can differ from a `memory` load. Relationships of one type keep memory storage's newest-first order. Those of different types are grouped by type.
 - A save skips the sections in four cases. The graph is below the floors. It holds a node with an inline identity. It has more than 262,144 relationships with properties. It has more than 1,024 node or relationship types. `layout="compact"` writes none. A file without them loads as before.
-- A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the write that promotes them refuse a damaged section.
+- A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the collapse of a write overlay refuse a damaged section.
 - `columns="memory"` and `KGLITE_MMAP=0` copy the sections to the heap instead of mapping them.
 
 ## Indexes served from the file

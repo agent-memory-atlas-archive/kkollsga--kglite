@@ -44,10 +44,11 @@ fn compress_some(payload: Option<Vec<u8>>) -> io::Result<Option<Vec<u8>>> {
 
 /// Topology with node properties stripped into the column sections.
 fn encode_topology(graph: &DirGraph, codec: serde_codec::CodecVersion) -> io::Result<Vec<u8>> {
-    // The topology of a frozen graph is copied out of sections that were not
-    // checksummed at load; refuse to write a damaged one into a new file. The
-    // serializer repeats the check but can only report a generic error.
-    if let Some(frozen) = graph.graph.as_frozen() {
+    // The topology of a frozen graph, or of an overlay over one, is copied out
+    // of sections that were not checksummed at load; refuse to write a damaged
+    // one into a new file. The serializer repeats the check but can only
+    // report a generic error.
+    if let Some(frozen) = graph.graph.frozen_base() {
         frozen.verify_sections()?;
     }
     let topology_raw = {

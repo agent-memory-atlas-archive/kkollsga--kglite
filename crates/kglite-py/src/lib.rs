@@ -932,11 +932,19 @@ fn _backend_is_forked(graph: &KnowledgeGraph) -> bool {
 /// **A test hook, not an API**, in the same family as `_backend_is_forked`:
 /// a mapped load that kept the file's topology and one that decoded it into the
 /// heap answer every query alike, so the difference needs an observable that is
-/// not a footprint measurement. The first write promotes the topology to the
-/// heap and this turns `False`.
+/// not a footprint measurement. The first write puts a write overlay over the
+/// topology and this turns `False`; with `include_overlay` it stays `True`
+/// through the overlay, which is what shows that a write copied nothing, until
+/// the overlay passes the promote valve or a whole-graph operation collapses it.
 #[pyfunction]
-fn _backend_is_frozen(graph: &KnowledgeGraph) -> bool {
-    graph.graph().graph.is_frozen()
+#[pyo3(signature = (graph, include_overlay=false))]
+fn _backend_is_frozen(graph: &KnowledgeGraph, include_overlay: bool) -> bool {
+    let backend = &graph.graph().graph;
+    if include_overlay {
+        backend.has_frozen_base()
+    } else {
+        backend.is_frozen()
+    }
 }
 
 /// Make the next write-ahead-log append on `graph` fail, as a disk that has

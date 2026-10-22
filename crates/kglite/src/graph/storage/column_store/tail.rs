@@ -62,6 +62,13 @@ pub(crate) const HEAP_TAIL_SPILL_FLOOR: usize = 1 << 20;
 /// heap at all triggers a pass over every store.
 pub(crate) const MAPPED_SPILL_FLOOR: usize = 1 << 20;
 
+/// [`MAPPED_SPILL_FLOOR`] for a write overlay over a frozen topology. That
+/// overlay never folds, so the heap its rows leave behind is the size of the
+/// writes by design; spilling it at 1 MiB made every transaction (a fork of the
+/// overlay) copy the whole tail and write it to fresh files, which its rollback
+/// then threw away. The valve at a quarter of the graph bounds it from above.
+pub(crate) const FROZEN_OVERLAY_SPILL_FLOOR: usize = 64 << 20;
+
 /// The kind of an identity column whose base part has kind `base` and whose
 /// tail has kind `tail`, as one column holding both parts' values would have
 /// it: a `UniqueId` part beside an `Int64` part widens to `Int64`

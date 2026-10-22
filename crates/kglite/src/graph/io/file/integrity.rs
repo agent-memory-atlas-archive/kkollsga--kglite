@@ -188,7 +188,7 @@ pub fn verify_graph(graph: &DirGraph) -> IntegrityReport {
             store.numeric(),
         );
     }
-    if let Some(frozen) = graph.graph.as_frozen() {
+    if let Some(frozen) = graph.graph.frozen_base() {
         for section in frozen.shared_sections() {
             let result = section
                 .verify()
