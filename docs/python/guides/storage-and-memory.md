@@ -58,12 +58,36 @@ A default `save()` writes v9 when any of these holds. An embedding store of 4 Mi
 
 - The rule for "large" is the one a v8 load uses to spill a column to a temp file. A default file therefore maps exactly the columns that would otherwise be copied into a per-process spill file. Many servers on one graph share the file's pages instead of each writing its own copy under `$TMPDIR`.
 - A v9 file stores the vectors, their norms and those column buffers uncompressed and 64-byte aligned, after the compressed sections. Smaller columns stay in the compressed sections and decode to the heap.
-- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. On the operator graphs measured the file grows 1.4-5.4x (one 134 MB graph becomes 389 MB). Almost all of the growth is string bytes that zstd shrinks 3-7x.
+- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. Raw columns alone grow the operator graphs measured 1.4-5.4x (one 134 MB graph becomes 389 MB). Almost all of that growth is string bytes that zstd shrinks 3-7x.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
 - A graph of 65,536 nodes or more also records the sorted member list of each node type. A type whose ids are all integers (`UniqueId` and int64 alike) or all strings also gets a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts. Either size also records the topology raw, at about 40 bytes per node and 32 per relationship, on top of the compressed copy.
 - These sections cost 4 bytes per node, 8 per indexed id and 16 per distinct peer. Measured: a random 1M-node, 12M-relationship graph grows 110 to 147 MB; a 196 MB operator graph grows 1.3 % and a 134 MB one 3.7 %.
 - A kglite release before this one refuses a v9 file: "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
 - If a consumer must stay on an older kglite, or the file size matters more than a spill file, save with `layout="compact"`. It writes v8 with every column and vector compressed.
+
+### Choosing a save layout
+
+A default save makes the file larger so a load can map it. If the file is large and nothing gains from mapping it, `layout="compact"` gives a smaller file and a faster save.
+
+| Graph | 0.20.1 (v8) | Default save (v9) | Growth |
+|---|---|---|---|
+| An operator graph of laws and decisions | 196 MB | 315 MB | 1.6x |
+| An operator graph of wells and fields | 134 MB | 460 MB | 3.4x |
+| A catalog, 200k products, 1.6M relationships | 12.9 MB | 110 MB | 8.5x |
+| A catalog, 1M products, 8M relationships | 51 MB | 440 MB | 8.6x |
+
+- The growth is largest for a graph of many relationships with few or small properties. The raw topology costs about 32 bytes per relationship, beside the compressed copy.
+- A default save of the 1M-product catalog takes 1.19 s; a `compact` save takes 0.49-0.57 s.
+- A default file also helps `memory` storage: it maps embeddings and large columns instead of copying them or spilling them to a temp file. The raw topology helps only `mapped` storage.
+- A `compact` file loads into either storage mode. A `mapped` load decodes its topology to the heap.
+
+Use `layout="compact"` in these cases:
+
+- The file is loaded only into `memory` storage, and the graph has no large embedding store or columns.
+- An older kglite must read it.
+- Disk space or transfer size matters more than load time and memory.
+
+Keep the default when any consumer loads the file into `mapped` storage, such as several MCP servers sharing one graph.
 - kglite reads v8 and older files unchanged. `embeddings=` and `columns=` have no effect on them.
 
 ## Topology served from the file
@@ -76,7 +100,13 @@ A save of a graph with 65,536 nodes or 262,144 relationships or more records the
 - A transaction forks the overlay in time that does not depend on the writes before it. Commit of a one-node transaction: 24 µs on a fresh load, 29 µs after 100,000 writes and 42 µs after 1,000,000, against 25, 26 and 37 µs in `memory` storage (1M nodes, 12M relationships).
 - A save copies the topology out of the file and the overlay's writes with it, so it needs a transient heap graph the size of the topology. It then serves the graph from the file it wrote: the overlay is empty, the footprint is a fresh load's (1M writes: 475 MB before the save, 25 MB after; a fresh load 16 MB) and every cost resets. A snapshot taken before the save keeps its state and the old mapping. A save to any path does this, including a durable graph's checkpoint. The background checkpoint, a graph below the floors, `layout="compact"` and Windows keep the overlay.
 - The order a node's relationships come back in can differ from a `memory` load. Relationships of one type keep memory storage's newest-first order. Those of different types are grouped by type.
-- A save skips the sections in three cases. The graph is below the floors. It holds a node with an inline identity. It has more than 65,535 node or relationship types (the type is a 16-bit number in the file). `layout="compact"` writes none. A file without them loads as before. Relationships with properties no longer matter: the properties stay on the heap, and the topology is still served from the file.
+- A save skips the sections in four cases:
+  - The graph is below the floors.
+  - It holds a node with an inline identity.
+  - It has more than 65,535 node or relationship types (the type is a 16-bit number in the file).
+  - It has more than 262,144 relationships that carry properties.
+
+  `layout="compact"` writes none. A file without them loads as before.
 - A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the collapse of a write overlay refuse a damaged section.
 - `topology="memory"` ignores the sections. `KGLITE_MMAP=0` copies them to the heap instead of mapping them, and the graph still serves from the copies.
 - `layout="compact"` writes the v8 file with the compressed topology and no raw sections.

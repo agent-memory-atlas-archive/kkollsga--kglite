@@ -15,8 +15,17 @@ before upgrading.
   - The refusal reads "File uses .kgl container version 9, but this library only supports up to version 8. Please upgrade kglite."
   - **Do:** save with `layout="compact"` (Rust: `SaveLayout::Compact`) for any file an older kglite must read. It writes the v8 container with everything compressed.
   - A graph below all of those sizes writes the same bytes as before. This release reads v8 and older files unchanged.
-  - The node and relationship thresholds add index sections (see Added): 4 bytes per node, 8 per indexed id and 16 per distinct relationship peer. A random 1M-node, 12M-relationship graph grows 110 to 147 MB; the `legal` operator graph grows 1.3 % and `sodir` 3.7 %. The same thresholds also record the topology raw (see Added): about 40 bytes per node and 32 per relationship, which grows a random 1M-node, 12M-relationship graph from 147 to 584 MB. With everything in this release, the `legal` operator graph goes from 196 MB (0.20.1) to 315 MB and `sodir` from 134 to 460 MB.
-  - A v9 file keeps those buffers raw and 64-byte aligned. Embeddings compress by under 10 %, so they add little; column text does not compress away. Measured on six operator graphs the file grew from 1.0x to 5.4x: `sodir` 134 to 389 MB, `rms` 18.5 to 99.7 MB, `legal` 196 to 265 MB. `layout="compact"` keeps the old size.
+  - The node and relationship thresholds add index sections (see Added): 4 bytes per node, 8 per indexed id and 16 per distinct relationship peer. A random 1M-node, 12M-relationship graph grows 110 to 147 MB; the `legal` operator graph grows 1.3 % and `sodir` 3.7 %. The same thresholds also record the topology raw (see Added): about 40 bytes per node and 32 per relationship, which grows a random 1M-node, 12M-relationship graph from 147 to 584 MB. With everything in this release, a default save grows these graphs:
+
+    | Graph | 0.20.1 (v8) | Default save (v9) | Growth |
+    |---|---|---|---|
+    | `legal` operator graph | 196 MB | 315 MB | 1.6x |
+    | `sodir` operator graph | 134 MB | 460 MB | 3.4x |
+    | Catalog, 200k products, 1.6M relationships | 12.9 MB | 110 MB | 8.5x |
+    | Catalog, 1M products, 8M relationships | 51 MB | 440 MB | 8.6x |
+
+    The growth is largest for a graph of many relationships with few or small properties, where the raw topology outweighs everything else. A default save of the 1M-product catalog takes 1.19 s against 0.50-0.53 s on 0.20.1. `layout="compact"` restores both the 0.20.1 size and save time.
+  - A v9 file keeps those buffers raw and 64-byte aligned. Embeddings compress by under 10 %, so they add little; column text does not compress away. Raw columns alone, before the topology sections, grew six operator graphs 1.0x to 5.4x: `sodir` 134 to 389 MB, `rms` 18.5 to 99.7 MB, `legal` 196 to 265 MB. `layout="compact"` keeps the old size.
   - The size rule is the one a v8 load uses to spill a column to a temp file, so the file holds raw exactly what a load would otherwise copy into a per-process spill file.
 - **Property columns with a buffer of 256 KB or more are read from the file by default, in every storage mode.**
   - `columns=` defaults to `auto`: the load maps those columns from a regular local file on Unix and writes no per-process spill file for them. Before, each process spilled them to `$TMPDIR`; measured per MCP server process, spill fell from 361 to 7 MiB (`sodir`), 90 to 0 (`rms`), 66 to 0.4 (`legal`), 37 to 2 (`music`), 22 to 1.6 (`codebase`) and 19 to 0 (`petrel`). What remains is the integer columns kept delta-compressed.
