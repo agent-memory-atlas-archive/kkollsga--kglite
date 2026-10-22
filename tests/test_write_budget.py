@@ -10,29 +10,42 @@ and the exemptions.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import warnings
 
+import numpy as np
+import pandas as pd
 import pytest
 
 import kglite
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Auto never maps on Windows")
 
-TINY = 12_000
+NODES = 70_000  # above the 65,536-node floor, so a save records topology sections in any build
+# The first write to a loaded graph costs ~9 bytes per node (630 KB at NODES), so the
+# limit sits above that and below what the bulk statement adds.
+TINY = 1 << 20
 BULK = "UNWIND range(1, 4000) AS i CREATE (:Doc {id: 100000 + i, n: i})"
 
 
-@pytest.fixture
-def saved(tmp_path, monkeypatch):
-    # Debug builds only: a tiny graph records the topology sections.
-    monkeypatch.setenv("KGLITE_RAW_SECTION_FLOORS", "1,1")
+@pytest.fixture(scope="module")
+def _base(tmp_path_factory):
     graph = kglite.KnowledgeGraph()
-    graph.cypher("UNWIND range(1, 60) AS i CREATE (:Doc {id: i, n: i})")
-    graph.cypher("MATCH (a:Doc), (b:Doc) WHERE b.id = a.id % 60 + 1 CREATE (a)-[:LINKS]->(b)")
-    path = str(tmp_path / "g.kgl")
-    graph.save(path)
+    ids = np.arange(1, NODES + 1)
+    graph.add_nodes(pd.DataFrame({"id": ids, "title": [f"d{i}" for i in ids], "n": ids}), "Doc", "id", "title")
+    ring = pd.DataFrame({"s": ids, "t": ids % NODES + 1})
+    graph.add_relationships(ring, "LINKS", "Doc", "s", "Doc", "t")
+    path = tmp_path_factory.mktemp("budget") / "g.kgl"
+    graph.save(str(path))
     return path
+
+
+@pytest.fixture
+def saved(_base, tmp_path):
+    path = tmp_path / "g.kgl"
+    shutil.copy(_base, path)
+    return str(path)
 
 
 def _load(path, **options):
@@ -108,12 +121,13 @@ def test_a_refused_statement_leaves_the_usage_where_it_was(saved):
     graph = _load(saved, write_budget=TINY)
     _create(graph, 1)
     used = graph.graph_info()["write_budget_used_bytes"]
+    state = graph.graph_info()["write_budget_state"]
     for _ in range(25):
         with pytest.raises(kglite.WriteBudgetExceededError):
             graph.cypher(BULK)
         info = graph.graph_info()
         assert info["write_budget_used_bytes"] == used, "the rollback takes its overlay entries with it"
-        assert info["write_budget_state"] == "ok"
+        assert info["write_budget_state"] == state
     _create(graph, 2)  # a statement that fits is still accepted
 
 
@@ -140,17 +154,15 @@ def test_a_session_refuses_at_the_limit_and_keeps_reading(saved):
     session = kglite.open_session(saved, storage="mapped", write_budget=0)
     with pytest.raises(kglite.WriteBudgetExceededError):
         session.execute("CREATE (:Doc {id: 777777, n: 1})")
-    assert session.cypher("MATCH (d:Doc) RETURN count(d) AS c").to_list()[0]["c"] == 60
+    assert session.cypher("MATCH (d:Doc) RETURN count(d) AS c").to_list()[0]["c"] == NODES
 
 
 def test_a_fluent_loader_is_refused_when_the_graph_is_at_the_limit(saved):
-    import pandas as pd
-
     graph = _load(saved, write_budget=0)
     frame = pd.DataFrame({"id": [5001, 5002], "title": ["a", "b"]})
     with pytest.raises(kglite.WriteBudgetExceededError):
         graph.add_nodes(frame, "Doc", "id", "title")
-    assert _count(graph) == 60
+    assert _count(graph) == NODES
 
 
 def test_a_zero_budget_and_no_limit(saved):
