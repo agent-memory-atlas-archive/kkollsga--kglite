@@ -15,6 +15,19 @@ fn part(info: &crate::graph::dir_graph::GraphInfo, name: &str) -> Option<String>
         .map(|f| f.reason.clone())
 }
 
+/// The topology status of a freshly loaded `mapped` file: Windows copies the
+/// sections to the heap and says so.
+fn loaded_status() -> (&'static str, Option<String>) {
+    if cfg!(windows) {
+        (
+            "heap",
+            Some("Windows copies the sections to the heap".to_string()),
+        )
+    } else {
+        ("mapped", None)
+    }
+}
+
 /// 70,000 `Doc` rows (a delta-compressed `n`), one node of `MixId` holding a
 /// string id beside an int one, and a `Doc` column of mixed values.
 fn mixed_graph() -> DirGraph {
@@ -60,8 +73,10 @@ fn a_save_records_and_announces_the_parts_it_wrote_without_a_mapped_form() {
 
     let mapped = load_owned(&path, StorageMode::Mapped);
     let info = mapped.graph_info();
-    assert_eq!(info.topology_status, "mapped");
-    assert_eq!(info.topology_heap_reason, None);
+    assert_eq!(
+        (info.topology_status, info.topology_heap_reason.clone()),
+        loaded_status()
+    );
     assert!(
         part(&info, "indexes:id:MixId").is_some_and(|r| r.contains("integer and string")),
         "{:?}",
@@ -138,6 +153,12 @@ fn a_rebased_save_reports_the_parts_of_the_file_it_now_serves() {
     })
     .unwrap();
     let info = graph.graph_info();
+    if cfg!(windows) {
+        // The rebase is declined where sections are copied: the overlay keeps
+        // serving and the report still describes the file it was loaded from.
+        assert_eq!(info.topology_status, "overlay");
+        return;
+    }
     assert_eq!(info.topology_status, "mapped", "rebased onto the file");
     assert_eq!(
         part(&info, "indexes:id:MixId"),
@@ -157,7 +178,7 @@ fn the_topology_status_says_why_it_is_on_the_heap() {
     };
 
     let mapped = load_owned(&path, StorageMode::Mapped);
-    assert_eq!(status(&mapped), ("mapped", None));
+    assert_eq!(status(&mapped), loaded_status());
 
     let memory = load_owned(&path, StorageMode::Memory);
     assert_eq!(
@@ -261,7 +282,11 @@ fn more_node_types_than_the_index_cap_are_reported() {
     })
     .unwrap();
     let info = load_owned(&path, StorageMode::Mapped).graph_info();
-    assert_eq!(info.topology_status, "mapped", "the topology takes 65,535");
+    assert_eq!(
+        info.topology_status,
+        loaded_status().0,
+        "the topology takes 65,535"
+    );
     assert!(part(&info, "indexes:nodes").is_some_and(|r| r.contains("1,024")));
     assert!(part(&info, "indexes:peers").is_some_and(|r| r.contains("1,024")));
 }

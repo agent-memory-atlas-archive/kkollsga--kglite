@@ -146,6 +146,19 @@ fn writes_warn_once_then_are_refused_and_a_save_starts_over() {
             save_graph_with_layout(&mut arc, target.to_str().unwrap(), true, SaveLayout::Auto)
                 .unwrap()
         });
+        if cfg!(windows) {
+            // The rebase is declined where sections are copied: the save wrote
+            // the changes but the heap they hold stays, and the refusal says a
+            // save will not help.
+            assert_ne!(state(&arc), WriteBudgetState::Ok);
+            let refused = create(crate::graph::handle::make_dir_graph_mut(&mut arc), 3)
+                .expect_err("still at the limit");
+            assert!(
+                refused.to_string().contains("could not release"),
+                "{refused}"
+            );
+            return;
+        }
         assert!(arc.graph.is_frozen(), "rebased onto the saved file");
         assert_eq!(state(&arc), WriteBudgetState::Ok);
         assert_eq!(arc.graph_info().write_budget_used_bytes, 0);

@@ -46,6 +46,17 @@ fn assert_rebased(graph: &DirGraph) {
     assert!(graph.graph.is_mapped(), "still mapped storage");
 }
 
+/// What a save leaves behind: the graph served from the file it wrote, except
+/// where sections are copied rather than mapped (Windows), where the rebase is
+/// declined by design and the overlay keeps serving.
+fn assert_after_save(graph: &DirGraph) {
+    if cfg!(windows) {
+        assert_overlay(graph);
+    } else {
+        assert_rebased(graph);
+    }
+}
+
 fn assert_collapsed(graph: &DirGraph) {
     assert!(!graph.graph.is_forked() && !graph.graph.has_frozen_base());
     assert!(graph.graph.is_mapped(), "a heap `Mapped` graph");
@@ -297,7 +308,7 @@ fn a_save_after_writes_rebases_the_graph_onto_the_saved_file_and_reloads_to_what
     .unwrap();
     // The graph now serves from the file it just wrote, with no overlay; the
     // reader keeps the old overlay over the old mapping.
-    assert_rebased(&graph);
+    assert_after_save(&graph);
     assert_overlay(&held);
     let reference = memory_after(&path, &SCRIPT);
     assert_eq!(dump(&graph), dump(&reference));
@@ -350,7 +361,7 @@ fn a_save_after_writes_rebases_the_graph_onto_the_saved_file_and_reloads_to_what
         dump(&load_owned(&third, StorageMode::Memory)),
         dump(&expected)
     );
-    assert_rebased(&graph);
+    assert_after_save(&graph);
     assert_eq!(dump(&graph), dump(&expected));
 
     // Saving over the file the graph is now mapped from replaces the inode it
@@ -367,7 +378,7 @@ fn a_save_after_writes_rebases_the_graph_onto_the_saved_file_and_reloads_to_what
         save_graph_with_layout(&mut graph, third.to_str().unwrap(), true, SaveLayout::Auto)
     })
     .unwrap();
-    assert_rebased(&graph);
+    assert_after_save(&graph);
     assert_eq!(dump(&graph), dump(&expected));
     assert_eq!(
         dump(&load_owned(&third, StorageMode::Mapped)),
@@ -397,7 +408,7 @@ fn a_save_that_records_no_raw_topology_leaves_the_overlay_serving() {
         save_graph_with_layout(&mut graph, big.to_str().unwrap(), true, SaveLayout::Auto)
     })
     .unwrap();
-    assert_rebased(&graph);
+    assert_after_save(&graph);
     assert_eq!(dump(&graph), dump(&memory_after(&path, &SCRIPT[..4])));
 }
 
@@ -471,7 +482,16 @@ fn a_rebase_returns_the_heap_to_what_a_fresh_load_holds() {
         save_graph_with_layout(&mut graph, saved.to_str().unwrap(), true, SaveLayout::Auto)
     })
     .unwrap();
-    assert_rebased(&graph);
+    assert_after_save(&graph);
+    if cfg!(windows) {
+        // Declined: the overlay keeps its heap, so the counts below are all
+        // that carries over.
+        assert_eq!(
+            rows(&graph, "MATCH (f:F) RETURN count(f)"),
+            "[[Int64(28000)]]"
+        );
+        return;
+    }
     assert_eq!(
         rows(&graph, "MATCH (f:F) RETURN count(f)"),
         "[[Int64(28000)]]"
@@ -600,7 +620,7 @@ fn a_durable_session_over_a_frozen_file_replays_its_writes_after_a_crash() {
             })
             .unwrap();
         with_floors(10, 10, || reopened.save(&path_str, true)).unwrap();
-        assert_rebased(&reopened.snapshot());
+        assert_after_save(&reopened.snapshot());
         assert_eq!(
             logical(&reopened.snapshot()),
             logical(&expected),
