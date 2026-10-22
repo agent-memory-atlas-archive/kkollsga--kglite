@@ -147,7 +147,7 @@ Compatibility mode makes the server present an agent that satisfies that check,
 while keeping the real product in the string:
 
 ```
-Neo4j/5.26.0 (kglite-bolt-server/<version>)
+Neo4j/2026.10.0 (kglite-bolt-server/<version>)
 ```
 
 Two equivalent ways to turn it on — the flag wins if both are set:
@@ -170,7 +170,8 @@ only: the identity is never switched automatically on the strength of a
 client-supplied string.
 
 Compatibility mode changes the handshake's `server` field and the
-`dbms.components()` row clients use for product detection. The `bolt_agent`
+`dbms.components()` rows clients use for product detection (a `Neo4j Kernel`
+row reporting `2026.10.0` and a `Cypher` row advertising `5` and `25`). The `bolt_agent`
 metadata remains `kglite-bolt-server/<version>` either way, because no driver
 gates on it and the compatibility claim should travel no further than needed.
 

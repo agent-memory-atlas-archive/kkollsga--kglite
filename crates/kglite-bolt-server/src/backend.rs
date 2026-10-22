@@ -30,10 +30,17 @@ use crate::error_map::{kg_to_bolt, read_only_refusal};
 
 /// The Neo4j server version reported by [`ServerIdentity::Neo4jCompatible`].
 ///
-/// 5.26 is the Neo4j LTS line whose Bolt 5.x surface this server targets. The
-/// number is a compatibility claim about the *wire protocol*, not an assertion
-/// that this process is Neo4j.
-const NEO4J_COMPAT_VERSION: &str = "5.26.0";
+/// A 2026.x calendar version: GraphBridge's search preflight
+/// (`Search/GraphSearchPreflight.cs` `ValidateCapabilities`) refuses any kernel
+/// outside `2026.MM[.p]`, and its full-text path needs `MM >= 09`. The Bolt 5.x
+/// wire surface is the same line the 5.26 LTS speaks. The number is a
+/// compatibility claim, not an assertion that this process is Neo4j.
+const NEO4J_COMPAT_VERSION: &str = "2026.10.0";
+
+/// Cypher language versions the `Cypher` component row advertises under
+/// `--neo4j-compat`. The engine parses a `CYPHER 5|25` prefix; "25" is what
+/// GraphBridge's preflight looks for.
+const NEO4J_COMPAT_CYPHER_VERSIONS: [&str; 2] = ["5", "25"];
 
 /// Driver families known to reject a server whose agent lacks a `Neo4j/`
 /// prefix, matched against the client's HELLO `user_agent`.
@@ -104,17 +111,30 @@ impl ServerIdentity {
         matches!(self, Self::Neo4jCompatible)
     }
 
-    /// The `(name, version)` pair `CALL dbms.components()` reports — the
+    /// The `(name, versions)` rows `CALL dbms.components()` reports — the
     /// sibling of [`Self::product_string`], kept on the same enum so the
-    /// handshake agent and the components row can never drift apart.
+    /// handshake agent and the components rows can never drift apart.
     ///
-    /// GUIs (Neo4j Browser, G.V()) read this row to decide feature support,
-    /// so `--neo4j-compat` reports the Neo4j LTS line whose wire surface
-    /// this server targets, while the default names the real product.
-    pub(crate) fn components_row(self, version: &str) -> (String, String) {
+    /// GUIs (Neo4j Browser, G.V(), GraphBridge) read these rows to decide
+    /// feature support, so `--neo4j-compat` reports a Neo4j kernel plus the
+    /// `Cypher` dialect row Neo4j 2025+ adds, while the default names the real
+    /// product.
+    pub(crate) fn components_rows(self, version: &str) -> Vec<(String, Vec<String>)> {
         match self {
-            Self::Kglite => ("kglite-bolt-server".to_string(), version.to_string()),
-            Self::Neo4jCompatible => ("Neo4j Kernel".to_string(), NEO4J_COMPAT_VERSION.to_string()),
+            Self::Kglite => vec![("kglite-bolt-server".to_string(), vec![version.to_string()])],
+            Self::Neo4jCompatible => vec![
+                (
+                    "Neo4j Kernel".to_string(),
+                    vec![NEO4J_COMPAT_VERSION.to_string()],
+                ),
+                (
+                    "Cypher".to_string(),
+                    NEO4J_COMPAT_CYPHER_VERSIONS
+                        .iter()
+                        .map(|v| (*v).to_string())
+                        .collect(),
+                ),
+            ],
         }
     }
 }
@@ -135,14 +155,16 @@ mod cypher_prefix_tests;
 mod intercepts;
 mod result_stream;
 #[cfg(test)]
+mod search_identity_tests;
+#[cfg(test)]
 mod writer_queue_tests;
 mod writer_slot;
 use admission::wait_timeout_error;
 use auto_commit::{access_mode_error, is_write_statement};
 use intercepts::{
-    backup_stream, checkpoint_stream, components_pipeline_rewrite, parse_backup_call,
-    parse_checkpoint_call, parse_server_facts_call, server_facts_stream, strip_cypher_prefix,
-    BackupArg, BackupCall, CheckpointCall, ServerFactsCall, ServerFactsVerb,
+    backup_stream, checkpoint_stream, components_pipeline_rewrite, components_stream,
+    parse_backup_call, parse_checkpoint_call, parse_server_facts_call, server_facts_stream,
+    strip_cypher_prefix, BackupArg, BackupCall, CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
 use result_stream::{decode_params, finish_stream, off_async_worker};
 use writer_slot::{ReapedHandles, SharedPermit, WriterPermit, WriterSlot};
@@ -685,12 +707,9 @@ impl BoltBackend for KgliteBackend {
         // The same row under a full YIELD ... WHERE/RETURN pipeline runs in the
         // engine over a literal row, so every clause after the CALL behaves as
         // it does for any other query.
-        let (components_name, components_version) =
-            self.identity.components_row(env!("CARGO_PKG_VERSION"));
         let components_query = components_pipeline_rewrite(
             intercept_text,
-            &components_name,
-            &[components_version.as_str()],
+            &self.identity.components_rows(env!("CARGO_PKG_VERSION")),
             COMPONENTS_EDITION,
         );
         let query = components_query.as_deref().unwrap_or(query);
@@ -1025,21 +1044,12 @@ impl KgliteBackend {
     fn run_server_facts(&self, call: &ServerFactsCall) -> ResultStream {
         let started = Instant::now();
         match call.verb {
-            ServerFactsVerb::DbmsComponents => {
-                let (name, version) = self.identity.components_row(env!("CARGO_PKG_VERSION"));
-                server_facts_stream(
-                    &call.columns,
-                    &[
-                        ("name", BoltValue::String(name)),
-                        (
-                            "versions",
-                            BoltValue::List(vec![BoltValue::String(version)]),
-                        ),
-                        ("edition", BoltValue::String(COMPONENTS_EDITION.to_string())),
-                    ],
-                    started,
-                )
-            }
+            ServerFactsVerb::DbmsComponents => components_stream(
+                &call.columns,
+                &self.identity.components_rows(env!("CARGO_PKG_VERSION")),
+                COMPONENTS_EDITION,
+                started,
+            ),
             ServerFactsVerb::DbmsShowCurrentUser => {
                 // Server config, not session state. "neo4j" under `--auth
                 // none` matches what clients expect from an auth-less server.
@@ -1815,7 +1825,7 @@ mod tests {
     fn compat_identity_keeps_attribution() {
         let agent = ServerIdentity::Neo4jCompatible.product_string("1.2.3");
         assert!(agent.contains("kglite-bolt-server/1.2.3"), "{agent}");
-        assert_eq!(agent, "Neo4j/5.26.0 (kglite-bolt-server/1.2.3)");
+        assert_eq!(agent, "Neo4j/2026.10.0 (kglite-bolt-server/1.2.3)");
     }
 
     #[test]
@@ -2028,7 +2038,13 @@ mod tests {
     /// answer covers, other procedures and malformed YIELDs are left alone.
     #[test]
     fn components_pipeline_rewrite_recognizes_only_the_pipeline_forms() {
-        let rewrite = |q: &str| components_pipeline_rewrite(q, "N", &["1.0"], "community");
+        let rewrite = |q: &str| {
+            components_pipeline_rewrite(
+                q,
+                &[("N".to_string(), vec!["1.0".to_string()])],
+                "community",
+            )
+        };
         let out = rewrite(
             "CALL dbms.components() YIELD name, versions AS v WHERE name = 'N' RETURN name, v LIMIT $limit",
         )
@@ -2073,11 +2089,12 @@ mod tests {
             .expect("the pipeline runs");
         assert_eq!(stream.metadata.columns, ["name", "versions", "edition"]);
         assert_eq!(stream.records.len(), 1);
-        let (name, version) = backend.identity.components_row(env!("CARGO_PKG_VERSION"));
+        let rows = backend.identity.components_rows(env!("CARGO_PKG_VERSION"));
+        let (name, versions) = rows[0].clone();
         assert_eq!(stream.records[0].values[0], BoltValue::String(name));
         assert_eq!(
             stream.records[0].values[1],
-            BoltValue::List(vec![BoltValue::String(version)])
+            BoltValue::List(versions.into_iter().map(BoltValue::String).collect())
         );
         assert_eq!(
             stream.records[0].values[2],
@@ -2166,18 +2183,6 @@ mod tests {
         assert_eq!(stream.metadata.columns.len(), 8);
         assert!(!stream.records.is_empty());
         assert!(stream.records.len() <= 2, "LIMIT 2 applies");
-    }
-
-    /// components_row follows the identity — and the row can never disagree
-    /// with the handshake agent, because both come from the same enum.
-    #[test]
-    fn components_row_follows_identity() {
-        let (name, version) = ServerIdentity::Kglite.components_row("9.9.9");
-        assert_eq!(name, "kglite-bolt-server");
-        assert_eq!(version, "9.9.9");
-        let (name, version) = ServerIdentity::Neo4jCompatible.components_row("9.9.9");
-        assert_eq!(name, "Neo4j Kernel");
-        assert_eq!(version, NEO4J_COMPAT_VERSION);
     }
 
     /// Row content over the wire shape: username from server config, and the

@@ -29,8 +29,7 @@ fn strip_cypher_prefix_exposes_the_statement_to_the_recognizers() {
     assert!(parse_checkpoint_call(strip_cypher_prefix("CYPHER 25 CALL db.checkpoint()")).is_some());
     assert!(components_pipeline_rewrite(
         strip_cypher_prefix("CYPHER 25 CALL dbms.components() YIELD name RETURN name"),
-        "N",
-        &["1.0"],
+        &[("N".to_string(), vec!["1.0".to_string()])],
         "community"
     )
     .is_some());

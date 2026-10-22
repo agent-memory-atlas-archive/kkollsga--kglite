@@ -459,7 +459,8 @@ Bolt layer. They report server state the engine does not hold. They are the
 introspection calls Neo4j clients make on connect:
 
 - **`CALL dbms.components()`** — name / versions / edition, following
-  `--neo4j-compat` (see *Driver identity*). Edition is always `community`.
+  `--neo4j-compat` (see *Driver identity*). One row by default; under the flag a
+  `Neo4j Kernel` row and a `Cypher` row. Edition is always `community`.
 - **`CALL dbms.showCurrentUser()`** — the configured `--auth-user`
   (or `neo4j` under `--auth none`); roles and flags are empty. Answered from
   server config: there is deliberately no per-session principal.
@@ -734,8 +735,9 @@ Two client families need the compatible spelling:
 
 - **GUI clients** (Neo4j Browser, G.V(), and other IDEs) read
   `dbms.components()` to decide product and feature support, so they need
-  the flag too. Under it the row reports `Neo4j Kernel` / `5.26.0` /
-  `community`. The official Python and JavaScript drivers accept the honest
+  the flag too. Under it `dbms.components()` reports `Neo4j Kernel` / `2026.10.0` /
+  `community` plus a `Cypher` row advertising `5` and `25`, which is what
+  GraphBridge's search preflight reads. The official Python and JavaScript drivers accept the honest
   default.
 
 Enable compatibility mode to serve those clients. Either route works, and the
@@ -746,11 +748,11 @@ kglite-bolt-server --graph graph.kgl --neo4j-compat
 KGLITE_BOLT_NEO4J_COMPAT=1 kglite-bolt-server --graph graph.kgl
 ```
 
-The agent then becomes `Neo4j/5.26.0 (kglite-bolt-server/<version>)`. That is
+The agent then becomes `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`. That is
 enough of a Neo4j spelling to pass the driver's check. The real product is
 retained, so the server stays identifiable in logs, in driver errors, and
 through `ServerInfo.agent()`. The handshake `server` field and
-`dbms.components()` row change; `bolt_agent` keeps reporting kglite.
+`dbms.components()` rows change; `bolt_agent` keeps reporting kglite.
 
 The variable accepts `1`, `true`, `yes` or `on` (any case). That is the useful
 form for container images and unit files, where adding an argument means

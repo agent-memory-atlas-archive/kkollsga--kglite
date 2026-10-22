@@ -215,7 +215,7 @@ struct Cli {
     /// agent does not start with `Neo4j/` and fails at connect time with
     /// `UntrustedServerException: Server does not identify as a genuine Neo4j
     /// instance` — before running a single query. With this flag the handshake
-    /// reports `Neo4j/5.26.0 (kglite-bolt-server/<version>)`, which satisfies
+    /// reports `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`, which satisfies
     /// that check while keeping the real product visible in logs and in the
     /// driver's own `ServerInfo.agent()`.
     ///

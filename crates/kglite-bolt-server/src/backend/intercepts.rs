@@ -365,8 +365,7 @@ pub(super) fn parse_server_facts_call(query: &str) -> Option<ServerFactsCall> {
 /// which falls through to the engine unchanged.
 pub(super) fn components_pipeline_rewrite(
     query: &str,
-    name: &str,
-    versions: &[&str],
+    rows: &[(String, Vec<String>)],
     edition: &str,
 ) -> Option<String> {
     let mut body = query.trim();
@@ -414,16 +413,25 @@ pub(super) fn components_pipeline_rewrite(
         }
     }
     let quote = |text: &str| format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"));
-    let versions: Vec<String> = versions.iter().map(|v| quote(v)).collect();
+    let row_literals: Vec<String> = rows
+        .iter()
+        .map(|(name, versions)| {
+            let versions: Vec<String> = versions.iter().map(|v| quote(v)).collect();
+            format!(
+                "{{name: {}, versions: [{}], edition: {}}}",
+                quote(name),
+                versions.join(", "),
+                quote(edition)
+            )
+        })
+        .collect();
     let with: Vec<String> = projected
         .iter()
         .map(|(column, alias)| format!("__components.{column} AS {alias}"))
         .collect();
     Some(format!(
-        "UNWIND [{{name: {}, versions: [{}], edition: {}}}] AS __components WITH {} {}",
-        quote(name),
-        versions.join(", "),
-        quote(edition),
+        "UNWIND [{}] AS __components WITH {} {}",
+        row_literals.join(", "),
         with.join(", "),
         tail
     ))
@@ -572,14 +580,51 @@ pub(super) fn server_facts_stream(
     values: &[(&'static str, BoltValue)],
     started: Instant,
 ) -> ResultStream {
-    let record: Vec<BoltValue> = columns
+    server_facts_rows_stream(columns, &[values.to_vec()], started)
+}
+
+/// The `dbms.components()` rows, projected onto the yielded columns.
+pub(super) fn components_stream(
+    columns: &[&'static str],
+    rows: &[(String, Vec<String>)],
+    edition: &str,
+    started: Instant,
+) -> ResultStream {
+    let rows: Vec<Vec<(&'static str, BoltValue)>> = rows
         .iter()
-        .map(|column| {
-            values
+        .map(|(name, versions)| {
+            vec![
+                ("name", BoltValue::String(name.clone())),
+                (
+                    "versions",
+                    BoltValue::List(versions.iter().cloned().map(BoltValue::String).collect()),
+                ),
+                ("edition", BoltValue::String(edition.to_string())),
+            ]
+        })
+        .collect();
+    server_facts_rows_stream(columns, &rows, started)
+}
+
+/// [`server_facts_stream`] for a verb that reports several rows.
+fn server_facts_rows_stream(
+    columns: &[&'static str],
+    rows: &[Vec<(&'static str, BoltValue)>],
+    started: Instant,
+) -> ResultStream {
+    let records: Vec<BoltRecord> = rows
+        .iter()
+        .map(|values| BoltRecord {
+            values: columns
                 .iter()
-                .find(|(name, _)| name == column)
-                .map(|(_, value)| value.clone())
-                .unwrap_or(BoltValue::Null)
+                .map(|column| {
+                    values
+                        .iter()
+                        .find(|(name, _)| name == column)
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or(BoltValue::Null)
+                })
+                .collect(),
         })
         .collect();
     ResultStream {
@@ -587,7 +632,7 @@ pub(super) fn server_facts_stream(
             columns: columns.iter().map(|c| (*c).to_string()).collect(),
             extra: BoltDict::new(),
         },
-        records: vec![BoltRecord { values: record }],
+        records,
         summary: BoltDict::from([
             ("type".to_string(), BoltValue::String("r".to_string())),
             (

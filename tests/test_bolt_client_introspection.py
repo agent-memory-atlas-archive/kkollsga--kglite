@@ -62,8 +62,26 @@ def test_components_compat_identity(bolt_server_neo4j_compat):
         "CALL dbms.components() YIELD name, versions, edition",
     )[0]
     assert rec["name"] == "Neo4j Kernel"
-    assert rec["versions"] == ["5.26.0"]
+    assert rec["versions"] == ["2026.10.0"]
     assert rec["edition"] == "community"
+
+
+def test_compat_components_carry_the_cypher_dialect_row(bolt_server_neo4j_compat):
+    """GraphBridge's preflight needs exactly one 2026.x kernel row and at most
+    one Cypher row advertising "25" (Search/GraphSearchPreflight.cs)."""
+    rows = _run(
+        bolt_server_neo4j_compat,
+        "CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition LIMIT 5",
+    )
+    by_name = {r["name"]: r for r in rows}
+    assert len(rows) == 2 and set(by_name) == {"Neo4j Kernel", "Cypher"}
+    assert by_name["Cypher"]["versions"] == ["5", "25"]
+    assert by_name["Neo4j Kernel"]["versions"][0].startswith("2026.")
+
+
+def test_honest_components_stay_a_single_kglite_row(bolt_server):
+    rows = _run(bolt_server, "CALL dbms.components() YIELD name, versions, edition")
+    assert [r["name"] for r in rows] == ["kglite-bolt-server"]
 
 
 def test_compat_agent_and_components_agree(bolt_server_neo4j_compat):
@@ -73,7 +91,7 @@ def test_compat_agent_and_components_agree(bolt_server_neo4j_compat):
         agent = driver.get_server_info().agent
         with driver.session() as session:
             name = list(session.run("CALL dbms.components() YIELD name"))[0]["name"]
-    assert agent.startswith("Neo4j/5.26.0"), agent
+    assert agent.startswith("Neo4j/2026.10.0"), agent
     assert name == "Neo4j Kernel"
 
 
@@ -237,3 +255,63 @@ def test_explain_plan_carries_string_representation(bolt_server):
             plan = result.consume().plan
     text = plan["args"]["string-representation"]
     assert "Match" in text and "\n" in text
+
+
+# ── Neo4j-named index search over the wire ────────────────────────────────
+
+
+@pytest.fixture
+def bolt_search_server(tmp_path):
+    """--neo4j-compat over a graph carrying a BM25 and a vector index."""
+    if not _bolt_binary_available():
+        pytest.skip(_BOLT_SKIP_REASON)
+    from kglite import KnowledgeGraph
+
+    graph = KnowledgeGraph()
+    for doc_id, text in [(1, "alpha quick fox"), (2, "beta quick quick"), (3, "gamma ray burst")]:
+        graph.cypher("CREATE (:Doc {id: $id, text: $text})", params={"id": doc_id, "text": text})
+    graph.build_text_index("Doc", "text")
+    graph.add_embeddings("Doc", "text", {1: [1.0, 0.0], 2: [0.0, 1.0], 3: [0.6, 0.8]})
+    graph.build_vector_index("Doc", "text", m=8)
+    path = tmp_path / "search.kgl"
+    graph.save(str(path))
+    proc, url = _spawn_bolt_server(path, readonly=True, extra_args=["--neo4j-compat"])
+    yield url
+    _teardown_bolt_server(proc)
+
+
+def test_graphbridge_fulltext_statement_runs_verbatim(bolt_search_server):
+    with GraphDatabase.driver(bolt_search_server, auth=None) as driver:
+        with driver.session() as session:
+            rows = list(
+                session.run(
+                    "CYPHER 25 CALL db.index.fulltext.queryNodes($index,$query,{limit:$limit}) "
+                    "YIELD node AS entity,score RETURN entity,score ORDER BY score DESC LIMIT $limit",
+                    {"index": "Doc.text", "query": "quick", "limit": 5},
+                )
+            )
+    assert [r["entity"]["id"] for r in rows] == [2, 1]
+    assert all(r["score"] > 0 for r in rows)
+
+
+def test_vector_procedure_runs_over_the_wire_and_the_search_clause_is_named(bolt_search_server):
+    with GraphDatabase.driver(bolt_search_server, auth=None) as driver:
+        with driver.session() as session:
+            rows = list(
+                session.run(
+                    "CALL db.index.vector.queryNodes($index, $k, $v) YIELD node, score "
+                    "RETURN node.id AS id, score ORDER BY score DESC",
+                    index="Doc.text",
+                    k=2,
+                    v=[1.0, 0.1],
+                )
+            )
+            assert [r["id"] for r in rows] == [1, 3]
+            with pytest.raises(neo4j.exceptions.ClientError, match="SEARCH clause is not supported"):
+                list(
+                    session.run(
+                        "CYPHER 25 MATCH (entity) SEARCH entity IN (VECTOR INDEX `Doc.text` FOR $q LIMIT 2) "
+                        "SCORE AS score RETURN entity, score",
+                        q=[1.0, 0.1],
+                    )
+                )

@@ -71,7 +71,7 @@ genuine Neo4j instance`, before any query runs. The Python and JavaScript
 drivers do not perform this check, so they work against the default identity.
 
 Start the server with compatibility mode (or set `KGLITE_BOLT_NEO4J_COMPAT=1`).
-The agent becomes `Neo4j/5.26.0 (kglite-bolt-server/<version>)`. The driver
+The agent becomes `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`. The driver
 accepts it, and it still names the real product:
 
 ```bash
