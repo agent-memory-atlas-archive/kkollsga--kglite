@@ -92,8 +92,7 @@ The header exposes:
   - The first write to a mapped store copies it to the heap.
   - `columns` (an additive field; a caller built before it declares a shorter
     `struct_size` and reads as `0`) takes the same values for property columns
-    (`0` decodes for a graph that loads into in-memory storage and means
-    `auto` for every other mode):
+    (`0` means `auto` in every storage mode):
     `auto` maps a column of 256 KB or more from a regular local file on Unix,
     `mapped` maps any size and `memory` decodes to the heap, spilling large
     columns to a temp file. A v8 or older file ignores it.
@@ -106,15 +105,19 @@ The header exposes:
     mapped load holds in memory: `0` is the default (`max(512 MiB, half the
     file)`), `UINT64_MAX` is no limit, any other value is that many bytes. A
     write past the limit returns `KGLITE_STATUS_CODE_WRITE_BUDGET_EXCEEDED`
-    (26) with the graph unchanged; saving the graph releases the memory. An
-    in-memory graph ignores it.
+    (26) with the graph unchanged; saving the graph releases the memory.
+    `kglite_session_set_embeddings`, `kglite_session_add_embeddings` and
+    `kglite_session_quantize_embeddings` count the heap of the stores they
+    write and are refused the same way before they start. An in-memory graph
+    ignores it.
   - Do not overwrite a loaded file in place (`cp`, `rsync --inplace`): a
     truncated mapping faults. Write to a new name and rename it over;
     `kglite_save_graph_durable` already does;
 - `kglite_save_graph_with_layout`: `kglite_save_graph_durable` plus a `layout`
-  (`0` default, `1` compact, `2` mapped). Compact writes the v8 container that
-  releases before the v9 reader can open; the default writes v9 when an
-  embedding store is large enough; mapped also writes large columns raw;
+  (`0` default, `1` compact; any other value is `KGLITE_STATUS_CODE_INVALID_ARGUMENT`).
+  Compact writes the v8 container that releases before the v9 reader can open;
+  the default writes v9 when an embedding store or a property column is large
+  enough, with those buffers raw;
 - `kglite_graph_verify_integrity`, which checks the CRC32 of every mapped
   section a graph serves and returns a JSON report;
 - `kglite_graph_storage_mode`, which reports the mode a graph handle is running

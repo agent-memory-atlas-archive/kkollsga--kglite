@@ -58,7 +58,7 @@ A default `save()` writes v9 when any of these holds. An embedding store of 4 Mi
 
 - The rule for "large" is the one a v8 load uses to spill a column to a temp file. A default file therefore maps exactly the columns that would otherwise be copied into a per-process spill file. Many servers on one graph share the file's pages instead of each writing its own copy under `$TMPDIR`.
 - A v9 file stores the vectors, their norms and those column buffers uncompressed and 64-byte aligned, after the compressed sections. Smaller columns stay in the compressed sections and decode to the heap.
-- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. Raw columns alone grow the operator graphs measured 1.4-5.4x (one 134 MB graph becomes 389 MB). Almost all of that growth is string bytes that zstd shrinks 3-7x.
+- Embeddings compress by under 10 %, so they add little. Raw column text does not compress away. Raw columns alone grow the operator graphs measured 1.35-5.38x (one 134 MB graph becomes 389 MB). Almost all of that growth is string bytes that zstd shrinks 3-7x.
 - Integer columns that shrink four times or more as deltas (monotonic ids) stay compressed and decode at load.
 - A graph of 65,536 nodes or more also records the sorted member list of each node type. A type whose ids are all integers (`UniqueId` and int64 alike) or all strings also gets a sorted id index. A graph of 262,144 relationships or more records the per-relationship-type peer counts. Either size also records the topology raw, at about 40 bytes per node and 32 per relationship, on top of the compressed copy.
 - These sections cost 4 bytes per node, 8 per indexed id and 16 per distinct peer. Measured: a random 1M-node, 12M-relationship graph grows 110 to 147 MB; a 196 MB operator graph grows 1.3 % and a 134 MB one 3.7 %.
@@ -77,7 +77,7 @@ A default save makes the file larger so a load can map it. If the file is large 
 | A catalog, 1M products, 8M relationships | 51 MB | 440 MB | 8.6x |
 
 - The growth is largest for a graph of many relationships with few or small properties. The raw topology costs about 32 bytes per relationship, beside the compressed copy.
-- A default save of the 1M-product catalog takes 1.19 s; a `compact` save takes 0.49-0.57 s.
+- A default save of the 1M-product catalog takes 1.19-1.68 s; a `compact` save takes 0.49-0.57 s.
 - A default file also helps `memory` storage: it maps embeddings and large columns instead of copying them or spilling them to a temp file. The raw topology helps only `mapped` storage.
 - A `compact` file loads into either storage mode. A `mapped` load decodes its topology to the heap.
 
@@ -135,7 +135,7 @@ Mapped topology changes two numbers differently.
 
 A load into `mapped` storage serves the recorded indexes from the file. A load into `memory` storage ignores them and builds what it always built.
 
-- The first `{id: ...}` lookup on a recorded type costs nothing to build and holds no heap: a binary search in the mapping. Before, it built a hash map of every id (1M ids: 23 ms and +83 MB, now 0.2 ms).
+- The first `{id: ...}` lookup on a recorded type costs nothing to build and holds no heap: a binary search in the mapping. Before, it built a hash map of every id (1M ids: 28 ms and +82 MB, now 0.17 ms).
 - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning every relationship (1M nodes, 12M relationships, `b.id, count(a)` over one type: 590 ms and +261 MB before, 235 ms and +179 MB after; `memory` storage takes 560 ms and +227 MB).
 - A type with repeated ids is recorded with the node a lookup returns on a `memory` load (the last one); the nodes it shadows are named in a small extra section. A type whose ids are `UniqueId` and int64 together is recorded as int64. A type with integer and string ids, or ids of another kind, has no recorded id index and builds one on first use, as before. More than 1,024 node types or relationship types record no member lists, id indexes or peer counts.
 - A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
@@ -166,12 +166,13 @@ g.graph_info()["write_budget_state"]   # "ok", "warning", "exceeded", "unlimited
 
 What happens as writes accumulate:
 
-- The reading is an estimate of the heap the unsaved writes hold (overlay entries at 128 bytes each plus new column heap), not an allocator measurement. `write_budget_used_bytes` reports it.
+- The reading is an estimate of the heap the unsaved writes hold (overlay entries at 128 bytes each, plus new column heap and the heap of embedding stores written since the load), not an allocator measurement. `write_budget_used_bytes` reports it.
 - At half the limit, the write that crossed it emits `kglite.WriteBudgetWarning`. It warns once per upward crossing and re-arms after a save.
 - At the limit, writes raise `kglite.WriteBudgetExceededError`. Reads keep working.
 - A Cypher statement that would cross the limit is rolled back, so the graph is unchanged and `write_budget_used_bytes` reads what it read before. Any failed Cypher statement that created or updated, and deleted nothing, gives its overlay entries back the same way, so repeated failures do not grow the heap. One that deleted a node or relationship keeps its entries until the next save. A smaller statement that fits is still accepted.
-- A fluent loader such as `add_nodes` is refused only when the graph is already at the limit, so one call can overshoot by its own size.
-- `save()` writes the changes out, serves the graph from the file it wrote and resets the budget against the new file size.
+- A store served from the file counts nothing until a write copies it to the heap, and then counts in full. A store a write replaces or removes gives its share back.
+- A fluent loader such as `add_nodes`, or an embedding call such as `set_embeddings`, `import_embeddings` or `embed_texts`, is refused only when the graph is already at the limit, so one call can overshoot by its own size.
+- `save()` writes the changes out, serves the graph from the file it wrote and resets the budget against the new file size. The reload places columns, embeddings and topology as the load did, so `columns="memory"` or `verify="eager"` survive a save.
 - If the save cannot rebase (`layout="compact"`, Windows), the file is written but the memory stays. The error then says a save did not release it; reload the saved file, open it durable or raise the budget.
 
 The MCP server takes `--write-budget` (or `extensions.write_budget.limit`) and appends the warning to the write's response. `kglite query --write-budget` and the C ABI field `write_budget` set it too. The CLI and manifest accept `default`, `unlimited` or a size such as `2GiB`.

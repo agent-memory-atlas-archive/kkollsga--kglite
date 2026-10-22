@@ -425,7 +425,7 @@ where the embedding stores of a v9 `.kgl` live. A graph saved with a store of
 - A mapped store costs no resident memory until a search touches it. `ps` and Linux cgroups still count the pages a search has touched; macOS `phys_footprint` does not.
 - The first write to a store copies it to the heap.
 - Write a new file and rename it over the served one. Overwriting it in place (`cp`, `rsync --inplace`) truncates a live mapping, and the next search faults.
-- v9 files (a default save of a graph with an embedding store of 4 MiB or more or a property column buffer of 256 KB or more) are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
+- v9 files (a default save of a graph with an embedding store of 4 MiB or more, a property column buffer of 256 KB or more, 65,536 nodes or 262,144 relationships) are refused by kglite releases before the one that introduced them. Save with `layout="compact"` for a file an older server must read.
 
 ### Column placement
 
@@ -456,6 +456,7 @@ the property columns of a v9 `.kgl` live. A default save writes every column wit
 - The default is `max(512 MiB, half the file)`.
 - At half the limit the write that crossed it answers with a `warning:` line, once per upward crossing, and the server logs it on stderr.
 - At the limit a write fails with `write_budget_exceeded` until `save_graph` writes the changes out; reads keep working.
+- The estimate counts overlay entries, new column heap and the heap of embedding stores written since the load.
 - An in-memory graph and a graph with no mapped topology carry no budget.
 
 ### The writer lease, and several servers on one file

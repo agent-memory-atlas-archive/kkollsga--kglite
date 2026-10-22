@@ -1014,8 +1014,11 @@ def load(
     Do not overwrite a loaded file in place (``cp``, ``rsync --inplace``): a
     truncated mapping faults. Write to a new name and rename it over, as
     :meth:`KnowledgeGraph.save` does, or load with ``embeddings="memory"``
-    and ``columns="memory"``. Saving over the loaded path with ``save()`` is
-    safe.
+    and ``columns="memory"``, adding ``topology="memory"`` for ``"mapped"``
+    storage when the file has topology sections (65,536 nodes or 262,144
+    relationships or more). Saving over the loaded path with ``save()`` is
+    safe, and the graph keeps serving columns, embeddings and topology as the
+    load asked.
 
     **Mapped columns.** A default save writes each property column that has a
     buffer of 256 KB or more (numbers, dates, booleans; strings as offsets plus
@@ -1053,7 +1056,9 @@ def load(
     **Unsaved-write budget.** A graph read from a file's mapped topology keeps
     its writes in heap memory until a save writes them out, so a read-only load
     that keeps writing grows without bound. ``write_budget`` bounds it. The
-    reading is an estimate of the heap the unsaved writes hold, reported by
+    reading is an estimate of the heap the unsaved writes hold (overlay entries,
+    new column heap and the heap of embedding stores written since the load; a
+    store served from the file counts nothing until a write copies it), reported by
     :meth:`KnowledgeGraph.graph_info` as ``write_budget_used_bytes`` beside
     ``write_budget_bytes`` and ``write_budget_state`` (``"ok"``, ``"warning"``,
     ``"exceeded"``, ``"unlimited"`` or ``"not_applicable"``).
@@ -1063,13 +1068,15 @@ def load(
     - A Cypher statement that would cross the limit is rolled back and raises
       :class:`WriteBudgetExceededError`, and a write made while the graph is at
       the limit raises it before anything runs. Reads keep working. A rolled-back
-      statement leaves its overlay entries until the next save, so the graph then
-      reads as at the limit. A fluent loader such as ``add_nodes`` is refused
-      only when the graph is already at the limit, so one call can overshoot by
-      its own size.
+      statement restores the usage it started from, except that one which
+      deleted a node or relationship keeps its overlay entries until the next
+      save. A fluent loader such as ``add_nodes`` or an embedding call such as
+      ``set_embeddings`` or ``embed_texts`` is refused only when the graph is
+      already at the limit, so one call can overshoot by its own size.
     - :meth:`KnowledgeGraph.save` writes the changes out, serves the graph from
-      the file it wrote and starts the budget over (limit included, as the file
-      has a new size). A save that cannot rebase (``layout="compact"``, Windows)
+      the file it wrote (columns, embeddings and topology placed as the load
+      asked) and starts the budget over (limit included, as the file has a new
+      size). A save that cannot rebase (``layout="compact"``, Windows)
       writes the file but keeps the memory, and the error says so.
 
     A graph with no mapped topology has no overlay to meter and carries no
