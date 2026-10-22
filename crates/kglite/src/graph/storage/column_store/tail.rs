@@ -394,6 +394,37 @@ impl ColumnStore {
         }
     }
 
+    /// Widen every `UniqueId` id column of the store, its base and its tail
+    /// segments alike, to `Int64`: what one id column of a heap store does when
+    /// the first `Int64` id meets it (`TypedColumn::widened_for`). A base part
+    /// the tail appends to is read beside it, so it has to change kind with the
+    /// column the tail made; left alone, the type reads two id spellings that a
+    /// heap store never holds, and a save drops its id index for the mix.
+    pub(super) fn widen_unique_id_columns(&mut self) {
+        const INT: Value = Value::Int64(0);
+        if let Some(wide) = self
+            .id_column
+            .as_deref()
+            .and_then(|column| column.widened_for(&INT))
+        {
+            self.swap_id_column(Some(Arc::new(wide)));
+        }
+        let stale = |part: &Arc<ColumnStore>| {
+            matches!(
+                part.id_column.as_deref(),
+                Some(TypedColumn::UniqueId { .. })
+            )
+        };
+        if self.tail_parts().any(stale) {
+            self.sealed_stats.invalidate();
+            for part in self.sealed_tails.iter_mut().chain(self.tail.iter_mut()) {
+                if stale(part) {
+                    Arc::make_mut(part).widen_unique_id_columns();
+                }
+            }
+        }
+    }
+
     /// The key of the base part's schema slot, for a slot-addressed call that
     /// lands on a tail row (the tail's schema is its own).
     pub(super) fn base_key_at(&self, slot: u16) -> Option<InternedKey> {

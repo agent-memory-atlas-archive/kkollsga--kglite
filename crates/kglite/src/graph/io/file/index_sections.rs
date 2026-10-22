@@ -47,6 +47,9 @@ pub(super) const KIND_ID_KEYS: u8 = 7;
 pub(super) const KIND_ID_NODES: u8 = 8;
 pub(super) const KIND_PEERS: u8 = 9;
 pub(super) const KIND_ID_STRINGS: u8 = 19;
+/// The nodes of a type that share an id with a later node and so have no entry
+/// in its id sections; written only for a type that has any.
+pub(super) const KIND_ID_SHADOWED: u8 = 20;
 
 /// A save records the type and id indexes of a graph with at least this many
 /// live nodes. Below it the rebuild is too cheap to be worth file bytes, and
@@ -131,11 +134,11 @@ fn owned(
 }
 
 /// The one id spelling a type's index can be written in.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IdKind {
     /// `Value::UniqueId`, what a DataFrame load stores: `u32` keys.
     Unique,
-    /// `Value::Int64`: `i64` keys.
+    /// `Value::Int64`, or a mix of it and `UniqueId`: `i64` keys.
     Int64,
     /// `Value::String`: byte-ordered keys, held in [`TypeScan::strings`].
     Str,
@@ -185,9 +188,20 @@ impl TypeScan {
                 return;
             }
         };
-        if *self.kind.get_or_insert(kind) != kind {
-            self.abandon();
-        } else if let Value::String(id) = id {
+        // `UniqueId` and `Int64` spell one integer: the lookup treats them as
+        // equal, and a heap store widens its id column to `Int64` when the two
+        // meet. A type holding both is written as `i64` keys.
+        match (*self.kind.get_or_insert(kind), kind) {
+            (held, kind) if held == kind => {}
+            (IdKind::Unique | IdKind::Int64, IdKind::Unique | IdKind::Int64) => {
+                self.kind = Some(IdKind::Int64);
+            }
+            _ => {
+                self.abandon();
+                return;
+            }
+        }
+        if let Value::String(id) = id {
             self.strings.push(id, node);
         } else {
             self.ids.push((value, node));
@@ -262,12 +276,8 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
             push_string_ids(name, &mut scan.strings, out);
             continue;
         }
-        scan.ids.sort_unstable_by_key(|(id, _)| *id);
-        // A repeated id has no single owner, so the index would pick a node
-        // the lazy build picks differently; the type is left to the lazy build.
-        if scan.ids.windows(2).any(|w| w[0].0 == w[1].0) {
-            continue;
-        }
+        scan.ids.sort_unstable();
+        let shadowed = keep_last_per_id(&mut scan.ids, |(id, _)| *id, |(_, node)| *node);
         let count = scan.ids.len();
         let (dtype, keys): (SectionDtype, Vec<u8>) = match kind {
             IdKind::Int64 => (
@@ -300,16 +310,54 @@ fn push_node_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
             count,
             scan.ids.iter().flat_map(|(_, n)| n.to_le_bytes()).collect(),
         ));
+        push_shadowed(name, shadowed, out);
     }
 }
 
-/// The id sections of a type whose ids are all strings, unless one repeats.
-fn push_string_ids(name: &str, ids: &mut StringIds, out: &mut Vec<MappableSection<'static>>) {
-    let mut entries = std::mem::take(&mut ids.entries);
-    entries.sort_unstable_by(|a, b| ids.key(a).cmp(ids.key(b)));
-    if entries.windows(2).any(|w| ids.key(&w[0]) == ids.key(&w[1])) {
+/// Of each run of entries with one id (the slice is sorted by id, then node),
+/// keep the last: the node the lazy build keeps, which inserts a type's nodes
+/// in ascending order and lets a later node replace an earlier one. The nodes
+/// of the entries dropped, in the order met.
+fn keep_last_per_id<T, K: PartialEq>(
+    entries: &mut Vec<T>,
+    key: impl Fn(&T) -> K,
+    node: impl Fn(&T) -> u32,
+) -> Vec<u32> {
+    let mut shadowed = Vec::new();
+    let mut kept = 0;
+    for read in 0..entries.len() {
+        if read + 1 == entries.len() || key(&entries[read]) != key(&entries[read + 1]) {
+            entries.swap(kept, read);
+            kept += 1;
+        } else {
+            shadowed.push(node(&entries[read]));
+        }
+    }
+    entries.truncate(kept);
+    shadowed
+}
+
+/// The section naming the nodes [`keep_last_per_id`] dropped, or nothing.
+fn push_shadowed(name: &str, mut shadowed: Vec<u32>, out: &mut Vec<MappableSection<'static>>) {
+    if shadowed.is_empty() {
         return;
     }
+    shadowed.sort_unstable();
+    out.push(owned(
+        id_section_name(name, "shadowed"),
+        KIND_ID_SHADOWED,
+        SectionDtype::U32,
+        shadowed.len(),
+        shadowed.iter().flat_map(|n| n.to_le_bytes()).collect(),
+    ));
+}
+
+/// The id sections of a type whose ids are all strings.
+fn push_string_ids(name: &str, ids: &mut StringIds, out: &mut Vec<MappableSection<'static>>) {
+    let mut entries = std::mem::take(&mut ids.entries);
+    entries.sort_unstable_by(|a, b| ids.key(a).cmp(ids.key(b)).then(a.2.cmp(&b.2)));
+    let shadowed = keep_last_per_id(&mut entries, |entry| ids.key(entry), |entry| entry.2);
+    push_shadowed(name, shadowed, out);
     let count = entries.len();
     let (keys, nodes) = string_keys::encode(entries.iter().map(|e| (ids.key(e), e.2)));
     out.push(owned(
@@ -454,7 +502,8 @@ pub(super) fn place(
 #[derive(Default)]
 pub(super) struct IndexSections {
     types: Vec<(String, MappedSection)>,
-    ids: Vec<(String, MappedSection, MappedSection)>,
+    /// `(type, keys, nodes, nodes that share an id with a later node)`.
+    ids: Vec<(String, MappedSection, MappedSection, u64)>,
     peers: Vec<(String, MappedSection, MappedSection)>,
 }
 
@@ -490,8 +539,16 @@ impl IndexSections {
                             KIND_ID_NODES,
                             SectionDtype::U32,
                         );
+                        let shadowed = partner(
+                            format!("idx:id:{stem}:shadowed"),
+                            KIND_ID_SHADOWED,
+                            SectionDtype::U32,
+                        )
+                        .map_or(0, |section| section.elem_count);
                         if let Some(nodes) = nodes {
-                            found.ids.push((unescape(stem), section.clone(), nodes));
+                            found
+                                .ids
+                                .push((unescape(stem), section.clone(), nodes, shadowed));
                         }
                     }
                 }
@@ -534,11 +591,12 @@ impl IndexSections {
         let types = TypeIndexBase::from_sections(std::mem::take(&mut self.types), bound)?;
         let ids: Vec<_> = std::mem::take(&mut self.ids)
             .into_iter()
-            .filter(|(name, _, nodes)| {
-                types
-                    .slice_for(name)
-                    .is_some_and(|members| members.len() / 4 == nodes.elem_count as usize)
+            .filter(|(name, _, nodes, shadowed)| {
+                types.slice_for(name).is_some_and(|members| {
+                    members.len() / 4 == (nodes.elem_count + shadowed) as usize
+                })
             })
+            .map(|(name, keys, nodes, _)| (name, keys, nodes))
             .collect();
         let id_base = IdIndexBase::from_sections(ids, bound)?;
         graph.type_indices = TypeIndexStore::from_base(types);
@@ -561,5 +619,44 @@ impl IndexSections {
             })
             .collect();
         PeerBase::from_sections(triples, graph.graph.node_bound())
+    }
+}
+
+#[cfg(test)]
+mod key_class_tests {
+    use super::*;
+
+    fn scan() -> TypeScan {
+        TypeScan {
+            uniform: true,
+            ..TypeScan::default()
+        }
+    }
+
+    #[test]
+    fn unique_and_int64_ids_are_one_key_class_and_a_string_is_not() {
+        let mut mixed = scan();
+        mixed.see(&Value::UniqueId(7), 0);
+        mixed.see(&Value::Int64(1 << 40), 1);
+        mixed.see(&Value::UniqueId(9), 2);
+        assert!(mixed.uniform && mixed.kind == Some(IdKind::Int64));
+        assert_eq!(mixed.ids, vec![(7, 0), (1 << 40, 1), (9, 2)]);
+
+        let mut unique = scan();
+        unique.see(&Value::UniqueId(7), 0);
+        assert_eq!(unique.kind, Some(IdKind::Unique));
+
+        let mut text = scan();
+        text.see(&Value::UniqueId(7), 0);
+        text.see(&Value::String("7".into()), 1);
+        assert!(!text.uniform && text.ids.is_empty());
+    }
+
+    #[test]
+    fn a_repeated_id_keeps_its_last_node_and_names_the_others() {
+        let mut ids = vec![(1i64, 4u32), (1, 9), (2, 3), (3, 1), (3, 2), (3, 8)];
+        let shadowed = keep_last_per_id(&mut ids, |(id, _)| *id, |(_, node)| *node);
+        assert_eq!(ids, vec![(1, 9), (2, 3), (3, 8)]);
+        assert_eq!(shadowed, vec![4, 1, 2]);
     }
 }

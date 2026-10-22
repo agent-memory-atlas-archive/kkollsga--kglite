@@ -35,7 +35,11 @@ pub(super) fn rows(graph: &DirGraph, query: &str) -> String {
 }
 
 /// A type whose ids are `UniqueId`, as a DataFrame load stores them.
-fn add_unique_id_type(graph: &mut DirGraph, node_type: &str, ids: impl Iterator<Item = u32>) {
+pub(super) fn add_unique_id_type(
+    graph: &mut DirGraph,
+    node_type: &str,
+    ids: impl Iterator<Item = u32>,
+) {
     use crate::datatypes::DataFrame;
     let rows: Vec<Vec<Value>> = ids
         .map(|id| {
@@ -123,13 +127,14 @@ pub(super) fn graph() -> DirGraph {
 
 /// Queries that touch every served structure: id lookups, type scans, typed
 /// and grouped edge aggregates in both directions.
-pub(super) const PROBES: [&str; 16] = [
+pub(super) const PROBES: [&str; 17] = [
     "MATCH (d:Doc {id: 1015}) RETURN d.n",
     "MATCH (d:Doc {id: 1030}) RETURN d.n",
     "MATCH (d:Doc {id: 1360}) RETURN d.n",
     "MATCH (d:Doc) RETURN count(d), sum(d.n), min(d.id), max(d.id)",
     "MATCH (t:Tag {id: 'tag-3'}) RETURN t.n",
     "MATCH (t:Twin {id: 3}) RETURN count(t)",
+    "MATCH (t:Twin {id: 3}) RETURN t.n",
     "MATCH (u:Uni {id: 508}) RETURN u.n",
     "MATCH (u:Uni {id: 509}) RETURN u.n",
     "MATCH (u:Uni) WHERE u.id > 600 RETURN count(u), sum(u.n)",
@@ -144,7 +149,7 @@ pub(super) const PROBES: [&str; 16] = [
 
 /// String-id lookups: hits, misses, the prefix neighbours of a hit, and the
 /// types that stay on the lazy build.
-const STRING_PROBES: [&str; 14] = [
+const STRING_PROBES: [&str; 15] = [
     "MATCH (s:Str {id: ''}) RETURN s.n",
     "MATCH (s:Str {id: 'ab'}) RETURN s.n",
     "MATCH (s:Str {id: 'abc'}) RETURN s.n",
@@ -159,6 +164,7 @@ const STRING_PROBES: [&str; 14] = [
     "MATCH (m:MixId {id: 'x'}) RETURN m.n",
     "MATCH (m:MixId {id: 5}) RETURN m.n",
     "MATCH (d:Dup {id: 'd1'}) RETURN count(d)",
+    "MATCH (d:Dup {id: 'd1'}) RETURN d.n",
 ];
 
 /// The probes' answers plus an id lookup in the type Cypher cannot spell.
@@ -256,6 +262,10 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
         "idx:id:Tag:nodes",
         "idx:id:Str:keys",
         "idx:id:Str:nodes",
+        "idx:id:Twin:keys",
+        "idx:id:Twin:nodes",
+        "idx:id:Dup:keys",
+        "idx:id:Dup:nodes",
         "idx:peer:LINKS:out",
         "idx:peer:LINKS:in",
         "idx:peer:TAGS:out",
@@ -267,12 +277,8 @@ fn a_large_graph_records_its_indexes_and_a_small_one_does_not() {
         );
     }
     assert!(
-        names
-            .iter()
-            .all(|n| !["idx:id:Twin", "idx:id:Dup", "idx:id:MixId"]
-                .iter()
-                .any(|p| n.starts_with(p))),
-        "repeated and mixed ids are left to the lazy build: {names:?}"
+        names.iter().all(|n| !n.starts_with("idx:id:MixId")),
+        "ids of two kinds are left to the lazy build: {names:?}"
     );
 
     let compact = tmp.path().join("compact.kgl");
@@ -341,12 +347,16 @@ fn a_mapped_load_serves_the_recorded_indexes_and_answers_like_the_original() {
             "the {name} string-id index is served from the file, with no heap copy"
         );
     }
-    for name in ["Twin", "Dup", "MixId"] {
+    for name in ["Twin", "Dup"] {
         assert!(
-            !mapped.id_indices.contains_key(name),
-            "{name}: types the file recorded no id index for are built on first use"
+            mapped.id_indices.contains_key(name) && mapped.id_indices.overlay_len(name).is_none(),
+            "{name}: a repeated id is recorded with the node the lazy build keeps"
         );
     }
+    assert!(
+        !mapped.id_indices.contains_key("MixId"),
+        "ids of two kinds are built on first use"
+    );
     assert!(peer_base_present(&mapped));
 
     assert_eq!(probe(&mapped), probe(&original));

@@ -2411,6 +2411,8 @@ mod embedding_load_validation_tests;
 #[path = "file/embedding_mapped_tests.rs"]
 mod embedding_mapped_tests;
 #[cfg(test)]
+mod eligibility_tests;
+#[cfg(test)]
 mod frozen_overlay_tests;
 #[cfg(test)]
 mod frozen_tests;

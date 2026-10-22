@@ -407,6 +407,9 @@ impl ColumnStore {
     pub fn push_id(&mut self, value: &Value) {
         if let Some(tail) = self.tail_for_append() {
             tail.push_id(value);
+            if matches!(value, Value::Int64(_)) {
+                self.widen_unique_id_columns();
+            }
             return;
         }
         self.spillable_growth = true;
@@ -1197,9 +1200,15 @@ impl ColumnStore {
             tail.tombstone(row);
             return;
         }
-        if let Some(t) = self.tombstones.get_mut(row_id as usize) {
-            *t = true;
+        if row_id >= self.row_count {
+            return;
         }
+        // An mmap-backed store starts with no bitmap at all; the first
+        // tombstone gives its base rows one.
+        if self.tombstones.len() < self.row_count as usize {
+            self.tombstones.resize(self.row_count as usize, false);
+        }
+        self.tombstones[row_id as usize] = true;
     }
 
     /// Bring a tombstoned row back. The inverse of [`Self::tombstone`], for the

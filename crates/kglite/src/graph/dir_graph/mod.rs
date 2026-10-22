@@ -1680,6 +1680,35 @@ impl DirGraph {
         by_type_name
     }
 
+    /// The property names of `node_type`'s metadata that are stored columns,
+    /// sorted. The metadata of a DataFrame-loaded type also records the columns
+    /// the id and title were loaded from (`id` and `title`, or the names
+    /// declared as their aliases), which live in the store's reserved
+    /// `__id__`/`__title__` columns: a schema slot for one is a second,
+    /// always-null column that a rebuilt store would write out beside the
+    /// reserved one. When an alias is declared, the plain `id` or `title` is an
+    /// ordinary property and stays a column.
+    fn column_names_in_metadata<'a>(
+        &self,
+        node_type: &str,
+        props: &'a HashMap<String, String>,
+    ) -> Vec<&'a String> {
+        let id_field = self
+            .id_field_aliases
+            .get(node_type)
+            .map_or("id", String::as_str);
+        let title_field = self
+            .title_field_aliases
+            .get(node_type)
+            .map_or("title", String::as_str);
+        let mut names: Vec<&String> = props
+            .keys()
+            .filter(|name| name.as_str() != id_field && name.as_str() != title_field)
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Rebuild `self.type_schemas` — one shared [`TypeSchema`] per node type,
     /// derived from `node_type_metadata` (O(types)) or, for a graph that
     /// carries none, by scanning the staged property maps. Read by the column
@@ -1700,8 +1729,7 @@ impl DirGraph {
             // `io::file::load_portable_column_section`), so sorted-by-name is
             // the canonical choice: deterministic, independent of insertion
             // history, and stable across processes and platforms.
-            let mut names: Vec<&String> = props.keys().collect();
-            names.sort();
+            let names = self.column_names_in_metadata(node_type, props);
             let keys = names
                 .into_iter()
                 .map(|name| self.interner.get_or_intern(name));
@@ -1747,8 +1775,7 @@ impl DirGraph {
         for (node_type, props) in self.node_type_metadata.iter() {
             // SLOT-ORDER RULE: sorted by property name — see
             // `rebuild_type_schemas` for why the order is observable.
-            let mut names: Vec<&String> = props.keys().collect();
-            names.sort();
+            let names = self.column_names_in_metadata(node_type, props);
             let keys = names
                 .into_iter()
                 .map(|name| self.interner.get_or_intern(name));

@@ -376,6 +376,59 @@ fn a_save_writes_the_base_and_tail_regions_into_one_file() {
     assert_same_rows(&twice.store, &heap_store(0..BASE + APPENDED + 5));
 }
 
+/// A tombstone on a base row of the mapping, on an appended row, and a SET
+/// beside them, on both stores.
+fn tombstone_rows(store: &mut ColumnStore, expected: &mut ColumnStore) {
+    for row in [7, BASE as u32 + 3, BASE as u32 + 9] {
+        store.tombstone(row);
+        expected.tombstone(row);
+        assert!(store.is_tombstoned(row), "tombstone {row} is held");
+    }
+    let (level, forty) = (key("level"), Value::Int64(40));
+    assert!(store.set(8, level, &forty, None));
+    assert!(expected.set(8, level, &forty, None));
+}
+
+#[test]
+fn a_tombstone_on_a_base_or_appended_row_is_held_and_answered_like_a_heap_store() {
+    let mut fixture = mapped_store(0..BASE);
+    let store = &mut fixture.store;
+    appended(store);
+    let mut expected = heap_store(0..BASE + APPENDED);
+    tombstone_rows(store, &mut expected);
+    assert_same_rows(store, &expected);
+    assert_eq!(store.live_count(), BASE as u32 + APPENDED as u32 - 3);
+
+    // Taken back, base row and appended row alike.
+    for row in [7, BASE as u32 + 3] {
+        store.untombstone(row);
+        expected.untombstone(row);
+    }
+    assert_same_rows(store, &expected);
+
+    // A tombstone does not survive a truncation of the rows it was set on.
+    store.tombstone(BASE as u32 + 9);
+    expected.tombstone(BASE as u32 + 9);
+    store.truncate_rows(BASE as u32 + 5);
+    expected.truncate_rows(BASE as u32 + 5);
+    assert_same_rows(store, &expected);
+}
+
+#[test]
+fn a_tombstone_on_a_pure_mapped_base_row_is_held() {
+    let mut fixture = mapped_store(0..BASE);
+    let mut expected = heap_store(0..BASE);
+    fixture.store.tombstone(11);
+    expected.tombstone(11);
+    assert!(fixture.store.is_tombstoned(11));
+    assert!(!fixture.store.is_tombstoned(12));
+    assert_eq!(fixture.store.live_count(), BASE as u32 - 1);
+    assert_same_rows(&fixture.store, &expected);
+    // Out of range stays out of range and is not a tombstone.
+    fixture.store.tombstone(BASE as u32 + 100);
+    assert_eq!(fixture.store.live_count(), BASE as u32 - 1);
+}
+
 #[test]
 fn a_column_one_part_lacks_is_written_as_nulls_for_that_part() {
     let mut fixture = mapped_store(0..BASE);
