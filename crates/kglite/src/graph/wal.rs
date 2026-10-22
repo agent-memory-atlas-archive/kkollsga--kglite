@@ -825,10 +825,10 @@ fn scan_frames(
     stream_len: u64,
     mut sink: impl FnMut(WalFrame),
 ) -> io::Result<FrameScan> {
+    let header_len = (WAL_MAGIC.len() + 1) as u64;
     let version = read_header(&mut r)?;
     let codec = wal_codec(version)?;
 
-    let header_len = (WAL_MAGIC.len() + 1) as u64;
     let mut consumed: u64 = header_len;
     let mut frame_count = 0usize;
     // The offset of the stop, where the following frame would start if its
@@ -885,6 +885,30 @@ fn scan_frames(
             non_tail,
         },
     })
+}
+
+/// [`scan_frames`] for a log file on disk. A file shorter than the header is
+/// what a kill between `reset`'s truncation and its header write leaves (an
+/// empty or prefix-of-header stub): it holds no frames and lost nothing.
+/// Append preparation classifies the stub and rewrites the header, so the scan
+/// must not fail the open first.
+fn scan_log_file(
+    r: impl Read,
+    stream_len: u64,
+    sink: impl FnMut(WalFrame),
+) -> io::Result<FrameScan> {
+    if stream_len < (WAL_MAGIC.len() + 1) as u64 {
+        return Ok(FrameScan {
+            diagnostic: None,
+            resume: ResumePoint {
+                version: WAL_FORMAT_VERSION,
+                stream_len,
+                valid_bytes: 0,
+                non_tail: None,
+            },
+        });
+    }
+    scan_frames(r, stream_len, sink)
 }
 
 /// What the bytes at one position in the frame walk turned out to be.
@@ -1078,7 +1102,7 @@ pub(crate) fn recover_with(path: &Path, sink: impl FnMut(WalFrame)) -> io::Resul
     match File::open(path) {
         Ok(f) => {
             let len = f.metadata()?.len();
-            let read = scan_frames(BufReader::new(f), len, sink)?;
+            let read = scan_log_file(BufReader::new(f), len, sink)?;
             if let Some(message) = read.diagnostic {
                 eprintln!("{message}");
             }
@@ -1170,7 +1194,7 @@ pub(crate) fn recover_for_append(
         Err(error) => return Err(error),
     };
     let metadata = file.metadata()?;
-    let read = scan_frames(BufReader::new(&file), metadata.len(), sink)?;
+    let read = scan_log_file(BufReader::new(&file), metadata.len(), sink)?;
     if let Some(message) = read.diagnostic {
         eprintln!("{message}");
     }

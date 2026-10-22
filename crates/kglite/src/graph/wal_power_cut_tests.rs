@@ -632,3 +632,41 @@ mod saved_tail {
         assert!(advisory.message.contains("offset"), "{}", advisory.message);
     }
 }
+
+/// The recovery scan that durable open runs before taking the writer must
+/// accept every cut a kill can leave, including a log killed inside `reset`
+/// (truncated, header not yet written) and every mid-record truncation.
+mod recovery_scan_accepts_every_cut {
+    use super::*;
+
+    fn scan_then_open(bytes: &[u8]) -> (usize, Wal, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("g.kgl-wal");
+        std::fs::write(&path, bytes).unwrap();
+        let mut frames = 0;
+        let recovered = recover_for_append(&path, |_| frames += 1).unwrap();
+        let wal = Wal::open_recovered(path, SyncMode::PageCache, recovered).unwrap();
+        (frames, wal, dir)
+    }
+
+    #[test]
+    fn a_log_killed_between_truncation_and_header_write_reopens_empty() {
+        let mut header = WAL_MAGIC.to_vec();
+        header.push(WAL_FORMAT_VERSION);
+        for cut in 0..header.len() {
+            let (frames, mut wal, _dir) = scan_then_open(&header[..cut]);
+            assert_eq!(frames, 0, "cut {cut}");
+            wal.append(&big_frame(1)).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_truncation_at_every_offset_keeps_exactly_the_whole_frames() {
+        let (full, ends) = image(4);
+        for cut in 0..=full.len() {
+            let (frames, _wal, _dir) = scan_then_open(&full[..cut]);
+            let whole = ends.iter().filter(|&&e| e <= cut).count();
+            assert_eq!(frames, whole, "cut {cut}");
+        }
+    }
+}

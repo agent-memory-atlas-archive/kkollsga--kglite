@@ -21,6 +21,7 @@ before upgrading.
 
 ### Fixed
 
+- **A durable graph opens after a kill that lands between a checkpoint's log truncation and its header write.** The log is then empty or shorter than its header, and the open failed with `failed to read the write-ahead log … failed to fill whole buffer`. Such a log holds no commits; the open now treats it as empty and rewrites the header.
 - **Embedding writes count against the write budget.**
   - `set_embeddings`, `import_embeddings`, `embed_texts`, `copy_embeddings_from`, `quantize_embeddings`, their relationship twins and the C ABI's `kglite_session_set_embeddings`, `kglite_session_add_embeddings` and `kglite_session_quantize_embeddings` are refused once the graph is at its limit. `embed_texts` skipped the check.
   - `write_budget_used_bytes` includes the heap of embedding stores written since the load. A store served from the file counts nothing until a write copies it, and a replaced or removed store gives its share back. Before, a mapped load could take gigabytes of vectors with the state at `"ok"`.
