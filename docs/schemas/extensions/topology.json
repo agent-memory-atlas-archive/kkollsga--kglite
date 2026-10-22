@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kglite.readthedocs.io/schemas/extensions/topology.json",
+  "title": "extensions.topology",
+  "description": "Whether a graph saved in mapped storage reads its topology and index sections in place once the server opens a v9 .kgl file. 'storage' is 'auto' (the default) or 'mapped' (both read the sections in place from a regular local file; Windows copies them) or 'memory' (ignore the sections, decode the compressed topology and rebuild the indexes). The --topology flag overrides it. The setting is runtime only and never written into a .kgl file; a v8 or older file and an in-memory graph ignore it.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "storage": {
+      "type": "string",
+      "enum": ["auto", "mapped", "memory"],
+      "description": "'auto', 'mapped' or 'memory'."
+    }
+  }
+}

@@ -157,6 +157,16 @@ pub(crate) struct Cli {
           value_parser = parse_embeddings_policy)]
     pub(crate) columns: Option<kglite::api::io::MapPolicy>,
 
+    /// Whether a mapped load of a v9 `.kgl` reads the file's topology and
+    /// index sections in place: `auto` and `mapped` read them, `memory`
+    /// decodes the topology and rebuilds the indexes. Overrides
+    /// `extensions.topology.storage` in the manifest. A v8 or older file and
+    /// an in-memory graph ignore it. Applies to every `.kgl` the server
+    /// opens, including reloads.
+    #[arg(long = "topology", value_name = "auto|mapped|memory",
+          value_parser = parse_embeddings_policy)]
+    pub(crate) topology: Option<kglite::api::io::MapPolicy>,
+
     /// Check that this build can boot with these flags, then exit: runs the
     /// side-effect-free prefix of boot (flags, mode paths, manifest, env file,
     /// codecs, ontology) and stops before any graph, listener or embedder.
@@ -225,7 +235,7 @@ pub(crate) enum Mode {
     Bare,
 }
 
-/// Parse the `--embeddings` / `--columns` value, naming the three spellings on a refusal.
+/// Parse the `--embeddings` / `--columns` / `--topology` value, naming the three spellings on a refusal.
 pub(crate) fn parse_embeddings_policy(
     text: &str,
 ) -> std::result::Result<kglite::api::io::MapPolicy, String> {

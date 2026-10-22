@@ -40,6 +40,7 @@ pub mod overflow;
 pub(crate) mod packed_codec;
 pub mod property_storage;
 pub(crate) mod slot_mirror;
+pub(crate) mod topology_memory;
 pub mod type_build_meta;
 pub mod undo;
 

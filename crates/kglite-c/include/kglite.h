@@ -369,6 +369,16 @@ typedef struct KgliteLoadOptions {
    * this field existed reads as `0`.
    */
   uint32_t columns;
+  /**
+   * Whether a mapped load of a v9 file reads its topology and index
+   * sections in place, with the values of `embeddings`: `0` default
+   * (`auto`), `1` auto and `2` mapped (read the sections from a regular
+   * local file; Windows copies them), `3` memory (ignore the sections,
+   * decode the topology and rebuild the indexes). A v8 or older file and an
+   * in-memory graph ignore it. A caller built before this field existed
+   * reads as `0`.
+   */
+  uint32_t topology;
 } KgliteLoadOptions;
 
 /**
@@ -1192,8 +1202,8 @@ KgliteStatusCode kglite_load_file(const char *path,
                                   const char **out_error_msg);
 
 /**
- * [`kglite_load_file`] with load options: where the embedding stores and property
- * columns of a v9 file live, and when their CRC32 is checked.
+ * [`kglite_load_file`] with load options: where the embedding stores, property
+ * columns and topology sections of a v9 file live, and when their CRC32 is checked.
  *
  * Identical to `kglite_load_file` (same outputs, errors and safety contract)
  * plus `options`: null means every default, which is exactly `kglite_load_file`.

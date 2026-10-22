@@ -14,6 +14,8 @@ first statement, and transactions, copies, snapshots, saves and the log behave.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 
 import numpy as np
@@ -301,3 +303,63 @@ def test_vacuum_after_deletes_on_a_frozen_graph_keeps_every_answer(saved):
         graph.cypher("MATCH (d:Doc) WHERE d.id >= 100 AND d.id < 300 DETACH DELETE d")
         graph.vacuum()
     assert _answers(mapped) == _answers(memory)
+
+
+def test_the_topology_policy_decides_whether_a_mapped_load_reads_the_sections(saved):
+    memory = kglite.load(saved, storage="memory")
+    for policy, frozen in [("auto", True), ("mapped", True), ("memory", False)]:
+        graph = kglite.load(saved, storage="mapped", topology=policy)
+        assert kglite._backend_is_frozen(graph) is frozen, policy
+        assert graph.graph_info()["storage_mode"] == "mapped"
+        assert _answers(graph) == _answers(memory), policy
+    # A graph loaded into memory storage never reads the sections.
+    assert not kglite._backend_is_frozen(kglite.load(saved, storage="memory", topology="mapped"))
+
+
+def test_a_bad_topology_value_is_an_argument_error(saved):
+    with pytest.raises(kglite.ArgumentError, match="topology must be 'auto', 'mapped' or 'memory', got 'always'"):
+        kglite.load(saved, topology="always")
+    with pytest.raises(kglite.ArgumentError, match="topology must be"):
+        kglite.open_session(saved, topology="always")
+
+
+def test_open_session_takes_topology_and_a_durable_open_refuses_it(saved, tmp_path):
+    session = kglite.open_session(saved, storage="mapped", topology="memory")
+    assert session.cypher(PROBES[1]).to_list() == kglite.load(saved).cypher(PROBES[1]).to_list()
+    with pytest.raises(ValueError, match="topology"):
+        kglite.open_session(str(tmp_path / "d.kgl"), topology="memory", durable="off")
+
+
+def test_graph_info_reports_mapped_heap_and_overlay_topology_bytes(saved):
+    mapped = kglite.load(saved, storage="mapped")
+    info = mapped.graph_info()
+    assert info["topology_mapped_bytes"] > 0
+    assert info["topology_heap_bytes"] < 64 * 1024, "only templates and sparse edge properties are heap"
+    assert info["topology_overlay_entries"] == 0
+    mapped.cypher("CREATE (:Doc {id: 900001, n: 1, title: 'new'})")
+    after = mapped.graph_info()
+    assert after["topology_overlay_entries"] > 0
+    assert after["topology_mapped_bytes"] == info["topology_mapped_bytes"]
+
+    heap = kglite.load(saved, storage="mapped", topology="memory").graph_info()
+    assert heap["topology_mapped_bytes"] == 0
+    assert heap["topology_heap_bytes"] >= 40 * NODES + 32 * EDGES, "the heap arrays are counted"
+    assert heap["topology_overlay_entries"] == 0
+
+
+def test_the_environment_kill_switch_puts_the_topology_on_the_heap(saved):
+    probe = (
+        "import sys, kglite; g = kglite.load(sys.argv[1], storage='mapped', topology='mapped');"
+        "i = g.graph_info();"
+        "print(kglite._backend_is_frozen(g), i['topology_mapped_bytes'], i['topology_heap_bytes'],"
+        " g.cypher(\"MATCH (d:Doc) RETURN count(d) AS c\").to_list()[0]['c'])"
+    )
+    env = {**os.environ, "KGLITE_MMAP": "0"}
+    out = subprocess.run(
+        [sys.executable, "-c", probe, saved], capture_output=True, text=True, check=True, env=env
+    ).stdout.split()
+    frozen, mapped_bytes, heap_bytes, docs = out
+    assert frozen == "True", "the sections still serve the graph, from heap copies"
+    assert int(mapped_bytes) == 0
+    assert int(heap_bytes) > 40 * NODES, "the copied sections are heap"
+    assert int(docs) == NODES - 1

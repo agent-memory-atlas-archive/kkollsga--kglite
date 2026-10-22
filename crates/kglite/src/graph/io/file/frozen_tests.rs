@@ -768,26 +768,7 @@ fn a_graph_under_the_floors_records_no_topology() {
 #[test]
 fn heap_placed_sections_serve_the_same_graph() {
     let (_tmp, path) = saved_topo();
-    let heap = load_file_with(
-        path.to_str().unwrap(),
-        &LoadOptions::new()
-            .with_storage(StorageMode::Mapped)
-            .with_columns(MapPolicy::Memory),
-    )
-    .unwrap();
-    assert_frozen(&heap, true);
-    let GraphBackend::Frozen(backend) = &heap.graph else {
-        panic!("frozen");
-    };
-    assert!(
-        backend.shared_sections().is_empty(),
-        "nothing is mapped under columns=memory"
-    );
-    assert_reads_match(
-        &heap,
-        &load(&path, StorageMode::Memory),
-        "heap-placed vs memory",
-    );
+    // A byte buffer has no file to map, so every section is copied to the heap.
     let bytes = std::fs::read(&path).unwrap();
     let from_bytes = load_kgl_bytes_with(
         &bytes,
@@ -795,11 +776,126 @@ fn heap_placed_sections_serve_the_same_graph() {
     )
     .unwrap();
     assert_frozen(&from_bytes, true);
+    let GraphBackend::Frozen(backend) = &from_bytes.graph else {
+        panic!("frozen");
+    };
+    assert!(
+        backend.shared_sections().is_empty(),
+        "nothing is mapped from a byte buffer"
+    );
     assert_reads_match(
         &from_bytes,
         &load(&path, StorageMode::Memory),
         "byte-buffer load vs memory",
     );
+}
+
+fn load_with_topology(path: &std::path::Path, policy: MapPolicy) -> DirGraph {
+    let graph = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new()
+            .with_storage(StorageMode::Mapped)
+            .with_topology(policy),
+    )
+    .unwrap();
+    Arc::try_unwrap(graph).unwrap_or_else(|_| panic!("a fresh load is uniquely owned"))
+}
+
+#[test]
+fn the_topology_policy_decides_whether_a_mapped_load_reads_the_sections() {
+    let (_tmp, path) = saved_topo_big();
+    let reference = load_owned(&path, StorageMode::Memory);
+
+    // `Memory` ignores the raw sections: the compressed topology is decoded
+    // and the indexes rebuilt, exactly as a memory-storage load does, and the
+    // graph still continues in mapped storage.
+    let memory = load_with_topology(&path, MapPolicy::Memory);
+    assert_frozen(&memory, false);
+    assert!(memory.graph.is_mapped());
+    assert_reads_match(&memory, &reference, "topology=memory vs memory storage");
+
+    // `Mapped` and `Auto` serve the file's sections.
+    for policy in [MapPolicy::Mapped, MapPolicy::Auto] {
+        let graph = load_with_topology(&path, policy);
+        assert_frozen(&graph, true);
+        assert_reads_match(&graph, &reference, "topology policy vs memory storage");
+        let info = graph.graph_info();
+        assert_eq!(
+            info.topology_mapped_bytes > 0,
+            cfg!(unix),
+            "{policy:?}: mapped bytes follow the platform's mapping rule"
+        );
+    }
+
+    // `columns` does not decide where the topology sections live.
+    let columns_memory = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new()
+            .with_storage(StorageMode::Mapped)
+            .with_columns(MapPolicy::Memory),
+    )
+    .unwrap();
+    assert_frozen(&columns_memory, true);
+    assert_eq!(
+        columns_memory.graph_info().topology_mapped_bytes > 0,
+        cfg!(unix),
+        "columns=memory leaves the topology sections mapped"
+    );
+
+    // Into memory storage the sections are never read, whatever the policy.
+    let into_memory = load_file_with(
+        path.to_str().unwrap(),
+        &LoadOptions::new()
+            .with_storage(StorageMode::Memory)
+            .with_topology(MapPolicy::Mapped),
+    )
+    .unwrap();
+    assert_frozen(&into_memory, false);
+}
+
+#[test]
+fn the_topology_policy_never_reads_a_damaged_section_when_it_is_memory() {
+    let (_tmp, path) = saved_topo_big();
+    for name in section_names(&path)
+        .iter()
+        .filter(|n| n.starts_with("topo:") || n.starts_with("idx:"))
+    {
+        flip_in_section(&path, name);
+    }
+    let memory = load_with_topology(&path, MapPolicy::Memory);
+    assert_frozen(&memory, false);
+    assert!(rows(&memory, "MATCH (a:A) RETURN count(a)").contains("59"));
+}
+
+#[test]
+fn graph_info_reports_mapped_heap_and_overlay_topology_bytes() {
+    let (_tmp, path) = saved_topo_big();
+    let mut frozen = load_with_topology(&path, MapPolicy::Mapped);
+    let before = frozen.graph_info();
+    if cfg!(unix) {
+        assert!(before.topology_mapped_bytes > 0);
+        assert!(
+            before.topology_heap_bytes < 8 * 1024,
+            "a frozen load keeps only templates on the heap: {}",
+            before.topology_heap_bytes
+        );
+    }
+    assert_eq!(before.topology_overlay_entries, 0);
+
+    run(&mut frozen, "CREATE (:A {id: 5000, n: 1})");
+    let after = frozen.graph_info();
+    assert!(frozen.graph.has_frozen_base(), "one write stays an overlay");
+    assert!(after.topology_overlay_entries > 0);
+    assert_eq!(after.topology_mapped_bytes, before.topology_mapped_bytes);
+
+    let heap = load_with_topology(&path, MapPolicy::Memory).graph_info();
+    assert_eq!(heap.topology_mapped_bytes, 0);
+    assert!(
+        heap.topology_heap_bytes > 100 * 1024,
+        "a heap graph's node and edge arrays are heap: {}",
+        heap.topology_heap_bytes
+    );
+    assert_eq!(heap.topology_overlay_entries, 0);
 }
 
 pub(super) fn flip_in_section(path: &std::path::Path, name: &str) {

@@ -164,8 +164,9 @@ pub(super) fn collect_embedding_sections(
 /// whether its sections are mapped or copied (`LoadOptions::embeddings`). The
 /// decision is made once per store, from the vector section's length, so the
 /// norms always follow the vectors. Column sections are placed per column by
-/// `LoadOptions::columns`; index sections follow `columns` when the load is
-/// into mapped storage (`into_mapped`) and are otherwise never read; sections
+/// `LoadOptions::columns`; index and topology sections follow
+/// `LoadOptions::topology` when the load is into mapped storage
+/// (`into_mapped`) and are otherwise never read; sections
 /// of other classes go to the heap.
 pub(super) fn open_table(
     entries: &[MapEntry],
@@ -176,6 +177,7 @@ pub(super) fn open_table(
     into_mapped: bool,
 ) -> io::Result<MappableTable> {
     let columns_policy = options.columns;
+    let topology_policy = options.topology;
     let lengths: HashMap<&str, u64> = entries.iter().map(|e| (e.name.as_str(), e.len)).collect();
     let columns = super::column_sections::ColumnPlacer::new(entries);
     MappableTable::open_placed(entries, bytes, base, file, options.verify, |entry| {
@@ -183,10 +185,10 @@ pub(super) fn open_table(
             return columns.place(entry, file, columns_policy);
         }
         if entry.owner == super::index_sections::OWNER {
-            return super::index_sections::place(entry, file, columns_policy, into_mapped);
+            return super::index_sections::place(entry, file, topology_policy, into_mapped);
         }
         if entry.owner == super::topology_sections::OWNER {
-            return super::topology_sections::place(entry, file, columns_policy, into_mapped);
+            return super::topology_sections::place(entry, file, topology_policy, into_mapped);
         }
         if !matches!(
             entry.kind,

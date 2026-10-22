@@ -2223,11 +2223,13 @@ fn load_portable_columnar(
         ));
     }
     // Whether the graph will be placed in mapped storage decides how the index
-    // sections are opened. A mode that does not parse is refused further down.
+    // and topology sections are opened; `topology="memory"` opens them as a
+    // memory-storage load does, unread. A mode that does not parse is refused
+    // further down.
     let into_mapped = match options.storage {
         Some(requested) => requested == StorageMode::Mapped,
         None => metadata.portable_storage_mode().ok() == Some(StorageMode::Mapped),
-    };
+    } && options.topology != MapPolicy::Memory;
     let mappable_table = open_mappable_table(
         &metadata,
         format_name,

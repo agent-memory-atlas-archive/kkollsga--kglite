@@ -2533,6 +2533,7 @@ pub kglite::api::io::LoadOptions::defer_index_rebuild: bool
 pub kglite::api::io::LoadOptions::embeddings: kglite::api::io::MapPolicy
 pub kglite::api::io::LoadOptions::max_load_bytes: core::option::Option<u64>
 pub kglite::api::io::LoadOptions::storage: core::option::Option<kglite::api::storage::StorageMode>
+pub kglite::api::io::LoadOptions::topology: kglite::api::io::MapPolicy
 pub kglite::api::io::LoadOptions::verify: kglite::api::io::Verify
 impl kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::new() -> Self
@@ -2541,6 +2542,7 @@ pub fn kglite::api::io::LoadOptions::with_defer_index_rebuild(self, bool) -> Sel
 pub fn kglite::api::io::LoadOptions::with_embeddings(self, kglite::api::io::MapPolicy) -> Self
 pub fn kglite::api::io::LoadOptions::with_max_load_bytes(self, core::option::Option<u64>) -> Self
 pub fn kglite::api::io::LoadOptions::with_storage(self, kglite::api::storage::StorageMode) -> Self
+pub fn kglite::api::io::LoadOptions::with_topology(self, kglite::api::io::MapPolicy) -> Self
 pub fn kglite::api::io::LoadOptions::with_verify(self, kglite::api::io::Verify) -> Self
 impl core::clone::Clone for kglite::api::io::LoadOptions
 pub fn kglite::api::io::LoadOptions::clone(&self) -> kglite::api::io::LoadOptions
@@ -5055,7 +5057,6 @@ pub fn kglite::api::DirGraph::get_or_compute_type_connectivity(&self) -> alloc::
 pub fn kglite::api::DirGraph::get_spatial_config(&self, &str) -> core::option::Option<&kglite::api::SpatialConfig>
 pub fn kglite::api::DirGraph::get_type_connectivity(&self) -> core::option::Option<alloc::vec::Vec<kglite::api::introspection::ConnectivityTriple>>
 pub fn kglite::api::DirGraph::graph_id(&self) -> u64
-pub fn kglite::api::DirGraph::graph_info(&self) -> kglite::api::GraphInfo
 pub fn kglite::api::DirGraph::has_connection_type(&self, &str) -> bool
 pub fn kglite::api::DirGraph::has_node_type(&self, &str) -> bool
 pub fn kglite::api::DirGraph::has_type_shadowing_property(&self) -> bool
@@ -5193,6 +5194,8 @@ pub fn kglite::api::DirGraph::has_edge_type_counts_cache(&self) -> bool
 pub fn kglite::api::DirGraph::has_type_connectivity_cache(&self) -> bool
 pub fn kglite::api::DirGraph::property_ndv(&self, &str, &str) -> core::option::Option<usize>
 impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::graph_info(&self) -> kglite::api::GraphInfo
+impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::independent_copy(&self) -> Self
 pub fn kglite::api::DirGraph::try_independent_copy(&self) -> core::io::error::Result<Self>
 impl kglite::api::DirGraph
@@ -5311,6 +5314,9 @@ pub kglite::api::GraphInfo::node_capacity: usize
 pub kglite::api::GraphInfo::node_count: usize
 pub kglite::api::GraphInfo::node_tombstones: usize
 pub kglite::api::GraphInfo::property_index_count: usize
+pub kglite::api::GraphInfo::topology_heap_bytes: usize
+pub kglite::api::GraphInfo::topology_mapped_bytes: usize
+pub kglite::api::GraphInfo::topology_overlay_entries: usize
 pub kglite::api::GraphInfo::type_count: usize
 impl core::clone::Clone for kglite::api::GraphInfo
 pub fn kglite::api::GraphInfo::clone(&self) -> kglite::api::GraphInfo

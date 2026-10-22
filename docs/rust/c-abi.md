@@ -97,6 +97,11 @@ The header exposes:
     `auto` maps a column of 256 KB or more from a regular local file on Unix,
     `mapped` maps any size and `memory` decodes to the heap, spilling large
     columns to a temp file. A v8 or older file ignores it.
+  - `topology` (a further additive field) takes the same values for the
+    topology and index sections of a v9 file loaded into mapped storage:
+    `auto` and `mapped` read them in place from a regular local file (Windows
+    copies them) and `memory` ignores them, decoding the topology and
+    rebuilding the indexes. A v8 or older file and an in-memory graph ignore it.
   - Do not overwrite a loaded file in place (`cp`, `rsync --inplace`): a
     truncated mapping faults. Write to a new name and rename it over;
     `kglite_save_graph_durable` already does;

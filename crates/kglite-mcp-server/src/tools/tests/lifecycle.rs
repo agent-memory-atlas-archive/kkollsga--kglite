@@ -1960,6 +1960,59 @@ fn the_columns_policy_decides_where_an_opened_graphs_columns_live() {
     assert_eq!(mapped_column_sections(&memory), 0);
 }
 
+/// A mapped-storage graph past the node floor a save records topology and
+/// index sections above, saved with `SaveLayout::Auto`.
+fn seed_big_topology(path: &std::path::Path) {
+    let mut dir = kglite::api::storage::new_dir_graph_in_mode(StorageMode::Mapped, None)
+        .expect("create the graph");
+    let params = std::collections::HashMap::new();
+    let opts = kglite::api::session::ExecuteOptions::eager(&params);
+    kglite::api::session::execute_mut(
+        &mut dir,
+        "UNWIND range(1, 70000) AS i CREATE (:Doc {id: i, n: i % 7})",
+        &opts,
+    )
+    .expect("seed nodes");
+    let mut graph = Arc::new(dir);
+    kglite::api::io::save_graph_with_layout(
+        &mut graph,
+        path.to_str().expect("utf-8 path"),
+        true,
+        kglite::api::io::SaveLayout::Auto,
+    )
+    .expect("save");
+}
+
+fn topology_is_frozen(state: &GraphState) -> bool {
+    state
+        .with_active(|active| active.kg.dir().graph.is_frozen())
+        .expect("active graph")
+}
+
+#[test]
+fn the_topology_policy_decides_whether_an_opened_graph_reads_its_sections() {
+    use kglite::api::io::MapPolicy;
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("big.kgl");
+    seed_big_topology(&p);
+
+    let auto = GraphState::default();
+    auto.open_or_create(&p, None).unwrap();
+    assert_eq!(
+        topology_is_frozen(&auto),
+        cfg!(unix),
+        "auto never maps on Windows"
+    );
+
+    let mapped = GraphState::default().with_topology_policy(Some(MapPolicy::Mapped));
+    mapped.open_or_create(&p, None).unwrap();
+    assert!(topology_is_frozen(&mapped));
+
+    let memory = GraphState::default().with_topology_policy(Some(MapPolicy::Memory));
+    memory.open_or_create(&p, None).unwrap();
+    assert!(!topology_is_frozen(&memory));
+}
+
 thread_local! {
     static SCOPES: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
 }

@@ -440,6 +440,15 @@ the property columns of a v9 `.kgl` live. A default save writes every column wit
 - A corrupt string column fails the load. `verify_integrity` checks the numeric ones.
 - As for embeddings: write a new file and rename it over the served one.
 
+### Topology placement
+
+`--topology auto|mapped|memory` (or `extensions.topology.storage`) decides whether a graph saved in mapped storage reads its topology and index sections in place.
+
+- `auto` (default) and `mapped` read the sections in place from a regular local file on Unix; the server holds no heap copy of the topology and a second process serving the same file shares the pages.
+- `memory` ignores the sections, decodes the compressed topology and rebuilds the indexes.
+- A v8 or older file and an in-memory graph ignore it.
+- Write a new file and rename it over the served one.
+
 ### The writer lease, and several servers on one file
 
 A `.kgl` has one writer at a time, guarded by an advisory lock on a

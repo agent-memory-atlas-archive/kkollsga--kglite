@@ -367,6 +367,14 @@ impl KnowledgeGraph {
     ///         - 'edge_property_overlay_rows': edges whose properties are held
     ///           in the disk backend's heap mutation overlay rather than the
     ///           mmap-backed base. 0 on every non-disk backend
+    ///         - 'topology_mapped_bytes': bytes of the topology read in place
+    ///           from the file mapping after a 'mapped' load of a v9 file; 0 for
+    ///           a heap topology
+    ///         - 'topology_heap_bytes': heap bytes of the topology (the node
+    ///           and edge arrays of a heap graph; only what a load copied for a
+    ///           mapped one); 0 on a disk graph
+    ///         - 'topology_overlay_entries': entries of the write overlay over
+    ///           a mapped topology; 0 before the first write
     ///
     /// Example:
     ///     ```python
@@ -405,6 +413,9 @@ impl KnowledgeGraph {
                 "edge_property_overlay_rows",
                 info.edge_property_overlay_rows,
             )?;
+            dict.set_item("topology_mapped_bytes", info.topology_mapped_bytes)?;
+            dict.set_item("topology_heap_bytes", info.topology_heap_bytes)?;
+            dict.set_item("topology_overlay_entries", info.topology_overlay_entries)?;
             dict.set_item("memory_limit", self.graph().memory_limit)?;
             dict.set_item("columnar_total_rows", info.columnar_total_rows)?;
             dict.set_item("columnar_live_rows", info.columnar_live_rows)?;

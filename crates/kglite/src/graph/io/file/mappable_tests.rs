@@ -532,12 +532,15 @@ fn load_options_mapping_fields_default_to_auto_and_chain() {
     let options = LoadOptions::new();
     assert_eq!(options.embeddings, MapPolicy::Auto);
     assert_eq!(options.columns, MapPolicy::Auto);
+    assert_eq!(options.topology, MapPolicy::Auto);
     let tuned = LoadOptions::new()
         .with_embeddings(MapPolicy::Mapped)
         .with_columns(MapPolicy::Memory)
+        .with_topology(MapPolicy::Memory)
         .with_verify(Verify::Eager);
     assert_eq!(tuned.embeddings, MapPolicy::Mapped);
     assert_eq!(tuned.columns, MapPolicy::Memory);
+    assert_eq!(tuned.topology, MapPolicy::Memory);
     assert_eq!(tuned.verify, Verify::Eager);
     // Inert for a v8 file: the options change nothing about what loads.
     let mut v8 = Vec::new();

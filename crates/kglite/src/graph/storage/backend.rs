@@ -640,7 +640,6 @@ impl GraphBackend {
 
     /// Entries the write overlay holds (see [`ForkedGraph::delta_len`]), looking
     /// through a write-capture wrapper; `None` without an overlay.
-    #[cfg(test)]
     pub(crate) fn overlay_entries(&self) -> Option<usize> {
         match self {
             GraphBackend::Forked(forked) => Some(forked.delta_len()),

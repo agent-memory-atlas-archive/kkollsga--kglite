@@ -239,10 +239,10 @@ fn load_options_from_args(
     storage: Option<&str>,
     defer_index_rebuild: Option<bool>,
     max_load_mb: Option<u64>,
-    placement: (Option<&str>, Option<&str>),
+    placement: (Option<&str>, Option<&str>, Option<&str>),
     verify: Option<&str>,
 ) -> PyResult<kglite_core::api::io::LoadOptions> {
-    let (embeddings, columns) = placement;
+    let (embeddings, columns, topology) = placement;
     use kglite_core::api::io::{MapPolicy, Verify};
     let argument =
         |message: String| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message));
@@ -262,6 +262,14 @@ fn load_options_from_args(
             ))
         })?;
         options = options.with_columns(policy);
+    }
+    if let Some(name) = topology {
+        let policy = MapPolicy::from_name(name).ok_or_else(|| {
+            argument(format!(
+                "topology must be 'auto', 'mapped' or 'memory', got '{name}'"
+            ))
+        })?;
+        options = options.with_topology(policy);
     }
     if let Some(name) = verify {
         let verify = Verify::from_name(name)
@@ -330,6 +338,10 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// process default in charge, which is off unless `KGLITE_DEFER_INDEX_REBUILD`
 /// says otherwise.
 ///
+/// `topology` ('auto', 'mapped' or 'memory') decides whether a 'mapped' load of
+/// a v9 file reads its topology and index sections in place or decodes the
+/// compressed topology onto the heap.
+///
 /// `max_load_mb` is a ceiling **in megabytes** — not bytes. Metadata-known
 /// terms refuse before decoding. A legacy portable stored-reference
 /// normalization term is checked after decoding but before the private graph
@@ -337,7 +349,7 @@ fn estimate_load_memory(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 /// estimate and ceiling. `KGLITE_MAX_LOAD_MB` sets a process-wide default this
 /// outranks.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, verify=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None))]
 // One keyword per documented option; the Python signature is the contract.
 #[allow(clippy::too_many_arguments)]
 fn load(
@@ -348,13 +360,14 @@ fn load(
     max_load_mb: Option<u64>,
     embeddings: Option<&str>,
     columns: Option<&str>,
+    topology: Option<&str>,
     verify: Option<&str>,
 ) -> PyResult<KnowledgeGraph> {
     let options = load_options_from_args(
         storage,
         defer_index_rebuild,
         max_load_mb,
-        (embeddings, columns),
+        (embeddings, columns, topology),
         verify,
     )?;
     let inner = py
@@ -442,10 +455,10 @@ fn load_rdf(
 /// owns the writer lease, replays the log, and routes `execute()` writes
 /// through group commit with the GIL released.
 ///
-/// `defer_index_rebuild`, `max_load_mb`, `embeddings`, `columns` and `verify` apply to the
+/// `defer_index_rebuild`, `max_load_mb`, `embeddings`, `columns`, `topology` and `verify` apply to the
 /// load form only; `auto_checkpoint_wal_mib` to the durable form only.
 #[pyfunction]
-#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, verify=None, durable=None, auto_checkpoint_wal_mib=None))]
+#[pyo3(signature = (path, *, storage=None, defer_index_rebuild=None, max_load_mb=None, embeddings=None, columns=None, topology=None, verify=None, durable=None, auto_checkpoint_wal_mib=None))]
 // One keyword per documented option; the load and durable forms share the signature.
 #[allow(clippy::too_many_arguments)]
 fn open_session(
@@ -456,6 +469,7 @@ fn open_session(
     max_load_mb: Option<u64>,
     embeddings: Option<&str>,
     columns: Option<&str>,
+    topology: Option<&str>,
     verify: Option<&str>,
     durable: Option<Bound<'_, PyAny>>,
     auto_checkpoint_wal_mib: Option<u64>,
@@ -470,7 +484,7 @@ fn open_session(
             storage,
             defer_index_rebuild,
             max_load_mb,
-            (embeddings, columns),
+            (embeddings, columns, topology),
             verify,
         )?;
         let inner = py
@@ -484,10 +498,11 @@ fn open_session(
         || max_load_mb.is_some()
         || embeddings.is_some()
         || columns.is_some()
+        || topology.is_some()
         || verify.is_some()
     {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "defer_index_rebuild, max_load_mb, embeddings, columns and verify apply to the \
+            "defer_index_rebuild, max_load_mb, embeddings, columns, topology and verify apply to the \
              read-only load form; a durable session (durable=...) opens through the writer \
              path, which takes none.",
         ));
@@ -529,7 +544,7 @@ fn from_bytes(
         storage,
         defer_index_rebuild,
         max_load_mb,
-        (None, None),
+        (None, None, None),
         None,
     )?;
     py.detach(|| kglite_core::api::io::load_kgl_bytes_with(data, &options))

@@ -91,6 +91,10 @@ place from a regular local file on Unix, so the query writes no spill file.
 the large ones to a temp file as a v8 load does. A v8 or older file ignores the
 flag.
 
+### Topology placement
+
+`kglite query --topology {auto|mapped|memory}` chooses whether a graph saved in mapped storage reads its topology and index sections in place. `auto` and `mapped` read them, so the query holds no heap copy of the topology. `memory` ignores them, decodes the compressed topology and rebuilds the indexes. A v8 or older file and an in-memory graph ignore the flag.
+
 ### Query deadlines
 
 **The CLI applies no query deadline by default.** That is a declared

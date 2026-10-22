@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 use kglite_c::{
     kglite_cypher_result_free, kglite_free_string, kglite_graph_free, kglite_graph_new,
-    kglite_graph_verify_integrity, kglite_load_file_with_options, kglite_save_graph_with_layout,
-    kglite_session_execute_mut, kglite_session_free, kglite_session_new, kglite_session_save,
-    kglite_session_set_embeddings, KgliteCypherResult, KgliteGraph, KgliteLoadOptions,
-    KgliteSession, KgliteStatusCode,
+    kglite_graph_new_in_mode, kglite_graph_verify_integrity, kglite_load_file_with_options,
+    kglite_save_graph_with_layout, kglite_session_execute_mut, kglite_session_free,
+    kglite_session_new, kglite_session_save, kglite_session_set_embeddings, KgliteCypherResult,
+    KgliteGraph, KgliteLoadOptions, KgliteSession, KgliteStatusCode,
 };
 
 const DIM: usize = 1024;
@@ -125,6 +125,7 @@ fn options(embeddings: u32, verify: u32) -> KgliteLoadOptions {
         embeddings,
         verify,
         columns: 0,
+        topology: 0,
     }
 }
 
@@ -318,6 +319,102 @@ fn the_columns_option_chooses_where_property_columns_live() {
         column_sections(graph) > 0,
         cfg!(unix),
         "columns reads as default, which is auto"
+    );
+    unsafe { kglite_graph_free(graph) };
+}
+
+/// A mapped-storage `.kgl` past the node floor a save records topology and
+/// index sections above.
+fn topology_file(dir: &std::path::Path) -> PathBuf {
+    let mut graph: *mut KgliteGraph = std::ptr::null_mut();
+    let mode = c("mapped");
+    assert_eq!(
+        unsafe {
+            kglite_graph_new_in_mode(
+                mode.as_ptr(),
+                std::ptr::null(),
+                &mut graph,
+                std::ptr::null_mut(),
+            )
+        },
+        KgliteStatusCode::Ok
+    );
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { kglite_session_new(graph, &mut session) },
+        KgliteStatusCode::Ok
+    );
+    let query = c("UNWIND range(1, 70000) AS i CREATE (:Doc {id: i, n: i % 7})");
+    let mut result: *mut KgliteCypherResult = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            kglite_session_execute_mut(
+                session,
+                query.as_ptr(),
+                std::ptr::null(),
+                &mut result,
+                std::ptr::null_mut(),
+            )
+        },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_cypher_result_free(result) };
+    let path = dir.join("topology.kgl");
+    let path_c = c(path.to_str().unwrap());
+    assert_eq!(
+        unsafe { kglite_session_save(session, path_c.as_ptr(), 0, std::ptr::null_mut()) },
+        KgliteStatusCode::Ok
+    );
+    unsafe { kglite_session_free(session) };
+    path
+}
+
+fn topology_sections(graph: *mut KgliteGraph) -> usize {
+    report(graph)["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["name"].as_str().unwrap().starts_with("topo:"))
+        .count()
+}
+
+#[test]
+fn the_topology_option_chooses_whether_sections_are_read_in_place() {
+    let dir = scratch("topology");
+    let path = topology_file(&dir);
+
+    // Unrequested, the sections map (Auto never maps on Windows).
+    let (rc, graph, _) = load(&path, None);
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert_eq!(topology_sections(graph) > 0, cfg!(unix));
+    unsafe { kglite_graph_free(graph) };
+
+    for (topology, mapped) in [(1u32, cfg!(unix)), (2, true), (3, false)] {
+        let mut opts = options(0, 0);
+        opts.topology = topology;
+        let (rc, graph, _) = load(&path, Some(&opts));
+        assert_eq!(rc, KgliteStatusCode::Ok);
+        assert_eq!(topology_sections(graph) > 0, mapped, "topology={topology}");
+        unsafe { kglite_graph_free(graph) };
+    }
+
+    let mut bad = options(0, 0);
+    bad.topology = 9;
+    let (rc, graph, message) = load(&path, Some(&bad));
+    assert_eq!(rc, KgliteStatusCode::InvalidArgument);
+    assert!(graph.is_null());
+    assert!(message.contains("topology"), "{message}");
+
+    // A caller built before `topology` existed declares the shorter struct.
+    let mut old = options(0, 0);
+    old.topology = 3;
+    old.struct_size = 8 + 3 * std::mem::size_of::<u32>();
+    let (rc, graph, _) = load(&path, Some(&old));
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    assert_eq!(
+        topology_sections(graph) > 0,
+        cfg!(unix),
+        "topology reads as default, which is auto"
     );
     unsafe { kglite_graph_free(graph) };
 }

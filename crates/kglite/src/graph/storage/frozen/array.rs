@@ -94,7 +94,6 @@ impl<T: FrozenElement> FrozenArray<T> {
         self.store.shared_section()
     }
 
-    #[cfg(test)]
     /// Bytes this array holds on the heap (0 when mapped).
     pub(crate) fn heap_bytes(&self) -> usize {
         self.store.heap_bytes()

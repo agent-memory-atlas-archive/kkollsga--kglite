@@ -168,6 +168,15 @@ enum Command {
               value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
                   .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
         columns: Option<kglite::api::io::MapPolicy>,
+        /// Whether a mapped load of a v9 `.kgl` reads the file's topology and
+        /// index sections in place: `auto` and `mapped` read them, `memory`
+        /// ignores them and decodes the topology and rebuilds the indexes.
+        /// Unset means `auto`. A v8 or older file, and a graph that loads into
+        /// in-memory storage, ignore it.
+        #[arg(long, value_name = "auto|mapped|memory",
+              value_parser = |text: &str| kglite::api::io::MapPolicy::from_name(text)
+                  .ok_or_else(|| format!("'{text}' is not one of auto, mapped, memory")))]
+        topology: Option<kglite::api::io::MapPolicy>,
         /// Deadline for this statement, in milliseconds. Omitted means no
         /// deadline, which is this CLI's declared default: Ctrl-C is the
         /// interactive cancel, and a batch query over a very large graph may
@@ -532,6 +541,7 @@ fn dispatch(command: &Command) -> Result<()> {
             valid_time_default,
             embeddings,
             columns,
+            topology,
             timeout_ms,
             response_max_bytes,
             response_full,
@@ -545,6 +555,7 @@ fn dispatch(command: &Command) -> Result<()> {
                 valid_time_default: *valid_time_default,
                 embeddings: *embeddings,
                 columns: *columns,
+                topology: *topology,
                 ..QueryOptions::default()
             },
             agent_response::AgentOptions {
@@ -755,15 +766,16 @@ fn fresh_graph() -> Result<DirGraph> {
 }
 
 fn load_graph(path: &Path) -> Result<Arc<DirGraph>> {
-    load_graph_placed(path, None, None)
+    load_graph_placed(path, None, None, None)
 }
 
 /// [`load_graph`] with the operator's placement of embeddings (`--embeddings`)
-/// and property columns (`--columns`).
+/// property columns (`--columns`) and topology sections (`--topology`).
 fn load_graph_placed(
     path: &Path,
     embeddings: Option<kglite::api::io::MapPolicy>,
     columns: Option<kglite::api::io::MapPolicy>,
+    topology: Option<kglite::api::io::MapPolicy>,
 ) -> Result<Arc<DirGraph>> {
     let p = path.to_string_lossy().to_string();
     let mut options = kglite::api::io::LoadOptions::new();
@@ -772,6 +784,9 @@ fn load_graph_placed(
     }
     if let Some(policy) = columns {
         options = options.with_columns(policy);
+    }
+    if let Some(policy) = topology {
+        options = options.with_topology(policy);
     }
     kglite::api::io::load_file_with(&p, &options).with_context(|| format!("failed to open {p}"))
 }
@@ -796,7 +811,7 @@ fn run_export_sqlite(graph_path: &Path, output: Option<&Path>) -> Result<()> {
 
 fn run_query(path: &Path, query: &str, mode: Mode, options: QueryOptions) -> Result<()> {
     let graph = exec::with_valid_time_default(
-        load_graph_placed(path, options.embeddings, options.columns)?,
+        load_graph_placed(path, options.embeddings, options.columns, options.topology)?,
         options.valid_time_default,
     );
     let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
@@ -825,7 +840,7 @@ fn run_agent_query(
         kglite::api::cypher::QueryWarningSink::Silent,
         || {
             let graph = exec::with_valid_time_default(
-                load_graph_placed(path, options.embeddings, options.columns)?,
+                load_graph_placed(path, options.embeddings, options.columns, options.topology)?,
                 options.valid_time_default,
             );
             let (_, is_mutation) = kglite::api::cypher::parse_with_mutation_check(query)
@@ -1822,7 +1837,7 @@ fn cypher_string(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{session_save, validate_agent_cli, Cli};
+    use super::{load_graph_placed, session_save, validate_agent_cli, Cli, Command};
     use clap::Parser;
     use kglite::api::io::{GraphFileIdentity, WriteOwnership};
     use kglite::api::DirGraph;
@@ -1911,6 +1926,70 @@ mod tests {
         .is_err());
         assert!(Cli::try_parse_from(["kglite", "response", "purge"]).is_err());
         assert!(Cli::try_parse_from(["kglite", "response", "purge", "--all"]).is_ok());
+    }
+
+    /// A mapped-storage graph past the node floor a save records topology
+    /// sections above.
+    fn saved_topology_graph(path: &std::path::Path) {
+        let mut dir = kglite::api::storage::new_dir_graph_in_mode(
+            kglite::api::storage::StorageMode::Mapped,
+            None,
+        )
+        .unwrap();
+        let params = std::collections::HashMap::new();
+        let opts = kglite::api::session::ExecuteOptions::eager(&params);
+        kglite::api::session::execute_mut(
+            &mut dir,
+            "UNWIND range(1, 70000) AS i CREATE (:Doc {id: i})",
+            &opts,
+        )
+        .unwrap();
+        let mut graph = Arc::new(dir);
+        kglite::api::io::save_graph(&mut graph, &path.to_string_lossy()).unwrap();
+    }
+
+    #[test]
+    fn the_topology_flag_reaches_the_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("topo.kgl");
+        saved_topology_graph(&path);
+        let topology_of = |args: &[&str]| {
+            let parsed = Cli::try_parse_from(args).unwrap();
+            let Some(Command::Query { topology, .. }) = parsed.command else {
+                panic!("a query command");
+            };
+            topology
+        };
+        let path_arg = path.to_string_lossy().to_string();
+        let default = topology_of(&["kglite", "query", &path_arg, "RETURN 1"]);
+        assert_eq!(default, None);
+        let memory = topology_of(&[
+            "kglite",
+            "query",
+            &path_arg,
+            "RETURN 1",
+            "--topology",
+            "memory",
+        ]);
+        assert_eq!(memory, Some(kglite::api::io::MapPolicy::Memory));
+        assert!(Cli::try_parse_from([
+            "kglite",
+            "query",
+            &path_arg,
+            "RETURN 1",
+            "--topology",
+            "always"
+        ])
+        .is_err());
+
+        let frozen = |policy| {
+            load_graph_placed(&path, None, None, policy)
+                .unwrap()
+                .graph
+                .is_frozen()
+        };
+        assert_eq!(frozen(default), cfg!(unix), "auto maps on unix");
+        assert!(!frozen(memory), "--topology memory decodes the topology");
     }
 
     #[test]

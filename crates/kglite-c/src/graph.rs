@@ -376,6 +376,14 @@ pub struct KgliteLoadOptions {
     /// heap, spilling large columns to a temp file). A caller built before
     /// this field existed reads as `0`.
     pub columns: u32,
+    /// Whether a mapped load of a v9 file reads its topology and index
+    /// sections in place, with the values of `embeddings`: `0` default
+    /// (`auto`), `1` auto and `2` mapped (read the sections from a regular
+    /// local file; Windows copies them), `3` memory (ignore the sections,
+    /// decode the topology and rebuild the indexes). A v8 or older file and an
+    /// in-memory graph ignore it. A caller built before this field existed
+    /// reads as `0`.
+    pub topology: u32,
 }
 
 fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, String> {
@@ -418,11 +426,18 @@ fn read_load_options(options: *const KgliteLoadOptions) -> Result<LoadOptions, S
         3 => load = load.with_columns(MapPolicy::Memory),
         other => return Err(format!("KgliteLoadOptions.columns {other} is not 0..=3")),
     }
+    match local.topology {
+        0 => {}
+        1 => load = load.with_topology(MapPolicy::Auto),
+        2 => load = load.with_topology(MapPolicy::Mapped),
+        3 => load = load.with_topology(MapPolicy::Memory),
+        other => return Err(format!("KgliteLoadOptions.topology {other} is not 0..=3")),
+    }
     Ok(load)
 }
 
-/// [`kglite_load_file`] with load options: where the embedding stores and property
-/// columns of a v9 file live, and when their CRC32 is checked.
+/// [`kglite_load_file`] with load options: where the embedding stores, property
+/// columns and topology sections of a v9 file live, and when their CRC32 is checked.
 ///
 /// Identical to `kglite_load_file` (same outputs, errors and safety contract)
 /// plus `options`: null means every default, which is exactly `kglite_load_file`.

@@ -44,6 +44,9 @@ pub struct QueryOptions {
     /// Where a v9 `.kgl`'s property columns live (`--columns`); `None` leaves
     /// the engine's default (`memory` for an in-memory graph, `auto` otherwise).
     pub columns: Option<kglite::api::io::MapPolicy>,
+    /// Whether a mapped load reads the topology and index sections in place
+    /// (`--topology`); `None` leaves the default (`auto`).
+    pub topology: Option<kglite::api::io::MapPolicy>,
 }
 
 /// `graph` with the operator's valid-time default set. The graph is the

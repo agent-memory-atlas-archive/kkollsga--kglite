@@ -213,6 +213,15 @@ pub struct LoadOptions {
     /// Same choice for column payloads of a v9 container. `Auto` (the
     /// default, in every storage mode) maps the columns a save wrote raw.
     pub columns: MapPolicy,
+    /// Same choice for the frozen `topo:*` topology sections and the derived
+    /// `idx:*` index sections (type members, id index, peer counts) of a v9
+    /// container loaded into mapped storage. `Auto` (the default) maps them.
+    /// `Memory` ignores the sections and decodes the compressed topology and
+    /// rebuilds the indexes, as a v8 load does. `Mapped` maps them on every
+    /// platform; a file without the sections (or a graph not eligible for
+    /// them) loads as it does under `Auto`. Into memory storage the sections
+    /// are never read, whatever the policy.
+    pub topology: MapPolicy,
     /// CRC32 verification of mappable sections; `KGLITE_VERIFY=eager` sets
     /// the default. See [`Verify`].
     pub verify: Verify,
@@ -229,6 +238,7 @@ impl LoadOptions {
             max_load_bytes: max_load_bytes_default(),
             embeddings: DEFAULT_EMBEDDINGS_POLICY,
             columns: MapPolicy::Auto,
+            topology: MapPolicy::Auto,
             verify: verify_default(),
         }
     }
@@ -263,6 +273,12 @@ impl LoadOptions {
     /// Choose how column payloads of a v9 container are held.
     pub fn with_columns(mut self, policy: MapPolicy) -> Self {
         self.columns = policy;
+        self
+    }
+
+    /// Choose how the topology and index sections of a v9 container are held.
+    pub fn with_topology(mut self, policy: MapPolicy) -> Self {
+        self.topology = policy;
         self
     }
 

@@ -895,6 +895,7 @@ def load(
     max_load_mb: int | None = None,
     embeddings: Literal["auto", "mapped", "memory"] | None = None,
     columns: Literal["auto", "mapped", "memory"] | None = None,
+    topology: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
 ) -> KnowledgeGraph:
     """Load a graph from a binary file previously saved with ``save()``.
@@ -933,6 +934,14 @@ def load(
             fallbacks of ``embeddings`` apply. Left unset, every storage mode
             uses ``"auto"``. A v8 or older file ignores it. See "Mapped
             columns" below.
+        topology: Whether a graph loaded into ``"mapped"`` storage reads the
+            file's topology and index sections in place. ``"auto"`` (default)
+            and ``"mapped"`` read them from the file mapping (a regular local
+            file; Windows copies them); ``"memory"`` ignores them, decodes the
+            compressed topology and rebuilds the indexes. A v8 or older file,
+            a file saved with ``layout="compact"`` and a graph loaded into
+            in-memory storage ignore it. ``KGLITE_MMAP=0`` always gives the
+            heap. See "Mapped topology" below.
         verify: ``"lazy"`` (default, or ``KGLITE_VERIFY=eager``) checks a
             mapped section's CRC32 on its first use (search, save, write); a
             section copied to the heap is always checked at load. ``"eager"``
@@ -949,7 +958,8 @@ def load(
             ``KGLITE_MAX_LOAD_MB``), either at the metadata precheck or at the
             pre-publication legacy normalization check.
         ArgumentError: ``storage`` is an unknown mode, or ``"disk"``;
-            ``embeddings``, ``columns`` or ``verify`` is not one of its names.
+            ``embeddings``, ``columns``, ``topology`` or ``verify`` is not one of
+            its names.
 
     **Mapped embeddings.** A graph saved with an embedding store of 4 MiB or
     more is a v9 file: the vectors and their norms sit uncompressed in the
@@ -982,6 +992,20 @@ def load(
     :meth:`KnowledgeGraph.verify_integrity`, when the graph is saved, and at
     load with ``verify="eager"``. A file saved with ``layout="compact"`` has
     nothing raw, so ``columns=`` has nothing to map in it.
+
+    **Mapped topology.** A default save of a graph with at least 65,536
+    nodes or 262,144 edges records the topology (node records, adjacency,
+    endpoints) as raw sections, and a load into ``"mapped"`` storage reads them
+    in place. The derived indexes are recorded too: type members and the id
+    index need the 65,536 nodes, peer counts the 262,144 edges. Private memory
+    then stays roughly constant plus the data a session writes; resident
+    memory (RSS) follows the working set the queries touch. A graph with a
+    node that is not column-backed, more than 1,024 node or edge types, or more
+    than 262,144 edges that carry properties records no topology and loads onto
+    the heap. Writes go to a copy-on-write overlay that collapses to a heap
+    graph once it holds a quarter of the graph, or on a whole-graph operation.
+    :meth:`KnowledgeGraph.graph_info` reports ``topology_mapped_bytes``,
+    ``topology_heap_bytes`` and ``topology_overlay_entries``.
 
     **``storage`` is not a memory lever.** For a v8 file, or a v9 file loaded
     with ``columns="memory"``, mapped and memory cost the same resident memory
@@ -1097,6 +1121,7 @@ def open_session(
     max_load_mb: int | None = None,
     embeddings: Literal["auto", "mapped", "memory"] | None = None,
     columns: Literal["auto", "mapped", "memory"] | None = None,
+    topology: Literal["auto", "mapped", "memory"] | None = None,
     verify: Literal["lazy", "eager"] | None = None,
     durable: bool | Literal["full", "normal", "off"] | None = None,
     auto_checkpoint_wal_mib: int | None = None,
@@ -1145,6 +1170,7 @@ def open_session(
             form only.
         embeddings: As on :func:`load`. Read-only form only.
         columns: As on :func:`load`. Read-only form only.
+        topology: As on :func:`load`. Read-only form only.
         verify: As on :func:`load`. Read-only form only.
         durable: ``"full"`` (every commit survives power loss), ``"normal"``
             (survives the process dying, not an OS crash), ``"off"`` (no log;
@@ -4112,10 +4138,23 @@ class KnowledgeGraph:
                 - ``edges_mapped``: Whether the edge CSR arrays are
                   memory-mapped from files. ``True`` on a disk graph whose CSR
                   is materialized; always ``False`` on the memory and mapped
-                  backends, which keep edges in the heap graph and have no CSR
+                  backends, which have no CSR (``topology_mapped_bytes``
+                  reports a mapped load's file-backed topology)
                 - ``edge_property_overlay_rows``: Edges whose properties are
                   held in the disk backend's heap mutation overlay rather than
                   the mmap-backed base. ``0`` on every non-disk backend
+                - ``topology_mapped_bytes``: Bytes of the topology read in
+                  place from the file mapping after a ``"mapped"`` load of a
+                  v9 file. These pages count toward RSS in proportion to what
+                  queries touch, never toward private memory. ``0`` for a heap
+                  topology, ``topology="memory"`` and ``KGLITE_MMAP=0``
+                - ``topology_heap_bytes``: Heap bytes of the topology: the node
+                  and edge arrays of a heap graph (40 and 32 bytes per slot),
+                  or for a mapped topology only what the load copied or
+                  decoded. ``0`` on a disk graph
+                - ``topology_overlay_entries``: Operations, node weights and
+                  edge weights held by the write overlay over a mapped
+                  topology. These are heap; ``0`` before the first write
                 - ``memory_limit``: Configured memory limit (None if unset)
                 - ``columnar_total_rows``: Total property-column rows, including
                   rows orphaned by deleted nodes

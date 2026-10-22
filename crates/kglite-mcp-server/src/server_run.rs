@@ -34,6 +34,7 @@ const KNOWN_EXTENSION_KEYS: &[&str] = &[
     "valid_time",
     "embeddings",
     "columns",
+    "topology",
 ];
 
 /// Manifest `extensions:` keys this build does not read, for the boot warning.
@@ -224,8 +225,8 @@ fn boot_valid_time_default(
     Ok(cli.valid_time_default.or(configured))
 }
 
-/// The placement for one of the two mappable data classes (`embeddings` or
-/// `columns`) of every `.kgl` the server opens: the flag when given, else
+/// The placement for one of the three mappable data classes (`embeddings`,
+/// `columns` or `topology`) of every `.kgl` the server opens: the flag when given, else
 /// `extensions.<key>.storage`, else `None` (the engine's default, `auto`). The
 /// flag wins outright, like `--valid-time-default`. A malformed value, or a key
 /// other than `storage`, fails the boot rather than being silently ignored.
@@ -273,6 +274,14 @@ fn boot_columns_policy(
     cli: &Cli,
 ) -> Result<Option<kglite::api::io::MapPolicy>> {
     boot_map_policy(manifest, "columns", cli.columns)
+}
+
+/// The topology and index placement: `--topology`, else `extensions.topology.storage`.
+fn boot_topology_policy(
+    manifest: Option<&mcp_methods::server::Manifest>,
+    cli: &Cli,
+) -> Result<Option<kglite::api::io::MapPolicy>> {
+    boot_map_policy(manifest, "topology", cli.topology)
 }
 
 /// `extensions.writable: true` — the manifest half of the write opt-in.
@@ -974,6 +983,7 @@ struct BootPrefix {
     valid_time_default: Option<kglite::api::temporal::ValidTimeDefault>,
     embeddings_policy: Option<kglite::api::io::MapPolicy>,
     columns_policy: Option<kglite::api::io::MapPolicy>,
+    topology_policy: Option<kglite::api::io::MapPolicy>,
     ontology: Option<BoundOntology>,
 }
 
@@ -1019,6 +1029,7 @@ fn boot_prefix(cli: &Cli, read_only_pin: bool) -> Result<BootPrefix> {
     let valid_time_default = boot_valid_time_default(manifest.as_ref(), cli)?;
     let embeddings_policy = boot_embeddings_policy(manifest.as_ref(), cli)?;
     let columns_policy = boot_columns_policy(manifest.as_ref(), cli)?;
+    let topology_policy = boot_topology_policy(manifest.as_ref(), cli)?;
     let ontology = boot_ontology(manifest.as_ref(), &manifest_base_dir(manifest.as_ref()))?;
     Ok(BootPrefix {
         mode,
@@ -1030,6 +1041,7 @@ fn boot_prefix(cli: &Cli, read_only_pin: bool) -> Result<BootPrefix> {
         valid_time_default,
         embeddings_policy,
         columns_policy,
+        topology_policy,
         ontology,
     })
 }
@@ -1066,6 +1078,7 @@ fn boot_graph(
         valid_time_default,
         embeddings_policy,
         columns_policy,
+        topology_policy,
         ontology,
     } = boot_prefix(cli, read_only_pin)?;
 
@@ -1081,6 +1094,7 @@ fn boot_graph(
         .with_valid_time_default(valid_time_default)
         .with_embeddings_policy(embeddings_policy)
         .with_columns_policy(columns_policy)
+        .with_topology_policy(topology_policy)
         // Declared here rather than from `builtins` (built below, after the
         // csv_http boot it needs) because `bind_mode` performs the boot open
         // a few lines down — a policy set later would arrive after the lease
@@ -1785,7 +1799,7 @@ mod boot_manifest_tests {
             "name: all\nextensions:\n  cypher_recipes: {}\n  recipe_catalog: {}\n  \
              recipe_tools: true\n  value_codecs: []\n  ontology: {}\n  graph_watch: true\n  parallel: true\n  tools_allow: []\n  \
              write_scope: []\n  csv_http_server: false\n  embedder: {}\n  writable: true\n  \
-             fetch_images: {}\n  valid_time: {}\n  embeddings: {}\n  columns: {}\n",
+             fetch_images: {}\n  valid_time: {}\n  embeddings: {}\n  columns: {}\n  topology: {}\n",
         );
         assert!(
             unknown_extension_keys(Some(&all_keys)).is_empty(),
@@ -2202,6 +2216,54 @@ mod boot_manifest_tests {
             );
             assert!(
                 boot_columns_policy(Some(&manifest), &bare).is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn topology_policy_reads_flag_over_manifest_and_defaults_to_none() {
+        use kglite::api::io::MapPolicy;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bare = Cli::parse_from(["kglite-mcp-server", "--graph", "g.kgl"]);
+        let flag = Cli::parse_from([
+            "kglite-mcp-server",
+            "--graph",
+            "g.kgl",
+            "--topology",
+            "memory",
+        ]);
+        assert_eq!(boot_topology_policy(None, &bare).unwrap(), None);
+        assert_eq!(
+            boot_topology_policy(None, &flag).unwrap(),
+            Some(MapPolicy::Memory)
+        );
+        let mapped = manifest_with(
+            tmp.path(),
+            "name: a\nextensions:\n  topology:\n    storage: mapped\n",
+        );
+        assert_eq!(
+            boot_topology_policy(Some(&mapped), &bare).unwrap(),
+            Some(MapPolicy::Mapped)
+        );
+        assert_eq!(
+            boot_topology_policy(Some(&mapped), &flag).unwrap(),
+            Some(MapPolicy::Memory),
+            "the flag overrides the manifest"
+        );
+        assert_eq!(
+            boot_columns_policy(Some(&mapped), &bare).unwrap(),
+            None,
+            "the keys are independent"
+        );
+        assert!(KNOWN_EXTENSION_KEYS.contains(&"topology"));
+        for body in ["storage: always", "storage: 7", "stroage: mapped"] {
+            let manifest = manifest_with(
+                tmp.path(),
+                &format!("name: m\nextensions:\n  topology:\n    {body}\n"),
+            );
+            assert!(
+                boot_topology_policy(Some(&manifest), &bare).is_err(),
                 "{body}"
             );
         }

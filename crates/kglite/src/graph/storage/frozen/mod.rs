@@ -672,6 +672,14 @@ impl FrozenGraph {
         }
     }
 
+    /// Bytes of this topology read in place from mapped `.kgl` sections.
+    pub(crate) fn mapped_bytes(&self) -> usize {
+        self.shared_sections()
+            .iter()
+            .map(|section| section.bytes().len())
+            .sum()
+    }
+
     /// The mapped `.kgl` sections behind this topology.
     pub(crate) fn shared_sections(
         &self,
@@ -693,7 +701,6 @@ impl FrozenGraph {
         .collect()
     }
 
-    #[cfg(test)]
     /// Bytes of this topology held on the heap: the property-less templates,
     /// the sparse edge-property map, and any array a load had to copy.
     pub(crate) fn heap_bytes(&self) -> usize {

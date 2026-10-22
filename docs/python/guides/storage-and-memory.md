@@ -21,12 +21,13 @@ A mapped region is read in place from the file. It costs no resident memory unti
 
 ## The knobs
 
-Four options control placement and the file layout. `kglite.load()` takes all four. `open_session(...)` (read-only form) takes the first three. The MCP server (`--embeddings`, `--columns`) and `kglite query` take `embeddings` and `columns`.
+Five options control placement and the file layout. `kglite.load()` takes all five. `open_session(...)` (read-only form) takes the first four. The MCP server (`--embeddings`, `--columns`, `--topology`) and `kglite query` take `embeddings`, `columns` and `topology`. The C ABI's `KgliteLoadOptions` has the same three fields.
 
 | Option | Values | Default | Effect |
 |---|---|---|---|
 | `embeddings=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Where embedding stores live |
 | `columns=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Where large property columns live |
+| `topology=` | `"auto"`, `"mapped"`, `"memory"` | `"auto"` | Whether a `mapped` load reads the topology and index sections in place |
 | `verify=` | `"lazy"`, `"eager"` | `"lazy"` | When section checksums run |
 | `layout=` (on `save()`) | `"auto"`, `"compact"` | `"auto"` | Which container version is written, and whether large buffers are stored raw |
 
@@ -34,6 +35,7 @@ Four options control placement and the file layout. `kglite.load()` takes all fo
 g = kglite.load("graph.kgl")                       # defaults
 g = kglite.load("graph.kgl", columns="memory")     # decode columns; large ones spill to a temp file
 g = kglite.load("graph.kgl", embeddings="memory")  # copy vectors to the heap
+g = kglite.load("graph.kgl", topology="memory")    # decode the topology, rebuild the indexes
 g.save("graph.kgl", layout="compact")              # v8 file older kglite can read
 report = g.verify_integrity()                      # {"ok": bool, "sections": [...]}
 ```
@@ -43,10 +45,11 @@ Meanings of the values:
 - `auto` maps a store of 64 MB or more (columns: 256 KB or more) from a regular local file on Unix.
 - `mapped` maps every store or column of a v9 file, whatever its size.
 - `memory` copies to the heap. Columns of 256 KB or more spill to a temp file, as in earlier releases.
+- For `topology=`, `auto` and `mapped` read the sections in place (Windows copies them) and `memory` ignores them: the compressed topology is decoded and the indexes are rebuilt, as before v9 recorded them. The graph still continues in `mapped` storage.
 - `lazy` checks the CRC32 of a section that stays mapped at its first use: a search, a save, `verify_integrity()` or the write that promotes it to the heap. A section copied to the heap at load is always checked at load, as are string columns, which are also UTF-8-validated. A numeric column that stays mapped is therefore not checked at load; pass `verify="eager"` to check it.
 - `eager` checks every section at open. `KGLITE_VERIFY=eager` sets it for a process.
 
-`columns=` only has an effect on a v9 file. A v8 file, and one saved with `layout="compact"`, has nothing raw to map.
+`columns=` and `topology=` only have an effect on a v9 file. A v8 file, and one saved with `layout="compact"`, has nothing raw to map. `topology=` also has no effect on a graph that loads into `memory` storage: it never reads the sections. A file without topology sections loads as it does under `auto`, whatever `topology=` says.
 
 ## Container v9 and v8
 
@@ -74,7 +77,23 @@ A save of a graph with 65,536 nodes or 262,144 relationships or more records the
 - The order a node's relationships come back in can differ from a `memory` load. Relationships of one type keep memory storage's newest-first order. Those of different types are grouped by type.
 - A save skips the sections in four cases. The graph is below the floors. It holds a node with an inline identity. It has more than 262,144 relationships with properties. It has more than 1,024 node or relationship types. `layout="compact"` writes none. A file without them loads as before.
 - A damaged node section refuses a `mapped` load. The other topology sections are checked at first use: `verify_integrity()`, a save, and the collapse of a write overlay refuse a damaged section.
-- `columns="memory"` and `KGLITE_MMAP=0` copy the sections to the heap instead of mapping them.
+- `topology="memory"` ignores the sections. `KGLITE_MMAP=0` copies them to the heap instead of mapping them, and the graph still serves from the copies.
+- `layout="compact"` writes the v8 file with the compressed topology and no raw sections.
+
+### Reading the memory numbers
+
+Mapped topology changes two numbers differently.
+
+| Number | Behaviour with a mapped topology |
+|---|---|
+| Private memory (macOS `phys_footprint`) | Stays roughly constant plus the data the session writes |
+| Resident memory (Linux RSS, cgroups) | Follows the working set the queries touch, which is clean and reclaimable |
+
+`graph_info()` reports the split:
+
+- `topology_mapped_bytes`: bytes read in place from the file. `0` for a heap topology, `topology="memory"` and `KGLITE_MMAP=0`.
+- `topology_heap_bytes`: the node and edge arrays of a heap graph (40 and 32 bytes per slot). For a mapped topology, only what the load copied or decoded.
+- `topology_overlay_entries`: writes held by the overlay. They are heap, and `0` before the first write.
 
 ## Indexes served from the file
 
@@ -84,7 +103,7 @@ A load into `mapped` storage serves the recorded indexes from the file. A load i
 - The first grouped aggregate over a relationship type decodes one direction's counts from the file instead of scanning every relationship (1M nodes, 12M relationships, `b.id, count(a)` over one type: 590 ms and +261 MB before, 235 ms and +179 MB after; `memory` storage takes 560 ms and +227 MB).
 - A type with repeated ids, or ids of mixed kinds, has no recorded id index and builds one on first use, as before.
 - A write to a node type layers over its recorded member list and id index. The first relationship write drops the recorded peer counts, which are then built from the relationships on first use.
-- `columns="memory"` and `KGLITE_MMAP=0` copy these sections to the heap instead of mapping them; the load still skips the scan.
+- `topology="memory"` ignores them and builds what a `memory` load builds. `KGLITE_MMAP=0` copies them to the heap instead of mapping them; the load still skips the scan.
 - A damaged index section refuses a `mapped` load, because the load reads and checks every one.
 
 ## Footprint and RSS

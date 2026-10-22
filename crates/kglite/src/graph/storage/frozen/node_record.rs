@@ -182,7 +182,6 @@ impl NodeSlab {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn heap_bytes(&self) -> usize {
         match &self.backing {
             Backing::Mapped(_) => 0,

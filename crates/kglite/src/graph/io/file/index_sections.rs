@@ -424,10 +424,11 @@ fn push_peer_sections(graph: &DirGraph, out: &mut Vec<MappableSection<'static>>)
 
 /// Where a load puts one index section.
 ///
-/// Into memory storage nothing reads them, so a file-backed section is left
-/// unread in the mapping and a byte-buffer load keeps only the validated
-/// range. Into mapped storage they follow `columns`, except that Windows
-/// always copies: an open mapping there blocks the rename a save performs.
+/// Into memory storage (or under `topology="memory"`) nothing reads them, so a
+/// file-backed section is left unread in the mapping and a byte-buffer load
+/// keeps only the validated range. Into mapped storage they follow
+/// `LoadOptions::topology`, except that Windows always copies: an open mapping
+/// there blocks the rename a save performs.
 pub(super) fn place(
     entry: &MapEntry,
     file: Option<&Arc<MappedFile>>,

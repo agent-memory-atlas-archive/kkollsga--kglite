@@ -925,7 +925,7 @@ The wheel relaunches `python -m kglite.mcp_server`; a binary relaunches itself.
 | The active graph has unsaved changes | `save_graph`, or `reload_graph(discard_unsaved=true)`, then retry |
 | `--version` or `--reload-preflight` fails or times out | Fix the installed build (for example a missing dependency or an unreadable manifest) |
 
-**Memory options.** A reload applies the same `--embeddings` and `--columns` (or `extensions.embeddings.storage` and `extensions.columns.storage`) as the boot. See {doc}`storage-and-memory` for what they do.
+**Memory options.** A reload applies the same `--embeddings`, `--columns` and `--topology` (or `extensions.embeddings.storage`, `extensions.columns.storage` and `extensions.topology.storage`) as the boot. See {doc}`storage-and-memory` for what they do.
 
 ### Security
 
@@ -1170,6 +1170,7 @@ Machine-readable JSON Schema (Draft 2020-12) for each first-class block lives un
 - [`embeddings.json`][schema-embeddings]
 - [`recipe_catalog.json`][schema-recipe-catalog]
 - [`recipe_tools.json`][schema-recipe-tools]
+- [`topology.json`][schema-topology]
 - [`valid_time.json`][schema-valid-time]
 - [`value_codecs.json`][schema-value-codecs]
 
@@ -1183,6 +1184,7 @@ The schemas are anchored to the Python parsers by the regression test `tests/tes
 [schema-embeddings]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/embeddings.json
 [schema-recipe-catalog]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_catalog.json
 [schema-recipe-tools]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/recipe_tools.json
+[schema-topology]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/topology.json
 [schema-valid-time]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/valid_time.json
 [schema-value-codecs]: https://github.com/kkollsga/kglite/blob/main/docs/schemas/extensions/value_codecs.json
 
@@ -1401,6 +1403,22 @@ This key decides where the property columns of a v9 `.kgl` file live. A graph sa
 - The setting is runtime only. Every `.kgl` the server opens takes it, including reloads. A v8 or older file ignores it.
 - The first write to a column copies that column to the heap; other columns stay mapped.
 - Write a new file beside the served one and rename it over; overwriting it in place truncates a live mapping.
+- A malformed value, or a key other than `storage`, fails the boot.
+
+#### `extensions.topology`
+
+```yaml
+extensions:
+  topology:
+    storage: auto   # 'auto' (default), 'mapped' or 'memory'
+```
+
+This key decides whether a graph saved in mapped storage reads its topology and index sections in place.
+
+- `auto` and `mapped` read the sections in place from a regular local file; Windows copies them.
+- `memory` ignores the sections, decodes the compressed topology and rebuilds the indexes.
+- `--topology {auto|mapped|memory}` overrides the manifest.
+- The setting is runtime only. Every `.kgl` the server opens takes it, including reloads. A v8 or older file and an in-memory graph ignore it.
 - A malformed value, or a key other than `storage`, fails the boot.
 
 #### `extensions.<other>` (passthrough)
