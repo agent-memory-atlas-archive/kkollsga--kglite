@@ -279,9 +279,8 @@ fn graph_with_property_edges(n: usize) -> DirGraph {
 }
 
 #[test]
-fn a_graph_with_many_property_edges_keeps_its_mapped_topology() {
-    // One edge more than the cap this replaced.
-    let n = 262_145;
+fn a_graph_at_the_property_edge_cap_keeps_its_mapped_topology() {
+    let n = 262_144;
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("weighted.kgl");
     with_floors(10, 10, || {
@@ -302,6 +301,7 @@ fn a_graph_with_many_property_edges_keeps_its_mapped_topology() {
 
     let mapped = load_owned(&path, StorageMode::Mapped);
     assert!(mapped.graph.is_frozen(), "served from the file");
+    assert!(mapped.graph_info().mapped_fallbacks.is_empty());
     let memory = load_owned(&path, StorageMode::Memory);
     for q in [
         "MATCH ()-[r:L]->() RETURN count(r), sum(r.w), min(r.tag)",
@@ -309,9 +309,58 @@ fn a_graph_with_many_property_edges_keeps_its_mapped_topology() {
     ] {
         assert_eq!(rows(&mapped, q), rows(&memory, q), "{q}");
     }
+}
+
+#[test]
+fn a_graph_past_the_property_edge_cap_keeps_a_heap_topology_and_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("heavy.kgl");
+    let saved = with_floors(10, 10, || {
+        save(graph_with_property_edges(262_145), &path, SaveLayout::Auto)
+    });
+    assert_eq!(
+        saved.take_save_notice(),
+        None,
+        "a memory-storage save does not warn about property edges"
+    );
+    let names = section_names(&path);
     assert!(
-        mapped.graph_info().topology_heap_bytes > 0,
-        "properties are heap"
+        !names.iter().any(|name| name.starts_with("topo:")),
+        "no topology sections: {names:?}"
+    );
+
+    let mapped = load_owned(&path, StorageMode::Mapped);
+    assert!(!mapped.graph.is_frozen());
+    let info = mapped.graph_info();
+    assert_eq!(info.topology_status, "heap");
+    let reason = info.topology_heap_reason.clone().unwrap();
+    assert!(
+        reason.contains("262,144 relationships carry properties"),
+        "{reason}"
+    );
+    assert!(info
+        .mapped_fallbacks
+        .iter()
+        .any(|f| f.part == "topology" && f.reason.contains("carry properties")));
+    let memory = load_owned(&path, StorageMode::Memory);
+    let q = "MATCH ()-[r:L]->() RETURN count(r), sum(r.w)";
+    assert_eq!(rows(&mapped, q), rows(&memory, q));
+
+    // The same graph saved from a mapped load names the part.
+    let mut again = load(&path, StorageMode::Mapped);
+    with_floors(10, 10, || {
+        save_graph_with_layout(
+            &mut again,
+            tmp.path().join("again.kgl").to_str().unwrap(),
+            true,
+            SaveLayout::Auto,
+        )
+    })
+    .unwrap();
+    let notice = again.take_save_notice().expect("a mapped save warns");
+    assert!(
+        notice.contains("topology") && notice.contains("carry properties"),
+        "{notice}"
     );
 }
 

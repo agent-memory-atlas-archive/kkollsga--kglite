@@ -30,7 +30,8 @@
 //! A save writes them for a graph of at least the index floors (nodes or edges)
 //! whose every node is a column-backed node without an inline identity, whose
 //! rows follow node order, and that holds at most 65,535 node types and as many
-//! connection types (the `u16` ordinal). Anything else stays on the compressed
+//! connection types (the `u16` ordinal), and at most 262,144 relationships with
+//! properties. Anything else stays on the compressed
 //! topology alone, and the reason is recorded in the file. A load into mapped storage that
 //! finds a complete, well-formed set serves the graph from it and never reads
 //! the compressed section; a memory load never reads these.
@@ -42,6 +43,7 @@ use super::mappable::{
     MapEntry, MappableSection, MappableTable, MappedSection, Placement, SectionDtype,
 };
 use super::*;
+use crate::graph::dir_graph::mapped_report::PROPERTY_EDGE_REASON;
 use crate::graph::dir_graph::MappedFallback;
 use crate::graph::schema::{EdgeData, InternedKey};
 use crate::graph::storage::disk::csr::CsrEdge;
@@ -84,6 +86,13 @@ const VERSION: u32 = 1;
 /// Types (node or connection) beyond which a save records nothing: a
 /// connection type is a `u16` ordinal in the adjacency arrays.
 const MAX_TYPES: usize = u16::MAX as usize;
+
+/// Relationships with properties beyond which a save records no topology
+/// sections. Their properties are decoded to a heap map at load, so past this a
+/// file triples in size (234 to 757 MB at 12M relationships with one float
+/// property) for a 4 % smaller footprint until the properties have mapped
+/// columns.
+const MAX_PROPERTY_EDGES: usize = 262_144;
 
 #[derive(Serialize, Deserialize)]
 struct Meta {
@@ -287,6 +296,9 @@ fn collect_edges(graph: &DirGraph) -> Result<EdgeSide, &'static str> {
     }
     if keys.len() > max_types() {
         return Err("more than 65,535 connection types");
+    }
+    if property_edges > MAX_PROPERTY_EDGES {
+        return Err(PROPERTY_EDGE_REASON);
     }
     let mut ordered: Vec<InternedKey> = keys.into_iter().collect();
     ordered.sort();

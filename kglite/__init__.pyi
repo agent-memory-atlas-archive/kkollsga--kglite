@@ -1041,9 +1041,9 @@ def load(
     index need the 65,536 nodes, peer counts the 262,144 edges. Private memory
     then stays roughly constant plus the data a session writes; resident
     memory (RSS) follows the working set the queries touch. A graph with a
-    node that is not column-backed, more than 1,024 node or edge types, or more
+    node that is not column-backed, more than 65,535 node or edge types, or more
     than 262,144 edges that carry properties records no topology and loads onto
-    the heap. Writes go to a copy-on-write overlay whose heap and costs follow
+    the heap; ``graph_info()`` names the reason. Writes go to a copy-on-write overlay whose heap and costs follow
     the writes however many there are; a save serves the graph from the file it
     wrote with an empty overlay, and a whole-graph operation collapses the
     overlay to a heap graph.

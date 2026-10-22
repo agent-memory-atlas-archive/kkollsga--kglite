@@ -47,6 +47,12 @@ impl MappedFallback {
 pub(crate) const DELTA_COLUMN_REASON: &str =
     "integers stored delta-compressed (four times smaller); decoded at load into a temporary file";
 
+/// Why a save recorded no topology for a graph with more than 262,144
+/// relationships that carry properties; a memory-storage save does not warn
+/// about it.
+pub(crate) const PROPERTY_EDGE_REASON: &str =
+    "more than 262,144 relationships carry properties, which are held on the heap either way";
+
 /// What a load recorded about the graph it produced.
 #[derive(Clone, Default)]
 pub(crate) struct MappedOrigin {
@@ -178,6 +184,10 @@ impl DirGraph {
         let named: Vec<String> = fallbacks
             .iter()
             .filter(|f| f.reason != DELTA_COLUMN_REASON)
+            // A graph in memory storage saves property-edge graphs routinely and
+            // never reads the topology sections; the reason is in the file and
+            // `graph_info()` for whoever loads it mapped, without a warning here.
+            .filter(|f| self.graph.is_mapped() || f.reason != PROPERTY_EDGE_REASON)
             .map(|f| format!("{} ({})", f.part, f.reason))
             .collect();
         if named.is_empty() {
