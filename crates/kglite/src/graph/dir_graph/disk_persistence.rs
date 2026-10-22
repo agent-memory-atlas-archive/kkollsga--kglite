@@ -849,6 +849,13 @@ impl DirGraph {
             .map(|(name, store)| {
                 let empty = HashMap::new();
                 let meta = self.node_type_metadata.get(name).unwrap_or(&empty);
+                // A tail of sealed segments is merged into one before the
+                // region plan looks at it; the plan reads a single tail.
+                let merged = match store.with_consolidated_tail() {
+                    std::borrow::Cow::Borrowed(_) => Arc::clone(store),
+                    std::borrow::Cow::Owned(whole) => Arc::new(whole),
+                };
+                let store = &merged;
                 // A store that is nothing but an mmap base re-emits its regions
                 // directly (`write_unified_columns`), so it is not flattened;
                 // neither is one that is that base with `SET` values over it
