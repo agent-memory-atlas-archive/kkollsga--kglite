@@ -580,6 +580,13 @@ pub(crate) const FUNCTIONS: &[FunctionSpec] = &[
         description: "The target node of a bound relationship",
         signature: "endNode(rel :: RELATIONSHIP) :: NODE?",
     },
+    FunctionSpec {
+        name: "valueType",
+        aliases: &[],
+        category: "graph",
+        description: "Neo4j's name for a value's most specific type, e.g. INTEGER NOT NULL",
+        signature: "valueType(value :: ANY) :: STRING",
+    },
     // ── collection ────────────────────────────────────────────────────────
     FunctionSpec {
         name: "size",

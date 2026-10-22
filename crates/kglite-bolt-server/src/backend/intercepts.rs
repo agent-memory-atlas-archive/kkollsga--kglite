@@ -35,6 +35,32 @@ pub(super) fn strip_keyword_ci<'a>(input: &'a str, keyword: &str) -> Option<&'a 
     }
 }
 
+/// The statement without a leading `CYPHER [5|25] [name=value ...]` prefix
+/// (Neo4j's version/option selector), so the verb recognizers below see the
+/// statement itself. The text is returned unchanged when there is no prefix;
+/// a malformed one is left for the engine's parser to reject.
+pub(super) fn strip_cypher_prefix(input: &str) -> &str {
+    let Some(mut rest) = strip_keyword_ci(input, "cypher") else {
+        return input;
+    };
+    let mut first = true;
+    loop {
+        let word_end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+        let word = &rest[..word_end];
+        let is_version = first && matches!(word, "5" | "25");
+        let is_option = word.split_once('=').is_some_and(|(name, value)| {
+            !name.is_empty()
+                && !value.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if !is_version && !is_option {
+            return rest;
+        }
+        first = false;
+        rest = rest[word_end..].trim_start();
+    }
+}
+
 /// Recognize exactly `CALL db.checkpoint()`, optionally followed by a `YIELD`
 /// naming a subset of [`CHECKPOINT_COLUMNS`]; `None` for anything else.
 ///

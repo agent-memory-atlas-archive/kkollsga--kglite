@@ -1387,6 +1387,11 @@ impl ConstraintRequirement {
     }
 }
 
+/// The hidden function `expr IS [NOT] :: <type>` parses into:
+/// `__is_type(expr, '<canonical type>', negated)`. It has no user-facing
+/// spelling and is rendered back as the predicate by `expression_to_string`.
+pub const IS_TYPE_FUNCTION: &str = "__is_type";
+
 /// The single source of truth for the aggregate name set —
 /// `is_aggregate_expression` classifies with it, and the nested-aggregate
 /// evaluator uses it to find the maximal aggregate calls it must evaluate over

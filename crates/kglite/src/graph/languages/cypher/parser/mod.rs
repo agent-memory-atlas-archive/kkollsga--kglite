@@ -117,6 +117,28 @@ pub(crate) const MAX_EXPRESSION_DEPTH: usize = 512;
 const STACK_RED_ZONE: usize = 128 * 1024;
 const STACK_GROW_SIZE: usize = 4 * 1024 * 1024;
 
+/// The Cypher versions a `CYPHER <n>` prefix may name.
+const SUPPORTED_CYPHER_VERSIONS: [i64; 2] = [5, 25];
+
+/// The `CYPHER <name>=<value>` option names Neo4j defines.
+const CYPHER_PREFIX_OPTIONS: [&str; 11] = [
+    "runtime",
+    "planner",
+    "expressionEngine",
+    "operatorEngine",
+    "interpretedPipesFallback",
+    "replan",
+    "updateStrategy",
+    "connectComponentsPlanner",
+    "debug",
+    "inferSchemaParts",
+    "parallelRuntimeSupport",
+];
+
+fn unsupported_cypher_version(version: &str) -> String {
+    format!("Unsupported Cypher version '{version}'; the supported versions are 5 and 25")
+}
+
 impl CypherParser {
     /// Construct with the tokenizer's verbatim keyword-lexeme table. An
     /// empty table is valid: such parsers fall back to canonical keyword
@@ -429,13 +451,24 @@ impl CypherParser {
         }
     }
 
-    /// Parse one statement: its leading `EXPLAIN` / `PROFILE` and
-    /// `FOR <axis> AS OF <instant>` prefixes, in either order, then its body.
+    /// Parse one statement: its leading `CYPHER [<version>] [<option>=<value>
+    /// ...]`, `EXPLAIN` / `PROFILE` and `FOR <axis> AS OF <instant>` prefixes,
+    /// in any order, then its body.
     pub fn parse_query(&mut self) -> Result<CypherQuery, String> {
         let mut explain = false;
         let mut profile = false;
         let mut context = None;
+        let mut versioned = false;
         loop {
+            if self.peek_soft_word("CYPHER") {
+                if versioned {
+                    return Err("A statement takes one CYPHER prefix".to_string());
+                }
+                versioned = true;
+                self.advance();
+                self.parse_cypher_prefix_options()?;
+                continue;
+            }
             if self.check(&CypherToken::Explain) || self.check(&CypherToken::Profile) {
                 if explain || profile {
                     return Err("A statement takes one EXPLAIN or PROFILE".to_string());
@@ -459,6 +492,62 @@ impl CypherParser {
         query.context = context;
         query.column_display = column_display_names(&query.clauses);
         Ok(query)
+    }
+
+    /// The tail of a `CYPHER` prefix: an optional version, then any number of
+    /// `name=value` options. Only the versions in [`SUPPORTED_CYPHER_VERSIONS`]
+    /// and the option names Neo4j defines ([`CYPHER_PREFIX_OPTIONS`]) are
+    /// accepted; this engine has one dialect and one planner, so what is
+    /// accepted is validated and has no effect on execution.
+    fn parse_cypher_prefix_options(&mut self) -> Result<(), String> {
+        match self.peek() {
+            Some(CypherToken::IntLit(version)) => {
+                let version = *version;
+                if !SUPPORTED_CYPHER_VERSIONS.contains(&version) {
+                    return Err(unsupported_cypher_version(&version.to_string()));
+                }
+                self.advance();
+            }
+            Some(CypherToken::FloatLit(version)) => {
+                return Err(unsupported_cypher_version(&version.to_string()));
+            }
+            _ => {}
+        }
+        while let Some(CypherToken::Identifier(name)) = self.peek() {
+            if self.peek_at(1) != Some(&CypherToken::Equals) {
+                break;
+            }
+            let name = name.clone();
+            if !CYPHER_PREFIX_OPTIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&name))
+            {
+                return Err(format!(
+                    "Unknown CYPHER option '{name}'; the options are {}",
+                    CYPHER_PREFIX_OPTIONS.join(", ")
+                ));
+            }
+            self.advance(); // option name
+            self.advance(); // =
+            match self.peek() {
+                Some(
+                    CypherToken::Identifier(_)
+                    | CypherToken::StringLit(_)
+                    | CypherToken::IntLit(_)
+                    | CypherToken::True
+                    | CypherToken::False,
+                ) => self.advance(),
+                // Values such as `skip` or `all` lex as keywords.
+                Some(token) if token_to_keyword_name(token).is_some() => self.advance(),
+                other => {
+                    return Err(format!(
+                        "Expected a value for CYPHER option '{name}', found {}",
+                        describe_token_opt(other)
+                    ))
+                }
+            };
+        }
+        Ok(())
     }
 
     /// A statement's body — schema DDL or a clause sequence — without its
@@ -918,3 +1007,7 @@ fn format_parse_error_message(input: &str, err: &str, line: usize, col: usize) -
 #[cfg(test)]
 #[path = "parser_tests.rs"]
 mod parser_tests;
+
+#[cfg(test)]
+#[path = "cypher_prefix_tests.rs"]
+mod cypher_prefix_tests;

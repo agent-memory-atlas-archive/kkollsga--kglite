@@ -17,6 +17,11 @@ before upgrading.
   - `CALL dbms.procedures()` and `CALL dbms.functions()` are new procedures listing the same rows.
   - `db.indexes()` and `SHOW INDEXES` add `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead` and `readCount`. `populationPercent` is `100.0` on an `ONLINE` index and `options` carries a vector index's dimension and similarity function; the rest are `null`.
   - `db.constraints()` and `SHOW CONSTRAINTS` add `id`, `ownedIndex` and `options`, always `null`. A bare `SHOW INDEXES`, `SHOW CONSTRAINTS` and bare `CALL` of either keep their columns; the added ones come with a `YIELD` that names them or with `YIELD *`.
+- **`IS :: TYPE` and `valueType()` in expressions.**
+  - `expr IS :: TYPE`, `expr IS NOT :: TYPE` and `expr IS TYPED TYPE` work in `WHERE`, `RETURN`, `CASE` and anywhere else an expression does. Types are `BOOLEAN`, `STRING`, `INTEGER`, `FLOAT`, `DATE`, `LOCAL TIME`, `ZONED TIME`, `LOCAL DATETIME`, `ZONED DATETIME`, `DURATION`, `POINT`, `LIST<T>`, `MAP`, `NODE`, `RELATIONSHIP`, `PATH`, `ANY`, `PROPERTY VALUE`, `NOTHING`, `NULL`, unions `A | B`, and `T NOT NULL`. Before, every form was a syntax error.
+  - A type admits `null` unless it says `NOT NULL`, and a predicate is never `null`. An integer is never a `FLOAT`. An unknown type name is a syntax error that lists the names.
+  - `valueType(x)` returns the type name with `NOT NULL`: `INTEGER NOT NULL`, `LIST<INTEGER> NOT NULL` for `[1, null]`, `NULL`.
+- **A `CYPHER` statement prefix.** `CYPHER 5 …` and `CYPHER 25 …` run any statement, alone or with `EXPLAIN`, `PROFILE` and `FOR … AS OF`. Other versions and unknown `name=value` options (`runtime`, `planner`, `expressionEngine`, …) are errors; the known options are accepted and ignored. The Bolt server's own verbs (`db.checkpoint`, `dbms.components`, `SHOW DATABASES`) are recognised behind the prefix.
 - **`CALL dbms.components() YIELD … RETURN … LIMIT $limit` works on the Bolt server.** The bare call and the YIELD-only form were answered directly; the same row now runs under any `WHERE`, `RETURN`, `ORDER BY` or `LIMIT` that follows the YIELD.
 
 ### Fixed

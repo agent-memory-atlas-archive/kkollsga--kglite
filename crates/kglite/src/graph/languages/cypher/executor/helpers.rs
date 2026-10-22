@@ -104,11 +104,29 @@ pub fn return_item_column_name(item: &ReturnItem) -> String {
 /// rendering *is* the identity the executor uses to resolve an unaliased
 /// projection, so `schema_check` compares ORDER BY keys against RETURN items
 /// with it — matching what the runtime can actually resolve.
+/// `x IS :: INTEGER` / `x IS NOT :: INTEGER` for the hidden `__is_type` call.
+fn render_is_type(args: &[Expression]) -> Option<String> {
+    match args {
+        [operand, Expression::Literal(Value::String(spec)), Expression::Literal(Value::Boolean(negated))] => {
+            Some(format!(
+                "{} IS {}:: {}",
+                expression_to_string(operand),
+                if *negated { "NOT " } else { "" },
+                spec
+            ))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn expression_to_string(expr: &Expression) -> String {
     match expr {
         Expression::PropertyAccess { variable, property } => format!("{}.{}", variable, property),
         Expression::Variable(name) => name.clone(),
         Expression::Literal(val) => format_value_compact(val),
+        Expression::FunctionCall { name, args, .. } if name == IS_TYPE_FUNCTION => {
+            render_is_type(args).unwrap_or_else(|| format!("{name}(...)"))
+        }
         Expression::FunctionCall {
             name,
             args,

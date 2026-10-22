@@ -857,6 +857,28 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *CHAIN_COUNT_QUERIES,
+    # `x IS :: TYPE` rides the planner as a hidden function call: pushdown,
+    # constant folding and the scope check walk it like any other call.
+    (
+        "type_predicate_where_pushdown",
+        "small_graph",
+        "MATCH (p:Person) WHERE p.age IS :: INTEGER AND p.age > $floor RETURN p.name AS name ORDER BY name",
+        {"floor": 20},
+    ),
+    (
+        "type_predicate_negated_and_folded",
+        "small_graph",
+        "MATCH (p:Person) WHERE p.age IS NOT :: STRING AND (1 IS :: INTEGER NOT NULL) "
+        "RETURN p.name AS name, valueType(p.age) AS t ORDER BY name",
+        None,
+    ),
+    (
+        "type_predicate_in_projection_and_aggregate",
+        "small_graph",
+        "MATCH (p:Person) RETURN count(CASE WHEN p.city IS :: STRING NOT NULL THEN null ELSE 1 END) AS bad, "
+        "count(CASE WHEN p.age IS :: INTEGER | FLOAT THEN 1 END) AS numeric",
+        None,
+    ),
     # Aggregate window functions: the argument expression and PARTITION BY keys
     # are walked by the planner passes (scope check, parameter binding,
     # constant folding), so each shape rides through them with the optimizer

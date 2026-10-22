@@ -225,16 +225,71 @@ impl CypherParser {
         // Check for IS NULL / IS NOT NULL postfix
         if self.peek() == Some(&CypherToken::Is) {
             self.advance(); // consume IS
-            if self.peek() == Some(&CypherToken::Not) {
+            let negated = self.peek() == Some(&CypherToken::Not);
+            if negated {
                 self.advance(); // consume NOT
-                self.expect(&CypherToken::Null)?;
-                return Ok(Expression::IsNotNull(Box::new(expr)));
-            } else {
-                self.expect(&CypherToken::Null)?;
-                return Ok(Expression::IsNull(Box::new(expr)));
             }
+            if self.at_type_predicate() {
+                return self.parse_type_predicate(expr, negated);
+            }
+            self.expect(&CypherToken::Null)?;
+            return Ok(if negated {
+                Expression::IsNotNull(Box::new(expr))
+            } else {
+                Expression::IsNull(Box::new(expr))
+            });
         }
         Ok(expr)
+    }
+
+    /// After `IS [NOT]`: `::` or `TYPED` opens a type predicate.
+    fn at_type_predicate(&self) -> bool {
+        (self.check(&CypherToken::Colon) && self.peek_at(1) == Some(&CypherToken::Colon))
+            || self.peek_soft_word("TYPED")
+    }
+
+    /// `expr IS [NOT] :: <type>` / `IS [NOT] TYPED <type>`. The type words are
+    /// validated here and the canonical spelling travels in the tree as the
+    /// hidden `__is_type(expr, '<type>', negated)` call, so no optimizer pass
+    /// has a new expression shape to enumerate.
+    fn parse_type_predicate(
+        &mut self,
+        expr: Expression,
+        negated: bool,
+    ) -> Result<Expression, String> {
+        if self.check(&CypherToken::Colon) {
+            self.advance();
+            self.advance();
+        } else {
+            self.advance(); // TYPED
+        }
+        let mut words: Vec<String> = Vec::new();
+        loop {
+            let word = match self.peek() {
+                Some(CypherToken::Identifier(word)) => word.clone(),
+                Some(CypherToken::Not) => "NOT".to_string(),
+                Some(CypherToken::Null) => "NULL".to_string(),
+                Some(CypherToken::LessThan) => "<".to_string(),
+                Some(CypherToken::GreaterThan) => ">".to_string(),
+                Some(CypherToken::Pipe) => "|".to_string(),
+                _ => break,
+            };
+            words.push(word);
+            self.advance();
+        }
+        if words.is_empty() {
+            return Err("expected a type after IS ::, for example IS :: INTEGER".to_string());
+        }
+        let parsed = crate::graph::value_type::TypeExpr::parse(&words.join(" "))?;
+        Ok(Expression::FunctionCall {
+            name: IS_TYPE_FUNCTION.to_string(),
+            args: vec![
+                expr,
+                Expression::Literal(Value::String(parsed.to_string())),
+                Expression::Literal(Value::Boolean(negated)),
+            ],
+            distinct: false,
+        })
     }
 
     pub(super) fn parse_additive_expression(&mut self) -> Result<Expression, String> {

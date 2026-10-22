@@ -19,6 +19,18 @@ impl<'a> CypherExecutor<'a> {
         row: &ResultRow,
     ) -> Result<Option<Value>, String> {
         let result: Result<Value, String> = match name {
+            // `x IS [NOT] :: <type>` (parsed into this hidden call) and the
+            // `valueType(x)` string both go through `graph::value_type`.
+            "__is_type" => self.eval_is_type(args, row),
+            "valuetype" => {
+                if args.len() != 1 {
+                    return Err("valueType() takes 1 argument".into());
+                }
+                let value = self.evaluate_expression(&args[0], row)?;
+                Ok(Value::String(crate::graph::value_type::value_type_string(
+                    &value,
+                )))
+            }
             "vector_score" => self.eval_vector_score(args, row),
             // text_bm25(n, 'property', 'query text') — BM25 relevance of one
             // row's document against a query, or null when that row has no
@@ -932,5 +944,21 @@ fn norm_of(embedding: Option<&[f32]>) -> Value {
     match embedding {
         Some(vector) => Value::Float64(vector.iter().map(|x| x * x).sum::<f32>().sqrt() as f64),
         None => Value::Null,
+    }
+}
+
+impl<'a> CypherExecutor<'a> {
+    /// `__is_type(expr, '<canonical type>', negated)`: whether the value is of
+    /// the type, flipped when `negated`. Never null — a null operand is of
+    /// every nullable type.
+    fn eval_is_type(&self, args: &[Expression], row: &ResultRow) -> Result<Value, String> {
+        let [operand, Expression::Literal(Value::String(spec)), Expression::Literal(Value::Boolean(negated))] =
+            args
+        else {
+            return Err("IS :: type predicate is malformed".into());
+        };
+        let ty = crate::graph::value_type::TypeExpr::parse(spec)?;
+        let value = self.evaluate_expression(operand, row)?;
+        Ok(Value::Boolean(ty.matches(&value) != *negated))
     }
 }

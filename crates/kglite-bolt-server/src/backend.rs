@@ -123,6 +123,8 @@ mod auto_commit;
 mod auto_commit_tests;
 #[cfg(test)]
 mod backup_tests;
+#[cfg(test)]
+mod cypher_prefix_tests;
 mod intercepts;
 mod result_stream;
 #[cfg(test)]
@@ -132,8 +134,8 @@ use admission::wait_timeout_error;
 use auto_commit::{access_mode_error, is_write_statement};
 use intercepts::{
     backup_stream, checkpoint_stream, components_pipeline_rewrite, parse_backup_call,
-    parse_checkpoint_call, parse_server_facts_call, server_facts_stream, BackupArg, BackupCall,
-    CheckpointCall, ServerFactsCall, ServerFactsVerb,
+    parse_checkpoint_call, parse_server_facts_call, server_facts_stream, strip_cypher_prefix,
+    BackupArg, BackupCall, CheckpointCall, ServerFactsCall, ServerFactsVerb,
 };
 use result_stream::{decode_params, finish_stream, off_async_worker};
 use writer_slot::{ReapedHandles, SharedPermit, WriterPermit, WriterSlot};
@@ -640,6 +642,11 @@ impl BoltBackend for KgliteBackend {
         }
         parse_tx_timeout(extra)?;
 
+        // The verbs below match at the start of the statement text, so a
+        // `CYPHER 5` / `CYPHER 25` prefix is looked through here; the engine
+        // parses the prefix itself for everything that is not intercepted.
+        let intercept_text = strip_cypher_prefix(trimmed);
+
         // `CALL db.checkpoint()` is a *bolt-layer verb*, not an engine
         // procedure: the Cypher executor has no session, no `&mut` graph and
         // no served path to write to, and CALL is classified as a read — so
@@ -647,7 +654,7 @@ impl BoltBackend for KgliteBackend {
         // Intercepting here is what gives the verb the three things it needs
         // (the session, the served path, the readonly flag), and it runs
         // before parameter decoding because the verb takes none.
-        if let Some(call) = parse_checkpoint_call(trimmed) {
+        if let Some(call) = parse_checkpoint_call(intercept_text) {
             return self.run_checkpoint(&call, transaction.is_some());
         }
 
@@ -655,7 +662,7 @@ impl BoltBackend for KgliteBackend {
         // db.checkpoint — it needs the session and the server's path policy.
         // Unlike a checkpoint it is allowed on `--readonly`: it writes a copy,
         // never the served graph.
-        if let Some(call) = parse_backup_call(trimmed) {
+        if let Some(call) = parse_backup_call(intercept_text) {
             return self
                 .run_backup(&call, parameters, transaction.is_some())
                 .await;
@@ -665,7 +672,7 @@ impl BoltBackend for KgliteBackend {
         // SHOW DATABASES): answered here for the same reason as
         // db.checkpoint — the engine has none of the state they report.
         // Reads, so they are fine inside a transaction.
-        if let Some(call) = parse_server_facts_call(trimmed) {
+        if let Some(call) = parse_server_facts_call(intercept_text) {
             return Ok(self.run_server_facts(&call));
         }
         // The same row under a full YIELD ... WHERE/RETURN pipeline runs in the
@@ -674,7 +681,7 @@ impl BoltBackend for KgliteBackend {
         let (components_name, components_version) =
             self.identity.components_row(env!("CARGO_PKG_VERSION"));
         let components_query = components_pipeline_rewrite(
-            trimmed,
+            intercept_text,
             &components_name,
             &[components_version.as_str()],
             COMPONENTS_EDITION,

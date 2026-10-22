@@ -182,6 +182,29 @@ graph.cypher("MATCH (p:Person {id: $id}) NODETACH DELETE p", params={"id": 7})
 - `FINISH` must be terminal. Completed mutations remain visible, and its
   `ResultView` is empty.
 
+### The `CYPHER` statement prefix
+
+A statement may start with `CYPHER [version] [option=value ...]`, as Neo4j
+clients send it:
+
+```python
+graph.cypher("CYPHER 25 MATCH (p:Person) RETURN p.name")
+graph.cypher("CYPHER 5 PROFILE MATCH (p:Person) RETURN count(p)")
+```
+
+- The version is `5` or `25`. Any other version is an error
+  (`Unsupported Cypher version`). KGLite has one dialect, so the version is
+  checked and has no effect.
+- Options are checked by name and ignored: `runtime`, `planner`,
+  `expressionEngine`, `operatorEngine`, `interpretedPipesFallback`, `replan`,
+  `updateStrategy`, `connectComponentsPlanner`, `debug`, `inferSchemaParts`,
+  `parallelRuntimeSupport`. An unknown option name is an error.
+- The prefix works before any statement kind and combines with `EXPLAIN`,
+  `PROFILE` and `FOR ... AS OF` in either order. A statement takes one
+  `CYPHER` prefix.
+- The Bolt server looks through the prefix when it recognizes its own verbs
+  (`CALL db.checkpoint()`, `dbms.components()`, `SHOW DATABASES`).
+
 ## WHERE Clause
 
 ```python
@@ -624,6 +647,7 @@ graph.cypher("""
 | `inDegree(n)` / `outDegree(n)` | Node's incoming / outgoing edge count |
 | `keys(n)` / `keys(r)` / `keys(map)` | Sorted property names of a node or relationship, or entry names of a map — `keys(properties(n))` and `keys({a: 1, b: 2})` both work (as JSON list). A relationship's keys also include `type` |
 | `properties(n)` / `properties(r)` | Full property map of a node or relationship (as JSON map); a relationship's map also carries its `type` |
+| `valueType(x)` | Neo4j's name for the type of `x`: `INTEGER NOT NULL`, `LIST<INTEGER NOT NULL> NOT NULL`, `NULL`; see [Type predicates](#type-predicates-is--type) |
 | `start_node(r)` | Source node of a bound relationship; supports dotted access: `start_node(r).name` |
 | `end_node(r)` | Target node of a bound relationship; supports dotted access: `end_node(r).name` |
 | `date(str)` / `datetime(str)` | Parse a date / ISO-8601 datetime string (`date('2020-01-15')`, `datetime('2020-01-15T10:30:00Z')`), or build one from a map (`date({year: 2020, month: 1, day: 15})`) |
@@ -2317,6 +2341,39 @@ Integer division or modulo **by zero raises** rather than returning NULL.
 Integer division truncates toward zero (`-7 / 2 → -3`) and only promotes to
 float when an operand is a float. Float division by zero stays NULL. See
 [Magnitude/error policy](#temporal-functions).
+
+## Type predicates (`IS :: TYPE`)
+
+`expr IS :: TYPE`, `expr IS NOT :: TYPE` and the `IS TYPED TYPE` spelling test
+the type of a value anywhere an expression is allowed:
+
+```python
+graph.cypher("MATCH (n:Reading) WHERE n.value IS :: FLOAT RETURN n.id")
+graph.cypher("RETURN [1, 2.5] IS :: LIST<INTEGER | FLOAT> AS ok")  # true
+graph.cypher("RETURN valueType([1, null]) AS t")  # LIST<INTEGER> NOT NULL
+```
+
+| Type | Matches |
+|---|---|
+| `BOOLEAN`, `STRING`, `INTEGER` (`INT`, `SIGNED INTEGER`), `FLOAT` | the scalar of that name; an integer is never a `FLOAT` and a float never an `INTEGER` |
+| `DATE`, `LOCAL TIME`, `ZONED TIME`, `LOCAL DATETIME`, `ZONED DATETIME`, `DURATION`, `POINT` | the temporal or spatial value of that kind |
+| `LIST<T>` | a list whose every element is a `T`; `[]` is a `LIST<T>` for every `T` |
+| `MAP`, `NODE`, `RELATIONSHIP`, `PATH` | a map, node, relationship or path |
+| `ANY`, `PROPERTY VALUE` | any value; any value a property can hold (scalars and lists of them) |
+| `NULL`, `NOTHING` | `null` only |
+| `A \| B` | a value of either type |
+| `T NOT NULL` | a `T` that is not null |
+
+- A type admits `null` unless it says `NOT NULL`: `null IS :: INTEGER` is
+  `true`, `null IS :: INTEGER NOT NULL` is `false`. A predicate is never
+  `null`.
+- The scalar names are the ones `REQUIRE n.p IS :: TYPE` accepts, with the same
+  matching, so a constraint and a predicate cannot disagree.
+- An unknown type name is a syntax error that lists the names above.
+- `valueType(x)` returns the most specific type with `NOT NULL`: `1` is
+  `INTEGER NOT NULL`, `[1, null]` is `LIST<INTEGER> NOT NULL`, `[]` is
+  `LIST<NOTHING> NOT NULL`, `null` is `NULL`. A list of mixed elements names
+  the union of their types, sorted by name.
 
 ## CASE Expressions
 
@@ -5531,6 +5588,7 @@ mean:
 | Comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`) | Partial | Scalar comparisons, null propagation and cross-type ordering follow openCypher: `<`/`<=`/`>`/`>=` are `null` between values no ordering rule relates, `=` is `false` and `<>` is `true`. Three deliberate divergences: a date equals midnight on that date, a date or datetime compares with a string by parsing it (both under Sort order), and maps have no ordering rule of their own. Lists order element-wise: the first differing pair decides, a longer list is greater when every shared element is equal (`[1, 0] >= [1]`), and a pair that cannot be ordered (a `null`, unrelated types) makes the result `null` unless an earlier pair already decided |
 | Boolean (`AND`, `OR`, `XOR`, `NOT`) | Covered | Predicate and expression positions preserve three-valued results |
 | `IS NULL` / `IS NOT NULL` | Covered | Also works as expressions in RETURN/WITH |
+| `IS :: TYPE` / `IS NOT :: TYPE` / `IS TYPED TYPE`, `valueType()` | Covered | Neo4j 5 type names, unions, `LIST<T>`, `NOT NULL`; see [Type predicates](#type-predicates-is--type). `VECTOR` and `ANY<...>` are not accepted |
 | `IN [list]` | Covered | Null operands and null-containing no-match lists preserve unknown; an **empty** list is `false` for every operand, `null` included |
 | `CONTAINS` / `STARTS WITH` / `ENDS WITH` | Covered | |
 | `=~` regex | Covered | Full-string match, per openCypher: the pattern must match the entire value, so `'inactive' =~ 'active'` is false. Wrap with `.*` to search, or use `text_match_regex()`, which is a search by design. Shares a process-wide FIFO cache with `text_match_regex()` (128 entries; 2 MiB compiled-program limit; misses compile outside the lock) |
