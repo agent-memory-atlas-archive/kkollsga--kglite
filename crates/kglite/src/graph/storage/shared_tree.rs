@@ -237,6 +237,16 @@ impl<V: Clone> PagedMap<V> {
         self.iter().map(|(key, _)| key)
     }
 
+    /// The keys in ascending order: pages are visited low to high and the keys
+    /// of one page (hash order) are sorted.
+    pub(crate) fn sorted_keys(&self) -> impl Iterator<Item = u32> + '_ {
+        self.tree.leaves().flat_map(|(_, leaf)| {
+            let mut keys: Vec<u32> = leaf.keys().copied().collect();
+            keys.sort_unstable();
+            keys
+        })
+    }
+
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
         self.iter().map(|(_, value)| value)
     }
@@ -272,6 +282,20 @@ impl PagedSet {
 
     pub(crate) fn insert(&mut self, key: u32) {
         self.map.insert(key, ());
+    }
+
+    pub(crate) fn remove(&mut self, key: u32) -> bool {
+        self.map.remove(key).is_some()
+    }
+
+    /// The highest key held.
+    pub(crate) fn max(&self) -> Option<u32> {
+        self.map.max_key()
+    }
+
+    /// The keys in ascending order.
+    pub(crate) fn iter_sorted(&self) -> impl Iterator<Item = u32> + '_ {
+        self.map.sorted_keys()
     }
 
     pub(crate) fn len(&self) -> usize {
