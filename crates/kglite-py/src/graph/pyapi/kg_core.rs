@@ -1841,7 +1841,7 @@ impl KnowledgeGraph {
     }
 
     /// Run Cypher reads and writes; write_scope limits mutations such as DETACH DELETE by stored type; return a ResultView or a DataFrame when to_df=True.
-    #[pyo3(signature = (query, *, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=true, parallel=false, disable_optimizer=false, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None))]
+    #[pyo3(signature = (query, *, to_df=false, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=true, parallel=false, disable_optimizer=false, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None, hide_structural_keys=false))]
     // Shared keyword-only query options preserve parity across Python entry points.
     #[allow(clippy::too_many_arguments)]
     // The detached closure preserves the engine's structured KgError until PyErr conversion.
@@ -1863,6 +1863,7 @@ impl KnowledgeGraph {
         git_sha: Option<String>,
         modified_by: Option<String>,
         valid_at: Option<&Bound<'_, PyAny>>,
+        hide_structural_keys: bool,
     ) -> PyResult<Py<PyAny>> {
         let query = crate::graph::valid_time::prefixed_query(query, valid_at)?;
         let query = query.as_ref();
@@ -1919,6 +1920,7 @@ impl KnowledgeGraph {
             let embedder_for_opts = this.embedder.clone();
 
             let opts = kglite_core::api::session::ExecuteOptions {
+                hide_structural_keys,
                 params: &param_map,
                 deadline,
                 deadline_origin,
@@ -1983,6 +1985,7 @@ impl KnowledgeGraph {
         };
         let mut result = {
             let opts = kglite_core::api::session::ExecuteOptions {
+                hide_structural_keys,
                 params: &param_map,
                 deadline,
                 deadline_origin,

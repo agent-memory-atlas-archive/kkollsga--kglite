@@ -433,6 +433,7 @@ fn path_relationships_are_accepted_by_embed() {
         super::super::write::MutationLimits {
             max_work_units: None,
             row_limit: None,
+            hide_structural_keys: false,
         },
         &super::super::load_csv::CsvImportPolicy::Denied,
         Some(&service),

@@ -59,6 +59,7 @@ struct Outcome {
 fn execute(graph: &DirGraph, query: &str, streaming: bool, work: Option<usize>) -> Outcome {
     let params = HashMap::new();
     let opts = ExecuteOptions {
+        hide_structural_keys: false,
         streaming,
         max_work_units: work,
         ..ExecuteOptions::eager(&params)
@@ -170,6 +171,7 @@ fn an_explicit_budget_keeps_the_materialized_route_and_its_error() {
     let params = HashMap::new();
     let run_with = |streaming: bool| {
         let opts = ExecuteOptions {
+            hide_structural_keys: false,
             streaming,
             max_work_units: Some(PATHS / 2),
             ..ExecuteOptions::eager(&params)
@@ -219,6 +221,7 @@ fn an_interrupt_between_chunks_aborts_the_stream() {
     CypherExecutor::interrupt_after_periodic_polls(0);
     let params = HashMap::new();
     let opts = ExecuteOptions {
+        hide_structural_keys: false,
         streaming: true,
         ..ExecuteOptions::eager(&params)
     };

@@ -169,6 +169,7 @@ impl FrozenGraph {
         let result = py.enter_kg(
             move |cancel| -> Result<cypher::CypherResult, crate::error::KgError> {
                 let opts = ExecuteOptions {
+                    hide_structural_keys: false,
                     params: &param_map,
                     deadline,
                     deadline_origin,

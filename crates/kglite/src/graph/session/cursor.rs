@@ -204,6 +204,7 @@ pub fn execute_read_cursor(
         deadline_origin: opts.deadline_origin,
         cancel: opts.cancel.clone(),
         parallel: opts.parallel,
+        hide_structural_keys: opts.hide_structural_keys,
         started,
         produced: Arc::clone(&produced),
     };
@@ -254,6 +255,7 @@ struct Job {
     deadline_origin: Option<Instant>,
     cancel: Option<CancelToken>,
     parallel: bool,
+    hide_structural_keys: bool,
     started: Instant,
     produced: Arc<AtomicUsize>,
 }
@@ -271,6 +273,7 @@ impl Job {
             cypher::CypherExecutor::with_params(&self.graph, &self.params, self.deadline)
                 .with_streaming(true)
                 .with_parallel(self.parallel)
+                .with_hidden_structural_keys(self.hide_structural_keys)
                 .with_cancel(self.cancel.as_ref().map(CancelToken::flag));
         let graph = &self.graph;
         let mut emit = |event: CursorEvent| -> bool {

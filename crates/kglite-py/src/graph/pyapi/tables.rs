@@ -24,6 +24,7 @@ use crate::graph::KnowledgeGraph;
 
 fn table_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
     ExecuteOptions {
+        hide_structural_keys: false,
         params,
         deadline: None,
         deadline_origin: None,

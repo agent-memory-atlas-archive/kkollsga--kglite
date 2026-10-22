@@ -236,6 +236,7 @@ pub fn get(graph: &DirGraph, recipe: &str, name: &str) -> Result<RecipeRecord, K
 
 fn recipe_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
     ExecuteOptions {
+        hide_structural_keys: false,
         params,
         deadline: None,
         deadline_origin: None,

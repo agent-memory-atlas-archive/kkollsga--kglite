@@ -8319,6 +8319,7 @@ class KnowledgeGraph:
         git_sha: Optional[str] = None,
         modified_by: Optional[str] = None,
         valid_at: Optional[Union[_dt.date, _dt.datetime, str]] = None,
+        hide_structural_keys: bool = False,
     ) -> Union[ResultView, pd.DataFrame, str]:
         """Execute a Cypher query.
 
@@ -8629,6 +8630,16 @@ class KnowledgeGraph:
                 under the default with a hint to use ``COUNT { (n)--() }`` or
                 ``FOR VALID_TIME ALL``. A query that means history passes
                 ``valid_at='all'`` or begins ``FOR VALID_TIME ALL``.
+            hide_structural_keys: Leave KGLite's virtual ``title`` and ``type``
+                keys out of the maps ``keys(n)``, ``properties(n)``,
+                ``properties(r)`` and ``n {.*}`` return, so they carry what
+                was stored, as Neo4j's do (default ``False``: the maps carry
+                ``id``, ``title`` and ``type``). A stored property named
+                ``type`` and a title the user wrote are kept, and ``id`` is
+                never hidden. A title equal to the minted form (``<Label>_<id>``
+                or the id) cannot be told from the virtual and is hidden.
+                ``RETURN n``, ``nodes(p)`` and ``collect(n)`` are not
+                affected. ``kglite-bolt-server --neo4j-compat`` sets it.
 
         Returns:
             ResultView by default, DataFrame when ``to_df=True``,

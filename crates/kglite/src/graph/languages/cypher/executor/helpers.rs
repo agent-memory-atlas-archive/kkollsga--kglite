@@ -761,6 +761,17 @@ pub(crate) fn materialize_node_value(
     idx: petgraph::graph::NodeIndex,
     graph: &crate::graph::DirGraph,
 ) -> Option<crate::datatypes::values::NodeValue> {
+    materialize_node_value_with(idx, graph, false)
+}
+
+/// [`materialize_node_value`] with the structural-key choice made: `hide`
+/// leaves out the virtual `title` and `type` entries (see
+/// [`collect_node_properties`]).
+pub(crate) fn materialize_node_value_with(
+    idx: petgraph::graph::NodeIndex,
+    graph: &crate::graph::DirGraph,
+    hide: bool,
+) -> Option<crate::datatypes::values::NodeValue> {
     // The returned value owns everything it needs, so on the disk backend the
     // record must not be parked in the query arena — a projection over N rows
     // would retain N records for the rest of the query
@@ -775,10 +786,10 @@ pub(crate) fn materialize_node_value(
                 .map(|store| (&**store, row_id))
         });
         let node = crate::graph::storage::NodeView::new(&data, store);
-        return Some(node_value_from_view(idx, node, graph));
+        return Some(node_value_from_view(idx, node, graph, hide));
     }
     let node = graph.graph.node_view(idx)?;
-    Some(node_value_from_view(idx, node, graph))
+    Some(node_value_from_view(idx, node, graph, hide))
 }
 
 /// The sorted, de-duplicated key set of [`materialize_node_value`]'s property
@@ -791,6 +802,7 @@ pub(crate) fn materialize_node_value(
 pub(crate) fn materialize_node_keys(
     idx: petgraph::graph::NodeIndex,
     graph: &crate::graph::DirGraph,
+    hide: bool,
 ) -> Option<Vec<String>> {
     // Same arena discipline as `materialize_node_value` (disk records must not
     // outlive the call).
@@ -803,44 +815,76 @@ pub(crate) fn materialize_node_keys(
                 .map(|store| (&**store, row_id))
         });
         let node = crate::graph::storage::NodeView::new(&data, store);
-        return Some(node_keys_from_view(node, graph));
+        return Some(node_keys_from_view(node, graph, hide));
     }
     let node = graph.graph.node_view(idx)?;
-    Some(node_keys_from_view(node, graph))
+    Some(node_keys_from_view(node, graph, hide))
 }
 
 fn node_keys_from_view(
     node: crate::graph::storage::NodeView<'_>,
     graph: &crate::graph::DirGraph,
+    hide: bool,
 ) -> Vec<String> {
     let node_type = node.node_type_str(&graph.interner).to_string();
     let mut keys = KeySink::default();
-    collect_node_properties(&mut keys, node, &node_type, graph);
+    collect_node_properties(&mut keys, node, &node_type, graph, hide);
     keys.0.into_iter().collect()
+}
+
+/// Whether a node's `title` is something the user wrote, as opposed to the
+/// virtual the engine mints (`<Label>_<id>`, or the id itself on a type titled
+/// by its ids). The engine does not record which it was, so this reads the
+/// value: a title equal to either minted form, or a node whose type names a
+/// `node_title_field` (whose value is already surfaced under that name), is
+/// virtual. A user title that happens to equal the minted form is
+/// indistinguishable from it and is treated as virtual.
+fn title_is_user_data(
+    node: crate::graph::storage::NodeView<'_>,
+    node_type: &str,
+    graph: &crate::graph::DirGraph,
+) -> bool {
+    if graph.title_field_aliases.contains_key(node_type) {
+        return false;
+    }
+    let title = crate::datatypes::values::raw_string(&node.title());
+    let id = crate::datatypes::values::raw_string(&node.id());
+    title != id && title != format!("{node_type}_{id}")
 }
 
 /// The one walk that decides which properties a materialised node carries:
 /// the three virtuals, every stored property, the id/title column aliases, and
 /// the columnar completion pass. Shared by the value and names-only sinks.
+///
+/// With `hide`, the virtual `title` and `type` are left out unless they carry
+/// user data (see [`title_is_user_data`]; a stored `type` property always
+/// stays). `id` is never hidden: a node's id is the identity the user wrote
+/// for it, and the engine does not record whether it was minted instead.
 fn collect_node_properties<S: PropertySink>(
     sink: &mut S,
     node: crate::graph::storage::NodeView<'_>,
     node_type: &str,
     graph: &crate::graph::DirGraph,
+    hide: bool,
 ) {
     // Include the three virtual builtins so consumers always see
     // id/title/type, matching what n.id / n.title / n.type would
     // resolve to via the alias machinery.
     sink.insert_with("id", || node.id().into_owned());
-    sink.insert_with("title", || node.title().into_owned());
-    sink.insert_with("type", || Value::String(node_type.to_string()));
+    if !hide || title_is_user_data(node, node_type, graph) {
+        sink.insert_with("title", || node.title().into_owned());
+    }
+    if !hide {
+        sink.insert_with("type", || Value::String(node_type.to_string()));
+    }
     // `type` is a soft alias, not a hard virtual: a stored property named
     // "type" wins over the structural type string (KG-1), matching what
     // `n.type` resolves to via `resolve_node_property_resolved`. `id` and
     // `title` are genuine virtuals — the canonical identity always wins —
-    // so only `type` gets the stored-shadow check. It can only *replace* the
-    // value under a key already present, so a names-only sink skips it.
-    if S::NEEDS_VALUES {
+    // so only `type` gets the stored-shadow check. Without `hide` it can only
+    // *replace* the value under a key already present, so a names-only sink
+    // skips it; with `hide` it is the only source of the key.
+    if S::NEEDS_VALUES || hide {
         if let Some(stored) = node.get_property_value("type") {
             sink.insert("type", stored);
         }
@@ -883,11 +927,12 @@ fn node_value_from_view(
     idx: petgraph::graph::NodeIndex,
     node: crate::graph::storage::NodeView<'_>,
     graph: &crate::graph::DirGraph,
+    hide: bool,
 ) -> crate::datatypes::values::NodeValue {
     use crate::datatypes::values::NodeValue;
     let node_type = node.node_type_str(&graph.interner).to_string();
     let mut properties = PropsSink::default();
-    collect_node_properties(&mut properties, node, &node_type, graph);
+    collect_node_properties(&mut properties, node, &node_type, graph, hide);
     let properties = properties.finish();
     // Full label set (primary + secondaries), not just the primary type —
     // so a materialised node (RETURN n, collect(n)[0], …) carries the same

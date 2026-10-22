@@ -101,6 +101,7 @@ fn load_csv_create_finish_streams_across_batch_boundaries() {
         super::super::write::MutationLimits {
             max_work_units: None,
             row_limit: None,
+            hide_structural_keys: false,
         },
         &super::super::load_csv::CsvImportPolicy::LocalFilesystem,
         None,

@@ -189,6 +189,19 @@ pub struct ExecuteOptions<'a> {
     /// Bolt server sets it nowhere: it multiplexes concurrent sessions over
     /// one process, so the cores are already committed.
     pub parallel: bool,
+    /// Leave kglite's virtual `title` and `type` out of the property maps
+    /// `keys(n)`, `properties(n)`, `properties(r)` and `n {.*}` return, so a
+    /// node's map carries what was stored, as Neo4j's does. Default `false`:
+    /// kglite's maps carry `id`, `title` and `type` (documented, and what
+    /// `RETURN n` and `nodes(p)` always return).
+    ///
+    /// A stored property named `type` is user data and is kept, as is a title
+    /// the user wrote; `id` is never hidden. A title equal to the engine's
+    /// minted form (`<Label>_<id>`, or the id) is indistinguishable from the
+    /// virtual and is hidden. `RETURN n`, `nodes(p)` and `collect(n)` are not
+    /// affected, because later `n.title` reads on the collected value need the
+    /// key. The Bolt server sets it under `--neo4j-compat`.
+    pub hide_structural_keys: bool,
 }
 
 impl<'a> ExecuteOptions<'a> {
@@ -219,6 +232,7 @@ impl<'a> ExecuteOptions<'a> {
             modified_by: None,
             csv_import: CsvImportPolicy::Denied,
             parallel: false,
+            hide_structural_keys: false,
         }
     }
 
@@ -243,6 +257,13 @@ impl<'a> ExecuteOptions<'a> {
     /// same reason [`Self::with_csv_import`] has one.
     pub fn with_parallel(mut self, parallel: bool) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// Hide the virtual `title` / `type` keys from property maps; see
+    /// [`Self::hide_structural_keys`].
+    pub fn with_hidden_structural_keys(mut self, hide: bool) -> Self {
+        self.hide_structural_keys = hide;
         self
     }
 }
@@ -428,6 +449,7 @@ pub(super) fn read_statement(
         .with_row_limit(opts.row_limit)
         .with_streaming(opts.streaming)
         .with_parallel(opts.parallel)
+        .with_hidden_structural_keys(opts.hide_structural_keys)
         .with_cancel(opts.cancel.as_ref().map(CancelToken::flag))
         .with_csv_import(opts.csv_import.clone())
         .execute(&parsed)
@@ -740,6 +762,7 @@ fn mut_statement(
                 cypher::executor::write::MutationLimits {
                     max_work_units: opts.max_work_units,
                     row_limit: opts.row_limit,
+                    hide_structural_keys: opts.hide_structural_keys,
                 },
                 &opts.csv_import,
                 embedding_service.as_ref(),
@@ -802,6 +825,7 @@ fn mut_statement(
             .with_row_limit(opts.row_limit)
             .with_streaming(opts.streaming)
             .with_parallel(opts.parallel)
+            .with_hidden_structural_keys(opts.hide_structural_keys)
             .with_cancel(opts.cancel.as_ref().map(CancelToken::flag))
             .execute(&parsed)
             .map_err(|message| exec_err(opts, started, message))?

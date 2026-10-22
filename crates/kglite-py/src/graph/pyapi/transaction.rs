@@ -222,6 +222,7 @@ impl Transaction {
 
         let output_csv = pre_parsed.output_format == cypher::OutputFormat::Csv;
         let opts = kglite_core::api::session::ExecuteOptions {
+            hide_structural_keys: false,
             params: &param_map,
             deadline,
             deadline_origin,

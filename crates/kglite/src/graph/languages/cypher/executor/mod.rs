@@ -219,6 +219,9 @@ pub struct CypherExecutor<'a> {
     /// (`scalar_functions::utility`). Keep it that way — adding an embedder
     /// field would put a foreign object inside every parallel region.
     pub(super) parallel: bool,
+    /// Leave the virtual `title` / `type` out of `keys`/`properties` maps; see
+    /// `ExecuteOptions::hide_structural_keys`.
+    pub(super) hide_structural_keys: bool,
     /// Whether this execution may read local files through `LOAD CSV`, and
     /// from where. Default [`load_csv::CsvImportPolicy::Denied`] — a caller
     /// grants filesystem access explicitly, so a remote Bolt client never
@@ -308,6 +311,7 @@ impl<'a> CypherExecutor<'a> {
             alias_name_hashes: OnceLock::new(),
             streaming: true,
             parallel: false,
+            hide_structural_keys: false,
             csv_import: load_csv::CsvImportPolicy::Denied,
             runtime_warnings: Mutex::new(Vec::new()),
             runtime_retrieval: Mutex::new(Vec::new()),

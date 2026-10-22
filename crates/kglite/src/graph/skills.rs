@@ -234,6 +234,7 @@ fn skill_opts(params: &HashMap<String, Value>) -> ExecuteOptions<'_> {
         lazy_eligible: false,
         streaming: true,
         parallel: false,
+        hide_structural_keys: false,
         disabled_passes: None,
         embedder: None,
         value_codecs: None,

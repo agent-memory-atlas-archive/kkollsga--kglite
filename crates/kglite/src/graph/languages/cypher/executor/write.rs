@@ -130,6 +130,9 @@ pub(crate) struct MutationLimits {
     /// is not a cap on what is *changed*, and `MutationStats` still counts
     /// every write.
     pub row_limit: Option<usize>,
+    /// Hide the virtual `title` / `type` keys from the maps the statement's
+    /// reads and trailing `RETURN` build (`ExecuteOptions::hide_structural_keys`).
+    pub hide_structural_keys: bool,
 }
 
 /// Invariant context for one mutation run — everything the clause loop reads
@@ -142,6 +145,7 @@ pub(super) struct MutationCtx<'a> {
     pub budget: &'a super::budget::ExecutionBudget,
     pub profiling: bool,
     pub csv_import: &'a super::load_csv::CsvImportPolicy,
+    pub hide_structural_keys: bool,
     pub relationship_identities: &'a std::sync::Arc<
         std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
     >,
@@ -266,6 +270,7 @@ pub(crate) fn execute_mutable_bounded(
         MutationLimits {
             max_work_units,
             row_limit: None,
+            hide_structural_keys: false,
         },
         &super::load_csv::CsvImportPolicy::Denied,
         None,
@@ -330,6 +335,7 @@ pub(crate) fn execute_mutable_with_csv(
             budget: &budget,
             profiling,
             csv_import,
+            hide_structural_keys: limits.hide_structural_keys,
             relationship_identities: &relationship_identities,
             embedding_service,
             leading: &query.clauses[..1],
@@ -365,6 +371,7 @@ pub(crate) fn execute_mutable_with_csv(
             budget: &budget,
             profiling,
             csv_import,
+            hide_structural_keys: limits.hide_structural_keys,
             relationship_identities: &relationship_identities,
             embedding_service,
             leading: &[],
@@ -555,6 +562,7 @@ fn run_clause_pipeline(
                     .with_cancel(interrupt.cancel)
                     .with_budget(budget.clone())
                     .with_csv_import(ctx.csv_import.clone())
+                    .with_hidden_structural_keys(ctx.hide_structural_keys)
                     .with_relationship_identities(Some(ctx.relationship_identities.clone()));
                 let declared = ctx.declared_before(clauses, i);
                 result_set = executor.execute_call_subquery(import, body, result_set, &declared)?;
@@ -598,6 +606,7 @@ fn run_clause_pipeline(
                     .with_cancel(interrupt.cancel)
                     .with_budget(budget.clone())
                     .with_csv_import(ctx.csv_import.clone())
+                    .with_hidden_structural_keys(ctx.hide_structural_keys)
                     .with_relationship_identities(Some(ctx.relationship_identities.clone()));
                 result_set = if let Clause::Return(r) = clause {
                     // Same ORDER BY scope carry as the read loop: the write

@@ -92,14 +92,15 @@ impl<'a> CypherExecutor<'a> {
             // The same collection pass `materialize_node_value` runs, through
             // a names-only sink: sorted + unique, without cloning the values it
             // would then drop.
-            if let Some(keys) = materialize_node_keys(idx, self.graph) {
+            if let Some(keys) = materialize_node_keys(idx, self.graph, self.hide_structural_keys) {
                 return Some(Value::List(keys.into_iter().map(Value::String).collect()));
             }
         }
         match self.evaluate_expression(arg, row).ok()? {
             // Materialised node value (collect()[0] etc.) → its keys.
             Value::Node(nv) => {
-                let mut keys: Vec<String> = nv.properties.keys().map(str::to_string).collect();
+                let properties = self.node_value_properties(&nv);
+                let mut keys: Vec<String> = properties.keys().map(str::to_string).collect();
                 keys.sort();
                 keys.dedup();
                 Some(Value::List(keys.into_iter().map(Value::String).collect()))
@@ -122,6 +123,46 @@ impl<'a> CypherExecutor<'a> {
         }
     }
 
+    /// Hide the virtual `title` / `type` structural keys from the property
+    /// maps this execution returns; see [`Self::hide_structural_keys`].
+    pub fn with_hidden_structural_keys(mut self, hide: bool) -> Self {
+        self.hide_structural_keys = hide;
+        self
+    }
+
+    /// The property map of a materialised node value (`collect(n)[0]`), with
+    /// the structural keys hidden when this execution asks for it. The value
+    /// is a snapshot, so the virtual `title` / `type` are recognised by what
+    /// they hold: a `type` equal to the node's primary label and a `title`
+    /// equal to the id or to `<Label>_<id>`.
+    fn node_value_properties(&self, node: &crate::datatypes::values::NodeValue) -> PropMap {
+        if !self.hide_structural_keys {
+            return node.properties.clone();
+        }
+        let label = node.labels.first().map(String::as_str).unwrap_or_default();
+        let id = node
+            .properties
+            .get("id")
+            .map(crate::datatypes::values::raw_string)
+            .unwrap_or_default();
+        let virtual_type = |value: &Value| matches!(value, Value::String(s) if s == label);
+        let virtual_title = |value: &Value| {
+            let title = crate::datatypes::values::raw_string(value);
+            title == id || title == format!("{label}_{id}")
+        };
+        PropMap::from_pairs(
+            node.properties
+                .iter()
+                .filter(|(key, value)| match *key {
+                    "type" => !virtual_type(value),
+                    "title" => !virtual_title(value),
+                    _ => true,
+                })
+                .map(|(key, value)| (PropKey::from(key), value.clone()))
+                .collect(),
+        )
+    }
+
     /// `properties(r)` for a relationship value: its user properties plus the
     /// synthetic `type` entry. `None` when the type is unresolvable — the
     /// token-only value of a binding whose slot was retired mid-statement,
@@ -133,7 +174,9 @@ impl<'a> CypherExecutor<'a> {
     ) -> Option<PropMap> {
         let rel_type = self.relationship_value_type(rel)?;
         let mut props: Vec<(PropKey, Value)> = Vec::with_capacity(rel.properties.len() + 1);
-        props.push((PropKey::from("type"), Value::String(rel_type)));
+        if !self.hide_structural_keys {
+            props.push((PropKey::from("type"), Value::String(rel_type)));
+        }
         props.extend(
             rel.properties
                 .iter()
@@ -456,14 +499,16 @@ impl<'a> CypherExecutor<'a> {
                 }
                 let arg = &args[0];
                 if let Some(idx) = self.node_arg_index(arg, row) {
-                    if let Some(node_value) = materialize_node_value(idx, self.graph) {
+                    if let Some(node_value) =
+                        materialize_node_value_with(idx, self.graph, self.hide_structural_keys)
+                    {
                         return Ok(Some(Value::Map(node_value.properties)));
                     }
                 }
                 // Materialised node value (collect()[0] etc.) → its property
                 // map; a relationship binding or value → its map plus `type`.
                 match self.evaluate_expression(arg, row) {
-                    Ok(Value::Node(nv)) => Ok(Value::Map(nv.properties)),
+                    Ok(Value::Node(nv)) => Ok(Value::Map(self.node_value_properties(&nv))),
                     Ok(Value::Map(map)) => Ok(Value::Map(map)),
                     Ok(Value::Relationship(rel)) => Ok(self
                         .relationship_value_properties(&rel)

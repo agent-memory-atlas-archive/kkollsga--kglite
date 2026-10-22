@@ -275,6 +275,7 @@ impl Session {
         let row_limit = qopts.row_limit;
         let result = py.enter_kg(move |cancel| -> Result<cypher::CypherResult, KgError> {
             let opts = ExecuteOptions {
+                hide_structural_keys: false,
                 params: &param_map,
                 deadline,
                 deadline_origin,
@@ -366,6 +367,7 @@ impl Session {
                 ));
             }
             let opts = ExecuteOptions {
+                hide_structural_keys: false,
                 params: &param_map,
                 deadline,
                 deadline_origin,

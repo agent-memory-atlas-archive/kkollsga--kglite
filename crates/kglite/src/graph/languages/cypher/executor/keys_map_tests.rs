@@ -37,6 +37,7 @@ fn person_graph() -> DirGraph {
 
 fn first_value(graph: &DirGraph, query: &str, params: HashMap<String, Value>) -> Value {
     let opts = ExecuteOptions {
+        hide_structural_keys: false,
         params: &params,
         deadline: None,
         deadline_origin: None,

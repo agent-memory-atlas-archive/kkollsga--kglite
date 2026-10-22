@@ -43,6 +43,7 @@ impl CypherExecutor<'_> {
         let child = CypherExecutor::with_params(slice.graph(), self.params, self.deadline)
             .with_streaming(self.streaming)
             .with_parallel(self.parallel)
+            .with_hidden_structural_keys(self.hide_structural_keys)
             .with_cancel(self.cancel)
             .with_budget(self.budget.clone())
             .with_statement_instant(self.statement_instant());

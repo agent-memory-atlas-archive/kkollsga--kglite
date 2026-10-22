@@ -478,6 +478,7 @@ fn an_id_seek_reads_no_other_ids_bounds() {
 fn streamed_rows(graph: &DirGraph, query: &str, lazy_eligible: bool) -> Vec<Vec<Value>> {
     let params = HashMap::new();
     let options = ExecuteOptions {
+        hide_structural_keys: false,
         lazy_eligible,
         streaming: true,
         ..ExecuteOptions::eager(&params)

@@ -645,7 +645,7 @@ graph.cypher("""
 | `labels(n)` | Node labels as a list, primary type first |
 | `degree(n)` | Node's total edge count (in + out; a self-loop counts twice) — e.g. `WHERE degree(n) > 100` to find hubs |
 | `inDegree(n)` / `outDegree(n)` | Node's incoming / outgoing edge count |
-| `keys(n)` / `keys(r)` / `keys(map)` | Sorted property names of a node or relationship, or entry names of a map — `keys(properties(n))` and `keys({a: 1, b: 2})` both work (as JSON list). A relationship's keys also include `type` |
+| `keys(n)` / `keys(r)` / `keys(map)` | Sorted property names of a node or relationship, or entry names of a map — `keys(properties(n))` and `keys({a: 1, b: 2})` both work (as JSON list). A node's keys include `id`, `title` and `type`; a relationship's include `type`. See [Hiding the structural keys](#hiding-the-structural-keys) |
 | `properties(n)` / `properties(r)` | Full property map of a node or relationship (as JSON map); a relationship's map also carries its `type` |
 | `valueType(x)` | Neo4j's name for the type of `x`: `INTEGER NOT NULL`, `LIST<INTEGER NOT NULL> NOT NULL`, `NULL`; see [Type predicates](#type-predicates-is--type) |
 | `start_node(r)` | Source node of a bound relationship; supports dotted access: `start_node(r).name` |
@@ -5397,6 +5397,32 @@ stored property can shadow them). Use `labels(n)` for the label set and `id(n)` 
   A type counts as titled by its ids when it has no declared title field and
   its first node's title equals that node's id.
 
+### Hiding the structural keys
+
+`keys(n)`, `properties(n)`, `properties(r)` and `n {.*}` carry the structural
+keys by default: `id`, `title` and `type` on a node, `type` on a relationship.
+Neo4j's maps hold stored properties only. The opt-in `hide_structural_keys`
+makes the four forms match:
+
+```python
+graph.cypher("CREATE (:Job {id: 'a', v: 1})")
+graph.cypher("MATCH (n:Job) RETURN keys(n)")                              # id, title, type, v
+graph.cypher("MATCH (n:Job) RETURN keys(n)", hide_structural_keys=True)   # id, v
+```
+
+- It hides the virtual `title` and `type` only. `id` is never hidden: the
+  engine does not record whether an id was supplied or minted.
+- A stored property named `type`, and a title the user wrote, stay.
+  A title equal to the minted form (`<Label>_<id>`, or the id itself) cannot be
+  told from the virtual and is hidden; so is the `title` of a type that
+  declares a `node_title_field`, whose value already appears under that name.
+- `RETURN n`, `nodes(p)` and `collect(n)` are unchanged, so `collect(n)[0].title`
+  still reads. A collected node is judged by its values: a `type` equal to its
+  label and a `title` equal to its id or `<Label>_<id>` are the virtuals.
+- Python: `graph.cypher(..., hide_structural_keys=True)`. Rust:
+  `ExecuteOptions::hide_structural_keys`. `kglite-bolt-server --neo4j-compat`
+  sets it for every query.
+
 ### Identity (`id`) and prefixed-id datasets (`nid`)
 
 **`id(n)` reads the node's `id` field, not an internal identifier.** In Neo4j and
@@ -5618,7 +5644,7 @@ mean:
 | `type(r)` | Covered | Returns relationship type |
 | `id(entity)` | Covered | KGLite logical node identity and stable relationship identity |
 | `labels(n)` | Intentional divergence | Primary type first, then secondary labels |
-| `keys(n)` / `keys(r)` / `keys(map)` | Covered | Returns property names, sorted; the map form covers `keys(properties(n))` |
+| `keys(n)` / `keys(r)` / `keys(map)` | Covered | Returns property names, sorted; the map form covers `keys(properties(n))`; node keys include `id`, `title`, `type` unless `hide_structural_keys` is set |
 | `date(str)` / `datetime(str)` | Partial | KGLite's temporal value model and documented arithmetic subset; a date and a datetime are intercomparable **and equatable**, a date being midnight on that date |
 | `coalesce` | Covered | |
 | `range(start, end [, step])` | Covered | Inclusive integer range |

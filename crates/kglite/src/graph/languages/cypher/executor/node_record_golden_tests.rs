@@ -97,6 +97,7 @@ fn rows_of(graph: &DirGraph, query: &str) -> Vec<Vec<(String, Value)>> {
     // Non-lazy execution, the way the Bolt / MCP / CLI bindings drive it, so
     // every row is materialised instead of deferred behind a lazy descriptor.
     let opts = ExecuteOptions {
+        hide_structural_keys: false,
         params: &params,
         deadline: None,
         deadline_origin: None,
@@ -413,6 +414,7 @@ fn keys_invariant_holds_across_both_property_storage_shapes() {
 
     let params: HashMap<String, Value> = HashMap::new();
     let opts = ExecuteOptions {
+        hide_structural_keys: false,
         params: &params,
         deadline: None,
         deadline_origin: None,

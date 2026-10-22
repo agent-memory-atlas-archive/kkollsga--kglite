@@ -330,6 +330,7 @@ impl Session {
         let (max_work_units, row_limit) = (qopts.max_work_units, qopts.row_limit);
         let outcome = py.enter_kg(move |cancel| {
             let opts = ExecuteOptions {
+                hide_structural_keys: false,
                 params: &param_map,
                 deadline,
                 deadline_origin,
@@ -537,6 +538,7 @@ impl SessionTransaction {
         let tx = self.inner.as_mut().ok_or_else(finished_error)?;
         let result = py.enter_kg(move |cancel| -> Result<cypher::CypherResult, KgError> {
             let opts = ExecuteOptions {
+                hide_structural_keys: false,
                 params: &param_map,
                 deadline: effective.deadline,
                 deadline_origin: effective.deadline_origin,

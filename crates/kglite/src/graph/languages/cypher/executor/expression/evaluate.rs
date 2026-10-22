@@ -474,7 +474,11 @@ impl<'a> CypherExecutor<'a> {
                 MapProjectionItem::AllProperties => {
                     // Materialization includes aliases and columnar metadata that
                     // a property-key walk cannot see.
-                    if let Some(node) = materialize_node_value(node_index, self.graph) {
+                    if let Some(node) = materialize_node_value_with(
+                        node_index,
+                        self.graph,
+                        self.hide_structural_keys,
+                    ) {
                         properties.extend(node.properties);
                     }
                 }

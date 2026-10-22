@@ -196,6 +196,10 @@ mod iteration_type_tests;
 mod predicate_value_position_tests;
 
 #[cfg(test)]
+#[path = "hidden_structural_keys_tests.rs"]
+mod hidden_structural_keys_tests;
+
+#[cfg(test)]
 #[path = "type_predicate_tests.rs"]
 mod type_predicate_tests;
 

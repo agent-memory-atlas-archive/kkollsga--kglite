@@ -97,6 +97,13 @@ impl ServerIdentity {
         matches!(self, Self::Kglite)
     }
 
+    /// Whether property maps (`keys(n)`, `properties(n)`, `n {.*}`) leave out
+    /// kglite's virtual `title` and `type`: the compatibility identity serves
+    /// the maps Neo4j drivers and ORMs expect, the honest one keeps kglite's.
+    pub(crate) fn hides_structural_keys(self) -> bool {
+        matches!(self, Self::Neo4jCompatible)
+    }
+
     /// The `(name, version)` pair `CALL dbms.components()` reports — the
     /// sibling of [`Self::product_string`], kept on the same enum so the
     /// handshake agent and the components row can never drift apart.
@@ -1105,6 +1112,7 @@ impl KgliteBackend {
         // remote-caller policy applies unconditionally. `execute_opts` is the
         // single chokepoint for both the auto-commit and in-transaction paths.
         opts.csv_import = self.csv_import.clone();
+        opts.hide_structural_keys = self.identity.hides_structural_keys();
         opts.set_timeout_ms(self.limits.effective_timeout_ms(meta.tx_timeout_ms));
         opts.max_work_units = self.limits.max_work_units;
         opts.row_limit = self.limits.max_rows;
