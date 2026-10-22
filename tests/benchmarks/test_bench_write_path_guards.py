@@ -29,6 +29,17 @@ What each guard catches:
   node write. With NDV tagged to the graph version every commit forced an
   O(type) rescan: 2.1 ms against 0.006 ms at 100k nodes (e7723266).
 
+* **Mapped-load write curve** -- a graph above the topology floors, loaded
+  ``mapped``, is measured fresh, after ``MAPPED_WRITES`` unsaved writes and
+  after a ``save()``: a one-node transaction commit, a relationship CREATE and
+  a one-hop read. The overlay over the file's topology is a shared paged
+  container, so each cell may cost at most ``MAX_MAPPED_AFTER_VS_FRESH`` times
+  its fresh cost after the writes and ``MAX_MAPPED_SAVED_VS_FRESH`` after the
+  save, and the commit at most ``MAX_MAPPED_VS_MEMORY`` times the same commit
+  on a ``memory`` load of the file. A fork that copies the base costs 33 us
+  fresh and 7,029 us after 1M writes; a save that does not serve the graph
+  from the file again leaves the overlay's costs in place.
+
 Statistic: ``median`` for the steady-state cells (the heavy tail is the
 occasional collection, not the work), mean for the first-write cell. Control
 values are printed with every verdict.
@@ -59,6 +70,21 @@ MAX_HELD_VS_UNHELD = 10.0
 #: Session relationship write (indexed MATCH x2 + CREATE) vs a node CREATE, at
 #: 100k nodes. Measured 2.6-2.7x; the version-tagged NDV rescan is ~1000x.
 MAX_NDV_REL_VS_NODE_WRITE = 20.0
+
+
+#: A mapped commit, relationship CREATE or read after ``MAPPED_WRITES`` writes
+#: may cost this multiple of its fresh cost. Measured 1.7-1.8x at 300k writes
+#: (8 us fresh, 14 us after; release, macOS); the overlay-slot copy fixed with the
+#: cell read 17.5x, and the base copy before the paged overlay grew 213x.
+MAX_MAPPED_AFTER_VS_FRESH = 3.0
+#: After a save the graph is served from the file again with an empty overlay.
+MAX_MAPPED_SAVED_VS_FRESH = 2.0
+#: A mapped commit may cost this multiple of the same commit on a memory load.
+#: Measured 1.2x fresh.
+MAX_MAPPED_VS_MEMORY = 4.0
+MAPPED_NODES = 70_000
+MAPPED_EDGES = 270_000
+MAPPED_WRITES = 300_000
 
 
 def _report(cell: str, **values) -> None:
@@ -181,3 +207,109 @@ def test_session_relationship_write_does_not_rescan_property_ndv():
         f"Session relationship write {rel_ms:.4f} ms is {ratio:.1f}x a node CREATE ({control:.4f} ms); "
         f"limit {MAX_NDV_REL_VS_NODE_WRITE}x (property NDV rescanned per commit?)"
     )
+
+
+def _mapped_cells(graph, n: int, offset: int) -> dict[str, float]:
+    """Median ms of a one-node commit, a relationship CREATE and a one-hop read."""
+    ids = [(offset + 7919 * j) % n for j in range(1, 301)]
+
+    def commit(j: int) -> None:
+        tx = graph.begin()
+        tx.cypher("CREATE (:Doc {id: $i, n: 1})", params={"i": 10_000_000 + offset * 10_000 + j})
+        tx.commit()
+
+    def edge(j: int) -> None:
+        graph.cypher(
+            "MATCH (a:Doc {id: $a}), (b:Doc {id: $b}) CREATE (a)-[:LINKS]->(b)",
+            params={"a": ids[j % 300], "b": ids[(j * 3 + 1) % 300]},
+        )
+
+    def read(j: int) -> None:
+        graph.cypher("MATCH (a:Doc {id: $a})-[:LINKS]->(b) RETURN count(b) AS c", params={"a": ids[j % 300]}).to_list()
+
+    return {
+        "commit_ms": statistics.median(_ms(commit, 300)),
+        "edge_ms": statistics.median(_ms(edge, 300)),
+        "read_ms": statistics.median(_ms(read, 300)),
+    }
+
+
+def test_mapped_write_curve_stays_flat_across_writes_and_a_save(tmp_path):
+    rng = np.random.default_rng(5)
+    base = kglite.KnowledgeGraph()
+    base.add_nodes(
+        pd.DataFrame(
+            {
+                "id": np.arange(MAPPED_NODES),
+                "title": [f"d{i}" for i in range(MAPPED_NODES)],
+                "n": rng.integers(0, 100, MAPPED_NODES),
+            }
+        ),
+        "Doc",
+        "id",
+        "title",
+    )
+    base.add_relationships(
+        pd.DataFrame(
+            {"s": rng.integers(0, MAPPED_NODES, MAPPED_EDGES), "t": rng.integers(0, MAPPED_NODES, MAPPED_EDGES)}
+        ),
+        "LINKS",
+        "Doc",
+        "s",
+        "Doc",
+        "t",
+        distinct=True,
+    )
+    path = str(tmp_path / "mapped.kgl")
+    base.save(path)
+    del base
+
+    memory = kglite.load(path, storage="memory")
+    memory_cells = _mapped_cells(memory, MAPPED_NODES, 0)
+    del memory
+
+    graph = kglite.load(path, storage="mapped")
+    assert graph.graph_info()["topology_status"] == "mapped", graph.graph_info()["topology_heap_reason"]
+    fresh = _mapped_cells(graph, MAPPED_NODES, 1)
+    for j in range(MAPPED_WRITES):
+        if j % 16 == 3 and j >= 403:
+            # Removing a node the overlay created long ago: from the middle of its run.
+            graph.cypher("MATCH (d:Doc {id: $i}) DETACH DELETE d", params={"i": 20_000_000 + j - 403})
+        elif j % 4 == 0:
+            graph.cypher("CREATE (:Doc {id: $i, n: 2})", params={"i": 20_000_000 + j})
+        elif j % 4 == 1:
+            graph.cypher(
+                "MATCH (a:Doc {id: $a}), (b:Doc {id: $b}) CREATE (a)-[:LINKS]->(b)",
+                params={"a": (j * 31) % MAPPED_NODES, "b": (j * 17 + 5) % MAPPED_NODES},
+            )
+        else:
+            graph.cypher("MATCH (d:Doc {id: $i}) SET d.n = $j", params={"i": (j * 13) % MAPPED_NODES, "j": j})
+    assert graph.graph_info()["topology_status"] == "overlay"
+    after = _mapped_cells(graph, MAPPED_NODES, 2)
+    graph.save(str(tmp_path / "saved.kgl"))
+    assert graph.graph_info()["topology_status"] == "mapped"
+    saved = _mapped_cells(graph, MAPPED_NODES, 3)
+
+    _report(
+        "mapped-curve",
+        **{f"fresh_{k}": v for k, v in fresh.items()},
+        **{f"after_{k}": v for k, v in after.items()},
+        **{f"saved_{k}": v for k, v in saved.items()},
+        memory_commit_ms=memory_cells["commit_ms"],
+        commit_after_vs_fresh=after["commit_ms"] / fresh["commit_ms"],
+    )
+    for cell in fresh:
+        assert after[cell] <= MAX_MAPPED_AFTER_VS_FRESH * fresh[cell], (
+            f"mapped {cell} after {MAPPED_WRITES} writes {after[cell]:.4f} ms is {after[cell] / fresh[cell]:.1f}x "
+            f"its fresh cost ({fresh[cell]:.4f} ms); limit {MAX_MAPPED_AFTER_VS_FRESH}x (overlay copied per commit?)"
+        )
+        assert saved[cell] <= MAX_MAPPED_SAVED_VS_FRESH * fresh[cell], (
+            f"mapped {cell} after a save {saved[cell]:.4f} ms is {saved[cell] / fresh[cell]:.1f}x its fresh cost "
+            f"({fresh[cell]:.4f} ms); limit {MAX_MAPPED_SAVED_VS_FRESH}x (graph not served from the file again?)"
+        )
+    for label, cells in (("fresh", fresh), ("after", after)):
+        assert cells["commit_ms"] <= MAX_MAPPED_VS_MEMORY * memory_cells["commit_ms"], (
+            f"mapped commit ({label}) {cells['commit_ms']:.4f} ms is "
+            f"{cells['commit_ms'] / memory_cells['commit_ms']:.1f}x the memory commit "
+            f"({memory_cells['commit_ms']:.4f} ms); limit {MAX_MAPPED_VS_MEMORY}x"
+        )

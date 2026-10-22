@@ -4236,7 +4236,8 @@ class KnowledgeGraph:
                 - ``topology_heap_reason``: ``None`` unless the status is
                   ``"heap"``; then why: memory storage, ``topology="memory"``,
                   what the file recorded (a graph below the size floors, an
-                  inline node identity, more than 65,535 types), sections the
+                  inline node identity, more than 65,535 types, more than 262,144
+                  relationships with properties), sections the
                   platform copied, or a collapse by a whole-graph operation
                 - ``mapped_fallbacks``: A list of ``{"part", "reason"}`` for
                   each part of a mapped graph held without a mapped form: what
