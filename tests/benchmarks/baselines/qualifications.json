@@ -216,10 +216,16 @@
       "sha256": "7151186819039d97a50afdd3e009cb34ada1de60c38198870e6e67d7ad0c4e8d",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-19 23:40-23:47 local on Mac16,10 (M4, 16 GiB), load average 4.9-8.5 (other sessions active, captured under load per protocol item 9). vs accepted 0_20_0.json, min: median +0.9% over 43 cells; controls var_length_1_8 -1.7%, cypher_match +6.9%, khop3_unwind -1.9%, khop3_in_list -3.7%, shortest_path 0.0%. Highest cell exists_var_length_witness +9.9% (below gate); best hop1_deg3_expand_memory -20.5%, cypher_match_materialized -15.8%, var_length_2_2 -10.9%. Cross-check: same-interpreter (3.12) interleaved A/B of the whole core file vs the published 0.20.0 wheel, 2 rounds, HEAD 4de6f262 engine: no cell > +10% in both rounds, worst +2-5%.",
+    "0_21_0.json": {
+      "evidence": "Release capture 2026-10-22 20:13-20:19 local on Mac16,10 (M4, 16 GiB), load average 1.3-3.3 (other sessions idle-to-light). vs accepted 0_20_1.json, min: median -4.7% over 43 cells; controls var_length_1_8 -2.5%, cypher_match -4.8%, khop3_unwind -5.0%, khop3_in_list -0.7%, shortest_path +1.1%. Highest cell cypher_match_materialized +3.0%; best load_kgl -40.7% (v9 mapped sections).",
       "platform": "Darwin/arm64",
-      "sha256": "7151186819039d97a50afdd3e009cb34ada1de60c38198870e6e67d7ad0c4e8d",
+      "sha256": "9250a5bfe4cec57b60f58fe201f6b4911ecdd8f28dbc22b66e6633dd141ddab7",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release capture 2026-10-22 20:13-20:19 local on Mac16,10 (M4, 16 GiB), load average 1.3-3.3 (other sessions idle-to-light). vs accepted 0_20_1.json, min: median -4.7% over 43 cells; controls var_length_1_8 -2.5%, cypher_match -4.8%, khop3_unwind -5.0%, khop3_in_list -0.7%, shortest_path +1.1%. Highest cell cypher_match_materialized +3.0%; best load_kgl -40.7% (v9 mapped sections).",
+      "platform": "Darwin/arm64",
+      "sha256": "9250a5bfe4cec57b60f58fe201f6b4911ecdd8f28dbc22b66e6633dd141ddab7",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -296,7 +302,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_20_1.json",
+    "Darwin/arm64": "0_21_0.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1

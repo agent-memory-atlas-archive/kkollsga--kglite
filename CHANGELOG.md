@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-22
+
 ### Breaking changes and migration
 
 - **A save writes `.kgl` container v9, which kglite releases before this one refuse, when the graph holds an embedding store of 4 MiB or more, a property column with a buffer of 256 KB or more, 65,536 nodes or more, or 262,144 relationships or more.**

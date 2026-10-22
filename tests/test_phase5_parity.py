@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (30_339_312, "0.20.1"),  # host release build
-    "linux": (37_614_584, "0.20.0"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (31_382_432, "0.21.0"),  # host release build
+    "linux": (37_618_616, "0.20.1"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.20.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "168aa7aeba4d3a90429aefb6bf847e80de945176279de1c1424b714ed63ed80a"
+LINUX_SIZE_WHEEL = "kglite-0.20.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "bec70192f09808a9d7d6d19fe557d1360fcd922b867b07ffc4154adce96b15d5"
 
 
 @pytest.mark.binary_size
@@ -654,6 +654,12 @@ def test_binary_size_regression():
         0.20.0: the mapped fork overlay base (`ForkBase`), the shared lazy
         id-index slot and per-type generations, hand-written `NodeData` /
         `EdgeData` serde, and the `thin-vec` container.
+
+      - 0.21.0:       31,382,432 bytes (≈29.9 MB), +1,043,120 (+3.4%) over
+        0.20.1: the .kgl v9 mappable sections (raw columns, topology, type
+        and id-index sections), the frozen mapped topology backend and its
+        shared paged write overlay, rebase on save, the unsaved-write
+        budget, embedding quantization, and the MCP stale-build reload.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise
