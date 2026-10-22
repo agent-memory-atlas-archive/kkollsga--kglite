@@ -1988,7 +1988,9 @@ mod tests {
                 .graph
                 .is_frozen()
         };
-        assert_eq!(frozen(default), cfg!(unix), "auto maps on unix");
+        // Windows copies the sections instead of mapping them, but still serves
+        // the graph from the frozen backend.
+        assert!(frozen(default), "auto reads the topology sections");
         assert!(!frozen(memory), "--topology memory decodes the topology");
     }
 
