@@ -109,6 +109,16 @@ impl SessionState {
     }
 }
 
+/// Refuse a direct write while the graph is at its unsaved-write budget. The
+/// embedding and quantization entry points call it with the locked graph,
+/// before they change anything; the warning at half the limit is Python's, the
+/// C ABI has no channel for it.
+pub(crate) fn guard_write_budget(graph: &DirGraph) -> Result<(), Refusal> {
+    graph
+        .check_write_budget()
+        .map_err(|error| (KgliteStatusCode::from_kg_error(&error), error.to_string()))
+}
+
 /// Fold the write-ahead log into the checkpoint when it has outgrown the
 /// session's bound (`"auto_checkpoint_wal_mib"`). Runs inline on the calling
 /// thread, after the commit has resolved: other threads' commits are not

@@ -232,7 +232,28 @@ pub struct LoadOptions {
     pub verify: Verify,
 }
 
+/// The part of a load's options that decides how the file's sections are held,
+/// kept on the graph so a save's rebase (`rebase`) reloads the saved file the
+/// way the caller loaded the original.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct LoadPolicy {
+    pub(crate) embeddings: MapPolicy,
+    pub(crate) columns: MapPolicy,
+    pub(crate) topology: MapPolicy,
+    pub(crate) verify: Verify,
+}
+
 impl LoadOptions {
+    /// What a rebase must repeat from this load.
+    pub(crate) fn policy(&self) -> LoadPolicy {
+        LoadPolicy {
+            embeddings: self.embeddings,
+            columns: self.columns,
+            topology: self.topology,
+            verify: self.verify,
+        }
+    }
+
     /// The defaults [`load_file`](super::load_file) itself uses: honour the
     /// recorded storage mode, and take `defer_index_rebuild` from
     /// `KGLITE_DEFER_INDEX_REBUILD` (see the module doc).

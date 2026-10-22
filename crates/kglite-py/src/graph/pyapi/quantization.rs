@@ -105,7 +105,7 @@ impl KnowledgeGraph {
         let precision = parse_precision(precision)?;
         self.check_durable_owner()?;
         // Building reads every vector once; keep the GIL free for other threads.
-        let report = self.unlogged_write(|g| {
+        let report = self.unlogged_metered_write(|g| {
             py.detach(|| {
                 quantize_embeddings(g, entity, node_type, text_column, precision, oversample)
             })

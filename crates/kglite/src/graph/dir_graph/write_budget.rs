@@ -17,20 +17,25 @@
 //! budget.
 //!
 //! The reading is an **estimate** of the heap the unsaved writes hold, taken in
-//! O(column stores) per statement: the overlay entries at
-//! [`OVERLAY_ENTRY_BYTES`] each, plus the column stores' heap above what the
-//! load left. It is deliberately not an allocator measurement.
+//! O(column stores + embedding stores) per statement: the overlay entries at
+//! [`OVERLAY_ENTRY_BYTES`] each, plus the column stores' heap and the embedding
+//! stores' heap (node and relationship) above what the load left. A store a
+//! load serves from the file counts nothing until a write copies it to the
+//! heap; a store a write replaces or removes gives its share back. The HNSW
+//! index is not counted. It is deliberately not an allocator measurement.
 //!
 //! ## Where it is checked
 //!
-//! Every write route reaches one of two seams. A Cypher statement
+//! Every write route reaches one of three seams. A Cypher statement
 //! (`session::execute`, so transactions, sessions and every binding) is refused
-//! before it starts when the overlay alone is already at the limit, and rolled back when
-//! it crosses the limit, so a refused statement leaves the graph exactly as it
-//! was. A statement that runs without a rollback checkpoint (a lone node
-//! `CREATE`) only gets the first check. A fluent bulk loader of the Python
-//! binding gets the first check before it starts, and a call may overshoot the
-//! limit by its own size.
+//! before it starts when the overlay and the embedding growth alone are already
+//! at the limit, and rolled back when it crosses the limit, so a refused
+//! statement leaves the graph exactly as it was. A statement that runs without
+//! a rollback checkpoint (a lone node `CREATE`) only gets the first check. A
+//! fluent loader of the Python binding (`logged_write`, and `logged_write_lazy`
+//! for `embed_texts`) and an embedding or quantization call of the C ABI get
+//! the first check before they start and the warning after; such a call may
+//! overshoot the limit by its own size, and the next call is refused.
 //!
 //! The warning state lives behind an `Arc` shared by every clone of the graph,
 //! so a transaction's working copy and the published graph agree on whether the
@@ -160,6 +165,9 @@ pub(crate) struct WriteBudget {
     setting: WriteBudgetSetting,
     /// Column-store heap the load left, which is not an unsaved write.
     baseline_heap: usize,
+    /// Embedding-store heap the load left (a store loaded with
+    /// `embeddings="memory"`), likewise not an unsaved write.
+    baseline_embedding_heap: usize,
     shared: Arc<Shared>,
 }
 
@@ -187,6 +195,14 @@ impl DirGraph {
             .sum()
     }
 
+    /// Heap of every node and relationship embedding store. O(stores): each
+    /// store reads container capacities.
+    fn embedding_heap_bytes(&self) -> usize {
+        let nodes: usize = self.embeddings.values().map(|s| s.heap_bytes()).sum();
+        let edges: usize = self.edge_embeddings.values().map(|s| s.heap_bytes()).sum();
+        nodes + edges
+    }
+
     /// Enroll a graph a load just produced. A graph with no frozen base keeps
     /// no budget: it has no overlay to meter and a save has no rebase to reset.
     pub(crate) fn enroll_write_budget(&mut self, setting: WriteBudgetSetting, file_bytes: u64) {
@@ -194,6 +210,7 @@ impl DirGraph {
             limit: limit_for(setting, file_bytes),
             setting,
             baseline_heap: self.column_heap_bytes(),
+            baseline_embedding_heap: self.embedding_heap_bytes(),
             shared: Arc::default(),
         });
     }
@@ -212,6 +229,12 @@ impl DirGraph {
         self.graph.overlay_entries().unwrap_or(0) as u64 * OVERLAY_ENTRY_BYTES
     }
 
+    /// The embedding stores' share: heap above what the load left.
+    fn embedding_budget_bytes(&self, budget: &WriteBudget) -> u64 {
+        self.embedding_heap_bytes()
+            .saturating_sub(budget.baseline_embedding_heap) as u64
+    }
+
     /// Estimated heap, in bytes, of the writes since the load or the last
     /// rebase.
     fn write_budget_used_with(&self, budget: &WriteBudget) -> u64 {
@@ -219,7 +242,15 @@ impl DirGraph {
         let columns = self
             .column_heap_bytes()
             .saturating_sub(budget.baseline_heap) as u64;
-        overlay + columns
+        overlay + columns + self.embedding_budget_bytes(budget)
+    }
+
+    /// Whether embedding writes since the load or the last rebase hold heap a
+    /// save can release by rebasing. The rebase runs for it even when the
+    /// overlay is empty.
+    pub(crate) fn has_unsaved_embedding_heap(&self) -> bool {
+        self.active_write_budget()
+            .is_some_and(|budget| self.embedding_budget_bytes(budget) > 0)
     }
 
     /// What `graph_info()` reports.
@@ -281,9 +312,10 @@ impl DirGraph {
         let Some(limit) = budget.limit else {
             return Ok(());
         };
-        // The overlay alone: the full reading costs a pass over the column
-        // stores, which the check after the statement pays instead.
-        if self.overlay_budget_bytes() >= limit {
+        // The overlay and the embedding stores: the full reading also costs a
+        // pass over the column stores, which the check after the statement
+        // pays instead.
+        if self.overlay_budget_bytes() + self.embedding_budget_bytes(budget) >= limit {
             return Err(self.write_budget_refusal(budget, limit));
         }
         Ok(())
@@ -336,9 +368,11 @@ impl DirGraph {
     /// empty, so the budget starts over against the new file.
     pub(crate) fn reset_write_budget_after_rebase(&mut self, file_bytes: u64) {
         let baseline_heap = self.column_heap_bytes();
+        let baseline_embedding_heap = self.embedding_heap_bytes();
         if let Some(budget) = self.write_budget.as_mut() {
             budget.limit = limit_for(budget.setting, file_bytes);
             budget.baseline_heap = baseline_heap;
+            budget.baseline_embedding_heap = baseline_embedding_heap;
             budget.shared = Arc::default();
         }
     }

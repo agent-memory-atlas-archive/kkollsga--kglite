@@ -174,6 +174,11 @@ pub(crate) fn validate_decoded_edge_embedding_stores_with(
 // Persistence and query execution share these typed construction and lookup methods.
 #[cfg_attr(not(test), allow(dead_code))]
 impl EdgeEmbeddingStore {
+    /// Heap the store holds; see [`EmbeddingStore::heap_bytes`].
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.numeric.heap_bytes()
+    }
+
     pub(crate) fn new(dimension: usize, metric: Option<&str>) -> Self {
         let numeric = match metric {
             Some(metric) => EmbeddingStore::with_metric(dimension, metric),

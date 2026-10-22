@@ -280,6 +280,27 @@ impl EmbeddingStore {
         }
     }
 
+    /// Heap the store holds, from container capacities (O(1), no scan): the
+    /// vectors and norms unless they are mapped, the slot maps, the quantized
+    /// copy unless mapped. The HNSW index is not counted; it is built on
+    /// request and `build_vector_index` is not a metered write.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        const MAP_ENTRY_OVERHEAD: usize = 1;
+        let map_bytes = |entry: usize, capacity: usize| capacity * (entry + MAP_ENTRY_OVERHEAD);
+        self.data.heap_bytes()
+            + self.norms.heap_bytes()
+            + self.slot_to_node.capacity() * std::mem::size_of::<usize>()
+            + map_bytes(
+                std::mem::size_of::<(usize, usize)>(),
+                self.node_to_slot.capacity(),
+            )
+            + map_bytes(
+                std::mem::size_of::<(usize, u64)>(),
+                self.text_hashes.capacity(),
+            )
+            + self.quant.as_ref().map_or(0, QuantStore::heap_bytes)
+    }
+
     /// Whether `data` is served from a memory-mapped file rather than the heap.
     pub fn is_mapped(&self) -> bool {
         self.data.is_mapped()

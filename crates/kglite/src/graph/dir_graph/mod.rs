@@ -682,6 +682,10 @@ pub struct DirGraph {
     /// (`write_budget`); `None` when none applies.
     #[serde(skip)]
     pub(crate) write_budget: Option<write_budget::WriteBudget>,
+    /// How the load that produced this graph held the file's sections; a
+    /// save's rebase repeats it.
+    #[serde(skip)]
+    pub(crate) load_policy: crate::graph::io::file::LoadPolicy,
     /// What the load recorded about the parts of this graph that are not
     /// served from a mapping; see [`mapped_report`].
     #[serde(skip)]
@@ -1032,6 +1036,7 @@ impl DirGraph {
             memory_limit: None,
             spill_dir: None,
             write_budget: None,
+            load_policy: Default::default(),
             mapped_origin: Default::default(),
             save_notice: Default::default(),
             temp_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),

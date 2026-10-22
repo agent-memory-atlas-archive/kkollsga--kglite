@@ -330,6 +330,9 @@ unsafe fn ingest_impl(
                 return crate::lifecycle::refuse(out_error_msg, refusal);
             }
             let mut working = session_state.inner.write();
+            if let Err(refusal) = crate::lifecycle::guard_write_budget(&working) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let result = match which {
                 Ingest::Set => {
                     set_embeddings(&mut working, node_type, text_column, metric, entries)
@@ -634,6 +637,9 @@ pub unsafe extern "C" fn kglite_session_quantize_embeddings(
                 return crate::lifecycle::refuse(out_error_msg, refusal);
             }
             let mut working = session_state.inner.write();
+            if let Err(refusal) = crate::lifecycle::guard_write_budget(&working) {
+                return crate::lifecycle::refuse(out_error_msg, refusal);
+            }
             let result = quantize_embeddings(
                 &mut working,
                 entity,

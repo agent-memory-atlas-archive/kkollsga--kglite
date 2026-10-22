@@ -8,8 +8,9 @@ use kglite_c::{
     kglite_cypher_result_free, kglite_free_string, kglite_graph_free, kglite_graph_new,
     kglite_graph_new_in_mode, kglite_graph_verify_integrity, kglite_load_file_with_options,
     kglite_save_graph_with_layout, kglite_session_execute_mut, kglite_session_free,
-    kglite_session_new, kglite_session_save, kglite_session_set_embeddings, KgliteCypherResult,
-    KgliteGraph, KgliteLoadOptions, KgliteSession, KgliteStatusCode,
+    kglite_session_new, kglite_session_quantize_embeddings, kglite_session_save,
+    kglite_session_set_embeddings, KgliteCypherResult, KgliteGraph, KgliteLoadOptions,
+    KgliteSession, KgliteStatusCode,
 };
 
 const DIM: usize = 1024;
@@ -475,4 +476,74 @@ fn the_write_budget_option_refuses_writes_at_the_limit() {
     let (rc, graph, _) = load(&path, Some(&old));
     assert_eq!(rc, KgliteStatusCode::Ok);
     assert_eq!(write_status(graph, write), KgliteStatusCode::Ok);
+}
+
+/// `set_embeddings` of `count` 4-float vectors for `Doc.<column>` over the
+/// first `count` ids.
+fn set_vectors(session: *mut KgliteSession, column: &str, count: usize) -> KgliteStatusCode {
+    let ids = c(&serde_json::to_string(&(1..=count).collect::<Vec<_>>()).unwrap());
+    let vectors = vec![0.5f32; count * 4];
+    let mut report: *const c_char = std::ptr::null();
+    let column = c(column);
+    let status = unsafe {
+        kglite_session_set_embeddings(
+            session,
+            c("Doc").as_ptr(),
+            column.as_ptr(),
+            ids.as_ptr(),
+            vectors.as_ptr(),
+            4,
+            count,
+            std::ptr::null(),
+            &mut report,
+            std::ptr::null_mut(),
+        )
+    };
+    if !report.is_null() {
+        unsafe { kglite_free_string(report) };
+    }
+    status
+}
+
+#[test]
+fn embedding_writes_through_the_c_abi_count_against_the_write_budget() {
+    if !cfg!(unix) {
+        return; // Windows copies the topology sections: no budget applies.
+    }
+    let dir = scratch("embedding-budget");
+    let path = topology_file(&dir);
+    let mut opts = options(0, 0);
+    opts.write_budget = 1;
+    let (rc, graph, _) = load(&path, Some(&opts));
+    assert_eq!(rc, KgliteStatusCode::Ok);
+    let mut session: *mut KgliteSession = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { kglite_session_new(graph, &mut session) },
+        KgliteStatusCode::Ok
+    );
+    // The first call may overshoot by its own size; the heap it holds then
+    // puts the graph at its limit.
+    assert_eq!(set_vectors(session, "n", 200), KgliteStatusCode::Ok);
+    assert_eq!(
+        set_vectors(session, "id", 200),
+        KgliteStatusCode::WriteBudgetExceeded
+    );
+    let (node_type, column, precision) = (c("Doc"), c("n"), c("int8"));
+    let mut report: *const c_char = std::ptr::null();
+    assert_eq!(
+        unsafe {
+            kglite_session_quantize_embeddings(
+                session,
+                node_type.as_ptr(),
+                column.as_ptr(),
+                precision.as_ptr(),
+                0,
+                std::ptr::null(),
+                &mut report,
+                std::ptr::null_mut(),
+            )
+        },
+        KgliteStatusCode::WriteBudgetExceeded
+    );
+    unsafe { kglite_session_free(session) };
 }

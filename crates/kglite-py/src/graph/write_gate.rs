@@ -180,8 +180,13 @@ impl KnowledgeGraph {
         f: impl FnOnce(&mut Arc<DirGraph>) -> PyResult<T>,
     ) -> PyResult<T> {
         self.check_durable_owner()?;
+        self.inner
+            .check_write_budget()
+            .map_err(crate::error_py::kg_to_pyerr)?;
         let out = f(&mut self.inner)?;
         self.commit_wal()?;
+        let _ = self.inner.settle_write_budget(false);
+        Python::attach(|py| crate::write_budget::announce(py, &self.inner));
         Ok(out)
     }
 
@@ -225,6 +230,23 @@ impl KnowledgeGraph {
     /// and no commit, matching how these behaved before the choke points.
     pub(crate) fn unlogged_write<T>(&mut self, f: impl FnOnce(&mut DirGraph) -> T) -> T {
         f(raw_graph_mut(&mut self.inner))
+    }
+
+    /// [`unlogged_write`](Self::unlogged_write) for a mutation that adds heap
+    /// the write budget meters (the quantized copy of an embedding store):
+    /// refused before it starts when the graph is at its limit, and settled
+    /// after it.
+    pub(crate) fn unlogged_metered_write<T>(
+        &mut self,
+        f: impl FnOnce(&mut DirGraph) -> PyResult<T>,
+    ) -> PyResult<T> {
+        self.inner
+            .check_write_budget()
+            .map_err(crate::error_py::kg_to_pyerr)?;
+        let out = f(raw_graph_mut(&mut self.inner))?;
+        let _ = self.inner.settle_write_budget(false);
+        Python::attach(|py| crate::write_budget::announce(py, &self.inner));
+        Ok(out)
     }
 
     /// [`unlogged_write`](Self::unlogged_write) for a callee that takes the

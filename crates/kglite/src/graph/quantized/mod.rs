@@ -165,6 +165,14 @@ impl<T: Code> CodeBuf<T> {
         matches!(self, CodeBuf::Mapped(..))
     }
 
+    /// Capacity of a heap buffer in bytes; nothing for a mapped one.
+    fn heap_bytes(&self) -> usize {
+        match self {
+            CodeBuf::Heap(vec) => vec.capacity() * std::mem::size_of::<T>(),
+            CodeBuf::Mapped(..) => 0,
+        }
+    }
+
     fn verify(&self) -> io::Result<()> {
         match self {
             CodeBuf::Heap(_) => Ok(()),
@@ -411,6 +419,16 @@ impl QuantStore {
                 Precision::Binary => kernels::hamming_kernel_name(),
             },
         }
+    }
+
+    /// Bytes the codes and scales hold on the heap; a mapped buffer counts 0.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let codes = match &self.codes {
+            Codes::F16(buf) => buf.heap_bytes(),
+            Codes::Int8(buf) => buf.heap_bytes(),
+            Codes::Bits(buf) => buf.heap_bytes(),
+        };
+        codes + self.scales.heap_bytes()
     }
 
     pub fn is_mapped(&self) -> bool {

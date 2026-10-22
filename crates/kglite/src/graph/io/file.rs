@@ -1374,6 +1374,7 @@ pub fn load_file_with(path: &str, options: &LoadOptions) -> io::Result<Arc<DirGr
     if let Some(g) = Arc::get_mut(&mut graph) {
         let file_bytes = std::fs::metadata(path).map_or(0, |m| m.len());
         g.enroll_write_budget(options.write_budget, file_bytes);
+        g.load_policy = options.policy();
     }
     Ok(graph)
 }
@@ -2306,6 +2307,7 @@ mod load_estimate;
 pub use load_estimate::{estimate_load_memory, estimate_load_memory_bytes, LoadMemoryEstimate};
 
 mod load_options;
+pub(crate) use load_options::LoadPolicy;
 use load_options::MAX_LOAD_ENV_VAR;
 pub use load_options::{LoadOptions, MapPolicy, Verify};
 
@@ -2363,6 +2365,8 @@ mod index_sections_tests;
 mod load_release_tests;
 #[cfg(test)]
 mod mapped_report_tests;
+#[cfg(test)]
+mod rebase_policy_tests;
 #[cfg(test)]
 mod rollback_overlay_tests;
 #[cfg(test)]

@@ -13,11 +13,17 @@
 //!
 //! The storage backend is: the topology, the column stores and the peer counts
 //! all come from the new file. So are the node member lists and the id index,
-//! which describe the same slots and which the new file serves in place. Everything
-//! else on the `DirGraph` is keyed by node and edge slots, which a save preserves
-//! (vacant slots stay vacant), or is state a load never owned (versions, the log
-//! wrapper, the declared indexes and their built contents, embeddings, locks), so
-//! it stays.
+//! which describe the same slots and which the new file serves in place, and
+//! the node and relationship embedding stores, which a write may have copied to
+//! the heap. Everything else on the `DirGraph` is keyed by node and edge slots,
+//! which a save preserves (vacant slots stay vacant), or is state a load never
+//! owned (versions, the log wrapper, the declared indexes and their built
+//! contents, locks), so it stays.
+//!
+//! The reload repeats the load's `columns`, `embeddings`, `topology` and
+//! `verify` choices (`LoadPolicy`), so a graph loaded with `columns="memory"`
+//! or `verify="eager"` is not left serving lazily checked mappings of the file
+//! it just wrote.
 //! A reader holding the previous `Arc<DirGraph>` keeps the previous backend,
 //! and with it the old mapping: the old file is unlinked by the save's rename,
 //! and a Unix mapping outlives the unlink.
@@ -29,7 +35,7 @@
 //! overlay over a frozen base; a platform that copies sections rather than
 //! mapping them (Windows); a file that did not record the raw topology
 //! sections (a small graph, or `topology="memory"` policy); a file whose slot
-//! space differs from the live graph's.
+//! space or embedding stores differ from the live graph's.
 
 use std::sync::Arc;
 
@@ -53,15 +59,28 @@ pub(crate) enum Rebase {
 /// Serve `graph` from the `.kgl` just saved at `path`. Never fails the save:
 /// any problem leaves the graph untouched.
 pub(crate) fn rebase_onto_saved(graph: &mut Arc<DirGraph>, path: &str) -> Rebase {
-    if !graph.graph.has_frozen_base() || graph.graph.overlay_entries().is_none_or(|n| n == 0) {
+    if !graph.graph.has_frozen_base() {
+        return Rebase::NoOverlay;
+    }
+    if graph.graph.overlay_entries().is_none_or(|n| n == 0) && !graph.has_unsaved_embedding_heap() {
         return Rebase::NoOverlay;
     }
     if cfg!(windows) {
         return Rebase::Declined("sections are copied, not mapped, on this platform");
     }
+    // The columns, the topology and the verification are held as the caller
+    // asked at load: a graph loaded with `columns="memory"` or
+    // `verify="eager"` must not turn into a lazily checked mapping of the file
+    // it just wrote (a later overwrite of that file in place would fault the
+    // mapping).
+    let policy = graph.load_policy;
     let options = LoadOptions::new()
         .with_storage(StorageMode::Mapped)
-        .with_defer_index_rebuild(true);
+        .with_defer_index_rebuild(true)
+        .with_embeddings(policy.embeddings)
+        .with_columns(policy.columns)
+        .with_topology(policy.topology)
+        .with_verify(policy.verify);
     let Ok(loaded) = load_file_inner(path, &options) else {
         return Rebase::Declined("the saved file did not load");
     };
@@ -76,6 +95,9 @@ pub(crate) fn rebase_onto_saved(graph: &mut Arc<DirGraph>, path: &str) -> Rebase
         || fresh.graph.edge_bound() != live.edge_bound()
     {
         return Rebase::Declined("the saved file does not describe the live slot space");
+    }
+    if !same_embedding_stores(graph, &fresh) {
+        return Rebase::Declined("the saved file does not describe the live embedding stores");
     }
     // The new stores may be mapped from spill files under the loaded graph's
     // temp directories; they must live as long as the graph that now serves
@@ -93,6 +115,10 @@ pub(crate) fn rebase_onto_saved(graph: &mut Arc<DirGraph>, path: &str) -> Rebase
     // The member lists and the id index describe the same slots; the loaded
     // pair serves from the file's sections, where the live pair holds the
     // heap maps the writes (and the lookups after them) built.
+    // The embedding stores a write copied to the heap are replaced by the
+    // saved file's, which serve from it again; this is what releases them.
+    dir.embeddings = std::mem::take(&mut fresh.embeddings);
+    dir.edge_embeddings = std::mem::take(&mut fresh.edge_embeddings);
     dir.type_indices = std::mem::take(&mut fresh.type_indices);
     dir.id_indices = std::mem::take(&mut fresh.id_indices);
     if let Ok(mut dirs) = dir.temp_dirs.lock() {
@@ -101,4 +127,24 @@ pub(crate) fn rebase_onto_saved(graph: &mut Arc<DirGraph>, path: &str) -> Rebase
     dir.mapped_origin = fresh.mapped_origin.clone();
     dir.reset_write_budget_after_rebase(std::fs::metadata(path).map_or(0, |m| m.len()));
     Rebase::Done
+}
+
+/// Whether the loaded file holds the same embedding stores as the live graph:
+/// the same keys, each with the same dimension and vector count. A save writes
+/// every store, so a difference means the file is not this graph.
+fn same_embedding_stores(live: &DirGraph, fresh: &DirGraph) -> bool {
+    live.embeddings.len() == fresh.embeddings.len()
+        && live.embeddings.iter().all(|(key, store)| {
+            fresh
+                .embeddings
+                .get(key)
+                .is_some_and(|f| f.dimension == store.dimension && f.len() == store.len())
+        })
+        && live.edge_embeddings.len() == fresh.edge_embeddings.len()
+        && live.edge_embeddings.iter().all(|(key, store)| {
+            fresh
+                .edge_embeddings
+                .get(key)
+                .is_some_and(|f| f.dimension() == store.dimension() && f.len() == store.len())
+        })
 }

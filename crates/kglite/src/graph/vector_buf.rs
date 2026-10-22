@@ -99,6 +99,15 @@ impl VectorBuf {
         matches!(self, VectorBuf::Mapped(_))
     }
 
+    /// Bytes the buffer holds on the heap: its capacity when it is a `Vec`,
+    /// nothing for a mapped view of a file.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        match self {
+            VectorBuf::Heap(vec) => vec.capacity() * std::mem::size_of::<f32>(),
+            VectorBuf::Mapped(_) => 0,
+        }
+    }
+
     pub fn as_slice(&self) -> &[f32] {
         match self {
             VectorBuf::Heap(vec) => vec,
