@@ -2346,6 +2346,8 @@ mod index_sections_tests;
 #[cfg(test)]
 mod load_release_tests;
 #[cfg(test)]
+mod rollback_overlay_tests;
+#[cfg(test)]
 mod write_budget_tests;
 
 /// Save `graph` and load it back into mapped storage with the topology sections

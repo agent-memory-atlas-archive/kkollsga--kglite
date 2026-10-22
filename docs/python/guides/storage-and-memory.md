@@ -135,7 +135,7 @@ What happens as writes accumulate:
 - The reading is an estimate of the heap the unsaved writes hold (overlay entries at 128 bytes each plus new column heap), not an allocator measurement. `write_budget_used_bytes` reports it.
 - At half the limit, the write that crossed it emits `kglite.WriteBudgetWarning`. It warns once per upward crossing and re-arms after a save.
 - At the limit, writes raise `kglite.WriteBudgetExceededError`. Reads keep working.
-- A Cypher statement that would cross the limit is rolled back, so the graph is unchanged. A rolled-back statement leaves its overlay entries until the next save, so the graph then reads as at the limit.
+- A Cypher statement that would cross the limit is rolled back, so the graph is unchanged and `write_budget_used_bytes` reads what it read before. Any failed Cypher statement rolls its overlay entries back the same way, so repeated failures do not grow the heap. A smaller statement that fits is still accepted.
 - A fluent loader such as `add_nodes` is refused only when the graph is already at the limit, so one call can overshoot by its own size.
 - `save()` writes the changes out, serves the graph from the file it wrote and resets the budget against the new file size.
 - If the save cannot rebase (`layout="compact"`, Windows), the file is written but the memory stays. The error then says a save did not release it; reload the saved file, open it durable or raise the budget.

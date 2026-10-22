@@ -162,6 +162,7 @@ fn the_statement_that_crosses_the_limit_is_rolled_back_whole() {
     run(&mut graph, "CREATE (:A {id: 9001, n: 1, s: 'kept'})");
     let before = dump(&graph);
     let nodes = graph.graph_info().node_count;
+    let used = graph.graph_info().write_budget_used_bytes;
     let error = execute_mut(&mut graph, BULK, &opts())
         .err()
         .expect("refused");
@@ -177,10 +178,19 @@ fn the_statement_that_crosses_the_limit_is_rolled_back_whole() {
         rows(&graph, "MATCH (n:A {id: 10001}) RETURN count(n)"),
         "[[Int64(0)]]"
     );
-    // The undo leaves the statement's overlay entries behind, so the graph
-    // reads as over its budget and asks for a save before the next write.
-    assert_eq!(state(&graph), WriteBudgetState::Exceeded);
-    assert!(create(&mut graph, 0).is_err());
+    // The rollback takes the statement's overlay entries with it: the budget
+    // reads what it read before, and the next small write is accepted.
+    assert_eq!(graph.graph_info().write_budget_used_bytes, used);
+    assert_eq!(state(&graph), WriteBudgetState::Ok);
+    for round in 0..20 {
+        assert!(execute_mut(&mut graph, BULK, &opts()).is_err());
+        assert_eq!(
+            graph.graph_info().write_budget_used_bytes,
+            used,
+            "refusal {round}"
+        );
+    }
+    create(&mut graph, 0).unwrap();
 }
 
 #[test]
@@ -312,15 +322,8 @@ fn an_operator_spelling_parses_to_a_setting() {
 #[test]
 fn a_graph_at_its_limit_refuses_before_the_statement_runs() {
     let (_tmp, path) = saved_topo();
-    let mut graph = owned(&path, WriteBudgetSetting::Bytes(TINY));
-    assert!(graph.check_write_budget().is_ok());
-    execute_mut(&mut graph, BULK, &opts())
-        .err()
-        .expect("refused");
-    assert!(
-        graph.check_write_budget().is_err(),
-        "the undo left it at the limit"
-    );
+    let mut graph = owned(&path, WriteBudgetSetting::Bytes(0));
+    assert!(graph.check_write_budget().is_err(), "at the limit");
     // A statement that would fail on its own is never run: the budget answers.
     let error = execute_mut(&mut graph, "CREATE (:A {id: 1 / 0})", &opts())
         .err()

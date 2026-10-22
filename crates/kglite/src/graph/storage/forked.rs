@@ -137,6 +137,26 @@ pub struct ForkedGraph {
     slot_mirror: super::slot_mirror::SlotMirror,
 }
 
+/// The overlay's node and edge delta as a statement found it, for a rollback
+/// to put back ([`ForkedGraph::mark`]).
+///
+/// The undo journal restores what the statement changed, slot for slot, by
+/// writing the inverse operations through the overlay, which only ever grows:
+/// every create, delete and weight copy the statement made stays behind as
+/// entries (an operation, a node weight, a re-weighted edge) that read as the
+/// graph they started from. Over a frozen base the overlay is never folded, so
+/// those entries are heap that only a save releases, and a statement refused
+/// again and again would grow it without bound. The delta is shared paged
+/// containers, so a clone costs a few `Arc` bumps and holding it makes the
+/// statement's first write to each page copy that page.
+///
+/// Column stores are not part of it: the journal's row-append and cell entries
+/// already truncate them back. The slot mirror is not either: the replay left
+/// it predicting the slots the restored delta would allocate next.
+pub(crate) struct OverlayMark {
+    delta: Delta,
+}
+
 /// One topology operation, in the order the writer issued it.
 ///
 /// Weights are not logged: a node or edge that is live at the end has its
@@ -697,6 +717,22 @@ impl ForkedGraph {
     /// collapse or a clone has to copy.
     pub(crate) fn delta_len(&self) -> usize {
         self.delta.ops.len() + self.delta.nodes.len() + self.delta.edges.weights.len()
+    }
+
+    /// The delta as it stands, when the overlay sits over a frozen base: the
+    /// one overlay that is never folded away, and so the one whose entries
+    /// outlive a rolled-back statement. `None` over a heap base.
+    pub(crate) fn mark(&self) -> Option<OverlayMark> {
+        self.base.frozen().is_some().then(|| OverlayMark {
+            delta: self.delta.clone(),
+        })
+    }
+
+    /// Put the delta back as [`Self::mark`] took it, after the journal has
+    /// restored the logical state: the entries the statement and its undo
+    /// added disappear.
+    pub(crate) fn restore_mark(&mut self, mark: OverlayMark) {
+        self.delta = mark.delta;
     }
 
     /// The overlay's own state, borrowed apart from its base.

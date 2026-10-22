@@ -104,6 +104,29 @@ def test_a_statement_that_crosses_is_rolled_back_whole(saved):
     assert graph.cypher("MATCH (d:Doc {id: 100001}) RETURN count(d) AS c").to_list()[0]["c"] == 0
 
 
+def test_a_refused_statement_leaves_the_usage_where_it_was(saved):
+    graph = _load(saved, write_budget=TINY)
+    _create(graph, 1)
+    used = graph.graph_info()["write_budget_used_bytes"]
+    for _ in range(25):
+        with pytest.raises(kglite.WriteBudgetExceededError):
+            graph.cypher(BULK)
+        info = graph.graph_info()
+        assert info["write_budget_used_bytes"] == used, "the rollback takes its overlay entries with it"
+        assert info["write_budget_state"] == "ok"
+    _create(graph, 2)  # a statement that fits is still accepted
+
+
+def test_failed_statements_do_not_grow_the_overlay(saved):
+    graph = _load(saved, write_budget=None)
+    _create(graph, 1)
+    used = graph.graph_info()["topology_overlay_entries"]
+    for _ in range(25):
+        with pytest.raises(kglite.CypherExecutionError):
+            graph.cypher("UNWIND range(1, 5) AS i CREATE (:Doc {id: 5000 + i, n: 10 / (3 - i)})")
+    assert graph.graph_info()["topology_overlay_entries"] == used
+
+
 def test_a_transaction_over_the_limit_refuses_and_rolls_back(saved):
     graph = _load(saved, write_budget=TINY)
     before = _count(graph)

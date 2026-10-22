@@ -648,6 +648,26 @@ impl GraphBackend {
         }
     }
 
+    /// The write overlay's delta, to put back after a rolled-back statement;
+    /// see [`super::forked::OverlayMark`]. Looks through a write-capture wrapper;
+    /// `None` without an overlay over a frozen base.
+    pub(crate) fn overlay_mark(&self) -> Option<super::forked::OverlayMark> {
+        match self {
+            GraphBackend::Forked(forked) => forked.mark(),
+            GraphBackend::Recording(rg) => rg.inner().overlay_mark(),
+            _ => None,
+        }
+    }
+
+    /// Put back the delta [`Self::overlay_mark`] took.
+    pub(crate) fn restore_overlay_mark(&mut self, mark: super::forked::OverlayMark) {
+        match self {
+            GraphBackend::Forked(forked) => forked.restore_mark(mark),
+            GraphBackend::Recording(rg) => rg.inner_mut().restore_overlay_mark(mark),
+            _ => {}
+        }
+    }
+
     /// `true` while the topology is served from a `.kgl`'s raw sections.
     ///
     /// Public as a **diagnostic**, like [`is_forked`](Self::is_forked): the
