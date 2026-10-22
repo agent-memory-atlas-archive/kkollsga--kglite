@@ -46,6 +46,10 @@ before upgrading.
 - **The `[0.21.0]` measurements now quote the final records.** Footprint, load, query-mix, warm-ratio, cold-expansion, first-lookup, save-time and MCP figures in the Added section, and the 1.35x to 5.38x column-growth range, replace numbers taken from intermediate runs.
 - **The stub, the guide and the C ABI notes match the shipped code.** A rolled-back statement restores its usage unless it deleted something; the overwrite-in-place advice names `topology="memory"`; the C `layout` argument accepts `0` and `1` only; `KgliteLoadOptions.columns = 0` means `auto` in every storage mode.
 
+### Rust API
+
+- `ExecuteOptions` gains a public `hide_structural_keys` field. Code that builds it with a struct literal needs the field; `ExecuteOptions::new(&params)` plus `with_hidden_structural_keys` is unaffected.
+
 ## [0.21.0] - 2026-10-22
 
 ### Breaking changes and migration
