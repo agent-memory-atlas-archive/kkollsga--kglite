@@ -92,6 +92,9 @@ pub enum TypeEntry {
         /// Its directory entry, so a probe does not look the name up again.
         entry: BaseEntry,
         delta: TypeIdIndex,
+        /// Live ids the delta adds to `base`'s count (negative when it
+        /// removes more than it adds): what makes [`TypeEntry::len`] O(1).
+        net: i64,
     },
     /// A base shared with at least one other graph, plus this graph's delta.
     /// Reads chain delta → base; writes only ever touch `delta`.
@@ -110,6 +113,8 @@ pub enum TypeEntry {
         base: Arc<TypeEntry>,
         delta: TypeIdIndex,
         depth: u16,
+        /// As [`TypeEntry::OverBase`]'s `net`.
+        net: i64,
     },
 }
 
@@ -280,6 +285,7 @@ impl TypeEntry {
             name: Arc::from(name),
             entry,
             delta: TypeIdIndex::default(),
+            net: 0,
         })
     }
 
@@ -292,13 +298,14 @@ impl TypeEntry {
                 name,
                 entry,
                 delta,
+                ..
             } => Some((Under::Mapped { base, name, entry }, delta)),
             TypeEntry::Layered { base, delta, .. } => Some((Under::Shared(base), delta)),
         }
     }
 
-    /// [`Self::layer`] with the delta writable.
-    fn layer_mut(&mut self) -> Option<(Under<'_>, &mut TypeIdIndex)> {
+    /// [`Self::layer`] with the delta and its running count writable.
+    fn layer_mut(&mut self) -> Option<(Under<'_>, &mut TypeIdIndex, &mut i64)> {
         match self {
             TypeEntry::Owned(_) => None,
             TypeEntry::OverBase {
@@ -306,8 +313,11 @@ impl TypeEntry {
                 name,
                 entry,
                 delta,
-            } => Some((Under::Mapped { base, name, entry }, delta)),
-            TypeEntry::Layered { base, delta, .. } => Some((Under::Shared(base), delta)),
+                net,
+            } => Some((Under::Mapped { base, name, entry }, delta, net)),
+            TypeEntry::Layered {
+                base, delta, net, ..
+            } => Some((Under::Shared(base), delta, net)),
         }
     }
 
@@ -375,8 +385,16 @@ impl TypeEntry {
     pub fn insert(&mut self, id: Value, idx: NodeIndex) {
         match self {
             TypeEntry::Owned(index) => index.insert(id, idx),
-            TypeEntry::Layered { delta, .. } | TypeEntry::OverBase { delta, .. } => {
-                delta.insert(id, idx)
+            _ => {
+                let (under, delta, net) = self.layer_mut().expect("a layered entry has a layer");
+                let was_live = match delta.get(&id) {
+                    Some(held) => held != tombstone(),
+                    None => under.get(&id).is_some(),
+                };
+                delta.insert(id, idx);
+                if !was_live {
+                    *net += 1;
+                }
             }
         }
     }
@@ -386,7 +404,7 @@ impl TypeEntry {
     /// Under a delta the id is tombstoned rather than removed: what is under it
     /// may be the immutable mapping or a base another graph is reading.
     pub fn remove_matching(&mut self, id: &Value, idx: NodeIndex) -> bool {
-        let Some((under, delta)) = self.layer_mut() else {
+        let Some((under, delta, net)) = self.layer_mut() else {
             let TypeEntry::Owned(index) = self else {
                 unreachable!("only an owned entry has no layer")
             };
@@ -400,17 +418,32 @@ impl TypeEntry {
             return false;
         }
         delta.insert(id.clone(), tombstone());
+        *net -= 1;
         true
     }
 
     pub fn len(&self) -> usize {
-        let Some((under, delta)) = self.layer() else {
-            let TypeEntry::Owned(index) = self else {
-                unreachable!("only an owned entry has no layer")
-            };
-            return index.len();
+        let (under, net) = match self {
+            TypeEntry::Owned(index) => return index.len(),
+            TypeEntry::OverBase {
+                base,
+                name,
+                entry,
+                net,
+                ..
+            } => (Under::Mapped { base, name, entry }, *net),
+            TypeEntry::Layered { base, net, .. } => (Under::Shared(base), *net),
         };
-        // Only the changed ids can move the count off the one underneath.
+        (under.len() as i64 + net).max(0) as usize
+    }
+
+    /// [`Self::len`] by walking the delta: O(changes), the reference the
+    /// running count is checked against.
+    #[cfg(test)]
+    pub(crate) fn len_by_walk(&self) -> usize {
+        let Some((under, delta)) = self.layer() else {
+            return self.len();
+        };
         let mut live = under.len() as i64;
         for (id, idx) in delta.iter() {
             let beneath = under.get(&id).is_some();
@@ -477,6 +510,7 @@ impl TypeEntry {
             base: Arc::clone(&base),
             delta: TypeIdIndex::default(),
             depth,
+            net: 0,
         };
         base
     }
@@ -497,6 +531,7 @@ impl TypeEntry {
             base,
             delta: TypeIdIndex::default(),
             depth,
+            net: 0,
         }
     }
 
@@ -806,5 +841,41 @@ mod tests {
         }
         assert_eq!(writer.get(&Value::UniqueId(0)), Some(NodeIndex::new(0)));
         assert_eq!(readers[0].get(&Value::UniqueId(1)), None);
+    }
+
+    /// The running count agrees with a walk of the delta, and with a model,
+    /// through random inserts, removals and re-inserts over one and two shared
+    /// levels: deleting must not cost the changes since the last save.
+    #[test]
+    fn the_running_count_matches_a_walk_of_the_delta() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |n: u32| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as u32
+        };
+        for rounds in 1..=2 {
+            let pairs: Vec<(u32, usize)> = (0..100).map(|i| (i, i as usize)).collect();
+            let mut entry = owned(&pairs);
+            let mut model: std::collections::HashMap<u32, usize> = pairs.iter().copied().collect();
+            for _ in 0..rounds {
+                let _kept = entry.share();
+                assert!(entry.is_layered());
+            }
+            for step in 0..600 {
+                let id = next(160);
+                if next(2) == 0 {
+                    let node = 1000 + step as usize;
+                    entry.insert(Value::UniqueId(id), NodeIndex::new(node));
+                    model.insert(id, node);
+                } else if let Some(&node) = model.get(&id) {
+                    assert!(entry.remove_matching(&Value::UniqueId(id), NodeIndex::new(node)));
+                    model.remove(&id);
+                }
+                assert_eq!(entry.len(), model.len(), "step {step}");
+                assert_eq!(entry.len(), entry.len_by_walk(), "step {step}");
+            }
+        }
     }
 }
