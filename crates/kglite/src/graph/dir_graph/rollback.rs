@@ -14,7 +14,7 @@
 //! | | cost to open | cost to roll back |
 //! |---|---|---|
 //! | [`StatementCheckpoint::None`] | nothing | n/a — the shape cannot fail after its first write |
-//! | [`StatementCheckpoint::Journal`] | O(1) + O(changes) | O(changes) + reindex of affected types |
+//! | [`StatementCheckpoint::Journal`] | O(1) + O(changes) | O(changes) |
 //! | [`StatementCheckpoint::DiskCells`] | O(graph clone without its columns) | O(changed cells) + O(1) swap |
 //! | [`StatementCheckpoint::Clone`] | O(V+E) | O(1) swap |
 //!
@@ -39,13 +39,13 @@
 //!   empty) and reconstructed from the journal. [`swap_data_scale`] is that
 //!   short, closed list; each member has a documented undo story in [`apply`].
 //!
-//! Two parked fields are *rebuilt* rather than journal-reversed, because their
-//! own mutation sites record no inverse: `id_indices` (dropped per touched
-//! type, self-healing on the next read) and `unique_indices` (recomputed per
-//! touched type by [`DirGraph::rebuild_unique_indices_for_types`]). Both are
-//! driven by the [`ReplayFallout`] the replay collects. Parking a field with no
-//! undo story of *either* kind is the one way to make this module wrong — see
-//! the `unique_indices` note on [`swap_data_scale`].
+//! One parked field is *rebuilt* rather than journal-reversed, because its own
+//! mutation sites record no inverse: `id_indices` (dropped per touched type,
+//! self-healing on the next read), driven by the [`ReplayFallout`] the replay
+//! collects. Parking a field with no undo story of *either* kind is the one
+//! way to make this module wrong. UNIQUE constraints add no parked field: the
+//! index a constraint owns is a `property_indices` / `composite_indices` entry,
+//! covered by the bucket entries below.
 //!
 //! ## Columnar mode: one entry per changed cell, replayed into the live store
 //!
@@ -92,8 +92,7 @@
 //!   checkpoint.
 //! - A columnar `SET` writes into the master, never into a node's weight, so it
 //!   produces **no** `NodeWeight` entry for the node it changed; the columnar
-//!   entries are the only signal that the type was written at all, which is why
-//!   their replay reports it — see [`columnar_type_touched`].
+//!   entries are the only record of the write.
 //!
 //! Two documented residues, both observational no-ops:
 //!
@@ -199,19 +198,6 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // inside Cypher and can be followed by a failing clause.
     std::mem::swap(&mut a.edge_text_indexes, &mut b.edge_text_indexes);
     std::mem::swap(&mut a.timeseries_store, &mut b.timeseries_store);
-    // Parked because its inner map holds one entry per node of a constrained
-    // type, so cloning it would put an O(constrained-nodes) copy back on every
-    // mutating statement — the cost this module exists to remove.
-    //
-    // Parking alone would be a *correctness* bug: `commit_unique_claims` /
-    // `release_unique_claims` / `evict_unique_claims_for_nodes` record nothing
-    // in the journal, and parking keeps the live post-statement map rather
-    // than the shell's, so a failed statement's claims would survive rollback
-    // — a phantom occupant (permanent spurious `ConstraintViolationError`) or
-    // a released claim (a real duplicate admitted). The paired undo story is
-    // the per-touched-type rebuild in `StatementCheckpoint::rollback`; do not
-    // park this field without it.
-    std::mem::swap(&mut a.unique_indices, &mut b.unique_indices);
     // Grows with the writes of a whole transaction, so cloning it into the
     // shell per statement would be quadratic over a long one. Left unreversed
     // on rollback by design: the end-of-transaction judge reads stored state
@@ -255,9 +241,10 @@ fn undo_bucket_append(members: Option<&mut Vec<NodeIndex>>, idx: NodeIndex) {
 ///   [`crate::graph::mutation::maintain`] with the same `BucketAppended` /
 ///   `BucketRemoved` entries `type_indices` already used. Whole-index DDL is
 ///   still not journalled — see the note on [`swap_data_scale`].
-/// - **`unique_indices`**: routing every constrained graph to
-///   `fork_transaction()` is strictly worse than the journal plus the
-///   per-touched-type unique rebuild that is that field's undo story.
+/// - **`unique_indices`** (retired): a constraint now owns an entry in
+///   `property_indices` / `composite_indices`, so the bucket journal above
+///   reverses it with everything else and no constrained graph needs a
+///   vetoed route.
 fn journal_covers(graph: &DirGraph) -> bool {
     // Only a petgraph-backed backend can express an inverse edit: Memory and
     // Mapped, whose `MappedGraph.inner` is the same StableDiGraph. Disk has no
@@ -519,9 +506,9 @@ impl StatementCheckpoint {
             } => {
                 let mut journal = graph.graph.take_undo();
                 let residue = journal.as_mut().map(|journal| journal.take_residue());
-                let fallout = journal
-                    .map(|journal| replay(graph, *journal))
-                    .unwrap_or_default();
+                if let Some(journal) = journal {
+                    replay(graph, *journal);
+                }
                 // The replay restored what the statement changed; this drops
                 // the entries the statement and its undo left in a write
                 // overlay over a frozen base.
@@ -549,12 +536,6 @@ impl StatementCheckpoint {
                     recording.set_edge_embedding_base_capture(enabled);
                 }
                 graph.restore_schema_shell(*shell);
-                // After the shell restore, so the rebuild reads the
-                // pre-statement schema (property readers and column metadata)
-                // against the restored data. `unique_indices` is parked, so
-                // what survives here is the failed statement's occupancy — see
-                // the note in `swap_data_scale`.
-                graph.rebuild_unique_indices_for_types(&fallout.stale_unique_indices);
                 // Edge-derived caches are `Arc`-shared with the shell, so the
                 // shell cannot restore them; drop them and let the next read
                 // rebuild.
@@ -592,8 +573,8 @@ impl DirGraph {
     }
 }
 
-/// The derived per-node-type state a replay perturbed, for the two parked
-/// fields that are rebuilt instead of journal-reversed.
+/// The derived per-node-type state a replay perturbed, for the parked field
+/// that is rebuilt instead of journal-reversed.
 #[derive(Default)]
 struct ReplayFallout {
     /// Node types whose id-index the replay perturbed. Whole-type
@@ -602,25 +583,19 @@ struct ReplayFallout {
     /// set is not known per entry, and the read path self-heals via
     /// `lookup_or_build` anyway.
     stale_id_indices: HashSet<String>,
-    /// Node types whose unique-occupancy maps must be recomputed from the
-    /// restored data. Wider than `stale_id_indices`: a plain property
-    /// overwrite leaves identity alone but can add or release a unique claim,
-    /// so `NodeWeight` counts here and not there.
-    stale_unique_indices: HashSet<String>,
 }
 
 impl ReplayFallout {
-    /// Record a node type whose identity *and* unique claims were perturbed —
-    /// a node appearing or disappearing does both.
+    /// Record a node type whose identity was perturbed — a node appearing or
+    /// disappearing.
     fn node_identity_changed(&mut self, node_type: String) {
-        self.stale_unique_indices.insert(node_type.clone());
         self.stale_id_indices.insert(node_type);
     }
 }
 
-/// Replay every entry in reverse capture order, reporting what has to be
-/// rebuilt afterwards.
-fn replay(graph: &mut DirGraph, journal: UndoJournal) -> ReplayFallout {
+/// Replay every entry in reverse capture order, then drop the id indexes the
+/// replay perturbed.
+fn replay(graph: &mut DirGraph, journal: UndoJournal) {
     let mut fallout = ReplayFallout::default();
     for entry in journal.into_replay_order() {
         apply(graph, entry, &mut fallout);
@@ -628,7 +603,6 @@ fn replay(graph: &mut DirGraph, journal: UndoJournal) -> ReplayFallout {
     for node_type in &fallout.stale_id_indices {
         graph.id_indices.remove(node_type);
     }
-    fallout
 }
 
 /// Reverse one edit. The journal is already uninstalled, so the `GraphWrite`
@@ -636,7 +610,7 @@ fn replay(graph: &mut DirGraph, journal: UndoJournal) -> ReplayFallout {
 fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
     match entry {
         UndoEntry::NodeAdded { idx, node_type } => undo_node_added(graph, idx, node_type, fallout),
-        UndoEntry::NodeWeight { idx, prior } => undo_node_weight(graph, idx, prior, fallout),
+        UndoEntry::NodeWeight { idx, prior } => undo_node_weight(graph, idx, prior),
         UndoEntry::NodeRemoved { idx, prior } => undo_node_removed(graph, idx, prior, fallout),
         UndoEntry::EdgeAdded { idx } => {
             GraphWrite::remove_edge(&mut graph.graph, idx);
@@ -772,7 +746,7 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             // `prior: None` restores as `Null` — indistinguishable through
             // every read surface, including the `rollback_tests::fingerprint`
             // oracle; see the module doc.
-            edit_column_master(graph, node_type, fallout, |store| {
+            edit_column_master(graph, node_type, |store| {
                 store.set(row_id, key, &prior.unwrap_or(Value::Null), None);
             });
         }
@@ -786,7 +760,7 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             // later, so reverse replay runs them first): each new column is
             // restored to its pre-statement content and only then dropped,
             // which keeps the two entries independent.
-            edit_column_master(graph, node_type, fallout, |store| {
+            edit_column_master(graph, node_type, |store| {
                 store.restore_schema_of(part, prior_schema, prior_column_count);
             });
         }
@@ -804,19 +778,18 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             (prior_schema, prior_column_count),
             prior_tail,
             store_was_new,
-            fallout,
         ),
         UndoEntry::ColumnarTitle {
             node_type,
             row_id,
             prior,
         } => {
-            edit_column_master(graph, node_type, fallout, |store| {
+            edit_column_master(graph, node_type, |store| {
                 store.set_title(row_id, &prior.unwrap_or(Value::Null));
             });
         }
         UndoEntry::ColumnarTombstone { node_type, row_id } => {
-            edit_column_master(graph, node_type, fallout, |store| {
+            edit_column_master(graph, node_type, |store| {
                 store.untombstone(row_id);
             });
         }
@@ -824,7 +797,7 @@ fn apply(graph: &mut DirGraph, entry: UndoEntry, fallout: &mut ReplayFallout) {
             node_type,
             displaced,
         } => {
-            edit_column_master(graph, node_type, fallout, |store| {
+            edit_column_master(graph, node_type, |store| {
                 store.restore_displaced(displaced);
             });
         }
@@ -861,23 +834,7 @@ fn undo_node_added(
     GraphWrite::remove_node(&mut graph.graph, idx);
 }
 
-fn undo_node_weight(
-    graph: &mut DirGraph,
-    idx: NodeIndex,
-    prior: NodeData,
-    fallout: &mut ReplayFallout,
-) {
-    // Both spellings of the type, so a claim under either is recomputed. The
-    // primary type is immutable in practice, but reading it costs one interner
-    // lookup on a path that only runs when a statement already failed.
-    let restored_type = graph.interner.resolve(prior.node_type).to_string();
-    if let Some(current) = GraphRead::node_type_of(&graph.graph, idx) {
-        let current = graph.interner.resolve(current).to_string();
-        if current != restored_type {
-            fallout.stale_unique_indices.insert(current);
-        }
-    }
-    fallout.stale_unique_indices.insert(restored_type);
+fn undo_node_weight(graph: &mut DirGraph, idx: NodeIndex, prior: NodeData) {
     if let Some(slot) = GraphWrite::node_weight_mut(&mut graph.graph, idx) {
         *slot = prior;
     }
@@ -1000,8 +957,7 @@ fn undo_bucket_removed(graph: &mut DirGraph, bucket: BucketId, idx: NodeIndex, p
     }
 }
 
-/// Run one edit against a type's live master `ColumnStore` and report the type
-/// as touched.
+/// Run one edit against a type's live master `ColumnStore`.
 ///
 /// Both lookups fail silently, and both failures mean the same thing — the
 /// type has no name or no store to restore into, so there is nothing to write.
@@ -1010,16 +966,14 @@ fn undo_bucket_removed(graph: &mut DirGraph, bucket: BucketId, idx: NodeIndex, p
 fn edit_column_master(
     graph: &mut DirGraph,
     node_type: InternedKey,
-    fallout: &mut ReplayFallout,
     edit: impl FnOnce(&mut ColumnStore),
 ) {
-    let Some(type_name) = graph.interner.try_resolve(node_type).map(str::to_string) else {
+    if graph.interner.try_resolve(node_type).is_none() {
         return;
-    };
+    }
     if let Some(store) = GraphWrite::column_store_mut(&mut graph.graph, node_type) {
         edit(std::sync::Arc::make_mut(store));
     }
-    columnar_type_touched(fallout, type_name);
 }
 
 /// Truncate a statement's row appends away, dropping the store itself when the
@@ -1040,11 +994,10 @@ fn undo_columnar_rows_appended(
     prior: (std::sync::Arc<crate::graph::schema::TypeSchema>, usize),
     prior_tail: Option<(u32, std::sync::Arc<crate::graph::schema::TypeSchema>, usize)>,
     store_was_new: bool,
-    fallout: &mut ReplayFallout,
 ) {
-    let Some(type_name) = graph.interner.try_resolve(node_type).map(str::to_string) else {
+    if graph.interner.try_resolve(node_type).is_none() {
         return;
-    };
+    }
     if store_was_new {
         GraphWrite::take_column_store(&mut graph.graph, node_type);
     } else if let Some(store) = GraphWrite::column_store_mut(&mut graph.graph, node_type) {
@@ -1057,18 +1010,6 @@ fn undo_columnar_rows_appended(
             store.restore_schema_of(part, schema, column_count);
         }
     }
-    columnar_type_touched(fallout, type_name);
-}
-
-/// Report a node type whose master column store the replay just wrote.
-///
-/// A columnar `SET` produces no `NodeWeight` entry (see the module doc), so
-/// the columnar undo entries are the *only* signal that a value under a
-/// declared unique constraint may have moved. Without the report, a failed
-/// columnar `SET` hits exactly the failure mode `swap_data_scale` warns about
-/// for the parked `unique_indices`.
-fn columnar_type_touched(fallout: &mut ReplayFallout, type_name: String) {
-    fallout.stale_unique_indices.insert(type_name);
 }
 
 /// Assert that a re-inserted entity landed on the slot it vacated.

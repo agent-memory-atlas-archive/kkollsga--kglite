@@ -1,23 +1,25 @@
 //! UNIQUE-constraint declaration and enforcement on `DirGraph`.
 //!
-//! # The structure *is* the constraint
+//! # The index *is* the constraint
 //!
-//! `DirGraph::unique_indices` maps `(node_type, [properties]) -> tuple value ->
-//! the one NodeIndex occupying it`. Unlike the other secondary index kinds,
-//! which map a value to a `Vec<NodeIndex>`, the unique index holds a single
-//! occupant — so "is this tuple taken by somebody else?" is one hash lookup,
-//! and there is no separate constraint bookkeeping that could drift out of sync
-//! with the index that answers the question.
+//! A declared constraint owns a hidden entry in `property_indices` (one
+//! property) or `composite_indices` (several) — see [`super::owned_index`].
+//! "Is this tuple taken by somebody else?" is one bucket probe on that index,
+//! and the write paths that already maintain a user index (`CREATE`, `SET`,
+//! `REMOVE`, `DELETE`, the bulk loaders, statement rollback) maintain the
+//! constraint with them: there is no second structure that could drift from
+//! the index that answers lookups, and a fork shares the entry instead of
+//! copying it.
 //!
 //! # Cost per write
 //!
 //! A graph that declares no constraint (the default, and every graph saved
-//! before this feature) pays one `HashMap::is_empty` per write and allocates
-//! nothing. A type that *does* carry constraints pays a scan of the
-//! declaration keys, one property read per constrained property, and one hash
-//! probe per constraint — never a full scan. A create allocates only the claim
-//! vector; a property write additionally composes before/after maps over the
-//! type's constrained properties ([`DirGraph::plan_property_write`]).
+//! before this feature) pays one `is_empty` per write and allocates nothing. A
+//! type that *does* carry constraints pays a scan of the declaration keys, one
+//! property read per constrained property, and one bucket probe per
+//! constraint — never a full scan. A create allocates only the claim vector; a
+//! property write additionally composes before/after maps over the type's
+//! constrained properties ([`DirGraph::plan_property_write`]).
 //!
 //! # NULL semantics
 //!
@@ -30,17 +32,17 @@
 //!
 //! # Persistence
 //!
-//! `unique_indices` is `#[serde(skip)]`; the declaration list
-//! `unique_constraint_keys` is persisted and replayed by
-//! [`DirGraph::rebuild_unique_indices_from_keys`] on load — the same
-//! persist-keys/rebuild-on-load pattern the property, range, and composite
-//! indexes use. The rebuild re-verifies the constraint for free, since building
-//! a single-occupant map *is* the duplicate check.
+//! `unique_constraint_keys` is the persisted declaration list;
+//! [`DirGraph::rebuild_unique_indices_from_keys`] re-installs the owned
+//! indexes on load — the same persist-keys/rebuild-on-load pattern the
+//! property, range, and composite indexes use. The scan that finds an
+//! already-present duplicate runs there too, since declaring a constraint the
+//! data violates must stay observable.
 //!
-//! `DirGraph::ddl_unique_constraints` is persisted beside it: one index may be
-//! declared twice — once by `CREATE CONSTRAINT`, once by a schema `primary_key`
-//! or `unique` — and only that record says a schema withdrawal must leave the
-//! index standing.
+//! `DirGraph::ddl_unique_constraints` is persisted beside it: one constraint
+//! may be declared twice — once by `CREATE CONSTRAINT`, once by a schema
+//! `primary_key` or `unique` — and only that record says a schema withdrawal
+//! must leave it standing.
 
 use std::collections::{HashMap, HashSet};
 
@@ -59,87 +61,47 @@ use crate::graph::schema::{
     CompositeValue, NodeSchemaDefinition, SchemaDefinition, PROVISIONAL_KEY,
 };
 
-/// One node's occupancy of one declared unique tuple.
+/// One node's would-be occupancy of one declared unique tuple.
 ///
-/// Produced by [`DirGraph::unique_claims`] before a write, checked by
-/// [`DirGraph::check_unique_claims`], and redeemed by
-/// [`DirGraph::commit_unique_claims`] once the node exists. Deriving the claim
-/// once and reusing it for check + commit is what keeps the two from disagreeing
-/// about *which* tuple was validated.
+/// Produced by [`DirGraph::unique_claims`] before a write and checked by
+/// [`DirGraph::check_unique_claims`]. Nothing redeems it afterwards: the owned
+/// index is filed by the same maintenance every user index gets, so deriving
+/// the claim once is only what keeps check and error report agreeing about
+/// *which* tuple was validated.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UniqueClaim {
     pub key: UniqueConstraintKey,
     pub value: CompositeValue,
 }
 
-/// The unique-index bookkeeping a property write owes once it has been applied:
-/// release what the node used to occupy, claim what it now occupies. Produced by
-/// [`DirGraph::plan_property_write`] *before* the write (so the write can be
-/// rejected without touching storage) and redeemed by
-/// [`DirGraph::apply_property_write_plan`] after.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct PropertyWritePlan {
-    pub release: Vec<UniqueClaim>,
-    pub claim: Vec<UniqueClaim>,
-}
-
 impl DirGraph {
     // ── Declaration ──
+
+    /// The declarations readers may act on: none while a deferred load has not
+    /// yet built the owned indexes, which is what a graph with no constraint
+    /// answers ([`DirGraph::indexes_deferred`]).
+    fn declared_unique_keys(&self) -> &[UniqueConstraintKey] {
+        if self.indexes_deferred {
+            &[]
+        } else {
+            &self.unique_constraint_keys
+        }
+    }
 
     /// Whether *any* unique constraint is declared on this graph — the write
     /// path's fast-out.
     #[inline]
     pub(crate) fn has_unique_constraints(&self) -> bool {
-        !self.unique_indices.is_empty()
+        !self.declared_unique_keys().is_empty()
     }
 
     /// Whether any unique constraint is declared on `node_type` — the gate the
     /// bulk fold uses to decide whether it owes occupancy bookkeeping at all.
     #[inline]
     pub(crate) fn type_has_unique_constraints(&self, node_type: &str) -> bool {
-        self.has_unique_constraints() && self.unique_indices.keys().any(|(nt, _)| nt == node_type)
-    }
-
-    /// The unique tuples `node_idx` occupies **as stored**.
-    ///
-    /// The read half of incremental occupancy maintenance: the bulk fold takes
-    /// this before a batch (what to release) and after it (what to claim), so
-    /// the answer never depends on what a row *asked* for — a
-    /// `conflict_handling` mode that skipped or merged the write is reflected
-    /// automatically.
-    ///
-    /// Reads through [`DirGraph::read_indexed`] and applies the same
-    /// incomplete-tuple exemption [`Self::build_unique_index`] does — here via
-    /// [`Self::unique_claims`], there via `read_complete_tuple` — so a folded
-    /// occupancy and a rebuilt one cannot disagree about which tuple a node holds.
-    pub(crate) fn stored_unique_claims(
-        &mut self,
-        node_type: &str,
-        node_idx: NodeIndex,
-    ) -> Vec<UniqueClaim> {
-        let properties: Vec<String> = {
-            let mut names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-            for (nt, tuple) in self.unique_indices.keys() {
-                if nt == node_type {
-                    names.extend(tuple.iter().map(String::as_str));
-                }
-            }
-            names.into_iter().map(str::to_string).collect()
-        };
-        if properties.is_empty() {
-            return Vec::new();
-        }
-        let values: HashMap<String, Option<Value>> = properties
-            .into_iter()
-            .map(|property| {
-                let reader = self.property_reader(node_type, &property);
-                let value = self.read_indexed(&reader, node_idx);
-                (property, value)
-            })
-            .collect();
-        self.unique_claims(node_type, |property| {
-            values.get(property).cloned().flatten()
-        })
+        self.declared_unique_keys()
+            .iter()
+            .any(|(nt, _)| nt == node_type)
     }
 
     /// Whether `(node_type, properties)` is declared UNIQUE. Property order is
@@ -148,27 +110,21 @@ impl DirGraph {
         self.find_unique_key(node_type, properties).is_some()
     }
 
-    /// Every declared unique constraint, as `(node_type, properties)`, sorted —
-    /// `unique_indices` is a `HashMap`, so an unsorted listing would vary
-    /// between runs. Backs `SHOW CONSTRAINTS`.
+    /// Every declared unique constraint, as `(node_type, properties)`, sorted so
+    /// the listing does not vary between runs. Backs `SHOW CONSTRAINTS`.
     ///
     /// **A listing, never a predicate** — the same rule as
     /// [`DirGraph::list_indexes_with_state`], and the reason this is the only
-    /// constraint reader that may touch `unique_constraint_keys`. A deferred
-    /// load's constraints are listed from that declaration list, and carry no
-    /// state marker because there is nothing to mark: enforcement is
-    /// materialized before any write reaches it
-    /// (`DirGraph::indexes_deferred`), and the eager path's load-time
-    /// verification is discarded rather than reported, so the two loads are
-    /// observably identical here. [`Self::has_unique_constraint`] and
-    /// [`Self::has_unique_constraints`] stay on the maps.
+    /// constraint reader that may look past a deferred load. A deferred load's
+    /// constraints are listed from the declaration list and carry no state
+    /// marker because there is nothing to mark: enforcement is materialized
+    /// before any write reaches it (`DirGraph::indexes_deferred`), so the two
+    /// loads are observably identical here. [`Self::has_unique_constraint`] and
+    /// [`Self::has_unique_constraints`] answer from the built state.
     pub fn list_unique_constraints(&self) -> Vec<UniqueConstraintKey> {
-        let mut all: Vec<UniqueConstraintKey> = if self.indexes_deferred {
-            self.unique_constraint_keys.clone()
-        } else {
-            self.unique_indices.keys().cloned().collect()
-        };
+        let mut all = self.unique_constraint_keys.clone();
         all.sort();
+        all.dedup();
         all
     }
 
@@ -180,18 +136,22 @@ impl DirGraph {
         properties: &[String],
     ) -> Option<&UniqueConstraintKey> {
         let wanted = normalize_properties(properties);
-        self.unique_indices
-            .keys()
+        self.declared_unique_keys()
+            .iter()
             .find(|(nt, props)| nt == node_type && normalize_properties(props) == wanted)
     }
 
-    /// Declare a UNIQUE constraint on `(node_type, properties)` and build its
-    /// index from live data. Returns the number of distinct tuples indexed.
+    /// Declare a UNIQUE constraint on `(node_type, properties)` and install the
+    /// index that enforces it. Returns the number of distinct tuples indexed.
     ///
     /// Fails with [`ConstraintViolation::preexisting`] when the existing data
     /// already contains a duplicate — declaring a constraint the data violates
     /// would otherwise install a constraint that silently lies about the rows
     /// already present. Nothing is installed on failure.
+    ///
+    /// A hash index the user already declared on the same property (or
+    /// composite) is adopted rather than duplicated, and survives a later
+    /// `DROP CONSTRAINT` ([`DirGraph::install_owned_index`]).
     ///
     /// Idempotent: re-declaring an existing constraint rebuilds it rather than
     /// erroring, so `CREATE CONSTRAINT ... IF NOT EXISTS` and a reload both work.
@@ -224,21 +184,21 @@ impl DirGraph {
         }
 
         let key: UniqueConstraintKey = (node_type.to_string(), owned.clone());
-        let (index, duplicates, sample) = self.build_unique_index(node_type, &owned);
-        if duplicates > 0 {
+        let scan = self.scan_unique_duplicates(node_type, &owned);
+        if scan.duplicates > 0 {
             return Err(Box::new(ConstraintViolation::preexisting(
                 self.unique_kind_for(node_type, &owned),
                 node_type,
                 owned,
-                duplicates,
-                sample,
+                scan.duplicates,
+                scan.sample,
             )));
         }
 
-        let count = index.len();
-        self.unique_indices.insert(key.clone(), index);
+        let adopt_existing = self.owned_slot_is_built(&key);
+        self.install_owned_index(&key, adopt_existing);
         self.unique_constraint_keys.push(key);
-        Ok(count)
+        Ok(scan.distinct)
     }
 
     /// Declare a UNIQUE constraint through DDL, recording that it came from
@@ -247,8 +207,8 @@ impl DirGraph {
     /// The DDL entry point for [`Self::create_unique_constraint`]: same
     /// installation, plus the provenance a later `define_schema` reads before
     /// withdrawing anything ([`Self::withdraw_schema_unique`]). A schema install
-    /// on the same tuple shares the one index this builds, so without the record
-    /// withdrawing the schema's half withdrew the DDL declaration with it.
+    /// on the same tuple shares the one declaration this makes, so without the
+    /// record withdrawing the schema's half withdrew the DDL declaration with it.
     ///
     /// Nothing is recorded when the declaration is refused, so a rejected
     /// statement leaves no provenance behind.
@@ -276,12 +236,12 @@ impl DirGraph {
 
     /// Withdraw the uniqueness a *schema* declared on `(node_type, properties)`.
     ///
-    /// Keeps the index when a DDL declaration also backs the tuple: the two
-    /// declarations share one entry in `unique_indices`, so dropping it here
-    /// would withdraw a `CREATE CONSTRAINT` the schema call never mentioned —
-    /// enforcement disappearing without a statement asking for it, which is the
-    /// failure this whole module is arranged to prevent. Reports whether the
-    /// index was removed.
+    /// Keeps the constraint when a DDL declaration also backs the tuple: the
+    /// two declarations share one entry in `unique_constraint_keys`, so
+    /// dropping it here would withdraw a `CREATE CONSTRAINT` the schema call
+    /// never mentioned — enforcement disappearing without a statement asking
+    /// for it, which is the failure this whole module is arranged to prevent.
+    /// Reports whether the constraint was removed.
     pub(crate) fn withdraw_schema_unique(
         &mut self,
         node_type: &str,
@@ -320,9 +280,9 @@ impl DirGraph {
         }
     }
 
-    /// Forget a declaration in both the live index and the persisted key list.
+    /// Forget a declaration, and release the index it owned.
     fn remove_unique_declaration(&mut self, key: &UniqueConstraintKey) {
-        self.unique_indices.remove(key);
+        self.release_owned_index(key);
         self.unique_constraint_keys.retain(|stored| stored != key);
     }
 
@@ -336,8 +296,8 @@ impl DirGraph {
         // rebuild's own `create_*` calls see a non-deferred graph.
         self.materialize_indexes();
         let keys: Vec<UniqueConstraintKey> = self
-            .unique_indices
-            .keys()
+            .unique_constraint_keys
+            .iter()
             .filter(|(nt, _)| nt == node_type)
             .cloned()
             .collect();
@@ -345,7 +305,7 @@ impl DirGraph {
             self.remove_unique_declaration(key);
             // The DDL provenance goes with the type: a later type of the same
             // name must not inherit a declaration whose index is gone, which
-            // would make `withdraw_schema_unique` retain an index nothing
+            // would make `withdraw_schema_unique` retain a constraint nothing
             // declared any more.
             self.ddl_unique_constraints
                 .remove(&(key.0.clone(), normalize_properties(&key.1)));
@@ -379,24 +339,24 @@ impl DirGraph {
         ConstraintKind::Unique
     }
 
-    /// Scan `node_type` and build the single-occupant map for `properties`.
-    /// Returns `(index, duplicate_tuple_count, first_duplicate_sample)`.
+    /// Scan `node_type` for tuples of `properties` held by more than one node.
     ///
-    /// First occupant wins a contested tuple, so the returned index is always
-    /// internally consistent even when the data is not — that is what lets the
-    /// load path stay non-fatal (see
-    /// [`Self::rebuild_unique_indices_from_keys`]).
-    pub(super) fn build_unique_index(
+    /// Transient: the set of seen tuples is dropped on return. The owned index
+    /// is built separately ([`DirGraph::install_owned_index`]) and holds *every*
+    /// holder of a contested tuple, so the duplicate count lives here rather
+    /// than in a bucket length — a bucket on a `name` property also carries the
+    /// title-filed nodes a constraint ignores.
+    pub(super) fn scan_unique_duplicates(
         &mut self,
         node_type: &str,
         properties: &[String],
-    ) -> (HashMap<CompositeValue, NodeIndex>, usize, Vec<Value>) {
+    ) -> UniqueScan {
         let readers: Vec<PropertyReader> = properties
             .iter()
             .map(|property| self.property_reader(node_type, property))
             .collect();
 
-        let mut index: HashMap<CompositeValue, NodeIndex> = HashMap::new();
+        let mut seen: HashSet<CompositeValue> = HashSet::new();
         let mut duplicates = 0usize;
         let mut sample: Vec<Value> = Vec::new();
 
@@ -407,18 +367,22 @@ impl DirGraph {
                     continue;
                 };
                 let composite = CompositeValue(values);
-                if let Some(_occupant) = index.get(&composite) {
+                if seen.contains(&composite) {
                     duplicates += 1;
                     if sample.is_empty() {
                         sample = composite.0.clone();
                     }
                     continue;
                 }
-                index.insert(composite, idx);
+                seen.insert(composite);
             }
         }
 
-        (index, duplicates, sample)
+        UniqueScan {
+            distinct: seen.len(),
+            duplicates,
+            sample,
+        }
     }
 
     /// Read every property of a constraint tuple off one node, returning `None`
@@ -453,10 +417,10 @@ impl DirGraph {
     where
         F: Fn(&str) -> Option<Value>,
     {
-        // Enforcement reads `unique_indices`, so a deferred graph would report
-        // no claims and admit a duplicate. Every write route materializes
-        // first (`DirGraph::indexes_deferred`); this is the tripwire for one
-        // that does not.
+        // Enforcement probes the owned indexes, so a deferred graph would
+        // report no claims and admit a duplicate. Every write route
+        // materializes first (`DirGraph::indexes_deferred`); this is the
+        // tripwire for one that does not.
         debug_assert!(
             !self.indexes_deferred,
             "unique-constraint enforcement on a graph with unmaterialized \
@@ -466,7 +430,7 @@ impl DirGraph {
             return Vec::new();
         }
         let mut claims = Vec::new();
-        for key in self.unique_indices.keys() {
+        for key in &self.unique_constraint_keys {
             if key.0 != node_type {
                 continue;
             }
@@ -501,11 +465,8 @@ impl DirGraph {
         holder: Option<NodeIndex>,
     ) -> ConstraintResult<()> {
         for claim in claims {
-            let Some(index) = self.unique_indices.get(&claim.key) else {
-                continue;
-            };
-            match index.get(&claim.value) {
-                Some(occupant) if Some(*occupant) != holder => {
+            match self.unique_occupant(&claim.key, &claim.value) {
+                Some(occupant) if Some(occupant) != holder => {
                     return Err(Box::new(ConstraintViolation::duplicate(
                         self.unique_kind_for(&claim.key.0, &claim.key.1),
                         claim.key.0.clone(),
@@ -519,84 +480,40 @@ impl DirGraph {
         Ok(())
     }
 
-    /// Record `node_idx` as the occupant of each claimed tuple. Call **after**
-    /// the node exists and [`Self::check_unique_claims`] passed.
-    pub(crate) fn commit_unique_claims(&mut self, claims: &[UniqueClaim], node_idx: NodeIndex) {
-        for claim in claims {
-            if let Some(index) = self.unique_indices.get_mut(&claim.key) {
-                index.insert(claim.value.clone(), node_idx);
-            }
-        }
-    }
-
-    /// Give up `node_idx`'s occupancy of each claimed tuple — the old-value half
-    /// of a SET, so the vacated tuple becomes available again. Only removes an
-    /// entry this node actually holds.
-    pub(crate) fn release_unique_claims(&mut self, claims: &[UniqueClaim], node_idx: NodeIndex) {
-        for claim in claims {
-            if let Some(index) = self.unique_indices.get_mut(&claim.key) {
-                if index.get(&claim.value) == Some(&node_idx) {
-                    index.remove(&claim.value);
-                }
-            }
-        }
-    }
-
-    /// Evict deleted nodes from every unique index of `node_type`. Without this
-    /// a deleted node keeps its tuple reserved forever and a legitimate re-insert
-    /// of the same value would be rejected.
-    ///
-    /// O(distinct tuples) per constraint, matching the shape the delete path
-    /// already uses for the property and composite indexes.
-    pub(crate) fn evict_unique_claims_for_nodes<S: std::hash::BuildHasher>(
-        &mut self,
-        node_type: &str,
-        deleted: &HashSet<NodeIndex, S>,
-    ) {
-        if !self.has_unique_constraints() {
-            return;
-        }
-        for (key, index) in self.unique_indices.iter_mut() {
-            if key.0 != node_type {
-                continue;
-            }
-            index.retain(|_, occupant| !deleted.contains(occupant));
-        }
-    }
-
-    /// What a property write must do to the unique indexes once it has been
-    /// applied: give up the tuples the node used to occupy, take the tuples it
-    /// now occupies.
-    ///
-    /// Empty on both sides when the type declares no unique constraint, which is
-    /// the common case.
+    /// Check a property write against the declared UNIQUE / NOT NULL / type
+    /// gates *before* it lands, so a violation returns without mutating
+    /// storage. The owned indexes move with the write through the incremental
+    /// maintenance every user index gets, so there is nothing to redeem after.
     ///
     /// A rejection is *also* parked on the graph by
     /// [`DirGraph::record_constraint_violation`], so callers whose error channel
     /// is a `String` (the Cypher `SET` / `REMOVE` tree) still surface a typed
     /// `ConstraintViolationError`. Recording here rather than at each call site
     /// keeps the violation attached to the code that produced it.
-    pub(crate) fn plan_property_write(
+    ///
+    /// Returns the unique tuples the node will hold once the write lands, for a
+    /// caller that has to compare them with the rest of its batch.
+    pub(crate) fn check_property_write(
         &mut self,
         node_type: &str,
         node_idx: NodeIndex,
         property: &str,
         new_value: Option<&Value>,
-    ) -> ConstraintResult<PropertyWritePlan> {
-        let planned = self.plan_property_write_uncaught(node_type, node_idx, property, new_value);
-        if let Err(violation) = &planned {
+    ) -> ConstraintResult<Vec<UniqueClaim>> {
+        let checked = self.check_property_write_uncaught(node_type, node_idx, property, new_value);
+        if let Err(violation) = &checked {
             self.record_constraint_violation(violation.as_ref().clone());
         }
-        planned
+        checked
     }
 
-    fn plan_property_write_uncaught(
+    fn check_property_write_uncaught(
         &mut self,
         node_type: &str,
         node_idx: NodeIndex,
         property: &str,
         new_value: Option<&Value>,
-    ) -> ConstraintResult<PropertyWritePlan> {
+    ) -> ConstraintResult<Vec<UniqueClaim>> {
         // A declared property type is a pure predicate on the incoming value:
         // no read-back, no claim bookkeeping, nothing to redeem afterwards. It
         // is checked *before* the uniqueness early-out below because that
@@ -614,24 +531,23 @@ impl DirGraph {
 
         let constrained = self.constrained_properties(node_type);
         if constrained.is_empty() {
-            return Ok(PropertyWritePlan::default());
+            return Ok(Vec::new());
         }
 
         // One read pass over every property any constraint on this type cares
         // about, so the composite tuples can be rebuilt without re-reading.
-        let mut before: HashMap<String, Value> = HashMap::with_capacity(constrained.len());
+        let mut after: HashMap<String, Value> = HashMap::with_capacity(constrained.len());
         for name in &constrained {
             let reader = self.property_reader(node_type, name);
             if let Some(value) = self.read_indexed(&reader, node_idx) {
                 if !matches!(value, Value::Null) {
-                    before.insert(name.clone(), value);
+                    after.insert(name.clone(), value);
                 }
             }
         }
 
         // The same map with this write applied — `None` models REMOVE and a SET
         // to null identically, since a constraint treats absent and null alike.
-        let mut after = before.clone();
         match new_value {
             Some(Value::Null) | None => {
                 after.remove(property);
@@ -646,21 +562,18 @@ impl DirGraph {
         // present beforehand.
         self.check_required_fields(node_type, |name| after.get(name).cloned())?;
 
-        let release = self.unique_claims(node_type, |name| before.get(name).cloned());
-        let claim = self.unique_claims(node_type, |name| after.get(name).cloned());
-        self.check_unique_claims(&claim, Some(node_idx))?;
-        Ok(PropertyWritePlan { release, claim })
+        let claims = self.unique_claims(node_type, |name| after.get(name).cloned());
+        self.check_unique_claims(&claims, Some(node_idx))?;
+        Ok(claims)
     }
 
     /// Every property name any declared constraint on `node_type` reads —
     /// unique tuples plus required fields, deduplicated.
     fn constrained_properties(&self, node_type: &str) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
-        if self.has_unique_constraints() {
-            for (nt, properties) in self.unique_indices.keys() {
-                if nt == node_type {
-                    names.extend(properties.iter().cloned());
-                }
+        for (nt, properties) in self.declared_unique_keys() {
+            if nt == node_type {
+                names.extend(properties.iter().cloned());
             }
         }
         names.extend(
@@ -676,16 +589,6 @@ impl DirGraph {
         names.sort();
         names.dedup();
         names
-    }
-
-    /// Apply a plan's index bookkeeping after the write landed.
-    pub(crate) fn apply_property_write_plan(
-        &mut self,
-        plan: &PropertyWritePlan,
-        node_idx: NodeIndex,
-    ) {
-        self.release_unique_claims(&plan.release, node_idx);
-        self.commit_unique_claims(&plan.claim, node_idx);
     }
 
     /// The violation a second claim on `claim` raises, for a caller that detects
@@ -1009,7 +912,7 @@ impl DirGraph {
     // ── Property type ──
     //
     // The declaration store (`ddl_property_type_constraints`) *is* the
-    // constraint, the way `unique_indices` is for uniqueness: there is no
+    // constraint, the way `unique_constraint_keys` is for uniqueness: there is no
     // second copy inside the schema, so no schema install can withdraw one and
     // no `reapply_*` pass is needed to put it back.
     //
@@ -1361,70 +1264,26 @@ impl DirGraph {
 
     // ── Load-time rebuild ──
 
-    /// Rebuild every persisted unique constraint from live data. Returns the
-    /// violations found in the loaded data, if any.
+    /// Re-install the owned index of every persisted unique constraint, from
+    /// live data.
     ///
-    /// **Deliberately non-fatal.** A `.kgl` file must always open: refusing to
-    /// load a graph because its data violates a constraint would strand the
-    /// user's data behind the very tool they need to fix it. So a contested
-    /// tuple keeps its first occupant, the constraint stays declared and live
-    /// for all *subsequent* writes, and the duplicates are returned for the
-    /// caller to surface. A violating file can only come from a write path that
-    /// predates enforcement or one that bypasses it (the RDF loaders), not from
-    /// a normal write.
-    pub(crate) fn rebuild_unique_indices_from_keys(&mut self) -> Vec<ConstraintViolation> {
-        let keys: Vec<UniqueConstraintKey> = std::mem::take(&mut self.unique_constraint_keys);
-        let mut violations = Vec::new();
+    /// **Deliberately non-fatal and silent.** A `.kgl` file must always open:
+    /// refusing to load a graph because its data violates a constraint would
+    /// strand the user's data behind the very tool they need to fix it. The
+    /// constraint stays declared and live for all *subsequent* writes; a
+    /// violating file can only come from a write path that predates enforcement
+    /// or one that bypasses it (the RDF loaders), not from a normal write.
+    /// [`Self::verify_unique_constraints`] audits on demand.
+    ///
+    /// An index the file lists in `property_index_keys` / `composite_index_keys`
+    /// was declared by the user and is adopted; one it does not list is rebuilt
+    /// here as owned-only, which is how a file written before constraints owned
+    /// an index opens.
+    pub(crate) fn rebuild_unique_indices_from_keys(&mut self) {
+        let keys = self.unique_constraint_keys.clone();
         for key in &keys {
-            let (index, duplicates, sample) = self.build_unique_index(&key.0, &key.1);
-            if duplicates > 0 {
-                violations.push(ConstraintViolation::preexisting(
-                    self.unique_kind_for(&key.0, &key.1),
-                    key.0.clone(),
-                    key.1.clone(),
-                    duplicates,
-                    sample,
-                ));
-            }
-            self.unique_indices.insert(key.clone(), index);
-        }
-        self.unique_constraint_keys = keys;
-        violations
-    }
-
-    pub(super) fn rebuild_all_unique_indices(&mut self) {
-        let node_types = self
-            .unique_indices
-            .keys()
-            .map(|(node_type, _)| node_type.clone())
-            .collect();
-        self.rebuild_unique_indices_for_types(&node_types);
-    }
-
-    /// Recompute the unique-occupancy maps of every declared constraint on
-    /// `node_types`, from live data.
-    ///
-    /// Reindex repairs physical occupants after vacuum relocates nodes. A
-    /// statement rollback also needs this: it restores data while leaving the
-    /// failed statement's occupancy parked in place, causing phantom or missing
-    /// claims unless the touched types are rebuilt.
-    ///
-    /// Untouched types cost nothing and an unconstrained graph returns
-    /// immediately. Duplicates are not reported here: maintenance preserves
-    /// already accepted data, including violations surfaced by the load path.
-    pub(super) fn rebuild_unique_indices_for_types(&mut self, node_types: &HashSet<String>) {
-        if node_types.is_empty() || self.unique_indices.is_empty() {
-            return;
-        }
-        let keys: Vec<UniqueConstraintKey> = self
-            .unique_indices
-            .keys()
-            .filter(|(node_type, _)| node_types.contains(node_type))
-            .cloned()
-            .collect();
-        for key in keys {
-            let (index, _duplicates, _sample) = self.build_unique_index(&key.0, &key.1);
-            self.unique_indices.insert(key, index);
+            let user_declared = self.persisted_lists_name_slot(key);
+            self.install_owned_index(key, user_declared);
         }
     }
 
@@ -1437,22 +1296,32 @@ impl DirGraph {
         // Re-entrant-safe: the flag is cleared before the rebuild, so the
         // rebuild's own `create_*` calls see a non-deferred graph.
         self.materialize_indexes();
-        let keys: Vec<UniqueConstraintKey> = self.unique_indices.keys().cloned().collect();
+        let keys: Vec<UniqueConstraintKey> = self.unique_constraint_keys.clone();
         let mut violations = Vec::new();
         for key in &keys {
-            let (_, duplicates, sample) = self.build_unique_index(&key.0, &key.1);
-            if duplicates > 0 {
+            let scan = self.scan_unique_duplicates(&key.0, &key.1);
+            if scan.duplicates > 0 {
                 violations.push(ConstraintViolation::preexisting(
                     self.unique_kind_for(&key.0, &key.1),
                     key.0.clone(),
                     key.1.clone(),
-                    duplicates,
-                    sample,
+                    scan.duplicates,
+                    scan.sample,
                 ));
             }
         }
         violations
     }
+}
+
+/// What [`DirGraph::scan_unique_duplicates`] found in one type's data.
+pub(super) struct UniqueScan {
+    /// Distinct complete tuples.
+    pub(super) distinct: usize,
+    /// Tuples seen beyond their first holder.
+    pub(super) duplicates: usize,
+    /// The first duplicated tuple, for the error message.
+    pub(super) sample: Vec<Value>,
 }
 
 #[cfg(test)]

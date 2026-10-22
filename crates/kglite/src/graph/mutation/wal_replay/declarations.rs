@@ -685,11 +685,15 @@ fn install_index(
             graph.drop_range_index(node_type, first);
         }
         (PropertyIndexKind::Composite, true) => {
-            let refs: Vec<&str> = properties.iter().map(String::as_str).collect();
-            graph.create_composite_index(node_type, &refs);
+            // A composite constraint's owned index already answers the
+            // declaration; adopting it is what the original call did.
+            if !graph.adopt_owned_slot(node_type, properties) {
+                let refs: Vec<&str> = properties.iter().map(String::as_str).collect();
+                graph.create_composite_index(node_type, &refs);
+            }
         }
         (PropertyIndexKind::Composite, false) => {
-            graph.drop_composite_index(node_type, properties);
+            graph.drop_composite_index(node_type, properties)?;
         }
     }
     Ok(())

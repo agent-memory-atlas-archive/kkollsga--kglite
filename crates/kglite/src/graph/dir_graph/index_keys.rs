@@ -1,7 +1,9 @@
 //! Persisting and restoring `DirGraph`'s declared indexes.
 //!
 //! The live index stores are `#[serde(skip)]`, so a save snapshots their keys
-//! into the four declaration lists and a load replays them. Split out of
+//! into the declaration lists and a load replays them. Indexes a constraint
+//! owns are not in the user lists: the file derives them from
+//! `unique_constraint_keys` (`dir_graph::owned_index`). Split out of
 //! `dir_graph/mod.rs` for the production-source line ceiling; the stores
 //! themselves live in `dir_graph::indexes` and `dir_graph::constraints`.
 //!
@@ -42,13 +44,13 @@ impl DirGraph {
         if self.indexes_deferred {
             return;
         }
-        self.property_index_keys = sorted_keys(&self.property_indices);
-        self.composite_index_keys = sorted_keys(&self.composite_indices);
+        self.property_index_keys = self.user_property_index_keys();
+        self.composite_index_keys = self.user_composite_index_keys();
         self.range_index_keys = sorted_keys(&self.range_indices);
-        // Declared UNIQUE constraints persist the same way. `unique_indices`
-        // keys *are* the declaration list, so snapshotting them keeps the two
-        // from drifting when a constraint is dropped.
-        self.unique_constraint_keys = sorted_keys(&self.unique_indices);
+        // The declared UNIQUE constraints are the live list; only its order
+        // is imposed here.
+        self.unique_constraint_keys.sort_unstable();
+        self.unique_constraint_keys.dedup();
         // Constraint *names* cannot be re-derived from the enforcement
         // structures, so unlike the lists above they are maintained live. Prune
         // instead: a name whose declaration is gone must not be saved, or
@@ -61,20 +63,24 @@ impl DirGraph {
     /// a mutation would force.
     pub(crate) fn index_keys_stale(&self) -> bool {
         !self.indexes_deferred
-            && (self.property_index_keys != sorted_keys(&self.property_indices)
-                || self.composite_index_keys != sorted_keys(&self.composite_indices)
+            && (self.property_index_keys != self.user_property_index_keys()
+                || self.composite_index_keys != self.user_composite_index_keys()
                 || self.range_index_keys != sorted_keys(&self.range_indices)
-                || self.unique_constraint_keys != sorted_keys(&self.unique_indices)
+                || !self
+                    .unique_constraint_keys
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
                 || self.has_undeclared_constraint_names())
     }
 
     /// Rebuild property, composite and range indexes from the persisted key
     /// lists. Called automatically after load.
     ///
-    /// Unique constraints are rebuilt too. Any violation the loaded data already
-    /// contains is discarded here rather than failing the load — see
-    /// [`Self::rebuild_unique_indices_from_keys`] for why a `.kgl` must always
-    /// open, and use [`Self::verify_unique_constraints`] to audit on demand.
+    /// The indexes unique constraints own are installed last, adopting any the
+    /// lists already named. A violation the loaded data already contains does
+    /// not fail the load — see [`Self::rebuild_unique_indices_from_keys`] for
+    /// why a `.kgl` must always open, and use [`Self::verify_unique_constraints`]
+    /// to audit on demand.
     pub fn rebuild_indices_from_keys(&mut self) {
         let prop_keys: Vec<IndexKey> = std::mem::take(&mut self.property_index_keys);
         for (node_type, property) in &prop_keys {
@@ -99,7 +105,7 @@ impl DirGraph {
         }
         self.range_index_keys = range_keys;
 
-        let _preexisting_violations = self.rebuild_unique_indices_from_keys();
+        self.rebuild_unique_indices_from_keys();
     }
 
     /// Record the declared indexes without building them: the deferred
@@ -111,11 +117,9 @@ impl DirGraph {
     /// property names, and every list is stored sorted — so a deferred load
     /// followed by a save writes the same bytes as an eager one.
     ///
-    /// The load-time unique-constraint *verification* is dropped with the
-    /// rebuild, and that is observable nowhere: its violations are returned to
-    /// `rebuild_indices_from_keys`, which discards them, and `build_unique_index`
-    /// has no other effect. Enforcement is unaffected — the first write
-    /// materializes.
+    /// The load path never reported a constraint violation in the loaded data,
+    /// so deferring the rebuild drops nothing observable. Enforcement is
+    /// unaffected — the first write materializes.
     pub(crate) fn defer_index_rebuild_from_keys(&mut self) {
         self.property_index_keys.sort_unstable();
         self.property_index_keys.dedup();

@@ -1029,6 +1029,7 @@ jobs:
             tests/test_mixed_kind_column_save_parity.py \
             tests/test_temporal_bound_coercion.py \
             tests/test_index_listing_parity.py \
+            tests/test_unique_owned_index.py \
             tests/test_timestamp_column_parity.py \
             tests/test_time_of_day_values.py \
             tests/test_zoned_datetime_values.py \

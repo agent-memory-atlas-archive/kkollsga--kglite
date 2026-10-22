@@ -8029,6 +8029,11 @@ class KnowledgeGraph:
         ``created`` is then ``False``. It is ``True`` only when this call made
         a new index.
 
+        A UNIQUE or NODE KEY constraint on the same property already owns an
+        equivalent index. Naming it here adopts it instead of building a second
+        one: it becomes yours, ``created`` is ``False``, and it survives a later
+        ``DROP CONSTRAINT``.
+
         ``serves_lookups`` says whether queries will actually read what was
         built, and ``not_serving`` carries the reason when they will not.
         ``created=True`` only means an index now exists. The case worth knowing
@@ -8075,7 +8080,14 @@ class KnowledgeGraph:
         ...
 
     def drop_index(self, node_type: str, property: str) -> bool:
-        """Remove an index. Returns ``True`` if it existed."""
+        """Remove an index. Returns ``True`` if it existed.
+
+        Raises:
+            ValueError: If a UNIQUE or NODE KEY constraint owns the index. The
+                message names the constraint; ``DROP CONSTRAINT`` removes the
+                constraint together with an index it created, and leaves one
+                you declared yourself.
+        """
         ...
 
     def create_global_index(self, property: str) -> dict[str, Any]:
@@ -8256,7 +8268,12 @@ class KnowledgeGraph:
         ...
 
     def drop_composite_index(self, node_type: str, properties: list[str]) -> bool:
-        """Remove a composite index. Returns ``True`` if it existed."""
+        """Remove a composite index. Returns ``True`` if it existed.
+
+        Raises:
+            ValueError: If a composite UNIQUE or NODE KEY constraint owns the
+                index (see :meth:`drop_index`).
+        """
         ...
 
     def list_composite_indexes(self) -> list[dict[str, Any]]:

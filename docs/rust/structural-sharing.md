@@ -252,11 +252,17 @@ extension. It is therefore the whole remaining fork cost on an indexed graph:
 ~90 µs for an index over ~1,000 distinct values. The cost is **O(distinct
 values)**, so a range index over a high-cardinality property costs proportionally more.
 
-**`unique_indices`, `embeddings` and `timeseries_store` are not layered
-either.** `unique_indices` holds one entry per node of every constrained type;
-`embeddings` is linear in dimension: 6.9 ms at d=64 on 1M nodes, so ≈41 ms at
-d=384, and more once an HNSW index exists, whose `links` allocate per node per
-layer. A graph carrying those still pays them on every fork.
+**`embeddings` and `timeseries_store` are not layered either.** `embeddings` is
+linear in dimension: 6.9 ms at d=64 on 1M nodes, so ≈41 ms at d=384, and more
+once an HNSW index exists, whose `links` allocate per node per layer. A graph
+carrying those still pays them on every fork.
+
+**UNIQUE and NODE KEY constraints cost nothing at fork.** A constraint owns an
+entry in `property_indices` or `composite_indices` (`dir_graph/owned_index.rs`).
+Both are layered. A separate `unique_indices` map once held one deep-copied entry
+per node of every constrained type. It was the whole cost of a one-write
+transaction on a constrained graph: about 20 ns per constrained node at fork, and
+the same again to drop the old copy at commit.
 
 **`Mapped` forks through the same overlay** as `Memory` (`ForkBase::Mapped`), under the same `can_fork` precondition and with the same fold-back. The fold also drops the base's lazy type and property indexes, which a fold rewrites without the `GraphWrite` hooks that normally clear them. **`Disk` never forks this way**: it forks through remapped immutable bases and its own mutation overlay, and none of this applies.
 

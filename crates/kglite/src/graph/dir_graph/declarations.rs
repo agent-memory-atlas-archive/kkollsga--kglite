@@ -95,13 +95,19 @@ impl DirGraph {
     /// Declare a composite index; the rebuild-path split is the same one
     /// [`Self::declare_range_index`] documents.
     pub fn declare_composite_index(&mut self, node_type: &str, properties: &[&str]) -> usize {
-        let count = self.create_composite_index(node_type, properties);
-        self.note_index_declaration(
-            node_type,
-            properties.iter().map(|p| (*p).to_string()).collect(),
-            PropertyIndexKind::Composite,
-            true,
-        );
+        let declared: Vec<String> = properties.iter().map(|p| (*p).to_string()).collect();
+        // A composite constraint's owned index already answers this
+        // declaration: adopt it instead of building a second structure.
+        let count = if self.adopt_owned_slot(node_type, &declared) {
+            let mut sorted = declared.clone();
+            sorted.sort_unstable();
+            self.composite_indices
+                .get(&(node_type.to_string(), sorted))
+                .map_or(0, |index| index.len())
+        } else {
+            self.create_composite_index(node_type, properties)
+        };
+        self.note_index_declaration(node_type, declared, PropertyIndexKind::Composite, true);
         count
     }
 

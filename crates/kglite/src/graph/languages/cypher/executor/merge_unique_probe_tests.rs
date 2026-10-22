@@ -36,18 +36,30 @@ fn labelled_count(graph: &DirGraph, label: &str) -> usize {
     }
 }
 
+/// Empty every index (the constraint's owned ones are the only ones here),
+/// run `statement`, then put the indexes back as they were — so what the
+/// statement wrote is a node the constraint never saw.
+fn write_unseen_by_the_constraint(graph: &mut DirGraph, statement: &str) {
+    let saved_property = graph.property_indices.clone();
+    let saved_composite = graph.composite_indices.clone();
+    for index in graph.property_indices.values_mut() {
+        index.clear();
+    }
+    for index in graph.composite_indices.values_mut() {
+        index.clear();
+    }
+    write(graph, statement);
+    graph.property_indices = saved_property;
+    graph.composite_indices = saved_composite;
+}
+
 /// A `U` graph under `declare`, holding `base`, with `hidden` then created
-/// while the unique index is emptied, so the constraint never saw it.
+/// while the owned index is emptied, so the constraint never saw it.
 fn graph_with_hidden_duplicate(declare: &str, base: &str, hidden: &str) -> DirGraph {
     let mut graph = DirGraph::new();
     write(&mut graph, declare);
     write(&mut graph, base);
-    let saved = graph.unique_indices.clone();
-    for index in graph.unique_indices.values_mut() {
-        index.clear();
-    }
-    write(&mut graph, hidden);
-    graph.unique_indices = saved;
+    write_unseen_by_the_constraint(&mut graph, hidden);
     graph
 }
 
@@ -73,12 +85,7 @@ fn an_integer_unique_key_stops_at_its_occupant() {
         "CREATE CONSTRAINT FOR (n:U) REQUIRE n.k IS UNIQUE",
     );
     write(&mut graph, "CREATE (:U {k: 7})");
-    let saved = graph.unique_indices.clone();
-    for index in graph.unique_indices.values_mut() {
-        index.clear();
-    }
-    write(&mut graph, "CREATE (:U {k: 7})");
-    graph.unique_indices = saved;
+    write_unseen_by_the_constraint(&mut graph, "CREATE (:U {k: 7})");
     assert_eq!(
         count(&mut graph, "MERGE (n:U {k: 7}) RETURN count(n)"),
         Value::Int64(1)

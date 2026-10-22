@@ -440,8 +440,8 @@ def test_withdrawing_a_primary_key_leaves_an_overlapping_ddl_constraint():
     """The audit reproducer for the fifth instance of the failure mode.
 
     A DDL `IS UNIQUE` and a schema primary key on the *same* `(type, property)`
-    share one index in `unique_indices`. Withdrawing the key withdrew that index
-    — the whole declaration, not the key's share of it — so `cu` vanished from
+    share one declaration in `unique_constraint_keys`. Withdrawing the key withdrew
+    it — the whole declaration, not the key's share of it — so `cu` vanished from
     `SHOW CONSTRAINTS` and duplicates were admitted, while the user had never
     touched the `CREATE CONSTRAINT` statement that declared it.
     """

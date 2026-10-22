@@ -110,18 +110,14 @@ pub(crate) fn type_index_rebuilds() -> usize {
 ///
 /// The whole reason `add_nodes` can fold an update instead of rebuilding: the
 /// batch overwrites the values in place, so the old bucket a node has to vacate
-/// and the unique tuple it has to release are only knowable from a read taken
-/// before the write. One read pass serves both — the property indexes and the
-/// constraint occupancy — which is why they are captured together rather than
-/// by two independent passes over the same rows.
+/// is only knowable from a read taken before the write. The indexes a
+/// constraint owns are among the maintained ones, so the tuple a node held is
+/// vacated by the same move.
 pub(crate) struct UpdatedRowPreImage {
     pub(crate) node_idx: NodeIndex,
     /// Old value of each [`DirGraph::maintained_index_properties`] entry.
     /// `None` where the node carried no value for it.
     indexed: Vec<(String, Option<Value>)>,
-    /// The unique tuples the node occupied before the batch. Empty when the
-    /// type declares no unique constraint.
-    claims: Vec<super::constraints::UniqueClaim>,
 }
 
 /// One planned bucket move: what an updated node has to leave, and what it has
@@ -161,6 +157,19 @@ impl DirGraph {
     pub(crate) fn property_reader(&mut self, node_type: &str, property: &str) -> PropertyReader {
         let resolved = self.resolve_alias(node_type, property).to_string();
         let key = self.interner.get_or_intern(&resolved);
+        PropertyReader { resolved, key }
+    }
+
+    /// [`Self::property_reader`] for a caller holding `&self`: the key is the
+    /// same hash of the resolved name, without registering the string, which a
+    /// name that is already a stored property has been.
+    pub(crate) fn property_reader_readonly(
+        &self,
+        node_type: &str,
+        property: &str,
+    ) -> PropertyReader {
+        let resolved = self.resolve_alias(node_type, property).to_string();
+        let key = InternedKey::from_str(&resolved);
         PropertyReader { resolved, key }
     }
 
@@ -292,6 +301,17 @@ impl DirGraph {
                 .build_property_index(node_type, property)
                 .map_err(|error| error.to_string())?;
             (count, true)
+        } else if self.adopt_owned_slot(node_type, &[property.to_string()]) {
+            // The constraint's owned index already answers this declaration;
+            // the user's request makes it theirs too, so it outlives the
+            // constraint. No second structure, and no rebuild.
+            let key = (node_type.to_string(), property.to_string());
+            (
+                self.property_indices
+                    .get(&key)
+                    .map_or(0, |index| index.len()),
+                false,
+            )
         } else {
             (self.create_index(node_type, property), false)
         };
@@ -349,6 +369,7 @@ impl DirGraph {
         // Re-entrant-safe: the flag is cleared before the rebuild, so the
         // rebuild's own `create_*` calls see a non-deferred graph.
         self.materialize_indexes();
+        self.reject_owned_index_drop(node_type, &[property.to_string()])?;
         let removed = if let Some(disk) = self.graph.as_disk_mut() {
             disk.drop_property_index(node_type, property)
                 .map_err(|error| format!("persistent index removal failed: {error}"))?
@@ -648,18 +669,34 @@ impl DirGraph {
     /// keep doing so — see `DirGraph::indexes_deferred`.
     pub fn list_indexes_with_state(&self) -> Vec<(String, String, IndexState)> {
         if self.indexes_deferred {
-            return self
+            // The owned indexes are declared by the constraint list, not by
+            // `property_index_keys`; list them beside the user indexes so a
+            // deferred load shows the rows a built one will.
+            let owned = self.deferred_owned_slots().into_iter().filter_map(|slot| {
+                match <[String; 1]>::try_from(slot.1) {
+                    Ok([property]) => Some((slot.0, property)),
+                    Err(_) => None,
+                }
+            });
+            let mut listed: Vec<(String, String, IndexState)> = self
                 .property_index_keys
                 .iter()
-                .map(|(node_type, property)| {
-                    (node_type.clone(), property.clone(), IndexState::Deferred)
-                })
+                .cloned()
+                .chain(owned)
+                .map(|(node_type, property)| (node_type, property, IndexState::Deferred))
                 .collect();
+            listed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+            return listed;
         }
-        self.property_indices
+        // Sorted: the map's iteration order is reseeded per process, and a
+        // listing that reorders between runs cannot be compared or diffed.
+        let mut listed: Vec<(String, String, IndexState)> = self
+            .property_indices
             .keys()
             .map(|(node_type, property)| (node_type.clone(), property.clone(), IndexState::Ready))
-            .collect()
+            .collect();
+        listed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        listed
     }
 
     /// The persistent disk-backed equality bundles on this graph, as
@@ -959,14 +996,19 @@ impl DirGraph {
         (node_type.to_string(), sorted)
     }
 
-    /// Returns true if the composite index existed and was removed.
-    /// Property order is not significant.
-    pub fn drop_composite_index(&mut self, node_type: &str, properties: &[String]) -> bool {
+    /// Returns true if the composite index existed and was removed, and an
+    /// error when a constraint owns it. Property order is not significant.
+    pub fn drop_composite_index(
+        &mut self,
+        node_type: &str,
+        properties: &[String],
+    ) -> Result<bool, String> {
         // A deferred load's declared indexes must exist before this DDL reads
         // or edits the maps as authoritative (`DirGraph::indexes_deferred`).
         // Re-entrant-safe: the flag is cleared before the rebuild, so the
         // rebuild's own `create_*` calls see a non-deferred graph.
         self.materialize_indexes();
+        self.reject_owned_index_drop(node_type, properties)?;
         let key = Self::composite_key(node_type, properties);
         let removed = self.composite_indices.remove(&key).is_some();
         if removed {
@@ -977,7 +1019,7 @@ impl DirGraph {
                 false,
             );
         }
-        removed
+        Ok(removed)
     }
 
     /// Property order is not significant — both spellings name one index.
@@ -991,20 +1033,29 @@ impl DirGraph {
     /// [`Self::list_indexes_with_state`].
     pub fn list_composite_indexes_with_state(&self) -> Vec<(String, Vec<String>, IndexState)> {
         if self.indexes_deferred {
-            return self
+            let owned = self
+                .deferred_owned_slots()
+                .into_iter()
+                .filter(|slot| slot.1.len() > 1);
+            let mut listed: Vec<(String, Vec<String>, IndexState)> = self
                 .composite_index_keys
                 .iter()
-                .map(|(node_type, properties)| {
-                    (node_type.clone(), properties.clone(), IndexState::Deferred)
-                })
+                .cloned()
+                .chain(owned)
+                .map(|(node_type, properties)| (node_type, properties, IndexState::Deferred))
                 .collect();
+            listed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+            return listed;
         }
-        self.composite_indices
+        let mut listed: Vec<(String, Vec<String>, IndexState)> = self
+            .composite_indices
             .keys()
             .map(|(node_type, properties)| {
                 (node_type.clone(), properties.clone(), IndexState::Ready)
             })
-            .collect()
+            .collect();
+        listed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        listed
     }
 
     /// Property names come back in the canonical (sorted) order, not the order
@@ -1209,32 +1260,19 @@ impl DirGraph {
         for mv in &moves {
             self.apply_update_move(node_type, mv);
         }
-        if constrained {
-            // Vacate before claiming, so a tuple one row gives up is free for
-            // the row that takes it. `release_unique_claims` only removes a
-            // tuple this node still occupies, so a release can never strip a
-            // claim another row of the same batch just committed.
-            for pre in updated {
-                self.release_unique_claims(&pre.claims, pre.node_idx);
-            }
-            for node_idx in tail.iter().chain(updated.iter().map(|pre| &pre.node_idx)) {
-                let claims = self.stored_unique_claims(node_type, *node_idx);
-                self.commit_unique_claims(&claims, *node_idx);
-            }
-        }
         true
     }
 
-    /// Whether claiming `rows` nodes' unique tuples one at a time is cheaper
-    /// than re-deriving the type's occupancy from every member.
+    /// Whether filing `rows` nodes into a constrained type's owned indexes one
+    /// at a time is cheaper than re-deriving them from every member.
     ///
     /// The create arm's counterpart to [`Self::folding_moves_beats_a_rebuild`],
     /// and it matters for the *first* bulk load into a constrained type: every
-    /// row is a create, so a per-row claim would pay a reader, a map and a
-    /// tuple clone per node where `build_unique_index` pays one read. The
-    /// weight is the ratio between those two per-node costs, and the members
-    /// count already includes this batch's creates — so a first load, where
-    /// rows *are* the members, always takes the rebuild it took before.
+    /// row is a create, so a per-row fold would pay a reader, a key and a
+    /// bucket per node where the rebuild pays one read. The weight is the ratio
+    /// between those two per-node costs, and the members count already includes
+    /// this batch's creates — so a first load, where rows *are* the members,
+    /// always takes the rebuild.
     fn claiming_beats_a_rebuild(&self, node_type: &str, rows: usize) -> bool {
         /// Work to claim one node's tuples against re-deriving one member's.
         const CLAIM_ELEMENT_WEIGHT: usize = 5;
@@ -1389,8 +1427,7 @@ impl DirGraph {
     }
 
     /// Read everything a fold will need to *undo* about `node_idx` before the
-    /// batch overwrites it: the old value of each maintained property, and the
-    /// unique tuples the node currently occupies.
+    /// batch overwrites it: the old value of each maintained property.
     ///
     /// Called once per updated node, before the batch executes — after it, the
     /// old values no longer exist anywhere. `properties` is
@@ -1409,16 +1446,7 @@ impl DirGraph {
                 (property.clone(), value)
             })
             .collect();
-        let claims = if self.type_has_unique_constraints(node_type) {
-            self.stored_unique_claims(node_type, node_idx)
-        } else {
-            Vec::new()
-        };
-        UpdatedRowPreImage {
-            node_idx,
-            indexed,
-            claims,
-        }
+        UpdatedRowPreImage { node_idx, indexed }
     }
 
     /// Rebuild every in-memory secondary index that covers `node_type` from
@@ -1455,14 +1483,7 @@ impl DirGraph {
             .map(|(_, props)| props.clone())
             .collect();
 
-        let unique_keys: Vec<Vec<String>> = self
-            .unique_indices
-            .keys()
-            .filter(|(nt, _)| nt == node_type)
-            .map(|(_, props)| props.clone())
-            .collect();
-
-        let rebuilt = prop_keys.len() + range_keys.len() + comp_keys.len() + unique_keys.len();
+        let rebuilt = prop_keys.len() + range_keys.len() + comp_keys.len();
         for property in &prop_keys {
             self.create_index(node_type, property);
         }
@@ -1472,18 +1493,6 @@ impl DirGraph {
         for properties in &comp_keys {
             let refs: Vec<&str> = properties.iter().map(String::as_str).collect();
             self.create_composite_index(node_type, &refs);
-        }
-        // Unique-constraint occupancy is rebuilt from live data rather than
-        // maintained per row. The bulk path validates the whole batch *before*
-        // it writes anything (`mutation::maintain::add_nodes`), so by the time we
-        // get here the data is known conflict-free and a rebuild reproduces the
-        // correct occupancy — without threading per-node claims through the
-        // batch engine. Rebuilding is also what keeps a bulk *update* that moves
-        // a constrained value from stranding the vacated tuple.
-        for properties in &unique_keys {
-            let (index, _duplicates, _sample) = self.build_unique_index(node_type, properties);
-            let key = (node_type.to_string(), properties.clone());
-            self.unique_indices.insert(key, index);
         }
         rebuilt
     }
@@ -1667,7 +1676,7 @@ impl DirGraph {
     /// contents are the *resolved* field's values, so reading the node by the
     /// user-facing key files it under a value the matcher's scan can never
     /// produce — the phantom-row / poisoned-bucket divergence this replaced.
-    fn indexed_value(
+    pub(crate) fn indexed_value(
         &mut self,
         node_type: &str,
         property: &str,
@@ -1724,11 +1733,29 @@ impl DirGraph {
             return;
         }
         note_maintenance_pass();
-        for property in self.single_value_indexed_properties(node_type) {
-            let Some(value) = self.indexed_value(node_type, &property, node_idx) else {
+        // Each key once: a property carrying both a hash and a range index is
+        // filed into both below, so it must not be visited twice.
+        let mut keys: Vec<IndexKey> = self
+            .property_indices
+            .keys()
+            .filter(|(nt, _)| nt == node_type)
+            .cloned()
+            .collect();
+        keys.extend(
+            self.range_indices
+                .keys()
+                .filter(|(nt, property)| {
+                    nt == node_type
+                        && !self
+                            .property_indices
+                            .contains_key(&(nt.clone(), property.clone()))
+                })
+                .cloned(),
+        );
+        for key in keys {
+            let Some(value) = self.indexed_value(node_type, &key.1, node_idx) else {
                 continue;
             };
-            let key = (node_type.to_string(), property);
             self.note_property_append(&key, &value, node_idx);
             if let Some(value_map) = self.property_indices.get_mut(&key) {
                 value_map.entry_or_default(&value).push(node_idx);
@@ -1800,14 +1827,13 @@ impl DirGraph {
     /// pays a scan of the (small) key sets, which is still per write rather
     /// than per index bucket.
     ///
-    /// Unique constraints are deliberately **not** consulted: their occupancy
-    /// lives in `unique_indices`, is planned before the write and redeemed
-    /// after it (`constraints::plan_property_write` /
-    /// `apply_property_write_plan`), and is never touched by the updaters this
-    /// gates. Disk-backed persistent `PropertyIndex` stores are out of scope
-    /// for the same reason as in [`Self::refresh_indexes_for_type`] — they
-    /// never land in `property_indices`, so the updaters cannot see them
-    /// either.
+    /// The indexes UNIQUE / NODE KEY constraints own sit in the same maps, so
+    /// a constrained type answers `true` and its writes are filed by these
+    /// updaters; the constraint is *checked* before the write
+    /// (`constraints::check_property_write`) and needs nothing after it.
+    /// Disk-backed persistent `PropertyIndex` stores are out of scope for the
+    /// same reason as in [`Self::refresh_indexes_for_type`] — they never land
+    /// in `property_indices`, so the updaters cannot see them either.
     pub(crate) fn type_has_user_indexes(&self, node_type: &str) -> bool {
         // Every incremental updater gates on this. A deferred graph reaching
         // it means a write is about to be filed into indexes that were never
@@ -1862,7 +1888,12 @@ impl DirGraph {
             self.move_in_single_value_indexes(&key, old_value, &landed, node_idx);
         }
 
-        self.update_composite_indices_for_property_change(node_type, node_idx, property);
+        self.update_composite_indices_for_property_change(
+            node_type,
+            node_idx,
+            property,
+            Some(old_value),
+        );
     }
 
     /// Vacate `old` and join the `landed` bucket of the hash and range indices
@@ -1935,7 +1966,7 @@ impl DirGraph {
             }
         }
         if composite {
-            self.update_composite_indices_for_property_change(node_type, node_idx, "name");
+            self.update_composite_indices_for_property_change(node_type, node_idx, "name", None);
         }
     }
 
@@ -1956,11 +1987,58 @@ impl DirGraph {
             self.evict_from_single_value_indexes(&key, old_value, node_idx);
         }
 
-        self.update_composite_indices_for_property_change(node_type, node_idx, property);
+        self.update_composite_indices_for_property_change(
+            node_type,
+            node_idx,
+            property,
+            Some(Some(old_value)),
+        );
+    }
+
+    /// The composite bucket `node_idx` sat in before the write, when it can be
+    /// named without scanning the index: the tuple the node held, rebuilt from
+    /// its current values with the changed property's `old` value put back.
+    ///
+    /// **Verified, never trusted**: the bucket is returned only when it exists
+    /// and holds the node. A node sits in exactly one bucket of a composite
+    /// index, so a hit *is* the bucket a scan would find, and a miss (a hint
+    /// that was not the filed value, or a second property that changed with
+    /// the first) returns `None` so the caller scans.
+    fn composite_bucket_before_write(
+        &mut self,
+        key: &CompositeIndexKey,
+        node_idx: NodeIndex,
+        changed_field: &str,
+        old: Option<&Value>,
+    ) -> Option<CompositeValue> {
+        let node_type = key.0.as_str();
+        let mut tuple = Vec::with_capacity(key.1.len());
+        for property in &key.1 {
+            let value = if self.resolve_alias(node_type, property) == changed_field {
+                old.cloned()
+            } else {
+                self.indexed_value(node_type, property, node_idx)
+            };
+            tuple.push(value.unwrap_or(Value::Null));
+        }
+        if tuple.iter().all(|v| matches!(v, Value::Null)) {
+            return None;
+        }
+        let tuple = CompositeValue(tuple);
+        self.composite_indices
+            .get(key)?
+            .get(&tuple)?
+            .contains(&node_idx)
+            .then_some(tuple)
     }
 
     /// Re-index one node in every composite index covering the changed
     /// property.
+    ///
+    /// `old` is the changed property's value before the write — `Some(None)`
+    /// when it was absent — for a caller that has it; the node's old bucket is
+    /// then found by a point probe instead of a scan of the whole index
+    /// ([`Self::composite_bucket_before_write`]). `None` scans.
     ///
     /// Membership is decided by *field*, not spelling: a composite index
     /// registered under a type's title-alias spelling holds titles, so a write
@@ -1971,6 +2049,7 @@ impl DirGraph {
         node_type: &str,
         node_idx: NodeIndex,
         changed_property: &str,
+        old: Option<Option<&Value>>,
     ) {
         let changed_field = self.resolve_alias(node_type, changed_property);
         let comp_keys: Vec<CompositeIndexKey> = self
@@ -1989,16 +2068,21 @@ impl DirGraph {
             return;
         }
 
+        let changed_field = changed_field.to_string();
         for key in comp_keys {
             // The buckets this node currently sits in, read before vacating
             // any of them so each position can be journalled.
-            let occupied: Vec<CompositeValue> = match self.composite_indices.get(&key) {
-                Some(comp_map) => comp_map
+            let probed = old.and_then(|old| {
+                self.composite_bucket_before_write(&key, node_idx, &changed_field, old)
+            });
+            let occupied: Vec<CompositeValue> = match (probed, self.composite_indices.get(&key)) {
+                (Some(bucket), _) => vec![bucket],
+                (None, Some(comp_map)) => comp_map
                     .iter()
                     .filter(|(_, members)| members.contains(&node_idx))
                     .map(|(value, _)| value.clone())
                     .collect(),
-                None => continue,
+                (None, None) => continue,
             };
             for value in &occupied {
                 self.note_composite_eviction(&key, value, node_idx);

@@ -54,6 +54,8 @@ impl KnowledgeGraph {
     ///     True if index existed and was removed, False otherwise
     fn drop_index(&mut self, node_type: &str, property: &str) -> PyResult<bool> {
         self.logged_write(|g| {
+            g.reject_owned_index_drop(node_type, &[property.to_string()])
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
             g.drop_index(node_type, property)
                 .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
         })
@@ -380,7 +382,12 @@ impl KnowledgeGraph {
     /// Returns:
     ///     True if index existed and was dropped, False otherwise
     fn drop_composite_index(&mut self, node_type: &str, properties: Vec<String>) -> PyResult<bool> {
-        self.logged_write(|g| Ok(g.drop_composite_index(node_type, &properties)))
+        self.logged_write(|g| {
+            g.reject_owned_index_drop(node_type, &properties)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            g.drop_composite_index(node_type, &properties)
+                .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)
+        })
     }
 
     /// List all composite indexes in the graph.

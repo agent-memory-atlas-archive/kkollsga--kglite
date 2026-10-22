@@ -5233,7 +5233,7 @@ pub fn kglite::api::DirGraph::create_composite_index(&mut self, &str, &[&str]) -
 pub fn kglite::api::DirGraph::create_index(&mut self, &str, &str) -> usize
 pub fn kglite::api::DirGraph::create_property_index_routed(&mut self, &str, &str) -> core::result::Result<(usize, bool), alloc::string::String>
 pub fn kglite::api::DirGraph::create_range_index(&mut self, &str, &str) -> usize
-pub fn kglite::api::DirGraph::drop_composite_index(&mut self, &str, &[alloc::string::String]) -> bool
+pub fn kglite::api::DirGraph::drop_composite_index(&mut self, &str, &[alloc::string::String]) -> core::result::Result<bool, alloc::string::String>
 pub fn kglite::api::DirGraph::drop_index(&mut self, &str, &str) -> core::result::Result<bool, alloc::string::String>
 pub fn kglite::api::DirGraph::drop_range_index(&mut self, &str, &str) -> bool
 pub fn kglite::api::DirGraph::find_matching_composite_index(&self, &str, &[alloc::string::String]) -> core::option::Option<((alloc::string::String, alloc::vec::Vec<alloc::string::String>), bool)>
@@ -5301,6 +5301,8 @@ impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::insert_node_routed(&mut self, kglite::datatypes::values::Value, kglite::datatypes::values::Value, &str, std::collections::hash::map::HashMap<alloc::string::String, kglite::datatypes::values::Value>) -> petgraph::graph_impl::NodeIndex
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::judge_transaction_end(&mut self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, kglite::error::KgError>
+impl kglite::api::DirGraph
+pub fn kglite::api::DirGraph::reject_owned_index_drop(&self, &str, &[alloc::string::String]) -> core::result::Result<(), alloc::string::String>
 impl kglite::api::DirGraph
 pub fn kglite::api::DirGraph::set_valid_time_default(&mut self, kglite::api::temporal::ValidTimeDefault, bool)
 impl kglite::api::DirGraph

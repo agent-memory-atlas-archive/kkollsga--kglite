@@ -392,7 +392,14 @@ fn create_single_property_index(
     let wants_range = create.index_type == DdlIndexType::Range;
     // `has_any_index`, not `has_index`: on a disk graph the installed index is
     // the mmap-backed one, which the in-memory-only `has_index` cannot see.
-    let exists = graph.has_any_index(label, property);
+    //
+    // An index a constraint owns is the equality structure a plain `CREATE
+    // INDEX` asks for, so that statement is equivalent to it and is refused (or
+    // skipped under `IF NOT EXISTS`) like any duplicate. A `RANGE` index also
+    // wants the ordered structure the owned index lacks: it goes ahead, and
+    // the user's declaration adopts the equality half.
+    let exists = graph.has_any_index(label, property)
+        && !(wants_range && graph.index_is_owned_only(label, &[property.to_string()]));
     if exists && !create.if_not_exists {
         return Err(already_exists_message(&index_name(
             label,
@@ -585,7 +592,7 @@ fn drop_node_indexes(
                 graph, label, property,
             ));
         }
-        many => dropped += usize::from(graph.drop_composite_index(label, many)),
+        many => dropped += usize::from(graph.drop_composite_index(label, many)?),
     }
     Ok(dropped)
 }
@@ -1467,10 +1474,10 @@ fn unknown_constraint_message(graph: &DirGraph, name: &str) -> String {
 /// null for every other kind, as in Neo4j.
 ///
 /// `YIELD` also accepts Neo4j 5's `id`, `ownedIndex` and `options`, which
-/// `YIELD *` includes (see [`constraint_cell`]). KGLite keeps no such state (a
-/// unique constraint *is* its index rather than owning a separate one), so they
-/// are null. The registry entry of `db.constraints` spells out the full list.
-/// Documented in CYPHER.md.
+/// `YIELD *` includes (see [`constraint_cell`]). `ownedIndex` names the index a
+/// UNIQUE or NODE KEY constraint owns and is null for the other kinds; KGLite
+/// keeps no state for `id` and `options`, so they are null. The registry entry
+/// of `db.constraints` spells out the full list. Documented in CYPHER.md.
 pub(crate) const SHOW_CONSTRAINTS_COLUMNS: &[&str] = &[
     "name",
     "type",
@@ -1517,7 +1524,8 @@ pub(crate) fn constraint_cell(info: &ConstraintInfo, column: &str) -> Option<Val
             .property_type
             .map(|declared| Value::String(declared.name().to_string()))
             .unwrap_or(Value::Null),
-        "id" | "ownedIndex" | "options" => Value::Null,
+        "ownedIndex" => info.owned_index.clone().map_or(Value::Null, Value::String),
+        "id" | "options" => Value::Null,
         _ => return None,
     })
 }

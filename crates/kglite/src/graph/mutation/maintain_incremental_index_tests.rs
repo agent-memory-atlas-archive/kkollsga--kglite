@@ -604,31 +604,24 @@ fn an_upsert_folds_the_user_index_instead_of_rebuilding_it() {
 }
 
 /// **The mechanism pin for the constrained arm.** A type carrying a UNIQUE
-/// tuple must fold too — occupancy is now maintained, not re-derived.
+/// tuple must fold too — the owned index is maintained, not re-derived.
 #[test]
 fn a_constrained_batch_folds_its_claims_instead_of_rebuilding_them() {
     let mut graph = upsert_fixture(true);
     let key = ("Item".to_string(), vec!["code".to_string()]);
     let planted = NodeIndex::new(0);
+    let sentinel = Value::String("sentinel".to_string());
     graph
-        .unique_indices
-        .get_mut(&key)
-        .expect("the fixture declares the constraint")
-        .insert(
-            CompositeValue(vec![Value::String("sentinel".to_string())]),
-            planted,
-        );
+        .property_indices
+        .get_mut(&("Item".to_string(), "code".to_string()))
+        .expect("the constraint owns an index on `code`")
+        .entry_or_default(&sentinel)
+        .push(planted);
 
     upsert(&mut graph, &[(100, 1, "c100")]).unwrap();
 
     assert_eq!(
-        graph
-            .unique_indices
-            .get(&key)
-            .and_then(|occupants| {
-                occupants.get(&CompositeValue(vec![Value::String("sentinel".to_string())]))
-            })
-            .copied(),
+        graph.unique_occupant(&key, &CompositeValue(vec![sentinel])),
         Some(planted),
         "the constrained append re-derived occupancy instead of folding its claims"
     );
@@ -672,35 +665,11 @@ fn folded_upserts_hold_the_same_values_as_a_rebuild() {
         buckets
     };
     let folded = sorted(index_buckets(&graph));
-    let folded_claims: Vec<_> = {
-        let mut claims: Vec<_> = graph
-            .unique_indices
-            .iter()
-            .flat_map(|(key, occupants)| {
-                occupants
-                    .iter()
-                    .map(move |(value, idx)| (key.clone(), format!("{value:?}"), idx.index()))
-            })
-            .collect();
-        claims.sort();
-        claims
-    };
+    let folded_claims = graph.unique_occupancy();
 
     graph.refresh_indexes_for_type("Item");
     let rebuilt = sorted(index_buckets(&graph));
-    let rebuilt_claims: Vec<_> = {
-        let mut claims: Vec<_> = graph
-            .unique_indices
-            .iter()
-            .flat_map(|(key, occupants)| {
-                occupants
-                    .iter()
-                    .map(move |(value, idx)| (key.clone(), format!("{value:?}"), idx.index()))
-            })
-            .collect();
-        claims.sort();
-        claims
-    };
+    let rebuilt_claims = graph.unique_occupancy();
 
     assert!(!folded.is_empty(), "the fixture must have indexed buckets");
     assert_eq!(folded, rebuilt, "the fold and the rebuild disagree");
@@ -749,13 +718,10 @@ fn an_upsert_frees_the_unique_tuple_it_vacated() {
         .lookup_by_id_readonly("Item", &Value::Int64(30))
         .expect("the new row exists");
     assert_eq!(
-        graph
-            .unique_indices
-            .get(&("Item".to_string(), vec!["code".to_string()]))
-            .and_then(
-                |occupants| occupants.get(&CompositeValue(vec![Value::String("c3".to_string())]))
-            )
-            .copied(),
+        graph.unique_occupant(
+            &("Item".to_string(), vec!["code".to_string()]),
+            &CompositeValue(vec![Value::String("c3".to_string())])
+        ),
         Some(holder),
         "the freed tuple must be recorded against its new holder"
     );

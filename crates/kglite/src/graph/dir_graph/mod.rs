@@ -77,6 +77,7 @@ pub(crate) use labels::LabelCheck;
 pub mod node_remap;
 mod node_write;
 pub mod ontology_apply;
+mod owned_index;
 mod payloads;
 mod pending_violation;
 pub(crate) use pending_violation::PendingViolation;
@@ -160,9 +161,9 @@ pub struct DirGraph {
     #[serde(default)]
     pub range_index_keys: Vec<IndexKey>,
     /// `true` between a deferred load and the materialization that follows it:
-    /// the four declaration lists are populated but `property_indices`,
-    /// `composite_indices`, `range_indices` and `unique_indices` are still
-    /// empty ([`Self::defer_index_rebuild_from_keys`]).
+    /// the declaration lists are populated but `property_indices`,
+    /// `composite_indices` and `range_indices` — the indexes constraints own
+    /// included — are still empty ([`Self::defer_index_rebuild_from_keys`]).
     ///
     /// **The one invariant this state rests on: while it is set, every reader
     /// of those four maps sees exactly what it would see on a graph that
@@ -183,40 +184,47 @@ pub struct DirGraph {
     /// `DEFERRED` for the index kinds that have a state column). They answer a
     /// different question from the predicates and must never be wired into one.
     ///
-    /// Writes are the other half: `unique_claims` reads `unique_indices`, so a
-    /// deferred graph would admit duplicates. Every route to a `&mut DirGraph`
+    /// Writes are the other half: `unique_claims` probes the owned indexes, so
+    /// a deferred graph would admit duplicates. Every route to a `&mut DirGraph`
     /// that can write materializes first — `handle::make_dir_graph_mut`,
     /// `session::execute_mut`, direct mutation preparation, and each
     /// index/constraint DDL entry point — so
     /// the index is complete *before* the write it must record.
     #[serde(skip)]
     pub(crate) indexes_deferred: bool,
-    /// Declared UNIQUE constraints, as the enforcement structure itself:
-    /// (node_type, [properties]) -> tuple value -> the one node occupying it.
-    /// A single-occupant map (rather than the `Vec<NodeIndex>` the other index
-    /// kinds carry) *is* the constraint: an occupied slot is the violation.
-    /// Skipped during serialization — rebuilt from `unique_constraint_keys` on
-    /// load, which re-verifies the constraint as a side effect.
-    #[serde(skip)]
-    pub(crate) unique_indices: HashMap<UniqueConstraintKey, HashMap<CompositeValue, NodeIndex>>,
-    /// Persisted list of declared unique constraints so they survive
-    /// save/load. Additive serde field — older `.kgl` files load with an empty
-    /// list, i.e. no constraints, which is the pre-existing behaviour.
+    /// Declared UNIQUE / NODE KEY constraints as `(node_type, [properties])`.
+    ///
+    /// The live declaration list *and* the persisted one. A constraint has no
+    /// structure of its own: it owns an entry in `property_indices` (one
+    /// property) or `composite_indices` (several), both [`LayeredIndex`], so a
+    /// fork shares it and the undo journal reverses it ([`Self::owned_slot`],
+    /// `dir_graph::owned_index`). Older `.kgl` files load with an empty list,
+    /// i.e. no constraints.
     #[serde(default)]
     pub(crate) unique_constraint_keys: Vec<UniqueConstraintKey>,
+    /// Index slots a user declared *independently* of the constraint that
+    /// owns them: a hash index that existed when the constraint was declared
+    /// (adopted), or one the user asked for by name afterwards. Such an entry
+    /// survives `DROP CONSTRAINT` and is persisted in `property_index_keys` /
+    /// `composite_index_keys`; an owned-only entry is neither. Keyed by
+    /// [`Self::owned_slot`]'s identity. Derived at load from the persisted
+    /// index lists, so it needs no field of its own in the file.
+    #[serde(skip)]
+    pub(crate) adopted_index_slots: std::collections::HashSet<CompositeIndexKey>,
     /// Which declared unique constraints came from DDL
     /// (`CREATE CONSTRAINT ... IS UNIQUE` / `... IS NODE KEY`) rather than from
     /// a schema, with the property tuple normalised (sorted, deduped) so a
     /// re-spelling of the same constraint hits the same entry.
     ///
     /// A DDL declaration and a schema `primary_key`/`unique` on the same
-    /// `(node_type, properties)` share **one** entry in `unique_indices` — the
-    /// index *is* the constraint, so there is no second copy to withdraw
+    /// `(node_type, properties)` share **one** declaration in
+    /// `unique_constraint_keys`, so there is no second copy to withdraw
     /// independently. Without this record, withdrawing the schema half took the
-    /// whole index with it: `define_schema` naming the type without its key
-    /// deleted a `CREATE CONSTRAINT` the caller never touched, and duplicates
-    /// were admitted. `set_schema` consults it (`withdraw_schema_unique`) and
-    /// retains an index a DDL declaration still backs.
+    /// whole constraint with it: `define_schema` naming the type without its
+    /// key deleted a `CREATE CONSTRAINT` the caller never touched, and
+    /// duplicates were admitted. `set_schema` consults it
+    /// (`withdraw_schema_unique`) and retains a declaration a DDL statement
+    /// still backs.
     ///
     /// Written only by the DDL entry points, so a schema install cannot forge
     /// provenance: [`Self::declare_ddl_unique_constraint`] records,
@@ -269,7 +277,7 @@ pub struct DirGraph {
     /// the enforcement structure *and* the provenance record, and it lives
     /// outside `SchemaDefinition`, so installing a schema cannot silently
     /// un-enforce it — the same arrangement uniqueness gets from
-    /// `unique_indices`.
+    /// `unique_constraint_keys`.
     ///
     /// Nested `BTreeMap` rather than the flat `BTreeSet` of tuples its sibling
     /// uses, for three reasons: a declaration carries a *value* (the type),
@@ -974,7 +982,7 @@ impl DirGraph {
             range_indices: HashMap::new(),
             range_index_keys: Vec::new(),
             indexes_deferred: false,
-            unique_indices: HashMap::new(),
+            adopted_index_slots: std::collections::HashSet::new(),
             ddl_unique_constraints: std::collections::BTreeSet::new(),
             unique_constraint_keys: Vec::new(),
             constraint_names: HashMap::new(),
@@ -2045,9 +2053,6 @@ impl DirGraph {
 
         // Vacuum relocates physical occupants; retain declarations even for
         // constrained types whose last node was removed.
-        if !self.unique_indices.is_empty() {
-            self.rebuild_all_unique_indices();
-        }
 
         // Lazy caches rebuild on next access.
         self.id_indices.clear();
@@ -2424,6 +2429,8 @@ pub use write_budget::{WriteBudgetSetting, WriteBudgetState};
 #[cfg(test)]
 #[path = "dir_graph_tests.rs"]
 mod dir_graph_tests;
+#[cfg(test)]
+mod owned_index_tests;
 
 #[cfg(test)]
 pub(crate) mod rollback_tests;

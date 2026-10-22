@@ -1371,9 +1371,9 @@ fn create_node(
 
     note_created_id(graph, &label, pk_id, node_idx);
 
+    // Files the node into every index of its type — including the ones its
+    // UNIQUE constraints own, which is what claims the tuples validated above.
     graph.update_property_indices_for_add(&label, node_idx);
-    // Claim the unique tuples validated above, now that the node exists.
-    graph.commit_unique_claims(&unique_claims, node_idx);
 
     ensure_type_metadata(graph, &label);
 
@@ -2151,8 +2151,8 @@ fn execute_remove(
                     // property is a violation; removing part of a unique tuple
                     // just vacates it. Planned before the write so a rejection
                     // leaves storage untouched.
-                    let constraint_plan = graph
-                        .plan_property_write(&node_type_str, node_idx, property, None)
+                    graph
+                        .check_property_write(&node_type_str, node_idx, property, None)
                         .map_err(|violation| violation.to_string())?;
 
                     let is_disk = graph.graph.is_disk();
@@ -2253,7 +2253,6 @@ fn execute_remove(
                             Some(write_field),
                         );
                     }
-                    graph.apply_property_write_plan(&constraint_plan, node_idx);
                     graph.note_ontology_touch(node_idx);
                 }
                 RemoveItem::Label {

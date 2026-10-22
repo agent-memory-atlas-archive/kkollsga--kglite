@@ -14,6 +14,7 @@ use crate::graph::mutation::batch_title_admission::{
     shadowed_identity_columns, snapshot_node_titles, ConnectionAdmissionFields, ConnectionTitles,
 };
 use crate::graph::mutation::connection_stubs::vivify_endpoints;
+use crate::graph::mutation::delete_index_eviction::DoomedBuckets;
 use crate::graph::mutation::delete_state::remove_doomed_nodes;
 use crate::graph::mutation::edge_props::{
     intern_edge_props, register_used_edge_property_names, resolve_edge_property_columns,
@@ -1708,6 +1709,7 @@ fn journal_bucket_evictions<S: BuildHasher>(
     affected_types: &HashSet<String>,
     nodes_to_delete: &HashSet<NodeIndex, S>,
     bucket_positions: &HashMap<String, Vec<(usize, NodeIndex)>>,
+    resolved: &DoomedBuckets,
 ) {
     if graph.graph.undo_journal_mut().is_none() {
         return;
@@ -1733,7 +1735,7 @@ fn journal_bucket_evictions<S: BuildHasher>(
         // hold a doomed node are captured, so the cost tracks the deletion
         // rather than the size of the index.
         for (key, value_map) in &graph.property_indices {
-            if &key.0 != node_type {
+            if &key.0 != node_type || resolved.covers_property(key) {
                 continue;
             }
             for (value, members) in value_map.iter() {
@@ -1749,7 +1751,7 @@ fn journal_bucket_evictions<S: BuildHasher>(
             }
         }
         for (key, btree) in &graph.range_indices {
-            if &key.0 != node_type {
+            if &key.0 != node_type || resolved.covers_range(key) {
                 continue;
             }
             for (value, members) in btree.iter() {
@@ -1765,7 +1767,7 @@ fn journal_bucket_evictions<S: BuildHasher>(
             }
         }
         for (key, comp_map) in &graph.composite_indices {
-            if &key.0 != node_type {
+            if &key.0 != node_type || resolved.covers_composite(key) {
                 continue;
             }
             for (value, members) in comp_map.iter() {
@@ -1786,6 +1788,7 @@ fn journal_bucket_evictions<S: BuildHasher>(
             evictions.push((BucketId::SecondaryLabel(*label), members.clone()));
         }
     }
+    evictions.extend(resolved.evictions(graph, nodes_to_delete));
     if let Some(journal) = graph.graph.undo_journal_mut() {
         for (bucket, pos, idx) in positional {
             journal.note_bucket_removed(bucket, idx, pos);
@@ -1899,6 +1902,20 @@ pub(crate) fn detach_delete_nodes<S: BuildHasher>(
         .cloned()
         .collect();
 
+    // The value-keyed index buckets the doomed nodes occupy, named while their
+    // values can still be read — what lets the sweeps below touch those buckets
+    // alone (`delete_index_eviction`).
+    let doomed_by_type: HashMap<String, Vec<NodeIndex>> = doomed_ids
+        .iter()
+        .map(|(node_type, entries)| {
+            (
+                node_type.clone(),
+                entries.iter().map(|(_, idx)| *idx).collect(),
+            )
+        })
+        .collect();
+    let resolved = DoomedBuckets::resolve(graph, &doomed_by_type);
+
     remove_doomed_nodes(graph, nodes_to_delete);
 
     // Where each doomed member sits in its type bucket, resolved once for both
@@ -1908,7 +1925,13 @@ pub(crate) fn detach_delete_nodes<S: BuildHasher>(
 
     // Statement-rollback capture, before the sweeps below strip the doomed
     // members out of the buckets.
-    journal_bucket_evictions(graph, &affected_types, nodes_to_delete, &bucket_positions);
+    journal_bucket_evictions(
+        graph,
+        &affected_types,
+        nodes_to_delete,
+        &bucket_positions,
+        &resolved,
+    );
 
     // Index cleanup — StableDiGraph keeps surviving indices stable.
     for node_type in &affected_types {
@@ -1928,48 +1951,10 @@ pub(crate) fn detach_delete_nodes<S: BuildHasher>(
                 graph.id_indices.remove(node_type);
             }
         }
-        let prop_keys: Vec<_> = graph
-            .property_indices
-            .keys()
-            .filter(|(nt, _)| nt == node_type)
-            .cloned()
-            .collect();
-        for key in prop_keys {
-            if let Some(value_map) = graph.property_indices.get_mut(&key) {
-                value_map.retain_members(|idx| !nodes_to_delete.contains(idx));
-            }
-        }
-        let comp_keys: Vec<_> = graph
-            .composite_indices
-            .keys()
-            .filter(|(nt, _)| nt == node_type)
-            .cloned()
-            .collect();
-        for key in comp_keys {
-            if let Some(value_map) = graph.composite_indices.get_mut(&key) {
-                value_map.retain_members(|idx| !nodes_to_delete.contains(idx));
-            }
-        }
-        // The B-tree range index was omitted from this cleanup, so a deleted
-        // node stayed in its value bucket and `lookup_range` — the candidate
-        // source for `WHERE n.prop > x` on an indexed property, in both the
-        // matcher and the fluent filter path — kept handing out tombstoned
-        // NodeIndexes. Same shape as the property/composite eviction above.
-        let range_keys: Vec<_> = graph
-            .range_indices
-            .keys()
-            .filter(|(nt, _)| nt == node_type)
-            .cloned()
-            .collect();
-        for key in range_keys {
-            if let Some(value_map) = graph.range_indices.get_mut(&key) {
-                value_map.retain_members_pruning_empty(|idx| !nodes_to_delete.contains(idx));
-            }
-        }
-        // A deleted node must give up its UNIQUE tuples, or the value stays
-        // reserved forever and re-inserting it is rejected.
-        graph.evict_unique_claims_for_nodes(node_type, nodes_to_delete);
+        resolved.sweep_unresolved(graph, node_type, nodes_to_delete);
     }
+
+    resolved.evict(graph, nodes_to_delete);
 
     // Secondary-label index is keyed by label (not primary type), so a
     // deleted node may sit in any bucket — evict outside the per-type loop.

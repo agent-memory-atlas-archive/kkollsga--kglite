@@ -124,7 +124,34 @@ fn the_graphbridge_index_statements_run() {
     .unwrap();
     assert_eq!(columns.last().map(String::as_str), Some("owningConstraint"));
     assert_eq!(rows.len(), 3);
-    assert!(rows.iter().all(|r| r[6] == Value::Null));
+    // Only the hash index the uniqueness constraint owns carries its name: the
+    // other two rows (the `age` index and the B-tree half of the RANGE index)
+    // belong to nothing.
+    let owners: Vec<(String, String, Value)> = rows
+        .iter()
+        .map(|r| {
+            let (Value::String(name), Value::String(kind)) = (&r[0], &r[2]) else {
+                panic!("unexpected row {r:?}");
+            };
+            (name.clone(), kind.clone(), r[6].clone())
+        })
+        .collect();
+    assert_eq!(
+        owners,
+        [
+            (
+                "Person.age".to_string(),
+                "PROPERTY".to_string(),
+                Value::Null
+            ),
+            (
+                "Person.name".to_string(),
+                "PROPERTY".to_string(),
+                Value::String("person_name_unique".to_string())
+            ),
+            ("Person.name".to_string(), "RANGE".to_string(), Value::Null),
+        ]
+    );
 }
 
 #[test]
@@ -205,10 +232,21 @@ fn show_constraints_yield_where_return_order_and_paging() {
         HashMap::new(),
     )
     .unwrap();
-    for column in ["id", "ownedIndex", "options"] {
+    for column in ["id", "options"] {
         let at = columns.iter().position(|c| c == column).expect(column);
         assert_eq!(rows[0][at], Value::Null, "{column}");
     }
+    let owned = columns.iter().position(|c| c == "ownedIndex").unwrap();
+    assert_eq!(rows[0][owned], Value::String("Person.name".to_string()));
+    // The kinds that own no index say so.
+    let (columns, rows) = query(
+        &g,
+        "SHOW CONSTRAINTS YIELD * WHERE name = 'person_age_typed'",
+        HashMap::new(),
+    )
+    .unwrap();
+    let owned = columns.iter().position(|c| c == "ownedIndex").unwrap();
+    assert_eq!(rows[0][owned], Value::Null);
 }
 
 #[test]

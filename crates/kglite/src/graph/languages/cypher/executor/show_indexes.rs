@@ -25,10 +25,12 @@ use crate::graph::introspection::schema_overview::{collect_indexes_structured, I
 /// `populationPercent` is `100.0` for an ONLINE index (built atomically) and
 /// null for a DEFERRED one; `options` carries the vector dimension and
 /// similarity function on a VECTOR row and is null elsewhere; `id`,
-/// `indexProvider`, `owningConstraint`, `lastRead` and `readCount` are null,
-/// because KGLite keeps no such state (a constraint is its index rather than
-/// owning one; there are no providers or usage counters). The registry entry
-/// of `db.indexes` spells out the full list. Documented in CYPHER.md.
+/// `indexProvider`, `lastRead` and `readCount` are null, because KGLite keeps
+/// no such state (there are no providers or usage counters).
+/// `owningConstraint` names the UNIQUE / NODE KEY constraint a hash-equality or
+/// composite index belongs to, and is null for an index nothing owns. The
+/// registry entry of `db.indexes` spells out the full list. Documented in
+/// CYPHER.md.
 pub(crate) const SHOW_INDEXES_COLUMNS: &[&str] = &[
     "name",
     "type",
@@ -101,7 +103,11 @@ pub(crate) fn index_cell(info: &IndexInfo, column: &str) -> Option<Value> {
                     ])),
                 )]))
             }),
-        "id" | "indexProvider" | "owningConstraint" | "lastRead" | "readCount" => Value::Null,
+        "owningConstraint" => info
+            .owning_constraint
+            .clone()
+            .map_or(Value::Null, Value::String),
+        "id" | "indexProvider" | "lastRead" | "readCount" => Value::Null,
         _ => return None,
     })
 }

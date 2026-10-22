@@ -106,7 +106,7 @@ fn composite_index_identity_ignores_property_order() {
         "the stored key is the canonical, sorted spelling"
     );
 
-    assert!(graph.drop_composite_index("Doc", &declared));
+    assert!(graph.drop_composite_index("Doc", &declared).unwrap());
     assert!(!graph.has_composite_index("Doc", &sorted));
 }
 

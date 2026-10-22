@@ -317,14 +317,14 @@ fn probe_unique_index(graph: &DirGraph, label: &str, wanted: &Candidate<'_>) -> 
     if !graph.has_unique_constraints() {
         return None;
     }
-    for ((node_type, names), occupants) in &graph.unique_indices {
-        if node_type != label {
+    for key in &graph.unique_constraint_keys {
+        if key.0 != label {
             continue;
         }
-        let Some(tuple) = wanted.tuple_for(names) else {
+        let Some(tuple) = wanted.tuple_for(&key.1) else {
             continue;
         };
-        if let Some(&idx) = occupants.get(&CompositeValue(tuple.clone())) {
+        if let Some(idx) = graph.unique_occupant(key, &CompositeValue(tuple.clone())) {
             if wanted.matches(graph, idx) {
                 return Some(IndexProbe::Matched(vec![idx]));
             }

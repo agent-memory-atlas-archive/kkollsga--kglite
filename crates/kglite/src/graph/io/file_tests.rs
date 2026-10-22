@@ -1620,8 +1620,8 @@ mod ddl_provenance_roundtrip_tests {
     }
 
     /// A schema primary key and a `CREATE CONSTRAINT ... IS UNIQUE` on the same
-    /// property share **one** entry in `unique_indices`, so withdrawing the key
-    /// used to delete the DDL declaration with it. The uniqueness twin of the
+    /// property share **one** declaration in `unique_constraint_keys`, so withdrawing
+    /// the key used to delete the DDL declaration with it. The uniqueness twin of the
     /// in-memory pin above.
     #[test]
     fn a_ddl_unique_declaration_survives_the_withdrawal_of_an_overlapping_key() {

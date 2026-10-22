@@ -392,8 +392,7 @@ fn gate_pending_title_update(
 ) -> Result<(), String> {
     let claims = if let Some(node_idx) = update.node_idx {
         graph
-            .plan_property_write(&update.node_type, node_idx, "title", Some(&update.value))
-            .map(|plan| plan.claim)
+            .check_property_write(&update.node_type, node_idx, "title", Some(&update.value))
             .map_err(|violation| violation.to_string())?
     } else {
         let typed = graph.check_property_types(&update.node_type, |property| {

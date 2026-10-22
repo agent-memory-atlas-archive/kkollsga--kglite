@@ -9,10 +9,10 @@
 //! the non-backend half of a `DirGraph` clone, and every statement about which
 //! field dominates has been inference from type shapes.
 //!
-//! This module measures it. It times **each of the ten fields
+//! This module measures it. It times **each of the nine fields
 //! `rollback::swap_data_scale` parks** — the codebase's own closed list of
 //! "data-scale" fields — cloned in isolation, plus the whole `DirGraph::clone`
-//! for reconciliation. The residue (total minus the sum of the ten) is the
+//! for reconciliation. The residue (total minus the sum of the nine) is the
 //! "O(schema) shell" that the rollback checkpoint already pays per statement.
 //!
 //! ## Why it is `#[ignore]`d
@@ -21,8 +21,8 @@
 //! **measurement instrument**, not a gate: it asserts only the invariants that
 //! would make its own numbers meaningless — that each fixture is the shape it
 //! claims (nodes present, id index warm, the index family under test actually
-//! populated). It does **not** check that its ten rows still match
-//! `swap_data_scale`'s ten fields; that list is hand-maintained and diffed by
+//! populated). It does **not** check that its nine rows still match
+//! `swap_data_scale`'s nine fields; that list is hand-maintained and diffed by
 //! eye, per the comment on `apportion`. Nothing gates the drift, which is
 //! tolerable only because forgetting to park a field costs speed rather than
 //! correctness (`rollback.rs`'s module doc states the asymmetry). Run it
@@ -104,7 +104,7 @@ struct FieldCost {
     extent: usize,
 }
 
-/// Time each of the ten `swap_data_scale` fields, plus the whole graph.
+/// Time each of the nine `swap_data_scale` fields, plus the whole graph.
 ///
 /// The order matches `swap_data_scale`'s own order so the two lists can be
 /// diffed by eye when a field is added.
@@ -159,11 +159,6 @@ fn apportion(graph: &DirGraph) -> (Vec<FieldCost>, f64) {
             micros: min_clone_us(&graph.timeseries_store, REPS),
             extent: graph.timeseries_store.len(),
         },
-        FieldCost {
-            name: "unique_indices",
-            micros: min_clone_us(&graph.unique_indices, REPS),
-            extent: graph.unique_indices.values().map(|m| m.len()).sum(),
-        },
     ];
     let total = min_clone_us(graph, REPS);
     (fields, total)
@@ -189,7 +184,7 @@ fn report(fixture: &str, graph: &DirGraph) {
         );
     }
     println!(
-        "| **sum of the ten** | **{sum:.0}** | **{:.1}%** | |",
+        "| **sum of the nine** | **{sum:.0}** | **{:.1}%** | |",
         100.0 * sum / total
     );
     println!("| **whole `DirGraph::clone`** | **{total:.0}** | 100% | |");

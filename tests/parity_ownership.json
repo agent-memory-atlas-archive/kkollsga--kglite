@@ -1657,5 +1657,14 @@
   },
   "tests/test_cypher_scalar_storage_golden.py::test_row_element_id_anchor_golden[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_unique_owned_index.py::test_the_owned_index_transcript_is_identical_in_every_storage_mode[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_unique_owned_index.py::test_the_owned_index_transcript_is_identical_in_every_storage_mode[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_unique_owned_index.py::test_the_owned_index_transcript_is_identical_in_every_storage_mode[disk]": {
+    "owner": "storage-parity"
   }
 }

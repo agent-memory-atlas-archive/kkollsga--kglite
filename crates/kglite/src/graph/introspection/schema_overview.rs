@@ -435,7 +435,7 @@ impl IndexKind {
 /// Field shape mirrors Neo4j's `SHOW INDEXES`: `name, type, entityType,
 /// labelsOrTypes, properties, state`, plus the KGLite-specific freshness
 /// columns. The Neo4j columns KGLite has no state for (`id`, `indexProvider`,
-/// `owningConstraint`, `lastRead`, `readCount`) project as null.
+/// `lastRead`, `readCount`) project as null.
 #[derive(Debug, Clone)]
 pub(crate) struct IndexInfo {
     /// Stable string ID — `"<node_type>.<property>"` for node equality/range,
@@ -477,6 +477,32 @@ pub(crate) struct IndexInfo {
     /// `(dimension, metric)` of the embedding store a `VECTOR` row indexes;
     /// `None` on every other kind. Feeds the `options` column.
     pub vector_config: Option<(usize, String)>,
+    /// The constraint that owns this index — set on the hash-equality and
+    /// composite rows a UNIQUE / NODE KEY constraint backs, `None` for every
+    /// index nothing owns. Feeds the `owningConstraint` column.
+    pub owning_constraint: Option<String>,
+}
+
+/// The name of the constraint that owns the equality / composite index on
+/// `(node_type, properties)`, if one does.
+fn owning_constraint_name(
+    graph: &DirGraph,
+    node_type: &str,
+    properties: &[String],
+) -> Option<String> {
+    graph
+        .constraint_for_index(node_type, properties)
+        .map(|key| graph.unique_constraint_display_name(key))
+}
+
+/// The canonical name of the index a unique constraint on `(node_type,
+/// properties)` owns, in the spelling `SHOW INDEXES` lists it under.
+fn owned_index_name(node_type: &str, properties: &[String]) -> String {
+    let normalized = crate::graph::constraints::normalize_properties(properties);
+    match normalized.as_slice() {
+        [property] => format!("{node_type}.{property}"),
+        many => format!("{node_type}.({})", many.join(",")),
+    }
 }
 
 /// All indexes installed on the graph, in deterministic order.
@@ -507,6 +533,8 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
     // surface at once. Those listers are the only index readers allowed to
     // consult the declaration lists; see `DirGraph::list_indexes_with_state`.
     for (node_type, property, state) in graph.list_indexes_with_state() {
+        let owning_constraint =
+            owning_constraint_name(graph, &node_type, std::slice::from_ref(&property));
         out.push(IndexInfo {
             name: format!("{node_type}.{property}"),
             kind: IndexKind::Equality,
@@ -518,9 +546,11 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: None,
             unembedded: None,
             vector_config: None,
+            owning_constraint,
         });
     }
     for (node_type, properties, state) in graph.list_composite_indexes_with_state() {
+        let owning_constraint = owning_constraint_name(graph, &node_type, &properties);
         out.push(IndexInfo {
             name: format!("{node_type}.({})", properties.join(",")),
             kind: IndexKind::Composite,
@@ -532,6 +562,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: None,
             unembedded: None,
             vector_config: None,
+            owning_constraint,
         });
     }
     for (node_type, property, state) in graph.list_range_indexes_with_state() {
@@ -546,6 +577,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: None,
             unembedded: None,
             vector_config: None,
+            owning_constraint: None,
         });
     }
     for (node_type, property, store) in crate::graph::text_indexes::list_text_indexes(graph) {
@@ -560,6 +592,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: Some(store.delta_size(graph)),
             unembedded: None,
             vector_config: None,
+            owning_constraint: None,
         });
     }
     for (rel_type, property, store) in
@@ -576,6 +609,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: Some(store.relationship_delta_size(graph)),
             unembedded: None,
             vector_config: None,
+            owning_constraint: None,
         });
     }
     // Only stores that actually carry an HNSW index get a row. A store without
@@ -608,6 +642,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
                         store.metric.clone().unwrap_or_else(|| "cosine".into()),
                     )
                 }),
+            owning_constraint: None,
         });
     }
     for status in crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
@@ -639,6 +674,7 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
                         store.metric().unwrap_or("cosine").to_string(),
                     )
                 }),
+            owning_constraint: None,
         });
     }
 
@@ -654,9 +690,9 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
 ///
 /// Field shape mirrors Neo4j's `SHOW CONSTRAINTS` subset KGLite can answer:
 /// `name, type, entityType, labelsOrTypes, properties, propertyType`. Neo4j also
-/// returns `id`, `ownedIndex` and `options`; KGLite has no equivalent state for
-/// them (a unique constraint *is* its index rather than owning a separate one),
-/// so they project as null rather than as invented values. Documented in CYPHER.md.
+/// returns `id` and `options`; KGLite has no equivalent state for them, so they
+/// project as null rather than as invented values. `ownedIndex` names the index
+/// a uniqueness or node-key constraint owns. Documented in CYPHER.md.
 #[derive(Debug, Clone)]
 pub(crate) struct ConstraintInfo {
     /// The name its author gave it, or the canonical `Label.property` /
@@ -674,6 +710,10 @@ pub(crate) struct ConstraintInfo {
     /// other kind — which is exactly what Neo4j 5 puts in the `propertyType`
     /// column, so a ported script's result handling reads unchanged.
     pub property_type: Option<DeclaredType>,
+    /// The name of the index a UNIQUE / NODE KEY constraint owns (the row
+    /// `SHOW INDEXES` lists with this constraint as its owner); `None` for the
+    /// kinds that own none. Feeds the `ownedIndex` column.
+    pub owned_index: Option<String>,
 }
 
 impl ConstraintInfo {
@@ -716,7 +756,7 @@ impl ConstraintInfo {
 /// *not* listed again as a separate `NODE_PROPERTY_EXISTENCE` row, matching
 /// Neo4j, where a node key is one constraint rather than two. A primary key on
 /// `id` reports `NODE_KEY` from the presence pass instead, since the id-index
-/// rather than `unique_indices` holds its uniqueness half.
+/// rather than an owned index holds its uniqueness half.
 pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<ConstraintInfo> {
     let mut out: Vec<ConstraintInfo> = Vec::new();
     // Properties already accounted for by a NODE_KEY row, so the presence pass
@@ -730,6 +770,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
                 covered.insert((node_type.clone(), property.clone()));
             }
         }
+        let owned_index = Some(owned_index_name(&node_type, &properties));
         out.push(ConstraintInfo {
             name: constraint_name(graph, EntityKind::Node, &node_type, &properties),
             kind,
@@ -737,6 +778,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             labels_or_types: vec![node_type.clone()],
             properties,
             property_type: None,
+            owned_index,
         });
     }
 
@@ -747,7 +789,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
         // A declared primary key is unique *and* present whichever property it
         // names. A key on `id` reaches this pass rather than the fold above
         // because its uniqueness lives in the per-type id-index instead of
-        // `unique_indices`, so the kind is decided by the declaration, not by
+        // an owned index, so the kind is decided by the declaration, not by
         // which pass the row arrived through.
         let kind = if graph.primary_key_for(&node_type) == Some(property.as_str()) {
             ConstraintKind::NodeKey
@@ -762,6 +804,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             labels_or_types: vec![node_type.clone()],
             properties,
             property_type: None,
+            owned_index: None,
         });
     }
 
@@ -779,6 +822,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             labels_or_types: vec![node_type.clone()],
             properties,
             property_type: Some(declared),
+            owned_index: None,
         });
     }
 
@@ -794,6 +838,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             labels_or_types: vec![rel_type],
             properties,
             property_type: None,
+            owned_index: None,
         });
     }
 
@@ -806,6 +851,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             labels_or_types: vec![rel_type],
             properties,
             property_type: Some(declared),
+            owned_index: None,
         });
     }
 
@@ -1957,6 +2003,7 @@ mod constraint_row_vocabulary_tests {
             labels_or_types: vec!["T".to_string()],
             properties: vec!["p".to_string()],
             property_type: None,
+            owned_index: None,
         }
     }
 
@@ -2059,8 +2106,8 @@ mod constraint_row_vocabulary_tests {
     /// A declared primary key is unique *and* present whichever property it
     /// names, so it reports as `NODE_KEY` for `id` exactly as it does for any
     /// other property. `id` reaches the presence pass rather than the unique
-    /// one — its uniqueness lives in the per-type id-index, not in
-    /// `unique_indices` — and reporting the pass it arrived through labelled it
+    /// one — its uniqueness lives in the per-type id-index, not in an owned
+    /// index — and reporting the pass it arrived through labelled it
     /// `NODE_PROPERTY_EXISTENCE`, contradicting the `NODE KEY` its own
     /// violation message names.
     #[test]

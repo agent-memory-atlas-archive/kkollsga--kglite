@@ -20,13 +20,10 @@ use super::*;
 /// one that changes a value a query would return.
 ///
 /// The **unique** arm covers what `fingerprint` structurally cannot: unique
-/// claims live in `unique_indices`, which the fingerprint does not read at all
-/// (it is parked by `swap_data_scale` and restored by a per-type rebuild, not
-/// by the journal). Its rollback path is therefore a *different* mechanism, and
-/// until 2026-08-15 it had never been run on a forked backend — where the
-/// journal's inverse ops replay through the overlay while the rebuild reads the
-/// types those ops reported. A phantom or lost claim here rejects or admits
-/// writes forever after, and no other assertion in this file can see it.
+/// claims are the buckets of the constraint's owned index, and `fingerprint`
+/// reads only user-declared ones. A phantom or lost claim on a forked backend
+/// rejects or admits writes forever after, and no other assertion in this file
+/// can see it.
 #[test]
 fn a_rollback_while_a_reader_is_held_touches_neither_graph() {
     use crate::graph::handle::make_dir_graph_mut;

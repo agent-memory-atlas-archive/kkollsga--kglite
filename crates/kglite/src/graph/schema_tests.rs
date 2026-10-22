@@ -266,18 +266,21 @@ mod maintenance_tests {
         // A maintenance caller can relocate/delete storage before reindexing;
         // both phantom occupants and missing live claims must be repaired.
         g.graph.remove_node(NodeIndex::new(0));
-        g.unique_indices.get_mut(&key).unwrap().clear();
+        g.property_indices
+            .get_mut(&("Person".to_string(), "age".to_string()))
+            .unwrap()
+            .clear();
         g.reindex();
-        assert_eq!(g.unique_indices[&key].len(), 2);
-        assert!(g.unique_indices[&key]
-            .values()
-            .all(|idx| *idx != NodeIndex::new(0)));
+        let occupancy = g.unique_occupancy();
+        assert_eq!(occupancy.len(), 2);
+        assert!(occupancy.iter().all(|(_, _, idx)| *idx != 0));
         for idx in [NodeIndex::new(1), NodeIndex::new(2)] {
             g.graph.remove_node(idx);
         }
         g.reindex();
         assert_eq!(g.list_unique_constraints(), declarations);
-        assert!(g.unique_indices[&key].is_empty());
+        assert!(g.unique_occupancy().is_empty());
+        assert!(g.has_unique_constraint(&key.0, &key.1));
     }
 
     #[test]

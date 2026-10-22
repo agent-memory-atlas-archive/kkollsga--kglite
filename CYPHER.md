@@ -96,7 +96,7 @@ scan (linear in node count). Keep these semantics in mind:
   - A `MERGE` naming no id, or an id the type does not hold, creates as before.
   - Constraint DDL is deliberately *not* the route here. `REQUIRE t.id IS UNIQUE`
     is refused, because `id` is a structural field rather than a stored property
-    and the unique secondary index would never see the write. See
+    and the unique index would never see the write. See
     [Cypher constraint DDL](#cypher-constraint-ddl).
 - **Matching is type-exact.** `'42'` ≠ `42`. Keep id types consistent across
   writes and reads.
@@ -3224,8 +3224,8 @@ feeds autocomplete.
 |-----------|---------------|---------|
 | `CALL db.labels()` | `label` | One row per node-type ("label") in the graph, sorted alphabetically |
 | `CALL db.relationshipTypes()` | `relationshipType` | One row per connection-type ("relationship type") in the graph, sorted alphabetically |
-| `CALL db.indexes()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded`, `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead`, `readCount` | One row per index installed on the graph, sorted by `name`. `stale`/`delta` are non-null on the opt-in kinds (`FULLTEXT`, `VECTOR`); `unembedded` on `VECTOR` alone. A bare call returns the first nine; the last seven are Neo4j 5's remaining columns, yieldable by name or with `YIELD *` (see [`SHOW INDEXES`](#show-indexes)). `SHOW INDEXES` returns the same rows — see [Cypher index DDL](#cypher-index-ddl) |
-| `CALL db.constraints()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType`, `id`, `ownedIndex`, `options` | One row per declared constraint, sorted by `name`. A bare call returns the first six; `id`, `ownedIndex` and `options` are yieldable and always `null`. `SHOW CONSTRAINTS` returns the same rows — see [Cypher constraint DDL](#cypher-constraint-ddl) |
+| `CALL db.indexes()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `state`, `stale`, `delta`, `unembedded`, `id`, `populationPercent`, `indexProvider`, `owningConstraint`, `options`, `lastRead`, `readCount` | One row per index installed on the graph, sorted by `name`. The hash index a UNIQUE or NODE KEY constraint owns is listed, with the constraint's name in `owningConstraint`. `stale`/`delta` are non-null on the opt-in kinds (`FULLTEXT`, `VECTOR`); `unembedded` on `VECTOR` alone. A bare call returns the first nine; the last seven are Neo4j 5's remaining columns, yieldable by name or with `YIELD *` (see [`SHOW INDEXES`](#show-indexes)). `SHOW INDEXES` returns the same rows — see [Cypher index DDL](#cypher-index-ddl) |
+| `CALL db.constraints()` | `name`, `type`, `entityType`, `labelsOrTypes`, `properties`, `propertyType`, `id`, `ownedIndex`, `options` | One row per declared constraint, sorted by `name`. A bare call returns the first six; `id`, `ownedIndex` and `options` are yieldable. `ownedIndex` names the index a uniqueness or node-key constraint owns and is `null` on the other kinds; `id` and `options` are always `null`. `SHOW CONSTRAINTS` returns the same rows — see [Cypher constraint DDL](#cypher-constraint-ddl) |
 | `CALL dbms.procedures()` | `name`, `description`, `mode`, `worksOnSystem`, `signature` | The registry rows `SHOW PROCEDURES` lists |
 | `CALL dbms.functions()` | `name`, `category`, `description`, `signature`, `aliases` | The function rows `SHOW FUNCTIONS` lists |
 | `CALL db.propertyKeys()` | `propertyKey` | One row per declared property name (node + relationship), sorted alphabetically |
@@ -4649,7 +4649,8 @@ rows and columns as `CALL db.indexes()`:
 | `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
 | `populationPercent` | `100.0` for an `ONLINE` index, `null` for a `DEFERRED` one |
 | `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; `null` elsewhere |
-| `id`, `indexProvider`, `owningConstraint`, `lastRead`, `readCount` | always `null` |
+| `owningConstraint` | the constraint that owns the index, on the hash-equality or composite row a UNIQUE or NODE KEY constraint backs. `null` on every index nothing owns |
+| `id`, `indexProvider`, `lastRead`, `readCount` | always `null` |
 
 `stale` / `delta` are KGLite-specific. They describe the catch-up contract both
 opt-in index kinds share: the index does not follow writes eagerly. It records
@@ -4685,8 +4686,7 @@ delete them. A relationship vector index uses the unambiguous canonical name
 through both `SHOW INDEXES` and `CALL db.indexes()`.
 
 A bare `SHOW INDEXES` returns the first nine columns. The last seven are Neo4j 5's own, returned when `YIELD` names them or is `*`. KGLite keeps no state for `id`,
-`indexProvider`, `owningConstraint` (a constraint is its index rather than
-owning one), `lastRead` or `readCount`, so they are `null`, not invented values.
+`indexProvider`, `lastRead` or `readCount`, so they are `null`, not invented values.
 `SHOW INDEXES YIELD … [WHERE …] [RETURN …]` filters, projects, orders and pages
 like `CALL db.indexes() YIELD …`; `BRIEF` and `VERBOSE` are refused rather than
 ignored.
@@ -4778,10 +4778,10 @@ either.
 
 | Statement | Enforces | Backed by |
 |---|---|---|
-| `REQUIRE n.p IS UNIQUE` | no two nodes of the type share `p` | a single-occupant unique index |
-| `REQUIRE (n.a, n.b) IS UNIQUE` | no two nodes share the *tuple* | one composite unique index |
+| `REQUIRE n.p IS UNIQUE` | no two nodes of the type share `p` | an owned hash index on `p`, which also serves `MATCH (n:T {p: $v})` |
+| `REQUIRE (n.a, n.b) IS UNIQUE` | no two nodes share the *tuple* | an owned composite index |
 | `REQUIRE n.p IS NOT NULL` | every node of the type has a non-null `p` | the node type's required-field list |
-| `REQUIRE n.p IS NODE KEY` | both of the above, at once | a unique index **plus** a required field |
+| `REQUIRE n.p IS NODE KEY` | both of the above, at once | an owned index **plus** a required field |
 | `REQUIRE n.p IS :: TYPE` | every value written to `p` has the declared type | a declared per-property type, checked before the write lands |
 | `REQUIRE r.p IS NOT NULL` (on `FOR ()-[r:T]-()`) | every relationship of the type has a non-null `p` | a declared per-connection-type presence rule |
 | `REQUIRE r.p IS :: TYPE` (on `FOR ()-[r:T]-()`) | every value written to `r.p` has the declared type | a declared per-connection-type property type |
@@ -4793,6 +4793,26 @@ city as long as no `(city, age)` pair repeats.
 **NULL is exempt**, matching Neo4j. A node is outside a uniqueness constraint
 unless *every* property in the tuple is present and non-null. So many nodes may
 share "no email" while `email` is `UNIQUE`.
+
+#### The index a constraint owns
+
+A `UNIQUE` or `NODE KEY` constraint owns a hash index on its properties. There is
+no separate uniqueness structure, so the constraint costs what the index costs and
+a lookup on the constrained property is an index probe, not a scan.
+
+- **Lookups.** `MATCH (n:T {p: $v})` reads the owned index like any other.
+- **Listing.** `SHOW INDEXES` lists it, with the constraint's name in
+  `owningConstraint`. `SHOW CONSTRAINTS` names it in `ownedIndex`.
+- **Dropping.** `DROP INDEX` on an owned index is refused and names the
+  constraint. `DROP CONSTRAINT` removes the constraint with an index it created.
+- **Creating.** `CREATE INDEX` on the same property errors as a duplicate, or is a
+  no-op under `IF NOT EXISTS`. A `CREATE RANGE INDEX` goes ahead, because the
+  owned index has no ordered half.
+- **Adoption.** An index you declared first is adopted by the constraint, not
+  duplicated, and survives `DROP CONSTRAINT`. Declaring an index by name on a
+  constrained property adopts it the same way.
+
+A saved file records the constraint, not the owned index; a load rebuilds it.
 
 `IS NODE KEY` is served as the conjunction of uniqueness and presence. The two
 halves are installed **atomically**: if the presence half cannot be declared, the
@@ -4965,14 +4985,14 @@ by a write scope. It returns the same rows and columns as
 | `labelsOrTypes` | single-element list holding the node type — or the relationship type on a relationship row |
 | `properties` | constrained property names, in declaration order |
 | `propertyType` | the declared type on a `NODE_PROPERTY_TYPE` / `RELATIONSHIP_PROPERTY_TYPE` row, `null` on every other kind |
-| `id`, `ownedIndex`, `options` | always `null` |
+| `ownedIndex` | the canonical name of the index a `UNIQUENESS` or `NODE_KEY` constraint owns (the row `SHOW INDEXES` lists with this constraint as `owningConstraint`). `null` on the other kinds |
+| `id`, `options` | always `null` |
 
 A node key is **one** row (`NODE_KEY`), not a uniqueness row plus an existence
 row. A declared property type is its own row, never folded into another, so a
 property can be `UNIQUE` **and** typed.
 
-A bare `SHOW CONSTRAINTS` returns the first six columns; `YIELD` adds `id`, `ownedIndex` and `options`. KGLite keeps no state for them (a unique constraint
-*is* its index rather than owning a separate one), so they are `null`, not
+A bare `SHOW CONSTRAINTS` returns the first six columns; `YIELD` adds `id`, `ownedIndex` and `options`. KGLite keeps no state for `id` and `options`, so they are `null`, not
 invented values. `SHOW CONSTRAINTS YIELD … [WHERE …] [RETURN …]` filters,
 projects, orders and pages like `CALL db.constraints() YIELD …`; `BRIEF` and
 `VERBOSE` are refused rather than ignored.

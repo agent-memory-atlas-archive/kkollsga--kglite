@@ -85,7 +85,7 @@ SCENARIOS: dict[str, dict] = {
             "by_name": "MATCH (n:P {name: 'dee'}) RETURN n.id AS id",
         },
         "api": {
-            "indexes": "[(i['node_type'], i['property']) for i in g.list_indexes()]",
+            "indexes": "sorted((i['node_type'], i['property']) for i in g.list_indexes())",
             "constraints": "g.cypher('SHOW CONSTRAINTS').to_list()",
         },
     },
@@ -256,7 +256,8 @@ EXPECTED: dict[str, dict] = {
             "by_name": [{"id": 4}],
         },
         "api": {
-            "indexes": [["P", "name"]],
+            # `email` is the index the UNIQUE constraint owns.
+            "indexes": [["P", "email"], ["P", "name"]],
             "constraints": "constraints-present",
         },
     },

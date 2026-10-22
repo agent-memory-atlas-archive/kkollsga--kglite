@@ -119,7 +119,6 @@ struct LandedPropertyWrite<'a> {
     /// index's buckets.
     old_title: Option<&'a Value>,
     value: &'a Value,
-    constraint_plan: &'a crate::graph::dir_graph::constraints::PropertyWritePlan,
     /// What this row still owes, after the memos have answered everything that
     /// is constant across the statement's rows.
     owed: RowBookkeeping,
@@ -285,11 +284,11 @@ pub(super) fn apply_node_property_set<'a>(
         shape.check(property, &value)?;
     }
 
-    // Declared UNIQUE / NOT NULL gates. Planned before the write so a violation
-    // returns without mutating storage; the returned plan is redeemed after the
-    // value lands.
-    let constraint_plan = graph
-        .plan_property_write(node_type_str, node_idx, property, Some(&value))
+    // Declared UNIQUE / NOT NULL gates. Checked before the write so a violation
+    // returns without mutating storage; the owned indexes move with the value
+    // through the index maintenance below.
+    graph
+        .check_property_write(node_type_str, node_idx, property, Some(&value))
         .map_err(|violation| violation.to_string())?;
 
     // What this row still owes once the memos have answered everything
@@ -359,7 +358,6 @@ pub(super) fn apply_node_property_set<'a>(
             old_value: old_value.as_ref(),
             old_title: old_title.as_ref(),
             value: &value,
-            constraint_plan: &constraint_plan,
             owed,
         },
         nodes_to_stamp,
@@ -447,8 +445,6 @@ fn finish_node_property_write(
         write.node_type,
         Some(write.write_field),
     );
-
-    graph.apply_property_write_plan(write.constraint_plan, write.node_idx);
 
     if let Some(value_type) = write.owed.record_metadata {
         let mut prop_type = HashMap::new();

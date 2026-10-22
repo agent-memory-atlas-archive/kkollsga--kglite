@@ -62,7 +62,7 @@ fn direct_disk_append_restores_declared_indexes_and_unique_enforcement() {
     let held = graph.clone();
     assert!(graph.indexes_deferred());
     assert!(graph.property_indices.is_empty());
-    assert!(graph.unique_indices.is_empty());
+    assert!(!graph.has_unique_constraints());
     assert_eq!(
         graph.list_unique_constraints(),
         held.list_unique_constraints()
@@ -82,7 +82,7 @@ fn direct_disk_append_restores_declared_indexes_and_unique_enforcement() {
         Some(vec![second])
     );
     assert!(held.indexes_deferred());
-    assert!(held.unique_indices.is_empty());
+    assert!(!held.has_unique_constraints());
     assert_eq!(held.graph.node_count(), 1);
 }
 
@@ -125,7 +125,7 @@ fn blocked_direct_disk_write_preserves_deferred_state_until_retry() {
     assert!(error.contains("active writer"), "{error}");
     assert!(second.indexes_deferred());
     assert!(second.property_indices.is_empty());
-    assert!(second.unique_indices.is_empty());
+    assert!(!second.has_unique_constraints());
     assert_eq!(second.graph.node_count(), 1);
     first.save_disk(path).unwrap();
     add_doc(&mut second, 2, "second").unwrap();
@@ -166,7 +166,7 @@ fn check_portable_direct_mutation(mode: crate::graph::storage::mode::StorageMode
     assert_eq!(live_storage_mode(&graph), mode);
     assert!(graph.indexes_deferred());
     assert!(graph.property_indices.is_empty());
-    assert!(graph.unique_indices.is_empty());
+    assert!(!graph.has_unique_constraints());
     let held = graph.clone();
     let error = add_doc(&mut graph, 2, "first").expect_err("duplicate must be refused");
     assert!(error.contains("UNIQUE"), "{error}");
@@ -193,7 +193,7 @@ fn check_portable_direct_mutation(mode: crate::graph::storage::mode::StorageMode
     assert!(add_doc(&mut graph, 3, "changed").is_err());
     assert_eq!(graph.graph.node_count(), 2);
     assert!(held.indexes_deferred());
-    assert!(held.unique_indices.is_empty());
+    assert!(!held.has_unique_constraints());
     assert_eq!(held.graph.node_count(), 1);
     assert_eq!(std::fs::read(&path).unwrap(), saved_bytes);
 }
@@ -242,7 +242,7 @@ fn disk_save_snapshots_all_live_index_declarations() {
     assert!(loaded.property_indices.is_empty());
     assert!(loaded.range_indices.is_empty());
     assert!(loaded.composite_indices.is_empty());
-    assert!(loaded.unique_indices.is_empty());
+    assert!(!loaded.has_unique_constraints());
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn deferred_disk_resave_preserves_declarations_without_materializing() {
     assert!(loaded.property_indices.is_empty());
     assert!(loaded.range_indices.is_empty());
     assert!(loaded.composite_indices.is_empty());
-    assert!(loaded.unique_indices.is_empty());
+    assert!(!loaded.has_unique_constraints());
     assert_saved_index_declarations(&held);
     assert!(held.indexes_deferred());
     let reloaded = load_owned(path);

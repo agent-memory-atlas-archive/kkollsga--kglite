@@ -147,14 +147,14 @@ fn deferred_load_builds_nothing_and_keeps_every_declaration() {
         !eager.property_indices.is_empty()
             && !eager.composite_indices.is_empty()
             && !eager.range_indices.is_empty()
-            && !eager.unique_indices.is_empty(),
+            && eager.has_unique_constraints(),
         "the eager control must actually build all four families"
     );
     assert!(
         deferred.property_indices.is_empty()
             && deferred.composite_indices.is_empty()
             && deferred.range_indices.is_empty()
-            && deferred.unique_indices.is_empty(),
+            && !deferred.has_unique_constraints(),
         "a deferred load must build nothing"
     );
 

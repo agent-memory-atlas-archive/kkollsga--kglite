@@ -2136,7 +2136,7 @@ mod tests {
         mutate_and_finish(
             &backend,
             &session,
-            "CREATE INDEX doc_title_idx FOR (d:Doc) ON (d.title)",
+            "CREATE INDEX doc_title_idx IF NOT EXISTS FOR (d:Doc) ON (d.title)",
             true,
         )
         .await;

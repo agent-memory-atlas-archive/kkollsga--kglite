@@ -749,7 +749,7 @@ fn saved_disk_unique_declaration_is_lazy_visible_and_enforced_on_write() {
     );
     assert!(held.indexes_deferred());
     assert!(
-        held.unique_indices.is_empty(),
+        !held.has_unique_constraints(),
         "disk load eagerly rebuilt occupancy"
     );
     assert_eq!(stored(&held), before);

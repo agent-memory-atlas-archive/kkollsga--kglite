@@ -277,8 +277,8 @@ graph.define_schema({"nodes": {"Person": {
 Three things make this real rather than advisory:
 
 - **`primary_key` may name any property, not just `id`.** A key on `id` routes
-  through the identity index. Any other key is backed by a unique secondary index
-  that persists and rebuilds on load.
+  through the identity index. Any other key owns a hash index that serves
+  lookups on the key, and a load rebuilds it.
 - **`required` is enforced at write time.** A `CREATE` that omits the property, a
   `SET` that nulls it, and a `REMOVE` that drops it all raise, rather than
   surfacing later in `validate_schema()`.
@@ -556,8 +556,8 @@ happen in Python or Rust. What to watch:
     `DROP CONSTRAINT person_email_unique` works as written.
 - **Uniqueness on the identity field is refused, not silently accepted.** A
   `REQUIRE … IS UNIQUE` (or `IS NODE KEY`) that resolves to the structural `id` is
-  rejected. That includes the node type's own id column name. A unique secondary
-  index would never observe those writes, so the constraint would admit
+  rejected. That includes the node type's own id column name. A unique index
+  would never observe those writes, so the constraint would admit
   duplicates while reporting success.
   - Declare identity uniqueness as `primary_key` in `define_schema` instead. It
     probes the per-type id index on every write path.

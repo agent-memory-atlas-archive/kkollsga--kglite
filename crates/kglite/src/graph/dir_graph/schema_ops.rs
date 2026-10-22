@@ -97,9 +97,9 @@ impl DirGraph {
     /// schema being replaced. The unique half is *retained* by
     /// [`Self::withdraw_schema_unique`]: computing the withdrawal from the
     /// outgoing schema is not enough on its own, since a DDL declaration and a
-    /// schema key on the same `(type, property)` share one entry in
-    /// `unique_indices` — withdrawing the key's declaration used to delete the
-    /// DDL one with it.
+    /// schema key on the same `(type, property)` share one declaration in
+    /// `unique_constraint_keys` — withdrawing the key's declaration used to
+    /// delete the DDL one with it.
     // `KgError` is a rich by-value error type across the whole public surface;
     // every other `Result<_, KgError>` signature in the engine carries the same
     // allow rather than boxing one variant in isolation.

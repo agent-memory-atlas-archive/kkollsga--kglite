@@ -1,10 +1,8 @@
 //! Unique-constraint claims across a rollback
 //!
-//! `unique_indices` is parked by `swap_data_scale`, so a journal rollback keeps
-//! the *failed statement's* occupancy map while the data underneath is restored.
-//! Its undo story is the per-touched-type rebuild in
-//! `StatementCheckpoint::rollback`. These tests pin both directions of getting
-//! that wrong:
+//! A constraint owns an entry in `property_indices` / `composite_indices`, so a
+//! journal rollback reverses its claims with the bucket entries every user
+//! index gets. These tests pin both directions of getting that wrong:
 //!
 //! - a **phantom claim** — a value the failed statement claimed stays occupied,
 //!   so a later legitimate insert is rejected forever;
@@ -12,8 +10,8 @@
 //!   real duplicate is admitted on the next write.
 //!
 //! The declared tuple is `Item.name`, an explicit non-`id` property, on purpose:
-//! `declared_unique_tuples` skips `primary_key == "id"`, so a constraint over
-//! `id` leaves `unique_indices` empty and would make these tests vacuous.
+//! a primary key on `id` is held by the id index, so a constraint over `id`
+//! would leave the owned index empty and make these tests vacuous.
 
 use super::*;
 
@@ -23,33 +21,36 @@ type UniqueClaims = Vec<(String, usize)>;
 /// `(node_type, constraint properties, claims)` per declared constraint.
 pub(super) type UniqueFingerprint = Vec<(String, Vec<String>, UniqueClaims)>;
 
-/// The whole occupancy map, per declared constraint: constraint tuple → the
-/// claimed values and the slot holding each. Slot-level so a claim that comes
-/// back pointing at the wrong node is a failure, not just a missing one.
+/// The whole occupancy, per declared constraint: constraint tuple → the claimed
+/// values and the slot holding each. Slot-level so a claim that comes back
+/// pointing at the wrong node is a failure, not just a missing one.
 pub(super) fn unique_fingerprint(graph: &DirGraph) -> UniqueFingerprint {
-    let mut out: Vec<_> = graph
-        .unique_indices
+    let mut out: Vec<(String, Vec<String>, UniqueClaims)> = graph
+        .unique_constraint_keys
         .iter()
-        .map(|((node_type, properties), occupants)| {
-            let mut claims: UniqueClaims = occupants
-                .iter()
-                .map(|(value, idx)| (format!("{value:?}"), idx.index()))
-                .collect();
-            claims.sort();
-            (node_type.clone(), properties.clone(), claims)
-        })
+        .map(|(node_type, properties)| (node_type.clone(), properties.clone(), Vec::new()))
         .collect();
+    for ((node_type, properties), value, idx) in graph.unique_occupancy() {
+        if let Some(entry) = out
+            .iter_mut()
+            .find(|(nt, props, _)| *nt == node_type && *props == properties)
+        {
+            entry.2.push((value, idx));
+        }
+    }
+    for entry in &mut out {
+        entry.2.sort();
+    }
     out.sort();
     out
 }
 
 /// `seeded()` plus a declared UNIQUE constraint over `Item.name`.
 ///
-/// Asserts the graph still takes the journal path: declaring a unique
-/// constraint touches only `unique_indices` / `unique_constraint_keys`, never
-/// `property_indices`, so `journal_covers` stays true. If that ever changes,
-/// these tests would silently start exercising the clone path and prove
-/// nothing — so the precondition is checked, not assumed.
+/// Asserts the graph still takes the journal path: the owned index is the only
+/// index on the graph, and the backend still supports the undo journal. If that
+/// ever changes, these tests would silently start exercising the clone path and
+/// prove nothing — so the precondition is checked, not assumed.
 pub(super) fn seeded_with_unique_name() -> DirGraph {
     let mut graph = seeded();
     run(
@@ -57,16 +58,18 @@ pub(super) fn seeded_with_unique_name() -> DirGraph {
         "CREATE CONSTRAINT FOR (i:Item) REQUIRE i.name IS UNIQUE",
     );
     assert_eq!(
-        graph.unique_indices.len(),
+        graph.unique_constraint_keys.len(),
         1,
         "the constraint must be declared and enforcing"
     );
     assert!(
-        graph.property_indices.is_empty()
+        graph.property_indices.len() == 1
             && graph.composite_indices.is_empty()
-            && graph.range_indices.is_empty(),
-        "a unique constraint must not create a user index, or these tests \
-         would exercise the clone checkpoint instead of the journal"
+            && graph.range_indices.is_empty()
+            && graph.graph.supports_undo_journal(),
+        "the constraint's owned index must be the only index and the journal \
+         must cover the graph, or these tests would exercise the clone \
+         checkpoint instead of the journal"
     );
     graph
 }
@@ -86,7 +89,7 @@ fn seeded_columnar_with_unique_qty() -> DirGraph {
     );
     graph.enable_columnar();
     assert_eq!(
-        graph.unique_indices.len(),
+        graph.unique_constraint_keys.len(),
         1,
         "the constraint must be declared and enforcing"
     );
@@ -101,13 +104,12 @@ fn seeded_columnar_with_unique_qty() -> DirGraph {
 ///
 /// This is the shape with no `NodeWeight` entry behind it: the value goes into
 /// the master column store, so the node's weight never changes and the journal
-/// sees only `UndoEntry::ColumnarCell` entries. Their replay is what reports
-/// the type into `stale_unique_indices`, and that report is the only thing
-/// driving the per-type unique rebuild. It has survived two rewrites of the
-/// mechanism underneath (the per-node handle sweep, then the per-type store
-/// pre-image, now the per-cell value) precisely because this test measures the
-/// claim rather than the mechanism: without the report a failed columnar `SET`
-/// leaves the claim it took behind and the claim it released free.
+/// sees only `UndoEntry::ColumnarCell` entries. The owned index's bucket
+/// entries, journalled by the index maintenance that follows the write, are what
+/// move the claim back. The test measures the claim rather than the mechanism,
+/// so it survives a rewrite of either: without the bucket undo a failed
+/// columnar `SET` leaves the claim it took behind and the claim it released
+/// free.
 #[test]
 fn rollback_restores_claims_moved_by_a_columnar_property_overwrite() {
     let mut graph = seeded_columnar_with_unique_qty();
@@ -187,8 +189,8 @@ fn rollback_restores_a_claim_the_failed_statement_released() {
 }
 
 /// The `NodeWeight`-only shape: a property overwrite moves a claim from the old
-/// value to the new one without touching identity, so it is invisible to
-/// `stale_id_indices` and needs `stale_unique_indices` to carry it.
+/// value to the new one without touching identity, so only the owned index's
+/// bucket entries can move it back.
 #[test]
 fn rollback_restores_claims_moved_by_a_property_overwrite() {
     let mut graph = seeded_with_unique_name();
