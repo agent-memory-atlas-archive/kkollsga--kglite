@@ -122,7 +122,6 @@ def test_a_name_held_by_a_range_index_or_a_constraint_is_refused_and_builds_noth
             "CREATE FULLTEXT INDEX f FOR (n:Doc) ON EACH [n.title] OPTIONS {indexProvider: 'x'}",
             "indexProvider",
         ),
-        ("CREATE FULLTEXT INDEX f FOR (n:Missing) ON EACH [n.title]", "Unknown node type"),
     ],
 )
 def test_forms_outside_the_supported_scope_are_refused_by_name(statement, needle):
@@ -196,3 +195,105 @@ def test_the_index_survives_a_crash_and_a_later_drop_replays(tmp_path, storage):
     _child(tmp_path, storage, 'g.cypher("DROP INDEX f")\n')
     g = kglite.open(str(tmp_path / "app.kgl"), durable=True)
     assert _rows(g) == []
+
+
+EMPTY_DDL = "CREATE FULLTEXT INDEX f FOR (n:Fresh) ON EACH [n.title]"
+
+
+def _fresh_hits(graph: KnowledgeGraph, text: str) -> list[int]:
+    return _hits(graph, "f", text)
+
+
+@pytest.mark.parametrize("mode", HEAP)
+def test_ddl_on_a_label_with_no_nodes_is_accepted_and_listed(mode):
+    graph = KnowledgeGraph(storage=mode)
+    graph.cypher(EMPTY_DDL)
+    [row] = _rows(graph)
+    assert (row["name"], row["type"], row["labelsOrTypes"], row["properties"]) == (
+        "f",
+        "FULLTEXT",
+        ["Fresh"],
+        ["title"],
+    )
+    assert _fresh_hits(graph, "red") == []
+    graph.cypher("CREATE FULLTEXT INDEX f IF NOT EXISTS FOR (n:Fresh) ON EACH [n.title]")
+    assert [r["name"] for r in _rows(graph)] == ["f"]
+    with pytest.raises(Exception, match="already exists"):
+        graph.cypher(EMPTY_DDL)
+    graph.cypher("DROP INDEX f")
+    assert _rows(graph) == []
+
+
+def _create(g):
+    g.cypher("CREATE (:Fresh {id: 1, title: 'quick red fox'}), (:Fresh {id: 2, title: 'blue cat'})")
+
+
+def _merge(g):
+    g.cypher("MERGE (:Fresh {id: 1, title: 'quick red fox'})")
+    g.cypher("MERGE (:Fresh {id: 2, title: 'blue cat'})")
+
+
+def _unwind(g):
+    g.cypher(
+        "UNWIND [{id: 1, t: 'quick red fox'}, {id: 2, t: 'blue cat'}] AS r CREATE (:Fresh {id: r['id'], title: r['t']})"
+    )
+
+
+def _add_nodes(g):
+    import pandas as pd
+
+    g.add_nodes(
+        pd.DataFrame({"id": [1, 2], "title": ["quick red fox", "blue cat"]}),
+        "Fresh",
+        "id",
+        "title",
+    )
+
+
+@pytest.mark.parametrize("write", [_create, _merge, _unwind, _add_nodes])
+@pytest.mark.parametrize("mode", HEAP)
+def test_nodes_written_after_the_ddl_are_found(mode, write):
+    graph = KnowledgeGraph(storage=mode)
+    graph.cypher(EMPTY_DDL)
+    write(graph)
+    assert _fresh_hits(graph, "red") == [1]
+    assert _fresh_hits(graph, "cat") == [2]
+    graph.cypher("MATCH (n:Fresh {id: 2}) SET n.title = 'red cat'")
+    assert sorted(_fresh_hits(graph, "red")) == [1, 2]
+
+
+@pytest.mark.parametrize("mode", HEAP)
+def test_an_index_over_a_still_empty_label_survives_save_and_load(mode, tmp_path):
+    graph = KnowledgeGraph(storage=mode)
+    graph.cypher(EMPTY_DDL)
+    path = str(tmp_path / "g.kgl")
+    graph.save(path)
+    reloaded = kglite.load(path)
+    assert [r["name"] for r in _rows(reloaded)] == ["f"]
+    assert _fresh_hits(reloaded, "red") == []
+    _create(reloaded)
+    assert _fresh_hits(reloaded, "red") == [1]
+    reloaded.cypher("DROP INDEX f")
+    assert _rows(reloaded) == []
+
+
+@pytest.mark.parametrize("storage", HEAP)
+def test_an_index_over_a_still_empty_label_survives_a_crash_then_fills(tmp_path, storage):
+    _child(tmp_path, storage, f'g.cypher("{EMPTY_DDL}")\n')
+    g = kglite.open(str(tmp_path / "app.kgl"), durable=True)
+    assert [(r["name"], r["type"]) for r in _rows(g)] == [("f", "FULLTEXT")]
+    assert _fresh_hits(g, "red") == []
+    del g
+    _child(
+        tmp_path,
+        storage,
+        "g.cypher(\"CREATE (:Fresh {id: 1, title: 'quick red fox'})\")\n",
+    )
+    g = kglite.open(str(tmp_path / "app.kgl"), durable=True)
+    assert _fresh_hits(g, "red") == [1]
+
+
+def test_a_disk_graph_still_refuses_an_empty_label_index(tmp_path):
+    graph = kglite.open(str(tmp_path / "g"), storage="disk")
+    with pytest.raises(Exception, match="disk-backed"):
+        graph.cypher(EMPTY_DDL)

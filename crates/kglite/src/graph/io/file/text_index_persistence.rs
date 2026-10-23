@@ -291,7 +291,12 @@ fn decode_text_indexes_impl(
         if entry.dirty.iter().any(|slot| *slot >= entry.watermark) {
             continue;
         }
-        if !graph.has_node_type(&entry.node_type) {
+        // An index with documents over a type the graph no longer has is an
+        // orphan; one with none was declared before its label had a node
+        // (`CREATE FULLTEXT INDEX` on an empty label) and stays declared.
+        if !graph.has_node_type(&entry.node_type)
+            && (!entry.terms.is_empty() || !entry.empty_docs.is_empty())
+        {
             continue;
         }
         let index = TextIndex::from_terms(entry.terms, &entry.empty_docs);

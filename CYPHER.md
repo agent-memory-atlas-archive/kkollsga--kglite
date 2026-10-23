@@ -4885,6 +4885,7 @@ ignored.
 `CREATE FULLTEXT INDEX FOR (n:Label) ON EACH [n.prop]` builds the BM25 index over one label's one property.
 It is the statement `build_text_index(label, prop)` runs, plus a name.
 
+- The label need not exist yet. The index covers nodes created later and answers no rows until one exists, so DDL can run before the data loads.
 - The name is optional. An unnamed index answers to `Label.prop`.
 - Index and constraint names share one namespace. A taken name is refused and builds nothing.
 - `IF NOT EXISTS` turns a taken name or an existing index on the property into a no-op. Without it, a second index on the same property is an error.

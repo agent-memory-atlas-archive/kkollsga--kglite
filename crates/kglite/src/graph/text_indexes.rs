@@ -673,6 +673,24 @@ pub fn build_text_index(
     property: &str,
     auto_refresh_limit: Option<usize>,
 ) -> Result<TextIndexReport, String> {
+    if !GraphRead::is_disk(&graph.graph) && !graph.has_node_type(node_type) {
+        return Err(format!(
+            "Unknown node type '{node_type}'. build_text_index() indexes one node type's \
+             property; list the graph's node types to see what exists."
+        ));
+    }
+    declare_text_index(graph, node_type, property, auto_refresh_limit)
+}
+
+/// [`build_text_index`] without the known-type requirement: the index is keyed
+/// by `(label, property)` and covers whatever nodes carry the label later, so
+/// `CREATE FULLTEXT INDEX` can run before the first node of its label exists.
+pub(crate) fn declare_text_index(
+    graph: &mut DirGraph,
+    node_type: &str,
+    property: &str,
+    auto_refresh_limit: Option<usize>,
+) -> Result<TextIndexReport, String> {
     let report = build_text_index_structure(graph, node_type, property, auto_refresh_limit)?;
     // The *resolved* ceiling, not the caller's `None`: replay reproduces the
     // index this build produced, whichever default the recovering build has.
@@ -705,13 +723,6 @@ pub(crate) fn build_text_index_structure(
              default (in-memory) or 'mapped' storage mode."
         ));
     }
-    if !graph.has_node_type(node_type) {
-        return Err(format!(
-            "Unknown node type '{node_type}'. build_text_index() indexes one node type's \
-             property; list the graph's node types to see what exists."
-        ));
-    }
-
     let field = graph.resolve_alias(node_type, property).to_string();
     let key = InternedKey::from_str(&field);
     let nodes = graph

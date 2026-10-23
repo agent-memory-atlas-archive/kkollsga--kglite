@@ -82,7 +82,7 @@ pub(super) fn execute_create_fulltext_index(
         return Err(already_exists_message(&format!("{label}.{property}")));
     }
 
-    crate::graph::text_indexes::build_text_index(graph, &label, property, None)?;
+    crate::graph::text_indexes::declare_text_index(graph, &label, property, None)?;
     if let Some(name) = &create.name {
         register_index_name(graph, name, named);
     }
