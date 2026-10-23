@@ -46,9 +46,9 @@ test('schema statements and explicit transactions interleave with grouped writes
   const calls = [];
   for (let i = 0; i < 60; i++) calls.push(graph.executeWrite('CREATE (:Mixed {i: $i})', { i }));
   for (let k = 0; k < 5; k++) calls.push(graph.executeWrite(`CREATE INDEX FOR (n:Mixed) ON (n.p${k})`));
-  const tx = await graph.begin();
-  await tx.run('CREATE (:ViaTx)');
-  calls.push(tx.commit());
+  // Grouped writes are not ordered against begin(), so a write can land between
+  // begin and commit; the optimistic conflict that causes is retriable by contract.
+  calls.push(graph.transaction(async (tx) => { await tx.run('CREATE (:ViaTx)'); }, { retries: 100 }));
   const settled = await Promise.allSettled(calls);
   const failed = settled.filter((r) => r.status === 'rejected');
   assert.equal(failed.length, 0, failed[0] && String(failed[0].reason));
