@@ -288,7 +288,6 @@ fn apply_edges(
                         EdgeData::new_interned(connection_type, properties),
                     );
                     crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
-                    graph.file_created_edge(idx);
                     created.edges.insert(idx);
                 }
                 let metadata = props
@@ -409,7 +408,6 @@ fn replace_group(
             .graph
             .add_edge(source, target, EdgeData::new_interned(kind, properties));
         crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
-        graph.file_created_edge(idx);
         created.edges.insert(idx);
     }
     graph.graph.flush_pending_writes();

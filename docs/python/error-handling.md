@@ -79,7 +79,7 @@ constraint raises `ConstraintViolationError`, from **every** write path:
 `cypher()` and the bulk loaders alike.
 
 - Relationship constraints (`FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL` /
-  `IS :: TYPE`) raise the same exception, with a message written in relationship
+  `IS :: TYPE` / `IS UNIQUE`) raise the same exception, with a message written in relationship
   words.
 - Declaring a constraint the stored data already violates is a different problem
   with a different fix. It raises the sibling `ConstraintCreationError`.

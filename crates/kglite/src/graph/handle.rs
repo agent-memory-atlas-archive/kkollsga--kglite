@@ -609,7 +609,7 @@ fn compact_dir_graph_indices(graph: &mut DirGraph) {
     for index in graph.range_indices.values_mut() {
         index.try_compact();
     }
-    for index in graph.rel_property_indices.values_mut() {
+    for index in graph.rel.indices.values_mut() {
         index.try_compact();
     }
 }

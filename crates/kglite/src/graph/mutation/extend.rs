@@ -75,7 +75,7 @@ use crate::graph::mutation::maintain::{
     add_connections_with_initial_load, add_nodes, gate_node_rows, parse_conflict_mode,
     source_owns_its_edges, InitialLoad,
 };
-use crate::graph::mutation::rel_constraint_gate::{ConnectionBatchGate, RowFolding};
+use crate::graph::mutation::rel_constraint_gate::{ConnectionBatchGate, RowFolding, UniqueClaims};
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -474,6 +474,7 @@ fn gate_edge_groups(
     if !target.has_rel_constraints() && !target.ontology_rel_gate {
         return Ok(());
     }
+    let mut claims = UniqueClaims::new();
     for ((conn_type, source_type, target_type), group) in edge_groups {
         if !target.type_has_rel_constraints(conn_type) && !target.ontology_rel_gate {
             continue;
@@ -503,7 +504,7 @@ fn gate_edge_groups(
             start_key: start_key.as_ref(),
             endpoint_types: Some((source_type, target_type)),
         }
-        .run(target)?;
+        .run_claiming(target, &mut claims)?;
     }
     Ok(())
 }

@@ -180,6 +180,13 @@ pub(super) fn check_target(graph: &DirGraph, target: &TemporalTarget) -> Result<
                     "there is no relationship type '{rel_type}' in the graph"
                 ));
             }
+            if graph.type_has_rel_unique(rel_type) {
+                return Err(format!(
+                    "relationship type '{rel_type}' declares a UNIQUE constraint, and a validity \
+                     interval would let several versions of one relationship share its value. \
+                     Drop the constraint before declaring an interval."
+                ));
+            }
             let Some(source) = source_type else {
                 return Ok(());
             };

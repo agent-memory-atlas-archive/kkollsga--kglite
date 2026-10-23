@@ -1535,7 +1535,7 @@ fn a_relationship_index_declaration_replays_and_follows_later_edge_ops() {
     ];
     apply_frames(&mut g, &frames, 0).unwrap();
     assert!(g.has_rel_property_index("KNOWS", "k"));
-    crate::graph::dir_graph::rel_index_tests::assert_consistent(&g);
+    crate::graph::dir_graph::rel_index::tests::assert_consistent(&g);
     assert_eq!(
         g.lookup_rel_index("KNOWS", "k", &Value::String("x2".into()))
             .map(|hits| hits.len()),

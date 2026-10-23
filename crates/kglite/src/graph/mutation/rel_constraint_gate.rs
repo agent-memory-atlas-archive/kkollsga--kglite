@@ -67,6 +67,7 @@ use petgraph::graph::NodeIndex;
 
 use super::batch::{sum_values, ConflictHandling};
 use super::maintain::source_owns_its_edges;
+pub(crate) use super::rel_unique_gate::UniqueClaims;
 
 /// Cell access to the rows a gate judges, whatever holds them.
 pub(crate) trait GateRows {
@@ -118,6 +119,7 @@ pub(crate) fn gate_property_rows(
         folding,
         start_key,
         endpoint_types,
+        claims,
     } = regime;
     // A declared validity interval gates these rows as it gates a load.
     let empty = crate::graph::features::temporal::check_edge_rows(
@@ -162,7 +164,7 @@ pub(crate) fn gate_property_rows(
         start_key,
         endpoint_types,
     }
-    .run(graph)
+    .run_claiming(graph, claims)
     .map(|warnings| (empty, warnings))
 }
 
@@ -172,6 +174,8 @@ pub(crate) struct RowRegime<'a> {
     pub folding: RowFolding,
     pub start_key: Option<&'a StartKey>,
     pub endpoint_types: Option<(&'a str, &'a str)>,
+    /// The unique values the call's earlier groups claim; see [`UniqueClaims`].
+    pub claims: &'a mut UniqueClaims,
 }
 
 /// One bulk frame, as its gate sees it.
@@ -271,6 +275,16 @@ impl ConnectionBatchGate<'_> {
     /// becomes a typed error at the binding. `Ok` carries the `warn`-level
     /// ontology lines.
     pub(crate) fn run(self, graph: &mut DirGraph) -> Result<Vec<String>, String> {
+        self.run_claiming(graph, &mut UniqueClaims::new())
+    }
+
+    /// [`Self::run`] for one group of a call that judges several before it
+    /// writes any: `claims` carries the unique values the earlier groups hold.
+    pub(crate) fn run_claiming(
+        self,
+        graph: &mut DirGraph,
+        claims: &mut UniqueClaims,
+    ) -> Result<Vec<String>, String> {
         // Fast-out. A graph that declares nothing pays one `is_empty` pair and
         // one flag read; a graph that constrains some *other* connection type
         // pays two more probes. Nothing below this line runs for an
@@ -305,6 +319,7 @@ impl ConnectionBatchGate<'_> {
         if !plan.names.is_empty() || plan.constrained {
             self.run_rows(graph, &mut plan)?;
         }
+        self.judge_unique(graph, claims)?;
         self.judge_cardinality(graph, &mut plan);
         graph.settle_ontology_tally(plan.tally)
     }
@@ -489,7 +504,7 @@ impl ConnectionBatchGate<'_> {
     /// in the frame — either stored, or created by an earlier row. It is what
     /// separates "this row is a create, and is the whole state" from "this row
     /// is a merge".
-    fn merge_row(
+    pub(super) fn merge_row(
         &self,
         row_idx: usize,
         columns: &[Option<usize>],
@@ -539,7 +554,7 @@ impl ConnectionBatchGate<'_> {
     /// The constrained properties `row_idx` supplies. A missing column and a
     /// null cell are the same thing — absent — which is what the loader's own
     /// `extract_props` does with them.
-    fn row_values(&self, row_idx: usize, columns: &[Option<usize>]) -> PairState {
+    pub(super) fn row_values(&self, row_idx: usize, columns: &[Option<usize>]) -> PairState {
         columns
             .iter()
             .map(|column| {

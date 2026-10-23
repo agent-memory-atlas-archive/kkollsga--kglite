@@ -8375,7 +8375,9 @@ class KnowledgeGraph:
         Constraint DDL — ``CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:L)
         REQUIRE n.p IS UNIQUE | IS NOT NULL | IS NODE KEY | IS :: TYPE``,
         the relationship form ``FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL |
-        IS :: TYPE``,
+        IS :: TYPE | IS UNIQUE`` (``IS UNIQUE`` takes one property, owns a
+        relationship index, and is refused on a disk graph and on a type with
+        a validity interval),
         ``DROP CONSTRAINT <name> [IF EXISTS]``, and ``SHOW CONSTRAINTS`` —
         declares constraints that are enforced on every write path, including
         the bulk loader. ``REQUIRE (n.a, n.b) IS UNIQUE`` constrains the tuple;

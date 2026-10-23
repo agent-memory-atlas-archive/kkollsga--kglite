@@ -447,6 +447,8 @@ fn create_relationship_index(
     graph.materialize_indexes();
     let name = qualified_index_name("RELATIONSHIP", rel_type, &create.properties);
     if graph.has_rel_property_index(rel_type, property) {
+        // An index a constraint owns is the structure this statement asks for,
+        // so it is a duplicate like any other.
         if create.if_not_exists {
             return Ok(MutationStats::default());
         }
@@ -746,6 +748,7 @@ fn drop_relationship_indexes(
         ));
     };
     super::write_scope::enforce_relationship_type_write_scope(graph, rel_type)?;
+    graph.reject_owned_rel_index_drop(rel_type, property)?;
     let wants = |class: IndexClass| only.is_none_or(|only| only == class);
     let vector = wants(IndexClass::Vector)
         && crate::graph::edge_embeddings::vector_index::drop_edge_vector_index(
@@ -753,8 +756,8 @@ fn drop_relationship_indexes(
         )?;
     let text = wants(IndexClass::Fulltext)
         && crate::graph::text_indexes::edge_text::drop_edge_text_index(graph, rel_type, property);
-    let value = wants(IndexClass::Equality)
-        && graph.withdraw_rel_property_index(rel_type, property);
+    let value =
+        wants(IndexClass::Equality) && graph.withdraw_rel_property_index(rel_type, property);
     Ok(usize::from(vector) + usize::from(text) + usize::from(value))
 }
 

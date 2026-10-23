@@ -8,7 +8,9 @@ use crate::graph::mutation::batch::{
     BatchMetrics, ConflictHandling, ConnectionBatchProcessor, ConnectionBatchStats,
 };
 use crate::graph::mutation::maintain::update_schema_node;
-use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding, RowRegime};
+use crate::graph::mutation::rel_constraint_gate::{
+    gate_property_rows, RowFolding, RowRegime, UniqueClaims,
+};
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -60,6 +62,7 @@ impl PendingEdges {
         let groups = self.split_by_start_key(graph, connection_type, source_type);
         let mut empty_intervals = EmptyIntervals::default();
         let mut ontology_warnings = Vec::new();
+        let mut claims = UniqueClaims::new();
         for group in &groups {
             let (empty, warnings) = gate_property_rows(
                 graph,
@@ -71,6 +74,7 @@ impl PendingEdges {
                     folding: RowFolding::for_load(false),
                     start_key: group.start_key.as_ref(),
                     endpoint_types: None,
+                    claims: &mut claims,
                 },
             )?;
             empty_intervals.absorb(empty);

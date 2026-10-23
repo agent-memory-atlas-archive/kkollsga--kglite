@@ -49,6 +49,13 @@ impl DirGraph {
                 keep
             });
         }
+        self.rel.unique.retain(|(owner, property)| {
+            let keep = !is_reserved_provenance_key(property);
+            if !keep {
+                dropped.push(format!("UNIQUE on relationship {owner}.{property}"));
+            }
+            keep
+        });
         for (store, what) in [
             (&mut self.ddl_property_type_constraints, "property type on"),
             (

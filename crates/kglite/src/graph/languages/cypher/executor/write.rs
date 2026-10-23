@@ -1111,7 +1111,7 @@ fn create_pattern_edges(
             // keeps the change log free of phantoms, since every capture on this
             // path happens downstream of here.
             if graph.has_rel_constraints() {
-                graph.check_rel_row_types(&edge_pat.connection_type, |property| {
+                graph.check_new_rel_row(&edge_pat.connection_type, |property| {
                     edge_props.get(property).cloned()
                 })?;
             }
@@ -1152,7 +1152,6 @@ fn create_pattern_edges(
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
             graph.note_required_edge(&edge_pat.connection_type, edge_index);
-            graph.file_created_edge(edge_index);
             graph.note_ontology_edge_touch(edge_index);
             graph.note_tx_edge_added(edge_index);
 
@@ -1991,10 +1990,9 @@ fn stamp_edge_provenance(
             );
         }
     }
-    // Once per stamped type, as `stamp_node_provenance` records the node
-    // keys: a type opted in after its edges were written, or a
-    // `git_sha`/`modified_by` its creating write did not carry, is
-    // otherwise stamped without its catalogue knowing the key.
+    // Once per stamped type, as `stamp_node_provenance` does: a type opted in
+    // after its edges were written, or a key its creating write did not carry,
+    // is otherwise stamped without its catalogue knowing the key.
     for type_key in stamped_types {
         let conn_type = graph.interner.resolve(type_key).to_string();
         for (name, value) in &provenance {

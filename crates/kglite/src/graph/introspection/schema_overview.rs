@@ -632,6 +632,9 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             name: format!("relationship:{rel_type}.{property}"),
             kind: IndexKind::Equality,
             entity_type: "RELATIONSHIP",
+            owning_constraint: graph
+                .has_rel_unique_constraint(&rel_type, &property)
+                .then(|| graph.rel_unique_display_name(&rel_type, &property)),
             labels_or_types: vec![rel_type],
             properties: vec![property],
             state: state.as_str(),
@@ -639,7 +642,6 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             delta: None,
             unembedded: None,
             vector_config: None,
-            owning_constraint: None,
         });
     }
     for (node_type, property, state) in graph.list_range_indexes_with_state() {
@@ -1006,8 +1008,9 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     }
 
     // Relationship rows. Their stores are separate from the node ones and carry
-    // only presence and property type — the two kinds relationship DDL installs
-    // — so there is no NODE_KEY-style folding to do here.
+    // presence, property type and single-property uniqueness — the kinds
+    // relationship DDL installs — so there is no NODE_KEY-style folding to do
+    // here.
     for (rel_type, property) in graph.list_rel_not_null_constraints() {
         let properties = vec![property];
         out.push(ConstraintInfo {
@@ -1024,6 +1027,26 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
             properties,
             property_type: None,
             owned_index: None,
+        });
+    }
+
+    for (rel_type, property) in graph.list_rel_unique_constraints() {
+        let properties = vec![property];
+        let owned_index = Some(format!("relationship:{rel_type}.{}", properties[0]));
+        out.push(ConstraintInfo {
+            name: constraint_name(
+                graph,
+                EntityKind::Relationship,
+                &rel_type,
+                &properties,
+                &[ConstraintKind::Unique],
+            ),
+            kind: ConstraintKind::Unique,
+            entity: EntityKind::Relationship,
+            labels_or_types: vec![rel_type],
+            properties,
+            property_type: None,
+            owned_index,
         });
     }
 

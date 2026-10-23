@@ -82,6 +82,12 @@ pub(super) fn set_edge_property(
     if let Some(rel_type) = constrained_edge_type(graph, edge_index) {
         graph.check_rel_property_write(&rel_type, property, Some(&value))?;
         graph.note_required_edge(&rel_type, edge_index);
+        // The edge being rewritten does not conflict with its own value.
+        graph.check_rel_unique_row(
+            &rel_type,
+            |written| (written == property).then(|| value.clone()),
+            Some(edge_index),
+        )?;
     }
 
     let observed_type = (!matches!(value, Value::Null)).then(|| value.type_name());

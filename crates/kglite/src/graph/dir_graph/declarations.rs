@@ -131,9 +131,7 @@ impl DirGraph {
                 PropertyIndexKind::Equality => (EntityKind::Node, IndexClass::Equality),
                 PropertyIndexKind::Range => (EntityKind::Node, IndexClass::Range),
                 PropertyIndexKind::Composite => (EntityKind::Node, IndexClass::Composite),
-                PropertyIndexKind::Relationship => {
-                    (EntityKind::Relationship, IndexClass::Equality)
-                }
+                PropertyIndexKind::Relationship => (EntityKind::Relationship, IndexClass::Equality),
             };
             self.forget_index_names_for(entity, node_type, &properties, &[class]);
         }

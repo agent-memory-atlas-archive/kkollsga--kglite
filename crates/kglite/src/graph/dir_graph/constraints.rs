@@ -1247,10 +1247,9 @@ impl DirGraph {
 
     /// Whether the declaration a registered name points at is still in force.
     fn constraint_is_declared(&self, declared: &NamedConstraint) -> bool {
-        // Relationship declarations live in their own stores, and neither
-        // uniqueness spelling can be installed on one — a name pointing at such
-        // a constraint can only have come from a hand-edited file, and is
-        // pruned rather than trusted.
+        // Relationship declarations live in their own stores. RELATIONSHIP KEY
+        // cannot be installed, so a name pointing at one can only have come
+        // from a hand-edited file, and is pruned rather than trusted.
         if declared.entity == EntityKind::Relationship {
             return match declared.kind {
                 ConstraintKind::NotNull => declared.properties.iter().all(|property| {
@@ -1260,7 +1259,11 @@ impl DirGraph {
                     self.rel_property_type_for(&declared.node_type, property)
                         .is_some()
                 }),
-                ConstraintKind::Unique | ConstraintKind::NodeKey => false,
+                ConstraintKind::Unique => declared
+                    .properties
+                    .iter()
+                    .all(|property| self.has_rel_unique_constraint(&declared.node_type, property)),
+                ConstraintKind::NodeKey => false,
             };
         }
         match declared.kind {

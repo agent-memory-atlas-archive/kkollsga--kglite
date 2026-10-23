@@ -4857,6 +4857,7 @@ CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE (n.a, n.b) IS UNI
 CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.prop IS NOT NULL
 CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.prop IS NODE KEY
 CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR (n:Label) REQUIRE n.prop IS :: INTEGER
+CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR ()-[r:TYPE]-() REQUIRE r.prop IS UNIQUE
 CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR ()-[r:TYPE]-() REQUIRE r.prop IS NOT NULL
 CREATE CONSTRAINT [name] [IF NOT EXISTS] FOR ()-[r:TYPE]-() REQUIRE r.prop IS :: INTEGER
 DROP CONSTRAINT <name> [IF EXISTS]
@@ -4880,6 +4881,7 @@ either.
 | `REQUIRE n.p IS NOT NULL` | every node of the type has a non-null `p` | the node type's required-field list |
 | `REQUIRE n.p IS NODE KEY` | both of the above, at once | an owned index **plus** a required field |
 | `REQUIRE n.p IS :: TYPE` | every value written to `p` has the declared type | a declared per-property type, checked before the write lands |
+| `REQUIRE r.p IS UNIQUE` (on `FOR ()-[r:T]-()`) | no two relationships of the type share `p` | an owned relationship index on `(T, p)`, which also serves `MATCH ()-[r:T {p: $v}]->()` |
 | `REQUIRE r.p IS NOT NULL` (on `FOR ()-[r:T]-()`) | every relationship of the type has a non-null `p` | a declared per-connection-type presence rule |
 | `REQUIRE r.p IS :: TYPE` (on `FOR ()-[r:T]-()`) | every value written to `r.p` has the declared type | a declared per-connection-type property type |
 
@@ -4987,12 +4989,36 @@ always the row:
 - `replace_connections` raises the refusal before its delete, so a rejected frame
   never costs the relationships already stored.
 
-**`IS UNIQUE` and `IS RELATIONSHIP KEY` on a relationship are refused.** This is a
-data-model gap, not a missing feature flag. The bulk loader deduplicates
-`(type, source, target)` while Cypher `CREATE` freely makes parallel edges, so
-KGLite has no single answer for when two relationships of a type are the same
-one. A uniqueness declaration would mean different things depending on which
-write path produced the data. The refusal names that reason.
+**`IS UNIQUE` on a relationship** means no two relationships of the type hold the
+same non-null value of the property. It says nothing about when two relationships
+are "the same one", so parallel edges between one pair are legal while their
+values differ.
+
+- **One property.** A composite `IS UNIQUE` is refused; declare one constraint per
+  property.
+- **Exact equality.** The check is the node constraint's: `1` and `1.0` are two
+  values, and a numeric string is a third. `NULL` and an absent property claim
+  nothing.
+- **The index it owns.** The constraint owns a relationship index, listed by
+  `SHOW INDEXES` with `owningConstraint` and by `SHOW CONSTRAINTS` as `ownedIndex`
+  (`relationship:T.p`). `DROP INDEX` on it is refused and names the constraint,
+  `CREATE INDEX` on the same property is a duplicate, an index you declared first
+  is adopted and survives `DROP CONSTRAINT`, and `DROP CONSTRAINT` removes an
+  index the constraint created.
+- **Where it is checked.** `CREATE`, `MERGE`'s create branch, `SET` in all three
+  spellings and the bulk loaders, which judge the state each frame leaves behind
+  (a frame that moves a value off one relationship and onto another is legal).
+  `REMOVE`, `DELETE` and a rolled-back statement release the claim.
+- **Refused.** A `storage='disk'` graph (its relationship ids cannot be indexed or
+  persisted) and a type with a declared validity interval, where several versions
+  of one relationship legitimately share a value; declaring an interval on a
+  unique type is refused the same way. `SHOW CONSTRAINTS` lists it as
+  `RELATIONSHIP_UNIQUENESS`.
+- **Persistence.** The `.kgl` file lists the declaration under a new key. A
+  binary that predates it ignores the key and opens the file without the
+  enforcement. A write-ahead log that carries the declaration is WAL format 13.
+
+**`IS RELATIONSHIP KEY` is refused.** Declare `IS UNIQUE` and `IS NOT NULL` instead.
 
 #### Property-type constraints (`IS :: T`)
 
@@ -5115,7 +5141,9 @@ enforces nothing**.
 |---|---|
 | `REQUIRE n.p IS :: LIST<STRING>` | Only the type names with an exact KGLite value counterpart are accepted (see [Property-type constraints](#property-type-constraints-is--t)). Lists, unions and decorated forms are refused by name rather than approximated; the error lists the names that work. `validate_schema()` audits existing data against `define_schema`'s per-type `types` map, and `lock_schema()` rejects a write whose value disagrees with the recorded property type |
 | `REQUIRE n.id IS UNIQUE` / `IS NODE KEY` | Uniqueness over the identity field — under **any** spelling that resolves to it, `id` itself or the node type's own id column (`person_id`) — is refused. `id` is a `NodeData` field, not an entry in the property map, so the write-path claim is never produced and the constraint would admit duplicates while reporting success. Declare the node type's primary key instead: `define_schema({'nodes': {'Person': {'primary_key': 'id'}}})` probes the per-type id index on every write path, and `MERGE` is the idempotent alternative to `CREATE`. Only `id` is affected — `title`, a column aliased to `title`, and ordinary properties all enforce correctly. `IS NOT NULL` on `id` **is** accepted, and genuinely enforced: every write path resolves an id before the check, so an *omitted* one satisfies the requirement, but an explicit `CREATE (:Person {id: null})` violates it — and the declaration itself is refused when existing rows already carry a null `id` |
-| `FOR ()-[r:T]-() REQUIRE r.p IS UNIQUE` / `IS RELATIONSHIP KEY` | KGLite has no single answer for when two relationships of a type are the same one — the bulk loader deduplicates `(type, source, target)` while Cypher `CREATE` freely makes parallel edges — so a uniqueness declaration would mean different things depending on which write path produced the data. Presence and property type **are** served on relationships (see [Relationship constraints](#relationship-constraints)) |
+| `FOR ()-[r:T]-() REQUIRE r.p IS RELATIONSHIP KEY` | Declare the two halves instead: `IS UNIQUE` and `IS NOT NULL` (see [Relationship constraints](#relationship-constraints)) |
+| `FOR ()-[r:T]-() REQUIRE (r.a, r.b) IS UNIQUE` | Relationship uniqueness covers exactly one property. Declare one constraint per property |
+| `FOR ()-[r:T]-() REQUIRE r.p IS UNIQUE` on a `storage='disk'` graph, or on a type with a declared validity interval | A disk graph's relationship ids cannot be indexed or persisted. A type with an interval holds several versions of one relationship that legitimately share a value. Both are refused with that reason |
 | `REQUIRE …` with no properties | Nothing to constrain |
 | `CREATE CONSTRAINT <name> …` reusing a live name | Names are unique per graph; drop the existing one or choose another name |
 
@@ -5844,7 +5872,7 @@ compatible subset.
 | Transactions | Snapshot isolation + OCC through `Session` / `Transaction`; durability depends on access mode | Server/embedded transaction management | Native session coordination is binding-independent; direct graph writes are in-place |
 | Indexing | Three separate structures — hash equality, composite, B-tree range — plus automatic type indexes and vector indexes | One general `RANGE` index serving equality, range, and ordering | An equality index cannot serve a range predicate, so KGLite exposes the distinction that Neo4j collapses. `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` are supported — see [Cypher index DDL](#cypher-index-ddl) for exactly what each statement builds |
 | Index names | User-assigned and stored, beside a derived canonical name (`Label.property`, `Label.(a,b)`) | User-assigned, unique | One namespace with constraint names; an owned index takes its constraint's name; the registry is an additive `.kgl` field |
-| Constraint DDL | `IS UNIQUE`, `IS NOT NULL`, `IS NODE KEY`, `IS :: TYPE` — enforced on every write path | `CREATE CONSTRAINT … IS UNIQUE / IS NOT NULL / IS NODE KEY / IS :: TYPE` | `IS :: TYPE` accepts the type names with an exact KGLite value counterpart (`BOOLEAN`, `STRING`, `INTEGER`, `FLOAT`, `DATE`, `LOCAL DATETIME`, `ZONED DATETIME`, `LOCAL TIME`, `ZONED TIME`, `DURATION`, `POINT`); lists and unions are rejected by name rather than approximated. Relationship constraints cover `IS NOT NULL` and `IS :: TYPE`; `IS UNIQUE` / `IS RELATIONSHIP KEY` on a relationship are refused, because KGLite has no single answer for when two relationships of a type are the same one. See [Cypher constraint DDL](#cypher-constraint-ddl) |
+| Constraint DDL | `IS UNIQUE`, `IS NOT NULL`, `IS NODE KEY`, `IS :: TYPE` — enforced on every write path | `CREATE CONSTRAINT … IS UNIQUE / IS NOT NULL / IS NODE KEY / IS :: TYPE` | `IS :: TYPE` accepts the type names with an exact KGLite value counterpart (`BOOLEAN`, `STRING`, `INTEGER`, `FLOAT`, `DATE`, `LOCAL DATETIME`, `ZONED DATETIME`, `LOCAL TIME`, `ZONED TIME`, `DURATION`, `POINT`); lists and unions are rejected by name rather than approximated. Relationship constraints cover `IS UNIQUE` (one property), `IS NOT NULL` and `IS :: TYPE`; `IS RELATIONSHIP KEY` is refused. See [Cypher constraint DDL](#cypher-constraint-ddl) |
 | Constraint names | Stored, so `DROP CONSTRAINT <name>` works | User-assigned, unique per database | The opposite decision to index names above: a ported schema script almost always drops constraints by name, and the `.kgl` metadata section is JSON, so the field was free. A constraint declared without a name is addressable by its canonical descriptor |
 | `LOAD CSV` source | Local files only — `file://` URLs and filesystem paths, gated by a per-caller capability | `file://` plus `http(s)://`, gated by an import-directory setting | The engine ships no HTTP client (network dependencies were removed in 0.14.x), so there is nothing to fetch a URL with. Filesystem access is granted per caller: on for in-process use, off for Bolt clients unless the server was started with `--allow-csv-import <DIR>` |
 

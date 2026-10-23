@@ -283,6 +283,12 @@ pub(crate) struct FileMetadata {
     /// as the two above.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     rel_ddl_property_type_constraints: BTreeMap<String, BTreeMap<String, DeclaredType>>,
+    /// Declared relationship UNIQUE constraints, as `(connection_type,
+    /// property)`. Additive like the two above: an older binary ignores the key
+    /// and opens the file without the enforcement, and a graph that declares
+    /// none writes the bytes it always wrote. The owned index is rebuilt at load.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    rel_ddl_unique_constraints: BTreeSet<(String, String)>,
     /// Node type metadata: node_type → { property_name → type_string }
     #[serde(default)]
     node_type_metadata: HashMap<String, HashMap<String, String>>,
@@ -546,7 +552,7 @@ impl FileMetadata {
             property_index_keys: graph.property_index_keys.clone(),
             composite_index_keys: graph.composite_index_keys.clone(),
             range_index_keys: graph.range_index_keys.clone(),
-            rel_property_index_keys: graph.rel_property_index_keys.clone(),
+            rel_property_index_keys: graph.rel.index_keys.clone(),
             unique_constraint_keys: graph.unique_constraint_keys.clone(),
             constraint_names: graph.constraint_names.clone(),
             index_names: graph.index_names.clone(),
@@ -555,6 +561,7 @@ impl FileMetadata {
             ddl_property_type_constraints: graph.ddl_property_type_constraints.clone(),
             rel_ddl_not_null_constraints: graph.rel_ddl_not_null_constraints.clone(),
             rel_ddl_property_type_constraints: graph.rel_ddl_property_type_constraints.clone(),
+            rel_ddl_unique_constraints: graph.rel.unique.clone(),
             node_type_metadata: (*graph.node_type_metadata).clone(),
             connection_type_metadata: (*graph.connection_type_metadata).clone(),
             id_field_aliases: (*graph.id_field_aliases).clone(),
@@ -644,7 +651,7 @@ impl FileMetadata {
         graph.property_index_keys = self.property_index_keys;
         graph.composite_index_keys = self.composite_index_keys;
         graph.range_index_keys = self.range_index_keys;
-        graph.rel_property_index_keys = self.rel_property_index_keys;
+        graph.rel.index_keys = self.rel_property_index_keys;
         graph.unique_constraint_keys = self.unique_constraint_keys;
         graph.constraint_names = self.constraint_names;
         graph.index_names = self.index_names;
@@ -653,6 +660,7 @@ impl FileMetadata {
         graph.ddl_property_type_constraints = self.ddl_property_type_constraints;
         graph.rel_ddl_not_null_constraints = self.rel_ddl_not_null_constraints;
         graph.rel_ddl_property_type_constraints = self.rel_ddl_property_type_constraints;
+        graph.rel.unique = self.rel_ddl_unique_constraints;
         graph.property_shapes = self.property_shapes;
         // Read-compat for files saved before declaration refused these.
         for dropped in graph.drop_reserved_provenance_constraints() {

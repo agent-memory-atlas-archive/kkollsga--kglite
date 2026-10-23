@@ -44,6 +44,7 @@ fn has_schema_state(graph: &DirGraph) -> bool {
         || !graph.ddl_property_type_constraints.is_empty()
         || !graph.rel_ddl_not_null_constraints.is_empty()
         || !graph.rel_ddl_property_type_constraints.is_empty()
+        || !graph.rel.unique.is_empty()
 }
 
 fn has_index_state(graph: &DirGraph) -> bool {
@@ -55,8 +56,8 @@ fn has_index_state(graph: &DirGraph) -> bool {
         || !graph.property_index_keys.is_empty()
         || !graph.composite_index_keys.is_empty()
         || !graph.range_index_keys.is_empty()
-        || !graph.rel_property_indices.is_empty()
-        || !graph.rel_property_index_keys.is_empty()
+        || !graph.rel.indices.is_empty()
+        || !graph.rel.index_keys.is_empty()
         || !graph.text_indexes.is_empty()
         || !graph.edge_text_indexes.is_empty()
         || !graph.embeddings.is_empty()

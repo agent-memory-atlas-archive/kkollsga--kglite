@@ -154,7 +154,7 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     std::mem::swap(&mut a.range_indices, &mut b.range_indices);
     // Journalled per bucket edit like the three families above
     // (`BucketId::RelPropertyValue`); whole-index DDL is not.
-    std::mem::swap(&mut a.rel_property_indices, &mut b.rel_property_indices);
+    std::mem::swap(&mut a.rel.indices, &mut b.rel.indices);
     std::mem::swap(&mut a.secondary_label_index, &mut b.secondary_label_index);
     // O(V × dimension) — a 100k × 384 store is 150 MB, so cloning it per
     // statement is out of the question. Its undo story is
@@ -916,7 +916,7 @@ fn undo_bucket_appended(
             }
         }
         BucketId::RelPropertyValue { key, value } => {
-            if let Some(value_map) = graph.rel_property_indices.get_mut(&key) {
+            if let Some(value_map) = graph.rel.indices.get_mut(&key) {
                 undo_bucket_append(value_map.get_mut(&value), idx);
                 if bucket_was_new {
                     value_map.remove(&value);
@@ -966,7 +966,7 @@ fn undo_bucket_removed(graph: &mut DirGraph, bucket: BucketId, idx: NodeIndex, p
             }
         }
         BucketId::RelPropertyValue { key, value } => {
-            if let Some(value_map) = graph.rel_property_indices.get_mut(&key) {
+            if let Some(value_map) = graph.rel.indices.get_mut(&key) {
                 let members = value_map.entry_or_default(&value);
                 let pos = pos.min(members.len());
                 members.insert(pos, idx);

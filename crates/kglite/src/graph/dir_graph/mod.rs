@@ -87,6 +87,7 @@ mod persistence_lifecycle;
 pub mod range_index_layer;
 pub(crate) mod rel_constraints;
 pub(crate) mod rel_index;
+mod rel_unique;
 mod reserved_constraints;
 pub(crate) mod rollback;
 pub(crate) mod schema_cow;
@@ -163,14 +164,11 @@ pub struct DirGraph {
     /// Persisted list of range index keys so indexes can be rebuilt on load
     #[serde(default)]
     pub range_index_keys: Vec<IndexKey>,
-    /// Relationship property indexes: `(rel_type, property) -> value -> [edge]`.
-    /// Skipped during serialization — rebuilt from `rel_property_index_keys` on
-    /// load. Members are edge slots held as `NodeIndex` (`dir_graph::rel_index`).
+    /// Relationship indexes and the UNIQUE constraints that own some of them
+    /// (`dir_graph::rel_index`, `dir_graph::rel_unique`). Skipped in
+    /// serialization; the declarations persist through `FileMetadata`.
     #[serde(skip)]
-    pub(crate) rel_property_indices: HashMap<IndexKey, LayeredIndex<Value>>,
-    /// Persisted list of relationship property index keys.
-    #[serde(default)]
-    pub(crate) rel_property_index_keys: Vec<IndexKey>,
+    pub(crate) rel: rel_index::RelIndexState,
     /// `true` between a deferred load and the materialization that follows it:
     /// the declaration lists are populated but `property_indices`,
     /// `composite_indices` and `range_indices` — the indexes constraints own
@@ -1005,8 +1003,7 @@ impl DirGraph {
             composite_index_keys: Vec::new(),
             range_indices: HashMap::new(),
             range_index_keys: Vec::new(),
-            rel_property_indices: HashMap::new(),
-            rel_property_index_keys: Vec::new(),
+            rel: rel_index::RelIndexState::default(),
             indexes_deferred: false,
             adopted_index_slots: std::collections::HashSet::new(),
             ddl_unique_constraints: std::collections::BTreeSet::new(),
@@ -2494,6 +2491,3 @@ mod edge_embedding_disk_tests;
 mod shared_id_index_tests;
 #[cfg(test)]
 mod timestamp_retype_disk_tests;
-
-#[cfg(test)]
-pub(crate) mod rel_index_tests;

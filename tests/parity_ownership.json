@@ -1675,5 +1675,14 @@
   },
   "tests/test_rel_property_index.py::test_the_rel_index_transcript_is_identical_in_every_storage_mode[disk]": {
     "owner": "storage-parity"
+  },
+  "tests/test_rel_unique.py::test_the_unique_transcript_is_identical_in_every_storage_mode[memory]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_rel_unique.py::test_the_unique_transcript_is_identical_in_every_storage_mode[mapped]": {
+    "owner": "storage-parity"
+  },
+  "tests/test_rel_unique.py::test_the_unique_transcript_is_identical_in_every_storage_mode[disk]": {
+    "owner": "storage-parity"
   }
 }

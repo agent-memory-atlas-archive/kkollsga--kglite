@@ -826,14 +826,18 @@ fn declare_rel_constraint(
                 })?;
                 graph.create_rel_property_type_constraint(rel_type, property, declared, &interrupt)
             }
-            // Neither can be installed on a relationship, so no statement can
-            // have logged one; a frame carrying it is not one this build wrote.
-            ConstraintKind::Unique | ConstraintKind::NodeKey => Ok(0),
+            ConstraintKind::Unique => {
+                graph.create_rel_unique_constraint(rel_type, property, &interrupt)
+            }
+            // RELATIONSHIP KEY cannot be installed, so no statement can have
+            // logged one; a frame carrying it is not one this build wrote.
+            ConstraintKind::NodeKey => Ok(0),
         };
         if let Err(error) = declared {
             return Err(replay_refusal(&match error {
                 RelDeclarationError::Violated(violation) => violation.to_string(),
-                RelDeclarationError::Interrupted(message) => message,
+                RelDeclarationError::Interrupted(message)
+                | RelDeclarationError::Refused(message) => message,
             }));
         }
     }
@@ -859,7 +863,8 @@ fn withdraw_constraint(
                 ConstraintKind::PropertyType => {
                     graph.drop_rel_property_type_constraint(entity_type, property)
                 }
-                ConstraintKind::Unique | ConstraintKind::NodeKey => false,
+                ConstraintKind::Unique => graph.drop_rel_unique_constraint(entity_type, property),
+                ConstraintKind::NodeKey => false,
             };
         }
         return;

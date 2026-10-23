@@ -8,9 +8,11 @@
 //! within a few dozen lines of the file-size ceiling, so growing it was not an
 //! option that stayed honest.)
 //!
-//! **What is served:** presence (`IS NOT NULL`) and property type
-//! (`IS :: <TYPE>`). **What is refused:** `IS UNIQUE` and `IS RELATIONSHIP KEY`,
-//! by name — see [`unsupported_rel_uniqueness_message`].
+//! **What is served:** presence (`IS NOT NULL`), property type
+//! (`IS :: <TYPE>`) and uniqueness of one property (`IS UNIQUE`, which owns a
+//! relationship index — see `dir_graph::rel_unique`). **What is refused:**
+//! `IS RELATIONSHIP KEY` and a composite `IS UNIQUE`, by name — see
+//! [`unsupported_rel_key_message`] and [`composite_rel_unique_message`].
 //!
 //! Installing validates the requested constraint against every existing
 //! relationship of the type and refuses on a violation, so a declaration that
@@ -28,14 +30,16 @@ use crate::graph::dir_graph::DirGraph;
 use crate::graph::property_types::DeclaredType;
 
 /// What a relationship constraint statement resolves to. The relationship
-/// counterpart of `schema_ddl::ConstraintPlan`, carrying only the two kinds
-/// this arm can serve — the refused ones never become a plan.
+/// counterpart of `schema_ddl::ConstraintPlan`, carrying only the kinds this
+/// arm can serve — the refused ones never become a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RelConstraintPlan {
     /// Presence, via `DirGraph::create_rel_not_null_constraint`.
     NotNull,
     /// A declared value type, via `DirGraph::create_rel_property_type_constraint`.
     PropertyType(DeclaredType),
+    /// Uniqueness of one property, via `DirGraph::create_rel_unique_constraint`.
+    Unique,
 }
 
 impl RelConstraintPlan {
@@ -44,7 +48,7 @@ impl RelConstraintPlan {
     fn declared_type(self) -> Option<DeclaredType> {
         match self {
             RelConstraintPlan::PropertyType(declared) => Some(declared),
-            RelConstraintPlan::NotNull => None,
+            RelConstraintPlan::NotNull | RelConstraintPlan::Unique => None,
         }
     }
 
@@ -52,6 +56,7 @@ impl RelConstraintPlan {
         match self {
             RelConstraintPlan::NotNull => ConstraintKind::NotNull,
             RelConstraintPlan::PropertyType(_) => ConstraintKind::PropertyType,
+            RelConstraintPlan::Unique => ConstraintKind::Unique,
         }
     }
 }
@@ -84,14 +89,12 @@ pub(super) fn execute_create_rel_constraint(
     let plan = match &create.requirement {
         ConstraintRequirement::NotNull => RelConstraintPlan::NotNull,
         ConstraintRequirement::Unique => {
-            return Err(unsupported_rel_uniqueness_message(rel_type, "IS UNIQUE"))
+            if create.properties.len() != 1 {
+                return Err(composite_rel_unique_message(rel_type, &create.properties));
+            }
+            RelConstraintPlan::Unique
         }
-        ConstraintRequirement::Key => {
-            return Err(unsupported_rel_uniqueness_message(
-                rel_type,
-                "IS RELATIONSHIP KEY",
-            ))
-        }
+        ConstraintRequirement::Key => return Err(unsupported_rel_key_message(rel_type)),
         ConstraintRequirement::PropertyType(declared) => match DeclaredType::resolve(declared) {
             Some(resolved) => RelConstraintPlan::PropertyType(resolved),
             // An unmappable type name is refused rather than approximated: the
@@ -182,6 +185,9 @@ fn install_rel_constraint(
             RelConstraintPlan::PropertyType(declared) => graph
                 .create_rel_property_type_constraint(rel_type, property, declared, interrupt)
                 .map(|_| ()),
+            RelConstraintPlan::Unique => graph
+                .create_rel_unique_constraint(rel_type, property, interrupt)
+                .map(|_| ()),
         };
         if let Err(error) = declared {
             for property in installed {
@@ -191,7 +197,8 @@ fn install_rel_constraint(
                 RelDeclarationError::Violated(violation) => {
                     graph.record_constraint_violation(*violation)
                 }
-                RelDeclarationError::Interrupted(message) => message,
+                RelDeclarationError::Interrupted(message)
+                | RelDeclarationError::Refused(message) => message,
             });
         }
         installed.push(property);
@@ -217,6 +224,9 @@ fn rel_constraint_is_declared(
         RelConstraintPlan::PropertyType(_) => properties
             .iter()
             .all(|property| graph.rel_property_type_for(rel_type, property).is_some()),
+        RelConstraintPlan::Unique => properties
+            .iter()
+            .all(|property| graph.has_rel_unique_constraint(rel_type, property)),
     }
 }
 
@@ -231,10 +241,11 @@ pub(super) fn drop_rel_property(
     match kind {
         ConstraintKind::NotNull => graph.drop_rel_not_null_constraint(rel_type, property),
         ConstraintKind::PropertyType => graph.drop_rel_property_type_constraint(rel_type, property),
-        // Neither can be installed on a relationship, so neither can be
-        // dropped from one. Reachable only through a registry entry no
-        // supported statement can create.
-        ConstraintKind::Unique | ConstraintKind::NodeKey => false,
+        ConstraintKind::Unique => graph.drop_rel_unique_constraint(rel_type, property),
+        // RELATIONSHIP KEY cannot be installed, so it cannot be dropped.
+        // Reachable only through a registry entry no supported statement can
+        // create.
+        ConstraintKind::NodeKey => false,
     }
 }
 
@@ -273,22 +284,25 @@ fn validate_rel_type_declared(graph: &DirGraph, rel_type: &str) -> Result<(), St
     ))
 }
 
-/// Why `IS UNIQUE` / `IS RELATIONSHIP KEY` on a relationship is refused rather
-/// than served.
-///
-/// Not a "not implemented yet" placeholder: the engine has no consistent answer
-/// to what makes two relationships the same one, and the write paths disagree
-/// with each other today. Naming that is the honest message, because the user's
-/// next question — "so how do I get uniqueness?" — has no answer this release
-/// can give, and a vaguer message would send them looking for a flag.
-fn unsupported_rel_uniqueness_message(rel_type: &str, spelling: &str) -> String {
+/// Why `IS RELATIONSHIP KEY` on a relationship is refused: it is `IS UNIQUE`
+/// plus `IS NOT NULL` in one declaration, and neither Neo4j Community nor the
+/// relationship uniqueness this build serves needs the combined spelling.
+fn unsupported_rel_key_message(rel_type: &str) -> String {
     format!(
-        "CREATE CONSTRAINT ... {spelling} on a relationship pattern is not supported: KGLite has \
-         no single answer for when two relationships of type '{rel_type}' are the same one — the \
-         bulk loader deduplicates (type, source, target), plus a declared temporal from bound, \
-         while Cypher CREATE freely makes parallel edges — so a uniqueness declaration would mean different things depending on \
-         which write path produced the data. Relationship REQUIRE ... IS NOT NULL and \
-         REQUIRE ... IS :: <TYPE> constraints are supported."
+        "CREATE CONSTRAINT ... IS RELATIONSHIP KEY on relationship type '{rel_type}' is not \
+         supported. Declare the two halves it would install instead: `REQUIRE r.p IS UNIQUE` \
+         and `REQUIRE r.p IS NOT NULL`."
+    )
+}
+
+/// Why a relationship `IS UNIQUE` over several properties is refused: the index
+/// the constraint owns covers one property.
+fn composite_rel_unique_message(rel_type: &str, properties: &[String]) -> String {
+    format!(
+        "CREATE CONSTRAINT ... IS UNIQUE over {} properties of relationship type '{rel_type}' \
+         is not supported: relationship uniqueness covers exactly one property. Declare one \
+         constraint per property.",
+        properties.len()
     )
 }
 
@@ -463,27 +477,55 @@ mod tests {
         });
     }
 
-    /// Uniqueness is refused because the engine has no settled multi-edge
-    /// answer, not because nobody got to it — the message has to say so, or the
-    /// reader goes looking for the flag that turns it on.
+    /// `IS RELATIONSHIP KEY` is refused by name, and the message names the two
+    /// declarations it would have installed.
     #[test]
-    fn relationship_uniqueness_and_key_are_refused_by_name() {
-        for requirement in ["IS UNIQUE", "IS RELATIONSHIP KEY"] {
-            let mut graph = knows_graph(StorageMode::Memory);
+    fn relationship_key_is_refused_by_name() {
+        let mut graph = knows_graph(StorageMode::Memory);
+        let error = run_err(
+            &mut graph,
+            "CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS RELATIONSHIP KEY",
+        );
+        assert!(error.contains("KNOWS"), "{error}");
+        assert!(
+            error.contains("IS UNIQUE") && error.contains("IS NOT NULL"),
+            "{error}"
+        );
+    }
+
+    /// Uniqueness is served on the heap backends, over one property, and a
+    /// disk graph refuses it with the reason rather than a generic error.
+    #[test]
+    fn relationship_uniqueness_is_served_on_heap_graphs_and_refused_on_disk() {
+        for mode in [StorageMode::Memory, StorageMode::Mapped] {
+            let mut graph = knows_graph(mode);
+            let stats = run(
+                &mut graph,
+                "CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS UNIQUE",
+            )
+            .unwrap();
+            assert_eq!(stats.constraints_added, 1, "{mode:?}");
+            assert!(graph.has_rel_unique_constraint("KNOWS", "since"));
             let error = run_err(
                 &mut graph,
-                &format!("CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since {requirement}"),
+                "MATCH (a:Person {person_id: 1}), (b:Person {person_id: 2}) \
+                 CREATE (a)-[:KNOWS {since: 2020}]->(b)",
             );
-            assert!(error.contains("KNOWS"), "for `{requirement}`: {error}");
-            assert!(
-                error.contains("parallel edges"),
-                "for `{requirement}`: {error}"
-            );
-            assert!(
-                error.contains("IS NOT NULL"),
-                "for `{requirement}`: the message must name what *is* served: {error}"
-            );
+            assert!(error.contains("UNIQUE"), "{mode:?}: {error}");
         }
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut disk = knows_graph_in(StorageMode::Disk, tmp.path());
+        let error = run_err(
+            &mut disk,
+            "CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS UNIQUE",
+        );
+        assert!(error.contains("storage='disk'"), "{error}");
+        let mut graph = knows_graph(StorageMode::Memory);
+        let error = run_err(
+            &mut graph,
+            "CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE (r.since, r.weight) IS UNIQUE",
+        );
+        assert!(error.contains("exactly one property"), "{error}");
     }
 
     /// The engine stamps the provenance keys after the bulk-load gate and

@@ -9,7 +9,9 @@ use crate::graph::mutation::maintain::{
     preflight_interner_names, source_owns_its_edges, update_schema_node,
 };
 use crate::graph::mutation::ontology_frame_gate::as_diagnostics;
-use crate::graph::mutation::rel_constraint_gate::{gate_property_rows, RowFolding, RowRegime};
+use crate::graph::mutation::rel_constraint_gate::{
+    gate_property_rows, RowFolding, RowRegime, UniqueClaims,
+};
 use crate::graph::schema::{DirGraph, InternedKey, RESERVED_PROVENANCE_KEYS};
 use crate::graph::storage::lookups::EndpointResolver;
 use petgraph::graph::NodeIndex;
@@ -173,8 +175,9 @@ pub fn add_edges_from_specs(
 
     let mut empty_intervals = EmptyIntervals::default();
     let mut ontology_warnings = Vec::new();
+    let mut claims = UniqueClaims::new();
     for group in &prepared {
-        let (empty, warnings) = group.gate(graph)?;
+        let (empty, warnings) = group.gate(graph, &mut claims)?;
         empty_intervals.absorb(empty);
         ontology_warnings.extend(warnings);
     }
@@ -231,7 +234,11 @@ struct PreparedSpecGroup {
 impl PreparedSpecGroup {
     /// Judge the group against the declared relationship constraints with the
     /// gate `add_connections` uses, under the regime its batch will run in.
-    fn gate(&self, graph: &mut DirGraph) -> Result<(EmptyIntervals, Vec<String>), String> {
+    fn gate(
+        &self,
+        graph: &mut DirGraph,
+        claims: &mut UniqueClaims,
+    ) -> Result<(EmptyIntervals, Vec<String>), String> {
         gate_property_rows(
             graph,
             &self.edge_type,
@@ -242,6 +249,7 @@ impl PreparedSpecGroup {
                 folding: RowFolding::for_load(self.is_initial_load),
                 start_key: self.start_key.as_ref(),
                 endpoint_types: Some((&self.source_type, &self.target_type)),
+                claims,
             },
         )
     }

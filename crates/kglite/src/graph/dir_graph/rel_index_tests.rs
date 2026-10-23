@@ -61,7 +61,7 @@ fn plan(graph: &DirGraph, query: &str) -> String {
 /// Every maintained index equals the index rebuilt from the live edges.
 pub(crate) fn assert_consistent(graph: &DirGraph) {
     assert!(graph.has_rel_property_indices(), "no relationship index");
-    for ((rel_type, property), index) in &graph.rel_property_indices {
+    for ((rel_type, property), index) in &graph.rel.indices {
         let type_key = InternedKey::from_str(rel_type);
         let property_key = InternedKey::from_str(property);
         let mut expected: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
@@ -140,7 +140,7 @@ fn create_index_builds_lists_and_drops() {
         "CREATE INDEX IF NOT EXISTS FOR ()-[r:T]-() ON (r.k)",
     );
     run(&mut graph, "CREATE RANGE INDEX FOR ()-[r:T]-() ON (r.n)");
-    assert_eq!(graph.rel_property_indices.len(), 2);
+    assert_eq!(graph.rel.indices.len(), 2);
 
     run(&mut graph, "DROP INDEX FOR ()-[r:T]-() ON (r.n)");
     run(&mut graph, "DROP INDEX `relationship:T.k`");
@@ -185,7 +185,7 @@ fn the_anchor_is_what_answers_the_query() {
     assert_eq!(count(&graph, query), 1);
     // Empty the index behind the graph's back. If the match still found the
     // edge it would be scanning, and the anchor would be decoration.
-    for index in graph.rel_property_indices.values_mut() {
+    for index in graph.rel.indices.values_mut() {
         index.clear();
     }
     assert_eq!(count(&graph, query), 0, "the query did not read the index");
@@ -326,7 +326,8 @@ fn a_failed_statement_restores_the_index() {
     let mut graph = indexed_graph();
     let snapshot = |graph: &DirGraph| -> BTreeMap<String, Vec<usize>> {
         graph
-            .rel_property_indices
+            .rel
+            .indices
             .get(&("T".to_string(), "k".to_string()))
             .unwrap()
             .iter()
@@ -418,10 +419,7 @@ fn saved_and_loaded(graph: DirGraph, deferred: bool) -> Arc<DirGraph> {
 #[test]
 fn a_save_carries_the_declaration_and_a_load_rebuilds_the_index() {
     let loaded = saved_and_loaded(indexed_graph(), false);
-    assert_eq!(
-        loaded.rel_property_index_keys,
-        [("T".to_string(), "k".to_string())]
-    );
+    assert_eq!(loaded.rel.index_keys, [("T".to_string(), "k".to_string())]);
     assert_consistent(&loaded);
     assert_eq!(
         count(&loaded, "MATCH ()-[r:T {k: 'a'}]->() RETURN count(r)"),
@@ -455,7 +453,7 @@ fn a_graph_without_a_relationship_index_writes_the_same_metadata_as_before() {
     let mut graph = DirGraph::new();
     run(&mut graph, "CREATE (:P {id: 1})-[:T {k: 1}]->(:M {id: 2})");
     graph.populate_index_keys();
-    assert!(graph.rel_property_index_keys.is_empty());
+    assert!(graph.rel.index_keys.is_empty());
     assert!(!graph.has_rel_property_indices());
 }
 

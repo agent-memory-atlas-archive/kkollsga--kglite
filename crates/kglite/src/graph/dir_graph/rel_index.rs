@@ -66,6 +66,22 @@ pub(crate) fn slot_edge(slot: NodeIndex) -> EdgeIndex {
     EdgeIndex::new(slot.index())
 }
 
+/// The relationship index state of a [`DirGraph`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RelIndexState {
+    /// `(rel_type, property) -> value -> [edge slot]`; rebuilt from `index_keys`
+    /// on load.
+    pub(crate) indices: std::collections::HashMap<IndexKey, LayeredIndex<Value>>,
+    /// Persisted keys of the indexes a user declared; one only a constraint
+    /// owns is derived from `unique`.
+    pub(crate) index_keys: Vec<IndexKey>,
+    /// Declared relationship UNIQUE constraints `(rel_type, property)`.
+    pub(crate) unique: std::collections::BTreeSet<(String, String)>,
+    /// Slots a user declared independently of the constraint that owns them;
+    /// they survive `DROP CONSTRAINT`.
+    pub(crate) adopted: std::collections::HashSet<IndexKey>,
+}
+
 /// An edge's indexed values as a write found them, taken by
 /// [`DirGraph::rel_index_capture`] and settled by
 /// [`DirGraph::refresh_rel_indexes`].
@@ -80,12 +96,13 @@ impl DirGraph {
     /// path takes first.
     #[inline]
     pub(crate) fn has_rel_property_indices(&self) -> bool {
-        !self.rel_property_indices.is_empty()
+        !self.rel.indices.is_empty()
     }
 
     /// Whether `(rel_type, property)` has a built index.
     pub(crate) fn has_rel_property_index(&self, rel_type: &str, property: &str) -> bool {
-        self.rel_property_indices
+        self.rel
+            .indices
             .contains_key(&(rel_type.to_string(), property.to_string()))
     }
 
@@ -127,7 +144,7 @@ impl DirGraph {
             }
         }
         let distinct = index.len();
-        self.rel_property_indices.insert(
+        self.rel.indices.insert(
             (rel_type.to_string(), property.to_string()),
             LayeredIndex::from(index),
         );
@@ -166,7 +183,8 @@ impl DirGraph {
     /// Drop the index on `(rel_type, property)`. Reports whether one went.
     pub(crate) fn drop_rel_property_index(&mut self, rel_type: &str, property: &str) -> bool {
         self.materialize_indexes();
-        self.rel_property_indices
+        self.rel
+            .indices
             .remove(&(rel_type.to_string(), property.to_string()))
             .is_some()
     }
@@ -174,7 +192,7 @@ impl DirGraph {
     /// Rebuild every relationship index from the live edges, keeping which
     /// ones exist. Called by `reindex()` and the load path.
     pub(crate) fn rebuild_rel_property_indexes(&mut self) {
-        let keys: Vec<IndexKey> = self.rel_property_indices.keys().cloned().collect();
+        let keys: Vec<IndexKey> = self.rel.indices.keys().cloned().collect();
         for (rel_type, property) in keys {
             self.build_rel_property_index(&rel_type, &property);
         }
@@ -182,7 +200,8 @@ impl DirGraph {
 
     /// The indexed keys of `rel_type`.
     fn rel_index_keys_of(&self, rel_type: &str) -> Vec<IndexKey> {
-        self.rel_property_indices
+        self.rel
+            .indices
             .keys()
             .filter(|(indexed_type, _)| indexed_type == rel_type)
             .cloned()
@@ -196,7 +215,7 @@ impl DirGraph {
         self.interner.try_resolve(key).map(str::to_string)
     }
 
-    fn read_edge_value(&self, edge: EdgeIndex, property: &str) -> Option<Value> {
+    pub(crate) fn read_edge_value(&self, edge: EdgeIndex, property: &str) -> Option<Value> {
         let _arena = self.graph.begin_query();
         self.graph
             .get_edge_property(edge, InternedKey::from_str(property))
@@ -209,7 +228,7 @@ impl DirGraph {
             return;
         }
         let slot = edge_slot(edge);
-        let Some(index) = self.rel_property_indices.get(key) else {
+        let Some(index) = self.rel.indices.get(key) else {
             return;
         };
         let bucket_was_new = !index.contains_key(value);
@@ -223,7 +242,7 @@ impl DirGraph {
                 bucket_was_new,
             );
         }
-        if let Some(index) = self.rel_property_indices.get_mut(key) {
+        if let Some(index) = self.rel.indices.get_mut(key) {
             index.entry_or_default(value).push(slot);
         }
     }
@@ -233,7 +252,8 @@ impl DirGraph {
     fn evict_rel_value(&mut self, key: &IndexKey, value: &Value, edge: EdgeIndex) {
         let slot = edge_slot(edge);
         let Some(pos) = self
-            .rel_property_indices
+            .rel
+            .indices
             .get(key)
             .and_then(|index| index.get(value))
             .and_then(|members| members.iter().position(|member| *member == slot))
@@ -250,7 +270,7 @@ impl DirGraph {
                 pos,
             );
         }
-        if let Some(index) = self.rel_property_indices.get_mut(key) {
+        if let Some(index) = self.rel.indices.get_mut(key) {
             let emptied = match index.get_mut(value) {
                 Some(members) => {
                     members.remove(pos);
@@ -268,7 +288,7 @@ impl DirGraph {
     /// the edge is in the graph.
     #[inline]
     pub(crate) fn file_created_edge(&mut self, edge: EdgeIndex) {
-        if self.rel_property_indices.is_empty() {
+        if self.rel.indices.is_empty() {
             return;
         }
         self.file_created_edge_slow(edge);
@@ -289,7 +309,7 @@ impl DirGraph {
     /// Called while the edge is still in the graph.
     #[inline]
     pub(crate) fn evict_removed_edge(&mut self, edge: EdgeIndex) {
-        if self.rel_property_indices.is_empty() {
+        if self.rel.indices.is_empty() {
             return;
         }
         self.evict_removed_edge_slow(edge);
@@ -310,7 +330,7 @@ impl DirGraph {
     /// when the edge's type has no index, which is also the fast-out.
     #[inline]
     pub(crate) fn rel_index_capture(&self, edge: EdgeIndex) -> Option<RelIndexPreImage> {
-        if self.rel_property_indices.is_empty() {
+        if self.rel.indices.is_empty() {
             return None;
         }
         let rel_type = self.rel_type_of_edge(edge)?;
@@ -359,7 +379,7 @@ impl DirGraph {
         value: &Value,
     ) -> Option<Vec<EdgeIndex>> {
         let key = (rel_type.to_string(), property.to_string());
-        let index = self.rel_property_indices.get(&key)?;
+        let index = self.rel.indices.get(&key)?;
         let keys = super::indexes::predicate_queries::equality_keys(value)?;
         if super::indexes::predicate_queries::temporal_probe_needs_scan(value, || {
             index.iter().map(|(key, _)| key)
@@ -376,13 +396,6 @@ impl DirGraph {
         Some(hits.into_iter().map(slot_edge).collect())
     }
 
-    /// Every index key, sorted — the list a save persists.
-    pub(super) fn user_rel_index_keys(&self) -> Vec<IndexKey> {
-        let mut keys: Vec<IndexKey> = self.rel_property_indices.keys().cloned().collect();
-        keys.sort_unstable();
-        keys
-    }
-
     /// Declared-but-unbuilt relationship indexes of a deferred load, listed
     /// beside the built ones.
     pub(crate) fn list_rel_property_indexes_with_state(
@@ -390,12 +403,16 @@ impl DirGraph {
     ) -> Vec<(String, String, super::indexes::IndexState)> {
         use super::indexes::IndexState;
         let mut listed: Vec<(String, String, IndexState)> = if self.indexes_deferred {
-            self.rel_property_index_keys
+            self.rel
+                .index_keys
                 .iter()
-                .map(|(t, p)| (t.clone(), p.clone(), IndexState::Deferred))
+                .cloned()
+                .chain(self.deferred_owned_rel_slots())
+                .map(|(t, p)| (t, p, IndexState::Deferred))
                 .collect()
         } else {
-            self.rel_property_indices
+            self.rel
+                .indices
                 .keys()
                 .map(|(t, p)| (t.clone(), p.clone(), IndexState::Ready))
                 .collect()
@@ -404,3 +421,7 @@ impl DirGraph {
         listed
     }
 }
+
+#[cfg(test)]
+#[path = "rel_index_tests.rs"]
+pub(crate) mod tests;

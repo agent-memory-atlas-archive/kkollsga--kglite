@@ -504,8 +504,9 @@ and .NET, are untested.
 ### Constraints cover uniqueness, presence and property type
 
 **Constraints cover uniqueness, presence and property type, not arbitrary
-rules.** Nodes carry all three. Relationships carry presence and property type
-(`FOR ()-[r:T]-() REQUIRE r.p IS NOT NULL` / `IS :: TYPE`) but not uniqueness.
+rules.** Nodes carry all three. Relationships carry all three too, with
+uniqueness over one property (`FOR ()-[r:T]-() REQUIRE r.p IS UNIQUE`), on
+memory and mapped graphs.
 
 KGLite does not offer:
 

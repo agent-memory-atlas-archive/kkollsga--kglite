@@ -513,7 +513,10 @@ pub(crate) mod write_hooks {
     /// creation funnel that can run while a relationship text index exists
     /// calls this *after* the edge is in the graph (its type is read from it).
     #[inline]
-    pub(crate) fn note_edge_created(graph: &DirGraph, edge: EdgeIndex) {
+    pub(crate) fn note_edge_created(graph: &mut DirGraph, edge: EdgeIndex) {
+        // A relationship index files the edge first; it is independent of the
+        // text-index lane below.
+        graph.file_created_edge(edge);
         if !any_edge_text_index(graph) {
             return;
         }

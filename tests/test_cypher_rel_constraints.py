@@ -318,15 +318,19 @@ def test_a_saved_graph_reloads_still_enforcing(tmp_path):
 # ── refusals ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("requirement", ["IS UNIQUE", "IS RELATIONSHIP KEY"])
-def test_relationship_uniqueness_names_the_data_model_reason(requirement):
+def test_relationship_key_names_the_two_declarations_it_stands_for():
     graph = _graph()
     with pytest.raises(kglite.CypherExecutionError) as exc:
-        graph.cypher(f"CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since {requirement}")
+        graph.cypher("CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS RELATIONSHIP KEY")
     message = str(exc.value)
     assert "KNOWS" in message, message
-    assert "parallel edges" in message, message
-    assert "IS NOT NULL" in message, "the message must name what *is* served"
+    assert "IS UNIQUE" in message and "IS NOT NULL" in message, message
+
+
+def test_composite_relationship_uniqueness_is_refused_with_its_reason():
+    graph = _graph()
+    with pytest.raises(kglite.CypherExecutionError, match="exactly one property"):
+        graph.cypher("CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE (r.since, r.weight) IS UNIQUE")
 
 
 @pytest.mark.parametrize(

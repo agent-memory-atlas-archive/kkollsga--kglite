@@ -1,12 +1,10 @@
 //! Declared constraints on *relationships* — the connection-type counterpart of
 //! [`super::constraints`].
 //!
-//! Two kinds are served: presence (`REQUIRE r.p IS NOT NULL`) and property type
-//! (`REQUIRE r.p IS :: T`). Uniqueness and RELATIONSHIP KEY are deliberately
-//! absent — the engine has no settled multi-edge answer (the bulk loader
-//! deduplicates `(type, src, tgt)` while Cypher `CREATE` freely makes parallel
-//! edges), so a uniqueness declaration would mean different things on different
-//! write paths. The DDL layer refuses them by name.
+//! Two stateless kinds live here: presence (`REQUIRE r.p IS NOT NULL`) and
+//! property type (`REQUIRE r.p IS :: T`). Uniqueness is stateful and lives in
+//! [`super::rel_unique`], on the relationship index it owns; RELATIONSHIP KEY is
+//! refused by the DDL layer.
 //!
 //! **Its own module, not more of `constraints.rs`.** The stores, the scan and
 //! the write-path gates are a separate surface reading separate state, and the
@@ -17,10 +15,10 @@
 //!
 //! **Two halves.** Declaration — install (validated against the existing
 //! data), drop, list — and the write-path gates the four edge choke points
-//! call. The gates are per-property predicates with no read-back: relationship
-//! constraints carry no composite tuple and no uniqueness, so unlike
-//! `plan_property_write` there is no stored state to reconstruct, and a gate
-//! costs one map probe plus one predicate per constrained property.
+//! call. The gates here are per-property predicates with no read-back, so
+//! unlike `plan_property_write` there is no stored state to reconstruct, and a
+//! gate costs one map probe plus one predicate per constrained property. The
+//! uniqueness check is the stateful sibling, called beside them.
 
 use crate::datatypes::values::Value;
 use crate::graph::algorithms::Interrupt;
@@ -53,6 +51,9 @@ pub(crate) enum RelDeclarationError {
     /// The query deadline passed, or a binding flipped the cancel flag, before
     /// the scan finished.
     Interrupted(String),
+    /// The declaration is not available here — a disk graph, a type with a
+    /// validity interval — whatever the data holds. The message says why.
+    Refused(String),
 }
 
 impl From<Box<ConstraintViolation>> for RelDeclarationError {
@@ -213,6 +214,7 @@ impl DirGraph {
     pub(crate) fn has_rel_constraints(&self) -> bool {
         !self.rel_ddl_not_null_constraints.is_empty()
             || !self.rel_ddl_property_type_constraints.is_empty()
+            || !self.rel.unique.is_empty()
     }
 
     /// Whether `rel_type` declares anything — the per-type companion, for a
@@ -222,6 +224,7 @@ impl DirGraph {
     pub(crate) fn type_has_rel_constraints(&self, rel_type: &str) -> bool {
         self.type_has_rel_not_null_constraints(rel_type)
             || self.type_has_rel_property_type_constraints(rel_type)
+            || self.type_has_rel_unique(rel_type)
     }
 
     /// Whether `rel_type` requires any property.
@@ -269,6 +272,7 @@ impl DirGraph {
         if let Some(declared) = self.rel_declared_property_types(rel_type) {
             names.extend(declared.keys().cloned());
         }
+        names.extend(self.rel_unique_properties(rel_type).map(str::to_string));
         names.sort();
         names.dedup();
         names
