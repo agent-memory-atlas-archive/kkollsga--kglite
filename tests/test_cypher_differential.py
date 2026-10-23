@@ -7434,6 +7434,139 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (n:Sample) WHERE n.v < 5 RETURN n.id AS id ORDER BY id",
         None,
     ),
+    # ── WITH top-K fusion (`fuse_with_top_k`) ──
+    #
+    # `WITH … ORDER BY … LIMIT k` fuses to the operator its RETURN twin gets
+    # when something follows the LIMIT. Each retrieval kind and a property sort
+    # run with OPTIONAL MATCH / MATCH / WITH behind them; the last group are the
+    # shapes that must not fuse and the scope golden. Doc 5 (no vector) ranks
+    # first under DESC, so the NULL placement is exercised.
+    (
+        "with_top_k_vector_then_optional",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_vector_then_match",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3 "
+        "MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_vector_then_with",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3 "
+        "WITH d.id AS id, s WHERE id <> 0 RETURN id, s",
+        None,
+    ),
+    (
+        "with_top_k_vector_exact_option",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [1.0,0.0], {exact:true}) AS s "
+        "ORDER BY s DESC LIMIT 2 OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_vector_ascending",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s ASC LIMIT 3 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_vector_filtered",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WHERE d.age > 22 WITH d, vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 3 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_bm25_then_optional",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, text_bm25(d, 'body', 'alpha') AS s ORDER BY s DESC LIMIT 3 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_bm25_then_match",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, text_bm25(d, 'body', 'alpha') AS s ORDER BY s DESC LIMIT 3 "
+        "MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, s, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_property_then_optional",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, d.age AS a ORDER BY a DESC LIMIT 3 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, a, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_property_then_match",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, d.age AS a ORDER BY a LIMIT 4 "
+        "MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, a, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_property_two_keys_then_with",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, d.id % 2 AS parity, d.age AS a ORDER BY parity DESC, a LIMIT 3 "
+        "WITH d.id AS id, parity, a RETURN id, parity, a",
+        None,
+    ),
+    (
+        "with_top_k_bail_distinct",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH DISTINCT d.id % 2 AS parity ORDER BY parity LIMIT 1 "
+        "OPTIONAL MATCH (d:Doc {id: parity}) RETURN parity, d.age AS age",
+        None,
+    ),
+    (
+        "with_top_k_bail_aggregating",
+        "with_top_k_graph",
+        "MATCH (d:Doc)-[:HAS]->(t:Tag) WITH t, count(d) AS n ORDER BY n DESC, t.id LIMIT 2 "
+        "OPTIONAL MATCH (t)<-[:HAS]-(d:Doc) RETURN t.id AS tag, n, d.id AS doc",
+        None,
+    ),
+    (
+        "with_top_k_bail_star",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH * ORDER BY d.age LIMIT 2 OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_bail_skip",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, d.age AS a ORDER BY a DESC SKIP 1 LIMIT 2 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, a, t.id AS tag",
+        None,
+    ),
+    (
+        "with_top_k_bail_key_reads_alias",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH d, d.age AS a ORDER BY a + 1 DESC LIMIT 2 "
+        "OPTIONAL MATCH (d)-[:HAS]->(t:Tag) RETURN d.id AS id, a, t.id AS tag",
+        None,
+    ),
+    # A non-projected `d` must not stay bound behind the WITH: a leaked `d`
+    # (doc 0) would make `(d:Doc {id: 3})` find nothing.
+    (
+        "with_top_k_scope_does_not_leak",
+        "with_top_k_graph",
+        "MATCH (d:Doc {id: 0}) WITH d.age AS a ORDER BY a DESC LIMIT 1 MATCH (d:Doc {id: 3}) RETURN d.id AS id, a",
+        None,
+    ),
+    (
+        "with_top_k_vector_scope_does_not_leak",
+        "with_top_k_graph",
+        "MATCH (d:Doc) WITH vector_score(d, 'summary_emb', [1.0,0.0]) AS s ORDER BY s DESC LIMIT 1 "
+        "MATCH (d:Doc {id: 3}) RETURN d.id AS id, s",
+        None,
+    ),
     # ── text_bm25 top-k fusion (`fuse_text_bm25_order_limit`) ──
     #
     # The pass claims `RETURN text_bm25(...) AS s ORDER BY s LIMIT k` from the
@@ -7637,6 +7770,50 @@ def vector_order_graph() -> kglite.KnowledgeGraph:
     graph = kglite.KnowledgeGraph()
     graph.add_nodes(pd.DataFrame({"id": [0, 1, 2, 3], "summary": ["x"] * 4}), "Doc", "id")
     graph.set_embeddings("Doc", "summary", {0: [1.0, 0.0], 1: [0.0, 1.0], 2: [-1.0, 0.0]})
+    return graph
+
+
+@pytest.fixture
+def with_top_k_graph() -> kglite.KnowledgeGraph:
+    """Six `Doc`s with distinct vector and BM25 scores, and `Tag`s hanging off
+    some of them, so a clause behind a `WITH` top-K has rows to extend.
+
+    Doc 5 carries no vector (it scores NULL, which ranks first under DESC) and
+    docs 2 and 5 have no tag (an OPTIONAL MATCH null-extends them).
+    """
+    import pandas as pd
+
+    graph = kglite.KnowledgeGraph()
+    bodies = ["alpha beta", "alpha", "beta gamma", "alpha alpha beta", "gamma", "delta"]
+    graph.add_nodes(
+        pd.DataFrame(
+            {
+                "id": list(range(6)),
+                "age": [30, 25, 40, 35, 20, 50],
+                "body": bodies,
+                "summary": ["x"] * 6,
+            }
+        ),
+        "Doc",
+        "id",
+        columns=["age", "body", "summary"],
+    )
+    graph.add_nodes(pd.DataFrame({"id": [0, 1, 2]}), "Tag", "id")
+    graph.set_embeddings(
+        "Doc",
+        "summary",
+        {0: [1.0, 0.0], 1: [0.0, 1.0], 2: [-1.0, 0.0], 3: [0.7, 0.7], 4: [0.9, 0.1]},
+    )
+    graph.build_vector_index("Doc", "summary")
+    graph.build_text_index("Doc", "body")
+    graph.add_connections(
+        pd.DataFrame({"d": [0, 0, 1, 3, 4, 4], "t": [0, 1, 1, 2, 0, 2]}),
+        "HAS",
+        "Doc",
+        "d",
+        "Tag",
+        "t",
+    )
     return graph
 
 
@@ -9163,6 +9340,7 @@ PASS_TRIGGER_CASES: dict[str, tuple[str, str]] = {
     "fuse_node_scan_top_k": ("differential", "trigger_node_scan_top_k"),
     "fuse_vector_score_order_limit": ("specialized", "vector_score_top_k"),
     "fuse_order_by_top_k": ("differential", "trigger_generic_top_k"),
+    "fuse_with_top_k": ("differential", "with_top_k_property_then_optional"),
     "reorder_predicates_by_cost": ("differential", "trigger_predicate_reorder"),
     "mark_fast_var_length_paths": ("differential", "var_length_no_var_distinct"),
     "mark_disjoint_fixed_trails": (

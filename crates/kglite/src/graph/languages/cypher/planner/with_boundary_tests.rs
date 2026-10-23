@@ -206,11 +206,14 @@ fn the_hoisted_plan_answers_absolute_values() {
 // fold_aliasing_with / hoist_terminal_return_over_with_top_k
 // ============================================================================
 
-/// True when a `WITH` is still standing after optimisation.
+/// True when a `WITH` is still standing after the folds in this file ran.
+/// `fuse_with_top_k` is off: it also removes a `WITH … ORDER BY … LIMIT`, which
+/// says nothing about whether the folds declined.
 fn with_survives(graph: &DirGraph, text: &str) -> bool {
     let params = HashMap::new();
     let mut query = parse_cypher(text).unwrap();
-    optimize(&mut query, graph, &params);
+    let disabled = HashSet::from(["fuse_with_top_k".to_string()]);
+    optimize_with_disabled(&mut query, graph, &params, &disabled);
     query.clauses.iter().any(|c| matches!(c, Clause::With(_)))
 }
 

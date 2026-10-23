@@ -40,6 +40,7 @@ use fusion::{
     fuse_node_scan_aggregate, fuse_node_scan_top_k, fuse_optional_match_aggregate,
     fuse_order_by_top_k, fuse_spatial_join, fuse_text_bm25_order_limit,
     fuse_vector_score_order_limit, mark_return_lazy_eligible, pass_fuse_unwind_valid_at,
+    pass_fuse_with_top_k,
 };
 use index_selection::push_where_into_match;
 use join_order::{
@@ -84,11 +85,10 @@ type PassFn = fn(&mut CypherQuery, &PassCtx);
 
 /// The optimizer pipeline as a single source of truth. Order is
 /// load-bearing — comments on individual entries call out cross-pass
-/// dependencies. Adding a new pass: write the impl, write a `pass_*`
-/// wrapper, register here with a unique name, doc-comment the wrapper,
-/// add at least one query to `tests/test_cypher_differential.py`. The
-/// wrapper lives in this file by default and beside its impl when this
-/// file is at its line cap (`hoist_with_where` is the first such case).
+/// dependencies. Adding a new pass: write the impl, write a `pass_*` wrapper
+/// (beside its impl once this file is at its line cap), register here with a
+/// unique name, doc-comment the wrapper, add at least one query to
+/// `tests/test_cypher_differential.py`.
 ///
 /// ## `CALL { }` (CallSubquery) barrier audit
 ///
@@ -127,8 +127,7 @@ type PassFn = fn(&mut CypherQuery, &PassCtx);
 /// no answer.
 pub const PASSES: &[(&str, PassFn)] = &[
     // FIRST: it qualifies a CALL body as written, before
-    // `optimize_nested_queries` fuses it; `push_where_into_match.*` then seek
-    // from the filter it moved.
+    // `optimize_nested_queries` fuses it; `push_where_into_match.*` then seek.
     (
         "hoist_where_over_call_subquery",
         pass_hoist_where_over_call_subquery,
@@ -251,6 +250,7 @@ pub const PASSES: &[(&str, PassFn)] = &[
         pass_fuse_text_bm25_order_limit,
     ),
     ("fuse_order_by_top_k", pass_fuse_order_by_top_k),
+    ("fuse_with_top_k", pass_fuse_with_top_k),
     (
         "reorder_predicates_by_cost",
         pass_reorder_predicates_by_cost,

@@ -1696,7 +1696,9 @@ fn test_fold_pass_through_with_skipped_when_orderby_follows() {
 
     let graph = DirGraph::new();
     let params = HashMap::new();
-    optimize(&mut query, &graph, &params);
+    // `fuse_with_top_k` replaces the WITH too; this asks about the fold.
+    let disabled = HashSet::from(["fuse_with_top_k".to_string()]);
+    optimize_with_disabled(&mut query, &graph, &params, &disabled);
 
     let has_with = query.clauses.iter().any(|c| matches!(c, Clause::With(_)));
     assert!(

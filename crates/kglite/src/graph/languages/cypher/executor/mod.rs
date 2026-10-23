@@ -894,45 +894,10 @@ impl<'a> CypherExecutor<'a> {
                 )?;
                 self.execute_fused_optional_match_aggregate(match_clause, with_clause, result_set)
             }
-            Clause::FusedVectorScoreTopK {
-                return_clause,
-                score_item_index,
-                score_call,
-                descending,
-                limit,
-                non_null_only,
-            } => self.execute_fused_vector_score_top_k(
-                retrieval::FusedTopK {
-                    return_clause,
-                    score_item_index: *score_item_index,
-                    descending: *descending,
-                    limit: *limit,
-                    non_null_only: *non_null_only,
-                },
-                score_call,
-                result_set,
-            ),
-            Clause::FusedTextBm25TopK {
-                return_clause,
-                score_item_index,
-                score_call,
-                sort_keys,
-                limit,
-            } => self.execute_fused_text_bm25_top_k(
-                return_clause,
-                *score_item_index,
-                score_call,
-                sort_keys,
-                *limit,
-                result_set,
-            ),
-            Clause::FusedOrderByTopK {
-                return_clause,
-                sort_keys,
-                limit,
-            } => {
-                self.record_exact_ordering(sort_keys, &result_set, *limit)?;
-                self.execute_fused_order_by_top_k(return_clause, sort_keys, *limit, result_set)
+            Clause::FusedVectorScoreTopK { .. }
+            | Clause::FusedTextBm25TopK { .. }
+            | Clause::FusedOrderByTopK { .. } => {
+                self.execute_fused_top_k_clause(clause, result_set)
             }
             Clause::FusedMatchReturnAggregate {
                 match_clause,

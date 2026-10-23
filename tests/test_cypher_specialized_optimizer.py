@@ -225,6 +225,7 @@ ORACLES = {
             "fuse_order_by_top_k",
             "fold_aliasing_with",
             "hoist_terminal_return_over_with_top_k",
+            "fuse_with_top_k",
         ],
         "operator": "FusedVectorScoreTopK",
         "query": (

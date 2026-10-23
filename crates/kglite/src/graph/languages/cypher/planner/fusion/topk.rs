@@ -319,6 +319,7 @@ pub(crate) fn fuse_vector_score_order_limit(query: &mut CypherQuery) {
                 descending: shape.descending,
                 limit: shape.limit,
                 non_null_only,
+                with_scope: false,
             },
         );
         i += 1;
@@ -429,6 +430,7 @@ pub(crate) fn fuse_text_bm25_order_limit(query: &mut CypherQuery) {
                 score_call: shape.score_call,
                 sort_keys,
                 limit: shape.limit,
+                with_scope: false,
             },
         );
         i += 1;
@@ -444,14 +446,14 @@ fn is_retrieval_score_call(expr: &Expression) -> bool {
 }
 
 /// What [`match_scored_order_limit`] extracts from a fusable three-clause span.
-struct ScoredShape {
+pub(super) struct ScoredShape {
     /// RETURN item that can reuse the retrieved score, or `usize::MAX` to
     /// evaluate RETURN independently of the ordered call.
-    score_index: usize,
-    score_call: Expression,
-    descending: bool,
-    nulls: NullsPlacement,
-    limit: usize,
+    pub(super) score_index: usize,
+    pub(super) score_call: Expression,
+    pub(super) descending: bool,
+    pub(super) nulls: NullsPlacement,
+    pub(super) limit: usize,
 }
 
 /// The `RETURN <scored item> + ORDER BY <its alias> + LIMIT k` shape test both
@@ -464,7 +466,11 @@ struct ScoredShape {
 /// LIMIT is not a positive integer literal.
 ///
 /// Read-only — the caller rewrites only after every check has passed.
-fn match_scored_order_limit(clauses: &[Clause], i: usize, function: &str) -> Option<ScoredShape> {
+pub(super) fn match_scored_order_limit(
+    clauses: &[Clause],
+    i: usize,
+    function: &str,
+) -> Option<ScoredShape> {
     use crate::graph::languages::cypher::ast::is_aggregate_expression;
 
     let (Clause::Return(r), Clause::OrderBy(o), Clause::Limit(l)) =
@@ -665,6 +671,7 @@ pub(crate) fn fuse_order_by_top_k(query: &mut CypherQuery) {
                 return_clause,
                 sort_keys,
                 limit,
+                with_scope: false,
             },
         );
 

@@ -1720,15 +1720,34 @@ pub(crate) fn visible_variables(clauses: &[Clause]) -> HashSet<String> {
 }
 
 pub(crate) fn advance_visible_variable_scope(scope: &mut HashSet<String>, clause: &Clause) {
-    if let Clause::With(w) = clause {
-        let preserves_all = w
-            .items
+    let with_items = match clause {
+        Clause::With(w) => Some(&w.items),
+        // A fused top-K that replaced a WITH keeps a WITH's scope.
+        Clause::FusedVectorScoreTopK {
+            return_clause,
+            with_scope: true,
+            ..
+        }
+        | Clause::FusedTextBm25TopK {
+            return_clause,
+            with_scope: true,
+            ..
+        }
+        | Clause::FusedOrderByTopK {
+            return_clause,
+            with_scope: true,
+            ..
+        } => Some(&return_clause.items),
+        _ => None,
+    };
+    if let Some(items) = with_items {
+        let preserves_all = items
             .iter()
             .any(|item| matches!(item.expression, Expression::Star));
         if !preserves_all {
             scope.clear();
         }
-        for item in &w.items {
+        for item in items {
             if let Some(name) = item.alias.clone().or_else(|| match &item.expression {
                 Expression::Variable(name) => Some(name.clone()),
                 _ => None,

@@ -261,6 +261,7 @@ GUARD_SAFE_PASSES = {
     "fuse_match_with_aggregate",
     "fuse_match_with_aggregate_top_k",
     "fuse_order_by_top_k",
+    "fuse_with_top_k",
     "fuse_vector_score_order_limit",
     "fuse_text_bm25_order_limit",
     "push_limit_into_match",

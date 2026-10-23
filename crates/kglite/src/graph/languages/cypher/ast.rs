@@ -210,6 +210,10 @@ pub enum Clause {
         /// clause: a row whose score is NULL is not a candidate, so the
         /// embedding store's members are the whole candidate set.
         non_null_only: bool,
+        /// The clause replaced a `WITH`, not a `RETURN`: the executor drops
+        /// the node, edge and path bindings the projection does not carry
+        /// forward, as a `WITH` does, so a later clause cannot see them.
+        with_scope: bool,
     },
     /// Optimizer-generated: fuse RETURN (with `text_bm25`) + ORDER BY + LIMIT
     /// into one pass the executor can serve from the text index's postings.
@@ -234,6 +238,10 @@ pub enum Clause {
         /// its fallback is that operator, which needs them.
         sort_keys: Vec<FusedSortKey>,
         limit: usize,
+        /// The clause replaced a `WITH`, not a `RETURN`: the executor drops
+        /// the node, edge and path bindings the projection does not carry
+        /// forward, as a `WITH` does, so a later clause cannot see them.
+        with_scope: bool,
     },
     /// Optimizer-generated: fuse MATCH traversal + RETURN with count() into
     /// a single pass. Instead of expanding all edges then grouping, iterate
@@ -296,6 +304,10 @@ pub enum Clause {
         /// One entry per ORDER BY item, in order (see [`FusedSortKey`]).
         sort_keys: Vec<FusedSortKey>,
         limit: usize,
+        /// The clause replaced a `WITH`, not a `RETURN`: the executor drops
+        /// the node, edge and path bindings the projection does not carry
+        /// forward, as a `WITH` does, so a later clause cannot see them.
+        with_scope: bool,
     },
     /// Optimizer-generated: MATCH (n) RETURN count(n) → graph.node_count() in O(1).
     FusedCountAll {

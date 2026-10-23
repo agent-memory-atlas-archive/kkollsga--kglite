@@ -168,28 +168,42 @@ impl<'a> CypherExecutor<'a> {
                 descending: true,
                 limit,
                 non_null_only,
-            }, ..] => self.try_vector_retrieval_entry(
-                matched,
-                return_clause,
-                *score_item_index,
-                score_call,
-                *limit,
-                *non_null_only,
-            ),
+                with_scope,
+            }, ..] => self
+                .try_vector_retrieval_entry(
+                    matched,
+                    return_clause,
+                    *score_item_index,
+                    score_call,
+                    *limit,
+                    *non_null_only,
+                )
+                .map(|out| {
+                    out.map(|rows| {
+                        super::return_clause::scoped_to_with(*with_scope, return_clause, rows)
+                    })
+                }),
             [Clause::Match(matched), Clause::FusedTextBm25TopK {
                 return_clause,
                 score_item_index,
                 score_call,
                 sort_keys,
                 limit,
-            }, ..] => self.try_text_retrieval_entry(
-                matched,
-                return_clause,
-                *score_item_index,
-                score_call,
-                sort_keys,
-                *limit,
-            ),
+                with_scope,
+            }, ..] => self
+                .try_text_retrieval_entry(
+                    matched,
+                    return_clause,
+                    *score_item_index,
+                    score_call,
+                    sort_keys,
+                    *limit,
+                )
+                .map(|out| {
+                    out.map(|rows| {
+                        super::return_clause::scoped_to_with(*with_scope, return_clause, rows)
+                    })
+                }),
             _ => Ok(None),
         }
     }

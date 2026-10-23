@@ -355,6 +355,66 @@ impl<'a> CypherExecutor<'a> {
     /// The shared ordering fallback preserves null placement and stable ties.
     /// A stale index scores unindexed rows null, so descending order must
     /// retain those rows first unless the query requests NULLS LAST.
+    /// Dispatch one of the three fused top-K clauses, leaving the scope its
+    /// original clause would have: a `WITH`'s when `with_scope` is set.
+    pub(super) fn execute_fused_top_k_clause(
+        &self,
+        clause: &Clause,
+        result_set: ResultSet,
+    ) -> Result<ResultSet, String> {
+        match clause {
+            Clause::FusedVectorScoreTopK {
+                return_clause,
+                score_item_index,
+                score_call,
+                descending,
+                limit,
+                non_null_only,
+                with_scope,
+            } => self
+                .execute_fused_vector_score_top_k(
+                    super::retrieval::FusedTopK {
+                        return_clause,
+                        score_item_index: *score_item_index,
+                        descending: *descending,
+                        limit: *limit,
+                        non_null_only: *non_null_only,
+                    },
+                    score_call,
+                    result_set,
+                )
+                .map(|out| scoped_to_with(*with_scope, return_clause, out)),
+            Clause::FusedTextBm25TopK {
+                return_clause,
+                score_item_index,
+                score_call,
+                sort_keys,
+                limit,
+                with_scope,
+            } => self
+                .execute_fused_text_bm25_top_k(
+                    return_clause,
+                    *score_item_index,
+                    score_call,
+                    sort_keys,
+                    *limit,
+                    result_set,
+                )
+                .map(|out| scoped_to_with(*with_scope, return_clause, out)),
+            Clause::FusedOrderByTopK {
+                return_clause,
+                sort_keys,
+                limit,
+                with_scope,
+            } => {
+                self.record_exact_ordering(sort_keys, &result_set, *limit)?;
+                self.execute_fused_order_by_top_k(return_clause, sort_keys, *limit, result_set)
+                    .map(|out| scoped_to_with(*with_scope, return_clause, out))
+            }
+            _ => unreachable!("dispatched only for the fused top-K clauses"),
+        }
+    }
+
     pub(super) fn execute_fused_text_bm25_top_k(
         &self,
         return_clause: &ReturnClause,
@@ -560,6 +620,20 @@ fn expand_wildcards(items: &[ReturnItem], row: &ResultRow) -> Vec<ReturnItem> {
         }
     }
     out
+}
+
+/// A fused top-K that replaced a `WITH` leaves the scope a `WITH` would have:
+/// the bindings its projection does not carry are dropped. One that replaced
+/// a `RETURN` is terminal and keeps them, as `execute_return` does.
+pub(super) fn scoped_to_with(
+    with_scope: bool,
+    clause: &ReturnClause,
+    mut result_set: ResultSet,
+) -> ResultSet {
+    if with_scope {
+        restrict_bindings_to_projection(&clause.items, &mut result_set);
+    }
+    result_set
 }
 
 /// Drop the identity bindings a `WITH` projection does not carry forward.

@@ -109,6 +109,11 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "a bounded heap over rows the matcher already admitted",
     ),
     (
+        "fuse_with_top_k",
+        "the same three operators as the RETURN-shape fusions, over rows the matcher \
+         already admitted; only the projection scope differs",
+    ),
+    (
         "fuse_chain_path_count",
         "each hop's relationships and peers are put to the filter (admits_hop) and the \
          start nodes come from the guarded matcher scan, so the DP counts exactly the \
