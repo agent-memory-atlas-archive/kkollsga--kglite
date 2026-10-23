@@ -77,6 +77,16 @@ impl NamedIndex {
         }
     }
 
+    /// A name for a relationship index on `rel_type.property`.
+    pub fn relationship(class: IndexClass, rel_type: &str, property: &str) -> Self {
+        NamedIndex {
+            class,
+            entity: EntityKind::Relationship,
+            target: rel_type.to_string(),
+            properties: vec![property.to_string()],
+        }
+    }
+
     fn describe(&self) -> String {
         let owner = &self.target;
         match self.properties.as_slice() {

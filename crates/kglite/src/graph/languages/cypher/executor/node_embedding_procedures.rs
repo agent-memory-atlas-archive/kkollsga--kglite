@@ -33,7 +33,8 @@ use super::edge_embedding_procedures::{
     optional_positive_usize, optional_string, require_list, require_string, yield_row,
     ListPosition,
 };
-use super::procedure_params::reject_unknown_keys;
+use super::procedure_params::{claim_index_name, register_built_index_name, reject_unknown_keys};
+use crate::graph::dir_graph::index_names::{IndexClass, NamedIndex};
 
 pub(super) fn execute(
     graph: &mut DirGraph,
@@ -79,6 +80,12 @@ pub(super) fn execute(
                     Surface::Cypher,
                 ));
             }
+            let named = NamedIndex::node(
+                IndexClass::Vector,
+                &node_type,
+                std::slice::from_ref(&text_property),
+            );
+            let name = claim_index_name(graph, params, proc_name, &named)?;
             journal_node_store(graph, &node_type, &text_property);
             let report = embeddings::build_vector_index(
                 graph,
@@ -90,6 +97,7 @@ pub(super) fn execute(
                 metric.as_deref(),
                 limit,
             )?;
+            register_built_index_name(graph, name, named);
             HashMap::from([
                 ("indexed", Value::Int64(report.indexed as i64)),
                 ("metric", Value::String(report.metric)),
@@ -455,6 +463,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
             "ef_search",
             "metric",
             "auto_refresh_limit",
+            "name",
         ],
         "db.node_embeddings.embed" => &[
             "type",

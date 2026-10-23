@@ -405,6 +405,12 @@ pub(crate) fn drop_edge_vector_index(
     if let Some(journal) = graph.graph.undo_journal_mut() {
         journal.note_edge_vector_index_replaced(key, prior);
     }
+    graph.forget_index_names_for(
+        crate::graph::constraints::EntityKind::Relationship,
+        connection_type,
+        &[text_property.to_string()],
+        &[crate::graph::dir_graph::index_names::IndexClass::Vector],
+    );
     graph.note_declaration(crate::graph::wal::MutationOp::SetEdgeVectorIndex {
         conn_type: connection_type.to_string(),
         text_column: text_property.to_string(),

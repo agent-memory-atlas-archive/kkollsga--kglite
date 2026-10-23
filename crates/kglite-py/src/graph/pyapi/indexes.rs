@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::graph::KnowledgeGraph;
+use kglite_core::api::index_names::{IndexClass, NamedIndex};
 
 #[pymethods]
 impl KnowledgeGraph {
@@ -453,25 +454,31 @@ impl KnowledgeGraph {
     }
 
     /// Build a BM25 lexical index over a node type's text or string/null-list property.
-    #[pyo3(signature = (node_type, property, auto_refresh_limit = None))]
+    #[pyo3(signature = (node_type, property, auto_refresh_limit = None, *, name = None))]
     fn build_text_index(
         &mut self,
         py: Python<'_>,
         node_type: &str,
         property: &str,
         auto_refresh_limit: Option<usize>,
+        name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let named = NamedIndex::node(IndexClass::Fulltext, node_type, &[property.to_string()]);
         // Built off the GIL — tokenizing a corpus is pure CPU over graph memory.
         let report = self.logged_write(|graph| {
-            py.detach(|| {
-                kglite_core::api::text_indexes::build_text_index(
-                    graph,
-                    node_type,
-                    property,
-                    auto_refresh_limit,
-                )
-            })
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+            super::vector::claim_name(graph, name, &named)?;
+            let report = py
+                .detach(|| {
+                    kglite_core::api::text_indexes::build_text_index(
+                        graph,
+                        node_type,
+                        property,
+                        auto_refresh_limit,
+                    )
+                })
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            super::vector::register_name(graph, name, named);
+            Ok(report)
         })?;
 
         let result = PyDict::new(py);

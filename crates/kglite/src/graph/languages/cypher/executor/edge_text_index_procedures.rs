@@ -23,7 +23,8 @@ use crate::graph::text_indexes::edge_text::{
 use super::edge_embedding_procedures::{
     optional_nonnegative_usize, optional_string, require_string, yield_row,
 };
-use super::procedure_params::reject_unknown_keys;
+use super::procedure_params::{claim_index_name, register_built_index_name, reject_unknown_keys};
+use crate::graph::dir_graph::index_names::{IndexClass, NamedIndex};
 
 /// The mutating procedures: build, refresh, drop.
 pub(super) fn execute(
@@ -42,8 +43,11 @@ pub(super) fn execute(
     let values = match proc_name {
         "db.relationship_text_index.build" => {
             let limit = optional_nonnegative_usize(params, "auto_refresh_limit", proc_name)?;
+            let named = NamedIndex::relationship(IndexClass::Fulltext, &rel_type, &property);
+            let name = claim_index_name(graph, params, proc_name, &named)?;
             let report = build_edge_text_index(graph, &rel_type, &property, limit)
                 .map_err(|error| format!("CALL {proc_name}: {error}"))?;
+            register_built_index_name(graph, name, named);
             HashMap::from([
                 ("indexed", Value::Int64(report.indexed as i64)),
                 ("skipped", Value::Int64(report.skipped as i64)),
@@ -128,7 +132,9 @@ pub(super) fn list(
 /// "Accepted:" line of the unknown-key refusal.
 pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
     match proc_name {
-        "db.relationship_text_index.build" => &["type", "text_column", "auto_refresh_limit"],
+        "db.relationship_text_index.build" => {
+            &["type", "text_column", "auto_refresh_limit", "name"]
+        }
         "db.relationship_text_index.refresh"
         | "db.relationship_text_index.drop"
         | "db.relationship_text_index.list" => &["type", "text_column"],

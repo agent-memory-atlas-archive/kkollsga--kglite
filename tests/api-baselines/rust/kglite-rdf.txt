@@ -2127,6 +2127,47 @@ pub fn kglite::api::fluent::symmetric_difference_selections(&mut kglite::api::Cu
 pub fn kglite::api::fluent::union_selections(&mut kglite::api::CurrentSelection, &kglite::api::CurrentSelection) -> core::result::Result<(), alloc::string::String>
 pub fn kglite::api::fluent::within_bounds(&kglite::api::DirGraph, &kglite::api::CurrentSelection, &str, &str, f64, f64, f64, f64, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<petgraph::graph_impl::NodeIndex>, alloc::string::String>
 pub fn kglite::api::fluent::wkt_centroid(&str) -> core::result::Result<(f64, f64), alloc::string::String>
+pub mod kglite::api::index_names
+pub enum kglite::api::index_names::IndexClass
+pub kglite::api::index_names::IndexClass::Composite
+pub kglite::api::index_names::IndexClass::Equality
+pub kglite::api::index_names::IndexClass::Fulltext
+pub kglite::api::index_names::IndexClass::Range
+pub kglite::api::index_names::IndexClass::Vector
+impl core::clone::Clone for kglite::api::index_names::IndexClass
+pub fn kglite::api::index_names::IndexClass::clone(&self) -> kglite::api::index_names::IndexClass
+impl core::cmp::Eq for kglite::api::index_names::IndexClass
+impl core::cmp::PartialEq for kglite::api::index_names::IndexClass
+pub fn kglite::api::index_names::IndexClass::eq(&self, &kglite::api::index_names::IndexClass) -> bool
+impl core::fmt::Debug for kglite::api::index_names::IndexClass
+pub fn kglite::api::index_names::IndexClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for kglite::api::index_names::IndexClass
+impl core::marker::StructuralPartialEq for kglite::api::index_names::IndexClass
+impl serde_core::ser::Serialize for kglite::api::index_names::IndexClass
+pub fn kglite::api::index_names::IndexClass::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::index_names::IndexClass
+pub fn kglite::api::index_names::IndexClass::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct kglite::api::index_names::NamedIndex
+pub kglite::api::index_names::NamedIndex::class: kglite::api::index_names::IndexClass
+pub kglite::api::index_names::NamedIndex::entity: kglite::api::EntityKind
+pub kglite::api::index_names::NamedIndex::properties: alloc::vec::Vec<alloc::string::String>
+pub kglite::api::index_names::NamedIndex::target: alloc::string::String
+impl kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::node(kglite::api::index_names::IndexClass, &str, &[alloc::string::String]) -> Self
+pub fn kglite::api::index_names::NamedIndex::relationship(kglite::api::index_names::IndexClass, &str, &str) -> Self
+impl core::clone::Clone for kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::clone(&self) -> kglite::api::index_names::NamedIndex
+impl core::cmp::PartialEq for kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::eq(&self, &kglite::api::index_names::NamedIndex) -> bool
+impl core::fmt::Debug for kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::index_names::NamedIndex
+impl serde_core::ser::Serialize for kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::index_names::NamedIndex
+pub fn kglite::api::index_names::NamedIndex::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn kglite::api::index_names::check_index_name(&kglite::api::DirGraph, &str, &kglite::api::index_names::NamedIndex) -> core::result::Result<(), alloc::string::String>
+pub fn kglite::api::index_names::register_index_name(&mut kglite::api::DirGraph, &str, kglite::api::index_names::NamedIndex)
 pub mod kglite::api::introspection
 pub mod kglite::api::introspection::debugging
 pub fn kglite::api::introspection::debugging::get_schema_string(&kglite::api::DirGraph) -> alloc::string::String

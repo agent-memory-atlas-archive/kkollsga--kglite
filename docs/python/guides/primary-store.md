@@ -542,8 +542,8 @@ happen in Python or Rust. What to watch:
   - A multi-property `RANGE` index is rejected, because the B-tree is
     single-property.
 - **Index names and constraint names are both stored.** A name given to
-  `CREATE INDEX <name>` persists across save/load, is what `SHOW INDEXES` lists,
-  and drops the index.
+  `CREATE INDEX <name>` (or to `build_text_index(name=)` / `build_vector_index(name=)`)
+  persists across save/load, is what `SHOW INDEXES` lists, and drops the index.
   - The canonical name (`Label.property`, `Label.(a,b)`, `relationship:TYPE.property`)
     keeps working, and so does the descriptor form
     `DROP INDEX FOR (n:Label) ON (n.prop)`.

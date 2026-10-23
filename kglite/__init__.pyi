@@ -11126,6 +11126,8 @@ class KnowledgeGraph:
         ef_search: int | None = None,
         metric: str | None = None,
         auto_refresh_limit: int | None = None,
+        *,
+        name: str | None = None,
     ) -> dict[str, Any]:
         """Build an HNSW approximate-nearest-neighbour index over an embedding
         store so vector search scales sub-linearly on large stores.
@@ -11194,6 +11196,14 @@ class KnowledgeGraph:
             auto_refresh_limit: How many outstanding vectors a query folds into
                 the index inline before it serves the exact scan instead
                 (default 1000). Omit on a rebuild to keep the current value.
+            name: Optional name for the index, which ``SHOW INDEXES`` lists in
+                place of the canonical name, ``DROP INDEX <name>`` accepts, and
+                ``db.index.vector.queryNodes`` resolves. Index and constraint names share one
+                namespace, so a name another index or a constraint holds is
+                refused before anything is built. The canonical name keeps
+                working. Not carried in the write-ahead log: after a crash
+                recovered from the log alone, the index answers to its
+                canonical name until it is named again.
 
         Returns:
             dict: ``{'indexed': int, 'metric': str, 'm': int}``.
@@ -11257,6 +11267,8 @@ class KnowledgeGraph:
         ef_search: int | None = None,
         metric: str | None = None,
         auto_refresh_limit: int | None = None,
+        *,
+        name: str | None = None,
     ) -> dict[str, Any]:
         """Build an HNSW index over a relationship embedding store — the
         relationship twin of :meth:`build_node_vector_index`, and the Python
@@ -11282,6 +11294,14 @@ class KnowledgeGraph:
                 refused when it contradicts the store's own.
             auto_refresh_limit: Outstanding vectors a query folds in before it
                 serves the exact scan instead (default 1000).
+            name: Optional name for the index, which ``SHOW INDEXES`` lists in
+                place of the canonical name, ``DROP INDEX <name>`` accepts, and
+                ``db.index.vector.queryRelationships`` resolves. Index and constraint names share one
+                namespace, so a name another index or a constraint holds is
+                refused before anything is built. The canonical name keeps
+                working. Not carried in the write-ahead log: after a crash
+                recovered from the log alone, the index answers to its
+                canonical name until it is named again.
 
         Returns:
             dict: ``{'indexed': int, 'metric': str, 'm': int}``.
@@ -11327,14 +11347,15 @@ class KnowledgeGraph:
         auto_refresh_limit: int | None = None,
         *,
         entity: Literal["node", "relationship"] = "node",
+        name: str | None = None,
     ) -> dict[str, Any]:
         """Build an HNSW index over an embedding store — a node store by
         default, a relationship store with ``entity="relationship"``.
 
         Routes to :meth:`build_node_vector_index` (``entity="node"``, the
         default) or :meth:`build_relationship_vector_index`
-        (``entity="relationship"``) with every argument unchanged, and behaves
-        exactly as the method it routes to.
+        (``entity="relationship"``) with every argument unchanged, ``name``
+        included, and behaves exactly as the method it routes to.
 
         Raises:
             ValueError: ``entity`` is neither ``"node"`` nor
@@ -11383,6 +11404,8 @@ class KnowledgeGraph:
         node_type: str,
         property: str,
         auto_refresh_limit: Optional[int] = None,
+        *,
+        name: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build a BM25 lexical index over a node type's text column, for
         keyword/full-text ranking.
@@ -11471,6 +11494,14 @@ class KnowledgeGraph:
                 is worth in time. A rebuild that omits this keeps whatever the
                 existing index used, so refreshing an index does not quietly
                 restore the default.
+            name: Optional name for the index, which ``SHOW INDEXES`` lists in
+                place of the canonical name, ``DROP INDEX <name>`` accepts, and
+                ``db.index.fulltext.queryNodes`` resolves. Index and constraint names share one
+                namespace, so a name another index or a constraint holds is
+                refused before anything is built. The canonical name keeps
+                working. Not carried in the write-ahead log: after a crash
+                recovered from the log alone, the index answers to its
+                canonical name until it is named again.
 
         Returns:
             dict: ``{'indexed': int, 'skipped': int, 'terms': int}`` —

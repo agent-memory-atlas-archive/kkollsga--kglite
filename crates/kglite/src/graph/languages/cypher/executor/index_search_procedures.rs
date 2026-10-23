@@ -54,7 +54,11 @@ fn resolve_index(
         .into_iter()
         .filter(|info| info.kind == kind && info.entity_type == entity)
         .collect();
-    if let Some(info) = listed.iter().find(|info| info.name == name) {
+    if let Some(info) = listed
+        .iter()
+        .find(|info| info.name == name)
+        .or_else(|| listed.iter().find(|info| info.canonical_name() == name))
+    {
         return Ok(info.clone());
     }
     let proc = proc_name(kind, relationship);

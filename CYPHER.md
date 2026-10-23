@@ -935,7 +935,8 @@ The explicit whole-store lifecycle and query procedures are:
 ```cypher
 CALL db.relationship_embeddings.build_index({
   type:'SUPPORTS', text_column:'evidence',
-  m:16, ef_construction:200, ef_search:64, auto_refresh_limit:1000
+  m:16, ef_construction:200, ef_search:64, auto_refresh_limit:1000,
+  name:'supports_vec'      // optional: the name SHOW INDEXES and db.index.vector.queryRelationships use
 }) YIELD indexed, metric, m
 
 CALL db.relationship_embeddings.refresh_index({type:'SUPPORTS', text_column:'evidence'})
@@ -1148,7 +1149,7 @@ graph.build_text_index("Article", "body")     # Python; every binding has it
 ```
 
 In Cypher the same index is `CALL db.node_text_index.build({type: 'Article',
-text_column: 'body'})`. It also has `refresh`, `drop` and `list`, and
+text_column: 'body'})`; `name: 'article_ft'` (or `build_text_index(..., name='article_ft')`) gives it a [name](#naming-a-search-index). It also has `refresh`, `drop` and `list`, and
 `db.text_index.*` routes to it by default.
 
 ```cypher
@@ -1243,7 +1244,7 @@ ORDER BY score DESC LIMIT 10
 
 | Procedure | Yields | Notes |
 |---|---|---|
-| `db.relationship_text_index.build({type, text_column, auto_refresh_limit?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index. Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
+| `db.relationship_text_index.build({type, text_column, auto_refresh_limit?, name?})` | `indexed`, `skipped`, `terms` | Builds or replaces the index; `name` registers a name for it (see [Naming a search index](#naming-a-search-index)). Same document rule as the node index (a string, or a list of strings/nulls joined); refuses an unknown relationship type and a property no relationship of the type carries as text |
 | `db.relationship_text_index.refresh({type, text_column})` | `refreshed` | Folds in every change since the last build or refresh, whatever the limit; refuses a missing index |
 | `db.relationship_text_index.drop({type, text_column})` | `dropped` | `false` when there was no such index |
 | `db.relationship_text_index.list({type?, text_column?})` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | Read-only; one row per index, sorted |
@@ -1350,10 +1351,10 @@ Four procedures take Neo4j's positional form and run over the `FULLTEXT` and `VE
 
 | Call | Yields | Index |
 |---|---|---|
-| `db.index.fulltext.queryNodes(indexName, queryString [, {limit, skip}])` | `node`, `score` | a `FULLTEXT` row named `Label.property` |
-| `db.index.fulltext.queryRelationships(indexName, queryString [, {limit, skip}])` | `relationship`, `score` | a `FULLTEXT` row named `relationship:TYPE.property` |
-| `db.index.vector.queryNodes(indexName, k, vector)` | `node`, `score` | a `VECTOR` row named `Label.property` |
-| `db.index.vector.queryRelationships(indexName, k, vector)` | `relationship`, `score` | a `VECTOR` row named `relationship:TYPE.property` |
+| `db.index.fulltext.queryNodes(indexName, queryString [, {limit, skip}])` | `node`, `score` | a `FULLTEXT` row, by its listed or canonical (`Label.property`) name |
+| `db.index.fulltext.queryRelationships(indexName, queryString [, {limit, skip}])` | `relationship`, `score` | a `FULLTEXT` row, by its listed or canonical (`relationship:TYPE.property`) name |
+| `db.index.vector.queryNodes(indexName, k, vector)` | `node`, `score` | a `VECTOR` row, by its listed or canonical (`Label.property`) name |
+| `db.index.vector.queryRelationships(indexName, k, vector)` | `relationship`, `score` | a `VECTOR` row, by its listed or canonical (`relationship:TYPE.property`) name |
 
 ```cypher
 CALL db.index.fulltext.queryNodes('Doc.text', $q, {limit: 10}) YIELD node, score
@@ -1368,6 +1369,40 @@ RETURN node.id, score
 - **Vector.** `k` is a positive integer; `vector` is a list of numbers of the store's dimension. The score is the store's metric (cosine similarity for a cosine store), not Neo4j's `(1 + cos) / 2`. The search is the one `db.node_embeddings.query` runs: HNSW when the index is online.
 - **Under `FOR VALID_TIME AS OF`** both lanes return only elements valid at the instant.
 - **`SEARCH`.** The Cypher 25 `SEARCH e IN (VECTOR INDEX …)` clause is not supported and says so; use the vector procedures.
+
+#### Naming a search index
+
+`indexName` is the name `SHOW INDEXES` lists, and either the canonical name or a name you chose resolves. Give a search index a name when you build it:
+
+```python
+graph.build_text_index("Doc", "text", name="doc_ft")
+graph.build_vector_index("Doc", "text", name="doc_vec")        # node store
+graph.build_vector_index("Doc", "text", entity="relationship", name="claims_vec")
+```
+
+```cypher
+CALL db.node_text_index.build({type: 'Doc', text_column: 'text', name: 'doc_ft'})
+CALL db.node_embeddings.build_index({type: 'Doc', text_column: 'text', name: 'doc_vec'})
+CALL db.relationship_text_index.build({type: 'CLAIMS', text_column: 'text', name: 'claims_ft'})
+CALL db.relationship_embeddings.build_index({type: 'CLAIMS', text_column: 'text', name: 'claims_vec'})
+```
+
+The name is checked before the build, so a name that another index or a constraint holds fails the call with nothing built. Rebuilding an index under its own name is fine. `DROP INDEX <name>` removes only that structure, so a property with both a BM25 and a vector index drops one at a time. See [Index names](#index-names) for the namespace rules.
+
+A client that preflights the index reads one `SHOW INDEXES` row:
+
+```cypher
+SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, indexProvider, options
+WHERE name = $index
+```
+
+| Column | `FULLTEXT` row | `VECTOR` row |
+|---|---|---|
+| `state` | `ONLINE` | `ONLINE` |
+| `indexProvider` | `fulltext-1.0` | `vector-2.0` |
+| `options.indexConfig` | `fulltext.analyzer` = `standard-no-stop-words` (KGLite's tokenizer lowercases and splits on non-alphanumerics, with no stop list or stemming), `fulltext.eventually_consistent` = `true` (a query folds in recent writes up to `auto_refresh_limit`, and otherwise serves the index as it stands) | `vector.dimensions`, `vector.similarity_function` (`COSINE`, `EUCLIDEAN`, `DOT_PRODUCT`, `POINCARE`: the store's metric) |
+
+`CREATE FULLTEXT INDEX` and `CREATE VECTOR INDEX` stay refused: Neo4j's full-text index spans several labels and properties, and a vector index here builds over an embedding store that must already exist, so neither is a thin alias over the builders above.
 
 **Positional `CALL` arguments.** `CALL proc(a, b, c)` binds by position to the procedure's declared parameters, and trailing optional ones may be left off. Only procedures with a declared signature take it: the four above, and `SHOW PROCEDURES` lists their signatures. Every other procedure takes one config map (`CALL proc({key: value})`), and positional arguments to it are an error that says so. A wrong argument count names the signature.
 
@@ -4585,8 +4620,10 @@ pastes straight in.
   `CREATE CONSTRAINT`. `CREATE INDEX <name> IF NOT EXISTS` on a taken name does
   nothing.
 - **A name covers the structures it created.** `CREATE RANGE INDEX r` names both
-  the hash and the B-tree row, and `DROP INDEX r` removes both. The canonical name
-  drops everything the property carries.
+  the hash and the B-tree row, and `DROP INDEX r` removes both. A name given to a
+  BM25 or vector index drops only that structure, so a property carrying both
+  can be dropped one at a time. The canonical name drops everything the property
+  carries.
 - **An owned index is named after its constraint.** The index a UNIQUE or NODE KEY
   constraint owns is listed under the constraint's name when it was declared with
   one, as Neo4j does, and under the canonical name otherwise. `DROP INDEX` on
@@ -4658,7 +4695,7 @@ rows and columns as `CALL db.indexes()`:
 
 | Column | Value |
 |---|---|
-| `name` | the name the index was given (`CREATE INDEX <name>`); for an index owned by a named constraint, the constraint's name; otherwise the canonical name — `Label.property`, `Label.(a,b)`, or `relationship:TYPE.property` for a relationship index |
+| `name` | the name the index was given (`CREATE INDEX <name>`, or the `name` of a BM25 or vector build); for an index owned by a named constraint, the constraint's name; otherwise the canonical name — `Label.property`, `Label.(a,b)`, or `relationship:TYPE.property` for a relationship index |
 | `type` | `PROPERTY` (hash equality or composite), `RANGE` (B-tree), `FULLTEXT` (BM25 text index — see `build_text_index()`), or `VECTOR` (HNSW index over an embedding store — see `build_vector_index()`) |
 | `entityType` | `NODE`, or `RELATIONSHIP` for a relationship vector or BM25 index |
 | `labelsOrTypes` | single-element list holding the node or relationship type |
@@ -4668,9 +4705,10 @@ rows and columns as `CALL db.indexes()`:
 | `delta` | how many documents (or vectors) the index would re-read to catch up — an upper bound. `null` alongside a `null` `stale` |
 | `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
 | `populationPercent` | `100.0` for an `ONLINE` index, `null` for a `DEFERRED` one |
-| `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; `null` elsewhere |
+| `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; on a `FULLTEXT` row `{indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words', `fulltext.eventually_consistent`: true}}`; `null` elsewhere |
 | `owningConstraint` | the constraint that owns the index, on the hash-equality or composite row a UNIQUE or NODE KEY constraint backs. `null` on every index nothing owns |
-| `id`, `indexProvider`, `lastRead`, `readCount` | always `null` |
+| `indexProvider` | `'fulltext-1.0'` on a `FULLTEXT` row, `'vector-2.0'` on a `VECTOR` row, `null` elsewhere |
+| `id`, `lastRead`, `readCount` | always `null` |
 
 `stale` / `delta` are KGLite-specific. They describe the catch-up contract both
 opt-in index kinds share: the index does not follow writes eagerly. It records
@@ -4706,7 +4744,7 @@ delete them. A relationship vector index uses the unambiguous canonical name
 through both `SHOW INDEXES` and `CALL db.indexes()`.
 
 A bare `SHOW INDEXES` returns the first nine columns. The last seven are Neo4j 5's own, returned when `YIELD` names them or is `*`. KGLite keeps no state for `id`,
-`indexProvider`, `lastRead` or `readCount`, so they are `null`, not invented values.
+`lastRead` or `readCount`, so they are `null`, not invented values.
 `SHOW INDEXES YIELD … [WHERE …] [RETURN …]` filters, projects, orders and pages
 like `CALL db.indexes() YIELD …`; `BRIEF` and `VERBOSE` are refused rather than
 ignored.

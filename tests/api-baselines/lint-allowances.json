@@ -113,7 +113,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:build_vector_index:fn build_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, entity: &str, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:build_vector_index:fn build_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, entity: &str, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -229,7 +229,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:build_relationship_vector_index:pub(super) fn build_relationship_vector_index( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:build_relationship_vector_index:pub(super) fn build_relationship_vector_index( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -281,7 +281,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:build_node_vector_index:pub(super) fn build_node_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:build_node_vector_index:pub(super) fn build_node_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

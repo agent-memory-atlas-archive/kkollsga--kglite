@@ -582,6 +582,14 @@ pub(crate) fn build_index_structure(
 /// whether one existed. Search reverts to the exact scan; the vectors stay.
 pub fn drop_vector_index(graph: &mut DirGraph, node_type: &str, text_column: &str) -> bool {
     let had = drop_index_structure(graph, node_type, text_column);
+    if had {
+        graph.forget_index_names_for(
+            crate::graph::constraints::EntityKind::Node,
+            node_type,
+            &[text_column.to_string()],
+            &[crate::graph::dir_graph::index_names::IndexClass::Vector],
+        );
+    }
     graph.note_declaration(crate::graph::wal::MutationOp::SetVectorIndex {
         node_type: node_type.to_string(),
         text_column: text_column.to_string(),

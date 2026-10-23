@@ -16,6 +16,10 @@ before upgrading.
   - Index names and constraint names share one namespace. A name another index, a constraint or another index's canonical name holds is refused on `CREATE INDEX` and `CREATE CONSTRAINT`; `CREATE INDEX <name> IF NOT EXISTS` on a taken name does nothing.
   - The index a named UNIQUE or NODE KEY constraint owns is listed under the constraint's name, as Neo4j names it, and `ownedIndex` says the same. A constraint declared without a name leaves the canonical name. An index you declared first keeps its own name when a constraint adopts it.
   - Names persist as an additive `.kgl` metadata field: files saved before it load with canonical names, an older release opens a file that carries names and ignores them, and a graph with no names writes the bytes it wrote before. The write-ahead log does not carry names.
+- **Named full-text and vector indexes.**
+  - `build_text_index(..., name=)`, `build_vector_index(..., name=)`, `build_node_vector_index`, `build_relationship_vector_index`, and the `name` key of `db.node_text_index.build`, `db.relationship_text_index.build`, `db.node_embeddings.build_index` and `db.relationship_embeddings.build_index` register a name for the index. The name is checked before the build, so a taken name builds nothing. `db.index.fulltext.queryNodes` / `queryRelationships` and `db.index.vector.queryNodes` / `queryRelationships` resolve it, and `DROP INDEX <name>` drops only that structure.
+  - `SHOW INDEXES YIELD name, state, type, entityType, labelsOrTypes, properties, indexProvider, options WHERE name = $index` returns the row a Neo4j search client preflights. `indexProvider` is `fulltext-1.0` or `vector-2.0`; `options.indexConfig` carries `fulltext.analyzer` (`standard-no-stop-words`) and `fulltext.eventually_consistent` (`true`) on a `FULLTEXT` row, beside the vector dimension and similarity function on a `VECTOR` row.
+  - `CREATE FULLTEXT INDEX` and `CREATE VECTOR INDEX` stay refused: they need `ON EACH [...]` and `OPTIONS { indexConfig: ... }` parsing, a multi-label full-text index KGLite does not have, and an embedding store a vector index builds over, so they are not a thin alias over the builders above.
 
 - **Neo4j-named index search and positional `CALL` arguments.**
   - `CALL db.index.fulltext.queryNodes(indexName, queryString, {limit, skip})` and `queryRelationships` rank the BM25 index of that name, matching documents only, best first, yielding `node` or `relationship` and `score`. `CALL db.index.vector.queryNodes(indexName, k, vector)` and `queryRelationships` rank the vector index's store, yielding the same columns.
@@ -80,6 +84,7 @@ before upgrading.
 
 ### Rust API
 
+- `kglite::api::index_names` adds `NamedIndex`, `IndexClass`, `check_index_name` and `register_index_name`: a binding checks a name before building an index and registers it once the build succeeds. `build_text_index` and `build_vector_index` keep their signatures.
 - `ExecuteOptions` gains a public `hide_structural_keys` field. Code that builds it with a struct literal needs the field; `ExecuteOptions::new(&params)` plus `with_hidden_structural_keys` is unaffected.
 
 ## [0.21.0] - 2026-10-22

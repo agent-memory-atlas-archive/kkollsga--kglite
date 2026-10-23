@@ -25,8 +25,9 @@ use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::schema::DirGraph;
 use crate::graph::storage::GraphRead;
 
-use super::procedure_params::reject_unknown_keys;
+use super::procedure_params::{claim_index_name, register_built_index_name, reject_unknown_keys};
 use super::relationship_identity::StatementRelationshipIdentities;
+use crate::graph::dir_graph::index_names::{IndexClass, NamedIndex};
 
 pub(super) fn execute(
     graph: &mut DirGraph,
@@ -75,6 +76,9 @@ pub(super) fn execute(
             HashMap::from([("dropped", Value::Boolean(dropped))])
         }
         "db.relationship_embeddings.build_index" => {
+            let named =
+                NamedIndex::relationship(IndexClass::Vector, &relationship_type, &text_property);
+            let name = claim_index_name(graph, params, proc_name, &named)?;
             let report = build_edge_vector_index(
                 graph,
                 &relationship_type,
@@ -91,6 +95,7 @@ pub(super) fn execute(
                     )?,
                 },
             )?;
+            register_built_index_name(graph, name, named);
             HashMap::from([
                 ("indexed", Value::Int64(report.indexed as i64)),
                 ("metric", Value::String(report.metric)),
@@ -509,6 +514,7 @@ pub(super) fn accepted_keys(proc_name: &str) -> &'static [&'static str] {
             "ef_search",
             "metric",
             "auto_refresh_limit",
+            "name",
         ],
         "db.relationship_embeddings.embed" => &[
             "type",

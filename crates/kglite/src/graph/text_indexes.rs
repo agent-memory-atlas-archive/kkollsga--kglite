@@ -829,6 +829,12 @@ pub fn refresh_text_index(graph: &DirGraph, node_type: &str, property: &str) -> 
 pub fn drop_text_index(graph: &mut DirGraph, node_type: &str, property: &str) -> bool {
     let removed = drop_text_index_structure(graph, node_type, property);
     if removed {
+        graph.forget_index_names_for(
+            crate::graph::constraints::EntityKind::Node,
+            node_type,
+            &[property.to_string()],
+            &[crate::graph::dir_graph::index_names::IndexClass::Fulltext],
+        );
         graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
             entity: crate::graph::wal::TextIndexEntity::Node,
             type_name: node_type.to_string(),

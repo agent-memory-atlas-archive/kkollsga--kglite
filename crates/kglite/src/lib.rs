@@ -518,6 +518,17 @@ pub mod api {
         };
     }
 
+    /// User-chosen index names. `check_index_name` refuses a name another
+    /// index or a constraint holds, before anything is built; `register_index_name`
+    /// then records it for the index just built, which `SHOW INDEXES` lists,
+    /// `DROP INDEX` accepts and the `db.index.*` search procedures resolve.
+    /// `NamedIndex::node` / `NamedIndex::relationship` describe the index.
+    pub mod index_names {
+        pub use crate::graph::dir_graph::index_names::{
+            check_index_name, register_index_name, IndexClass, NamedIndex,
+        };
+    }
+
     /// Validity-interval declarations: which two properties bound a node
     /// label's or relationship type's validity interval, and whether the end
     /// day belongs to it (`closed`) or ends it (`half_open`). `declare`

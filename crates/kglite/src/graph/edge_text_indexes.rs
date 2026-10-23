@@ -332,6 +332,12 @@ pub(crate) fn refresh_edge_text_index(
 pub(crate) fn drop_edge_text_index(graph: &mut DirGraph, rel_type: &str, property: &str) -> bool {
     let removed = drop_edge_text_index_structure(graph, rel_type, property);
     if removed {
+        graph.forget_index_names_for(
+            crate::graph::constraints::EntityKind::Relationship,
+            rel_type,
+            &[property.to_string()],
+            &[crate::graph::dir_graph::index_names::IndexClass::Fulltext],
+        );
         graph.note_declaration(crate::graph::wal::MutationOp::SetTextIndex {
             entity: crate::graph::wal::TextIndexEntity::Relationship,
             type_name: rel_type.to_string(),

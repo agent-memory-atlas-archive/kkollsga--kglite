@@ -11,7 +11,9 @@ use super::super::result::{ResultRow, ResultSet};
 use crate::datatypes::prop_map::PropMap;
 use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::introspection::schema_overview::{collect_indexes_structured, IndexInfo};
+use crate::graph::introspection::schema_overview::{
+    collect_indexes_structured, IndexInfo, IndexKind,
+};
 
 /// Columns a bare `SHOW INDEXES` and a bare `CALL db.indexes()` return. The
 /// first six are Neo4j's own. `stale`, `delta` and `unembedded` are
@@ -88,28 +90,58 @@ pub(crate) fn index_cell(info: &IndexInfo, column: &str) -> Option<Value> {
                 Value::Null
             }
         }
-        "options" => info
-            .vector_config
-            .as_ref()
-            .map_or(Value::Null, |(dim, metric)| {
-                Value::Map(PropMap::from_iter([(
-                    "indexConfig",
-                    Value::Map(PropMap::from_iter([
+        "options" => match info.kind {
+            IndexKind::Text => index_config([
+                (
+                    "fulltext.analyzer",
+                    Value::String(FULLTEXT_ANALYZER.to_string()),
+                ),
+                ("fulltext.eventually_consistent", Value::Boolean(true)),
+            ]),
+            _ => info
+                .vector_config
+                .as_ref()
+                .map_or(Value::Null, |(dim, metric)| {
+                    index_config([
                         ("vector.dimensions", Value::Int64(*dim as i64)),
                         (
                             "vector.similarity_function",
                             Value::String(metric.to_ascii_uppercase()),
                         ),
-                    ])),
-                )]))
-            }),
+                    ])
+                }),
+        },
+        "indexProvider" => match info.kind {
+            IndexKind::Text => Value::String(FULLTEXT_PROVIDER.to_string()),
+            IndexKind::Vector => Value::String(VECTOR_PROVIDER.to_string()),
+            _ => Value::Null,
+        },
         "owningConstraint" => info
             .owning_constraint
             .clone()
             .map_or(Value::Null, Value::String),
-        "id" | "indexProvider" | "lastRead" | "readCount" => Value::Null,
+        "id" | "lastRead" | "readCount" => Value::Null,
         _ => return None,
     })
+}
+
+/// The `indexProvider` a `FULLTEXT` row reports: Neo4j's provider string for its
+/// Lucene full-text index, which a client keys on to recognise the kind.
+const FULLTEXT_PROVIDER: &str = "fulltext-1.0";
+/// The `indexProvider` a `VECTOR` row reports: Neo4j's string for its vector
+/// index.
+const VECTOR_PROVIDER: &str = "vector-2.0";
+/// The `fulltext.analyzer` a `FULLTEXT` row reports. KGLite's one tokenizer
+/// lowercases, splits on every non-alphanumeric character, and applies no stop
+/// list or stemming, which is Neo4j's `standard-no-stop-words` by behaviour.
+const FULLTEXT_ANALYZER: &str = "standard-no-stop-words";
+
+/// `{indexConfig: {…}}` — the shape Neo4j nests an index's settings under.
+fn index_config<const N: usize>(settings: [(&'static str, Value); N]) -> Value {
+    Value::Map(PropMap::from_iter([(
+        "indexConfig",
+        Value::Map(PropMap::from_iter(settings)),
+    )]))
 }
 
 #[cfg(test)]

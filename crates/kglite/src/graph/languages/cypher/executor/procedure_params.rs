@@ -34,3 +34,32 @@ pub(super) fn reject_unknown_keys<'k>(
     }
     Ok(())
 }
+
+/// The optional `name` of an index-building procedure, claimed before the
+/// build so a name that is taken refuses the call with nothing built. Pair with
+/// [`register_built_index_name`] once the build has succeeded.
+pub(super) fn claim_index_name(
+    graph: &crate::graph::dir_graph::DirGraph,
+    params: &std::collections::HashMap<String, crate::datatypes::values::Value>,
+    proc_name: &str,
+    named: &crate::graph::dir_graph::index_names::NamedIndex,
+) -> Result<Option<String>, String> {
+    let Some(name) = super::edge_embedding_procedures::optional_string(params, "name", proc_name)?
+    else {
+        return Ok(None);
+    };
+    crate::graph::dir_graph::index_names::check_index_name(graph, &name, named)
+        .map_err(|error| format!("CALL {proc_name}: {error}"))?;
+    Ok(Some(name))
+}
+
+/// Register the name [`claim_index_name`] returned for the index just built.
+pub(super) fn register_built_index_name(
+    graph: &mut crate::graph::dir_graph::DirGraph,
+    name: Option<String>,
+    named: crate::graph::dir_graph::index_names::NamedIndex,
+) {
+    if let Some(name) = name {
+        crate::graph::dir_graph::index_names::register_index_name(graph, &name, named);
+    }
+}

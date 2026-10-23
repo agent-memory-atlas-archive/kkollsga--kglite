@@ -412,7 +412,7 @@ impl KnowledgeGraph {
     }
 
     /// Build an HNSW index over a node embedding store (default) or, with entity='relationship', a relationship one.
-    #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, entity="node"))]
+    #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, entity="node", name=None))]
     // One Rust argument per HNSW knob plus the route.
     #[allow(clippy::too_many_arguments)]
     fn build_vector_index(
@@ -426,6 +426,7 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         auto_refresh_limit: Option<usize>,
         entity: &str,
+        name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         match Entity::parse("build_vector_index", entity)? {
             Entity::Node => self.build_node_vector_index(
@@ -437,6 +438,7 @@ impl KnowledgeGraph {
                 ef_search,
                 metric,
                 auto_refresh_limit,
+                name,
             ),
             Entity::Relationship => self.build_relationship_vector_index(
                 py,
@@ -447,6 +449,7 @@ impl KnowledgeGraph {
                 ef_search,
                 metric,
                 auto_refresh_limit,
+                name,
             ),
         }
     }

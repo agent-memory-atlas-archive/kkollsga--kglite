@@ -14,6 +14,7 @@ use crate::graph::KnowledgeGraph;
 use kglite_core::api::embeddings::{
     EmbedError, EmbedHooks, EmbedMode, RelationshipIngestReport, RelationshipVector,
 };
+use kglite_core::api::index_names::{IndexClass, NamedIndex};
 use kglite_core::api::Value;
 
 /// The keys a list-of-dicts row may carry — `relationship_embeddings()`'s row.
@@ -185,7 +186,7 @@ impl KnowledgeGraph {
     }
 
     /// Build an HNSW index over a relationship embedding store — the relationship twin of build_node_vector_index.
-    #[pyo3(signature = (relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None))]
+    #[pyo3(signature = (relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, name=None))]
     // One Rust argument per HNSW knob, as build_node_vector_index has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_relationship_vector_index(
@@ -198,21 +199,27 @@ impl KnowledgeGraph {
         ef_search: Option<usize>,
         metric: Option<&str>,
         auto_refresh_limit: Option<usize>,
+        name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let named = NamedIndex::relationship(IndexClass::Vector, relationship_type, text_column);
         let report = self.logged_write(|g| {
-            py.detach(|| {
-                kglite_core::api::embeddings::build_relationship_vector_index(
-                    g,
-                    relationship_type,
-                    text_column,
-                    m,
-                    ef_construction,
-                    ef_search,
-                    metric,
-                    auto_refresh_limit,
-                )
-            })
-            .map_err(PyValueError::new_err)
+            super::vector::claim_name(g, name, &named)?;
+            let report = py
+                .detach(|| {
+                    kglite_core::api::embeddings::build_relationship_vector_index(
+                        g,
+                        relationship_type,
+                        text_column,
+                        m,
+                        ef_construction,
+                        ef_search,
+                        metric,
+                        auto_refresh_limit,
+                    )
+                })
+                .map_err(PyValueError::new_err)?;
+            super::vector::register_name(g, name, named);
+            Ok(report)
         })?;
         let result = PyDict::new(py);
         result.set_item("indexed", report.indexed)?;

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::graph::{KnowledgeGraph, NodeKeyGuard, NodeKeyKind};
 use kglite_core::api::embeddings::{EmbedError, EmbedHooks, EmbedMode};
+use kglite_core::api::index_names::{IndexClass, NamedIndex};
 use kglite_core::api::io as file;
 use kglite_core::api::GraphRead;
 
@@ -811,7 +812,7 @@ impl KnowledgeGraph {
     }
 
     /// Build an HNSW index over a node embedding store so vector search scales on large stores.
-    #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None))]
+    #[pyo3(signature = (node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, name=None))]
     // One Rust argument per HNSW knob the Python signature exposes.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_node_vector_index(
@@ -824,22 +825,28 @@ impl KnowledgeGraph {
         ef_search: Option<usize>,
         metric: Option<&str>,
         auto_refresh_limit: Option<usize>,
+        name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let named = NamedIndex::node(IndexClass::Vector, node_type, &[text_column.to_string()]);
         // Build off the GIL — pure CPU over the contiguous vector buffer.
         let report = self.logged_write(|g| {
-            py.detach(|| {
-                kglite_core::api::embeddings::build_vector_index(
-                    g,
-                    node_type,
-                    text_column,
-                    m,
-                    ef_construction,
-                    ef_search,
-                    metric,
-                    auto_refresh_limit,
-                )
-            })
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+            claim_name(g, name, &named)?;
+            let report = py
+                .detach(|| {
+                    kglite_core::api::embeddings::build_vector_index(
+                        g,
+                        node_type,
+                        text_column,
+                        m,
+                        ef_construction,
+                        ef_search,
+                        metric,
+                        auto_refresh_limit,
+                    )
+                })
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+            register_name(g, name, named);
+            Ok(report)
         })?;
 
         let result = PyDict::new(py);
@@ -1021,5 +1028,30 @@ fn embedding_file_error(error: std::io::Error) -> PyErr {
         crate::error_py::ArgumentError::new_err(error.to_string())
     } else {
         PyErr::new::<pyo3::exceptions::PyIOError, _>(error.to_string())
+    }
+}
+
+/// Claim `name` (when given) for the index `named` describes, before the build:
+/// a name already taken refuses the call with nothing built.
+pub(super) fn claim_name(
+    graph: &kglite_core::api::DirGraph,
+    name: Option<&str>,
+    named: &NamedIndex,
+) -> PyResult<()> {
+    match name {
+        Some(name) => kglite_core::api::index_names::check_index_name(graph, name, named)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
+        None => Ok(()),
+    }
+}
+
+/// Record the name [`claim_name`] accepted, once the build has succeeded.
+pub(super) fn register_name(
+    graph: &mut kglite_core::api::DirGraph,
+    name: Option<&str>,
+    named: NamedIndex,
+) {
+    if let Some(name) = name {
+        kglite_core::api::index_names::register_index_name(graph, name, named);
     }
 }
