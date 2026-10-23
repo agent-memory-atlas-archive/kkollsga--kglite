@@ -328,10 +328,7 @@ impl Transaction {
         // since begin(). (The OCC check stays here because the commit target
         // is the owner KnowledgeGraph's Arc, not a core Session's.)
         Python::attach(|py| {
-            let mut kg = self
-                .owner
-                .try_borrow_mut(py)
-                .map_err(|_| super::kg_core::concurrent_access_pyerr())?;
+            let mut kg = super::kg_core::borrow_mut_waiting(self.owner.bind(py))?;
             if kg.lifecycle.epoch() != self.ownership_epoch {
                 return Err(crate::error_py::kg_to_pyerr(
                     crate::error::KgError::Argument(

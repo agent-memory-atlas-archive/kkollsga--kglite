@@ -300,8 +300,14 @@ impl KnowledgeGraph {
         // Keep the commit guard as well: no caller may drain a source stream
         // or append a source WAL for an independently mutated derived handle.
         self.check_durable_owner()?;
-        self.flush_wal()
-            .map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))?;
+        // The fsync inside `flush_wal` is the slow part of a durable write;
+        // other Python threads run while it waits on the disk.
+        let flushed = if self.lifecycle.durable.is_some() {
+            Python::attach(|py| py.detach(|| self.flush_wal()))
+        } else {
+            self.flush_wal()
+        };
+        flushed.map_err(|e| crate::error_py::durability_failed_pyerr(e.to_string()))?;
         self.auto_checkpoint_if_needed();
         Ok(())
     }

@@ -2305,13 +2305,21 @@ class KnowledgeGraph:
     """A high-performance knowledge graph with typed nodes, connections, and
     a fluent query API backed by Rust.
 
-    **Single-owner / threading.** A ``KnowledgeGraph`` is single-owner: it is
-    not safe to share one instance across threads while any thread mutates it
-    (doing so raises a clear ``RuntimeError``). For concurrent access, don't
-    share the graph — take a thread-safe handle off it: :meth:`session` (shared
-    reads + serialized writes, plus :meth:`Session.cursor` for per-thread
-    fluent chains) or :meth:`freeze` (a lock-free read-only snapshot). See
-    ``docs/concepts/concurrency.md``.
+    **Single-owner / threading.** A ``KnowledgeGraph`` is single-owner. A
+    Cypher mutation (``cypher()`` with ``CREATE``/``SET``/``DELETE``/``MERGE``)
+    releases the GIL while it runs, and a second thread that calls
+    :meth:`cypher`, :meth:`begin`, :meth:`begin_read` or :meth:`backup` on the
+    same graph **waits** for the write to finish, so concurrent writers
+    serialize and no reader sees a half-applied write. The wait releases the
+    GIL and ends on ``KeyboardInterrupt``. Every other method (fluent chains,
+    ``add_nodes()``, ``save()``) still raises ``RuntimeError: Already
+    borrowed`` when it touches the graph during a write on another thread,
+    and an embedder callback that calls back into the graph that is running
+    it raises ``RuntimeError`` instead of waiting on itself. For concurrent
+    access beyond that, take a thread-safe handle off the graph:
+    :meth:`session` (shared reads + serialized writes, plus
+    :meth:`Session.cursor` for per-thread fluent chains) or :meth:`freeze` (a
+    lock-free read-only snapshot). See ``docs/concepts/concurrency.md``.
     """
 
     # ====================================================================
@@ -5683,7 +5691,7 @@ class KnowledgeGraph:
         The graph is captured at the call (pending commits are logged first, so
         the returned ``lsn`` covers exactly the data in the file). The borrow on
         this handle is released before the file is serialised, so another
-        thread may use the graph meanwhile without raising "Already borrowed".
+        thread may use the graph meanwhile without waiting or raising "Already borrowed".
         A plain :class:`KnowledgeGraph` is still single-owner by design: for a
         graph that many threads write while a backup runs, use
         :meth:`session` and call :meth:`Session.backup`, which also keeps
@@ -5785,8 +5793,9 @@ class KnowledgeGraph:
 
         Returns a :class:`FrozenGraph` that shares this graph's data (an O(1)
         clone — no deep copy) and exposes only read methods. A live
-        ``KnowledgeGraph`` is single-owner and raises if a second thread touches
-        it while another mutates it; a ``FrozenGraph`` has no mutating method, so
+        ``KnowledgeGraph`` is single-owner: a second thread's ``cypher()`` waits
+        for a running write, and its other methods raise while one runs; a
+        ``FrozenGraph`` has no mutating method, so
         any number of threads can run ``cypher()`` against the same snapshot in
         parallel, lock-free.
 
@@ -5833,8 +5842,9 @@ class KnowledgeGraph:
     def session(self) -> "Session":
         """Seed a thread-safe, shareable :class:`Session` from this graph.
 
-        Unlike a live ``KnowledgeGraph`` — which is single-owner and trips a
-        borrow guard when shared across threads mid-mutation — a ``Session``
+        Unlike a live ``KnowledgeGraph`` — which is single-owner, makes a
+        second thread's ``cypher()`` wait for a running write and raises from
+        its other methods — a ``Session``
         exposes only ``&self`` methods with synchronisation in an internal
         lock: concurrent ``cypher()`` reads run lock-free, and ``execute()``
         writes serialise behind the lock with copy-on-write + atomic swap.
@@ -11606,7 +11616,7 @@ class Session:
     momentary snapshot and run lock-free, while writes serialise behind the
     internal lock with copy-on-write + atomic swap. This is the supported way
     to serve one graph to many agent / request threads without the
-    single-owner borrow conflict a live :class:`KnowledgeGraph` raises.
+    single-owner borrow conflict a live :class:`KnowledgeGraph` has.
 
     The ``Session`` is an independent owner seeded from the source graph's
     state; once either side mutates, copy-on-write forks them. Treat the

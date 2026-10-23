@@ -60,6 +60,33 @@ impl PyEmbedderAdapter {
     }
 }
 
+thread_local! {
+    static IN_CALLBACK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// True while this thread runs Python embedder code. Such a callback executes
+/// inside the graph operation that invoked it, which still holds the graph's
+/// borrow, so a callback that touches that graph must be refused rather than
+/// made to wait on a release only it could trigger.
+pub(crate) fn in_embedder_callback() -> bool {
+    IN_CALLBACK.with(|c| c.get() > 0)
+}
+
+struct CallbackScope;
+
+impl CallbackScope {
+    fn enter() -> Self {
+        IN_CALLBACK.with(|c| c.set(c.get() + 1));
+        Self
+    }
+}
+
+impl Drop for CallbackScope {
+    fn drop(&mut self) {
+        IN_CALLBACK.with(|c| c.set(c.get() - 1));
+    }
+}
+
 impl Embedder for PyEmbedderAdapter {
     fn dimension(&self) -> usize {
         self.dimension
@@ -71,6 +98,7 @@ impl Embedder for PyEmbedderAdapter {
 
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         Python::attach(|py| -> PyResult<Vec<Vec<f32>>> {
+            let _scope = CallbackScope::enter();
             let py_texts = pyo3::types::PyList::new(py, texts)?;
             let result = self.instance.call_method1(py, "embed", (py_texts,))?;
             result.extract(py)
@@ -80,6 +108,7 @@ impl Embedder for PyEmbedderAdapter {
 
     fn load(&self) -> Result<(), String> {
         Python::attach(|py| -> PyResult<()> {
+            let _scope = CallbackScope::enter();
             let bound = self.instance.bind(py);
             if bound.hasattr("load")? {
                 bound.call_method0("load")?;

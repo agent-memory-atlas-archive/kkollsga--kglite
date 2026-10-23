@@ -91,6 +91,10 @@ before upgrading.
 
 ### Changed
 
+- **A second thread's `cypher()` on a live graph waits for a running write.**
+  - A Cypher mutation on a `KnowledgeGraph` now releases the GIL while it runs, as does the fsync of a durable commit. Before, the whole call held it, so a pure-Python thread beside a write ran at about a third of its speed and reader threads of a `freeze()` snapshot stalled behind the writer.
+  - A second thread that calls `cypher()`, `begin()`, `begin_read()` or `backup()` on the same graph now waits for the write to finish. Before, it raised `RuntimeError: KnowledgeGraph accessed concurrently`. The wait releases the GIL, `Ctrl-C` ends it, and the thread never sees a half-applied write.
+  - Other methods called during a write on another thread still raise `RuntimeError: Already borrowed`. An embedder callback that calls the graph running it still raises `RuntimeError`.
 - **Relationship loads check for repeated rows faster.** The identical-row warning of `add_relationships` costs about half of what it did: a medium graph's seven loads drop from 55 ms to 48 ms (release build). The warning text and counts are unchanged.
 - **EXPLAIN shows operator names whole and the index a top-K starts from.** The operation column of an EXPLAIN table was cut at 30 characters; it now prints in full (other result tables keep the cap). A fused vector top-K reads `FusedVectorScoreTopK [hnsw]` when its store has a built index and `[exact]` when it has none or `{exact: true}` is requested. A fused BM25 top-K reads `FusedTextBm25TopK [postings]` or `[scan]`. The label is the state before execution: a stale index, a filter or a row-dependent argument can still fall back to the exact scan, which `diagnostics['retrieval']` reports afterwards. The label is omitted when the label or property is not static.
 - **The index a UNIQUE or NODE KEY constraint owns is listed as `RANGE`.** `SHOW INDEXES` and `db.indexes()` reported `PROPERTY` for it; Neo4j types a constraint's backing index `RANGE`, and clients that look for the index behind a constraint filter on that. `owningConstraint` is unchanged, and so is the index.

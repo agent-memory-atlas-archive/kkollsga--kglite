@@ -4,6 +4,8 @@ Verifies that read-only Cypher queries release the GIL and can run
 concurrently from multiple Python threads.
 """
 
+import os
+import signal
 import threading
 import time
 
@@ -476,3 +478,104 @@ def test_begin_under_a_held_borrow_raises_instead_of_panicking():
     for outcome in caught:
         assert isinstance(outcome, RuntimeError), f"expected RuntimeError, got {outcome!r}"
         assert "concurrently" in str(outcome)
+
+
+# ── Live-graph mutations release the GIL; a second thread waits ─────────────
+#
+# A live KnowledgeGraph is guarded by one exclusive borrow. A Cypher mutation
+# releases the GIL while it runs; a second thread that calls cypher() on the
+# same graph waits for the write to finish (releasing the GIL while it waits)
+# instead of raising or reading a half-applied graph.
+
+_LIVE_NODES = 200_000
+
+
+def _live_graph():
+    g = kglite.KnowledgeGraph()
+    g.cypher(f"UNWIND range(1, {_LIVE_NODES}) AS i CREATE (:T {{i: i}})")
+    return g
+
+
+class TestLiveMutationGIL:
+    def test_spinner_progresses_during_a_live_mutation(self):
+        g = _live_graph()
+        ticks, _ = _ticks_during(lambda: [g.cypher("MATCH (n:T) SET n.f = n.i + 1") for _ in range(2)])
+        assert ticks >= 3, f"a live Cypher mutation held the GIL (ticks={ticks})"
+
+    def test_two_writer_threads_both_land(self):
+        g = _live_graph()
+        per_thread = 5
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(2)
+
+        def write(tag):
+            barrier.wait()
+            for k in range(per_thread):
+                try:
+                    g.cypher("MATCH (n:T) WHERE n.i <= 20000 SET n.last = $tag", params={"tag": tag})
+                    g.cypher("CREATE (:W {tag: $tag, k: $k})", params={"tag": tag, "k": k})
+                except BaseException as e:  # noqa: BLE001 — any raise is the failure under test
+                    errors.append(e)
+
+        threads = [threading.Thread(target=write, args=(tag,)) for tag in ("a", "b")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        assert not any(t.is_alive() for t in threads), "a writer thread hung"
+        assert errors == [], errors
+        counts = {r["tag"]: r["c"] for r in g.cypher("MATCH (w:W) RETURN w.tag AS tag, count(w) AS c")}
+        assert counts == {"a": per_thread, "b": per_thread}
+
+    def test_reader_thread_waits_and_sees_the_whole_write(self):
+        g = _live_graph()
+        seen: list[int] = []
+        errors: list[BaseException] = []
+        started = threading.Event()
+
+        def read():
+            started.wait()
+            for _ in range(30):
+                try:
+                    seen.append(g.cypher("MATCH (n:T) WHERE n.flag = 1 RETURN count(n) AS c")[0]["c"])
+                except BaseException as e:  # noqa: BLE001
+                    errors.append(e)
+
+        t = threading.Thread(target=read)
+        t.start()
+        started.set()
+        g.cypher("MATCH (n:T) SET n.flag = 1")
+        t.join(timeout=60)
+        assert not t.is_alive()
+        assert errors == [], errors
+        # Never a half-applied graph: before the write or after it.
+        assert seen and set(seen) <= {0, _LIVE_NODES}, sorted(set(seen))
+        assert seen[-1] == _LIVE_NODES
+
+    @pytest.mark.skipif(os.name != "posix", reason="delivers SIGINT to the process")
+    def test_ctrl_c_ends_the_wait_for_a_running_write(self):
+        g = _live_graph()
+        writing = threading.Event()
+
+        def write():
+            writing.set()
+            for _ in range(4):
+                g.cypher("MATCH (n:T) SET n.f = n.i + 1")
+
+        w = threading.Thread(target=write)
+        w.start()
+        writing.wait()
+        time.sleep(0.2)
+        timer = threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGINT))
+        timer.start()
+        t0 = time.perf_counter()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                while True:
+                    g.cypher("MATCH (n:T) RETURN count(n) AS c")
+                    if time.perf_counter() - t0 > 30:
+                        pytest.fail("no KeyboardInterrupt while waiting behind a write")
+        finally:
+            timer.cancel()
+            w.join(timeout=60)
+        assert not w.is_alive()

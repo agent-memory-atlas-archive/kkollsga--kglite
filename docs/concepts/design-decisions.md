@@ -89,7 +89,7 @@ ownership, not universal operator streaming.
 
 An `Arc<DirGraph>` makes immutable snapshots cheap. `FrozenGraph` exposes that
 model directly for readers. A mutable `KnowledgeGraph` stays a single-owner
-handle; copying on mutation preserves existing snapshots.
+handle (a second thread's `cypher()` waits for a running write); copying on mutation preserves existing snapshots.
 
 Servers need composable writes as well as parallel reads, so `Session` adds a
 small synchronization boundary:

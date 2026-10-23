@@ -248,8 +248,10 @@ def run_child(mode, reader):
 # --- durable graphs -----------------------------------------------------------------------------
 #
 # A write on a durable handle holds the handle's mutable borrow while the embedder callback runs. A
-# second thread (or the callback itself) touching the same handle raises "accessed concurrently"
-# instead of waiting; a Session taken earlier still reads the committed snapshot and refuses writes.
+# second thread touching the same handle WAITS for the write to finish (it neither raises nor reads
+# a half-applied graph); the callback itself re-entering the handle raises "accessed concurrently",
+# since it would wait on a release only it can trigger. A Session taken earlier still reads the
+# committed snapshot and refuses writes.
 # These cases pin that contract in a bounded child so a lock cycle fails instead of hanging pytest.
 
 DURABLE_CHILD = textwrap.dedent(
@@ -284,7 +286,7 @@ DURABLE_CHILD = textwrap.dedent(
                 box["err"] = f"{type(e).__name__}: {e}"
         t = threading.Thread(target=run, daemon=True)
         t.start()
-        t.join(5)
+        t.join(1)
         box["hung"] = t.is_alive()
         return box
 
@@ -317,8 +319,8 @@ DURABLE_CHILD = textwrap.dedent(
 @pytest.mark.parametrize(
     ("mode", "check"),
     [
-        ("reader_thread", lambda r: "accessed concurrently" in r["err"]),
-        ("writer_thread", lambda r: "accessed concurrently" in r["err"]),
+        ("reader_thread", lambda r: r["hung"] is True and "err" not in r),
+        ("writer_thread", lambda r: r["hung"] is True and "err" not in r),
         ("reentrant_write", lambda r: "accessed concurrently" in r["err"]),
         ("session_reader", lambda r: r["ok"] == [{"m": 0}, {"m": 0}]),
         ("session_writer", lambda r: "durable" in r["err"]),
@@ -342,10 +344,13 @@ def test_durable_write_with_a_callback_embedder_keeps_todays_concurrency_contrac
     result = __import__("json").loads(stdout.strip().splitlines()[-1])
     assert result["rows"] == [{"id": 1, "s": 1.0}, {"id": 2, "s": 0.0}]
     outcome = result["seen"]["r"]
-    assert outcome.get("hung") is not True, outcome
+    if mode not in ("reader_thread", "writer_thread"):
+        assert outcome.get("hung") is not True, outcome
     assert check(outcome), outcome
 
-    # The outer write survived the hard exit; nothing the refused callers tried reached the log.
+    # The outer write survived the hard exit; nothing the refused callers tried reached the log. A
+    # writer that waited may have landed in the instant between the outer commit and the exit.
     reopened = kglite.open(str(path), durable="full")
     assert reopened.cypher("MATCH (d:Doc) RETURN d.m AS m ORDER BY d.id").to_list() == [{"m": 1}, {"m": 1}]
-    assert reopened.cypher("MATCH (n) WHERE n:Late OR n:Re OR n:S RETURN count(n) AS c").scalar() == 0
+    stray = "n:Re OR n:S" if mode == "writer_thread" else "n:Late OR n:Re OR n:S"
+    assert reopened.cypher(f"MATCH (n) WHERE {stray} RETURN count(n) AS c").scalar() == 0

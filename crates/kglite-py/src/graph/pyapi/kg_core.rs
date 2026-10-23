@@ -109,14 +109,11 @@ pub(crate) fn save_error_to_pyerr(error: io::SaveError) -> PyErr {
     }
 }
 
-/// Clear, actionable error for a cross-thread borrow conflict on a shared
-/// `KnowledgeGraph`. PyO3's `#[pyclass]` is `RefCell`-guarded: while one
-/// thread mutates the graph (`add_nodes` / `embed_texts` / a `CREATE`
-/// query / `save`) it holds the exclusive borrow, and a second thread
-/// touching the *same* instance hits the guard. The raw symptom is a cryptic
-/// `RuntimeError: Already borrowed`, or a panic where the borrow is taken by
-/// hand; the `try_borrow` sites — `cypher()`, `begin()`, `begin_read()` — map
-/// it to this one message.
+/// Error for a borrow conflict that waiting cannot resolve: an embedder
+/// callback re-entering the graph whose operation invoked it. A second
+/// thread never sees it from `cypher()`, `begin()`, `begin_read()` or
+/// `backup()`: those wait (see [`borrow_waiting`]). PyO3's own
+/// `Already borrowed` still surfaces from the other `&self` methods.
 ///
 /// Kept in the Python wrapper (not core `KgError`): the borrow guard is a
 /// PyO3/GIL concern, so a non-Python binding never raises it. Raised as a
@@ -124,16 +121,45 @@ pub(crate) fn save_error_to_pyerr(error: io::SaveError) -> PyErr {
 /// it (`PyBorrowError` is itself a `RuntimeError`).
 pub(crate) fn concurrent_access_pyerr() -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        "KnowledgeGraph accessed concurrently from another thread while it was being \
-         used elsewhere. A KnowledgeGraph is single-owner: it is not safe to share one \
-         instance across threads while any thread mutates it (add_nodes, add_connections, \
-         embed_texts, a CREATE/SET/DELETE query, or save). For concurrent access, reach \
-         for a Session instead of sharing the KnowledgeGraph: `g.session()` returns a \
-         thread-safe handle whose `cypher()` reads run lock-free and `execute()` writes \
-         serialize; `g.freeze()` gives a lock-free read-only snapshot; \
-         `g.session().cursor()` hands each thread its own fluent handle. (Or give each \
-         worker its own `copy()`.) See docs/concepts/concurrency.md.",
+        "KnowledgeGraph accessed concurrently: an embedder callback re-entered the graph \
+         whose operation is running it, which would wait on itself. Do not call the graph \
+         from inside `embed()`. To query a graph from other threads while it works, use \
+         a Session: `g.session()` returns a thread-safe handle whose `cypher()` reads run \
+         lock-free and `execute()` writes serialize; `g.freeze()` gives a lock-free \
+         read-only snapshot. See docs/concepts/concurrency.md.",
     )
+}
+
+/// Retry `attempt` until it yields, sleeping with the GIL released between
+/// tries (a waiter that kept the GIL would starve the writer it waits on) and
+/// polling for signals so Ctrl-C ends the wait.
+fn wait_for_borrow<T>(py: Python<'_>, mut attempt: impl FnMut() -> Option<T>) -> PyResult<T> {
+    let mut pause = std::time::Duration::from_micros(20);
+    loop {
+        if let Some(guard) = attempt() {
+            return Ok(guard);
+        }
+        if crate::graph::embedder::py_adapter::in_embedder_callback() {
+            return Err(concurrent_access_pyerr());
+        }
+        py.detach(|| std::thread::sleep(pause));
+        py.check_signals()?;
+        pause = (pause * 2).min(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Shared borrow of the graph, waiting out a writer on another thread.
+pub(crate) fn borrow_waiting<'py>(
+    slf: &Bound<'py, KnowledgeGraph>,
+) -> PyResult<PyRef<'py, KnowledgeGraph>> {
+    wait_for_borrow(slf.py(), || slf.try_borrow().ok())
+}
+
+/// Exclusive borrow of the graph, waiting out any other holder.
+pub(crate) fn borrow_mut_waiting<'py>(
+    slf: &Bound<'py, KnowledgeGraph>,
+) -> PyResult<PyRefMut<'py, KnowledgeGraph>> {
+    wait_for_borrow(slf.py(), || slf.try_borrow_mut().ok())
 }
 
 /// Format an integer with comma thousands separators ("1234567" → "1,234,567").
@@ -148,7 +174,7 @@ pub(crate) fn concurrent_access_pyerr() -> PyErr {
 /// handle it was aimed at — the same policy `Session`, `FrozenGraph` and a
 /// read-only `Transaction` refuse under, and one a caller routes on by class.
 fn refuse_mutation_on_a_read_only_graph(slf: &Bound<'_, KnowledgeGraph>) -> PyResult<()> {
-    let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
+    let this = borrow_waiting(slf)?;
     if this.graph().read_only {
         return Err(crate::error_py::kg_to_pyerr(
             crate::error::KgError::read_only(
@@ -890,9 +916,7 @@ impl KnowledgeGraph {
         // with it released, so a second thread using this graph meanwhile gets
         // a working graph instead of "Already borrowed".
         let (snapshot, lsn, live_path) = {
-            let mut this = slf
-                .try_borrow_mut()
-                .map_err(|_| concurrent_access_pyerr())?;
+            let mut this = borrow_mut_waiting(slf)?;
             this.check_wal_not_diverged()?;
             this.check_durable_owner()?;
             // Apply-then-log: drain anything still buffered so the LSN read
@@ -1869,7 +1893,7 @@ impl KnowledgeGraph {
         let query = query.as_ref();
         let write_scope_set: Option<std::collections::HashSet<String>> =
             write_scope.map(|v| v.into_iter().collect());
-        let self_ref = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
+        let self_ref = borrow_waiting(slf)?;
         let effective = self_ref
             .query_defaults()
             .resolve(timeout_ms, max_work_units, row_limit);
@@ -1914,9 +1938,7 @@ impl KnowledgeGraph {
         let query_started = std::time::Instant::now();
 
         if is_mutation {
-            let mut this = slf
-                .try_borrow_mut()
-                .map_err(|_| concurrent_access_pyerr())?;
+            let mut this = borrow_mut_waiting(slf)?;
             let embedder_for_opts = this.embedder.clone();
 
             let opts = kglite_core::api::session::ExecuteOptions {
@@ -1976,11 +1998,11 @@ impl KnowledgeGraph {
         // Query execution and output materialisation both run inside
         // py.detach with the GIL free.
         let inner = {
-            let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
+            let this = borrow_waiting(slf)?;
             this.graph().clone()
         };
         let embedder_for_opts: Option<std::sync::Arc<dyn crate::graph::embedder::Embedder>> = {
-            let this = slf.try_borrow().map_err(|_| concurrent_access_pyerr())?;
+            let this = borrow_waiting(slf)?;
             this.embedder.clone()
         };
         let mut result = {
@@ -2105,10 +2127,9 @@ impl KnowledgeGraph {
         // nothing, and a mutating one skips the clone entirely when
         // Arc::try_unwrap succeeds in the materialization path.
         let core_tx = Python::attach(|py| {
-            // `try_borrow`, not `borrow`: another thread mid-mutation holds the
-            // exclusive borrow, and a bare `borrow` panics out through the FFI
-            // boundary instead of raising what `cypher()` raises there.
-            let kg = slf.try_borrow(py).map_err(|_| concurrent_access_pyerr())?;
+            // Waits like `cypher()`: a bare `borrow` would panic out through
+            // the FFI boundary while another thread holds the exclusive borrow.
+            let kg = borrow_waiting(slf.bind(py))?;
             // The throwaway Session is dropped immediately; the Transaction
             // owns its snapshot Arc + base version. The CoW/OCC state machine
             // lives in core.
@@ -2151,9 +2172,8 @@ impl KnowledgeGraph {
     #[pyo3(signature = (timeout_ms=None))]
     fn begin_read(slf: Py<Self>, timeout_ms: Option<u64>) -> PyResult<Transaction> {
         let core_tx = Python::attach(|py| {
-            // `try_borrow` for the same reason as `begin` — a concurrent
-            // mutation must raise, not panic.
-            let kg = slf.try_borrow(py).map_err(|_| concurrent_access_pyerr())?;
+            // Waits for a concurrent mutation, as `begin` does.
+            let kg = borrow_waiting(slf.bind(py))?;
             Ok::<_, PyErr>((
                 kglite_core::api::session::Session::from_arc(Arc::clone(kg.graph())).begin_read(),
                 kg.query_defaults(),
@@ -2394,19 +2414,14 @@ fn build_disabled_passes(
     Ok(set)
 }
 
-/// Python-backed embedders reacquire the GIL during query preparation.
+/// Runs with the GIL released, so other Python threads make progress during the
+/// write; Python-backed embedders reacquire it during query preparation.
 fn execute_mut_with_embedder(
     py: Python<'_>,
     graph: &mut kglite_core::api::DirGraph,
     query: &str,
     opts: &kglite_core::api::session::ExecuteOptions<'_>,
 ) -> PyResult<kglite_core::api::session::ExecuteOutcome> {
-    let mut execute =
-        || kglite_core::api::session::execute_mut(graph, query, opts).map_err(Box::new);
-    if opts.embedder.is_some() {
-        py.detach(execute)
-    } else {
-        execute()
-    }
-    .map_err(|error| crate::error_py::kg_to_pyerr(*error))
+    py.detach(|| kglite_core::api::session::execute_mut(graph, query, opts).map_err(Box::new))
+        .map_err(|error| crate::error_py::kg_to_pyerr(*error))
 }

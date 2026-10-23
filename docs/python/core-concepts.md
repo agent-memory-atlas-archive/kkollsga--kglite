@@ -30,9 +30,10 @@ deadline, or the work budget fails it, its earlier writes are rolled back.
 - A `with` block is not a transaction. Use `begin()` when failure must discard the
   work.
 
-**Single-owner.** A `KnowledgeGraph` is owned by one thread at a time. Concurrent
-reads are fine, but a read overlapping a mutation on the same instance raises a
-clear `RuntimeError`. For multi-threaded use, pick one of three routes:
+**Single-owner.** A `KnowledgeGraph` is owned by one thread at a time. A Cypher
+mutation releases the GIL, and another thread's `cypher()` on the same instance
+waits for it to finish. Other methods called during a write raise `RuntimeError`.
+For multi-threaded use, pick one of three routes:
 
 - Give each worker its own `copy()`.
 - Share a read-only `graph.freeze()` snapshot for lock-free reads.

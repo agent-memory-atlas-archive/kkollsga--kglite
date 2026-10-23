@@ -5,9 +5,16 @@ about one model do not apply to the others.
 
 ## Bare `KnowledgeGraph`
 
-A graph handle has single-owner mutation semantics. Concurrent reads may run,
-but a read that overlaps mutation on the same handle is rejected rather than
-silently racing. Direct writes mutate in place.
+A graph handle has single-owner mutation semantics. A Cypher mutation mutates
+in place and releases the GIL, so other Python threads keep running. A second
+thread that calls `cypher()`, `begin()`, `begin_read()` or `backup()` on the same
+handle waits for the write to finish, then runs; it never sees a half-applied
+write. The wait releases the GIL and ends on `KeyboardInterrupt`.
+
+Other methods (fluent chains, `add_nodes()`, `save()`) raise `RuntimeError` when
+they touch the handle during a write on another thread. An embedder callback that
+calls the graph running it raises instead of waiting on itself. Readers that
+must never wait on a writer use `freeze()` or a `Session`.
 
 Use a separate `copy()` for independent evolution or `freeze()` for a stable
 shared read snapshot:

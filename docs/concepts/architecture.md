@@ -119,7 +119,8 @@ query operator streams without intermediate Rust rows.
 Graph state is shared through `Arc<DirGraph>`:
 
 - `KnowledgeGraph` is a single-owner Python handle. Concurrent reads are safe;
-  overlapping mutation on the same Python object is rejected.
+  a `cypher()` call that overlaps a mutation on the same Python object waits
+  for it.
 - `FrozenGraph` is an immutable O(1) snapshot for parallel readers.
 - `Session` is the shareable server handle. Reads take momentary snapshots and
   run without holding the session lock; writes serialize and atomically swap

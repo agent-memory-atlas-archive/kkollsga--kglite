@@ -1409,9 +1409,10 @@ A corrupt / truncated / wrong-format file raises a typed, classifiable
 
 ## Concurrency
 
-A `KnowledgeGraph` is **single-owner**: it is not safe to share one instance
-across threads while any thread mutates it (touching a shared graph mid-mutation
-raises a clear `RuntimeError`, not a crash). Three safe patterns:
+A `KnowledgeGraph` is **single-owner**. A Cypher mutation releases the GIL, and a
+second thread that calls `cypher()`, `begin()`, `begin_read()` or `backup()` on
+the same graph waits for the write to finish. Other methods called during a write
+on another thread raise `RuntimeError`. Three safe patterns:
 
 ```python
 # Per-worker: give each thread its own graph (copy() is cheap; builds are fast)
