@@ -85,6 +85,12 @@ pub(crate) fn embed_selected_nodes(
             )));
         }
     }
+    crate::graph::property_vector_indexes::check_not_property_sourced(
+        graph,
+        node_type,
+        text_column,
+    )
+    .map_err(EmbedError::Output)?;
     let key = store_key(node_type, text_column);
     let existing = graph.embeddings.get(&key);
     let untouched = NodeEmbedReport {

@@ -441,6 +441,7 @@ fn variant_tags_are_stable_on_disk_format() {
                 entity: crate::graph::constraints::EntityKind::Relationship,
                 target: "C".into(),
                 properties: vec!["txt".into()],
+                vector_source: None,
                 present: true,
             },
         ),
@@ -1414,6 +1415,10 @@ fn index_name_ops_round_trip() {
         entity: EntityKind::Relationship,
         target: "CLAIMS".into(),
         properties: vec!["a".into(), "b".into()],
+        vector_source: Some(crate::graph::dir_graph::index_names::VectorSource {
+            dimension: 3,
+            metric: "cosine".into(),
+        }),
         present,
     };
     let frames = vec![WalFrame {

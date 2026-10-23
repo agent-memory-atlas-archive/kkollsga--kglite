@@ -194,6 +194,12 @@ fn swap_data_scale(a: &mut DirGraph, b: &mut DirGraph) {
     // a failing clause, so `build_text_index` / `drop_text_index` journal
     // `UndoEntry::TextIndexReplaced` with the store they displaced.
     std::mem::swap(&mut a.text_indexes, &mut b.text_indexes);
+    // Property-sourced vector indexes hold a copy of every indexed vector, so
+    // they are parked for the same reason. Their undo story is the text
+    // index's: a write only marks a slot dirty, a rolled-back statement leaves
+    // the marks (the fold re-reads the restored property), and the slots a
+    // mid-statement fold claimed are re-marked by `rollback_statement`.
+    std::mem::swap(&mut a.property_vectors, &mut b.property_vectors);
     // Relationship text indexes: the same corpus-sized shape and the same
     // re-mark story (`UndoEntry::EdgeTextDocPruned` at the edge-removal choke
     // point, the statement-claims window below), plus
@@ -424,6 +430,9 @@ impl StatementCheckpoint {
         {
             store.begin_statement();
         }
+        for index in graph.property_vectors.values() {
+            index.begin_statement();
+        }
         Self::Journal {
             shell,
             recorded_ops,
@@ -460,6 +469,9 @@ impl StatementCheckpoint {
                     .chain(graph.edge_text_indexes.values())
                 {
                     store.end_statement();
+                }
+                for index in graph.property_vectors.values() {
+                    index.end_statement();
                 }
                 if let Some(cdc) = cdc {
                     cdc.commit(graph);
@@ -527,6 +539,9 @@ impl StatementCheckpoint {
                     .chain(graph.edge_text_indexes.values())
                 {
                     store.rollback_statement();
+                }
+                for index in graph.property_vectors.values() {
+                    index.rollback_statement();
                 }
                 // Ops the failed statement buffered for the write-ahead log
                 // describe writes that no longer exist.

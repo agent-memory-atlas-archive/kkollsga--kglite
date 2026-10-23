@@ -621,6 +621,7 @@ impl Declarations {
             );
         }
         self.install_index_names(graph);
+        crate::graph::property_vector_indexes::rebuild_declared_property_vectors(graph);
         Ok(())
     }
 
@@ -635,6 +636,7 @@ impl Declarations {
                 entity,
                 target,
                 properties,
+                vector_source,
                 present,
             } = op
             else {
@@ -648,6 +650,7 @@ impl Declarations {
                         entity: *entity,
                         target: target.clone(),
                         properties: properties.clone(),
+                        vector_source: vector_source.clone(),
                     },
                 );
             } else {

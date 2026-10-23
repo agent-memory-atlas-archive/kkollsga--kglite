@@ -417,7 +417,7 @@ NEO4J_SCHEMA_SCRIPT: list[tuple[str, str | None]] = [
     (
         "CREATE VECTOR INDEX p_emb IF NOT EXISTS FOR (p:Person) ON (p.embedding) "
         "OPTIONS {indexConfig: {`vector.dimensions`: 128}}",
-        "build_vector_index",
+        None,
     ),
     ("CREATE LOOKUP INDEX node_labels IF NOT EXISTS FOR (n) ON EACH labels(n)", "LOOKUP INDEX"),
     # A relationship property index is served: one equality index per property.

@@ -40,6 +40,7 @@ pub mod mutation;
 pub mod ontology;
 pub(crate) mod parallel;
 pub mod property_types;
+pub mod property_vector_indexes;
 pub mod quantized;
 pub mod recipes;
 pub mod schema;

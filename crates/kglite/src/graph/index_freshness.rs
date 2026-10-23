@@ -430,7 +430,9 @@ pub(crate) mod write_hooks {
         // `OnceLock`. A memory or mapped graph therefore still evaluates one
         // `is_empty` and one match arm per row, which is what "zero cost when
         // unindexed" has always meant here.
-        !graph.text_indexes.is_empty() || disk_tracking(graph).is_some()
+        !graph.text_indexes.is_empty()
+            || !graph.property_vectors.is_empty()
+            || disk_tracking(graph).is_some()
     }
 
     /// The disk backend underneath, if it has a persistent bundle whose
@@ -451,6 +453,7 @@ pub(crate) mod write_hooks {
         }
         note_work();
         crate::graph::text_indexes::note_node_created(graph, node, node_type);
+        crate::graph::property_vector_indexes::note_node_created(graph, node, node_type);
         if let Some(disk) = disk_tracking(graph) {
             disk.note_index_node_created(node.index() as u32, node_type);
         }
@@ -458,13 +461,20 @@ pub(crate) mod write_hooks {
 
     /// A node was removed at `node`.
     ///
-    /// Disk-only, and gated on its own rather than through
-    /// [`any_tracked_index`]: a text index prunes the deleted document itself
+    /// Gated on its own rather than through [`any_tracked_index`]: a text index
+    /// prunes the deleted document itself
     /// (`delete_state::prune_doomed_text_docs`), so routing deletion through
     /// the shared gate would put work past it for every text-indexed memory
-    /// graph to no effect.
+    /// graph to no effect. Only a disk bundle and a property-sourced vector
+    /// index have anything to do here.
     #[inline]
     pub(crate) fn note_node_removed(graph: &DirGraph, node: NodeIndex) {
+        // A property-sourced vector index re-reads the slot at its next fold,
+        // which finds the node gone (or, after reuse, another node).
+        if !graph.property_vectors.is_empty() {
+            note_work();
+            crate::graph::property_vector_indexes::note_node_removed(graph, node);
+        }
         let Some(disk) = disk_tracking(graph) else {
             return;
         };
@@ -492,6 +502,7 @@ pub(crate) mod write_hooks {
         }
         note_work();
         crate::graph::text_indexes::note_property_written(graph, node, node_type, field);
+        crate::graph::property_vector_indexes::note_property_written(graph, node, node_type, field);
         if let Some(disk) = disk_tracking(graph) {
             // A typed bundle is keyed on the user's spelling of the property
             // and `field` is the alias-resolved one, so only the global

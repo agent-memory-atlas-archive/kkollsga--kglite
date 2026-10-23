@@ -212,6 +212,10 @@ pub(super) fn load_portable_optional_sections(
             decode_edge_text_indexes(&raw, dir_graph, normalization_effects);
         }
     }
+    // Property-sourced vector indexes persist only their declaration (the
+    // registry, applied with the metadata); the structure is derived from the
+    // finished rows.
+    crate::graph::property_vector_indexes::rebuild_declared_property_vectors(dir_graph);
     Ok(())
 }
 

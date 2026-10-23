@@ -359,6 +359,15 @@ impl CypherExecutor<'_> {
         ]);
         if relationship {
             self.execute_edge_embedding_query(&delegated, yields)
+        } else if let Some(rows) = super::node_embedding_procedures::property_vector_query(
+            self.graph,
+            &info.labels_or_types[0],
+            &info.properties[0],
+            &delegated,
+            yields,
+            self.retrieval_filter()?.as_deref(),
+        ) {
+            rows
         } else {
             super::node_embedding_procedures::query(
                 self.graph,

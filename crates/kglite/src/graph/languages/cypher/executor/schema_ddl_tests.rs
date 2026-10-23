@@ -193,10 +193,6 @@ fn unsupported_index_types_name_themselves_and_the_alternative() {
         ),
         ("CREATE POINT INDEX p FOR (n:Person) ON (n.loc)", "Spatial"),
         (
-            "CREATE VECTOR INDEX v FOR (n:Person) ON (n.emb)",
-            "build_vector_index",
-        ),
-        (
             "CREATE LOOKUP INDEX l FOR (n) ON EACH labels(n)",
             "automatically",
         ),

@@ -434,6 +434,43 @@ pub(super) fn query(
     Ok(hits.into_iter().map(|hit| hit_row(hit, yields)).collect())
 }
 
+/// `db.index.vector.queryNodes` over a `CREATE VECTOR INDEX` index: fold the
+/// index's outstanding writes, then rank. `None` when `(node_type, property)`
+/// is not a property-sourced index, so the caller falls through to the
+/// embedding-store path.
+pub(super) fn property_vector_query(
+    graph: &DirGraph,
+    node_type: &str,
+    property: &str,
+    params: &HashMap<String, Value>,
+    yields: &[YieldItem],
+    filter: Option<&ElementFilter>,
+) -> Option<Result<Vec<ResultRow>, String>> {
+    let proc_name = "db.index.vector.queryNodes";
+    crate::graph::property_vector_indexes::property_vector_index(graph, node_type, property)?;
+    let run = || -> Result<Vec<ResultRow>, String> {
+        let vector = numeric_vector(params.get("vector"), proc_name)?;
+        crate::graph::embedding_validation::validate_finite_vector(&vector)
+            .map_err(|error| format!("Invalid node embedding query: {error}"))?;
+        let top_k = optional_nonnegative_usize(params, "top_k", proc_name)?.unwrap_or(10);
+        let admit =
+            filter.map(|filter| move |node: usize| filter.admits_node(graph, NodeIndex::new(node)));
+        let hits = crate::graph::property_vector_indexes::query_property_vector_index(
+            graph,
+            node_type,
+            property,
+            &vector,
+            top_k,
+            admit
+                .as_ref()
+                .map(|admits| admits as &dyn Fn(usize) -> bool),
+        )
+        .expect("index presence checked above")?;
+        Ok(hits.into_iter().map(|hit| hit_row(hit, yields)).collect())
+    };
+    Some(run())
+}
+
 fn hit_row(hit: DenseStoreHit, yields: &[YieldItem]) -> ResultRow {
     let mut row = ResultRow::new();
     for item in yields {

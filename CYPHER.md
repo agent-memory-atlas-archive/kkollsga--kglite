@@ -1492,7 +1492,7 @@ WHERE name = $index
 | `indexProvider` | `fulltext-1.0` | `vector-2.0` |
 | `options.indexConfig` | `fulltext.analyzer` = `standard-no-stop-words` (KGLite's tokenizer lowercases and splits on non-alphanumerics, with no stop list or stemming), `fulltext.eventually_consistent` = `false` (a query folds in recent writes up to `auto_refresh_limit`, and otherwise serves the index as it stands) | `vector.dimensions`, `vector.similarity_function` (`COSINE`, `EUCLIDEAN`, `DOT_PRODUCT`, `POINCARE`: the store's metric) |
 
-`CREATE FULLTEXT INDEX` builds the single-label, single-property index and registers its name (see [Cypher index DDL](#cypher-index-ddl)). `CREATE VECTOR INDEX` stays refused: a vector index here builds over an embedding store that must already exist, so it is not a thin alias over the builders above.
+`CREATE FULLTEXT INDEX` builds the single-label, single-property index and registers its name (see [Cypher index DDL](#cypher-index-ddl)). `CREATE VECTOR INDEX` indexes a list property in place (see [Vector indexes](#vector-indexes)).
 
 **Positional `CALL` arguments.** `CALL proc(a, b, c)` binds by position to the procedure's declared parameters, and trailing optional ones may be left off. Only procedures with a declared signature take it: the four above, and `SHOW PROCEDURES` lists their signatures. Every other procedure takes one config map (`CALL proc({key: value})`), and positional arguments to it are an error that says so. A wrong argument count names the signature.
 
@@ -4655,6 +4655,8 @@ DROP INDEX FOR (n:Label) ON (n.prop [, ...])        -- KGLite extension
 SHOW [ALL] INDEX[ES]
 CREATE FULLTEXT INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON EACH [n.prop]
     [OPTIONS {indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words'}}]
+CREATE VECTOR INDEX name [IF NOT EXISTS] FOR (n:Label) ON (n.prop)
+    OPTIONS {indexConfig: {`vector.dimensions`: 3, `vector.similarity_function`: 'cosine'}}
 ```
 
 #### What each statement builds
@@ -4891,6 +4893,30 @@ It is the statement `build_text_index(label, prop)` runs, plus a name.
 - A `storage='disk'` graph refuses the statement, as it refuses `build_text_index`.
 - The index is saved with the graph and recovered from the write-ahead log.
 
+#### Vector indexes
+
+`CREATE VECTOR INDEX name FOR (n:Label) ON (n.prop) OPTIONS {indexConfig: {...}}` indexes a list property in place.
+The vectors are the node property, so a client that writes `SET n.emb = $vector` needs no separate embedding load.
+
+- The name is required: `db.index.vector.queryNodes` and `SEARCH` address the index by name.
+- `vector.dimensions` is required. `vector.similarity_function` is `cosine` (the default) or `euclidean`, in any case. Another `indexConfig` key or `indexProvider` is refused by name.
+- A node is indexed when `n.prop` is a list of exactly `vector.dimensions` finite numbers. Integers widen to floats.
+- Any other node of the label is skipped without an error, as in Neo4j: an absent or `null` property, another type, the wrong length, a non-numeric or `NaN` member, and a zero vector under `cosine`. `SHOW INDEXES` reports how many nodes are skipped in `unembedded`.
+- `Label` means the node's primary label, as for `FULLTEXT`. `SET n:Extra` and `REMOVE n:Extra` do not change membership.
+- Every write keeps the index current: `CREATE`, `MERGE`, `SET` (property, `= map`, `+= map`), `REMOVE`, `DELETE`, `DETACH DELETE`, the bulk loaders, a rolled-back statement or transaction, and `vacuum()`. The next query folds the writes in.
+- A `DELETE` makes the next query rebuild the HNSW graph, because removing a vector renumbers the store.
+- The index is saved as its declaration. A load, a crash recovery and `vacuum()` rebuild it from the rows, so a very large graph pays one scan at open.
+- One source per column. `Label.prop` cannot also be an embedding store: `CREATE VECTOR INDEX` refuses a column that has a store, and `set_embeddings`, `db.node_embeddings.set` and `embed` refuse a column that has this index. `vector_score(n, 'prop', ...)` reads embedding stores only.
+- `IF NOT EXISTS` turns a taken name or an existing index on the property into a no-op. `DROP INDEX name` removes the index and leaves the property.
+- A `storage='disk'` graph refuses the statement. The relationship form is refused: use `db.relationship_embeddings.build_index`.
+- The score is the store's metric (cosine similarity, or negated distance), not Neo4j's `[0, 1]` normalisation. The ranking is the same.
+
+```cypher
+CREATE VECTOR INDEX doc_emb IF NOT EXISTS FOR (d:Doc) ON (d.emb)
+  OPTIONS {indexConfig: {`vector.dimensions`: 384, `vector.similarity_function`: 'cosine'}}
+MATCH (d:Doc) SEARCH d IN (VECTOR INDEX doc_emb FOR $q LIMIT 5) SCORE AS s RETURN d.id, s
+```
+
 #### Forms that are rejected
 
 Each of these forms fails with a `CypherExecutionError` naming the construct and
@@ -4905,7 +4931,7 @@ success.
 | `CREATE FULLTEXT INDEX FOR ()-[r:T]-() …` | Not available through DDL. Use `CALL db.relationship_text_index.build(...)` |
 | `CREATE FULLTEXT INDEX … OPTIONS` with another analyzer, an unknown `indexConfig` key or `indexProvider` | KGLite has one tokenizer, `standard-no-stop-words`. `fulltext.eventually_consistent` is accepted as `true` or `false` and does not change behaviour |
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
-| `CREATE VECTOR INDEX` | The statement parses in full, but a vector index here builds over an existing embedding store and HNSW build parameters, so create it through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
+| `CREATE VECTOR INDEX` without a name, on a relationship, with an `indexConfig` key other than `vector.dimensions` / `vector.similarity_function`, or on a column that has an embedding store | A vector index is addressed by name. For relationships and HNSW build parameters use `build_vector_index(...)` and `db.relationship_embeddings.build_index` |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
 | `CREATE INDEX FOR ()-[r:T]-() ON (r.a, r.b)` | A relationship index covers exactly one property. Create one index per property |
 | `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` on a `storage='disk'` graph | A disk graph's relationship ids are a frozen CSR plus a process-local overlay, so an index keyed by them cannot be kept or persisted. The statement is refused with that reason; the property stays queryable, scanned |

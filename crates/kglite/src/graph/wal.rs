@@ -523,6 +523,9 @@ pub enum MutationOp {
         entity: crate::graph::constraints::EntityKind,
         target: String,
         properties: Vec<String>,
+        /// The declaration of a `CREATE VECTOR INDEX` index, which has no other
+        /// WAL op: replay rebuilds its structure from this and the rows.
+        vector_source: Option<crate::graph::dir_graph::index_names::VectorSource>,
         present: bool,
     },
 }

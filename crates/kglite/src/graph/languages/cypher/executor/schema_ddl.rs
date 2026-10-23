@@ -719,6 +719,11 @@ fn drop_node_indexes(
                 dropped += usize::from(crate::graph::embeddings::drop_vector_index(
                     graph, label, property,
                 ));
+                dropped += usize::from(
+                    crate::graph::property_vector_indexes::drop_property_vector_index(
+                        graph, label, property,
+                    ),
+                );
             }
         }
         many if wants(IndexClass::Composite) => {

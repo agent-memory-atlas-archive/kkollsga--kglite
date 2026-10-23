@@ -879,6 +879,11 @@ where
     I: IntoIterator<Item = (K, V)>,
     V: AsRef<[f32]>,
 {
+    crate::graph::property_vector_indexes::check_not_property_sourced(
+        graph,
+        node_type,
+        text_column,
+    )?;
     // Disk arena guard (owned; no-op on memory/mapped) — the column probe and
     // the id lookups below both read node views.
     let _arena_guard = graph.graph.begin_query();

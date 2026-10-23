@@ -56,6 +56,17 @@ impl IndexClass {
     }
 }
 
+/// Where a `CREATE VECTOR INDEX` index reads its vectors: the node property
+/// itself, as lists of `dimension` numbers. The declaration is all that
+/// persists — the structure is rebuilt from the rows
+/// ([`crate::graph::property_vector_indexes`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VectorSource {
+    pub dimension: usize,
+    /// `cosine` or `euclidean`.
+    pub metric: String,
+}
+
 /// The index a registered name points at: its structure family and what it
 /// indexes. `target` is a node label, or a relationship type when `entity` is
 /// [`EntityKind::Relationship`].
@@ -66,6 +77,11 @@ pub struct NamedIndex {
     pub entity: EntityKind,
     pub target: String,
     pub properties: Vec<String>,
+    /// Set on a [`IndexClass::Vector`] name whose index reads its vectors from
+    /// the node property (`CREATE VECTOR INDEX`); `None` for an index over an
+    /// embedding store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_source: Option<VectorSource>,
 }
 
 impl NamedIndex {
@@ -76,6 +92,19 @@ impl NamedIndex {
             entity: EntityKind::Node,
             target: label.to_string(),
             properties: properties.to_vec(),
+            vector_source: None,
+        }
+    }
+
+    /// A name for a vector index that reads `label.property` itself.
+    pub fn property_vector(label: &str, property: &str, source: VectorSource) -> Self {
+        NamedIndex {
+            vector_source: Some(source),
+            ..NamedIndex::node(
+                IndexClass::Vector,
+                label,
+                std::slice::from_ref(&property.to_string()),
+            )
         }
     }
 
@@ -86,6 +115,7 @@ impl NamedIndex {
             entity: EntityKind::Relationship,
             target: rel_type.to_string(),
             properties: vec![property.to_string()],
+            vector_source: None,
         }
     }
 
@@ -124,6 +154,7 @@ impl DirGraph {
             entity: named.entity,
             target: named.target.clone(),
             properties: named.properties.clone(),
+            vector_source: named.vector_source.clone(),
             present,
         });
     }

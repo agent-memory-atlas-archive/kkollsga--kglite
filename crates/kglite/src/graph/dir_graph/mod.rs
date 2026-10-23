@@ -668,6 +668,11 @@ pub struct DirGraph {
     /// is: it is corpus-sized, so a statement checkpoint must not clone it.
     #[serde(skip)]
     pub text_indexes: HashMap<(String, String), crate::graph::text_indexes::TextIndexStore>,
+    /// `CREATE VECTOR INDEX` indexes, keyed `(label, property)`: derived, rebuilt
+    /// from the registry; see [`crate::graph::property_vector_indexes`].
+    #[serde(skip)]
+    pub(crate) property_vectors:
+        HashMap<(String, String), crate::graph::property_vector_indexes::PropertyVectorIndex>,
     /// Relationship BM25 text indexes: (relationship_type, property) ->
     /// TextIndexStore keyed by edge slot — see
     /// [`crate::graph::text_indexes::edge_text`]. Parked by `swap_data_scale` like
@@ -1061,6 +1066,7 @@ impl DirGraph {
             embeddings: HashMap::new(),
             edge_embeddings: HashMap::new(),
             text_indexes: HashMap::new(),
+            property_vectors: HashMap::new(),
             edge_text_indexes: HashMap::new(),
             timeseries_configs: HashMap::new(),
             timeseries_store: HashMap::new(),
@@ -2299,6 +2305,7 @@ impl DirGraph {
         if self.column_store_count() > 0 {
             self.rebuild_columns_to_heap();
         }
+        crate::graph::property_vector_indexes::rebuild_declared_property_vectors(self);
 
         old_to_new
     }

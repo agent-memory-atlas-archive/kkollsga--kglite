@@ -745,6 +745,22 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             reports_range: false,
         });
     }
+    for index in crate::graph::property_vector_indexes::list_property_vector_indexes(graph) {
+        out.push(IndexInfo {
+            name: format!("{}.{}", index.label(), index.property()),
+            kind: IndexKind::Vector,
+            entity_type: "NODE",
+            labels_or_types: vec![index.label().to_string()],
+            properties: vec![index.property().to_string()],
+            state: "ONLINE",
+            stale: Some(false),
+            delta: Some(0),
+            unembedded: Some(index.unindexed(graph)),
+            vector_config: Some((index.dimension(), index.metric().to_string())),
+            owning_constraint: None,
+            reports_range: false,
+        });
+    }
     for status in crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
         .into_iter()
         .filter(|status| status.built)
