@@ -31,8 +31,8 @@ deadline, or the work budget fails it, its earlier writes are rolled back.
   work.
 
 **Single-owner.** A `KnowledgeGraph` is owned by one thread at a time. A Cypher
-mutation releases the GIL, and another thread's `cypher()` on the same instance
-waits for it to finish. Other methods called during a write raise `RuntimeError`.
+mutation releases the GIL, and another thread's call to any method on the same
+instance waits for it to finish.
 For multi-threaded use, pick one of three routes:
 
 - Give each worker its own `copy()`.

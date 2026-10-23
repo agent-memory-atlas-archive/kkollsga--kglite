@@ -332,8 +332,8 @@ cost from decoding the checkpoint. See [Cost and tuning](#cost-and-tuning).
 
 ## Serving concurrent reads
 
-A `KnowledgeGraph` is single-owner. Another thread's `cypher()` on the same
-instance waits for a running write; its other methods raise `RuntimeError`.
+A `KnowledgeGraph` is single-owner. Another thread's call to any method on the
+same instance waits for a running write.
 
 For a read-heavy server, take an immutable snapshot with `g.freeze()`. It returns
 a `FrozenGraph` that shares the data via an O(1) clone and serves `cypher()` from

@@ -71,14 +71,17 @@ impl KnowledgeGraph {
     /// Store a DataFrame as a table-valued property (a queryable list of maps).
     #[pyo3(signature = (node_type, node_id, property, data))]
     fn set_table_property(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         node_id: &Bound<'_, PyAny>,
         property: &str,
         data: &Bound<'_, PyAny>,
     ) -> PyResult<usize> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         require_plain_identifier("node_type", node_type)?;
         require_plain_identifier("property", property)?;
         let columns: Vec<String> = data
@@ -152,7 +155,7 @@ impl KnowledgeGraph {
         let query = format!(
             "MATCH (n:{node_type} {{id: $nid}}) SET n.{property} = $rows RETURN count(n) AS c"
         );
-        self.logged_write(|graph| {
+        this.logged_write(|graph| {
             let outcome = execute_mut(graph, &query, &table_opts(&params))
                 .map_err(crate::error_py::kg_to_pyerr)?;
             if scalar_count(&outcome.result) == 0 {
@@ -172,12 +175,15 @@ impl KnowledgeGraph {
     /// Reconstruct a table-valued property as a pandas DataFrame.
     #[pyo3(signature = (node_type, node_id, property))]
     fn get_table_property(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         node_id: &Bound<'_, PyAny>,
         property: &str,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         require_plain_identifier("node_type", node_type)?;
         require_plain_identifier("property", property)?;
         let mut params: HashMap<String, Value> = HashMap::new();
@@ -185,7 +191,7 @@ impl KnowledgeGraph {
         let query = format!(
             "MATCH (n:{node_type} {{id: $nid}}) RETURN n.{property} AS rows, count(n) AS c"
         );
-        let outcome = execute_read(self.graph(), &query, &table_opts(&params))
+        let outcome = execute_read(this.graph(), &query, &table_opts(&params))
             .map_err(crate::error_py::kg_to_pyerr)?;
         let row = outcome.result.rows.first().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -198,9 +204,9 @@ impl KnowledgeGraph {
             // A node without the property reconstructs as an empty frame
             // (with the registered columns, when known).
             let empty = PyList::empty(py);
-            return build_frame(py, empty.as_any(), self, node_type, property);
+            return build_frame(py, empty.as_any(), this, node_type, property);
         }
-        build_frame(py, rows_py.bind(py), self, node_type, property)
+        build_frame(py, rows_py.bind(py), this, node_type, property)
     }
 }
 

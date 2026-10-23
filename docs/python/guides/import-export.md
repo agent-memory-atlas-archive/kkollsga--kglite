@@ -767,9 +767,9 @@ The Python GIL is released during heavy Rust operations, allowing other Python t
 | `vector_search()` | Yes | Similarity computation (uses rayon internally) |
 | `search_text()` | Partial | Model embedding needs GIL; vector search releases it |
 | `add_nodes()` | No | DataFrame conversion requires GIL throughout |
-| `cypher()` (mutations) | Yes | Other threads' `cypher()` calls on the graph wait for it |
+| `cypher()` (mutations) | Yes | Other threads' calls on the graph wait for it |
 
-A `KnowledgeGraph` is single-owner: concurrent reads are fine, and a `cypher()`
+A `KnowledgeGraph` is single-owner: concurrent reads are fine, and a call
 that overlaps a mutation on the same instance waits for it. For lock-free
 concurrent reads across threads, serve from an immutable `graph.freeze()`
 snapshot (see {doc}`/concepts/concurrency`).

@@ -1287,7 +1287,7 @@ impl KnowledgeGraph {
     // The public Python loader exposes independently optional ingestion controls.
     #[allow(clippy::too_many_arguments)]
     fn add_nodes(
-        &mut self,
+        slf: &Bound<'_, Self>,
         data: &Bound<'_, PyAny>,
         node_type: String,
         unique_id_field: String,
@@ -1306,7 +1306,10 @@ impl KnowledgeGraph {
         convention: Option<&str>,
         empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let py = data.py();
         let on_invalid = OnInvalid::parse(on_invalid)?;
         let (convention, empty_when) =
@@ -1315,7 +1318,7 @@ impl KnowledgeGraph {
         // source) must never write a `runtime`-layer type (agent-owned). Skip
         // it as a no-op + report, so disjoint ownership is enforced, not
         // trusted. Undeclared / `managed` types proceed normally.
-        if managed_reload && self.graph().layer_for(&node_type) == Some("runtime") {
+        if managed_reload && this.graph().layer_for(&node_type) == Some("runtime") {
             return skipped_runtime_layer_report(py, &node_type);
         }
         let parsed = parse_inline_config(
@@ -1344,14 +1347,14 @@ impl KnowledgeGraph {
         if let Some(label_list) = labels.as_ref() {
             names.extend(label_list.iter().map(String::as_str));
         }
-        validate_interner_names(self.graph(), names)?;
+        validate_interner_names(this.graph(), names)?;
 
         refuse_convention_without_interval(
             (convention, empty_when),
             converted.temporal_cfg.as_ref(),
         )?;
         let (result, declared, labelled_warning) =
-            self.logged_write_with_cursor(|graph, cursor| {
+            this.logged_write_with_cursor(|graph, cursor| {
                 // Every refusal comes before the declaration: once declared, only
                 // `finish_declaration` may end the call. Everything after the write is
                 // infallible, or a raise would leave the rows in memory but out of the
@@ -1427,7 +1430,7 @@ impl KnowledgeGraph {
                 cursor.selection.clear();
                 Ok((result, declared, labelled_warning))
             })?;
-        self.add_report(OperationReport::NodeOperation(result.clone()));
+        this.add_report(OperationReport::NodeOperation(result.clone()));
         declared?;
         crate::graph::warn_all(py, &load_warnings(&result, labelled_warning))?;
 
@@ -1437,11 +1440,14 @@ impl KnowledgeGraph {
     /// Merge another KnowledgeGraph into this one, in place, with its declarations.
     #[pyo3(signature = (other, conflict_handling=None))]
     fn extend(
-        &mut self,
+        slf: &Bound<'_, Self>,
         other: &Bound<'_, KnowledgeGraph>,
         conflict_handling: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let py = other.py();
 
         // Clone the source's Arc<DirGraph> up front and release the
@@ -1453,7 +1459,7 @@ impl KnowledgeGraph {
         // self-extend path: we read the original and write a fresh copy.
         let source_arc = match other.try_borrow() {
             Ok(other_ref) => Arc::clone(other_ref.graph()),
-            Err(_) => Arc::clone(self.graph()),
+            Err(_) => Arc::clone(this.graph()),
         };
 
         // Surface the embedding-store limitation before mutating.
@@ -1473,7 +1479,7 @@ impl KnowledgeGraph {
             );
         }
 
-        let result = self.logged_write_with_cursor(|graph, cursor| {
+        let result = this.logged_write_with_cursor(|graph, cursor| {
             let result =
                 kglite_core::api::mutation::extend_graph(graph, &source_arc, conflict_handling)
                     .map_err(|message| bulk_write_err(graph, message))?;
@@ -1487,16 +1493,19 @@ impl KnowledgeGraph {
     /// Refuse a relationship frame without writing it (used by `attach_rows`,
     /// whose frame always carries its endpoints in `src` and `dst`).
     fn _check_relationships(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         data: &Bound<'_, PyAny>,
         connection_type: String,
         source_type: String,
         target_type: String,
     ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let source_id_field = "src".to_string();
         let target_id_field = "dst".to_string();
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         let (df, _) = build_connection_df_from_pandas(
             data,
             &source_id_field,
@@ -1509,7 +1518,7 @@ impl KnowledgeGraph {
             OnInvalid::Warn,
         )?;
         validate_interner_names(
-            self.graph(),
+            this.graph(),
             [
                 connection_type.as_str(),
                 source_type.as_str(),
@@ -1517,7 +1526,7 @@ impl KnowledgeGraph {
             ],
         )?;
         // A dry run: it writes nothing, so nothing is logged.
-        self.unlogged_write(|graph| {
+        this.unlogged_write(|graph| {
             detach_bulk_write(py, graph, |graph| {
                 kglite_core::api::mutation::check_connections(
                     graph,
@@ -1537,7 +1546,7 @@ impl KnowledgeGraph {
     // The public Python loader supports DataFrame and query modes with optional controls.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn add_relationships(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
         connection_type: String,
@@ -1560,9 +1569,12 @@ impl KnowledgeGraph {
         empty_when: Option<&str>,
         distinct: bool,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         write_connections(
             py,
-            self,
+            this,
             false,
             data,
             connection_type,
@@ -1592,7 +1604,7 @@ impl KnowledgeGraph {
     // The same loader arguments add_relationships takes.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn replace_relationships(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
         connection_type: String,
@@ -1614,9 +1626,12 @@ impl KnowledgeGraph {
         convention: Option<&str>,
         empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         write_connections(
             py,
-            self,
+            this,
             true,
             data,
             connection_type,
@@ -1657,8 +1672,10 @@ impl KnowledgeGraph {
     ///     print(graph.node_types)  # ['Person', 'Company']
     ///     ```
     #[getter]
-    fn node_types(&self) -> Vec<String> {
-        self.graph().get_node_types()
+    fn node_types(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.graph().get_node_types())
     }
 
     /// Add a secondary label to a batch of nodes by id.
@@ -1679,15 +1696,18 @@ impl KnowledgeGraph {
     ///     ``node_type`` nodes). Idempotent — re-adding a label that's
     ///     already present is counted in ``skipped``.
     fn add_label(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         ids: &Bound<'_, PyList>,
         label: &str,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        validate_interner_names(self.graph(), [label])?;
-        let (labelled, skipped, warning) = self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
+        validate_interner_names(this.graph(), [label])?;
+        let (labelled, skipped, warning) = this.logged_write(|g| {
             if !g.type_indices.contains_key(node_type) {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Node type '{}' does not exist in the graph",
@@ -1738,15 +1758,18 @@ impl KnowledgeGraph {
     ///     actually removed from) and ``skipped`` (ids that don't
     ///     exist, or didn't have the label).
     fn remove_label(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         ids: &Bound<'_, PyList>,
         label: &str,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        validate_interner_names(self.graph(), [label])?;
-        let (removed, skipped) = self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
+        validate_interner_names(this.graph(), [label])?;
+        let (removed, skipped) = this.logged_write(|g| {
             if !g.type_indices.contains_key(node_type) {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                     "Node type '{}' does not exist in the graph",
@@ -1809,17 +1832,20 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (nodes, *, git_sha=None, modified_by=None))]
     fn add_nodes_bulk(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         nodes: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let result_dict = PyDict::new(py);
         let mut warnings: Vec<String> = Vec::new();
 
-        self.logged_write_with_cursor(|graph, cursor| {
+        this.logged_write_with_cursor(|graph, cursor| {
             for item in nodes.iter() {
                 let spec = item.cast::<PyDict>()?;
 
@@ -1895,13 +1921,16 @@ impl KnowledgeGraph {
     /// Load several relationship types at once from a list of specs.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
     pub(super) fn add_relationships_bulk(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_relationships_internal(
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.add_relationships_internal(
             py,
             connections,
             false,
@@ -1913,13 +1942,16 @@ impl KnowledgeGraph {
     /// Load relationship specs, skipping those whose source or target node type is not loaded.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
     pub(super) fn add_relationships_from_source(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_relationships_internal(
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.add_relationships_internal(
             py,
             connections,
             true,

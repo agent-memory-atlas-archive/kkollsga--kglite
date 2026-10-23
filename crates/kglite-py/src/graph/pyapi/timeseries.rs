@@ -22,16 +22,19 @@ impl KnowledgeGraph {
     /// `bin_type` describes what values represent: "total", "mean", or "sample".
     #[pyo3(signature = (node_type, *, resolution, channels=None, units=None, bin_type=None))]
     fn set_timeseries(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_type: String,
         resolution: String,
         channels: Option<Vec<String>>,
         units: Option<HashMap<String, String>>,
         bin_type: Option<String>,
     ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         kglite_core::api::timeseries::validate_resolution(&resolution)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.logged_write(|graph| {
+        this.logged_write(|graph| {
             graph.set_timeseries_config(
                 &node_type,
                 TimeseriesConfig {
@@ -47,8 +50,15 @@ impl KnowledgeGraph {
 
     /// Get timeseries configuration for a node type, or all types.
     #[pyo3(signature = (node_type=None))]
-    fn timeseries_config(&self, py: Python<'_>, node_type: Option<String>) -> PyResult<Py<PyAny>> {
-        let graph = self.graph();
+    fn timeseries_config(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        node_type: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let graph = this.graph();
         if let Some(nt) = node_type {
             match graph.timeseries_configs.get(&nt) {
                 Some(config) => ts_config_to_py(py, config),
@@ -78,15 +88,18 @@ impl KnowledgeGraph {
     /// and clears all channels (since they would no longer align).
     #[pyo3(signature = (node_id, keys))]
     fn set_time_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_id: &Bound<'_, PyAny>,
         keys: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let date_keys = parse_keys_from_python(keys)?;
 
         kglite_core::api::timeseries::validate_keys_sorted(&date_keys)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        self.logged_write(|graph| {
+        this.logged_write(|graph| {
             let id_val = py_in::py_value_to_value(node_id)?;
             let node_idx = find_node_by_id(graph, &id_val)?;
 
@@ -107,12 +120,15 @@ impl KnowledgeGraph {
     /// The values length must match the time index length.
     #[pyo3(signature = (node_id, channel_name, values))]
     fn add_ts_channel(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_id: &Bound<'_, PyAny>,
         channel_name: String,
         values: Vec<f64>,
     ) -> PyResult<()> {
-        self.logged_write(|graph| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|graph| {
             let _arena_guard = graph.begin_read_pass(); // disk arena guard (no-op on memory/mapped)
             let id_val = py_in::py_value_to_value(node_id)?;
             let node_idx = find_node_by_id(graph, &id_val)?;
@@ -140,7 +156,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (node_type, *, data, fk, time_key, channels, resolution=None, units=None))]
     #[allow(clippy::too_many_arguments)]
     fn add_timeseries(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: String,
         data: &Bound<'_, PyAny>,
@@ -150,9 +166,12 @@ impl KnowledgeGraph {
         resolution: Option<String>,
         units: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         // Resolve resolution: parameter > existing config > auto-detect
-        let graph_ref = self.graph();
+        let graph_ref = this.graph();
         let resolved_resolution = if let Some(r) = resolution {
             kglite_core::api::timeseries::validate_resolution(&r)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
@@ -253,7 +272,7 @@ impl KnowledgeGraph {
         }
 
         // Build the ID index and attach the series
-        let (nodes_loaded, total_records) = self.logged_write(|graph| {
+        let (nodes_loaded, total_records) = this.logged_write(|graph| {
             Ok(apply_timeseries_batch(
                 graph,
                 TimeseriesBatch {
@@ -286,14 +305,17 @@ impl KnowledgeGraph {
     /// Returns None if the node has no timeseries data.
     #[pyo3(signature = (node_id, channel=None, start=None, end=None))]
     fn timeseries(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_id: &Bound<'_, PyAny>,
         channel: Option<String>,
         start: Option<String>,
         end: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        let graph = self.graph();
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let graph = this.graph();
         let id_val = py_in::py_value_to_value(node_id)?;
         let node_idx = find_node_by_id_readonly(graph, &id_val)?;
 
@@ -354,8 +376,15 @@ impl KnowledgeGraph {
 
     /// Get the time index for a node as ISO date strings, or None.
     #[pyo3(signature = (node_id,))]
-    fn time_index(&self, py: Python<'_>, node_id: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        let graph = self.graph();
+    fn time_index(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        node_id: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let graph = this.graph();
         let id_val = py_in::py_value_to_value(node_id)?;
         let node_idx = find_node_by_id_readonly(graph, &id_val)?;
 

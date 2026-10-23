@@ -233,7 +233,7 @@ def _table(header: list[str], rows: list[list[str]]) -> str:
 
 def graph_info_tables() -> str:
     source = INTROSPECTION_RS.read_text(encoding="utf-8")
-    body = _fn_body(source, "fn graph_info(&self)")
+    body = _fn_body(source, "fn graph_info(slf: &Bound<'_, Self>)")
     keys = _keys(body, "dict")
     _same("graph_info() keys", keys, GRAPH_INFO)
     meanings = _stub_meanings()
@@ -264,7 +264,7 @@ def graph_info_tables() -> str:
 
 
 def schema_tables() -> str:
-    body = _fn_body(CORE_RS.read_text(encoding="utf-8"), "fn schema(&self)")
+    body = _fn_body(CORE_RS.read_text(encoding="utf-8"), "fn schema(slf: &Bound<'_, Self>)")
     _same("schema() top-level keys", _keys(body, "result"), SCHEMA_TOP)
     _same("schema() node type entry", _keys(body, "type_dict"), SCHEMA_NODE)
     _same("schema() relationship type entry", _keys(body, "ct_dict"), SCHEMA_CONN)

@@ -62,9 +62,12 @@ fn inherited_group_description(graph: &KnowledgeGraph, recipe: &str) -> Option<S
 #[pymethods]
 impl KnowledgeGraph {
     /// List every recipe query this graph carries, sorted by recipe then name.
-    fn list_recipes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn list_recipes(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let result_list = PyList::empty(py);
-        for record in recipes::list(self.graph()) {
+        for record in recipes::list(this.graph()) {
             result_list.append(record_to_dict(py, &record)?)?;
         }
         Ok(result_list.into())
@@ -72,8 +75,16 @@ impl KnowledgeGraph {
 
     /// Read one recipe query by its recipe and name.
     #[pyo3(signature = (recipe, name))]
-    fn get_recipe(&self, py: Python<'_>, recipe: &str, name: &str) -> PyResult<Py<PyAny>> {
-        let record = recipes::get(self.graph(), recipe, name).map_err(kg_to_pyerr)?;
+    fn get_recipe(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        recipe: &str,
+        name: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let record = recipes::get(this.graph(), recipe, name).map_err(kg_to_pyerr)?;
         Ok(record_to_dict(py, &record)?.into())
     }
 
@@ -84,7 +95,7 @@ impl KnowledgeGraph {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (recipe, name, description, cypher, parameters=None, recipe_description=None, tool=None))]
     fn set_recipe(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         recipe: &str,
         name: &str,
@@ -94,13 +105,16 @@ impl KnowledgeGraph {
         recipe_description: Option<&str>,
         tool: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let parameters = match parameters {
             Some(value) => kglite_value_to_json(&py_in::py_value_to_value(value)?),
             None => empty_schema(),
         };
         let group_description = match recipe_description {
             Some(text) => text.to_string(),
-            None => inherited_group_description(self, recipe).unwrap_or_default(),
+            None => inherited_group_description(this, recipe).unwrap_or_default(),
         };
         let record = RecipeRecord {
             recipe: recipe.to_string(),
@@ -111,11 +125,11 @@ impl KnowledgeGraph {
             recipe_description: group_description,
             tool: tool.map(str::to_string),
         };
-        let outcome = self.logged_write(|g| recipes::set(g, &record).map_err(kg_to_pyerr))?;
+        let outcome = this.logged_write(|g| recipes::set(g, &record).map_err(kg_to_pyerr))?;
 
         // Read back rather than echo the argument, so what this returns is what
         // a later `get_recipe` will.
-        let stored = recipes::get(self.graph(), recipe, name).map_err(kg_to_pyerr)?;
+        let stored = recipes::get(this.graph(), recipe, name).map_err(kg_to_pyerr)?;
         let dict = record_to_dict(py, &stored)?;
         dict.set_item("created", matches!(outcome, SetOutcome::Created))?;
         Ok(dict.into())
@@ -123,14 +137,20 @@ impl KnowledgeGraph {
 
     /// Remove one recipe query; False means there was nothing stored there.
     #[pyo3(signature = (recipe, name))]
-    fn delete_recipe(&mut self, recipe: &str, name: &str) -> PyResult<bool> {
-        self.logged_write(|g| recipes::delete(g, recipe, name).map_err(kg_to_pyerr))
+    fn delete_recipe(slf: &Bound<'_, Self>, recipe: &str, name: &str) -> PyResult<bool> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| recipes::delete(g, recipe, name).map_err(kg_to_pyerr))
     }
 
     /// Import a JSON recipe catalogue, replacing same-keyed queries.
     #[pyo3(signature = (path))]
-    fn import_recipes(&mut self, path: &str) -> PyResult<Vec<String>> {
-        let written = self.logged_write(|g| {
+    fn import_recipes(slf: &Bound<'_, Self>, path: &str) -> PyResult<Vec<String>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        let written = this.logged_write(|g| {
             recipes::import_path(g, std::path::Path::new(path)).map_err(kg_to_pyerr)
         })?;
         Ok(written
@@ -141,7 +161,10 @@ impl KnowledgeGraph {
 
     /// Write every recipe query to `path` as one JSON catalogue document.
     #[pyo3(signature = (path))]
-    fn export_recipes(&self, path: &str) -> PyResult<()> {
-        recipes::export_path(self.graph(), std::path::Path::new(path)).map_err(kg_to_pyerr)
+    fn export_recipes(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        recipes::export_path(this.graph(), std::path::Path::new(path)).map_err(kg_to_pyerr)
     }
 }

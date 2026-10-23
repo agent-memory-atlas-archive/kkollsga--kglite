@@ -34,7 +34,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword, as node_vector_search has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn relationship_vector_search(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query_vector: Vec<f32>,
@@ -45,12 +45,15 @@ impl KnowledgeGraph {
         exact: bool,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let types = type_list(types)?;
         let keys = relationship_keys.unwrap_or_default();
         let options = RelationshipSearchOptions::new(top_k)
             .with_exact(exact)
             .with_metric(metric);
-        let inner = self.graph().clone();
+        let inner = this.graph().clone();
         let hits = py
             .detach(|| {
                 kglite_core::api::embeddings::search_relationship_embeddings(
@@ -78,7 +81,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword, as node_search_text has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn relationship_search_text(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query: &str,
@@ -89,8 +92,12 @@ impl KnowledgeGraph {
         exact: bool,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
-        let query_vector = self.embed_query(py, query)?;
-        self.relationship_vector_search(
+        let query_vector = {
+            let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+            guard.embed_query(py, query)?
+        };
+        Self::relationship_vector_search(
+            slf,
             py,
             text_column,
             query_vector,
@@ -106,17 +113,20 @@ impl KnowledgeGraph {
     /// One relationship's stored vector by endpoint address, or None when it has none; refuses a store that does not exist.
     #[pyo3(signature = (relationship_type, text_column, address, *, relationship_keys=None))]
     pub(super) fn relationship_embedding(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
         address: &Bound<'_, PyAny>,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let address = tuple_row(address, Vec::new(), "relationship_embedding", "address")?;
         let keys = relationship_keys.unwrap_or_default();
         let vector = kglite_core::api::embeddings::relationship_embedding(
-            self.graph(),
+            this.graph(),
             relationship_type,
             text_column,
             &address,
@@ -131,25 +141,30 @@ impl KnowledgeGraph {
 
     /// The vector dimension of a relationship type's embedding store for a text column, or None when there is no such store.
     pub(super) fn relationship_embedding_dim(
-        &self,
+        slf: &Bound<'_, Self>,
         relationship_type: &str,
         text_column: &str,
-    ) -> Option<usize> {
-        kglite_core::api::embeddings::relationship_embedding_dim(
-            self.graph(),
+    ) -> PyResult<Option<usize>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(kglite_core::api::embeddings::relationship_embedding_dim(
+            this.graph(),
             relationship_type,
             text_column,
-        )
+        ))
     }
 
     /// Remove a relationship type's embedding store for a text column; refuses a store that does not exist.
     pub(super) fn remove_relationship_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
-        self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| {
             kglite_core::api::embeddings::remove_relationship_embeddings(
                 g,
                 relationship_type,

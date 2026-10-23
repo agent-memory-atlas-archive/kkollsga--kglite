@@ -7,6 +7,7 @@
 
 pub mod algorithms;
 pub mod blueprint;
+pub(crate) mod borrow;
 pub mod connection_pointers;
 pub mod embedding_routes;
 pub mod export;
@@ -25,6 +26,7 @@ pub mod relationship_search;
 pub mod relationship_vectors;
 pub mod result_table;
 pub mod result_view;
+pub(crate) mod save;
 pub mod session;
 pub(crate) mod session_durable;
 pub mod skills;

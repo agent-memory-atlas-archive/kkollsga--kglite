@@ -34,7 +34,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword, as embed_relationship_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn set_relationship_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
@@ -43,6 +43,9 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let precision = super::quantization::parse_precision(precision)?;
         super::quantization::refuse_poincare(precision, metric)?;
         let rows = RelationshipRows {
@@ -54,7 +57,7 @@ impl KnowledgeGraph {
             metric,
             precision,
         };
-        let result = self.write_relationship_rows(
+        let result = this.write_relationship_rows(
             py,
             rows,
             kglite_core::api::embeddings::set_relationship_embeddings,
@@ -66,7 +69,7 @@ impl KnowledgeGraph {
     /// Upsert relationship vectors addressed by endpoint ids — the relationship twin of add_embeddings.
     #[pyo3(signature = (relationship_type, text_column, embeddings, *, relationship_keys=None, metric=None))]
     pub(super) fn add_relationship_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
@@ -74,6 +77,9 @@ impl KnowledgeGraph {
         relationship_keys: Option<HashMap<String, String>>,
         metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let rows = RelationshipRows {
             method: "add_relationship_embeddings",
             relationship_type,
@@ -83,7 +89,7 @@ impl KnowledgeGraph {
             metric,
             precision: None,
         };
-        self.write_relationship_rows(
+        this.write_relationship_rows(
             py,
             rows,
             kglite_core::api::embeddings::add_relationship_embeddings,
@@ -95,7 +101,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword, as embed_node_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_relationship_texts(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
@@ -105,10 +111,13 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let precision = super::quantization::parse_precision(precision)?;
         super::quantization::refuse_poincare(precision, metric)?;
-        let (model, _) = self.embedder_or_idle(
+        let (model, _) = this.embedder_or_idle(
             kglite_core::api::embeddings::EmbeddingEntity::Relationship,
             relationship_type,
             text_column,
@@ -148,7 +157,7 @@ impl KnowledgeGraph {
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
         };
-        let outcome = self.logged_write(|g| {
+        let outcome = this.logged_write(|g| {
             let outcome = kglite_core::api::embeddings::embed_relationship_texts(
                 g,
                 relationship_type,
@@ -163,7 +172,7 @@ impl KnowledgeGraph {
             }
             outcome.map_err(|error| embed_error(error, relationship_type, text_column))
         })?;
-        let quantized = self.quantize_written(
+        let quantized = this.quantize_written(
             kglite_core::api::embeddings::EmbeddingEntity::Relationship,
             relationship_type,
             text_column,
@@ -190,7 +199,7 @@ impl KnowledgeGraph {
     // One Rust argument per HNSW knob, as build_node_vector_index has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_relationship_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
@@ -201,8 +210,11 @@ impl KnowledgeGraph {
         auto_refresh_limit: Option<usize>,
         name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let named = NamedIndex::relationship(IndexClass::Vector, relationship_type, text_column);
-        let report = self.logged_write(|g| {
+        let report = this.logged_write(|g| {
             super::vector::claim_name(g, name, &named)?;
             let report = py
                 .detach(|| {
@@ -231,11 +243,14 @@ impl KnowledgeGraph {
     /// Drop the HNSW index over a relationship embedding store (the vectors stay); True if one was dropped.
     #[pyo3(signature = (relationship_type, text_column))]
     pub(super) fn drop_relationship_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<bool> {
-        self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| {
             kglite_core::api::embeddings::drop_relationship_vector_index(
                 g,
                 relationship_type,
@@ -248,26 +263,31 @@ impl KnowledgeGraph {
     /// Whether an HNSW index is currently built over a relationship embedding store.
     #[pyo3(signature = (relationship_type, text_column))]
     pub(super) fn has_relationship_vector_index(
-        &self,
+        slf: &Bound<'_, Self>,
         relationship_type: &str,
         text_column: &str,
-    ) -> bool {
-        kglite_core::api::embeddings::has_relationship_vector_index(
-            self.graph(),
+    ) -> PyResult<bool> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(kglite_core::api::embeddings::has_relationship_vector_index(
+            this.graph(),
             relationship_type,
             text_column,
-        )
+        ))
     }
 
     /// Fold every outstanding vector into a relationship store's HNSW index now; refuses when no index is built.
     #[pyo3(signature = (relationship_type, text_column))]
     pub(super) fn refresh_relationship_vector_index(
-        &self,
+        slf: &Bound<'_, Self>,
         relationship_type: &str,
         text_column: &str,
     ) -> PyResult<usize> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         kglite_core::api::embeddings::refresh_relationship_vector_index(
-            self.graph(),
+            this.graph(),
             relationship_type,
             text_column,
         )

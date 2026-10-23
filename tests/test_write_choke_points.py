@@ -38,9 +38,10 @@ LIFECYCLE_PARTS_ALLOWED = {
     "lib.rs",
     "graph/bg_checkpoint.rs",
     "graph/pyapi/kg_core.rs",
+    "graph/pyapi/save.rs",
     "graph/write_gate.rs",
 }
-LIFECYCLE_ACCESSOR_ALLOWED = {"graph/pyapi/kg_core.rs", "graph/write_gate.rs"}
+LIFECYCLE_ACCESSOR_ALLOWED = {"graph/pyapi/kg_core.rs", "graph/pyapi/save.rs", "graph/write_gate.rs"}
 
 
 def _code(text: str) -> str:

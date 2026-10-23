@@ -113,6 +113,16 @@ mod sigint {
 
     static FORWARD: AtomicPtr<Forward> = AtomicPtr::new(std::ptr::null_mut());
 
+    /// The first disposition ever replaced, normally Python's own. A library
+    /// that installs its handler over ours and chains to what it replaced
+    /// (polars' `signal_hook`) makes `FORWARD` point at a handler that calls
+    /// back into this one; a signal then recurses until the stack overflows.
+    /// The handler breaks the loop by forwarding to this one instead.
+    static FIRST: AtomicPtr<Forward> = AtomicPtr::new(std::ptr::null_mut());
+
+    /// True while the handler is forwarding, so a re-entry is a chain loop.
+    static FORWARDING: AtomicBool = AtomicBool::new(false);
+
     /// Async-signal-safe: atomics, plus a call into the previous handler.
     extern "C" fn handle_sigint(
         sig: libc::c_int,
@@ -123,10 +133,31 @@ mod sigint {
             QUERY_CANCEL.store(true, Ordering::SeqCst);
             return;
         }
-        let fwd = FORWARD.load(Ordering::SeqCst);
+        let looped = FORWARDING.swap(true, Ordering::SeqCst);
+        let fwd = if looped {
+            FIRST.load(Ordering::SeqCst)
+        } else {
+            FORWARD.load(Ordering::SeqCst)
+        };
         if fwd.is_null() {
+            if !looped {
+                FORWARDING.store(false, Ordering::SeqCst);
+            }
             return;
         }
+        forward_to(fwd, sig, info, ctx);
+        if !looped {
+            FORWARDING.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Call the disposition `fwd` records.
+    fn forward_to(
+        fwd: *mut Forward,
+        sig: libc::c_int,
+        info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
         // SAFETY: `fwd` is a leaked, never-freed `Forward`.
         let prev = unsafe { &(*fwd).action };
         let h = prev.sa_sigaction;
@@ -183,6 +214,12 @@ mod sigint {
         if prev.sa_sigaction != handler as libc::sighandler_t {
             let boxed = Box::into_raw(Box::new(Forward { action: prev }));
             FORWARD.store(boxed, Ordering::SeqCst);
+            let _ = FIRST.compare_exchange(
+                std::ptr::null_mut(),
+                boxed,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
         }
     }
 

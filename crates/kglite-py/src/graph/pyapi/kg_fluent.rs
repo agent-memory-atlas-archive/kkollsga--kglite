@@ -32,7 +32,7 @@ impl KnowledgeGraph {
     // The declaration's bounds, convention, source type and empty-row option are separate keyword arguments.
     #[allow(clippy::too_many_arguments)]
     fn set_temporal(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         type_name: String,
         valid_from: String,
@@ -41,13 +41,16 @@ impl KnowledgeGraph {
         source_type: Option<String>,
         empty_when: Option<&str>,
     ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         use kglite_core::api::temporal::{self, TemporalTarget};
         let (convention, empty_when) =
             crate::graph::parse_interval_options(convention, empty_when)?;
         let argument = |message: String| {
             crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
         };
-        let report = self.logged_write(|graph| {
+        let report = this.logged_write(|graph| {
             let is_node = graph.type_indices.contains_key(&type_name);
             let is_relationship = graph.connection_type_metadata.contains_key(&type_name);
             // A name that is both a node type and a relationship type is the node
@@ -87,7 +90,14 @@ impl KnowledgeGraph {
 
     /// Set the instant unprefixed statements and fluent cursors read on a graph with validity declarations.
     #[pyo3(signature = (value, persist=false))]
-    fn set_valid_time_default(&mut self, value: &Bound<'_, PyAny>, persist: bool) -> PyResult<()> {
+    fn set_valid_time_default(
+        slf: &Bound<'_, Self>,
+        value: &Bound<'_, PyAny>,
+        persist: bool,
+    ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         use crate::datatypes::py_in::query_date;
         use kglite_core::api::temporal::ValidTimeDefault;
         let text = value.extract::<String>().ok();
@@ -111,7 +121,7 @@ impl KnowledgeGraph {
                 ValidTimeDefault::Date(day)
             }
         };
-        self.unlogged_write_lazy(|inner| {
+        this.unlogged_write_lazy(|inner| {
             kglite_core::api::make_dir_graph_mut_preserving_lineage(inner)
                 .set_valid_time_default(default, persist)
         });
@@ -119,8 +129,10 @@ impl KnowledgeGraph {
     }
 
     /// The graph's valid-time default: 'today', 'all' or a YYYY-MM-DD date.
-    fn get_valid_time_default(&self) -> String {
-        self.graph().valid_time_default.to_string()
+    fn get_valid_time_default(slf: &Bound<'_, Self>) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.graph().valid_time_default.to_string())
     }
 
     /// Set the temporal context for auto-filtering.
@@ -134,15 +146,18 @@ impl KnowledgeGraph {
     /// - `date()` — reset to today
     #[pyo3(signature = (date_str=None, end_str=None))]
     fn date(
-        &self,
+        slf: &Bound<'_, Self>,
         date_str: Option<&Bound<'_, PyAny>>,
         end_str: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         use crate::datatypes::py_in::query_date;
         let is_all = date_str
             .and_then(|value| value.extract::<String>().ok())
             .is_some_and(|text| text == "all");
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.temporal_context = match (date_str, end_str) {
             _ if is_all => TemporalContext::All,
             (Some(start), Some(end)) => {
@@ -168,20 +183,23 @@ impl KnowledgeGraph {
     /// Select all nodes of a given type.
     #[pyo3(signature = (node_type, sort=None, limit=None, temporal=None, include_secondary=false))]
     fn select(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_type: String,
         sort: Option<&Bound<'_, PyAny>>,
         limit: Option<usize>,
         temporal: Option<bool>,
         include_secondary: bool,
     ) -> PyResult<Self> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
-        let mut new_kg = self.clone();
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let mut new_kg = this.clone();
 
         let estimated = if include_secondary {
-            self.graph().nodes_with_label(&node_type).len()
+            this.graph().nodes_with_label(&node_type).len()
         } else {
-            self.graph()
+            this.graph()
                 .type_indices
                 .get(&node_type)
                 .map(|v| v.len())
@@ -202,14 +220,14 @@ impl KnowledgeGraph {
         // the filter cannot read — is a `ValueError`; a seeding error an
         // `ArgumentError`.
         let valid_time = kglite_core::api::fluent::FluentFilter::for_select(
-            self.graph(),
-            &self.cursor.temporal_context,
+            this.graph(),
+            &this.cursor.temporal_context,
             &node_type,
             temporal,
         )
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
         kglite_core::api::fluent::select_nodes(
-            self.graph(),
+            this.graph(),
             &mut new_kg.cursor.selection,
             &node_type,
             include_secondary,
@@ -242,18 +260,21 @@ impl KnowledgeGraph {
     #[pyo3(signature = (conditions, sort=None, limit=None))]
     #[pyo3(name = "where")]
     fn where_method(
-        &self,
+        slf: &Bound<'_, Self>,
         conditions: &Bound<'_, PyDict>,
         sort: Option<&Bound<'_, PyAny>>,
         limit: Option<usize>,
     ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let filter_conditions = py_in::pydict_to_filter_conditions(conditions)?;
         let sort_fields = match sort {
             Some(spec) => Some(py_in::parse_sort_fields(spec, None)?),
             None => None,
         };
 
-        self.derive_with(|inner, cursor| {
+        this.derive_with(|inner, cursor| {
             let level_count = |c: &crate::graph::CursorState| {
                 c.selection
                     .get_level(c.selection.get_level_count().saturating_sub(1))
@@ -283,11 +304,14 @@ impl KnowledgeGraph {
     /// A node is kept if it matches at least one condition set.
     #[pyo3(signature = (conditions, sort=None, limit=None))]
     fn where_any(
-        &self,
+        slf: &Bound<'_, Self>,
         conditions: &Bound<'_, PyList>,
         sort: Option<&Bound<'_, PyAny>>,
         limit: Option<usize>,
     ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let condition_sets: Vec<HashMap<String, FilterCondition>> = conditions
             .iter()
             .map(|item| {
@@ -313,7 +337,7 @@ impl KnowledgeGraph {
             None => None,
         };
 
-        self.derive_with(|inner, cursor| {
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::filter_nodes_any(
                 inner,
                 &mut cursor.selection,
@@ -328,11 +352,14 @@ impl KnowledgeGraph {
     /// Filter nodes based on whether they have connections.
     #[pyo3(signature = (include_orphans=None, sort=None, limit=None))]
     fn where_orphans(
-        &self,
+        slf: &Bound<'_, Self>,
         include_orphans: Option<bool>,
         sort: Option<&Bound<'_, PyAny>>,
         limit: Option<usize>,
     ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let include = include_orphans.unwrap_or(true);
         let sort_fields = if let Some(spec) = sort {
             Some(py_in::parse_sort_fields(spec, None)?)
@@ -341,13 +368,13 @@ impl KnowledgeGraph {
         };
 
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            self.graph(),
-            &self.cursor.temporal_context,
+            this.graph(),
+            &this.cursor.temporal_context,
             None,
             "where_orphans()",
         )
         .map_err(fluent_arg_err)?;
-        self.derive_with(|inner, cursor| {
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::filter_orphan_nodes(
                 inner,
                 &mut cursor.selection,
@@ -362,17 +389,27 @@ impl KnowledgeGraph {
 
     /// Sort the current selection.
     #[pyo3(signature = (sort, ascending=None))]
-    fn sort(&self, sort: &Bound<'_, PyAny>, ascending: Option<bool>) -> PyResult<Self> {
+    fn sort(
+        slf: &Bound<'_, Self>,
+        sort: &Bound<'_, PyAny>,
+        ascending: Option<bool>,
+    ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let sort_fields = py_in::parse_sort_fields(sort, ascending)?;
-        self.derive_with(|inner, cursor| {
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::sort_nodes(inner, &mut cursor.selection, sort_fields)
                 .map_err(fluent_arg_err)
         })
     }
 
     /// Limit the number of nodes per parent group.
-    fn limit(&self, max_per_group: usize) -> PyResult<Self> {
-        self.derive_with(|inner, cursor| {
+    fn limit(slf: &Bound<'_, Self>, max_per_group: usize) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::limit_nodes_per_group(
                 inner,
                 &mut cursor.selection,
@@ -385,8 +422,11 @@ impl KnowledgeGraph {
     /// Skip the first N nodes per group (for pagination).
     /// Use with sort() + limit() for paged results:
     ///   graph.sort('name').offset(20).limit(10)
-    fn offset(&self, n: usize) -> PyResult<Self> {
-        self.derive_with(|inner, cursor| {
+    fn offset(slf: &Bound<'_, Self>, n: usize) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::offset_nodes(inner, &mut cursor.selection, n)
                 .map_err(fluent_arg_err)
         })
@@ -395,7 +435,14 @@ impl KnowledgeGraph {
     /// Filter current selection to nodes that have at least one connection
     /// of the given type. Equivalent to Cypher's WHERE EXISTS {(n)-[:TYPE]->()}.
     #[pyo3(signature = (connection_type, direction=None))]
-    fn where_connected(&self, connection_type: &str, direction: Option<&str>) -> PyResult<Self> {
+    fn where_connected(
+        slf: &Bound<'_, Self>,
+        connection_type: &str,
+        direction: Option<&str>,
+    ) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let dir = match direction.unwrap_or("any") {
             "outgoing" | "out" => Some(petgraph::Direction::Outgoing),
             "incoming" | "in" => Some(petgraph::Direction::Incoming),
@@ -411,13 +458,13 @@ impl KnowledgeGraph {
         };
 
         let valid_time = kglite_core::api::fluent::FluentFilter::for_walk(
-            self.graph(),
-            &self.cursor.temporal_context,
+            this.graph(),
+            &this.cursor.temporal_context,
             Some(connection_type),
             "where_connected()",
         )
         .map_err(fluent_arg_err)?;
-        self.derive_with(|inner, cursor| {
+        this.derive_with(|inner, cursor| {
             kglite_core::api::fluent::filter_by_connection(
                 inner,
                 &mut cursor.selection,
@@ -432,63 +479,72 @@ impl KnowledgeGraph {
     /// Keep the nodes valid at a date: each under its type's declared or named bounds.
     #[pyo3(signature = (date=None, date_from_field=None, date_to_field=None))]
     fn valid_at(
-        &mut self,
+        slf: &Bound<'_, Self>,
         date: Option<&Bound<'_, PyAny>>,
         date_from_field: Option<&str>,
         date_to_field: Option<&str>,
     ) -> PyResult<Self> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let date = match date {
             Some(d) => Some(crate::datatypes::py_in::query_date(d, "date")?.0),
             None => None,
         };
         let filter = kglite_core::api::fluent::FluentFilter::for_valid_at(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             date,
-            &self.cursor.temporal_context,
+            &this.cursor.temporal_context,
             date_from_field,
             date_to_field,
         )
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        self.retain_valid(filter, "VALID_AT")
+        this.retain_valid(filter, "VALID_AT")
     }
 
     /// Keep the nodes whose validity overlaps a range; a partial end date covers its whole period.
     #[pyo3(signature = (start_date, end_date, date_from_field=None, date_to_field=None))]
     fn valid_during(
-        &mut self,
+        slf: &Bound<'_, Self>,
         start_date: &Bound<'_, PyAny>,
         end_date: &Bound<'_, PyAny>,
         date_from_field: Option<&str>,
         date_to_field: Option<&str>,
     ) -> PyResult<Self> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let (start, _) = crate::datatypes::py_in::query_date(start_date, "start_date")?;
         let (end, precision) = crate::datatypes::py_in::query_date(end_date, "end_date")?;
         let end = kglite_core::api::timeseries::expand_end(end, precision);
         let filter = kglite_core::api::fluent::FluentFilter::for_valid_during(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             start,
             end,
             date_from_field,
             date_to_field,
         )
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        self.retain_valid(filter, "VALID_DURING")
+        this.retain_valid(filter, "VALID_DURING")
     }
 
     /// Set properties on the selected nodes of a detached copy, judged against valid-time declarations.
     #[pyo3(signature = (properties, keep_selection=None))]
     fn update(
-        &mut self,
+        slf: &Bound<'_, Self>,
         properties: &Bound<'_, PyDict>,
         keep_selection: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
-        let current_index = self.cursor.selection.get_level_count().saturating_sub(1);
-        let level = self
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
+        let current_index = this.cursor.selection.get_level_count().saturating_sub(1);
+        let level = this
             .cursor
             .selection
             .get_level(current_index)
@@ -522,7 +578,7 @@ impl KnowledgeGraph {
         // writing both bounds is one legal write; a refusal raises. The write
         // lands on `self.graph()`; the handle returned below is deliberately
         // detached, so `self` is what owns the durability state.
-        let written = self.logged_write(|graph| {
+        let written = this.logged_write(|graph| {
             kglite_core::api::mutation::update_node_property_set(graph, &nodes, &parsed_properties)
                 .map_err(|e| super::kg_mutation::bulk_write_err(graph, e))
         })?;
@@ -531,7 +587,7 @@ impl KnowledgeGraph {
         let warnings = written.warnings;
         let diagnostics = written.diagnostics;
 
-        let mut new_kg = self.detached_view(keep_selection.unwrap_or(false));
+        let mut new_kg = this.detached_view(keep_selection.unwrap_or(false));
 
         let report = kglite_core::api::mutation::NodeOperationReport {
             operation_type: "update".to_string(),
@@ -560,16 +616,19 @@ impl KnowledgeGraph {
 
     /// Materialise selected nodes as a flat ``ResultView``.
     #[pyo3(signature = (limit=None))]
-    fn collect(&self, limit: Option<usize>) -> PyResult<Py<PyAny>> {
+    fn collect(slf: &Bound<'_, Self>, limit: Option<usize>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let max = limit.unwrap_or(usize::MAX);
-        let node_indices: Vec<petgraph::graph::NodeIndex> = self
+        let node_indices: Vec<petgraph::graph::NodeIndex> = this
             .cursor
             .selection
             .current_node_indices()
             .take(max)
             .collect();
         let view = crate::graph::pyapi::result_view::ResultView::from_nodes_with_graph(
-            self.graph(),
+            this.graph(),
             &node_indices,
         );
         Python::attach(|py| Py::new(py, view).map(|v| v.into_any()))
@@ -579,15 +638,18 @@ impl KnowledgeGraph {
     /// hierarchy. Always returns a ``dict``.
     #[pyo3(signature = (group_by, *, parent_info=false, flatten_single_parent=true, limit=None))]
     fn collect_grouped(
-        &self,
+        slf: &Bound<'_, Self>,
         group_by: &str,
         parent_info: Option<bool>,
         flatten_single_parent: Option<bool>,
         limit: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let nodes = kglite_core::api::fluent::get_nodes(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             None,
             None,
             limit,
@@ -595,7 +657,7 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             py_out::level_nodes_to_pydict(
                 py,
-                &self.graph().graph,
+                &this.graph().graph,
                 &nodes,
                 Some(group_by),
                 parent_info,
@@ -606,12 +668,20 @@ impl KnowledgeGraph {
 
     /// Export the current selection as a pandas DataFrame.
     #[pyo3(signature = (*, include_type=true, include_id=true))]
-    fn to_df(&self, py: Python<'_>, include_type: bool, include_id: bool) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn to_df(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        include_type: bool,
+        include_id: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let mut nodes_data: Vec<(&str, kglite_core::api::NodeView<'_>)> = Vec::new();
-        for node_idx in self.cursor.selection.current_node_indices() {
-            if let Some(node) = self.graph().node_view(node_idx) {
-                nodes_data.push((node.node_type_str(&self.graph().interner), node));
+        for node_idx in this.cursor.selection.current_node_indices() {
+            if let Some(node) = this.graph().node_view(node_idx) {
+                nodes_data.push((node.node_type_str(&this.graph().interner), node));
             }
         }
 
@@ -633,7 +703,7 @@ impl KnowledgeGraph {
         let discover = |nodes: &Vec<(&str, kglite_core::api::NodeView<'_>)>| {
             kglite_core::api::discover_property_keys_excluding(
                 nodes,
-                &self.graph().interner,
+                &this.graph().interner,
                 &emitted_identity,
             )
         };
@@ -643,7 +713,7 @@ impl KnowledgeGraph {
             let first_type = nodes_data[0].0;
             let all_same = nodes_data.iter().all(|(nt, _)| *nt == first_type);
             if all_same {
-                kglite_core::api::schema_property_keys(self.graph(), first_type, &emitted_identity)
+                kglite_core::api::schema_property_keys(this.graph(), first_type, &emitted_identity)
                     .unwrap_or_else(|| discover(&nodes_data))
             } else {
                 discover(&nodes_data)
@@ -671,7 +741,7 @@ impl KnowledgeGraph {
         for (node_type, node) in &nodes_data {
             title_col.append(py_out::graph_value_to_py(
                 py,
-                &self.graph().graph,
+                &this.graph().graph,
                 &node.title(),
             )?)?;
             if let Some(ref tc) = type_col {
@@ -685,7 +755,7 @@ impl KnowledgeGraph {
                 let val_ref = val.as_deref().unwrap_or(&Value::Null);
                 prop_cols[j].append(py_out::graph_value_to_py(
                     py,
-                    &self.graph().graph,
+                    &this.graph().graph,
                     val_ref,
                 )?)?;
             }
@@ -723,11 +793,14 @@ impl KnowledgeGraph {
     /// Each node is printed as a block with type, id, title, and all properties.
     /// The ``limit`` parameter caps the number of nodes shown (default 50).
     #[pyo3(signature = (limit=50))]
-    fn to_str(&self, limit: usize) -> PyResult<String> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn to_str(slf: &Bound<'_, Self>, limit: usize) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         use crate::datatypes::values::format_value;
 
-        let node_indices: Vec<_> = self.cursor.selection.current_node_indices().collect();
+        let node_indices: Vec<_> = this.cursor.selection.current_node_indices().collect();
         let total = node_indices.len();
         let show = total.min(limit);
 
@@ -738,18 +811,18 @@ impl KnowledgeGraph {
         let mut buf = String::with_capacity(show * 200);
 
         for (i, &idx) in node_indices.iter().take(show).enumerate() {
-            if let Some(node) = self.graph().node_view(idx) {
+            if let Some(node) = this.graph().node_view(idx) {
                 if i > 0 {
                     buf.push('\n');
                 }
                 buf.push_str(&format!(
                     "[{}] {} (id: {})\n",
-                    node.node_type_str(&self.graph().interner),
+                    node.node_type_str(&this.graph().interner),
                     format_value(&node.title()),
                     format_value(&node.id()),
                 ));
                 // Sort property keys for deterministic output
-                let mut keys: Vec<&str> = node.property_keys(&self.graph().interner);
+                let mut keys: Vec<&str> = node.property_keys(&this.graph().interner);
                 keys.sort();
                 for key in keys {
                     if let Some(val) = node.get_property(key) {
@@ -796,25 +869,28 @@ impl KnowledgeGraph {
     ///     # Initiative(123, Juniper) -> Proposal(456, Alpha) -> Site(789, W1)
     ///     ```
     #[pyo3(signature = (columns=None, limit=200))]
-    fn show(&self, columns: Option<Vec<String>>, limit: usize) -> PyResult<String> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn show(slf: &Bound<'_, Self>, columns: Option<Vec<String>>, limit: usize) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         use kglite_core::api::fluent::format_value_compact;
 
         let columns = columns.unwrap_or_else(|| vec!["id".to_string(), "title".to_string()]);
-        let level_count = self.cursor.selection.get_level_count();
+        let level_count = this.cursor.selection.get_level_count();
 
         let fmt_node = |idx: NodeIndex| -> String {
-            let node = match self.graph().node_view(idx) {
+            let node = match this.graph().node_view(idx) {
                 Some(n) => n,
                 None => return "?".to_string(),
             };
             let mut s = String::with_capacity(64);
-            let node_type_str = node.node_type_str(&self.graph().interner);
+            let node_type_str = node.node_type_str(&this.graph().interner);
             s.push_str(node_type_str);
             s.push('(');
             let mut first = true;
             for col in &columns {
-                let resolved = self.graph().resolve_alias(node_type_str, col);
+                let resolved = this.graph().resolve_alias(node_type_str, col);
                 if let Some(val) = node.get_field_ref(resolved) {
                     if matches!(&*val, Value::Null) {
                         continue;
@@ -839,7 +915,7 @@ impl KnowledgeGraph {
         };
 
         if level_count <= 1 {
-            let nodes: Vec<_> = self.cursor.selection.current_node_indices().collect();
+            let nodes: Vec<_> = this.cursor.selection.current_node_indices().collect();
             if nodes.is_empty() {
                 return Ok("(empty selection)".to_string());
             }
@@ -855,7 +931,7 @@ impl KnowledgeGraph {
             Ok(buf)
         } else {
             // Multi-level: walk traversal chains via DFS
-            let level0 = self.cursor.selection.get_level(0).ok_or_else(|| {
+            let level0 = this.cursor.selection.get_level(0).ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::CypherExecution {
                     message: ("no selection levels").to_string(),
                     position: None,
@@ -878,7 +954,7 @@ impl KnowledgeGraph {
                         continue;
                     }
 
-                    let level = match self.cursor.selection.get_level(level_idx) {
+                    let level = match this.cursor.selection.get_level(level_idx) {
                         Some(l) => l,
                         None => {
                             chains.push(chain);
@@ -939,16 +1015,18 @@ impl KnowledgeGraph {
     ///     count = len(graph.select('User'))         # same, via __len__
     ///     ```
     #[pyo3(name = "len")]
-    fn py_len(&self) -> usize {
-        if self.cursor.selection.has_active_selection() {
-            self.cursor.selection.current_node_count()
+    fn py_len(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(if this.cursor.selection.has_active_selection() {
+            this.cursor.selection.current_node_count()
         } else {
-            self.graph().graph.node_count()
-        }
+            this.graph().graph.node_count()
+        })
     }
 
-    fn __len__(&self) -> usize {
-        self.py_len()
+    fn __len__(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        Self::py_len(slf)
     }
 
     /// Returns the raw node indices in the current selection.
@@ -958,12 +1036,15 @@ impl KnowledgeGraph {
     ///     ```python
     ///     indices = graph.select('User').indices()
     ///     ```
-    fn indices(&self) -> Vec<usize> {
-        self.cursor
+    fn indices(slf: &Bound<'_, Self>) -> PyResult<Vec<usize>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this
+            .cursor
             .selection
             .current_node_indices()
             .map(|idx| idx.index())
-            .collect()
+            .collect())
     }
 
     /// Returns just the raw ID values from the current selection as a flat list.
@@ -977,13 +1058,16 @@ impl KnowledgeGraph {
     ///     user_ids = graph.select('User').ids()
     ///     # Returns: [1, 2, 3, 4, 5, ...]
     ///     ```
-    fn ids(&self) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn ids(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         Python::attach(|py| {
             let result = PyList::empty(py);
 
-            for node_idx in self.cursor.selection.current_node_indices() {
-                if let Some(node) = self.graph().node_view(node_idx) {
+            for node_idx in this.cursor.selection.current_node_indices() {
+                if let Some(node) = this.graph().node_view(node_idx) {
                     result.append(py_out::value_to_py(py, &node.id())?)?;
                 }
             }
@@ -994,8 +1078,15 @@ impl KnowledgeGraph {
 
     /// Look up a node by type and integer or string ID through the identity index.
     #[pyo3(signature = (node_type, node_id))]
-    fn node(&self, node_type: &str, node_id: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn node(
+        slf: &Bound<'_, Self>,
+        node_type: &str,
+        node_id: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let id_value = py_in::py_value_to_value(node_id)?;
 
         // Read-only typed index lookup — same path as `exists()`.
@@ -1005,30 +1096,37 @@ impl KnowledgeGraph {
         // deep-copied the ENTIRE graph whenever any other handle
         // (a fluent clone, a frozen view, a session) shared the Arc —
         // an O(graph) hit on a point lookup.
-        let node_idx = match self.graph().lookup_by_id_readonly(node_type, &id_value) {
+        let node_idx = match this.graph().lookup_by_id_readonly(node_type, &id_value) {
             Some(idx) => idx,
             None => return Ok(None),
         };
 
-        let node = match self.graph().node_view(node_idx) {
+        let node = match this.graph().node_view(node_idx) {
             Some(n) => n,
             None => return Ok(None),
         };
 
-        let node_info = node.to_node_info(&self.graph().interner);
+        let node_info = node.to_node_info(&this.graph().interner);
         Python::attach(|py| {
-            let dict = py_out::nodeinfo_to_pydict(py, &self.graph().graph, &node_info)?;
+            let dict = py_out::nodeinfo_to_pydict(py, &this.graph().graph, &node_info)?;
             Ok(Some(dict))
         })
     }
 
     /// Return whether the identity index contains this type and integer or string ID.
     #[pyo3(signature = (node_type, unique_id))]
-    fn exists(&self, node_type: &str, unique_id: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn exists(
+        slf: &Bound<'_, Self>,
+        node_type: &str,
+        unique_id: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let id_value = py_in::py_value_to_value(unique_id)?;
         // Read-only typed index lookup — see `node()` for why this must not
         // route through `Arc::make_mut`.
-        Ok(self
+        Ok(this
             .graph()
             .lookup_by_id_readonly(node_type, &id_value)
             .is_some())
@@ -1056,18 +1154,21 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (name, node_type=None, match_type=None))]
     fn find(
-        &self,
+        slf: &Bound<'_, Self>,
         name: &str,
         node_type: Option<&str>,
         match_type: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let match_type = match match_type.unwrap_or("exact") {
             "contains" => kglite_core::api::code_entities::CodeEntityMatch::Contains,
             "starts_with" => kglite_core::api::code_entities::CodeEntityMatch::StartsWith,
             _ => kglite_core::api::code_entities::CodeEntityMatch::Exact,
         };
         let results = kglite_core::api::code_entities::find_code_entities(
-            self.graph(),
+            this.graph(),
             name,
             node_type,
             match_type,
@@ -1076,7 +1177,7 @@ impl KnowledgeGraph {
         Python::attach(|py| {
             let list = PyList::empty(py);
             for node_info in &results {
-                let dict = py_out::nodeinfo_to_pydict(py, &self.graph().graph, node_info)?;
+                let dict = py_out::nodeinfo_to_pydict(py, &this.graph().graph, node_info)?;
                 list.append(dict)?;
             }
             Ok(list.into_any().unbind())
@@ -1105,13 +1206,20 @@ impl KnowledgeGraph {
     ///     locs = graph.source(["KnowledgeGraph", "build", "execute"])
     ///     ```
     #[pyo3(signature = (name, node_type=None))]
-    fn source(&self, name: &Bound<'_, PyAny>, node_type: Option<&str>) -> PyResult<Py<PyAny>> {
+    fn source(
+        slf: &Bound<'_, Self>,
+        name: &Bound<'_, PyAny>,
+        node_type: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         if let Ok(list) = name.cast::<PyList>() {
             let names: Vec<String> = list.extract()?;
             return Python::attach(|py| {
                 let result = PyList::empty(py);
                 for n in &names {
-                    let dict = self.source_one(py, n, node_type)?;
+                    let dict = this.source_one(py, n, node_type)?;
                     result.append(dict)?;
                 }
                 Ok(result.into_any().unbind())
@@ -1119,7 +1227,7 @@ impl KnowledgeGraph {
         }
 
         let name_str: String = name.extract()?;
-        Python::attach(|py| self.source_one(py, &name_str, node_type))
+        Python::attach(|py| this.source_one(py, &name_str, node_type))
     }
 
     /// Get the full neighborhood of a code entity.
@@ -1145,13 +1253,16 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (name, node_type=None, hops=None))]
     fn context(
-        &self,
+        slf: &Bound<'_, Self>,
         name: &str,
         node_type: Option<&str>,
         hops: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let lookup = kglite_core::api::code_entities::code_entity_context(
-            self.graph(),
+            this.graph(),
             name,
             node_type,
             hops.unwrap_or(1),
@@ -1169,7 +1280,7 @@ impl KnowledgeGraph {
                     for info in &matches {
                         match_list.append(py_out::nodeinfo_to_pydict(
                             py,
-                            &self.graph().graph,
+                            &this.graph().graph,
                             info,
                         )?)?;
                     }
@@ -1180,7 +1291,7 @@ impl KnowledgeGraph {
             };
             result.set_item(
                 "node",
-                py_out::nodeinfo_to_pydict(py, &self.graph().graph, &context.node)?,
+                py_out::nodeinfo_to_pydict(py, &this.graph().graph, &context.node)?,
             )?;
             if let Some(path) = &context.defined_in {
                 result.set_item("defined_in", path)?;
@@ -1188,7 +1299,7 @@ impl KnowledgeGraph {
             for (edge_type, nodes) in &context.outgoing {
                 let list = PyList::empty(py);
                 for info in nodes {
-                    list.append(py_out::nodeinfo_to_pydict(py, &self.graph().graph, info)?)?;
+                    list.append(py_out::nodeinfo_to_pydict(py, &this.graph().graph, info)?)?;
                 }
                 result.set_item(edge_type.as_str(), list)?;
             }
@@ -1208,7 +1319,7 @@ impl KnowledgeGraph {
                 };
                 let list = PyList::empty(py);
                 for info in nodes {
-                    list.append(py_out::nodeinfo_to_pydict(py, &self.graph().graph, info)?)?;
+                    list.append(py_out::nodeinfo_to_pydict(py, &this.graph().graph, info)?)?;
                 }
                 result.set_item(key.as_str(), list)?;
             }
@@ -1234,13 +1345,16 @@ impl KnowledgeGraph {
     ///     toc = graph.toc("src/graph/mod.rs")
     ///     ```
     #[pyo3(signature = (file_path))]
-    fn toc(&self, file_path: &str) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+    fn toc(slf: &Bound<'_, Self>, file_path: &str) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let file_id = Value::String(file_path.to_string());
 
-        let file_idx = if let Some(indices) = self.graph().type_indices.get("File") {
+        let file_idx = if let Some(indices) = this.graph().type_indices.get("File") {
             indices.iter().find(|idx| {
-                self.graph()
+                this.graph()
                     .node_view(*idx)
                     .map(|n| *n.id() == file_id)
                     .unwrap_or(false)
@@ -1264,7 +1378,7 @@ impl KnowledgeGraph {
         // signature).
         let mut entities: Vec<(String, String, String, i64, i64, Option<String>)> = Vec::new();
 
-        for edge in self
+        for edge in this
             .graph()
             .graph
             .edges_directed(file_idx, petgraph::Direction::Outgoing)
@@ -1272,8 +1386,8 @@ impl KnowledgeGraph {
             if edge.connection_type() != kglite_core::api::InternedKey::from_str("DEFINES") {
                 continue;
             }
-            if let Some(node) = self.graph().node_view(edge.target()) {
-                let node_type = node.get_node_type_ref(&self.graph().interner).to_string();
+            if let Some(node) = this.graph().node_view(edge.target()) {
+                let node_type = node.get_node_type_ref(&this.graph().interner).to_string();
                 let name = match &*node.title() {
                     Value::String(s) => s.clone(),
                     _ => String::new(),

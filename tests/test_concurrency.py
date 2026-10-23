@@ -489,6 +489,13 @@ def test_begin_under_a_held_borrow_raises_instead_of_panicking():
 
 _LIVE_NODES = 200_000
 
+# A shell backgrounds a job with SIGINT ignored, and Python then never raises
+# KeyboardInterrupt, so a test that waits for one cannot pass there.
+_needs_sigint = pytest.mark.skipif(
+    os.name != "posix" or signal.getsignal(signal.SIGINT) is signal.SIG_IGN,
+    reason="delivers SIGINT to the process; needs a SIGINT that raises KeyboardInterrupt",
+)
+
 
 def _live_graph():
     g = kglite.KnowledgeGraph()
@@ -552,7 +559,7 @@ class TestLiveMutationGIL:
         assert seen and set(seen) <= {0, _LIVE_NODES}, sorted(set(seen))
         assert seen[-1] == _LIVE_NODES
 
-    @pytest.mark.skipif(os.name != "posix", reason="delivers SIGINT to the process")
+    @_needs_sigint
     def test_ctrl_c_ends_the_wait_for_a_running_write(self):
         g = _live_graph()
         writing = threading.Event()
@@ -579,3 +586,213 @@ class TestLiveMutationGIL:
             timer.cancel()
             w.join(timeout=60)
         assert not w.is_alive()
+
+
+# ── Every method waits, not just cypher() ───────────────────────────────────
+#
+# PyO3's own glue raises `Already borrowed` for a `&self` / `&mut self`
+# method called while another thread holds the graph's exclusive borrow.
+# Every `KnowledgeGraph` method therefore takes `slf: &Bound<'_, Self>` and
+# borrows through `borrow_waiting` / `borrow_mut_waiting`.
+
+_WAITING_CALLS = {
+    # kg_fluent.rs
+    "fluent_chain": lambda g, tmp: g.select("T").where({"i": 5}).count(),
+    # kg_mutation.rs
+    "add_nodes": lambda g, tmp: g.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["a", "b"]}), "N", "id", "title"),
+    "node_types": lambda g, tmp: g.node_types,
+    # kg_core.rs
+    "save": lambda g, tmp: g.save(str(tmp / "g.kgl")),
+    "describe": lambda g, tmp: g.describe(),
+    "schema": lambda g, tmp: g.schema(),
+    "len": lambda g, tmp: len(g),
+    "repr": lambda g, tmp: repr(g),
+    "copy": lambda g, tmp: g.copy(),
+    # kg_introspection.rs
+    "graph_info": lambda g, tmp: g.graph_info(),
+    "read_only_getter": lambda g, tmp: g.read_only,
+    # algorithms.rs
+    "connected_components": lambda g, tmp: g.connected_components(),
+    # indexes.rs
+    "list_indexes": lambda g, tmp: g.list_indexes(),
+    # vector.rs
+    "list_embeddings": lambda g, tmp: g.list_embeddings(),
+    # timeseries.rs
+    "timeseries_config": lambda g, tmp: g.timeseries_config(),
+    # recipes.rs / skills.rs
+    "list_recipes": lambda g, tmp: g.list_recipes(),
+    "list_skills": lambda g, tmp: g.list_skills(),
+    # connection_pointers.rs
+    "connection_types": lambda g, tmp: g.connection_types(),
+}
+
+
+def _write_in_background(g, rounds=6):
+    writing = threading.Event()
+
+    def write():
+        writing.set()
+        for k in range(rounds):
+            g.cypher("MATCH (n:T) SET n.f = n.i + 1")
+        g.cypher("CREATE (:W {tag: 'a'})")
+
+    w = threading.Thread(target=write)
+    w.start()
+    writing.wait()
+    time.sleep(0.05)
+    return w
+
+
+class TestEveryMethodWaits:
+    @pytest.mark.parametrize("name", sorted(_WAITING_CALLS))
+    def test_method_waits_out_a_running_write(self, name, tmp_path):
+        g = _live_graph()
+        w = _write_in_background(g)
+        try:
+            _WAITING_CALLS[name](g, tmp_path)
+        finally:
+            w.join(timeout=60)
+        assert not w.is_alive()
+        assert g.cypher("MATCH (w:W) RETURN count(w) AS c")[0]["c"] == 1
+
+    def test_a_write_from_the_waiting_thread_lands_beside_the_running_one(self):
+        g = _live_graph()
+        w = _write_in_background(g)
+        g.add_nodes(pd.DataFrame({"id": [1, 2], "title": ["a", "b"]}), "N", "id", "title")
+        w.join(timeout=60)
+        assert g.cypher("MATCH (w:W) RETURN count(w) AS c")[0]["c"] == 1
+        assert g.cypher("MATCH (n:N) RETURN count(n) AS c")[0]["c"] == 2
+        assert g.cypher("MATCH (n:T) WHERE n.f = n.i + 1 RETURN count(n) AS c")[0]["c"] == _LIVE_NODES
+
+    @_needs_sigint
+    def test_ctrl_c_ends_the_wait_in_a_fluent_method(self):
+        g = _live_graph()
+        w = _write_in_background(g, rounds=40)
+        timer = threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGINT))
+        timer.start()
+        t0 = time.perf_counter()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                while True:
+                    g.select("T").count()
+                    if time.perf_counter() - t0 > 30:
+                        pytest.fail("no KeyboardInterrupt while a fluent method waited behind a write")
+        finally:
+            timer.cancel()
+            w.join(timeout=120)
+        assert not w.is_alive()
+
+    def test_a_callback_reentering_through_any_method_raises_not_hangs(self):
+        g = kglite.KnowledgeGraph()
+        g.add_nodes(pd.DataFrame({"id": [1], "title": ["Doc 1"], "summary": ["hello"]}), "Doc", "id", "title")
+        caught: list[BaseException | None] = []
+
+        class _Reentrant:
+            dimension = 4
+
+            def embed(self, texts):
+                for call in (
+                    lambda: g.describe(),
+                    lambda: len(g),
+                    lambda: g.select("Doc").count(),
+                    lambda: g.add_nodes(pd.DataFrame({"id": [9], "title": ["x"]}), "Doc", "id", "title"),
+                ):
+                    try:
+                        call()
+                    except BaseException as e:  # noqa: BLE001
+                        caught.append(e)
+                    else:
+                        caught.append(None)
+                return [[0.0] * 4 for _ in texts]
+
+        g.set_embedder(_Reentrant())
+        g.embed_texts("Doc", "summary", show_progress=False)
+        assert len(caught) == 4
+        for outcome in caught:
+            assert isinstance(outcome, RuntimeError), repr(outcome)
+            assert "concurrently" in str(outcome)
+
+
+def _pymethods_receivers():
+    """(file, fn, receiver) for each `&self` / `&mut self` method of a
+    `#[pymethods] impl KnowledgeGraph` block."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "crates" / "kglite-py" / "src"
+    found = []
+    for path in sorted(root.rglob("*.rs")):
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"#\[pymethods\]\s*(?:#\[[^\]]*\]\s*)*impl\s+KnowledgeGraph\s*\{", text):
+            depth, i = 1, m.end()
+            block_start = i
+            while depth:
+                c = text[i]
+                depth += (c == "{") - (c == "}")
+                i += 1
+            block = text[block_start:i]
+            for fm in re.finditer(
+                r"\n    (?:pub(?:\([a-z]+\))? )?fn (\w+)\s*(?:<[^>]*>)?\(\s*(?:mut\s+)?([^,)]*)", block
+            ):
+                recv = fm.group(2).strip()
+                if "self" in recv or re.search(r"slf\s*:\s*(PyRef|PyRefMut)\b", recv):
+                    found.append((path.name, fm.group(1), recv))
+    return found
+
+
+def test_no_knowledge_graph_pymethod_takes_a_glue_borrowed_receiver():
+    """A `&self` / `&mut self` / `PyRef(Mut)<Self>` receiver makes PyO3 raise
+    `Already borrowed` instead of waiting; the receiver must be `slf: &Bound`."""
+    bad = _pymethods_receivers()
+    assert bad == [], bad
+
+
+def test_a_progress_callback_reentering_the_loading_graph_raises_not_hangs(tmp_path):
+    """The re-entry guard covers every callback that runs inside a graph
+    operation, not only embedders: this thread already holds the borrow."""
+    nt = tmp_path / "t.nt"
+    nt.write_text(
+        "".join(f'<http://e/{i}> <http://www.w3.org/2000/01/rdf-schema#label> "n{i}"@en .\n' for i in range(50)),
+        encoding="utf-8",
+    )
+    g = kglite.KnowledgeGraph()
+    caught: list[BaseException | None] = []
+
+    def progress(_event):
+        try:
+            g.describe()
+        except BaseException as e:  # noqa: BLE001
+            caught.append(e)
+        else:
+            caught.append(None)
+
+    g.load_ntriples(str(nt), progress=progress)
+    assert caught, "the progress callback never ran"
+    for outcome in caught:
+        assert isinstance(outcome, RuntimeError), repr(outcome)
+        assert "concurrently" in str(outcome)
+
+
+@_needs_sigint
+def test_ctrl_c_with_a_chaining_signal_handler_installed_over_kglites_does_not_crash():
+    """A library that installs a SIGINT handler over kglite's and chains to
+    what it replaced (polars does) made a Ctrl-C outside a Cypher call recurse
+    between the two handlers until the stack overflowed."""
+    import subprocess
+    import sys
+
+    code = (
+        "import os, signal, kglite\n"
+        "g = kglite.KnowledgeGraph()\n"
+        "g.cypher('RETURN 1')\n"  # arms kglite's handler
+        "import polars\n"  # installs a chaining handler over it
+        "polars.DataFrame({'a': [1]})\n"
+        "g.cypher('RETURN 1')\n"  # re-arms: kglite now forwards to polars'
+        "try:\n"
+        "    os.kill(os.getpid(), signal.SIGINT)\n"
+        "    for _ in range(100000): pass\n"
+        "except KeyboardInterrupt:\n"
+        "    print('interrupted')\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and "interrupted" in out.stdout, (out.returncode, out.stdout, out.stderr[-500:])

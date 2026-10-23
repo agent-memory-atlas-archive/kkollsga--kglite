@@ -102,7 +102,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn set_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -121,7 +121,8 @@ impl KnowledgeGraph {
                     "relationship",
                     relationship_keys.is_some(),
                 )?;
-                self.set_node_embeddings(
+                Self::set_node_embeddings(
+                    slf,
                     py,
                     node_type,
                     text_column,
@@ -130,7 +131,8 @@ impl KnowledgeGraph {
                     precision,
                 )
             }
-            Entity::Relationship => self.set_relationship_embeddings(
+            Entity::Relationship => Self::set_relationship_embeddings(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -147,7 +149,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn add_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -165,9 +167,17 @@ impl KnowledgeGraph {
                     "relationship",
                     relationship_keys.is_some(),
                 )?;
-                self.add_node_embeddings(py, node_type, text_column, node_rows(embeddings)?, metric)
+                Self::add_node_embeddings(
+                    slf,
+                    py,
+                    node_type,
+                    text_column,
+                    node_rows(embeddings)?,
+                    metric,
+                )
             }
-            Entity::Relationship => self.add_relationship_embeddings(
+            Entity::Relationship => Self::add_relationship_embeddings(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -183,7 +193,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn embed_texts(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -195,7 +205,8 @@ impl KnowledgeGraph {
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         match Entity::parse("embed_texts", entity)? {
-            Entity::Node => self.embed_node_texts(
+            Entity::Node => Self::embed_node_texts(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -205,7 +216,8 @@ impl KnowledgeGraph {
                 metric,
                 precision,
             ),
-            Entity::Relationship => self.embed_relationship_texts(
+            Entity::Relationship => Self::embed_relationship_texts(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -221,7 +233,7 @@ impl KnowledgeGraph {
     /// Read stored vectors: node vectors by id (default) or, with entity='relationship', relationship rows by endpoints.
     #[pyo3(signature = (node_type_or_text_column, text_column=None, *, entity="node", relationship_keys=None))]
     fn embeddings(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type_or_text_column: &str,
         text_column: Option<&str>,
@@ -237,7 +249,7 @@ impl KnowledgeGraph {
                     "relationship",
                     relationship_keys.is_some(),
                 )?;
-                self.node_embeddings(py, node_type_or_text_column, text_column)
+                Self::node_embeddings(slf, py, node_type_or_text_column, text_column)
             }
             Entity::Relationship => {
                 let text_column = text_column.ok_or_else(|| {
@@ -246,7 +258,8 @@ impl KnowledgeGraph {
                          text_column); text_column is missing",
                     )
                 })?;
-                self.relationship_embeddings(
+                Self::relationship_embeddings(
+                    slf,
                     py,
                     node_type_or_text_column,
                     text_column,
@@ -259,7 +272,7 @@ impl KnowledgeGraph {
     /// Read one stored vector: a node's by id (default) or, with entity='relationship', a relationship's by endpoint address.
     #[pyo3(signature = (node_type, text_column, node_id, *, entity="node", relationship_keys=None))]
     fn embedding(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -276,40 +289,47 @@ impl KnowledgeGraph {
                     "relationship",
                     relationship_keys.is_some(),
                 )?;
-                self.node_embedding(py, node_type, text_column, node_id)
+                Self::node_embedding(slf, py, node_type, text_column, node_id)
             }
-            Entity::Relationship => {
-                self.relationship_embedding(py, node_type, text_column, node_id, relationship_keys)
-            }
+            Entity::Relationship => Self::relationship_embedding(
+                slf,
+                py,
+                node_type,
+                text_column,
+                node_id,
+                relationship_keys,
+            ),
         }
     }
 
     /// The vector dimension of a node embedding store (default) or, with entity='relationship', a relationship one; None when absent.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn embedding_dim(
-        &self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<Option<usize>> {
         Ok(match Entity::parse("embedding_dim", entity)? {
-            Entity::Node => self.node_embedding_dim(node_type, text_column),
-            Entity::Relationship => self.relationship_embedding_dim(node_type, text_column),
+            Entity::Node => Self::node_embedding_dim(slf, node_type, text_column)?,
+            Entity::Relationship => Self::relationship_embedding_dim(slf, node_type, text_column)?,
         })
     }
 
     /// Remove a node embedding store (default) or, with entity='relationship', a relationship one; refuses a store that does not exist.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn remove_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<()> {
         match Entity::parse("remove_embeddings", entity)? {
-            Entity::Node => self.remove_node_embeddings(py, node_type, text_column),
-            Entity::Relationship => self.remove_relationship_embeddings(py, node_type, text_column),
+            Entity::Node => Self::remove_node_embeddings(slf, py, node_type, text_column),
+            Entity::Relationship => {
+                Self::remove_relationship_embeddings(slf, py, node_type, text_column)
+            }
         }
     }
 
@@ -318,7 +338,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn vector_search(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query_vector: Vec<f32>,
@@ -338,7 +358,8 @@ impl KnowledgeGraph {
             returning,
         };
         match search.route(entity)? {
-            Entity::Node => self.node_vector_search(
+            Entity::Node => Self::node_vector_search(
+                slf,
                 py,
                 text_column,
                 query_vector,
@@ -348,7 +369,8 @@ impl KnowledgeGraph {
                 search.returning,
                 exact,
             ),
-            Entity::Relationship => self.relationship_vector_search(
+            Entity::Relationship => Self::relationship_vector_search(
+                slf,
                 py,
                 text_column,
                 query_vector,
@@ -367,7 +389,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword across both routes.
     #[allow(clippy::too_many_arguments)]
     fn search_text(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query: &str,
@@ -387,7 +409,8 @@ impl KnowledgeGraph {
             returning,
         };
         match search.route(entity)? {
-            Entity::Node => self.node_search_text(
+            Entity::Node => Self::node_search_text(
+                slf,
                 py,
                 text_column,
                 query,
@@ -397,7 +420,8 @@ impl KnowledgeGraph {
                 search.returning,
                 exact,
             ),
-            Entity::Relationship => self.relationship_search_text(
+            Entity::Relationship => Self::relationship_search_text(
+                slf,
                 py,
                 text_column,
                 query,
@@ -416,7 +440,7 @@ impl KnowledgeGraph {
     // One Rust argument per HNSW knob plus the route.
     #[allow(clippy::too_many_arguments)]
     fn build_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -429,7 +453,8 @@ impl KnowledgeGraph {
         name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         match Entity::parse("build_vector_index", entity)? {
-            Entity::Node => self.build_node_vector_index(
+            Entity::Node => Self::build_node_vector_index(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -440,7 +465,8 @@ impl KnowledgeGraph {
                 auto_refresh_limit,
                 name,
             ),
-            Entity::Relationship => self.build_relationship_vector_index(
+            Entity::Relationship => Self::build_relationship_vector_index(
+                slf,
                 py,
                 node_type,
                 text_column,
@@ -457,37 +483,48 @@ impl KnowledgeGraph {
     /// Drop the HNSW index over a node embedding store (default) or, with entity='relationship', a relationship one.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn drop_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<bool> {
         match Entity::parse("drop_vector_index", entity)? {
-            Entity::Node => self.drop_node_vector_index(node_type, text_column),
-            Entity::Relationship => self.drop_relationship_vector_index(node_type, text_column),
+            Entity::Node => Self::drop_node_vector_index(slf, node_type, text_column),
+            Entity::Relationship => {
+                Self::drop_relationship_vector_index(slf, node_type, text_column)
+            }
         }
     }
 
     /// Whether an HNSW index is built over a node embedding store (default) or, with entity='relationship', a relationship one.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
-    fn has_vector_index(&self, node_type: &str, text_column: &str, entity: &str) -> PyResult<bool> {
+    fn has_vector_index(
+        slf: &Bound<'_, Self>,
+        node_type: &str,
+        text_column: &str,
+        entity: &str,
+    ) -> PyResult<bool> {
         match Entity::parse("has_vector_index", entity)? {
-            Entity::Node => self.has_node_vector_index(node_type, text_column),
-            Entity::Relationship => Ok(self.has_relationship_vector_index(node_type, text_column)),
+            Entity::Node => Self::has_node_vector_index(slf, node_type, text_column),
+            Entity::Relationship => {
+                Self::has_relationship_vector_index(slf, node_type, text_column)
+            }
         }
     }
 
     /// Fold outstanding vectors into a node store's HNSW index (default) or, with entity='relationship', a relationship store's.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn refresh_vector_index(
-        &self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<usize> {
         match Entity::parse("refresh_vector_index", entity)? {
-            Entity::Node => self.refresh_node_vector_index(node_type, text_column),
-            Entity::Relationship => self.refresh_relationship_vector_index(node_type, text_column),
+            Entity::Node => Self::refresh_node_vector_index(slf, node_type, text_column),
+            Entity::Relationship => {
+                Self::refresh_relationship_vector_index(slf, node_type, text_column)
+            }
         }
     }
 }

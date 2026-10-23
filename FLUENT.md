@@ -1410,9 +1410,9 @@ A corrupt / truncated / wrong-format file raises a typed, classifiable
 ## Concurrency
 
 A `KnowledgeGraph` is **single-owner**. A Cypher mutation releases the GIL, and a
-second thread that calls `cypher()`, `begin()`, `begin_read()` or `backup()` on
-the same graph waits for the write to finish. Other methods called during a write
-on another thread raise `RuntimeError`. Three safe patterns:
+second thread that calls any method on the same graph waits for the write to
+finish. A callback that calls the graph running it raises `RuntimeError`. Three
+safe patterns:
 
 ```python
 # Per-worker: give each thread its own graph (copy() is cheap; builds are fast)

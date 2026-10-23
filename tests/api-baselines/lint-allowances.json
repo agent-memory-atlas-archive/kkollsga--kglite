@@ -53,83 +53,83 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:all_paths:fn all_paths( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, max_hops: Option<usize>, max_results: Option<usize>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, direction: Optio::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:all_paths:fn all_paths( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, max_hops: Option<usize>, max_results: Option<usize>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, ::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:are_connected:fn are_connected( &self, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_ms: Option<u64>, ) -> PyResult<bool>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:are_connected:fn are_connected( slf: &Bound<'_, Self>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_ms: Option<u64>, ) -> PyResult<bool>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:betweenness_centrality:fn betweenness_centrality( &self, py: Python<'_>, normalized: Option<bool>, sample_size: Option<usize>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:betweenness_centrality:fn betweenness_centrality( slf: &Bound<'_, Self>, py: Python<'_>, normalized: Option<bool>, sample_size: Option<usize>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:closeness_centrality:fn closeness_centrality( &self, py: Python<'_>, normalized: Option<bool>, sample_size: Option<usize>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:closeness_centrality:fn closeness_centrality( slf: &Bound<'_, Self>, py: Python<'_>, normalized: Option<bool>, sample_size: Option<usize>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:pagerank:fn pagerank( &self, py: Python<'_>, damping_factor: Option<f64>, max_iterations: Option<usize>, tolerance: Option<f64>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:pagerank:fn pagerank( slf: &Bound<'_, Self>, py: Python<'_>, damping_factor: Option<f64>, max_iterations: Option<usize>, tolerance: Option<f64>, connection_types: Option<&Bound<'_, PyAny>>, top_k: Option<usize>, timeout_ms: Option<u64>, to_df: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path:fn shortest_path( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, weight_property: Option<String>, timeout_ms: Option<u64>, direction: Option<&str>, ) -> Py::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path:fn shortest_path( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, weight_property: Option<String>, timeout_ms: Option<u64>, direction: Optio::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_ids:fn shortest_path_ids( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, direction: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_ids:fn shortest_path_ids( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, direction: Option<&str>, ) -> PyResult<Py<PyA::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_indices:fn shortest_path_indices( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, direction: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_indices:fn shortest_path_indices( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, timeout_ms: Option<u64>, direction: Option<&str>, ) -> PyResult<Py::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_length:fn shortest_path_length( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, weight_property: Option<String>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_ms: Option<u64>, ::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_length:fn shortest_path_length( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: &str, target_id: &Bound<'_, PyAny>, weight_property: Option<String>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_m::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_lengths_batch:fn shortest_path_lengths_batch( &self, py: Python<'_>, node_type: &str, pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_ms: Option<u64>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_lengths_batch:fn shortest_path_lengths_batch( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, timeout_ms: Option<u64>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_lengths_from:fn shortest_path_lengths_from( &self, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: Option<&str>, target_ids: Option<Vec<Bound<'_, PyAny>>>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, max_hops: Option<usize>, timeou::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/algorithms.rs::fn:shortest_path_lengths_from:fn shortest_path_lengths_from( slf: &Bound<'_, Self>, py: Python<'_>, source_type: &str, source_id: &Bound<'_, PyAny>, target_type: Option<&str>, target_ids: Option<Vec<Bound<'_, PyAny>>>, connection_types: Option<Vec<String>>, via_types: Option<Vec<String>>, direction: Option<&str>, max_hops: Optio::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:add_connections:fn add_connections( &mut self, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Option<&Bound<'_, PyLi::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:add_connections:fn add_connections( slf: &Bound<'_, Self>, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Option<&Bo::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:create_connections:fn create_connections( &mut self, py: Python<'_>, connection_type: String, keep_selection: Option<bool>, conflict_handling: Option<String>, properties: Option<&Bound<'_, PyDict>>, source_type: Option<String>, target_type: Option<String>, ) -> PyResult<Self>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:create_connections:fn create_connections( slf: &Bound<'_, Self>, py: Python<'_>, connection_type: String, keep_selection: Option<bool>, conflict_handling: Option<String>, properties: Option<&Bound<'_, PyDict>>, source_type: Option<String>, target_type: Option<String>, ) -> PyResult<Self>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:replace_connections:fn replace_connections( &mut self, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Option<&Bound<'_, ::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/connection_pointers.rs::fn:replace_connections:fn replace_connections( slf: &Bound<'_, Self>, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Option::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:add_embeddings:fn add_embeddings( &mut self, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:add_embeddings:fn add_embeddings( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:build_vector_index:fn build_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, entity: &str, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:build_vector_index:fn build_vector_index( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, entity: &str, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:embed_texts:fn embed_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, entity: &str, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:embed_texts:fn embed_texts( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, entity: &str, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:search_text:fn search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<String, String>>, ) -> PyResu::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:search_text:fn search_text( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<String, Strin::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:set_embeddings:fn set_embeddings( &mut self, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:set_embeddings:fn set_embeddings( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, metric: Option<&str>, entity: &str, relationship_keys: Option<HashMap<String, String>>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:vector_search:fn vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<String, String>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/embedding_routes.rs::fn:vector_search:fn vector_search( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, entity: &str, types: Option<&Bound<'_, PyAny>>, relationship_keys: Option<HashMap<::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -157,47 +157,47 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_core.rs::fn:load_ntriples:fn load_ntriples( &mut self, py: Python<'_>, path: &str, predicates: Option<Vec<String>>, languages: Option<Vec<String>>, node_types: Option<&Bound<'_, PyDict>>, predicate_labels: Option<&Bound<'_, PyDict>>, max_entities: Option<usize>, max_triples: Option<u64>, verbose: bool, progress: Option<Py<Py::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_core.rs::fn:load_ntriples:fn load_ntriples( slf: &Bound<'_, Self>, py: Python<'_>, path: &str, predicates: Option<Vec<String>>, languages: Option<Vec<String>>, node_types: Option<&Bound<'_, PyDict>>, predicate_labels: Option<&Bound<'_, PyDict>>, max_entities: Option<usize>, max_triples: Option<u64>, verbose: bool, progress: ::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_core.rs::fn:to_bytes:fn to_bytes(&mut self, py: Python<'_>) -> PyResult<Py<PyBytes>>::clippy::wrong_self_convention",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_core.rs::fn:to_bytes:fn to_bytes(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyBytes>>::clippy::wrong_self_convention",
       "classification": "transitional"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_fluent.rs::fn:set_temporal:fn set_temporal( &mut self, py: Python<'_>, type_name: String, valid_from: String, valid_to: String, convention: Option<&str>, source_type: Option<String>, empty_when: Option<&str>, ) -> PyResult<()>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_fluent.rs::fn:set_temporal:fn set_temporal( slf: &Bound<'_, Self>, py: Python<'_>, type_name: String, valid_from: String, valid_to: String, convention: Option<&str>, source_type: Option<String>, empty_when: Option<&str>, ) -> PyResult<()>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:collect_children:fn collect_children( &mut self, py: Python<'_>, property: Option<&str>, r#where: Option<&Bound<'_, PyDict>>, sort: Option<&Bound<'_, PyAny>>, limit: Option<usize>, store_as: Option<&str>, max_length: Option<usize>, keep_selection: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:collect_children:fn collect_children( slf: &Bound<'_, Self>, py: Python<'_>, property: Option<&str>, r#where: Option<&Bound<'_, PyDict>>, sort: Option<&Bound<'_, PyAny>>, limit: Option<usize>, store_as: Option<&str>, max_length: Option<usize>, keep_selection: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:compare:fn compare( &mut self, target_type: &Bound<'_, PyAny>, method: &Bound<'_, PyAny>, filter: Option<&Bound<'_, PyDict>>, sort: Option<&Bound<'_, PyAny>>, limit: Option<usize>, level_index: Option<usize>, new_level: Option<bool>, ) -> PyResult<Self>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:compare:fn compare( slf: &Bound<'_, Self>, target_type: &Bound<'_, PyAny>, method: &Bound<'_, PyAny>, filter: Option<&Bound<'_, PyDict>>, sort: Option<&Bound<'_, PyAny>>, limit: Option<usize>, level_index: Option<usize>, new_level: Option<bool>, ) -> PyResult<Self>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:create_relationships:pub(super) fn create_relationships( &mut self, py: Python<'_>, connection_type: String, keep_selection: Option<bool>, conflict_handling: Option<String>, properties: Option<&Bound<'_, PyDict>>, source_type: Option<String>, target_type: Option<String>, ) -> PyResult<Self>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:create_relationships:pub(super) fn create_relationships( slf: &Bound<'_, Self>, py: Python<'_>, connection_type: String, keep_selection: Option<bool>, conflict_handling: Option<String>, properties: Option<&Bound<'_, PyDict>>, source_type: Option<String>, target_type: Option<String>, ) -> PyResult<Self>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:describe:fn describe( &self, types: Option<Vec<String>>, type_search: Option<String>, connections: Option<&Bound<'_, PyAny>>, cypher: Option<&Bound<'_, PyAny>>, fluent: Option<&Bound<'_, PyAny>>, max_pairs: Option<usize>, sample_truncate: Option<usize>, ) -> PyResult<String>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:describe:fn describe( slf: &Bound<'_, Self>, types: Option<Vec<String>>, type_search: Option<String>, connections: Option<&Bound<'_, PyAny>>, cypher: Option<&Bound<'_, PyAny>>, fluent: Option<&Bound<'_, PyAny>>, max_pairs: Option<usize>, sample_truncate: Option<usize>, ) -> PyResult<String>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:traverse:fn traverse( &self, py: Python<'_>, connection_type: String, level_index: Option<usize>, direction: Option<String>, sort_target: Option<&Bound<'_, PyAny>>, limit: Option<usize>, new_level: Option<bool>, at: Option<&Bound<'_, PyAny>>, during: Option<(Bound<'_, PyAny>, Bound<'_, PyAny>)>, temporal: Op::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:traverse:fn traverse( slf: &Bound<'_, Self>, py: Python<'_>, connection_type: String, level_index: Option<usize>, direction: Option<String>, sort_target: Option<&Bound<'_, PyAny>>, limit: Option<usize>, new_level: Option<bool>, at: Option<&Bound<'_, PyAny>>, during: Option<(Bound<'_, PyAny>, Bound<'_, PyAny>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:unique_values:fn unique_values( mut slf: PyRefMut<'_, Self>, property: String, group_by_parent: Option<bool>, level_index: Option<usize>, indices: Option<Vec<usize>>, store_as: Option<&str>, max_length: Option<usize>, keep_selection: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_introspection.rs::fn:unique_values:fn unique_values<'py>( slf: &Bound<'py, Self>, property: String, group_by_parent: Option<bool>, level_index: Option<usize>, indices: Option<Vec<usize>>, store_as: Option<&str>, max_length: Option<usize>, keep_selection: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:add_nodes:fn add_nodes( &mut self, data: &Bound<'_, PyAny>, node_type: String, unique_id_field: String, node_title_field: Option<String>, columns: Option<&Bound<'_, PyList>>, conflict_handling: Option<String>, skip_columns: Option<&Bound<'_, PyList>>, column_types: Option<&Bound<'_, PyDict>>, timeseries: Opti::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:add_nodes:fn add_nodes( slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>, node_type: String, unique_id_field: String, node_title_field: Option<String>, columns: Option<&Bound<'_, PyList>>, conflict_handling: Option<String>, skip_columns: Option<&Bound<'_, PyList>>, column_types: Option<&Bound<'_, PyDict>>, time::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:add_relationships:pub(super) fn add_relationships( &mut self, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Option<&B::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:add_relationships:pub(super) fn add_relationships( slf: &Bound<'_, Self>, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, column::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -205,7 +205,7 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:replace_relationships:pub(super) fn replace_relationships( &mut self, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, columns: Optio::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/kg_mutation.rs::fn:replace_relationships:pub(super) fn replace_relationships( slf: &Bound<'_, Self>, py: Python<'_>, data: Option<&Bound<'_, PyAny>>, connection_type: String, source_type: String, source_id_field: String, target_type: String, target_id_field: String, source_title_field: Option<String>, target_title_field: Option<String>, co::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -213,31 +213,31 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/quantization.rs::fn:quantization_recall:fn quantization_recall( &self, py: Python<'_>, node_type: &str, text_column: &str, sample: usize, top_k: usize, oversample: Option<u32>, entity: &str, seed: u64, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/quantization.rs::fn:quantization_recall:fn quantization_recall( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, sample: usize, top_k: usize, oversample: Option<u32>, entity: &str, seed: u64, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/recipes.rs::fn:set_recipe:fn set_recipe( &mut self, py: Python<'_>, recipe: &str, name: &str, description: &str, cypher: &str, parameters: Option<&Bound<'_, PyAny>>, recipe_description: Option<&str>, tool: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/recipes.rs::fn:set_recipe:fn set_recipe( slf: &Bound<'_, Self>, py: Python<'_>, recipe: &str, name: &str, description: &str, cypher: &str, parameters: Option<&Bound<'_, PyAny>>, recipe_description: Option<&str>, tool: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_search_text:pub(super) fn relationship_search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_search_text:pub(super) fn relationship_search_text( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query: &str, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_vector_search:pub(super) fn relationship_vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_search.rs::fn:relationship_vector_search:pub(super) fn relationship_vector_search( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: usize, metric: Option<&str>, to_df: bool, types: Option<&Bound<'_, PyAny>>, exact: bool, relationship_keys: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:build_relationship_vector_index:pub(super) fn build_relationship_vector_index( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:build_relationship_vector_index:pub(super) fn build_relationship_vector_index( slf: &Bound<'_, Self>, py: Python<'_>, relationship_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, batch_size: usize, show_progress: bool, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:embed_relationship_texts:pub(super) fn embed_relationship_texts( slf: &Bound<'_, Self>, py: Python<'_>, relationship_type: &str, text_column: &str, batch_size: usize, show_progress: bool, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:set_relationship_embeddings:pub(super) fn set_relationship_embeddings( &mut self, py: Python<'_>, relationship_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, relationship_keys: Option<HashMap<String, String>>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/relationship_vectors.rs::fn:set_relationship_embeddings:pub(super) fn set_relationship_embeddings( slf: &Bound<'_, Self>, py: Python<'_>, relationship_type: &str, text_column: &str, embeddings: &Bound<'_, PyAny>, relationship_keys: Option<HashMap<String, String>>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -273,7 +273,7 @@
       "classification": "api-shape"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/timeseries.rs::fn:add_timeseries:fn add_timeseries( &mut self, py: Python<'_>, node_type: String, data: &Bound<'_, PyAny>, fk: String, time_key: Vec<String>, channels: &Bound<'_, PyAny>, resolution: Option<String>, units: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/timeseries.rs::fn:add_timeseries:fn add_timeseries( slf: &Bound<'_, Self>, py: Python<'_>, node_type: String, data: &Bound<'_, PyAny>, fk: String, time_key: Vec<String>, channels: &Bound<'_, PyAny>, resolution: Option<String>, units: Option<HashMap<String, String>>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
@@ -281,19 +281,19 @@
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:build_node_vector_index:pub(super) fn build_node_vector_index( &mut self, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:build_node_vector_index:pub(super) fn build_node_vector_index( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>, metric: Option<&str>, auto_refresh_limit: Option<usize>, name: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:embed_node_texts:pub(super) fn embed_node_texts( &mut self, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:embed_node_texts:pub(super) fn embed_node_texts( slf: &Bound<'_, Self>, py: Python<'_>, node_type: &str, text_column: &str, batch_size: Option<usize>, show_progress: Option<bool>, mode: Option<&str>, metric: Option<&str>, precision: Option<&str>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_search_text:pub(super) fn node_search_text( &self, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_search_text:pub(super) fn node_search_text( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query: &str, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {
-      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_vector_search:pub(super) fn node_vector_search( &self, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
+      "identity": "crates/kglite-py/src/graph/pyapi/vector.rs::fn:node_vector_search:pub(super) fn node_vector_search( slf: &Bound<'_, Self>, py: Python<'_>, text_column: &str, query_vector: Vec<f32>, top_k: Option<usize>, metric: Option<&str>, to_df: Option<bool>, returning: Option<Vec<String>>, exact: Option<bool>, ) -> PyResult<Py<PyAny>>::clippy::too_many_arguments",
       "classification": "boundary"
     },
     {

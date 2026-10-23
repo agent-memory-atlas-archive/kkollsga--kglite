@@ -27,7 +27,7 @@ impl KnowledgeGraph {
     /// Replace the embedding store of a node type with vectors keyed by node id.
     #[pyo3(signature = (node_type, text_column, embeddings, metric=None, *, precision=None))]
     pub(super) fn set_node_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -35,15 +35,18 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let precision = super::quantization::parse_precision(precision)?;
         super::quantization::refuse_poincare(precision, metric)?;
         let entries = marshal_embedding_batch(embeddings)?;
-        let report = self.logged_write(|g| {
+        let report = this.logged_write(|g| {
             kglite_core::api::embeddings::set_embeddings(g, node_type, text_column, metric, entries)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })?;
-        let quantized = self.quantize_written(
+        let quantized = this.quantize_written(
             kglite_core::api::embeddings::EmbeddingEntity::Node,
             node_type,
             text_column,
@@ -68,16 +71,19 @@ impl KnowledgeGraph {
     /// Upsert node vectors keyed by id into a node type's embedding store, creating it if absent.
     #[pyo3(signature = (node_type, text_column, embeddings, metric=None))]
     pub(super) fn add_node_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
         embeddings: &Bound<'_, PyDict>,
         metric: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let entries = marshal_embedding_batch(embeddings)?;
-        let report = self.logged_write(|g| {
+        let report = this.logged_write(|g| {
             kglite_core::api::embeddings::add_embeddings(g, node_type, text_column, metric, entries)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })?;
@@ -94,7 +100,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (text_column, query_vector, top_k=10, metric=None, to_df=false, returning=None, exact=false))]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn node_vector_search(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query_vector: Vec<f32>,
@@ -104,7 +110,10 @@ impl KnowledgeGraph {
         returning: Option<Vec<String>>,
         exact: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let top_k = top_k.unwrap_or(10);
         let exact = exact.unwrap_or(false);
         let embedding_property = kglite_core::api::embeddings::store_name(text_column);
@@ -124,8 +133,8 @@ impl KnowledgeGraph {
                 })
             })
             .transpose()?;
-        let inner = self.graph().clone();
-        let selection = self.cursor.selection.clone();
+        let inner = this.graph().clone();
+        let selection = this.cursor.selection.clone();
         let results = py
             .detach(|| {
                 let options = kglite_core::api::algorithms::VectorSearchOptions::default()
@@ -149,7 +158,7 @@ impl KnowledgeGraph {
             let records: Vec<Py<PyAny>> = results
                 .iter()
                 .filter_map(|r| {
-                    self.graph()
+                    this.graph()
                         .graph
                         .node_view(r.node_idx)
                         .map(|node| (r, node))
@@ -161,12 +170,12 @@ impl KnowledgeGraph {
                         dict.set_item("title", py_out::value_to_py(py, &node.title())?)?;
                     }
                     if want("type") {
-                        dict.set_item("type", node.node_type_str(&self.graph().interner))?;
+                        dict.set_item("type", node.node_type_str(&this.graph().interner))?;
                     }
                     dict.set_item("score", r.score)?;
                     // properties_cloned reads PropertyStorage::Columnar (the
                     // durable shape); property_iter yields nothing for it.
-                    for (k, v) in node.properties_cloned(&self.graph().interner) {
+                    for (k, v) in node.properties_cloned(&this.graph().interner) {
                         if want(&k) {
                             dict.set_item(k, py_out::value_to_py(py, &v)?)?;
                         }
@@ -180,17 +189,17 @@ impl KnowledgeGraph {
 
         let py_list = PyList::empty(py);
         for r in &results {
-            if let Some(node) = self.graph().graph.node_view(r.node_idx) {
+            if let Some(node) = this.graph().graph.node_view(r.node_idx) {
                 let dict = PyDict::new(py);
                 dict.set_item("id", py_out::value_to_py(py, &node.id())?)?;
                 if want("title") {
                     dict.set_item("title", py_out::value_to_py(py, &node.title())?)?;
                 }
                 if want("type") {
-                    dict.set_item("type", node.node_type_str(&self.graph().interner))?;
+                    dict.set_item("type", node.node_type_str(&this.graph().interner))?;
                 }
                 dict.set_item("score", r.score)?;
-                for (k, v) in node.properties_cloned(&self.graph().interner) {
+                for (k, v) in node.properties_cloned(&this.graph().interner) {
                     if want(&k) {
                         dict.set_item(k, py_out::value_to_py(py, &v)?)?;
                     }
@@ -203,24 +212,35 @@ impl KnowledgeGraph {
     }
 
     /// The vector dimension of a node type's embedding store for a text column, or None when there is no such store.
-    pub(super) fn node_embedding_dim(&self, node_type: &str, text_column: &str) -> Option<usize> {
-        let key = kglite_core::api::embeddings::store_key(node_type, text_column);
-        self.graph().embeddings.get(&key).map(|s| s.dimension)
+    pub(super) fn node_embedding_dim(
+        slf: &Bound<'_, Self>,
+        node_type: &str,
+        text_column: &str,
+    ) -> PyResult<Option<usize>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok({
+            let key = kglite_core::api::embeddings::store_key(node_type, text_column);
+            this.graph().embeddings.get(&key).map(|s| s.dimension)
+        })
     }
 
     /// Provenance for one node or relationship embedding store, or None.
     #[pyo3(signature = (node_type, text_column, *, entity="node"))]
     fn embedding_info(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
         entity: &str,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         use kglite_core::api::embeddings::{embedding_info, EmbeddingEntity};
         let entity =
             EmbeddingEntity::parse(entity).map_err(crate::error_py::ArgumentError::new_err)?;
-        let Some(info) = embedding_info(self.graph(), entity, node_type, text_column) else {
+        let Some(info) = embedding_info(this.graph(), entity, node_type, text_column) else {
             return Ok(py.None());
         };
         let d = PyDict::new(py);
@@ -241,20 +261,23 @@ impl KnowledgeGraph {
     /// Copy every node and relationship embedding store from `other` into this graph.
     #[pyo3(signature = (other, *, relationship_keys=None))]
     fn copy_embeddings_from(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         other: &Bound<'_, KnowledgeGraph>,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         // Mirror extend()'s safe shape: clone the source Arc first (so a
         // self-copy doesn't double-borrow), then mutate self.
         let src_arc = match other.try_borrow() {
             Ok(o) => Arc::clone(o.graph()),
-            Err(_) => Arc::clone(self.graph()),
+            Err(_) => Arc::clone(this.graph()),
         };
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         let keys = relationship_keys.unwrap_or_default();
-        let report = self.logged_write(|g| {
+        let report = this.logged_write(|g| {
             g.copy_embeddings_with_relationships_from(&src_arc, &keys)
                 .map_err(crate::error_py::ArgumentError::new_err)
         })?;
@@ -270,10 +293,13 @@ impl KnowledgeGraph {
     }
 
     /// List every embedding store: node stores, then relationship stores.
-    fn list_embeddings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn list_embeddings(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         use kglite_core::api::embeddings::{list_embeddings, list_relationship_embeddings};
         let py_list = PyList::empty(py);
-        for info in list_embeddings(self.graph()) {
+        for info in list_embeddings(this.graph()) {
             let dict = PyDict::new(py);
             dict.set_item("entity", "node")?;
             dict.set_item("node_type", info.node_type)?;
@@ -289,7 +315,7 @@ impl KnowledgeGraph {
             )?;
             py_list.append(dict)?;
         }
-        for info in list_relationship_embeddings(self.graph()) {
+        for info in list_relationship_embeddings(this.graph()) {
             let dict = PyDict::new(py);
             dict.set_item("entity", "relationship")?;
             dict.set_item("relationship_type", info.relationship_type)?;
@@ -311,13 +337,16 @@ impl KnowledgeGraph {
     /// Diagnose embedding coverage per (type, text column) for nodes and relationships.
     #[pyo3(signature = (node_type=None, *, relationship_type=None))]
     fn embedding_diagnostics(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: Option<&str>,
         relationship_type: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         use kglite_core::api::embeddings::{embedding_diagnostics, EmbeddingEntity};
-        let rows = embedding_diagnostics(self.graph(), node_type, relationship_type)
+        let rows = embedding_diagnostics(this.graph(), node_type, relationship_type)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         let py_list = PyList::empty(py);
         for row in rows {
@@ -355,12 +384,15 @@ impl KnowledgeGraph {
 
     /// Remove a node type's embedding store for a text column; refuses a store that does not exist.
     pub(super) fn remove_node_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
     ) -> PyResult<()> {
-        self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| {
             kglite_core::api::embeddings::remove_embeddings(g, node_type, text_column)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })?;
@@ -371,12 +403,15 @@ impl KnowledgeGraph {
     /// Export node and relationship embeddings to a standalone .kgle file.
     #[pyo3(signature = (path, node_types=None, *, relationship_keys=None))]
     fn export_embeddings(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         path: &str,
         node_types: Option<Bound<'_, PyAny>>,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let filter = match &node_types {
             None => None,
             Some(obj) => {
@@ -399,7 +434,7 @@ impl KnowledgeGraph {
             }
         };
 
-        let inner = self.graph().clone();
+        let inner = this.graph().clone();
         let path_owned = path.to_string();
         let keys = relationship_keys.unwrap_or_default();
         let stats = py
@@ -419,16 +454,19 @@ impl KnowledgeGraph {
     /// Import node and relationship embeddings from a .kgle file.
     #[pyo3(signature = (path, *, relationship_keys=None, precision=None))]
     fn import_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         path: &str,
         relationship_keys: Option<HashMap<String, String>>,
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.check_durable_owner()?;
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.check_durable_owner()?;
         let precision = super::quantization::parse_precision(precision)?;
         let keys = relationship_keys.unwrap_or_default();
-        let stats = self.logged_write(|g| {
+        let stats = this.logged_write(|g| {
             file::import_embeddings_from_file(g, path, &keys).map_err(embedding_file_error)
         })?;
         // The import's decode buffers are dead; their pages are not reusable.
@@ -440,11 +478,11 @@ impl KnowledgeGraph {
         if precision.is_some() {
             use kglite_core::api::embeddings::EmbeddingEntity;
             for (type_name, column) in &stats.installed {
-                self.quantize_written(EmbeddingEntity::Node, type_name, column, precision)?;
+                this.quantize_written(EmbeddingEntity::Node, type_name, column, precision)?;
                 quantized += 1;
             }
             for (type_name, column) in &stats.relationships.installed {
-                self.quantize_written(EmbeddingEntity::Relationship, type_name, column, precision)?;
+                this.quantize_written(EmbeddingEntity::Relationship, type_name, column, precision)?;
                 quantized += 1;
             }
         }
@@ -518,17 +556,20 @@ impl KnowledgeGraph {
     /// Read node vectors by id: a whole node type's store, or the current selection's.
     #[pyo3(signature = (node_type_or_text_column, text_column=None))]
     pub(super) fn node_embeddings(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type_or_text_column: &str,
         text_column: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        let _arena_guard = self.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let _arena_guard = this.graph().begin_read_pass(); // disk arena guard (no-op on memory/mapped)
         let result = PyDict::new(py);
 
         if let Some(col) = text_column {
             let rows = kglite_core::api::embeddings::node_embeddings(
-                self.graph(),
+                this.graph(),
                 node_type_or_text_column,
                 col,
             )
@@ -544,29 +585,29 @@ impl KnowledgeGraph {
         // rule get_nodes() applies); one a query emptied stays empty.
         let col = node_type_or_text_column;
 
-        let selection = &self.cursor.selection;
+        let selection = &this.cursor.selection;
         let level = selection
             .get_level(selection.get_level_count().saturating_sub(1))
             .filter(|level| level.node_count() > 0);
         let nodes: Vec<NodeIndex> = match level {
             Some(level) => level.get_all_nodes(),
             None if selection.never_selected() => {
-                GraphRead::node_indices(&self.graph().graph).collect()
+                GraphRead::node_indices(&this.graph().graph).collect()
             }
             None => Vec::new(),
         };
 
         for node_idx in &nodes {
-            let node = match self.graph().graph.node_view(*node_idx) {
+            let node = match this.graph().graph.node_view(*node_idx) {
                 Some(n) => n,
                 None => continue,
             };
 
             let key = kglite_core::api::embeddings::store_key(
-                node.node_type_str(&self.graph().interner),
+                node.node_type_str(&this.graph().interner),
                 col,
             );
-            let store = match self.graph().embeddings.get(&key) {
+            let store = match this.graph().embeddings.get(&key) {
                 Some(s) => s,
                 None => continue,
             };
@@ -586,15 +627,18 @@ impl KnowledgeGraph {
 
     /// One node's stored vector by id, or None when the node or its vector is absent; refuses a store that does not exist.
     pub(super) fn node_embedding(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
         node_id: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let id = py_in::py_value_to_value(node_id)?;
         let vector =
-            kglite_core::api::embeddings::node_embedding(self.graph(), node_type, text_column, &id)
+            kglite_core::api::embeddings::node_embedding(this.graph(), node_type, text_column, &id)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         match vector {
             Some(vector) => PyList::new(py, vector)?.into_py_any(py),
@@ -605,15 +649,18 @@ impl KnowledgeGraph {
     /// Every vector in a relationship store, addressed by endpoint ids, as rows for an edge list and edge-feature matrix.
     #[pyo3(signature = (relationship_type, text_column, *, relationship_keys=None))]
     pub(super) fn relationship_embeddings(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         relationship_type: &str,
         text_column: &str,
         relationship_keys: Option<HashMap<String, String>>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let keys = relationship_keys.unwrap_or_default();
         let rows = kglite_core::api::embeddings::relationship_embeddings(
-            self.graph(),
+            this.graph(),
             relationship_type,
             text_column,
             &keys,
@@ -649,9 +696,16 @@ impl KnowledgeGraph {
     /// registered model automatically.  The model is **not** serialized —
     /// call ``set_embedder()`` again after ``load()``.
     #[pyo3(signature = (model,))]
-    fn set_embedder(&mut self, py: Python<'_>, model: Option<Py<PyAny>>) -> PyResult<()> {
+    fn set_embedder(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        model: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let Some(model) = model else {
-            self.embedder = None;
+            this.embedder = None;
             return Ok(());
         };
         let bound = model.bind(py);
@@ -664,7 +718,7 @@ impl KnowledgeGraph {
             PyErr::new::<pyo3::exceptions::PyAttributeError, _>("model must have an 'embed' method")
         })?;
         let adapter = crate::graph::embedder::py_adapter::PyEmbedderAdapter::new(py, model)?;
-        self.embedder = Some(Arc::new(adapter));
+        this.embedder = Some(Arc::new(adapter));
         Ok(())
     }
 
@@ -673,7 +727,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword, as embed_relationship_texts has.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn embed_node_texts(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -683,13 +737,16 @@ impl KnowledgeGraph {
         metric: Option<&str>,
         precision: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         // Refuse derived durable/CDC handles before loading or invoking the
         // model. `commit_wal()` retains the same guard after mutation as
         // defense in depth, but it cannot undo an already-installed store.
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         let precision = super::quantization::parse_precision(precision)?;
         super::quantization::refuse_poincare(precision, metric)?;
-        let (model, registered) = self.embedder_or_idle(
+        let (model, registered) = this.embedder_or_idle(
             kglite_core::api::embeddings::EmbeddingEntity::Node,
             node_type,
             text_column,
@@ -708,7 +765,7 @@ impl KnowledgeGraph {
         // A type with no nodes stays the `{'embedded': 0}` no-op it has always
         // been; a type the graph has never *seen* is a mistake and gets
         // `set_embeddings`' complaint, before the model is loaded.
-        if !self.graph().type_indices.contains_key(node_type) {
+        if !this.graph().type_indices.contains_key(node_type) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Node type '{}' does not exist in the graph",
                 node_type
@@ -747,7 +804,7 @@ impl KnowledgeGraph {
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
         };
-        let outcome = self.logged_write_lazy(|inner| {
+        let outcome = this.logged_write_lazy(|inner| {
             let outcome = kglite_core::api::embeddings::embed_property(
                 inner,
                 node_type,
@@ -762,7 +819,7 @@ impl KnowledgeGraph {
             }
             outcome.map_err(|error| embed_error(error, node_type, text_column))
         })?;
-        let quantized = self.quantize_written(
+        let quantized = this.quantize_written(
             kglite_core::api::embeddings::EmbeddingEntity::Node,
             node_type,
             text_column,
@@ -788,7 +845,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (text_column, query, top_k=10, metric=None, to_df=false, returning=None, exact=false))]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn node_search_text(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         text_column: &str,
         query: &str,
@@ -798,8 +855,12 @@ impl KnowledgeGraph {
         returning: Option<Vec<String>>,
         exact: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        let query_vector = self.embed_query(py, query)?;
-        self.node_vector_search(
+        let query_vector = {
+            let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+            guard.embed_query(py, query)?
+        };
+        Self::node_vector_search(
+            slf,
             py,
             text_column,
             query_vector,
@@ -816,7 +877,7 @@ impl KnowledgeGraph {
     // One Rust argument per HNSW knob the Python signature exposes.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_node_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -827,9 +888,12 @@ impl KnowledgeGraph {
         auto_refresh_limit: Option<usize>,
         name: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let named = NamedIndex::node(IndexClass::Vector, node_type, &[text_column.to_string()]);
         // Build off the GIL — pure CPU over the contiguous vector buffer.
-        let report = self.logged_write(|g| {
+        let report = this.logged_write(|g| {
             claim_name(g, name, &named)?;
             let report = py
                 .detach(|| {
@@ -859,11 +923,14 @@ impl KnowledgeGraph {
     /// Drop the HNSW index over a node embedding store (the vectors stay); True if one was dropped.
     #[pyo3(signature = (node_type, text_column))]
     pub(super) fn drop_node_vector_index(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
     ) -> PyResult<bool> {
-        self.logged_write(|g| {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| {
             Ok(kglite_core::api::embeddings::drop_vector_index(
                 g,
                 node_type,
@@ -875,12 +942,15 @@ impl KnowledgeGraph {
     /// Whether an HNSW index is currently built over a node embedding store.
     #[pyo3(signature = (node_type, text_column))]
     pub(super) fn has_node_vector_index(
-        &self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
     ) -> PyResult<bool> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         Ok(kglite_core::api::embeddings::has_vector_index(
-            self.graph(),
+            this.graph(),
             node_type,
             text_column,
         ))
@@ -889,11 +959,14 @@ impl KnowledgeGraph {
     /// Fold every outstanding vector into a node store's HNSW index now; refuses when no index is built.
     #[pyo3(signature = (node_type, text_column))]
     pub(super) fn refresh_node_vector_index(
-        &self,
+        slf: &Bound<'_, Self>,
         node_type: &str,
         text_column: &str,
     ) -> PyResult<usize> {
-        kglite_core::api::embeddings::refresh_vector_index(self.graph(), node_type, text_column)
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        kglite_core::api::embeddings::refresh_vector_index(this.graph(), node_type, text_column)
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 }

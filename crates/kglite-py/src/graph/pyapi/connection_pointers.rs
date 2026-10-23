@@ -14,7 +14,7 @@ impl KnowledgeGraph {
     // The loader arguments of add_relationships, passed through unchanged.
     #[allow(clippy::too_many_arguments)]
     fn add_connections(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
         connection_type: String,
@@ -37,7 +37,8 @@ impl KnowledgeGraph {
         empty_when: Option<&str>,
         distinct: bool,
     ) -> PyResult<Py<PyAny>> {
-        self.add_relationships(
+        Self::add_relationships(
+            slf,
             py,
             data,
             connection_type,
@@ -67,7 +68,7 @@ impl KnowledgeGraph {
     // The loader arguments of replace_relationships, passed through unchanged.
     #[allow(clippy::too_many_arguments)]
     fn replace_connections(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         data: Option<&Bound<'_, PyAny>>,
         connection_type: String,
@@ -89,7 +90,8 @@ impl KnowledgeGraph {
         convention: Option<&str>,
         empty_when: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
-        self.replace_relationships(
+        Self::replace_relationships(
+            slf,
             py,
             data,
             connection_type,
@@ -116,38 +118,39 @@ impl KnowledgeGraph {
     /// Pointer to add_relationships_bulk(), the primary spelling; a connection is a relationship.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
     fn add_connections_bulk(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_relationships_bulk(py, connections, git_sha, modified_by)
+        Self::add_relationships_bulk(slf, py, connections, git_sha, modified_by)
     }
 
     /// Pointer to add_relationships_from_source(), the primary spelling; a connection is a relationship.
     #[pyo3(signature = (connections, *, git_sha=None, modified_by=None))]
     fn add_connections_from_source(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         connections: &Bound<'_, PyList>,
         git_sha: Option<String>,
         modified_by: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.add_relationships_from_source(py, connections, git_sha, modified_by)
+        Self::add_relationships_from_source(slf, py, connections, git_sha, modified_by)
     }
 
     /// Pointer to relationships(), the primary spelling; a connection is a relationship.
     #[pyo3(signature = (indices=None, parent_info=None, include_node_properties=None,
                         flatten_single_parent=true))]
     fn connections(
-        &self,
+        slf: &Bound<'_, Self>,
         indices: Option<Vec<usize>>,
         parent_info: Option<bool>,
         include_node_properties: Option<bool>,
         flatten_single_parent: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
-        self.relationships(
+        Self::relationships(
+            slf,
             indices,
             parent_info,
             include_node_properties,
@@ -156,8 +159,8 @@ impl KnowledgeGraph {
     }
 
     /// Pointer to relationship_types(), the primary spelling; a connection is a relationship.
-    fn connection_types(&self) -> PyResult<Py<PyAny>> {
-        self.relationship_types()
+    fn connection_types(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        Self::relationship_types(slf)
     }
 
     /// Pointer to create_relationships(), the primary spelling; a connection is a relationship.
@@ -165,7 +168,7 @@ impl KnowledgeGraph {
     // The arguments of create_relationships, passed through unchanged.
     #[allow(clippy::too_many_arguments)]
     fn create_connections(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         connection_type: String,
         keep_selection: Option<bool>,
@@ -174,7 +177,8 @@ impl KnowledgeGraph {
         source_type: Option<String>,
         target_type: Option<String>,
     ) -> PyResult<Self> {
-        self.create_relationships(
+        Self::create_relationships(
+            slf,
             py,
             connection_type,
             keep_selection,

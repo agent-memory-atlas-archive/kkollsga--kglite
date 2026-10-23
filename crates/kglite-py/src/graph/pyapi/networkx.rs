@@ -104,7 +104,10 @@ impl KnowledgeGraph {
     ///     scores = nx.pagerank(nxg)
     ///     ```
     #[pyo3(signature = (*, node_key = "id"))]
-    fn to_networkx(&self, py: Python<'_>, node_key: &str) -> PyResult<Py<PyAny>> {
+    fn to_networkx(slf: &Bound<'_, Self>, py: Python<'_>, node_key: &str) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let key_mode = NodeKeyMode::parse(node_key)?;
         let nx = py.import("networkx").map_err(|_| {
             PyErr::new::<pyo3::exceptions::PyImportError, _>(
@@ -117,7 +120,7 @@ impl KnowledgeGraph {
         let add_node = nxg.getattr("add_node")?;
         let add_edge = nxg.getattr("add_edge")?;
 
-        let graph = self.graph();
+        let graph = this.graph();
         let interner = &graph.interner;
         // Direct GraphRead traversal — hold the disk arena guard while
         // borrowed node/edge weights live (arena protocol; no-op in

@@ -15,11 +15,14 @@ impl KnowledgeGraph {
     /// Export the graph or current selection to files in the specified format.
     #[pyo3(signature = (path, format=None, selection_only=None))]
     fn export(
-        &self,
+        slf: &Bound<'_, Self>,
         path: &str,
         format: Option<&str>,
         selection_only: Option<bool>,
     ) -> PyResult<()> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         // Infer format from extension if not specified
         let fmt = format.unwrap_or_else(|| {
             if path.ends_with(".graphml") {
@@ -42,30 +45,30 @@ impl KnowledgeGraph {
         });
 
         let selection: Option<&CurrentSelection> =
-            crate::graph::resolve_export_selection(self, selection_only);
+            crate::graph::resolve_export_selection(this, selection_only);
 
         match fmt {
             "graphml" => {
-                let content = kglite_core::api::io::to_graphml(self.graph(), selection)
+                let content = kglite_core::api::io::to_graphml(this.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "gexf" => {
-                let content = kglite_core::api::io::to_gexf(self.graph(), selection)
+                let content = kglite_core::api::io::to_gexf(this.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "d3" | "json" => {
-                let content = kglite_core::api::io::to_d3_json(self.graph(), selection)
+                let content = kglite_core::api::io::to_d3_json(this.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "csv" => {
                 let (nodes_path, edges_path) = paired_csv_paths(Path::new(path))?;
-                let (nodes_csv, edges_csv) = kglite_core::api::io::to_csv(self.graph(), selection)
+                let (nodes_csv, edges_csv) = kglite_core::api::io::to_csv(this.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
                 std::fs::write(&nodes_path, nodes_csv)
@@ -75,10 +78,10 @@ impl KnowledgeGraph {
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             }
             "nq" | "trig" => {
-                self.write_rdf(path, fmt, None, false, selection)?;
+                this.write_rdf(path, fmt, None, false, selection)?;
             }
             "sqlite" => {
-                let content = kglite_core::api::io::to_sqlite_dump(self.graph(), selection)
+                let content = kglite_core::api::io::to_sqlite_dump(this.graph(), selection)
                     .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
                 std::fs::write(path, content)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
@@ -97,21 +100,24 @@ impl KnowledgeGraph {
     /// Export the graph to RDF 1.2 (N-Quads or TriG) that `load_rdf` reads back.
     #[pyo3(signature = (path, format=None, base=None, schema_org=false, selection_only=None))]
     fn export_rdf(
-        &self,
+        slf: &Bound<'_, Self>,
         path: &str,
         format: Option<&str>,
         base: Option<&str>,
         schema_org: bool,
         selection_only: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let selection: Option<&CurrentSelection> =
-            crate::graph::resolve_export_selection(self, selection_only);
+            crate::graph::resolve_export_selection(this, selection_only);
         let fmt = format.unwrap_or(if path.ends_with(".trig") {
             "trig"
         } else {
             "nq"
         });
-        let summary = self.write_rdf(path, fmt, base, schema_org, selection)?;
+        let summary = this.write_rdf(path, fmt, base, schema_org, selection)?;
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("output_path", &summary.output_path)?;
@@ -125,22 +131,25 @@ impl KnowledgeGraph {
     /// Export graph data to a CSV directory tree with a re-import blueprint.
     #[pyo3(signature = (path, selection_only=None, verbose=false))]
     fn export_csv(
-        &self,
+        slf: &Bound<'_, Self>,
         path: &str,
         selection_only: Option<bool>,
         verbose: bool,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         // Check if selection actually has nodes (not just levels)
         // Same pattern as export_string() — avoids empty export when
         // add_nodes creates a selection level with 0 nodes.
         let selection: Option<&CurrentSelection> =
-            crate::graph::resolve_export_selection(self, selection_only);
+            crate::graph::resolve_export_selection(this, selection_only);
 
         let summary = kglite_core::api::io::to_csv_dir(
-            self.graph(),
+            this.graph(),
             path,
             selection,
-            &self.graph().parent_types,
+            &this.graph().parent_types,
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
@@ -178,8 +187,10 @@ impl KnowledgeGraph {
     /// filter (also available as ``kglite export-text <file>``). Reserved
     /// provenance keys (``updated_at``/``git_sha``) are omitted so diffs aren't
     /// swamped by per-write metadata churn.
-    fn to_text(&self) -> String {
-        kglite_core::api::io::to_text(self.graph())
+    fn to_text(slf: &Bound<'_, Self>) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(kglite_core::api::io::to_text(this.graph()))
     }
 
     /// Export to a string instead of a file.
@@ -210,22 +221,25 @@ impl KnowledgeGraph {
     ///     Use selection_only=False to always export the entire graph
     #[pyo3(signature = (format=None, selection_only=None))]
     fn export_string(
-        &self,
+        slf: &Bound<'_, Self>,
         format: Option<&str>,
         selection_only: Option<bool>,
     ) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let selection: Option<&CurrentSelection> =
-            crate::graph::resolve_export_selection(self, selection_only);
+            crate::graph::resolve_export_selection(this, selection_only);
         let format = format.unwrap_or("json");
 
         match format {
-            "graphml" => kglite_core::api::io::to_graphml(self.graph(), selection)
+            "graphml" => kglite_core::api::io::to_graphml(this.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "gexf" => kglite_core::api::io::to_gexf(self.graph(), selection)
+            "gexf" => kglite_core::api::io::to_gexf(this.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "d3" | "json" => kglite_core::api::io::to_d3_json(self.graph(), selection)
+            "d3" | "json" => kglite_core::api::io::to_d3_json(this.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
-            "sqlite" => kglite_core::api::io::to_sqlite_dump(self.graph(), selection)
+            "sqlite" => kglite_core::api::io::to_sqlite_dump(this.graph(), selection)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>),
             "csv" => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "export_string() cannot produce 'csv': the CSV export writes two \

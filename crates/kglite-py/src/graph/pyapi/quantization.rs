@@ -93,7 +93,7 @@ impl KnowledgeGraph {
     /// Build, replace or drop the quantized scan copy of a node store (default) or, with entity='relationship', a relationship store.
     #[pyo3(signature = (node_type, text_column, precision, oversample=None, *, entity="node"))]
     fn quantize_embeddings(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -101,11 +101,14 @@ impl KnowledgeGraph {
         oversample: Option<u32>,
         entity: &str,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let entity = parse_entity(entity)?;
         let precision = parse_precision(precision)?;
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         // Building reads every vector once; keep the GIL free for other threads.
-        let report = self.unlogged_metered_write(|g| {
+        let report = this.unlogged_metered_write(|g| {
             py.detach(|| {
                 quantize_embeddings(g, entity, node_type, text_column, precision, oversample)
             })
@@ -136,7 +139,7 @@ impl KnowledgeGraph {
     // One Rust argument per Python keyword.
     #[allow(clippy::too_many_arguments)]
     fn quantization_recall(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         node_type: &str,
         text_column: &str,
@@ -146,8 +149,11 @@ impl KnowledgeGraph {
         entity: &str,
         seed: u64,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let entity = parse_entity(entity)?;
-        let graph = self.graph();
+        let graph = this.graph();
         let report = py
             .detach(|| {
                 quantization_recall(

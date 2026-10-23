@@ -4,10 +4,10 @@
 //! time, so splitting them across files is purely structural — no runtime
 //! impact.
 
+use super::borrow::{borrow_mut_waiting, borrow_waiting};
 use crate::datatypes::{py_in, py_out};
 use crate::graph::languages::cypher;
 use crate::graph::pyapi::transaction::Transaction;
-use crate::graph::write_gate::lifecycle_graph_mut;
 use crate::graph::KnowledgeGraph;
 use crate::util::EnterKg;
 use kglite_core::api::introspection;
@@ -109,59 +109,6 @@ pub(crate) fn save_error_to_pyerr(error: io::SaveError) -> PyErr {
     }
 }
 
-/// Error for a borrow conflict that waiting cannot resolve: an embedder
-/// callback re-entering the graph whose operation invoked it. A second
-/// thread never sees it from `cypher()`, `begin()`, `begin_read()` or
-/// `backup()`: those wait (see [`borrow_waiting`]). PyO3's own
-/// `Already borrowed` still surfaces from the other `&self` methods.
-///
-/// Kept in the Python wrapper (not core `KgError`): the borrow guard is a
-/// PyO3/GIL concern, so a non-Python binding never raises it. Raised as a
-/// `RuntimeError` so existing `except RuntimeError` handlers still catch
-/// it (`PyBorrowError` is itself a `RuntimeError`).
-pub(crate) fn concurrent_access_pyerr() -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        "KnowledgeGraph accessed concurrently: an embedder callback re-entered the graph \
-         whose operation is running it, which would wait on itself. Do not call the graph \
-         from inside `embed()`. To query a graph from other threads while it works, use \
-         a Session: `g.session()` returns a thread-safe handle whose `cypher()` reads run \
-         lock-free and `execute()` writes serialize; `g.freeze()` gives a lock-free \
-         read-only snapshot. See docs/concepts/concurrency.md.",
-    )
-}
-
-/// Retry `attempt` until it yields, sleeping with the GIL released between
-/// tries (a waiter that kept the GIL would starve the writer it waits on) and
-/// polling for signals so Ctrl-C ends the wait.
-fn wait_for_borrow<T>(py: Python<'_>, mut attempt: impl FnMut() -> Option<T>) -> PyResult<T> {
-    let mut pause = std::time::Duration::from_micros(20);
-    loop {
-        if let Some(guard) = attempt() {
-            return Ok(guard);
-        }
-        if crate::graph::embedder::py_adapter::in_embedder_callback() {
-            return Err(concurrent_access_pyerr());
-        }
-        py.detach(|| std::thread::sleep(pause));
-        py.check_signals()?;
-        pause = (pause * 2).min(std::time::Duration::from_millis(1));
-    }
-}
-
-/// Shared borrow of the graph, waiting out a writer on another thread.
-pub(crate) fn borrow_waiting<'py>(
-    slf: &Bound<'py, KnowledgeGraph>,
-) -> PyResult<PyRef<'py, KnowledgeGraph>> {
-    wait_for_borrow(slf.py(), || slf.try_borrow().ok())
-}
-
-/// Exclusive borrow of the graph, waiting out any other holder.
-pub(crate) fn borrow_mut_waiting<'py>(
-    slf: &Bound<'py, KnowledgeGraph>,
-) -> PyResult<PyRefMut<'py, KnowledgeGraph>> {
-    wait_for_borrow(slf.py(), || slf.try_borrow_mut().ok())
-}
-
 /// Format an integer with comma thousands separators ("1234567" → "1,234,567").
 /// Used by `KnowledgeGraph::__repr__` — keeps large-graph summaries legible
 /// without pulling a dep just for `num-format`.
@@ -252,7 +199,10 @@ impl KnowledgeGraph {
     /// or ``describe()``. The caches are persisted by ``save()`` and
     /// restored by ``load()``, so this only needs to be called once
     /// after building or mutating a graph.
-    fn rebuild_caches(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn rebuild_caches(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         // Order matters on large disk graphs: `compute_type_connectivity`
         // runs first so its single sequential sweep of `edge_endpoints.bin`
         // also warms the page cache for the histogram builder below. On
@@ -266,7 +216,7 @@ impl KnowledgeGraph {
         // Wikidata-scale graphs must not wedge every other Python thread.
 
         let triples = {
-            let inner = self.graph();
+            let inner = this.graph();
             py.detach(|| introspection::compute_type_connectivity(inner))
         };
 
@@ -274,7 +224,7 @@ impl KnowledgeGraph {
         // histogram so the Cypher planner's fast path for unanchored
         // aggregate queries works. Legacy disk graphs built before v0.7.13
         // won't have the histogram files — this call creates them.
-        self.unlogged_write(|graph| {
+        this.unlogged_write(|graph| {
             if let kglite_core::api::storage::GraphBackend::Disk(ref mut dg) = graph.graph {
                 py.detach(|| dg.rebuild_peer_count_histogram())
                     .map_err(|e| crate::error_py::kg_to_pyerr(crate::error::KgError::FileIo(e)))?;
@@ -287,7 +237,7 @@ impl KnowledgeGraph {
         // Poison-recovering: the guarded state is swapped in place (never left
         // half-written), so a panic in some other holder must not turn every
         // later rebuild into one.
-        *self
+        *this
             .graph()
             .edge_type_counts_cache
             .write()
@@ -299,7 +249,7 @@ impl KnowledgeGraph {
         // type) must learn every source type its stored edges leave, or the
         // shared-relationship ownership rule lets another source type's load
         // duplicate the pairs it shares with them.
-        self.unlogged_write(|graph| {
+        this.unlogged_write(|graph| {
             for (conn_type, (src_types, tgt_types)) in derived.endpoints {
                 let info = graph
                     .connection_type_metadata_mut()
@@ -310,7 +260,7 @@ impl KnowledgeGraph {
             }
         });
 
-        self.graph().set_type_connectivity(triples);
+        this.graph().set_type_connectivity(triples);
         Ok(())
     }
 
@@ -320,29 +270,40 @@ impl KnowledgeGraph {
     /// backend — does not materialise per-type breakdowns. For full
     /// per-type structure use ``schema()`` or ``describe()``.
     #[getter]
-    fn shape(&self) -> (usize, usize) {
-        use kglite_core::api::GraphRead;
-        (
-            self.graph().graph.node_count(),
-            self.graph().graph.edge_count(),
-        )
+    fn shape(slf: &Bound<'_, Self>) -> PyResult<(usize, usize)> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok({
+            use kglite_core::api::GraphRead;
+            (
+                this.graph().graph.node_count(),
+                this.graph().graph.edge_count(),
+            )
+        })
     }
 
     /// Human-readable summary used by ``print(graph)`` and the REPL.
     /// Format: ``KnowledgeGraph(N nodes, M edges)`` with thousands
     /// separators for legibility on large graphs.
-    fn __repr__(&self) -> String {
-        use kglite_core::api::GraphRead;
-        format!(
-            "KnowledgeGraph({} nodes, {} edges)",
-            fmt_with_commas(self.graph().graph.node_count()),
-            fmt_with_commas(self.graph().graph.edge_count()),
-        )
+    fn __repr__(slf: &Bound<'_, Self>) -> PyResult<String> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok({
+            use kglite_core::api::GraphRead;
+            format!(
+                "KnowledgeGraph({} nodes, {} edges)",
+                fmt_with_commas(this.graph().graph.node_count()),
+                fmt_with_commas(this.graph().graph.edge_count()),
+            )
+        })
     }
 
     /// Return a full schema overview of the graph.
-    fn schema(&self) -> PyResult<Py<PyAny>> {
-        let overview = introspection::compute_schema(self.graph());
+    fn schema(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let overview = introspection::compute_schema(this.graph());
         Python::attach(|py| {
             let result = PyDict::new(py);
 
@@ -379,8 +340,11 @@ impl KnowledgeGraph {
     }
 
     /// Every relationship type with its count and endpoint node types.
-    pub(super) fn relationship_types(&self) -> PyResult<Py<PyAny>> {
-        let stats = introspection::compute_connection_type_stats(self.graph());
+    pub(super) fn relationship_types(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let stats = introspection::compute_connection_type_stats(this.graph());
         Python::attach(|py| {
             let result_list = PyList::empty(py);
             for ct in &stats {
@@ -397,11 +361,18 @@ impl KnowledgeGraph {
 
     /// Return property statistics for a node type.
     #[pyo3(signature = (node_type, max_values=20))]
-    fn properties(&self, node_type: &str, max_values: usize) -> PyResult<Py<PyAny>> {
+    fn properties(
+        slf: &Bound<'_, Self>,
+        node_type: &str,
+        max_values: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         // Full scan → exact distinct-value stats for ordinary types; only
         // Wikidata-scale types sample (and are then flagged `approx`), so a
         // sampled `unique` is never mistaken for an exact count.
-        let count = self
+        let count = this
             .graph()
             .type_indices
             .get(node_type)
@@ -416,7 +387,7 @@ impl KnowledgeGraph {
         // key: `KeyError` is reserved for a missing result column or dict key
         // (docs/python/error-handling.md), which a type name is not.
         let stats =
-            introspection::compute_property_stats(self.graph(), node_type, max_values, sample)
+            introspection::compute_property_stats(this.graph(), node_type, max_values, sample)
                 .map_err(|message| {
                     crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message))
                 })?;
@@ -433,7 +404,7 @@ impl KnowledgeGraph {
                 if let Some(ref vals) = prop.values {
                     let py_vals = PyList::empty(py);
                     for v in vals {
-                        py_vals.append(py_out::graph_value_to_py(py, &self.graph().graph, v)?)?;
+                        py_vals.append(py_out::graph_value_to_py(py, &this.graph().graph, v)?)?;
                     }
                     prop_dict.set_item("values", py_vals)?;
                 }
@@ -444,8 +415,11 @@ impl KnowledgeGraph {
     }
 
     /// Return connection topology for a node type (outgoing and incoming).
-    fn neighbors_schema(&self, node_type: &str) -> PyResult<Py<PyAny>> {
-        let ns = introspection::compute_neighbors_schema(self.graph(), node_type).map_err(
+    fn neighbors_schema(slf: &Bound<'_, Self>, node_type: &str) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let ns = introspection::compute_neighbors_schema(this.graph(), node_type).map_err(
             |message| crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(message)),
         )?;
         Python::attach(|py| {
@@ -483,7 +457,14 @@ impl KnowledgeGraph {
     ///   - ``sample(3)`` — sample 3 nodes from the current selection
     ///   - ``sample()`` — sample 5 nodes from the current selection
     #[pyo3(signature = (node_type=None, n=None))]
-    fn sample(&self, node_type: Option<&Bound<'_, PyAny>>, n: Option<i64>) -> PyResult<Py<PyAny>> {
+    fn sample(
+        slf: &Bound<'_, Self>,
+        node_type: Option<&Bound<'_, PyAny>>,
+        n: Option<i64>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let default_n = 5usize;
 
         // `i64`, not `usize`: PyO3 rejects a negative `usize` argument before
@@ -518,20 +499,20 @@ impl KnowledgeGraph {
         };
 
         if let Some(nt) = node_type {
-            let type_indices = self.graph().type_indices.get(&nt).ok_or_else(|| {
+            let type_indices = this.graph().type_indices.get(&nt).ok_or_else(|| {
                 crate::error_py::kg_to_pyerr(crate::error::KgError::Argument(
                     (format!("Node type '{}' not found", nt)).to_string(),
                 ))
             })?;
             let indices: Vec<_> = type_indices.iter().take(count).collect();
             let view = crate::graph::pyapi::result_view::ResultView::from_nodes_with_graph(
-                self.graph(),
+                this.graph(),
                 &indices,
             );
             return Python::attach(|py| Py::new(py, view).map(|v| v.into_any()));
         }
 
-        let level_count = self.cursor.selection.get_level_count();
+        let level_count = this.cursor.selection.get_level_count();
         if level_count == 0 {
             return Err(crate::error_py::kg_to_pyerr(
                 crate::error::KgError::Argument(
@@ -540,7 +521,7 @@ impl KnowledgeGraph {
             ));
         }
         let last = level_count - 1;
-        let level = self
+        let level = this
             .cursor
             .selection
             .get_level(last)
@@ -552,18 +533,21 @@ impl KnowledgeGraph {
         let all_indices = level.get_all_nodes();
         let indices: Vec<_> = all_indices.into_iter().take(count).collect();
         let view = crate::graph::pyapi::result_view::ResultView::from_nodes_with_graph(
-            self.graph(),
+            this.graph(),
             &indices,
         );
         Python::attach(|py| Py::new(py, view).map(|v| v.into_any()))
     }
 
     /// Return a unified list of all indexes (single-property and composite).
-    fn indexes(&self) -> PyResult<Py<PyAny>> {
+    fn indexes(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         Python::attach(|py| {
             let result_list = PyList::empty(py);
 
-            for (node_type, property) in self.graph().property_indices.keys() {
+            for (node_type, property) in this.graph().property_indices.keys() {
                 let d = PyDict::new(py);
                 d.set_item("node_type", node_type.as_str())?;
                 d.set_item("property", property.as_str())?;
@@ -571,7 +555,7 @@ impl KnowledgeGraph {
                 result_list.append(d)?;
             }
 
-            for (node_type, properties) in self.graph().composite_indices.keys() {
+            for (node_type, properties) in this.graph().composite_indices.keys() {
                 let d = PyDict::new(py);
                 d.set_item("node_type", node_type.as_str())?;
                 d.set_item("properties", properties)?;
@@ -584,8 +568,11 @@ impl KnowledgeGraph {
     }
 
     /// Clear the current selection (resets to empty).
-    fn clear(&mut self) -> PyResult<()> {
-        self.cursor.selection.clear();
+    fn clear(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.cursor.selection.clear();
         Ok(())
     }
 
@@ -594,7 +581,7 @@ impl KnowledgeGraph {
     #[pyo3(signature = (path, *, predicates=None, languages=None, node_types=None, predicate_labels=None, max_entities=None, max_triples=None, verbose=false, progress=None))]
     #[allow(clippy::too_many_arguments)]
     fn load_ntriples(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         path: &str,
         predicates: Option<Vec<String>>,
@@ -606,9 +593,12 @@ impl KnowledgeGraph {
         verbose: bool,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         use std::collections::HashSet;
 
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         if let Some(ref cb) = progress {
             if !cb.bind(py).is_callable() {
                 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -650,7 +640,7 @@ impl KnowledgeGraph {
 
         // A handle derived from a durable graph must not write the shared
         // file; refuse before the load, as every other write does.
-        self.check_durable_owner()?;
+        this.check_durable_owner()?;
         // Unlogged on purpose: a durable graph checkpoints after the load
         // (below) instead of logging it.
         // Release the GIL during the multi-minute load so Python
@@ -659,7 +649,7 @@ impl KnowledgeGraph {
         // (Python::check_signals), the loader returns the literal
         // `<cancelled>` sentinel — translate that into the KeyboardInterrupt
         // the user actually expects, instead of a generic RuntimeError.
-        let stats = self
+        let stats = this
             .unlogged_write(|graph| {
                 py.detach(|| kglite_core::api::io::load_ntriples(graph, path, &config))
             })
@@ -677,10 +667,10 @@ impl KnowledgeGraph {
         // dump-sized load would put millions of ops in the log, and `save()`
         // writes the checkpoint and truncates it. Other graphs only need the
         // capture buffer drained for CDC.
-        if self.lifecycle.durable.is_some() {
-            self.save(py, None, true, "auto")?;
+        if this.lifecycle.durable.is_some() {
+            super::save::save_graph(this, py, None, true, "auto")?;
         } else {
-            self.flush_pending_ops()?;
+            this.flush_pending_ops()?;
         }
 
         Python::attach(|py| {
@@ -707,189 +697,22 @@ impl KnowledgeGraph {
     /// Serialise the graph to disk, atomically and durably.
     #[pyo3(signature = (path=None, *, fsync=true, layout="auto"))]
     fn save(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         path: Option<&str>,
         fsync: bool,
         layout: &str,
     ) -> PyResult<()> {
-        let layout = io::SaveLayout::from_name(layout).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "layout must be 'auto' or 'compact', got '{layout}'"
-            ))
-        })?;
-        // A graph whose log refused an append holds a statement the caller was
-        // told had failed. `save()` is the one call that would commit it — it
-        // serializes whatever is in memory, and cannot tell the acknowledged
-        // writes from the one that was not. Refuse before anything is touched.
-        self.check_wal_not_diverged()?;
-        // A handle derived from a durable graph inherits `source_path` but not
-        // the log, so a bare `save()` here would write *its* fork over the
-        // durable file without stamping the checkpoint LSN or truncating the
-        // log — leaving frames the owner still holds to replay over a
-        // checkpoint that never contained them. Refuse the whole call rather
-        // than only the same-path case: a derived handle serializes the entire
-        // shared graph anyway, so `copy()`/`to_subgraph()` is the honest route
-        // to a separate file and the message names it.
-        self.check_durable_owner()?;
-        // Durable (WAL) graphs: `save()` is the checkpoint that TRUNCATES
-        // the fsync'd WAL below. Honouring `fsync=False` here would pair a
-        // maybe-not-on-disk checkpoint with a destroyed log — a crash then
-        // loses both. Force the flush and tell the caller (documented
-        // contract in the `save()` docstring).
-        let fsync = if self.lifecycle.durable.is_some() && !fsync {
-            let msg = "save(fsync=False) is ignored for durable graphs: the checkpoint \
-                       truncates the write-ahead log, so it must itself be flushed to disk \
-                       (fsync forced to True) or a crash would lose both the checkpoint and \
-                       the log.";
-            let cmsg = std::ffi::CString::new(msg).unwrap_or_default();
-            let _ = PyErr::warn(
-                py,
-                py.get_type::<pyo3::exceptions::PyUserWarning>().as_any(),
-                cmsg.as_c_str(),
-                1,
-            );
-            true
-        } else {
-            fsync
-        };
-        // Resolve the target: explicit path wins; otherwise fall back to the
-        // origin file this graph was opened from (`kglite.open`/`load`). A
-        // graph built in memory with no origin and no explicit path has
-        // nowhere to go — guide the user rather than panicking.
-        let effective: String = match path {
-            Some(p) => p.to_string(),
-            None => self
-                .lifecycle
-                .source_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "save() needs a path: this graph was not opened from a file. \
-                         Pass an explicit path (g.save('graph.kgl')) or open it with \
-                         kglite.open('graph.kgl') so save() remembers the target.",
-                    )
-                })?,
-        };
-        // A contended save-as target keeps its typed refusal here; the
-        // `SaveError` channel below carries only a message.
-        let mut lease_contention: Option<crate::error::KgError> = None;
-        let mut checkpoint_warning: Option<String> = None;
-        let saved = py.detach(|| -> Result<(), io::SaveError> {
-            use kglite_core::api::durable::{self, DurabilityLevel};
-            use std::path::Path;
-            // A background checkpoint still writing the stamped file must land
-            // (and have its log trim applied) before this save touches either:
-            // its older stamp would otherwise be renamed over this checkpoint.
-            checkpoint_warning = self
-                .lifecycle
-                .durable
-                .as_mut()
-                .and_then(|state| state.settle_checkpoint(true));
-            let io_error = |error: std::io::Error| io::SaveError::Io(error.to_string());
-            let same_target = self
-                .lifecycle
-                .source_path
-                .as_ref()
-                .map_or(Ok(false), |source| {
-                    io::same_checkpoint_path(source, Path::new(&effective)).map_err(io_error)
-                })?;
-            // Keep the original sidecar spelling for equivalent publication paths.
-            let target = if same_target {
-                self.lifecycle.source_path.as_ref().unwrap().clone()
-            } else {
-                effective.into()
-            };
-            // A process that holds the target's lease owns it; any other holder
-            // refuses the save before the write-ahead-log guard below, which
-            // would otherwise answer a foreign holder's sidecar with a recovery
-            // instruction. `open(..., lock=False)` opted out of lease checks.
-            if !self.lifecycle.lease_opt_out {
-                if let Err(refusal) = io::refuse_foreign_writer(&target) {
-                    let error = crate::error::KgError::from(refusal);
-                    let message = error.to_string();
-                    if matches!(error, crate::error::KgError::WriterLeaseHeld { .. }) {
-                        lease_contention = Some(error);
-                    }
-                    return Err(io::SaveError::Io(message));
-                }
-            }
-            let target_lease = if !same_target && self.lifecycle.writer_lease.is_some() {
-                match io::GraphWriterLease::acquire_ex(&target, std::time::Duration::ZERO) {
-                    Ok(lease) => Some(lease),
-                    Err(refusal) => {
-                        let error = crate::error::KgError::from(refusal);
-                        let message = error.to_string();
-                        if matches!(error, crate::error::KgError::WriterLeaseHeld { .. }) {
-                            lease_contention = Some(error);
-                        }
-                        return Err(io::SaveError::Io(message));
-                    }
-                }
-            } else {
-                None
-            };
-            let level = self
-                .lifecycle
-                .durable
-                .as_ref()
-                .map_or(DurabilityLevel::Off, |state| state.level);
-            let target_wal = if same_target {
-                None
-            } else {
-                durable::prepare_save_as_target(&target, level)?
-            };
-            let (graph_arc, lifecycle) = self.lifecycle_parts();
-            let previous_stamp = graph_arc.checkpoint_lsn;
-            if let Some(state) = lifecycle.durable.as_mut() {
-                let graph = lifecycle_graph_mut(graph_arc);
-                graph.bump_version();
-                durable::checkpoint_prologue(&mut state.wal, state.next_lsn, graph)
-                    .map_err(io_error)?;
-            }
-            if let Err(error) =
-                io::save_graph_with_layout(graph_arc, &target.to_string_lossy(), fsync, layout)
-            {
-                lifecycle_graph_mut(graph_arc).checkpoint_lsn = previous_stamp;
-                return Err(error);
-            }
-            if same_target {
-                if let Some(state) = lifecycle.durable.as_mut() {
-                    durable::checkpoint_epilogue(&mut state.wal, lifecycle_graph_mut(graph_arc))
-                        .map_err(io_error)?;
-                }
-            } else {
-                // The original WAL still describes its original checkpoint. Truncating
-                // it here would destroy source recovery. The new WAL was emptied before
-                // publication, so the handoff has no fallible work after the save.
-                if let Some(state) = lifecycle.durable.as_mut() {
-                    state.wal = target_wal.expect("logging destination prepared above");
-                    kglite_core::api::cdc::drain_at_commit(lifecycle_graph_mut(graph_arc));
-                }
-                lifecycle.writer_lease = target_lease;
-                lifecycle.source_path = Some(target);
-            }
-            Ok(())
-        });
-        if let Some(text) = checkpoint_warning {
-            crate::graph::bg_checkpoint::warn_user(text);
-        }
-        saved.map_err(|error| match (error, lease_contention.take()) {
-            (_, Some(contended)) => crate::error_py::kg_to_pyerr(contended),
-            (io::SaveError::Refused(message), None) => {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(message)
-            }
-            (io::SaveError::Io(message), None) => file_io_err(std::io::Error::other(message)),
-        })?;
-        crate::mapped_fallback::announce(py, self.graph());
-        crate::allocator::release_after_seam(py);
-        Ok(())
+        let mut guard = borrow_mut_waiting(slf)?;
+        super::save::save_graph(&mut guard, py, path, fsync, layout)
     }
 
     /// Check the CRC32 of every memory-mapped section this graph serves.
-    fn verify_integrity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let graph = Arc::clone(self.graph());
+    fn verify_integrity(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let graph = Arc::clone(this.graph());
         let report = py.detach(|| io::verify_graph(&graph));
         let sections = PyList::empty(py);
         for section in &report.sections {
@@ -914,7 +737,7 @@ impl KnowledgeGraph {
     ) -> PyResult<Py<PyAny>> {
         // The borrow covers only fixing the point in time. The serialize runs
         // with it released, so a second thread using this graph meanwhile gets
-        // a working graph instead of "Already borrowed".
+        // a working graph instead of waiting out the whole backup.
         let (snapshot, lsn, live_path) = {
             let mut this = borrow_mut_waiting(slf)?;
             this.check_wal_not_diverged()?;
@@ -963,14 +786,17 @@ impl KnowledgeGraph {
     ///
     /// Pending mutations are folded into the log first, so this is also the
     /// safe way to force a commit boundary before an external snapshot.
-    fn sync(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn sync(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         use kglite_core::api::durable::DurabilityLevel;
 
         // Ordered before the no-log message below: a derived handle also has
         // no log, but "reopen with durable=" is the wrong advice for it — the
         // log exists, it just belongs to another handle.
-        self.check_durable_owner()?;
-        if self.lifecycle.durable.is_none() {
+        this.check_durable_owner()?;
+        if this.lifecycle.durable.is_none() {
             return Err(crate::error_py::kg_to_pyerr(
                 crate::error::KgError::not_durable(
                     "sync() needs a graph opened with a write-ahead log. This graph \
@@ -984,12 +810,12 @@ impl KnowledgeGraph {
         // A barrier over a log that no longer describes the graph would report
         // success for exactly the state the failed append made unrepresentable
         // — the same refusal `save()` takes, for the same reason.
-        self.check_wal_not_diverged()?;
+        this.check_wal_not_diverged()?;
         // Drain anything still buffered in the capture layer into a frame
         // before barriering, so `sync()` cannot report success over ops that
         // never reached the log.
-        self.flush_pending_ops()?;
-        let ds = self
+        this.flush_pending_ops()?;
+        let ds = this
             .lifecycle
             .durable
             .as_mut()
@@ -1015,8 +841,11 @@ impl KnowledgeGraph {
     // consolidates node properties into column stores before serializing,
     // which mutates the graph in place (it stays columnar afterwards).
     #[allow(clippy::wrong_self_convention)]
-    fn to_bytes(&mut self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
-        if self.graph().graph.is_disk() {
+    fn to_bytes(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        if this.graph().graph.is_disk() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "to_bytes() is not supported for disk-mode graphs (a disk graph is a \
                  directory, not a single byte stream). Use save('dir/') instead.",
@@ -1025,8 +854,8 @@ impl KnowledgeGraph {
         // Same prep as save(), through the same entry point so the two
         // `.kgl` producers cannot drift: stamp metadata + consolidate the
         // property columns.
-        self.unlogged_write_lazy(io::prepare_kgl_write);
-        let inner = self.graph().clone();
+        this.unlogged_write_lazy(io::prepare_kgl_write);
+        let inner = this.graph().clone();
         let bytes = py
             .detach(move || -> std::io::Result<Vec<u8>> {
                 let mut buf: Vec<u8> = Vec::new();
@@ -1054,15 +883,18 @@ impl KnowledgeGraph {
     /// The current embedder binding is captured with the snapshot.
     #[pyo3(signature = (*, valid_at=None))]
     fn freeze(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         valid_at: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<crate::graph::pyapi::frozen::FrozenGraph> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         crate::graph::pyapi::frozen::FrozenGraph::as_of(
             py,
-            std::sync::Arc::clone(self.graph()),
-            self.embedder.clone(),
-            self.query_defaults(),
+            std::sync::Arc::clone(this.graph()),
+            this.embedder.clone(),
+            this.query_defaults(),
             valid_at,
         )
     }
@@ -1082,21 +914,26 @@ impl KnowledgeGraph {
     /// load with a `KnowledgeGraph`, then `.session()` and serve every thread
     /// through the `Session`" — don't keep mutating the original graph after.
     /// The current embedder binding is captured with the Session.
-    fn session(&self) -> crate::graph::pyapi::session::Session {
-        crate::graph::pyapi::session::Session::with_defaults(
-            std::sync::Arc::clone(self.graph()),
-            self.embedder.clone(),
-            self.query_defaults(),
-            self.lifecycle.durable_authority(),
+    fn session(slf: &Bound<'_, Self>) -> PyResult<crate::graph::pyapi::session::Session> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(crate::graph::pyapi::session::Session::with_defaults(
+            std::sync::Arc::clone(this.graph()),
+            this.embedder.clone(),
+            this.query_defaults(),
+            this.lifecycle.durable_authority(),
         )
-        .with_live_path(self.lifecycle.source_path.clone())
+        .with_live_path(this.lifecycle.source_path.clone()))
     }
 
     /// Save to the remembered path and end persistence ownership, retaining detached usable data.
-    fn close(&mut self, py: Python<'_>) -> PyResult<()> {
-        if self.lifecycle.source_path.is_some() {
-            self.save(py, None, true, "auto")?;
-            self.end_persistence_ownership(py);
+    fn close(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        if this.lifecycle.source_path.is_some() {
+            super::save::save_graph(this, py, None, true, "auto")?;
+            this.end_persistence_ownership(py);
         }
         Ok(())
     }
@@ -1110,17 +947,20 @@ impl KnowledgeGraph {
     /// End persistence ownership, checkpointing only on clean exit without undoing committed WAL writes.
     #[pyo3(signature = (exc_type, _exc_value, _traceback))]
     fn __exit__(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         exc_type: &Bound<'_, pyo3::PyAny>,
         _exc_value: &Bound<'_, pyo3::PyAny>,
         _traceback: &Bound<'_, pyo3::PyAny>,
     ) -> PyResult<bool> {
-        if self.lifecycle.source_path.is_some() {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        if this.lifecycle.source_path.is_some() {
             if exc_type.is_none() {
-                self.save(py, None, true, "auto")?;
+                super::save::save_graph(this, py, None, true, "auto")?;
             }
-            self.end_persistence_ownership(py);
+            this.end_persistence_ownership(py);
         }
         Ok(false)
     }
@@ -1135,11 +975,14 @@ impl KnowledgeGraph {
     ///
     /// **Edges only.** Dead columnar rows are dropped by `save()`; node slots
     /// freed by a delete are reclaimed by neither.
-    fn compact(&mut self) -> PyResult<usize> {
-        if !self.graph().graph.is_disk() {
+    fn compact(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        if !this.graph().graph.is_disk() {
             return Ok(0);
         }
-        self.unlogged_write(|graph| graph.compact_disk())
+        this.unlogged_write(|graph| graph.compact_disk())
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
@@ -1152,41 +995,65 @@ impl KnowledgeGraph {
     ///
     /// Per-query `timeout_ms` always overrides this setting.
     #[pyo3(signature = (timeout_ms=None))]
-    fn set_default_timeout(&mut self, timeout_ms: Option<u64>) {
-        self.default_timeout_ms = timeout_ms;
+    fn set_default_timeout(slf: &Bound<'_, Self>, timeout_ms: Option<u64>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.default_timeout_ms = timeout_ms;
+        Ok(())
     }
 
     /// Get the current default query timeout in milliseconds, or None.
-    fn get_default_timeout(&self) -> Option<u64> {
-        self.default_timeout_ms
+    fn get_default_timeout(slf: &Bound<'_, Self>) -> PyResult<Option<u64>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.default_timeout_ms)
     }
 
     /// Set a default per-query work budget applied to all cypher() calls.
     #[pyo3(signature = (max_work_units=None))]
-    fn set_default_max_work_units(&mut self, max_work_units: Option<usize>) {
-        self.default_max_work_units = max_work_units;
+    fn set_default_max_work_units(
+        slf: &Bound<'_, Self>,
+        max_work_units: Option<usize>,
+    ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.default_max_work_units = max_work_units;
+        Ok(())
     }
 
     /// Get the current default per-query work budget, or None.
-    fn get_default_max_work_units(&self) -> Option<usize> {
-        self.default_max_work_units
+    fn get_default_max_work_units(slf: &Bound<'_, Self>) -> PyResult<Option<usize>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.default_max_work_units)
     }
 
     /// Set a default cap on the result rows every cypher() call retains.
     #[pyo3(signature = (row_limit=None))]
-    fn set_default_row_limit(&mut self, row_limit: Option<usize>) {
-        self.default_row_limit = row_limit;
+    fn set_default_row_limit(slf: &Bound<'_, Self>, row_limit: Option<usize>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.default_row_limit = row_limit;
+        Ok(())
     }
 
     /// Get the current default result-row cap, or None.
-    fn get_default_row_limit(&self) -> Option<usize> {
-        self.default_row_limit
+    fn get_default_row_limit(slf: &Bound<'_, Self>) -> PyResult<Option<usize>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.default_row_limit)
     }
 
     /// Get the most recent operation report as a Python dictionary
-    fn last_report(&self) -> PyResult<Py<PyAny>> {
+    fn last_report(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         Python::attach(|py| {
-            if let Some(report) = self.cursor.reports.get_last_report() {
+            if let Some(report) = this.cursor.reports.get_last_report() {
                 match report {
                     OperationReport::NodeOperation(node_report) => {
                         let report_dict = PyDict::new(py);
@@ -1261,16 +1128,21 @@ impl KnowledgeGraph {
     }
 
     /// Get the last operation index (a sequential ID of operations performed)
-    fn operation_index(&self) -> usize {
-        self.cursor.reports.get_last_operation_index()
+    fn operation_index(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.cursor.reports.get_last_operation_index())
     }
 
     /// Get all report history as a list of dictionaries
-    fn report_history(&self) -> PyResult<Py<PyAny>> {
+    fn report_history(slf: &Bound<'_, Self>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         Python::attach(|py| {
             let report_list = PyList::empty(py);
 
-            for report in self.cursor.reports.get_all_reports() {
+            for report in this.cursor.reports.get_all_reports() {
                 let report_dict = match report {
                     OperationReport::NodeOperation(node_report) => {
                         let dict = PyDict::new(py);
@@ -1340,9 +1212,12 @@ impl KnowledgeGraph {
 
     /// Perform union of two selections - combines all nodes from both selections
     /// Returns a new KnowledgeGraph with the union of both selections
-    fn union(&self, other: &Self) -> PyResult<Self> {
-        require_same_immutable_view(self, other)?;
-        self.derive_with(|_inner, cursor| {
+    fn union(slf: &Bound<'_, Self>, other: &Self) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        require_same_immutable_view(this, other)?;
+        this.derive_with(|_inner, cursor| {
             kglite_core::api::fluent::union_selections(
                 &mut cursor.selection,
                 &other.cursor.selection,
@@ -1353,9 +1228,12 @@ impl KnowledgeGraph {
 
     /// Perform intersection of two selections - keeps only nodes present in both
     /// Returns a new KnowledgeGraph with only nodes that exist in both selections
-    fn intersection(&self, other: &Self) -> PyResult<Self> {
-        require_same_immutable_view(self, other)?;
-        self.derive_with(|_inner, cursor| {
+    fn intersection(slf: &Bound<'_, Self>, other: &Self) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        require_same_immutable_view(this, other)?;
+        this.derive_with(|_inner, cursor| {
             kglite_core::api::fluent::intersection_selections(
                 &mut cursor.selection,
                 &other.cursor.selection,
@@ -1366,9 +1244,12 @@ impl KnowledgeGraph {
 
     /// Perform difference of two selections - keeps nodes in self but not in other
     /// Returns a new KnowledgeGraph with nodes from self that are not in other
-    fn difference(&self, other: &Self) -> PyResult<Self> {
-        require_same_immutable_view(self, other)?;
-        self.derive_with(|_inner, cursor| {
+    fn difference(slf: &Bound<'_, Self>, other: &Self) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        require_same_immutable_view(this, other)?;
+        this.derive_with(|_inner, cursor| {
             kglite_core::api::fluent::difference_selections(
                 &mut cursor.selection,
                 &other.cursor.selection,
@@ -1379,9 +1260,12 @@ impl KnowledgeGraph {
 
     /// Perform symmetric difference of two selections - keeps nodes in either but not both
     /// Returns a new KnowledgeGraph with nodes that are in exactly one of the selections
-    fn symmetric_difference(&self, other: &Self) -> PyResult<Self> {
-        require_same_immutable_view(self, other)?;
-        self.derive_with(|_inner, cursor| {
+    fn symmetric_difference(slf: &Bound<'_, Self>, other: &Self) -> PyResult<Self> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        require_same_immutable_view(this, other)?;
+        this.derive_with(|_inner, cursor| {
             kglite_core::api::fluent::symmetric_difference_selections(
                 &mut cursor.selection,
                 &other.cursor.selection,
@@ -1427,10 +1311,11 @@ impl KnowledgeGraph {
     ///     This same graph (not a copy), so the call can be chained.
     #[pyo3(signature = (schema_dict, *, replace = false))]
     fn define_schema<'py>(
-        mut slf: PyRefMut<'py, Self>,
+        slf: &Bound<'py, Self>,
         schema_dict: &Bound<'_, PyDict>,
         replace: bool,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, Self>> {
+        let mut guard = borrow_mut_waiting(slf)?;
         let py = slf.py();
         // The schema grammar lives in core (`kglite::api::schema_from_value`),
         // not here: the C ABI's `kglite_define_schema` parses the same dialect
@@ -1445,7 +1330,7 @@ impl KnowledgeGraph {
         // Only replace can withdraw a declaration from a type this call never
         // named, so only replace has enforcement loss to warn about.
         let mode = if replace {
-            warn_about_constraints_dropped_by_replace(py, slf.graph(), &schema)?;
+            warn_about_constraints_dropped_by_replace(py, guard.graph(), &schema)?;
             SchemaInstall::Replace
         } else {
             SchemaInstall::Merge
@@ -1454,28 +1339,31 @@ impl KnowledgeGraph {
         // Installing the schema installs the UNIQUE constraints it declares, so
         // it fails when existing data already violates one — nothing is changed
         // in that case, so the caller can fix the data and retry.
-        slf.unlogged_write(|g| {
+        guard.unlogged_write(|g| {
             g.set_schema(schema, mode)
                 .map_err(crate::error_py::kg_to_pyerr)
         })?;
 
-        Ok(slf)
+        Ok(slf.clone())
     }
 
     /// Install the declared semantic layer (classes + relationship semantics).
     #[pyo3(signature = (ontology_dict))]
     fn define_ontology(
-        &mut self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         ontology_dict: &Bound<'_, PyDict>,
     ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         // One grammar, in core — the same chokepoint posture as
         // define_schema above (the C ABI would parse the identical dialect).
         let store = kglite_core::api::ontology_from_value(&py_in::py_value_to_value(
             ontology_dict.as_any(),
         )?)
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        let warnings = self.logged_write(|g| {
+        let warnings = this.logged_write(|g| {
             g.define_ontology(store).map_err(|e| match e {
                 kglite_core::api::DefineOntologyError::Refused(r) => {
                     crate::error_py::kg_to_pyerr(kglite_core::api::KgError::from(r))
@@ -1493,19 +1381,25 @@ impl KnowledgeGraph {
     }
 
     /// The declared semantic layer as a dict, or None when none is declared.
-    fn ontology(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        if self.graph().ontology.is_empty() {
+    fn ontology(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        if this.graph().ontology.is_empty() {
             return Ok(py.None());
         }
-        let json = kglite_core::api::ontology_to_json(&self.graph().ontology)
+        let json = kglite_core::api::ontology_to_json(&this.graph().ontology)
             .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         let value = kglite_core::api::param::json_value_to_kglite_value(&json);
         py_out::value_to_py(py, &value)
     }
 
     /// Remove the declared semantic layer entirely.
-    fn clear_ontology(&mut self) -> PyResult<()> {
-        self.logged_write(|g| {
+    fn clear_ontology(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| {
             g.clear_ontology()
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })
@@ -1513,8 +1407,15 @@ impl KnowledgeGraph {
 
     /// Materialize declared supertypes as real secondary labels.
     #[pyo3(signature = (adopt=false))]
-    fn materialize_ontology(&mut self, py: Python<'_>, adopt: bool) -> PyResult<Py<PyAny>> {
-        let report = self.logged_write(|g| {
+    fn materialize_ontology(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        adopt: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        let report = this.logged_write(|g| {
             g.materialize_ontology(adopt)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
         })?;
@@ -1531,14 +1432,20 @@ impl KnowledgeGraph {
     }
 
     /// Withdraw every materialized label; returns how many were removed.
-    fn dematerialize_ontology(&mut self) -> PyResult<usize> {
-        self.logged_write(|g| Ok(g.dematerialize_ontology()))
+    fn dematerialize_ontology(slf: &Bound<'_, Self>) -> PyResult<usize> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
+        this.logged_write(|g| Ok(g.dematerialize_ontology()))
     }
 
     /// Drift report per managed label (extra/missing vs the declared closure).
-    fn ontology_diff(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn ontology_diff(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let out = pyo3::types::PyList::empty(py);
-        for (label, state, extra, missing) in self.graph().ontology_label_diff() {
+        for (label, state, extra, missing) in this.graph().ontology_label_diff() {
             let d = PyDict::new(py);
             d.set_item("label", label)?;
             d.set_item("state", state.as_str())?;
@@ -1562,15 +1469,22 @@ impl KnowledgeGraph {
     ///         - 'message': Human-readable error message
     ///         - Additional fields depending on error type
     #[pyo3(signature = (strict=None))]
-    fn validate_schema(&self, py: Python<'_>, strict: Option<bool>) -> PyResult<Py<PyAny>> {
-        let schema = self.graph().get_schema().ok_or_else(|| {
+    fn validate_schema(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        strict: Option<bool>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let schema = this.graph().get_schema().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 "No schema defined. Call define_schema() first.",
             )
         })?;
 
         let errors = kglite_core::api::mutation::validate_graph(
-            self.graph(),
+            this.graph(),
             schema,
             strict.unwrap_or(false),
         );
@@ -1671,11 +1585,14 @@ impl KnowledgeGraph {
     ///
     ///     ``duplicate_tuples`` counts distinct colliding value tuples;
     ///     ``sample`` is one of them, positional against ``properties``.
-    fn verify_unique_constraints(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn verify_unique_constraints(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         // The scan is `&mut` in core because it rebuilds each index to count
         // collisions — an audit, not a read — so it takes the same mutable
         // handle every writer does.
-        let violations = self.unlogged_write(|g| g.verify_unique_constraints());
+        let violations = this.unlogged_write(|g| g.verify_unique_constraints());
         let result = PyList::empty(py);
         for violation in violations {
             let entry = PyDict::new(py);
@@ -1684,7 +1601,7 @@ impl KnowledgeGraph {
             entry.set_item("properties", violation.properties.clone())?;
             let sample = PyList::empty(py);
             for value in violation.sample_values() {
-                sample.append(py_out::graph_value_to_py(py, &self.graph().graph, value)?)?;
+                sample.append(py_out::graph_value_to_py(py, &this.graph().graph, value)?)?;
             }
             entry.set_item("sample", sample)?;
             let duplicate_tuples = violation.duplicate_tuple_count();
@@ -1705,16 +1622,19 @@ impl KnowledgeGraph {
     }
 
     /// Check if a schema has been defined for this graph
-    fn has_schema(&self) -> bool {
-        self.graph().get_schema().is_some()
+    fn has_schema(slf: &Bound<'_, Self>) -> PyResult<bool> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+        Ok(this.graph().get_schema().is_some())
     }
 
     /// Clear the schema definition from the graph.
     ///
     /// Returns this same graph (not a copy), so the call can be chained.
-    fn clear_schema(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.unlogged_write(|g| g.clear_schema());
-        Ok(slf)
+    fn clear_schema<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, Self>> {
+        let mut guard = borrow_mut_waiting(slf)?;
+        guard.unlogged_write(|g| g.clear_schema());
+        Ok(slf.clone())
     }
 
     /// Set free-text instructions rendered verbatim at the top of describe().
@@ -1722,17 +1642,21 @@ impl KnowledgeGraph {
     /// Returns this same graph (not a copy), so the call can be chained.
     #[pyo3(signature = (text, *, channel=None))]
     fn set_instructions<'py>(
-        mut slf: PyRefMut<'py, Self>,
+        slf: &Bound<'py, Self>,
         text: &str,
         channel: Option<&str>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.unlogged_write(|g| g.set_instructions(text, channel));
-        Ok(slf)
+    ) -> PyResult<Bound<'py, Self>> {
+        let mut guard = borrow_mut_waiting(slf)?;
+        guard.unlogged_write(|g| g.set_instructions(text, channel));
+        Ok(slf.clone())
     }
 
     /// Get the current schema definition as a dictionary
-    fn schema_definition(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let schema = match self.graph().get_schema() {
+    fn schema_definition(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let schema = match this.graph().get_schema() {
             Some(s) => s,
             None => return Ok(py.None()),
         };
@@ -1844,16 +1768,19 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (pattern, max_matches=None))]
     fn match_pattern(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         pattern: &str,
         max_matches: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let parsed = kglite_core::api::fluent::parse_pattern(pattern).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Pattern syntax error: {}", e))
         })?;
 
-        let executor = kglite_core::api::fluent::PatternExecutor::new(self.graph(), max_matches);
+        let executor = kglite_core::api::fluent::PatternExecutor::new(this.graph(), max_matches);
         let matches = executor.execute(&parsed).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                 "Pattern execution error: {}",
@@ -1861,7 +1788,7 @@ impl KnowledgeGraph {
             ))
         })?;
 
-        py_out::pattern_matches_to_pylist(py, &matches, self.graph())
+        py_out::pattern_matches_to_pylist(py, &matches, this.graph())
     }
 
     /// Run Cypher reads and writes; write_scope limits mutations such as DETACH DELETE by stored type; return a ResultView or a DataFrame when to_df=True.
@@ -2071,8 +1998,11 @@ impl KnowledgeGraph {
     ///
     /// Returns None if no mutation has been executed yet.
     #[getter]
-    fn last_mutation_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        match &self.cursor.last_mutation_stats {
+    fn last_mutation_stats(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        match &this.cursor.last_mutation_stats {
             Some(stats) => {
                 let dict = PyDict::new(py);
                 dict.set_item("nodes_created", stats.nodes_created)?;

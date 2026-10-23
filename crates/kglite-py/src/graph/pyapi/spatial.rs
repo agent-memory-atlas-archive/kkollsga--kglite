@@ -131,7 +131,7 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (min_lat, max_lat, min_lon, max_lon, lat_field=None, lon_field=None))]
     fn within_bounds(
-        &mut self,
+        slf: &Bound<'_, Self>,
         min_lat: f64,
         max_lat: f64,
         min_lon: f64,
@@ -139,13 +139,16 @@ impl KnowledgeGraph {
         lat_field: Option<&str>,
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
+            resolve_lat_lon_fields(this.graph(), &this.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(this.graph(), &this.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::within_bounds(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             lat_field,
             lon_field,
             min_lat,
@@ -156,7 +159,7 @@ impl KnowledgeGraph {
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.selection.clear(); // clear() already adds a fresh level
         if let Some(level) = new_kg.cursor.selection.get_level_mut(0) {
             if !matching_nodes.is_empty() {
@@ -205,20 +208,23 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (center_lat, center_lon, max_distance, lat_field=None, lon_field=None))]
     fn near_point(
-        &mut self,
+        slf: &Bound<'_, Self>,
         center_lat: f64,
         center_lon: f64,
         max_distance: f64,
         lat_field: Option<&str>,
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
+            resolve_lat_lon_fields(this.graph(), &this.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(this.graph(), &this.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::near_point(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             lat_field,
             lon_field,
             center_lat,
@@ -228,7 +234,7 @@ impl KnowledgeGraph {
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.selection.clear(); // clear() already adds a fresh level
         if let Some(level) = new_kg.cursor.selection.get_level_mut(0) {
             if !matching_nodes.is_empty() {
@@ -273,20 +279,23 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (center_lat, center_lon, max_distance_m, lat_field=None, lon_field=None))]
     fn near_point_m(
-        &mut self,
+        slf: &Bound<'_, Self>,
         center_lat: f64,
         center_lon: f64,
         max_distance_m: f64,
         lat_field: Option<&str>,
         lon_field: Option<&str>,
     ) -> PyResult<Self> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
+            resolve_lat_lon_fields(this.graph(), &this.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(this.graph(), &this.cursor.selection);
 
         let matching_nodes = kglite_core::api::fluent::near_point_m(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             lat_field,
             lon_field,
             center_lat,
@@ -296,7 +305,7 @@ impl KnowledgeGraph {
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.selection.clear();
         if let Some(level) = new_kg.cursor.selection.get_level_mut(0) {
             if !matching_nodes.is_empty() {
@@ -338,24 +347,27 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (lat, lon, geometry_field=None))]
     fn contains_point(
-        &mut self,
+        slf: &Bound<'_, Self>,
         lat: f64,
         lon: f64,
         geometry_field: Option<&str>,
     ) -> PyResult<Self> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let geometry_field =
-            resolve_geometry_field(self.graph(), &self.cursor.selection, geometry_field);
+            resolve_geometry_field(this.graph(), &this.cursor.selection, geometry_field);
 
         let matching_nodes = kglite_core::api::fluent::contains_point(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             geometry_field,
             lat,
             lon,
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.selection.clear();
         if let Some(level) = new_kg.cursor.selection.get_level_mut(0) {
             if !matching_nodes.is_empty() {
@@ -400,23 +412,26 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (query_wkt, geometry_field=None))]
     fn intersects_geometry(
-        &mut self,
+        slf: &Bound<'_, Self>,
         query_wkt: &Bound<'_, PyAny>,
         geometry_field: Option<&str>,
     ) -> PyResult<Self> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let wkt_string = extract_wkt(query_wkt)?;
         let geometry_field =
-            resolve_geometry_field(self.graph(), &self.cursor.selection, geometry_field);
+            resolve_geometry_field(this.graph(), &this.cursor.selection, geometry_field);
 
         let matching_nodes = kglite_core::api::fluent::intersects_geometry(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             geometry_field,
             &wkt_string,
         )
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
 
-        let mut new_kg = self.clone();
+        let mut new_kg = this.clone();
         new_kg.cursor.selection.clear(); // clear() already adds a fresh level
         if let Some(level) = new_kg.cursor.selection.get_level_mut(0) {
             if !matching_nodes.is_empty() {
@@ -457,19 +472,22 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (lat_field=None, lon_field=None, as_shapely=false))]
     fn bounds(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         lat_field: Option<&str>,
         lon_field: Option<&str>,
         as_shapely: bool,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
+            resolve_lat_lon_fields(this.graph(), &this.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(this.graph(), &this.cursor.selection);
 
         match kglite_core::api::fluent::get_bounds(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             lat_field,
             lon_field,
             geom_fb,
@@ -512,19 +530,22 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (lat_field=None, lon_field=None, as_shapely=false))]
     fn centroid(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         lat_field: Option<&str>,
         lon_field: Option<&str>,
         as_shapely: bool,
     ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
         let (lat_field, lon_field) =
-            resolve_lat_lon_fields(self.graph(), &self.cursor.selection, lat_field, lon_field);
-        let geom_fb = resolve_geom_fallback(self.graph(), &self.cursor.selection);
+            resolve_lat_lon_fields(this.graph(), &this.cursor.selection, lat_field, lon_field);
+        let geom_fb = resolve_geom_fallback(this.graph(), &this.cursor.selection);
 
         match kglite_core::api::fluent::calculate_centroid(
-            self.graph(),
-            &self.cursor.selection,
+            this.graph(),
+            &this.cursor.selection,
             lat_field,
             lon_field,
             geom_fb,
@@ -565,7 +586,7 @@ impl KnowledgeGraph {
     ///     ```
     #[pyo3(signature = (wkt_string, as_shapely=false))]
     fn wkt_centroid(
-        &self,
+        _slf: &Bound<'_, Self>,
         py: Python<'_>,
         wkt_string: &Bound<'_, PyAny>,
         as_shapely: bool,
@@ -602,13 +623,16 @@ impl KnowledgeGraph {
     ///     shapes: Named WKT shape fields as {name: field_name}. Zero or more.
     #[pyo3(signature = (node_type, *, location=None, geometry=None, points=None, shapes=None))]
     fn set_spatial(
-        &mut self,
+        slf: &Bound<'_, Self>,
         node_type: String,
         location: Option<(String, String)>,
         geometry: Option<String>,
         points: Option<&Bound<'_, PyDict>>,
         shapes: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
+        let mut guard = crate::graph::pyapi::borrow::borrow_mut_waiting(slf)?;
+        let this: &mut KnowledgeGraph = &mut guard;
+
         let mut config = SpatialConfig {
             location,
             geometry,
@@ -631,7 +655,7 @@ impl KnowledgeGraph {
             }
         }
 
-        self.logged_write(|g| {
+        this.logged_write(|g| {
             g.set_spatial_config(&node_type, config);
             Ok(())
         })
@@ -645,8 +669,15 @@ impl KnowledgeGraph {
     /// Returns:
     ///     dict with spatial config for the requested type(s), or None if not configured.
     #[pyo3(signature = (node_type=None))]
-    fn spatial(&self, py: Python<'_>, node_type: Option<String>) -> PyResult<Py<PyAny>> {
-        let graph = self.graph();
+    fn spatial(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        node_type: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let guard = crate::graph::pyapi::borrow::borrow_waiting(slf)?;
+        let this: &KnowledgeGraph = &guard;
+
+        let graph = this.graph();
 
         if let Some(nt) = node_type {
             match graph.spatial_configs.get(&nt) {
