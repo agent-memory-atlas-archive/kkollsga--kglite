@@ -72,6 +72,7 @@ mod independent_copy;
 pub(crate) mod index_create;
 mod index_keys;
 pub mod index_layer;
+pub mod index_names;
 pub(crate) mod indexes;
 mod labels;
 pub(crate) use labels::LabelCheck;
@@ -249,6 +250,11 @@ pub struct DirGraph {
     /// their constraints must be dropped by descriptor.
     #[serde(default)]
     pub(crate) constraint_names: HashMap<String, NamedConstraint>,
+    /// User-chosen index names → the index each names (`index_names.rs`).
+    /// Additive serde field: older `.kgl` files load with an empty map, which
+    /// only means their indexes answer to their canonical names.
+    #[serde(default)]
+    pub(crate) index_names: HashMap<String, index_names::NamedIndex>,
     /// `(node_type, property)` presence constraints declared through DDL
     /// (`CREATE CONSTRAINT ... IS NOT NULL`) rather than through a schema.
     ///
@@ -995,6 +1001,7 @@ impl DirGraph {
             ddl_unique_constraints: std::collections::BTreeSet::new(),
             unique_constraint_keys: Vec::new(),
             constraint_names: HashMap::new(),
+            index_names: HashMap::new(),
             ddl_not_null_constraints: std::collections::BTreeSet::new(),
             ddl_property_type_constraints: std::collections::BTreeMap::new(),
             rel_ddl_not_null_constraints: std::collections::BTreeSet::new(),

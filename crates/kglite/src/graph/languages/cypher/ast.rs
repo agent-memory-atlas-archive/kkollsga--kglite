@@ -1303,10 +1303,9 @@ impl DdlTarget {
 /// [OPTIONS { … }]`
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateIndex {
-    /// Name from `CREATE INDEX <name> FOR …`. Accepted for Neo4j-script
-    /// portability, but **not persisted**: KGLite derives its own canonical
-    /// index name (`Label.property`) and `SHOW INDEXES` / `DROP INDEX` speak
-    /// that name. Documented in CYPHER.md.
+    /// Name from `CREATE INDEX <name> FOR …`. Registered beside the canonical
+    /// name (`Label.property`), which keeps working, and persisted in the
+    /// `.kgl` metadata. Documented in CYPHER.md.
     pub name: Option<String>,
     pub index_type: DdlIndexType,
     pub if_not_exists: bool,

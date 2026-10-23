@@ -102,7 +102,7 @@ fn duplicate_create_index_errors_unless_if_not_exists() {
 }
 
 #[test]
-fn a_named_index_is_created_under_its_canonical_name() {
+fn a_named_index_is_listed_under_its_name() {
     let mut graph = person_graph();
     run(
         &mut graph,
@@ -113,7 +113,7 @@ fn a_named_index_is_created_under_its_canonical_name() {
         .iter()
         .map(|i| i.name.clone())
         .collect();
-    assert_eq!(names, vec!["Person.age".to_string()]);
+    assert_eq!(names, vec!["person_age".to_string()]);
 }
 
 #[test]

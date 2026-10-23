@@ -470,29 +470,30 @@ fn show_lists_the_owned_index_and_names_both_ends() {
         "CREATE CONSTRAINT composite FOR (n:T) REQUIRE (n.b, n.a) IS NODE KEY",
     );
     run(&mut graph, "CREATE INDEX FOR (n:T) ON (n.plain)");
+    // An owned index is named after its constraint.
     assert_eq!(
         index_rows(&graph),
         [
+            ("T.plain".to_string(), "PROPERTY".to_string(), None),
             (
-                "T.(a,b)".to_string(),
+                "composite".to_string(),
                 "PROPERTY".to_string(),
                 Some("composite".to_string())
             ),
             (
-                "T.k".to_string(),
+                "single".to_string(),
                 "PROPERTY".to_string(),
                 Some("single".to_string())
             ),
-            ("T.plain".to_string(), "PROPERTY".to_string(), None),
         ]
     );
     assert_eq!(
         owned_index_of(&graph, "single"),
-        Value::String("T.k".into())
+        Value::String("single".into())
     );
     assert_eq!(
         owned_index_of(&graph, "composite"),
-        Value::String("T.(a,b)".into())
+        Value::String("composite".into())
     );
 }
 

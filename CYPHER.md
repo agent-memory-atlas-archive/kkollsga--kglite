@@ -4556,34 +4556,54 @@ double index memory, and in-memory footprint is this engine's product. The
 divergence costs performance, never correctness. If you need range acceleration,
 write `CREATE RANGE INDEX`.
 
-#### Index names are canonical, not yours
+#### Index names
 
-KGLite derives index names from what they index: `Label.property`, or
-`Label.(a,b)` for a composite. A name in `CREATE INDEX <name> FOR …` is
-**accepted but not stored**. The persisted `.kgl` index state is a list of
-`(label, property)` key tuples, so there is nowhere to keep it.
-
-A composite index is keyed by its property names **sorted**, so declaration order
-is not part of its identity. `ON (n.city, n.age)` and `ON (n.age, n.city)` are
-one index, named `L.(age,city)`, and either spelling drops it.
+Every index answers to a **canonical name** derived from what it indexes:
+`Label.property`, `Label.(a,b)` for a composite, `relationship:TYPE.property` for a
+relationship index. `CREATE INDEX <name> FOR …` also gives it a name of your
+choosing, which is stored and persisted. `SHOW INDEXES` lists the name you gave,
+and the canonical name keeps working beside it.
 
 ```cypher
 CREATE INDEX person_email FOR (p:Person) ON (p.email);   -- index is created
-SHOW INDEXES;                                            -- name is 'Person.email'
-DROP INDEX person_email;                                 -- error, explains this
-DROP INDEX Person.email;                                 -- works
+SHOW INDEXES;                                            -- name is 'person_email'
+DROP INDEX person_email;                                 -- works
+DROP INDEX Person.email;                                 -- also works (canonical name)
 DROP INDEX FOR (p:Person) ON (p.email);                   -- also works
 ```
+
+A composite index is keyed by its property names **sorted**, so declaration order
+is not part of its identity. `ON (n.city, n.age)` and `ON (n.age, n.city)` are
+one index, canonically `L.(age,city)`, and either spelling drops it.
 
 `DROP INDEX` accepts the dotted canonical name unquoted, so `SHOW INDEXES` output
 pastes straight in.
 
-- `DROP INDEX <unknown name> IF EXISTS` is a no-op, truthfully, since no index
-  carries that name.
-- The bare form errors and spells the naming rule out, because "person_email
-  doesn't exist" is baffling to someone who just created it under that name.
-- The descriptor form (`DROP INDEX FOR …`) is a KGLite extension that sidesteps
-  naming entirely.
+- **One namespace.** Index names and constraint names share one namespace, as in
+  Neo4j. A name a constraint holds, a name another index holds and the canonical
+  name of another index are all refused, on either `CREATE INDEX` or
+  `CREATE CONSTRAINT`. `CREATE INDEX <name> IF NOT EXISTS` on a taken name does
+  nothing.
+- **A name covers the structures it created.** `CREATE RANGE INDEX r` names both
+  the hash and the B-tree row, and `DROP INDEX r` removes both. The canonical name
+  drops everything the property carries.
+- **An owned index is named after its constraint.** The index a UNIQUE or NODE KEY
+  constraint owns is listed under the constraint's name when it was declared with
+  one, as Neo4j does, and under the canonical name otherwise. `DROP INDEX` on
+  either spelling is refused. An index you declared first keeps its own name when
+  a constraint adopts it.
+- `DROP INDEX <unknown name>` errors and lists what is installed; with `IF EXISTS`
+  it is a no-op.
+- A name lives as long as its index. Dropping the index by any route, or loading a
+  file whose index is gone, discards the name, so an index built later on the same
+  property does not inherit it.
+- Names persist in the `.kgl` file as an additive field. A file saved before the
+  field existed loads with canonical names only, and an older release opens a file
+  that carries names and ignores them. The write-ahead log does not carry names: a
+  durable graph recovered from the log alone keeps the index, under its canonical
+  name, until it is named again.
+- A disk graph's property indexes are persistent bundles `SHOW INDEXES` does not
+  list, so they are not addressable by name; BM25 and vector indexes are.
 
 #### Indexes on `name`, titles and ids
 
@@ -4604,7 +4624,7 @@ snapshot: after a write it declines until `reindex()` or `save()`.
 One canonical name can cover several structures. A property carrying a hash
 index, a B-tree index and a BM25 text index shows three `SHOW INDEXES` rows
 sharing a `name`, distinguished by `type` (`PROPERTY`, `RANGE`, `FULLTEXT`).
-`DROP INDEX <name>` removes every structure under that name.
+`DROP INDEX <canonical name>` removes every structure under that name.
 
 A relationship vector index and a relationship BM25 index are both named
 `relationship:TYPE.property`, and that name pastes in unquoted too:
@@ -4638,7 +4658,7 @@ rows and columns as `CALL db.indexes()`:
 
 | Column | Value |
 |---|---|
-| `name` | canonical name — `Label.property`, `Label.(a,b)`, or `relationship:TYPE.property` for a relationship index |
+| `name` | the name the index was given (`CREATE INDEX <name>`); for an index owned by a named constraint, the constraint's name; otherwise the canonical name — `Label.property`, `Label.(a,b)`, or `relationship:TYPE.property` for a relationship index |
 | `type` | `PROPERTY` (hash equality or composite), `RANGE` (B-tree), `FULLTEXT` (BM25 text index — see `build_text_index()`), or `VECTOR` (HNSW index over an embedding store — see `build_vector_index()`) |
 | `entityType` | `NODE`, or `RELATIONSHIP` for a relationship vector or BM25 index |
 | `labelsOrTypes` | single-element list holding the node or relationship type |
@@ -4957,7 +4977,7 @@ Deduplicate (or populate, for `IS NOT NULL`) and retry.
 #### Constraint names *are* stored
 
 Constraint names are stored, which is the opposite of
-[index names](#index-names-are-canonical-not-yours). This is deliberate: a ported
+[index names](#index-names). This is deliberate: a ported
 schema script almost always names its constraints and drops them by name, and
 there is no descriptor form to fall back on.
 
@@ -4994,7 +5014,7 @@ by a write scope. It returns the same rows and columns as
 | `labelsOrTypes` | single-element list holding the node type — or the relationship type on a relationship row |
 | `properties` | constrained property names, in declaration order |
 | `propertyType` | the declared type on a `NODE_PROPERTY_TYPE` / `RELATIONSHIP_PROPERTY_TYPE` row, `null` on every other kind |
-| `ownedIndex` | the canonical name of the index a `UNIQUENESS` or `NODE_KEY` constraint owns (the row `SHOW INDEXES` lists with this constraint as `owningConstraint`). `null` on the other kinds |
+| `ownedIndex` | the name `SHOW INDEXES` lists the index a `UNIQUENESS` or `NODE_KEY` constraint owns under (the row with this constraint as `owningConstraint`): the constraint's own name when it has one, else the canonical name. `null` on the other kinds |
 | `id`, `options` | always `null` |
 
 A declared `NODE KEY` is **one** row (`NODE_KEY`), not a uniqueness row plus an
@@ -5746,7 +5766,7 @@ compatible subset.
 | Storage | In-memory, mmap-backed, or disk CSR | Disk-based | One Cypher engine spans all three embedded storage modes |
 | Transactions | Snapshot isolation + OCC through `Session` / `Transaction`; durability depends on access mode | Server/embedded transaction management | Native session coordination is binding-independent; direct graph writes are in-place |
 | Indexing | Three separate structures — hash equality, composite, B-tree range — plus automatic type indexes and vector indexes | One general `RANGE` index serving equality, range, and ordering | An equality index cannot serve a range predicate, so KGLite exposes the distinction that Neo4j collapses. `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` are supported — see [Cypher index DDL](#cypher-index-ddl) for exactly what each statement builds |
-| Index names | Canonical and derived: `Label.property`, `Label.(a,b)` | User-assigned, unique | A name in `CREATE INDEX <name> …` is accepted for script portability but not stored; the persisted `.kgl` index state is a list of `(label, property)` keys |
+| Index names | User-assigned and stored, beside a derived canonical name (`Label.property`, `Label.(a,b)`) | User-assigned, unique | One namespace with constraint names; an owned index takes its constraint's name; the registry is an additive `.kgl` field |
 | Constraint DDL | `IS UNIQUE`, `IS NOT NULL`, `IS NODE KEY`, `IS :: TYPE` — enforced on every write path | `CREATE CONSTRAINT … IS UNIQUE / IS NOT NULL / IS NODE KEY / IS :: TYPE` | `IS :: TYPE` accepts the type names with an exact KGLite value counterpart (`BOOLEAN`, `STRING`, `INTEGER`, `FLOAT`, `DATE`, `LOCAL DATETIME`, `ZONED DATETIME`, `LOCAL TIME`, `ZONED TIME`, `DURATION`, `POINT`); lists and unions are rejected by name rather than approximated. Relationship constraints cover `IS NOT NULL` and `IS :: TYPE`; `IS UNIQUE` / `IS RELATIONSHIP KEY` on a relationship are refused, because KGLite has no single answer for when two relationships of a type are the same one. See [Cypher constraint DDL](#cypher-constraint-ddl) |
 | Constraint names | Stored, so `DROP CONSTRAINT <name>` works | User-assigned, unique per database | The opposite decision to index names above: a ported schema script almost always drops constraints by name, and the `.kgl` metadata section is JSON, so the field was free. A constraint declared without a name is addressable by its canonical descriptor |
 | `LOAD CSV` source | Local files only — `file://` URLs and filesystem paths, gated by a per-caller capability | `file://` plus `http(s)://`, gated by an import-directory setting | The engine ships no HTTP client (network dependencies were removed in 0.14.x), so there is nothing to fetch a URL with. Filesystem access is granted per caller: on for in-process use, off for Bolt clients unless the server was started with `--allow-csv-import <DIR>` |

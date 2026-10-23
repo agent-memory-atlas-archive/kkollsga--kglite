@@ -1,7 +1,8 @@
 //! Schema / property / neighbors / sample / join-candidate computation.
 
 use crate::datatypes::values::Value;
-use crate::graph::constraints::{ConstraintKind, EntityKind};
+use crate::graph::constraints::{normalize_properties, ConstraintKind, EntityKind};
+use crate::graph::dir_graph::index_names::NamedIndex;
 use crate::graph::dir_graph::indexes::IndexState;
 use crate::graph::property_types::DeclaredType;
 use crate::graph::schema::{DirGraph, InternedKey};
@@ -483,6 +484,34 @@ pub(crate) struct IndexInfo {
     pub owning_constraint: Option<String>,
 }
 
+impl IndexInfo {
+    /// The entity the index covers, as the registry and the constraint
+    /// vocabulary spell it.
+    pub(crate) fn entity_kind(&self) -> EntityKind {
+        if self.entity_type == "RELATIONSHIP" {
+            EntityKind::Relationship
+        } else {
+            EntityKind::Node
+        }
+    }
+
+    /// The name derived from what the index covers, whatever name it is listed
+    /// under: `Label.property`, `Label.(a,b)`, `relationship:Type.property`.
+    /// `DROP INDEX` and the search procedures accept it beside a registered name.
+    pub(crate) fn canonical_name(&self) -> String {
+        let owner = self.labels_or_types.first().map_or("", String::as_str);
+        let covered = match self.properties.as_slice() {
+            [property] => format!("{owner}.{property}"),
+            many => format!("{owner}.({})", many.join(",")),
+        };
+        if self.entity_kind() == EntityKind::Relationship {
+            format!("relationship:{covered}")
+        } else {
+            covered
+        }
+    }
+}
+
 /// The name of the constraint that owns the equality / composite index on
 /// `(node_type, properties)`, if one does.
 fn owning_constraint_name(
@@ -495,14 +524,22 @@ fn owning_constraint_name(
         .map(|key| graph.unique_constraint_display_name(key))
 }
 
-/// The canonical name of the index a unique constraint on `(node_type,
-/// properties)` owns, in the spelling `SHOW INDEXES` lists it under.
-fn owned_index_name(node_type: &str, properties: &[String]) -> String {
+/// The name `SHOW INDEXES` lists the index a unique constraint on `(node_type,
+/// properties)` owns under: a name registered for the index itself, else the
+/// constraint's own registered name, else the canonical name.
+fn owned_index_name(graph: &DirGraph, node_type: &str, properties: &[String]) -> String {
     let normalized = crate::graph::constraints::normalize_properties(properties);
-    match normalized.as_slice() {
-        [property] => format!("{node_type}.{property}"),
-        many => format!("{node_type}.({})", many.join(",")),
-    }
+    let (kind, canonical) = match normalized.as_slice() {
+        [property] => (IndexKind::Equality, format!("{node_type}.{property}")),
+        many => (
+            IndexKind::Composite,
+            format!("{node_type}.({})", many.join(",")),
+        ),
+    };
+    graph
+        .registered_index_name(EntityKind::Node, node_type, properties, kind)
+        .or_else(|| registered_owner_name(graph, node_type, properties))
+        .map_or(canonical, str::to_string)
 }
 
 /// All indexes installed on the graph, in deterministic order.
@@ -525,6 +562,31 @@ fn owned_index_name(node_type: &str, properties: &[String]) -> String {
 /// `db.relationship_text_index.*` procedures, and `DROP INDEX relationship:T.p`
 /// removes both.
 pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
+    let mut out = collect_indexes_unnamed(graph);
+    if graph.index_names.is_empty() && graph.constraint_names.is_empty() {
+        return out;
+    }
+    for info in &mut out {
+        if let Some(name) = display_index_name(graph, info) {
+            info.name = name;
+        }
+    }
+    sort_indexes(&mut out);
+    out
+}
+
+fn sort_indexes(out: &mut [IndexInfo]) {
+    out.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| (a.kind as u8).cmp(&(b.kind as u8)))
+    });
+}
+
+/// [`collect_indexes_structured`] before user names are applied: every row
+/// under its canonical name. What registry pruning and name resolution compare
+/// against.
+pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
     let mut out: Vec<IndexInfo> = Vec::new();
 
     // The three property-index families come through the state-aware listers
@@ -678,12 +740,86 @@ pub(crate) fn collect_indexes_structured(graph: &DirGraph) -> Vec<IndexInfo> {
         });
     }
 
-    out.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| (a.kind as u8).cmp(&(b.kind as u8)))
-    });
+    sort_indexes(&mut out);
     out
+}
+
+/// The name a listed row answers to when it is not the canonical one: the name
+/// its author registered for it, else — for the hash or composite index a
+/// UNIQUE / NODE KEY constraint owns — the constraint's own name, as Neo4j
+/// names an owned index after its constraint. A constraint declared without a
+/// name leaves the canonical name, which is also its descriptor.
+fn display_index_name(graph: &DirGraph, info: &IndexInfo) -> Option<String> {
+    let entity = info.entity_kind();
+    let target = info.labels_or_types.first()?;
+    if let Some(name) = graph.registered_index_name(entity, target, &info.properties, info.kind) {
+        return Some(name.to_string());
+    }
+    if entity == EntityKind::Node && matches!(info.kind, IndexKind::Equality | IndexKind::Composite)
+    {
+        return registered_owner_name(graph, target, &info.properties).map(str::to_string);
+    }
+    None
+}
+
+/// The registered name of the UNIQUE / NODE KEY constraint on `(node_type,
+/// properties)`, if it was declared with one.
+fn registered_owner_name<'g>(
+    graph: &'g DirGraph,
+    node_type: &str,
+    properties: &[String],
+) -> Option<&'g str> {
+    graph.constraint_for_index(node_type, properties)?;
+    graph.name_for_constraint(
+        EntityKind::Node,
+        node_type,
+        properties,
+        &[ConstraintKind::Unique, ConstraintKind::NodeKey],
+    )
+}
+
+/// Whether `named` still points at a listed index.
+fn index_name_is_live(named: &NamedIndex, rows: &[IndexInfo]) -> bool {
+    rows.iter().any(|row| {
+        row.entity_kind() == named.entity
+            && row
+                .labels_or_types
+                .first()
+                .is_some_and(|t| *t == named.target)
+            && named.class.covers(row.kind)
+            && normalize_properties(&row.properties) == normalize_properties(&named.properties)
+    })
+}
+
+/// Drop every registered index name whose index is no longer installed.
+pub(crate) fn prune_index_names(graph: &mut DirGraph) {
+    if graph.index_names.is_empty() {
+        return;
+    }
+    let rows = collect_indexes_unnamed(graph);
+    graph
+        .index_names
+        .retain(|_, named| index_name_is_live(named, &rows));
+}
+
+/// [`prune_index_names`]'s read-only test.
+pub(crate) fn has_undeclared_index_names(graph: &DirGraph) -> bool {
+    if graph.index_names.is_empty() {
+        return false;
+    }
+    let rows = collect_indexes_unnamed(graph);
+    graph
+        .index_names
+        .values()
+        .any(|named| !index_name_is_live(named, &rows))
+}
+
+/// Whether `name` is a registered index name that still points at an index.
+pub(crate) fn index_name_in_use(graph: &DirGraph, name: &str) -> bool {
+    let Some(named) = graph.index_name_entry(name) else {
+        return false;
+    };
+    index_name_is_live(named, &collect_indexes_unnamed(graph))
 }
 
 /// One constraint entry surfaced by `SHOW CONSTRAINTS` / `CALL db.constraints()`.
@@ -780,7 +916,7 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
                 covered.insert((node_type.clone(), property.clone()));
             }
         }
-        let owned_index = Some(owned_index_name(&node_type, &properties));
+        let owned_index = Some(owned_index_name(graph, &node_type, &properties));
         out.push(ConstraintInfo {
             name: constraint_name(
                 graph,

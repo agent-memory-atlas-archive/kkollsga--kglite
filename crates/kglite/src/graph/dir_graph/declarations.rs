@@ -10,6 +10,8 @@
 //! [`DirGraph::add_node_label`](crate::graph::schema::DirGraph) takes for
 //! secondary labels.
 
+use super::index_names::IndexClass;
+use crate::graph::constraints::EntityKind;
 use crate::graph::schema::{DirGraph, SpatialConfig};
 use crate::graph::wal::{MutationOp, PropertyIndexKind};
 
@@ -122,6 +124,16 @@ impl DirGraph {
         kind: PropertyIndexKind,
         present: bool,
     ) {
+        if !present {
+            // A name must not outlive the structure it named, or an index
+            // rebuilt on the same property would inherit it.
+            let class = match kind {
+                PropertyIndexKind::Equality => IndexClass::Equality,
+                PropertyIndexKind::Range => IndexClass::Range,
+                PropertyIndexKind::Composite => IndexClass::Composite,
+            };
+            self.forget_index_names_for(EntityKind::Node, node_type, &properties, &[class]);
+        }
         self.note_declaration(MutationOp::SetPropertyIndex {
             node_type: node_type.to_string(),
             properties,

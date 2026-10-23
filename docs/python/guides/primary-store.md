@@ -541,18 +541,17 @@ happen in Python or Rust. What to watch:
   - Add `RANGE` when you need range scans.
   - A multi-property `RANGE` index is rejected, because the B-tree is
     single-property.
-- **Index names are not persisted; constraint names are.** An index name is
-  accepted for portability and then discarded. Index names here are canonical and
-  derived: `Label.property`, `Label.(a,b)`, and `relationship:TYPE.property` for a
-  relationship vector index.
-  - `DROP INDEX` wants that derived canonical name, or, for a node index, the
-    descriptor form `DROP INDEX FOR (n:Label) ON (n.prop)`.
-  - **The trap:** dropping by a name you chose fails. Adding `IF EXISTS` to that
-    same statement turns the failure into a silent no-op that leaves your index in
-    place.
-  - `SHOW INDEXES` prints the canonical name, and its output pastes straight in.
-  - Constraint names persist across save/load and are unique per graph. So
-    `CREATE CONSTRAINT person_email_unique …` followed by
+- **Index names and constraint names are both stored.** A name given to
+  `CREATE INDEX <name>` persists across save/load, is what `SHOW INDEXES` lists,
+  and drops the index.
+  - The canonical name (`Label.property`, `Label.(a,b)`, `relationship:TYPE.property`)
+    keeps working, and so does the descriptor form
+    `DROP INDEX FOR (n:Label) ON (n.prop)`.
+  - Index and constraint names share one namespace, so a name already used by
+    either is refused.
+  - The index a named UNIQUE or NODE KEY constraint owns is listed under the
+    constraint's name.
+  - `CREATE CONSTRAINT person_email_unique …` followed by
     `DROP CONSTRAINT person_email_unique` works as written.
 - **Uniqueness on the identity field is refused, not silently accepted.** A
   `REQUIRE … IS UNIQUE` (or `IS NODE KEY`) that resolves to the structural `id` is

@@ -11,6 +11,12 @@ before upgrading.
 
 ### Added
 
+- **Index names are stored.**
+  - `CREATE INDEX <name> FOR …` (and `CREATE RANGE INDEX <name>`) registers the name. `SHOW INDEXES` lists it, `DROP INDEX <name>` drops by it, and the canonical name (`Label.property`) keeps working beside it. A `RANGE` name covers both of its structures. `DROP INDEX <name>` on an unknown name still errors, and `IF EXISTS` is a no-op.
+  - Index names and constraint names share one namespace. A name another index, a constraint or another index's canonical name holds is refused on `CREATE INDEX` and `CREATE CONSTRAINT`; `CREATE INDEX <name> IF NOT EXISTS` on a taken name does nothing.
+  - The index a named UNIQUE or NODE KEY constraint owns is listed under the constraint's name, as Neo4j names it, and `ownedIndex` says the same. A constraint declared without a name leaves the canonical name. An index you declared first keeps its own name when a constraint adopts it.
+  - Names persist as an additive `.kgl` metadata field: files saved before it load with canonical names, an older release opens a file that carries names and ignores them, and a graph with no names writes the bytes it wrote before. The write-ahead log does not carry names.
+
 - **Neo4j-named index search and positional `CALL` arguments.**
   - `CALL db.index.fulltext.queryNodes(indexName, queryString, {limit, skip})` and `queryRelationships` rank the BM25 index of that name, matching documents only, best first, yielding `node` or `relationship` and `score`. `CALL db.index.vector.queryNodes(indexName, k, vector)` and `queryRelationships` rank the vector index's store, yielding the same columns.
   - `indexName` is the name `SHOW INDEXES` lists for a `FULLTEXT` or `VECTOR` row: `Label.property`, or `relationship:TYPE.property`. A name that matches no index of that kind is an error listing the ones that exist. Unknown options, a non-positive `k` and a non-numeric vector are errors.
@@ -61,6 +67,8 @@ before upgrading.
 - **A save releases embedding heap.** The rebase replaces the embedding stores with the saved file's, so a session that only wrote embeddings gets its budget back, as the refusal message says.
 
 ### Changed
+
+- **`SHOW INDEXES` lists the name a `CREATE INDEX <name>` gave.** Before, every row carried the canonical name and the given name was discarded. A script that reads `SHOW INDEXES` names back as `Label.property` for an index it created under a name now sees the name it chose; the canonical name still drops it.
 
 - **`--neo4j-compat` reports a 2026.x kernel and a Cypher dialect row.** `dbms.components()` returns `Neo4j Kernel` / `2026.10.0` / `community` plus `Cypher` / `["5", "25"]` (it was one `Neo4j Kernel` / `5.26.0` row), and the handshake agent is `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`. Clients that gate on the kernel version, GraphBridge's search preflight among them, now see a release that advertises Cypher 25. The default identity is unchanged.
 - **`elementId(n) = <row value>` seeks the node per driving row.** `UNWIND $rows AS row MATCH (n:L) WHERE elementId(n) = row.id` (also `WITH row`, `OPTIONAL MATCH`, untyped `MATCH (n)`, and the `SET` / `DELETE` that follow) scanned the label once per row. The planner now records the value as a per-row anchor, so each row starts at its node. On 100k nodes, 1 000 rows took 40.6 s and now take 0.8 ms; 50 rows took 2.1 s and now take 0.05 ms. The `WHERE` stays, so a null, non-numeric, out-of-range, deleted or other-label value matches nothing, as before. A value that is not `row.x`, a variable, `toString`, `toInteger` or `elementId` of one is left to the scan.

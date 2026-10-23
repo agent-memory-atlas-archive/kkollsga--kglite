@@ -2168,7 +2168,7 @@ mod tests {
         }
         let named = HashMap::from([(
             "index".to_string(),
-            BoltValue::String("Doc.title".to_string()),
+            BoltValue::String("doc_title".to_string()),
         )]);
         let stream = backend
             .execute(

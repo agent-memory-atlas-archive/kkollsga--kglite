@@ -219,6 +219,11 @@ pub(crate) struct FileMetadata {
     /// `DROP CONSTRAINT <name>` survives save/load.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     constraint_names: HashMap<String, NamedConstraint>,
+    /// User-chosen index names → the index each names, so `DROP INDEX <name>`
+    /// and the named search procedures survive save/load. Same additive,
+    /// skipped-when-empty posture as `constraint_names`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    index_names: HashMap<String, crate::graph::dir_graph::index_names::NamedIndex>,
     /// Which declared unique constraints came from DDL
     /// (`CREATE CONSTRAINT ... IS UNIQUE` / `... IS NODE KEY`) rather than from
     /// a schema, with each property tuple normalised.
@@ -538,6 +543,7 @@ impl FileMetadata {
             range_index_keys: graph.range_index_keys.clone(),
             unique_constraint_keys: graph.unique_constraint_keys.clone(),
             constraint_names: graph.constraint_names.clone(),
+            index_names: graph.index_names.clone(),
             ddl_unique_constraints: graph.ddl_unique_constraints.clone(),
             ddl_not_null_constraints: graph.ddl_not_null_constraints.clone(),
             ddl_property_type_constraints: graph.ddl_property_type_constraints.clone(),
@@ -634,6 +640,7 @@ impl FileMetadata {
         graph.range_index_keys = self.range_index_keys;
         graph.unique_constraint_keys = self.unique_constraint_keys;
         graph.constraint_names = self.constraint_names;
+        graph.index_names = self.index_names;
         graph.ddl_unique_constraints = self.ddl_unique_constraints;
         graph.ddl_not_null_constraints = self.ddl_not_null_constraints;
         graph.ddl_property_type_constraints = self.ddl_property_type_constraints;

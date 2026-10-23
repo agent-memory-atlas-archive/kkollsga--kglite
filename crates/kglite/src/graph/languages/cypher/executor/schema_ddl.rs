@@ -30,25 +30,23 @@
 //!
 //! # Index names
 //!
-//! KGLite index names are **derived**, not user-assigned: `Label.property` for
-//! single-property indexes, `Label.(a,b)` for composite ones (see
-//! `introspection::schema_overview::collect_indexes_structured`, the single
+//! Every KGLite index has a **canonical** name derived from what it indexes:
+//! `Label.property` for single-property indexes, `Label.(a,b)` for composite ones
+//! (see `introspection::schema_overview::collect_indexes_structured`, the single
 //! source of truth shared with `CALL db.indexes()`). A name written in
-//! `CREATE INDEX <name> FOR …` is accepted so Neo4j schema scripts run
-//! unedited, but it is not stored — the persisted `.kgl` state is a list of
-//! `(label, property)` key tuples, and adding a name map would change the file
-//! format. `SHOW INDEXES` therefore reports canonical names, and `DROP INDEX`
-//! expects one. `DROP INDEX FOR (n:L) ON (n.p)` is the KGLite extension that
-//! sidesteps the naming question entirely.
+//! `CREATE INDEX <name> FOR …` is registered beside it (`dir_graph::index_names`):
+//! `SHOW INDEXES` lists it, `DROP INDEX` accepts it, and the canonical name keeps
+//! working. The registry is an additive `.kgl` metadata field, a lookup aid like
+//! the constraint one below, pruned when its index goes. `DROP INDEX FOR (n:L) ON
+//! (n.p)` remains the KGLite extension that sidesteps naming entirely.
 //!
-//! # Constraint names *are* stored — a deliberate divergence from index names
+//! # Constraint names
 //!
 //! A ported Neo4j schema script almost always names its constraints and drops
 //! them by name (`CREATE CONSTRAINT person_email_unique …; DROP CONSTRAINT
-//! person_email_unique`), whereas index DDL has the
-//! `DROP INDEX FOR (n:L) ON (n.p)` descriptor form as a natural escape hatch.
-//! Refusing `DROP CONSTRAINT <name>` would break the dominant shape, and
-//! silently no-opping it would be worse still. The cost is nil: the `.kgl`
+//! person_email_unique`). Refusing `DROP CONSTRAINT <name>` would break the
+//! dominant shape, and silently no-opping it would be worse still. The cost is
+//! nil: the `.kgl`
 //! metadata section is **JSON**, not postcard (`io/file.rs` writes it with
 //! `serde_json`), so a new `#[serde(default, skip_serializing_if = …)]` field
 //! is forward- and backward-compatible and, being skipped when empty, leaves
@@ -60,8 +58,7 @@
 //! spelling. The registry is never the source of truth — the constraint lives in
 //! the enforcement structure, and `prune_constraint_names` drops any name whose
 //! declaration has gone — so a lost name can degrade addressability but never
-//! enforcement. Index names stay derived rather than stored: bringing them
-//! into line would change `SHOW INDEXES` output.
+//! enforcement. Index and constraint names share one namespace.
 
 use super::super::ast::*;
 use super::super::result::{MutationStats, ResultRow, ResultSet};
@@ -71,6 +68,9 @@ use crate::graph::algorithms::Interrupt;
 use crate::graph::constraints::{
     descriptor, normalize_properties, ConstraintDeclaration, ConstraintKind, EntityKind,
     NamedConstraint,
+};
+use crate::graph::dir_graph::index_names::{
+    check_index_name, register_index_name, IndexClass, NamedIndex,
 };
 use crate::graph::dir_graph::DirGraph;
 use crate::graph::introspection::schema_overview::{
@@ -375,11 +375,36 @@ fn execute_create_index(
         validate_ddl_properties_declared(graph, &label, &create.properties, DdlPurpose::Index)?;
     }
 
-    match create.properties.as_slice() {
-        [] => Err("CREATE INDEX requires at least one property".to_string()),
-        [property] => create_single_property_index(graph, create, &label, property),
-        properties => create_composite_index(graph, create, &label, properties),
+    // A name is claimed before anything is built, so a refusal leaves the graph
+    // as it was. Under IF NOT EXISTS a name already in use is Neo4j's no-op.
+    let named = create.name.as_ref().map(|name| {
+        let class = match (create.properties.as_slice(), create.index_type) {
+            ([_], DdlIndexType::Range) => IndexClass::Range,
+            ([_], _) => IndexClass::Equality,
+            _ => IndexClass::Composite,
+        };
+        (name, NamedIndex::node(class, &label, &create.properties))
+    });
+    if let Some((name, named)) = &named {
+        if let Err(taken) = check_index_name(graph, name, named) {
+            if create.if_not_exists {
+                return Ok(MutationStats::default());
+            }
+            return Err(taken);
+        }
     }
+
+    let stats = match create.properties.as_slice() {
+        [] => return Err("CREATE INDEX requires at least one property".to_string()),
+        [property] => create_single_property_index(graph, create, &label, property)?,
+        properties => create_composite_index(graph, create, &label, properties)?,
+    };
+    if let Some((name, named)) = named {
+        if stats.indexes_added > 0 {
+            register_index_name(graph, name, named);
+        }
+    }
+    Ok(stats)
 }
 
 /// Single-property `CREATE INDEX` / `CREATE RANGE INDEX`.
@@ -538,11 +563,20 @@ fn execute_drop_index(graph: &mut DirGraph, drop: &DropIndex) -> Result<Mutation
         },
     };
 
-    let dropped = if entity_type == "RELATIONSHIP" {
-        drop_relationship_indexes(graph, &label, &properties)?
-    } else {
-        drop_node_indexes(graph, &label, &properties)?
+    // A registered name drops the structures it names and no others; the
+    // canonical name drops everything the property carries.
+    let class = match &drop.selector {
+        DropIndexSelector::Name(name) => graph.index_name_entry(name).map(|named| named.class),
+        DropIndexSelector::Descriptor { .. } => None,
     };
+    let dropped = if entity_type == "RELATIONSHIP" {
+        drop_relationship_indexes(graph, &label, &properties, class)?
+    } else {
+        drop_node_indexes(graph, &label, &properties, class)?
+    };
+    if let DropIndexSelector::Name(name) = &drop.selector {
+        graph.forget_index_name(name);
+    }
 
     if dropped == 0 {
         let name = qualified_index_name(entity_type, &label, &properties);
@@ -577,22 +611,42 @@ fn drop_node_indexes(
     graph: &mut DirGraph,
     label: &str,
     properties: &[String],
+    only: Option<IndexClass>,
 ) -> Result<usize, String> {
     super::write_scope::enforce_write_scope(graph, label)?;
 
+    let wants = |class: IndexClass| only.is_none_or(|only| only == class);
     let mut dropped = 0usize;
     match properties {
         [property] => {
-            dropped += usize::from(graph.drop_index(label, property)?);
-            dropped += usize::from(graph.drop_range_index(label, property));
-            dropped += usize::from(crate::graph::text_indexes::drop_text_index(
-                graph, label, property,
-            ));
-            dropped += usize::from(crate::graph::embeddings::drop_vector_index(
-                graph, label, property,
-            ));
+            // A RANGE name owns the B-tree, and the equality index beside it
+            // unless a constraint owns that one.
+            if wants(IndexClass::Equality)
+                || (only == Some(IndexClass::Range)
+                    && graph
+                        .reject_owned_index_drop(label, std::slice::from_ref(property))
+                        .is_ok())
+            {
+                dropped += usize::from(graph.drop_index(label, property)?);
+            }
+            if wants(IndexClass::Range) {
+                dropped += usize::from(graph.drop_range_index(label, property));
+            }
+            if wants(IndexClass::Fulltext) {
+                dropped += usize::from(crate::graph::text_indexes::drop_text_index(
+                    graph, label, property,
+                ));
+            }
+            if wants(IndexClass::Vector) {
+                dropped += usize::from(crate::graph::embeddings::drop_vector_index(
+                    graph, label, property,
+                ));
+            }
         }
-        many => dropped += usize::from(graph.drop_composite_index(label, many)?),
+        many if wants(IndexClass::Composite) => {
+            dropped += usize::from(graph.drop_composite_index(label, many)?);
+        }
+        _ => {}
     }
     Ok(dropped)
 }
@@ -612,6 +666,7 @@ fn drop_relationship_indexes(
     graph: &mut DirGraph,
     rel_type: &str,
     properties: &[String],
+    only: Option<IndexClass>,
 ) -> Result<usize, String> {
     let [property] = properties else {
         return Err(format!(
@@ -621,21 +676,20 @@ fn drop_relationship_indexes(
         ));
     };
     super::write_scope::enforce_relationship_type_write_scope(graph, rel_type)?;
-    let vector = crate::graph::edge_embeddings::vector_index::drop_edge_vector_index(
-        graph, rel_type, property,
-    )?;
-    let text =
-        crate::graph::text_indexes::edge_text::drop_edge_text_index(graph, rel_type, property);
+    let wants = |class: IndexClass| only.is_none_or(|only| only == class);
+    let vector = wants(IndexClass::Vector)
+        && crate::graph::edge_embeddings::vector_index::drop_edge_vector_index(
+            graph, rel_type, property,
+        )?;
+    let text = wants(IndexClass::Fulltext)
+        && crate::graph::text_indexes::edge_text::drop_edge_text_index(graph, rel_type, property);
     Ok(usize::from(vector) + usize::from(text))
 }
 
 /// `DROP INDEX <name>` where `<name>` matches no installed index.
 ///
-/// `IF EXISTS` makes this a no-op, matching Neo4j — and it is literally true
-/// here: KGLite has no index under that name, because names are canonical and
-/// a name supplied to `CREATE INDEX` was never stored. Without `IF EXISTS` the
-/// error spells the naming rule out, since "person_name doesn't exist" is
-/// otherwise baffling to someone who just created it under that name.
+/// `IF EXISTS` makes this a no-op, matching Neo4j. Without it the error lists
+/// the installed names and spells out the two spellings an index answers to.
 fn drop_missing_index(
     graph: &DirGraph,
     name: &str,
@@ -665,11 +719,10 @@ fn drop_missing_index(
         ));
     }
     Err(format!(
-        "no index named '{name}' exists. KGLite index names are canonical — \
-         'Label.property' for a single property, 'Label.(a,b)' for composite, \
-         'relationship:Type.property' for a relationship index — and a name given to CREATE \
-         INDEX is not stored; {available}. Use the canonical name, or the descriptor form `DROP \
-         INDEX FOR (n:Label) ON (n.property)`."
+        "no index named '{name}' exists. An index answers to the name given when it was \
+         created, or to its canonical name — 'Label.property' for a single property, \
+         'Label.(a,b)' for composite, 'relationship:Type.property' for a relationship index; \
+         {available}. The descriptor form `DROP INDEX FOR (n:Label) ON (n.property)` also works."
     ))
 }
 
@@ -685,6 +738,11 @@ fn resolve_index_name(graph: &DirGraph, name: &str) -> Option<(&'static str, Str
     collect_indexes_structured(graph)
         .into_iter()
         .find(|info| info.name == name)
+        .or_else(|| {
+            collect_indexes_structured(graph)
+                .into_iter()
+                .find(|info| info.canonical_name() == name)
+        })
         .map(|info| {
             (
                 info.entity_type,
@@ -1090,6 +1148,12 @@ pub(super) fn reject_name_collision(
     label: &str,
     properties: &[String],
 ) -> Result<(), String> {
+    if crate::graph::introspection::schema_overview::index_name_in_use(graph, name) {
+        return Err(format!(
+            "a constraint cannot be named '{name}': an index already has that name. Index and \
+             constraint names share one namespace — drop the index, or choose another name."
+        ));
+    }
     let Some(existing) = graph.constraint_by_name(name) else {
         return Ok(());
     };

@@ -60,7 +60,7 @@ fn show_indexes_yield_where_return_order_and_paging() {
     )
     .unwrap();
     assert_eq!(columns, ["name", "labelsOrTypes"]);
-    assert_eq!(strings(&rows, 0), ["Person.name"]);
+    assert_eq!(strings(&rows, 0), ["person_range"]);
     assert_eq!(
         rows[0][1],
         Value::List(vec![Value::String("Person".to_string())])
@@ -72,10 +72,11 @@ fn show_indexes_yield_where_return_order_and_paging() {
         HashMap::new(),
     )
     .unwrap();
-    // The uniqueness constraint backs its own index on Person.name.
+    // The uniqueness constraint backs its own index on Person.name, which the
+    // RANGE index declared first names; each row carries a registered name.
     assert_eq!(
         strings(&all, 0),
-        ["Person.age", "Person.name", "Person.name"]
+        ["person_age", "person_range", "person_range"]
     );
     let (_, page) = query(
         &g,
@@ -83,7 +84,7 @@ fn show_indexes_yield_where_return_order_and_paging() {
         HashMap::from([("limit".to_string(), Value::Int64(2))]),
     )
     .unwrap();
-    assert_eq!(strings(&page, 0), ["Person.name", "Person.age"]);
+    assert_eq!(strings(&page, 0), ["person_range", "person_age"]);
     let (_, none) = query(
         &g,
         "SHOW INDEXES YIELD name WHERE name = 'nope' RETURN name",
@@ -104,15 +105,19 @@ fn the_graphbridge_index_statements_run() {
          indexProvider, options WHERE name = $index \
          RETURN name, state, type, entityType, labelsOrTypes, properties, indexProvider, options \
          LIMIT 2",
-        HashMap::from([("index".to_string(), Value::String("Person.age".to_string()))]),
+        HashMap::from([("index".to_string(), Value::String("person_age".to_string()))]),
     )
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(columns[6], "indexProvider");
     assert_eq!(rows[0][1], Value::String("ONLINE".to_string()));
     assert_eq!(rows[0][2], Value::String("PROPERTY".to_string()));
-    assert_eq!(rows[0][6], Value::Null, "no provider is recorded");
-    assert_eq!(rows[0][7], Value::Null, "only a vector index has options");
+    assert_eq!(
+        rows[0][6],
+        Value::Null,
+        "only a search index has a provider"
+    );
+    assert_eq!(rows[0][7], Value::Null, "only a search index has options");
 
     let (columns, rows) = query(
         &g,
@@ -140,16 +145,16 @@ fn the_graphbridge_index_statements_run() {
         owners,
         [
             (
-                "Person.age".to_string(),
+                "person_age".to_string(),
                 "PROPERTY".to_string(),
                 Value::Null
             ),
             (
-                "Person.name".to_string(),
+                "person_range".to_string(),
                 "PROPERTY".to_string(),
                 Value::String("person_name_unique".to_string())
             ),
-            ("Person.name".to_string(), "RANGE".to_string(), Value::Null),
+            ("person_range".to_string(), "RANGE".to_string(), Value::Null),
         ]
     );
 }
@@ -162,7 +167,7 @@ fn show_indexes_reports_population_and_every_neo4j_column() {
     assert!(!bare.iter().any(|c| c == "options"));
     let (columns, rows) = query(
         &g,
-        "SHOW INDEXES YIELD * WHERE name = 'Person.age'",
+        "SHOW INDEXES YIELD * WHERE name = 'person_age'",
         HashMap::new(),
     )
     .unwrap();
@@ -237,7 +242,8 @@ fn show_constraints_yield_where_return_order_and_paging() {
         assert_eq!(rows[0][at], Value::Null, "{column}");
     }
     let owned = columns.iter().position(|c| c == "ownedIndex").unwrap();
-    assert_eq!(rows[0][owned], Value::String("Person.name".to_string()));
+    // The index the constraint owns was declared first, under its own name.
+    assert_eq!(rows[0][owned], Value::String("person_range".to_string()));
     // The kinds that own no index say so.
     let (columns, rows) = query(
         &g,

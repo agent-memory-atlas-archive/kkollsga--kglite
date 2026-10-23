@@ -60,13 +60,14 @@ def test_the_constraint_and_its_index_name_each_other(mode, tmp_path):
     kg.cypher("CREATE CONSTRAINT single FOR (n:T) REQUIRE n.k IS UNIQUE")
     kg.cypher("CREATE CONSTRAINT composite FOR (n:T) REQUIRE (n.b, n.a) IS NODE KEY")
     kg.cypher("CREATE INDEX FOR (n:T) ON (n.plain)")
+    # An owned index is named after its constraint, as Neo4j names it.
     assert _index_rows(kg) == [
-        ("T.(a,b)", "PROPERTY", "composite"),
-        ("T.k", "PROPERTY", "single"),
         ("T.plain", "PROPERTY", None),
+        ("composite", "PROPERTY", "composite"),
+        ("single", "PROPERTY", "single"),
     ]
     owned = {r["name"]: r["ownedIndex"] for r in kg.cypher("SHOW CONSTRAINTS YIELD name, ownedIndex").to_dicts()}
-    assert owned == {"single": "T.k", "composite": "T.(a,b)"}
+    assert owned == {"single": "single", "composite": "composite"}
     assert kg.has_index("T", "k") and kg.has_composite_index("T", ["a", "b"])
     assert {(i["node_type"], i["property"]) for i in kg.list_indexes()} >= {("T", "k"), ("T", "plain")}
 
@@ -117,7 +118,7 @@ def test_create_index_equivalent_to_an_owned_index_is_a_duplicate(mode, tmp_path
     with pytest.raises(Exception, match="already exists"):
         kg.cypher("CREATE INDEX FOR (n:T) ON (n.k)")
     kg.cypher("CREATE INDEX IF NOT EXISTS FOR (n:T) ON (n.k)")
-    assert _index_rows(kg) == [("T.k", "PROPERTY", "single")]
+    assert _index_rows(kg) == [("single", "PROPERTY", "single")]
     # A no-op adopts nothing: the index still goes with its constraint.
     kg.cypher("DROP CONSTRAINT single")
     assert _index_rows(kg) == []
@@ -303,7 +304,7 @@ def test_a_deferred_load_lists_the_owned_index_and_enforces_on_the_first_write(m
     path = str(tmp_path / "d.kgl")
     kg.save(path)
     reloaded = kglite.load(path, defer_index_rebuild=True)
-    assert _index_rows(reloaded) == [("T.k", "PROPERTY", "single")]
+    assert _index_rows(reloaded) == [("single", "PROPERTY", "single")]
     with pytest.raises(Exception, match=UNIQUE_ERROR):
         reloaded.cypher("CREATE (:T {id: 2, k: 'a'})")
     assert _count(reloaded, "MATCH (n:T {k: 'a'}) RETURN count(n) AS c") == 1
@@ -314,7 +315,7 @@ def test_a_deferred_load_lists_the_owned_index_and_enforces_on_the_first_write(m
 # ---------------------------------------------------------------------------
 
 TRANSCRIPT = [
-    ("rows", [("T.(a,b)", "PROPERTY", "ck"), ("T.k", "PROPERTY", "uk")]),
+    ("rows", [("ck", "PROPERTY", "ck"), ("uk", "PROPERTY", "uk")]),
     ("dup_create", "refused"),
     ("dup_set", "refused"),
     ("dup_composite", "refused"),
@@ -322,7 +323,7 @@ TRANSCRIPT = [
     ("lookup_after_move", [0, 1]),
     ("after_delete_reinsert", "admitted"),
     ("drop_index", "refused"),
-    ("final_rows", [("T.(a,b)", "PROPERTY", "ck")]),
+    ("final_rows", [("ck", "PROPERTY", "ck")]),
 ]
 
 

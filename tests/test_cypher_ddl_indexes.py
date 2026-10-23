@@ -103,7 +103,7 @@ def test_range_index_builds_both_structures(graph) -> None:
     graph.cypher("CREATE RANGE INDEX person_age FOR (p:Person) ON (p.age)")
     assert graph.last_mutation_stats["indexes_added"] == 2
     assert graph.has_index("Person", "age")
-    kinds = {row["type"] for row in _index_rows(graph) if row["name"] == "Person.age"}
+    kinds = {row["type"] for row in _index_rows(graph) if row["name"] == "person_age"}
     assert kinds == {"PROPERTY", "RANGE"}
 
 
@@ -299,21 +299,23 @@ def test_drop_index_removes_both_structures_of_a_range_index(graph) -> None:
     assert _index_rows(graph) == []
 
 
-def test_dropping_a_neo4j_style_name_explains_the_naming_rule(graph) -> None:
-    """A name given to `CREATE INDEX` is not stored. Failing loudly beats
-    letting the caller believe the drop worked."""
+def test_a_neo4j_style_name_is_stored_and_drops_the_index(graph) -> None:
+    """A name given to `CREATE INDEX` is the name `SHOW INDEXES` lists and
+    `DROP INDEX` accepts; the canonical name keeps working beside it."""
     graph.cypher("CREATE INDEX person_city FOR (p:Person) ON (p.city)")
-    assert _names(graph) == {"Person.city"}
+    assert _names(graph) == {"person_city"}
 
-    with pytest.raises(kglite.CypherExecutionError) as excinfo:
+    graph.cypher("DROP INDEX person_city")
+    assert not graph.has_index("Person", "city")
+
+    graph.cypher("CREATE INDEX person_city FOR (p:Person) ON (p.city)")
+    graph.cypher("DROP INDEX `Person.city`")
+    assert not graph.has_index("Person", "city")
+
+    # A name no index carries still fails loudly, and IF EXISTS is a no-op.
+    with pytest.raises(kglite.CypherExecutionError, match="no index named 'person_city'"):
         graph.cypher("DROP INDEX person_city")
-    message = str(excinfo.value)
-    assert "canonical" in message
-    assert "Person.city" in message
-
-    # IF EXISTS is a no-op: there genuinely is no index under that name.
     graph.cypher("DROP INDEX person_city IF EXISTS")
-    assert graph.has_index("Person", "city")
 
 
 def test_neo4j_3_drop_syntax_is_named_as_such(graph) -> None:

@@ -56,6 +56,9 @@ impl DirGraph {
         // instead: a name whose declaration is gone must not be saved, or
         // `DROP CONSTRAINT <name>` would resurrect it after a reload.
         self.prune_constraint_names();
+        // Index names likewise: a name whose index is gone must not be saved,
+        // or the next index built on that property would inherit it.
+        crate::graph::introspection::schema_overview::prune_index_names(self);
     }
 
     /// Whether [`Self::populate_index_keys`] would change anything: its
@@ -70,7 +73,8 @@ impl DirGraph {
                     .unique_constraint_keys
                     .windows(2)
                     .all(|pair| pair[0] < pair[1])
-                || self.has_undeclared_constraint_names())
+                || self.has_undeclared_constraint_names()
+                || crate::graph::introspection::schema_overview::has_undeclared_index_names(self))
     }
 
     /// Rebuild property, composite and range indexes from the persisted key
