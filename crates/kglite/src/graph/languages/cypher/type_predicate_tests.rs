@@ -339,3 +339,42 @@ fn constraint_and_expression_agree_on_scalar_names() {
         assert_eq!(expr.to_string(), declared.name());
     }
 }
+
+/// The parsed type is shared across rows and statements: many rows of mixed
+/// types, two different specs in one statement and a repeated statement must
+/// each see their own spec's answer.
+#[test]
+fn cached_type_specs_stay_distinct_across_many_mixed_rows() {
+    let mut g = DirGraph::new();
+    let row = |g: &mut DirGraph, q: &str| match scalar(g, q) {
+        Value::Int64(n) => n,
+        other => panic!("{q}: {other:?}"),
+    };
+    // 300 values cycling int / float / string / null.
+    let list = "[x IN range(0, 299) | CASE x % 4 WHEN 0 THEN x WHEN 1 THEN x + 0.5 WHEN 2 THEN toString(x) ELSE null END]";
+    let count =
+        |ty: &str| format!("UNWIND {list} AS v RETURN count(CASE WHEN v IS :: {ty} THEN 1 END)");
+    for _ in 0..2 {
+        assert_eq!(row(&mut g, &count("INTEGER NOT NULL")), 75);
+        assert_eq!(row(&mut g, &count("FLOAT")), 75 + 75);
+        assert_eq!(row(&mut g, &count("STRING | INTEGER")), 75 + 75 + 75);
+        assert_eq!(row(&mut g, &count("INTEGER")), 75 + 75);
+    }
+    let both = format!(
+        "UNWIND {list} AS v RETURN count(CASE WHEN v IS :: INTEGER AND v IS NOT :: FLOAT THEN 1 END)"
+    );
+    assert_eq!(row(&mut g, &both), 75);
+}
+
+/// A failed parse is never cached: the same invalid spec errors the same way
+/// after a valid spec of similar text has been cached.
+#[test]
+fn invalid_type_error_is_stable_after_valid_specs_are_cached() {
+    let mut g = DirGraph::new();
+    assert!(is_type(&mut g, "1", "INTEGER"));
+    let first = run(&mut g, "RETURN 1 IS :: BLOB").unwrap_err();
+    assert!(is_type(&mut g, "1", "INTEGER"));
+    let second = run(&mut g, "RETURN 1 IS :: BLOB").unwrap_err();
+    assert_eq!(first, second);
+    assert!(first.contains("INTEGER"), "{first}");
+}

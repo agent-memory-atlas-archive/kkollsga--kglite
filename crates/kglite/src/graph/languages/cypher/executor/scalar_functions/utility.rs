@@ -920,6 +920,39 @@ fn norm_of(embedding: Option<&[f32]>) -> Value {
     }
 }
 
+/// Parsed `IS ::` type expressions by canonical spec string. The spec is a
+/// literal of the statement, so every row of a scan asks for the same one;
+/// parsing it per row cost more than the type test. A hit allocates nothing.
+/// Failed parses are not stored, so an invalid spec errors on every call as
+/// before. Cleared when full: the keys come from query text, which an
+/// adversarial stream could make unbounded.
+static TYPE_CACHE: std::sync::LazyLock<
+    std::sync::RwLock<
+        std::collections::HashMap<String, std::sync::Arc<crate::graph::value_type::TypeExpr>>,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+const TYPE_CACHE_CAPACITY: usize = 128;
+
+fn parsed_type(spec: &str) -> Result<std::sync::Arc<crate::graph::value_type::TypeExpr>, String> {
+    if let Some(hit) = TYPE_CACHE
+        .read()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(spec)
+    {
+        return Ok(std::sync::Arc::clone(hit));
+    }
+    let parsed = std::sync::Arc::new(crate::graph::value_type::TypeExpr::parse(spec)?);
+    let mut cache = TYPE_CACHE
+        .write()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cache.len() >= TYPE_CACHE_CAPACITY {
+        cache.clear();
+    }
+    cache.insert(spec.to_owned(), std::sync::Arc::clone(&parsed));
+    Ok(parsed)
+}
+
 impl<'a> CypherExecutor<'a> {
     /// `__is_type(expr, '<canonical type>', negated)`: whether the value is of
     /// the type, flipped when `negated`. Never null — a null operand is of
@@ -930,7 +963,7 @@ impl<'a> CypherExecutor<'a> {
         else {
             return Err("IS :: type predicate is malformed".into());
         };
-        let ty = crate::graph::value_type::TypeExpr::parse(spec)?;
+        let ty = parsed_type(spec)?;
         let value = self.evaluate_expression(operand, row)?;
         Ok(Value::Boolean(ty.matches(&value) != *negated))
     }
