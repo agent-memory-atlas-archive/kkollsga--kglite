@@ -177,7 +177,9 @@ const WAL_HEADER_LEN: u64 = (WAL_MAGIC.len() + 1) as u64;
 /// declaration, as the fourth kind of [`MutationOp::SetPropertyIndex`]. Tags
 /// are unchanged; the header moves because a v12 reader meeting the new kind
 /// cannot decode the frame and would treat it as a torn tail, silently
-/// dropping a committed declaration.
+/// dropping a committed declaration. The same version appends
+/// [`MutationOp::SetIndexName`] as tag 24, the registration or release of a
+/// user-chosen index name; tags 0–23 are unchanged.
 pub const WAL_FORMAT_VERSION: u8 = 13;
 
 /// Oldest WAL format this build can replay. Frames from any version in
@@ -504,6 +506,23 @@ pub enum MutationOp {
         type_name: String,
         property: String,
         auto_refresh_limit: Option<usize>,
+        present: bool,
+    },
+    /// Register (`present`) or release a user-chosen index name.
+    ///
+    /// Carries the whole entry, not just the name: a release has to reach
+    /// exactly the entry it removed, and replay applies the names after it has
+    /// rebuilt every index, so the entry must stand alone. The index
+    /// structures themselves travel in [`MutationOp::SetPropertyIndex`],
+    /// [`MutationOp::SetTextIndex`], [`MutationOp::SetVectorIndex`] and
+    /// [`MutationOp::SetEdgeVectorIndex`]; the registry is a lookup aid over
+    /// them, never their source of truth.
+    SetIndexName {
+        name: String,
+        class: crate::graph::dir_graph::index_names::IndexClass,
+        entity: crate::graph::constraints::EntityKind,
+        target: String,
+        properties: Vec<String>,
         present: bool,
     },
 }

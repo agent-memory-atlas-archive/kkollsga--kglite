@@ -13,15 +13,17 @@
 //!
 //! The registry is an additive `FileMetadata` field: an older file loads with
 //! none (every index answers to its canonical name) and an older binary that
-//! meets the field ignores it. It is not carried in the write-ahead log, so a
-//! name given after the last checkpoint does not survive crash recovery; the
-//! index itself does, under its canonical name.
+//! meets the field ignores it. Registering and forgetting a name each log a
+//! [`MutationOp::SetIndexName`], so crash recovery restores the registry the
+//! last statement left. Replay applies the names after every index it
+//! rebuilds, so a name always lands on the final state of its index.
 
 use serde::{Deserialize, Serialize};
 
 use super::DirGraph;
 use crate::graph::constraints::{normalize_properties, EntityKind};
 use crate::graph::introspection::schema_overview::IndexKind;
+use crate::graph::wal::MutationOp;
 
 /// Which index structure a registered name points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +112,20 @@ impl NamedIndex {
 impl DirGraph {
     /// Register `name` for an index, replacing a stale entry of that name.
     pub(crate) fn register_index_name(&mut self, name: &str, named: NamedIndex) {
+        self.note_index_name(name, &named, true);
         self.index_names.insert(name.to_string(), named);
+    }
+
+    /// Record a name registration or release for the write-ahead log.
+    fn note_index_name(&mut self, name: &str, named: &NamedIndex, present: bool) {
+        self.note_declaration(MutationOp::SetIndexName {
+            name: name.to_string(),
+            class: named.class,
+            entity: named.entity,
+            target: named.target.clone(),
+            properties: named.properties.clone(),
+            present,
+        });
     }
 
     /// The entry a registered name points at.
@@ -120,7 +135,9 @@ impl DirGraph {
 
     /// Forget one name.
     pub(crate) fn forget_index_name(&mut self, name: &str) {
-        self.index_names.remove(name);
+        if let Some(named) = self.index_names.remove(name) {
+            self.note_index_name(name, &named, false);
+        }
     }
 
     /// Forget every name registered for `(entity, target, properties)` whose
@@ -136,9 +153,17 @@ impl DirGraph {
         if self.index_names.is_empty() {
             return;
         }
-        self.index_names.retain(|_, named| {
-            !(classes.contains(&named.class) && named.indexes(entity, target, properties))
-        });
+        let released: Vec<String> = self
+            .index_names
+            .iter()
+            .filter(|(_, named)| {
+                classes.contains(&named.class) && named.indexes(entity, target, properties)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in released {
+            self.forget_index_name(&name);
+        }
     }
 
     /// The name registered for the listed row `(entity, target, properties,

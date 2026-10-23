@@ -26,6 +26,7 @@ use crate::graph::algorithms::Interrupt;
 use crate::graph::constraints::{
     normalize_properties, ConstraintDeclaration, ConstraintKind, EntityKind,
 };
+use crate::graph::dir_graph::index_names::NamedIndex;
 use crate::graph::dir_graph::rel_constraints::RelDeclarationError;
 use crate::graph::features::temporal::persist::JournaledDeclaration;
 use crate::graph::features::temporal::TemporalTarget;
@@ -118,6 +119,7 @@ enum DeclKey {
     VectorIndex(String, String),
     EdgeVectorIndex(String, String),
     TextIndex(TextIndexEntity, String, String),
+    IndexName(String),
     Temporal(TemporalTarget),
     /// A temporal record that does not parse keeps a slot of its own, so the
     /// op is still accounted a declaration; install skips it.
@@ -266,6 +268,7 @@ impl Declarations {
                 property,
                 ..
             } => DeclKey::TextIndex(*entity, type_name.clone(), property.clone()),
+            MutationOp::SetIndexName { name, .. } => DeclKey::IndexName(name.clone()),
             MutationOp::SetTypeParent { node_type, .. } => DeclKey::Parent(node_type.clone()),
             MutationOp::SetOntology { .. } => DeclKey::Ontology,
             MutationOp::SetSchemaVersion { .. } => DeclKey::SchemaVersion,
@@ -617,7 +620,40 @@ impl Declarations {
                 *present,
             );
         }
+        self.install_index_names(graph);
         Ok(())
+    }
+
+    /// Reinstate the index-name registry once every index is rebuilt, so a
+    /// name lands on the final state of its index. Written straight into the
+    /// registry: replay re-journals nothing.
+    fn install_index_names(&self, graph: &mut DirGraph) {
+        for op in &self.ops {
+            let MutationOp::SetIndexName {
+                name,
+                class,
+                entity,
+                target,
+                properties,
+                present,
+            } = op
+            else {
+                continue;
+            };
+            if *present {
+                graph.index_names.insert(
+                    name.clone(),
+                    NamedIndex {
+                        class: *class,
+                        entity: *entity,
+                        target: target.clone(),
+                        properties: properties.clone(),
+                    },
+                );
+            } else {
+                graph.index_names.remove(name);
+            }
+        }
     }
 }
 

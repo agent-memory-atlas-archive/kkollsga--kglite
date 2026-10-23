@@ -11203,9 +11203,8 @@ class KnowledgeGraph:
                 ``db.index.vector.queryNodes`` resolves. Index and constraint names share one
                 namespace, so a name another index or a constraint holds is
                 refused before anything is built. The canonical name keeps
-                working. Not carried in the write-ahead log: after a crash
-                recovered from the log alone, the index answers to its
-                canonical name until it is named again.
+                working. A durable graph recovers the name after a crash,
+                together with the index.
 
         Returns:
             dict: ``{'indexed': int, 'metric': str, 'm': int}``.
@@ -11301,9 +11300,8 @@ class KnowledgeGraph:
                 ``db.index.vector.queryRelationships`` resolves. Index and constraint names share one
                 namespace, so a name another index or a constraint holds is
                 refused before anything is built. The canonical name keeps
-                working. Not carried in the write-ahead log: after a crash
-                recovered from the log alone, the index answers to its
-                canonical name until it is named again.
+                working. A durable graph recovers the name after a crash,
+                together with the index.
 
         Returns:
             dict: ``{'indexed': int, 'metric': str, 'm': int}``.
@@ -11501,9 +11499,8 @@ class KnowledgeGraph:
                 ``db.index.fulltext.queryNodes`` resolves. Index and constraint names share one
                 namespace, so a name another index or a constraint holds is
                 refused before anything is built. The canonical name keeps
-                working. Not carried in the write-ahead log: after a crash
-                recovered from the log alone, the index answers to its
-                canonical name until it is named again.
+                working. A durable graph recovers the name after a crash,
+                together with the index.
 
         Returns:
             dict: ``{'indexed': int, 'skipped': int, 'terms': int}`` —

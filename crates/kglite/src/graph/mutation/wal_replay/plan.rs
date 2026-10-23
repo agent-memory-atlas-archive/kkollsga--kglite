@@ -225,6 +225,7 @@ impl ReplayPlan {
             | MutationOp::SetSpatialConfig { .. }
             | MutationOp::SetPropertyIndex { .. }
             | MutationOp::SetConstraint { .. }
+            | MutationOp::SetIndexName { .. }
             | MutationOp::SetNodeTimeseries { .. }
             | MutationOp::SetTimeseriesConfig { .. }
             | MutationOp::SetEmbeddings { .. }

@@ -196,7 +196,7 @@ fn empty_reader_is_error() {
 #[test]
 fn variant_tags_are_stable_on_disk_format() {
     let id = || Value::Int64(1);
-    let cases: [(u8, MutationOp); 24] = [
+    let cases: [(u8, MutationOp); 25] = [
         (
             0,
             MutationOp::UpsertNode {
@@ -430,6 +430,17 @@ fn variant_tags_are_stable_on_disk_format() {
                 type_name: "C".into(),
                 property: "txt".into(),
                 auto_refresh_limit: Some(500),
+                present: true,
+            },
+        ),
+        (
+            24,
+            MutationOp::SetIndexName {
+                name: "by_body".into(),
+                class: crate::graph::dir_graph::index_names::IndexClass::Fulltext,
+                entity: crate::graph::constraints::EntityKind::Relationship,
+                target: "C".into(),
+                properties: vec!["txt".into()],
                 present: true,
             },
         ),
@@ -1389,4 +1400,27 @@ fn v13_logs_carry_the_relationship_index_kind_and_v12_logs_still_read() {
     let v12 = write_wal_version(&equality, 12);
     assert_eq!(v12[4], 12);
     assert_eq!(read_frames_all(v12).unwrap(), equality);
+}
+
+/// Index-name registrations and releases are v13 ops: a log round-trips both
+/// directions of the op with every field of the entry intact.
+#[test]
+fn index_name_ops_round_trip() {
+    use crate::graph::constraints::EntityKind;
+    use crate::graph::dir_graph::index_names::IndexClass;
+    let op = |present| MutationOp::SetIndexName {
+        name: "by_text".into(),
+        class: IndexClass::Vector,
+        entity: EntityKind::Relationship,
+        target: "CLAIMS".into(),
+        properties: vec!["a".into(), "b".into()],
+        present,
+    };
+    let frames = vec![WalFrame {
+        lsn: 1,
+        ops: vec![op(true), op(false)],
+    }];
+    let log = write_wal(&frames);
+    assert_eq!(log[4], WAL_FORMAT_VERSION);
+    assert_eq!(read_frames_all(log).unwrap(), frames);
 }

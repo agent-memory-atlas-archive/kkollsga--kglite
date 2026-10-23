@@ -492,6 +492,7 @@ fn mutation_op_has_legacy_reference(op: &MutationOp) -> bool {
         | MutationOp::SetSpatialConfig { .. }
         | MutationOp::SetPropertyIndex { .. }
         | MutationOp::SetConstraint { .. }
+        | MutationOp::SetIndexName { .. }
         // The payload ops carry channel floats and embedding vectors, neither
         // of which can hold a `Value` at all, so no node reference can hide
         // in one.

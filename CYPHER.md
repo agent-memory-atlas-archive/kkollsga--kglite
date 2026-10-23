@@ -4666,9 +4666,9 @@ pastes straight in.
   property does not inherit it.
 - Names persist in the `.kgl` file as an additive field. A file saved before the
   field existed loads with canonical names only, and an older release opens a file
-  that carries names and ignores them. The write-ahead log does not carry names: a
-  durable graph recovered from the log alone keeps the index, under its canonical
-  name, until it is named again.
+  that carries names and ignores them. The write-ahead log records each name given
+  or released, so a durable graph recovered after a crash lists the same names as
+  before it.
 - A disk graph's property indexes are persistent bundles `SHOW INDEXES` does not
   list, so they are not addressable by name; BM25 and vector indexes are.
 
