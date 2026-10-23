@@ -83,8 +83,19 @@ def gh_api(path: str) -> dict:
     return json.loads(proc.stdout)
 
 
+def is_release_run(run: dict, branch: str) -> bool:
+    """Only push-event runs on the target branch decide a release.
+
+    A pull_request run can share the merge SHA with the push run (the PR head
+    fast-forwarded onto main). Such a run is routinely cancelled by
+    `cancel-in-progress` concurrency; counting it made a green release read as
+    failed (CI #1582 cancelled vs push/main #1581 success, same SHA).
+    """
+    return run.get("event") == "push" and run.get("head_branch") == branch
+
+
 def fetch_runs(repo: str, branch: str, sha: str) -> tuple[list[dict], str]:
-    """Return the workflow runs for `sha`, and which query found them.
+    """Return the push-event runs on `branch` for `sha`, and which query found them.
 
     Branch-scoped first: it is the query that demonstrably works when the
     head_sha filter goes blind. The head_sha query is unioned in so a run
@@ -93,9 +104,13 @@ def fetch_runs(repo: str, branch: str, sha: str) -> tuple[list[dict], str]:
     by_branch = [
         run
         for run in gh_api(f"repos/{repo}/actions/runs?branch={branch}&per_page=100").get("workflow_runs", [])
-        if run.get("head_sha") == sha
+        if run.get("head_sha") == sha and is_release_run(run, branch)
     ]
-    by_sha = gh_api(f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs", [])
+    by_sha = [
+        run
+        for run in gh_api(f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs", [])
+        if is_release_run(run, branch)
+    ]
 
     merged: dict[int, dict] = {run["id"]: run for run in by_sha}
     merged.update({run["id"]: run for run in by_branch})

@@ -193,6 +193,57 @@ def test_a_rerun_supersedes_the_earlier_attempt():
     assert failed == []
 
 
+def _gh_run(name, number, event, branch, status, conclusion, sha="abc123"):
+    return {
+        "id": number,
+        "name": name,
+        "run_number": number,
+        "event": event,
+        "head_branch": branch,
+        "head_sha": sha,
+        "status": status,
+        "conclusion": conclusion,
+    }
+
+
+def _canned_api(monkeypatch, runs):
+    """Both queries answer with every run, as the head_sha query does."""
+    monkeypatch.setattr(wait_for_release_ci, "gh_api", lambda path: {"workflow_runs": runs})
+
+
+def test_a_cancelled_pull_request_run_on_the_same_sha_is_not_a_failure(monkeypatch):
+    """CI #1582 (pull_request, cancelled) shares a SHA with CI #1581
+    (push/main, success); only the push run may decide the release."""
+    runs = [
+        _gh_run("CI", 1581, "push", "main", "completed", "success"),
+        _gh_run("CI", 1582, "pull_request", "fix/0.21.1-review", "completed", "cancelled"),
+        _gh_run("Release", 40, "push", "main", "completed", "success"),
+    ]
+    _canned_api(monkeypatch, runs)
+    found, _ = wait_for_release_ci.fetch_runs("o/r", "main", "abc123")
+    all_terminal, missing, pending, failed = wait_for_release_ci.evaluate(found, ("CI", "Release"))
+    assert (all_terminal, missing, pending, failed) == (True, [], [], [])
+
+
+def test_a_cancelled_push_run_on_main_still_fails(monkeypatch):
+    runs = [
+        _gh_run("CI", 1581, "push", "main", "completed", "cancelled"),
+        _gh_run("CI", 1582, "pull_request", "x", "completed", "success"),
+        _gh_run("Release", 40, "push", "main", "completed", "success"),
+    ]
+    _canned_api(monkeypatch, runs)
+    found, _ = wait_for_release_ci.fetch_runs("o/r", "main", "abc123")
+    _, _, _, failed = wait_for_release_ci.evaluate(found, ("CI", "Release"))
+    assert failed == ["CI: cancelled"]
+
+
+def test_only_pull_request_runs_present_is_missing_not_a_pass(monkeypatch):
+    _canned_api(monkeypatch, [_gh_run("CI", 1582, "pull_request", "x", "completed", "success")])
+    found, _ = wait_for_release_ci.fetch_runs("o/r", "main", "abc123")
+    all_terminal, missing, _, _ = wait_for_release_ci.evaluate(found, ("CI",))
+    assert (all_terminal, missing) == (False, ["CI"])
+
+
 @pytest.mark.parametrize("workflow", wait_for_release_ci.RELEASE_WORKFLOWS)
 def test_expected_workflow_names_exist_in_the_repository(workflow):
     """A renamed workflow would make the poller wait forever on a name
