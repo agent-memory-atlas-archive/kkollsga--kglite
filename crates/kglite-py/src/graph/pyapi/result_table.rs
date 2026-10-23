@@ -176,6 +176,21 @@ pub fn format_table(py: Python<'_>, columns: &[String], rows: &[Vec<Value>]) -> 
     render(style, columns, rows)
 }
 
+/// The operation column of an EXPLAIN result, which is never truncated: its
+/// operator names and index states (`FusedVectorScoreTopK [hnsw] [requested=auto]`)
+/// are the content. Matches the exact EXPLAIN column triple so a procedure
+/// result that happens to have an `operation` column keeps the cap.
+fn explain_operation_column(columns: &[String]) -> Option<usize> {
+    match columns {
+        [step, operation, estimated]
+            if step == "step" && operation == "operation" && estimated == "estimated_rows" =>
+        {
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 fn render(style: &TableStyle, columns: &[String], rows: &[Vec<Value>]) -> String {
     if rows.is_empty() {
         return format!("shape: (0, {})\n(empty)", columns.len());
@@ -183,6 +198,7 @@ fn render(style: &TableStyle, columns: &[String], rows: &[Vec<Value>]) -> String
 
     let n = rows.len();
     let max_col_width = 30;
+    let explain_operation = explain_operation_column(columns);
     let max_display_rows = 20;
 
     // Decide which rows to show
@@ -200,7 +216,15 @@ fn render(style: &TableStyle, columns: &[String], rows: &[Vec<Value>]) -> String
         .chain(rows.iter().skip(tail_start))
         .map(|row| {
             row.iter()
-                .map(|v| truncate_middle(&format_cell_value(v), max_col_width))
+                .enumerate()
+                .map(|(j, v)| {
+                    let cell = format_cell_value(v);
+                    if Some(j) == explain_operation {
+                        cell
+                    } else {
+                        truncate_middle(&cell, max_col_width)
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -461,5 +485,26 @@ mod tests {
         let rows = vec![vec![plain(&"日".repeat(40))]];
         let out = render(&ASCII_STYLE, &cols, &rows);
         assert!(out.contains(" ... "));
+    }
+
+    #[test]
+    fn explain_operation_column_is_not_truncated_but_other_tables_are() {
+        let op = "FusedVectorScoreTopK [hnsw] [requested=auto] over a long tail";
+        assert!(op.chars().count() > 30);
+        let explain_cols: Vec<String> = ["step", "operation", "estimated_rows"]
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        let rows = vec![vec![Value::Int64(1), plain(op), Value::Int64(5)]];
+        let out = render(&ASCII_STYLE, &explain_cols, &rows);
+        assert!(out.contains(op), "EXPLAIN operation truncated:\n{out}");
+
+        let other_cols: Vec<String> = ["id", "operation"].iter().map(|c| c.to_string()).collect();
+        let rows = vec![vec![Value::Int64(1), plain(op)]];
+        let out = render(&ASCII_STYLE, &other_cols, &rows);
+        assert!(
+            !out.contains(op) && out.contains(" ... "),
+            "cap lost:\n{out}"
+        );
     }
 }

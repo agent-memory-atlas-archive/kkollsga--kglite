@@ -236,17 +236,29 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
         ]);
     }
 
-    for clause in query.clauses.iter() {
+    for (clause_index, clause) in query.clauses.iter().enumerate() {
         // `step` numbers rows, not clauses: a MATCH contributes a ClosureProbe
         // row per eligible closure and an Expand row per variable-length edge
         // after its own row, and the column stays contiguous.
         let step = (rows.len() + 1) as i64;
         let mut operation = executor::clause_display_name(clause);
         if let Clause::FusedVectorScoreTopK { score_call, .. } = clause {
+            if let Some(state) =
+                retrieval_index_state(graph, &query.clauses[..clause_index], score_call, true)
+            {
+                operation.push_str(&format!(" [{state}]"));
+            }
             operation.push_str(&format!(
                 " [requested={}]",
                 requested_vector_policy(score_call)
             ));
+        }
+        if let Clause::FusedTextBm25TopK { score_call, .. } = clause {
+            if let Some(state) =
+                retrieval_index_state(graph, &query.clauses[..clause_index], score_call, false)
+            {
+                operation.push_str(&format!(" [{state}]"));
+            }
         }
         let est = match clause {
             Clause::Match(m) | Clause::OptionalMatch(m) => estimate_match_rows(m, graph)
@@ -313,6 +325,64 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
         profile: None,
         diagnostics: None,
         lazy: None,
+    }
+}
+
+/// The index state a fused retrieval operator will find, from what the plan
+/// and the graph show without executing: `hnsw` / `exact` for a vector top-K,
+/// `postings` / `scan` for a BM25 one.
+///
+/// The store is resolved from the nearest preceding single-label MATCH that
+/// binds the scored variable and the literal property argument. `None` when
+/// either is not static (a parameter property, an alternation, a variable no
+/// earlier MATCH binds), or no vector store exists for the pair — the label
+/// is then omitted rather than guessed. It is the state the executor starts
+/// from: a stale index, a filtered population or a row-dependent argument can
+/// still route a query to the exact scan, which `diagnostics["retrieval"]`
+/// reports after execution.
+fn retrieval_index_state(
+    graph: &DirGraph,
+    preceding: &[Clause],
+    score_call: &Expression,
+    vector: bool,
+) -> Option<&'static str> {
+    let Expression::FunctionCall { args, .. } = score_call else {
+        return None;
+    };
+    let (Some(Expression::Variable(variable)), Some(Expression::Literal(Value::String(property)))) =
+        (args.first(), args.get(1))
+    else {
+        return None;
+    };
+    let node_type = preceding.iter().rev().find_map(|clause| {
+        let (Clause::Match(m) | Clause::OptionalMatch(m)) = clause else {
+            return None;
+        };
+        m.patterns
+            .iter()
+            .flat_map(|pattern| pattern.elements.iter())
+            .find_map(|element| match element {
+                PatternElement::Node(np)
+                    if np.variable.as_deref() == Some(variable.as_str())
+                        && np.alt_labels.is_none() =>
+                {
+                    np.node_type.as_deref()
+                }
+                _ => None,
+            })
+    })?;
+    if vector {
+        let store = graph.embedding_store(node_type, property)?;
+        let forced_exact = requested_vector_policy(score_call) == "exact";
+        Some(if store.has_index() && !forced_exact {
+            "hnsw"
+        } else {
+            "exact"
+        })
+    } else if crate::graph::text_indexes::has_text_index(graph, node_type, property) {
+        Some("postings")
+    } else {
+        Some("scan")
     }
 }
 

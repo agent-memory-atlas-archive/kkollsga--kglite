@@ -91,6 +91,7 @@ before upgrading.
 
 ### Changed
 
+- **EXPLAIN shows operator names whole and the index a top-K starts from.** The operation column of an EXPLAIN table was cut at 30 characters; it now prints in full (other result tables keep the cap). A fused vector top-K reads `FusedVectorScoreTopK [hnsw]` when its store has a built index and `[exact]` when it has none or `{exact: true}` is requested. A fused BM25 top-K reads `FusedTextBm25TopK [postings]` or `[scan]`. The label is the state before execution: a stale index, a filter or a row-dependent argument can still fall back to the exact scan, which `diagnostics['retrieval']` reports afterwards. The label is omitted when the label or property is not static.
 - **The index a UNIQUE or NODE KEY constraint owns is listed as `RANGE`.** `SHOW INDEXES` and `db.indexes()` reported `PROPERTY` for it; Neo4j types a constraint's backing index `RANGE`, and clients that look for the index behind a constraint filter on that. `owningConstraint` is unchanged, and so is the index.
 - **`SHOW INDEXES` lists the name a `CREATE INDEX <name>` gave.** Before, every row carried the canonical name and the given name was discarded. A script that reads `SHOW INDEXES` names back as `Label.property` for an index it created under a name now sees the name it chose; the canonical name still drops it.
 

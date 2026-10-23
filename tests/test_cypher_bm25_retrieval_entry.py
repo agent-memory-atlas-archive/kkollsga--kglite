@@ -44,7 +44,7 @@ def test_complete_indexed_corpus_keeps_numeric_zero_and_stable_ties():
             f"MATCH (d:Doc) RETURN d.id AS id, text_bm25(d, 'body', 'needle') AS score ORDER BY score DESC LIMIT {k}"
         )
         plan = graph.cypher("EXPLAIN " + query).to_list()
-        assert any(row["operation"] == "FusedTextBm25TopK" for row in plan)
+        assert any(row["operation"] == "FusedTextBm25TopK [postings]" for row in plan)
         expected = graph.cypher(query, disable_optimizer=True).to_list()
         assert [row["id"] for row in expected] == list(range(k))
         if k == 3:
