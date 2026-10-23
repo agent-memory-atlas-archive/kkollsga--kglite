@@ -120,7 +120,7 @@ fn build_connection_df_from_pandas(
     column_types: Option<&Bound<'_, PyDict>>,
     on_invalid: OnInvalid,
 ) -> PyResult<(DataFrame, Option<kglite_core::api::TemporalConfig>)> {
-    let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
+    let all_columns: Vec<String> = py_in::dataframe_columns(data)?;
 
     let mut default_cols = vec![source_id_field, target_id_field];
     if let Some(src_title) = source_title_field {
@@ -640,7 +640,7 @@ fn parse_inline_config<'py>(
         }
     }
 
-    let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
+    let all_columns: Vec<String> = py_in::dataframe_columns(data)?;
 
     let mut default_cols = vec![unique_id_field];
     if let Some(title_field) = node_title_field {
