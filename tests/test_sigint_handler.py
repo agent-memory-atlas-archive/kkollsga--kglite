@@ -145,3 +145,25 @@ def test_disposition_change_after_the_first_query_is_followed():
     done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "['b']"
+
+
+def test_ctrl_c_during_a_query_that_finishes_unpolled_still_interrupts(restore_sigint):
+    # A read this small completes between two cancel-flag polls. The handler
+    # absorbs a SIGINT that lands inside it, so without redelivery the signal
+    # vanished and a loop of such reads never saw Ctrl-C.
+    g = kglite.KnowledgeGraph()
+    g.cypher("UNWIND range(1, 20000) AS i CREATE (:T {i: i})")
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    for k in range(20):
+        timer = threading.Timer(0.03 + (k % 5) * 0.003, lambda: os.kill(os.getpid(), signal.SIGINT))
+        timer.start()
+        t0 = time.perf_counter()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                while True:
+                    g.cypher("MATCH (n:T) RETURN count(n) AS c")
+                    if time.perf_counter() - t0 > 10:
+                        pytest.fail(f"round {k}: SIGINT during a read was swallowed")
+        finally:
+            timer.cancel()
+            timer.join()

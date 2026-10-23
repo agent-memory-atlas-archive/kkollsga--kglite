@@ -563,10 +563,15 @@ class TestLiveMutationGIL:
     def test_ctrl_c_ends_the_wait_for_a_running_write(self):
         g = _live_graph()
         writing = threading.Event()
+        stop = threading.Event()
 
+        # The writer keeps writing until told to stop, so the SIGINT cannot
+        # arrive after a fixed batch of writes has already finished (a fast
+        # machine finishes four 200k-row writes inside the delay).
         def write():
             writing.set()
-            for _ in range(4):
+            give_up = time.perf_counter() + 20  # bounds a failing run: the wait must not outlive it
+            while not stop.is_set() and time.perf_counter() < give_up:
                 g.cypher("MATCH (n:T) SET n.f = n.i + 1")
 
         w = threading.Thread(target=write)
@@ -584,8 +589,12 @@ class TestLiveMutationGIL:
                         pytest.fail("no KeyboardInterrupt while waiting behind a write")
         finally:
             timer.cancel()
+            stop.set()
             w.join(timeout=60)
         assert not w.is_alive()
+        # Ended by the signal (~0.3 s after the timer started), not by the
+        # writer giving up: only the wait loop's signal poll can do the former.
+        assert time.perf_counter() - t0 < 10
 
 
 # ── Every method waits, not just cypher() ───────────────────────────────────

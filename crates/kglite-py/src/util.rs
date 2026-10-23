@@ -64,13 +64,21 @@ impl EnterKg for Python<'_> {
         T: Ungil + Send,
         E: Ungil + Send + Into<KgError>,
     {
-        let _guard = sigint::arm();
+        let guard = sigint::arm();
         let cancel = sigint::cancel_flag();
         // GIL released for the whole engine call; the SIGINT handler
-        // (armed by `_guard`) can flip `cancel` from signal context.
+        // (armed by `guard`) can flip `cancel` from signal context.
         let r = self.detach(move || f(cancel));
-        // `_guard` disarms on drop, after the GIL is reacquired here.
-        r.map_err(|e| kg_to_pyerr(e.into()))
+        // Disarm after the GIL is reacquired. A SIGINT the handler absorbed
+        // that the engine never observed (the call finished between two
+        // polls) would otherwise vanish; hand it to Python's handler instead.
+        let absorbed = guard.finish();
+        let r = r.map_err(Into::into);
+        if absorbed && !matches!(r, Err(KgError::Cancelled)) {
+            sigint::redeliver();
+            self.check_signals()?;
+        }
+        r.map_err(kg_to_pyerr)
     }
 }
 
@@ -223,6 +231,26 @@ mod sigint {
         }
     }
 
+    impl Guard {
+        /// Disarm. True when this was the last running call and the handler
+        /// absorbed a SIGINT during it that is still unconsumed.
+        pub(super) fn finish(self) -> bool {
+            // Drop runs the decrement; the last-out check needs the count
+            // before it, so the decrement happens here and Drop is skipped.
+            std::mem::forget(self);
+            ACTIVE.fetch_sub(1, Ordering::SeqCst) == 1 && QUERY_CANCEL.swap(false, Ordering::SeqCst)
+        }
+    }
+
+    /// Re-raise SIGINT now that no call is running: the handler forwards it
+    /// to the disposition it replaced (normally Python's own).
+    pub(super) fn redeliver() {
+        // SAFETY: `raise` is async-signal-safe and has no preconditions.
+        unsafe {
+            libc::raise(libc::SIGINT);
+        }
+    }
+
     impl Drop for Guard {
         fn drop(&mut self) {
             ACTIVE.fetch_sub(1, Ordering::SeqCst);
@@ -243,4 +271,12 @@ mod sigint {
     pub(super) fn arm() -> Guard {
         Guard
     }
+
+    impl Guard {
+        pub(super) fn finish(self) -> bool {
+            false
+        }
+    }
+
+    pub(super) fn redeliver() {}
 }
