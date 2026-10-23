@@ -347,6 +347,26 @@ impl DirGraph {
         Ok(count)
     }
 
+    /// Fold a disk graph's overflow edges into its CSR before a write when the
+    /// bag is large enough that copying it on every write costs more than one
+    /// fold. A graph built in-process holds its whole edge set as overflow until
+    /// `save()` or `compact()`, so without this its first write — and every one
+    /// after — pays O(edges). The threshold bounds the fold's amortized cost at
+    /// four edges' worth of work per overflow edge added since the last fold.
+    /// A failed fold leaves the graph as it was; the write proceeds on the slow
+    /// path. No-op outside disk mode.
+    pub(crate) fn compact_disk_if_overflow_large(&mut self) {
+        const MIN_OVERFLOW: usize = 100_000;
+        let Some(disk) = self.graph.as_disk() else {
+            return;
+        };
+        let overflow = disk.overflow_edge_count();
+        if overflow < MIN_OVERFLOW.max(disk.edge_count / 4) {
+            return;
+        }
+        let _ = self.compact_disk();
+    }
+
     /// Save a disk-mode graph to a directory. The directory IS the graph.
     /// Persists CSR files, node data, edge properties, column stores, and metadata.
     ///

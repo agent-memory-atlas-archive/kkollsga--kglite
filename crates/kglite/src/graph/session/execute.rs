@@ -704,6 +704,9 @@ fn mut_statement(
         // deferred load's indexes before the statement writes into them —
         // `DirGraph::indexes_deferred` for why it must be before.
         graph.materialize_indexes();
+        // A disk graph still carrying its build-time overflow copies it on
+        // every write; fold it once, before the statement's checkpoint.
+        graph.compact_disk_if_overflow_large();
         let mut names = Vec::new();
         collect_mutation_names(&parsed, &mut names);
         graph

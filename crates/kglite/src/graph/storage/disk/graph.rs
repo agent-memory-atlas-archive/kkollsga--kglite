@@ -1899,6 +1899,13 @@ impl DiskGraph {
             || self.overflow_in.values().any(|v| !v.is_empty())
     }
 
+    /// Edges appended after the immutable CSR snapshot (the overflow bag), as
+    /// an O(1) count. Every write that forks or snapshots this backend copies
+    /// the bag, so a write's cost grows with it until `compact` folds it.
+    pub(crate) fn overflow_edge_count(&self) -> usize {
+        self.appended_edge_endpoints.len()
+    }
+
     pub fn build_csr_from_pending(&mut self) -> std::io::Result<()> {
         let node_bound = self.node_slot_len();
         let pending = self.pending_edges.get_mut();
