@@ -182,6 +182,10 @@ pub enum BucketId {
         key: CompositeIndexKey,
         value: CompositeValue,
     },
+    /// One value bucket of a relationship property index
+    /// (`DirGraph::rel_property_indices`). Members are edge slots held as
+    /// `NodeIndex`.
+    RelPropertyValue { key: IndexKey, value: Value },
 }
 
 /// One reversible edit. See the module docs for the replay contract.

@@ -47,6 +47,7 @@ impl DirGraph {
         self.property_index_keys = self.user_property_index_keys();
         self.composite_index_keys = self.user_composite_index_keys();
         self.range_index_keys = sorted_keys(&self.range_indices);
+        self.rel_property_index_keys = self.user_rel_index_keys();
         // The declared UNIQUE constraints are the live list; only its order
         // is imposed here.
         self.unique_constraint_keys.sort_unstable();
@@ -69,6 +70,7 @@ impl DirGraph {
             && (self.property_index_keys != self.user_property_index_keys()
                 || self.composite_index_keys != self.user_composite_index_keys()
                 || self.range_index_keys != sorted_keys(&self.range_indices)
+                || self.rel_property_index_keys != self.user_rel_index_keys()
                 || !self
                     .unique_constraint_keys
                     .windows(2)
@@ -109,6 +111,12 @@ impl DirGraph {
         }
         self.range_index_keys = range_keys;
 
+        let rel_keys: Vec<IndexKey> = std::mem::take(&mut self.rel_property_index_keys);
+        for (rel_type, property) in &rel_keys {
+            self.build_rel_property_index(rel_type, property);
+        }
+        self.rel_property_index_keys = rel_keys;
+
         self.rebuild_unique_indices_from_keys();
     }
 
@@ -134,6 +142,8 @@ impl DirGraph {
         self.composite_index_keys.dedup();
         self.range_index_keys.sort_unstable();
         self.range_index_keys.dedup();
+        self.rel_property_index_keys.sort_unstable();
+        self.rel_property_index_keys.dedup();
         self.unique_constraint_keys.sort_unstable();
         self.unique_constraint_keys.dedup();
         self.indexes_deferred = true;

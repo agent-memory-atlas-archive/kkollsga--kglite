@@ -86,6 +86,7 @@ pub(crate) use pending_violation::PendingViolation;
 mod persistence_lifecycle;
 pub mod range_index_layer;
 pub(crate) mod rel_constraints;
+pub(crate) mod rel_index;
 mod reserved_constraints;
 pub(crate) mod rollback;
 pub(crate) mod schema_cow;
@@ -162,6 +163,14 @@ pub struct DirGraph {
     /// Persisted list of range index keys so indexes can be rebuilt on load
     #[serde(default)]
     pub range_index_keys: Vec<IndexKey>,
+    /// Relationship property indexes: `(rel_type, property) -> value -> [edge]`.
+    /// Skipped during serialization — rebuilt from `rel_property_index_keys` on
+    /// load. Members are edge slots held as `NodeIndex` (`dir_graph::rel_index`).
+    #[serde(skip)]
+    pub(crate) rel_property_indices: HashMap<IndexKey, LayeredIndex<Value>>,
+    /// Persisted list of relationship property index keys.
+    #[serde(default)]
+    pub(crate) rel_property_index_keys: Vec<IndexKey>,
     /// `true` between a deferred load and the materialization that follows it:
     /// the declaration lists are populated but `property_indices`,
     /// `composite_indices` and `range_indices` — the indexes constraints own
@@ -996,6 +1005,8 @@ impl DirGraph {
             composite_index_keys: Vec::new(),
             range_indices: HashMap::new(),
             range_index_keys: Vec::new(),
+            rel_property_indices: HashMap::new(),
+            rel_property_index_keys: Vec::new(),
             indexes_deferred: false,
             adopted_index_slots: std::collections::HashSet::new(),
             ddl_unique_constraints: std::collections::BTreeSet::new(),
@@ -2089,6 +2100,8 @@ impl DirGraph {
             self.create_composite_index(&node_type, &prop_refs);
         }
 
+        self.rebuild_rel_property_indexes();
+
         let range_keys: Vec<IndexKey> = self.range_indices.keys().cloned().collect();
         for (node_type, property) in range_keys {
             self.create_range_index(&node_type, &property);
@@ -2481,3 +2494,6 @@ mod edge_embedding_disk_tests;
 mod shared_id_index_tests;
 #[cfg(test)]
 mod timestamp_retype_disk_tests;
+
+#[cfg(test)]
+pub(crate) mod rel_index_tests;

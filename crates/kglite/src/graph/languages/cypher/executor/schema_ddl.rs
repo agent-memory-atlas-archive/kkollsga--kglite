@@ -12,6 +12,7 @@
 //! | `property_indices` (hash) | `=`, `IN` | `DirGraph::create_index` |
 //! | `composite_indices` (hash, multi-property) | conjunctive `=` | `DirGraph::create_composite_index` |
 //! | `range_indices` (B-tree) | `<`, `<=`, `>`, `>=`, ordering | `DirGraph::create_range_index` |
+//! | `rel_property_indices` (hash, relationship) | `=`, `IN` on `r.p` | `DirGraph::declare_rel_property_index` |
 //!
 //! So a Neo4j-syntax statement maps like this:
 //!
@@ -354,6 +355,9 @@ fn execute_create_index(
     graph: &mut DirGraph,
     create: &CreateIndex,
 ) -> Result<MutationStats, String> {
+    if let DdlTarget::Relationship { rel_type, .. } = &create.target {
+        return create_relationship_index(graph, create, rel_type);
+    }
     let label = node_label(&create.target, "CREATE INDEX")?;
     // Role-scoped write guard: an index is schema state for one node type, so a
     // session restricted to a write whitelist may not index a type outside it.
@@ -405,6 +409,68 @@ fn execute_create_index(
         }
     }
     Ok(stats)
+}
+
+/// `CREATE [RANGE] INDEX FOR ()-[r:T]-() ON (r.p)` — the relationship
+/// equality index.
+///
+/// A `RANGE` index on a relationship builds the same equality structure: the
+/// ordered half a node `RANGE` index adds is not built for relationships, so a
+/// range predicate on `r.p` still scans.
+fn create_relationship_index(
+    graph: &mut DirGraph,
+    create: &CreateIndex,
+    rel_type: &str,
+) -> Result<MutationStats, String> {
+    super::write_scope::enforce_relationship_type_write_scope(graph, rel_type)?;
+    if create.has_options {
+        return Err(format!(
+            "OPTIONS {{ ... }} on CREATE INDEX is not supported: KGLite has no index providers \
+             or per-index configuration to apply. Remove the OPTIONS block — \
+             `CREATE INDEX FOR ()-[r:{rel_type}]-() ON (r.{})` creates the index.",
+            create.properties.join(", r.")
+        ));
+    }
+    let [property] = create.properties.as_slice() else {
+        return Err(if create.properties.is_empty() {
+            "CREATE INDEX requires at least one property".to_string()
+        } else {
+            format!(
+                "CREATE INDEX over {} properties of relationship type '{rel_type}' is not \
+                 supported: a relationship index covers exactly one property. Create one index \
+                 per property.",
+                create.properties.len()
+            )
+        });
+    };
+    graph.refuse_rel_index_on_disk("CREATE INDEX")?;
+    graph.materialize_indexes();
+    let name = qualified_index_name("RELATIONSHIP", rel_type, &create.properties);
+    if graph.has_rel_property_index(rel_type, property) {
+        if create.if_not_exists {
+            return Ok(MutationStats::default());
+        }
+        return Err(already_exists_message(&name));
+    }
+    let named = create.name.as_ref().map(|name| {
+        (
+            name,
+            NamedIndex::relationship(IndexClass::Equality, rel_type, property),
+        )
+    });
+    if let Some((name, named)) = &named {
+        if let Err(taken) = check_index_name(graph, name, named) {
+            if create.if_not_exists {
+                return Ok(MutationStats::default());
+            }
+            return Err(taken);
+        }
+    }
+    graph.declare_rel_property_index(rel_type, property);
+    if let Some((name, named)) = named {
+        register_index_name(graph, name, named);
+    }
+    Ok(indexes_added(1))
 }
 
 /// Single-property `CREATE INDEX` / `CREATE RANGE INDEX`.
@@ -551,6 +617,10 @@ fn execute_drop_index(graph: &mut DirGraph, drop: &DropIndex) -> Result<Mutation
     // conflating them is how `IF EXISTS` used to report success over an index
     // that was still installed.
     let (entity_type, label, properties, resolved) = match &drop.selector {
+        DropIndexSelector::Descriptor {
+            target: DdlTarget::Relationship { rel_type, .. },
+            properties,
+        } => ("RELATIONSHIP", rel_type.clone(), properties.clone(), false),
         DropIndexSelector::Descriptor { target, properties } => (
             "NODE",
             node_label(target, "DROP INDEX")?,
@@ -683,7 +753,9 @@ fn drop_relationship_indexes(
         )?;
     let text = wants(IndexClass::Fulltext)
         && crate::graph::text_indexes::edge_text::drop_edge_text_index(graph, rel_type, property);
-    Ok(usize::from(vector) + usize::from(text))
+    let value = wants(IndexClass::Equality)
+        && graph.withdraw_rel_property_index(rel_type, property);
+    Ok(usize::from(vector) + usize::from(text) + usize::from(value))
 }
 
 /// `DROP INDEX <name>` where `<name>` matches no installed index.
@@ -774,22 +846,15 @@ fn qualified_index_name(entity_type: &str, label: &str, properties: &[String]) -
     }
 }
 
-/// The node label an *index* statement targets, rejecting relationship DDL by
-/// name. Constraint DDL has its own [`constraint_label`]: the reason a
-/// relationship target is refused there is a different reason, and reporting it
-/// as an index limitation sends the reader looking for an index they never
-/// asked for.
+/// The node label an *index* statement targets. A relationship target never
+/// reaches it: `CREATE INDEX` and `DROP INDEX` route one to the relationship
+/// index arm first. Constraint DDL has its own [`constraint_label`].
 fn node_label(target: &DdlTarget, statement: &str) -> Result<String, String> {
     match target {
         DdlTarget::Node { label, .. } => Ok(label.clone()),
         DdlTarget::Relationship { rel_type, .. } => Err(format!(
-            "{statement} on a relationship pattern is not supported: the descriptor form covers \
-             node properties only, and KGLite has no relationship *property* index to build on \
-             type '{rel_type}' — relationship properties are still queryable, they are scanned \
-             rather than indexed. A relationship *vector* index is built by \
-             `CALL db.relationship_embeddings.build_index`, a relationship BM25 index by \
-             `CALL db.relationship_text_index.build`, and either is addressed by its canonical name, as \
-             `DROP INDEX relationship:{rel_type}.<property>`."
+            "{statement} on relationship type '{rel_type}' reached the node-label path; relationship \
+             index DDL is handled before it. Please report this."
         )),
     }
 }

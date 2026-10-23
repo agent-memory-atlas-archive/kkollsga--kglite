@@ -1491,3 +1491,84 @@ fn payloads_replay_from_a_payload_only_frame() {
     assert_eq!(stored_series(&mut g, 1), Some(series(&[3.0])));
     assert_eq!(store(&g).map(|s| s.len()), Some(1));
 }
+
+// ── relationship property index declarations ─────────────────────────
+
+fn edge_with(conn: &str, src: i64, tgt: i64, key: &str) -> MutationOp {
+    MutationOp::UpsertEdge {
+        conn_type: conn.into(),
+        src_type: "Person".into(),
+        src_id: Value::Int64(src),
+        tgt_type: "Person".into(),
+        tgt_id: Value::Int64(tgt),
+        properties: vec![("k".to_string(), Value::String(key.into()))],
+    }
+}
+
+#[test]
+fn a_relationship_index_declaration_replays_and_follows_later_edge_ops() {
+    let mut g = DirGraph::new();
+    let frames = vec![
+        frame(
+            1,
+            vec![
+                upsert_node(1, "A", vec![]),
+                upsert_node(2, "B", vec![]),
+                upsert_node(3, "C", vec![]),
+                edge_with("KNOWS", 1, 2, "x"),
+                MutationOp::SetPropertyIndex {
+                    node_type: "KNOWS".into(),
+                    properties: vec!["k".into()],
+                    kind: PropertyIndexKind::Relationship,
+                    present: true,
+                },
+            ],
+        ),
+        // After the declaration: a new edge, and a replacement of the first.
+        frame(
+            2,
+            vec![
+                edge_with("KNOWS", 2, 3, "y"),
+                edge_with("KNOWS", 1, 2, "x2"),
+            ],
+        ),
+    ];
+    apply_frames(&mut g, &frames, 0).unwrap();
+    assert!(g.has_rel_property_index("KNOWS", "k"));
+    crate::graph::dir_graph::rel_index_tests::assert_consistent(&g);
+    assert_eq!(
+        g.lookup_rel_index("KNOWS", "k", &Value::String("x2".into()))
+            .map(|hits| hits.len()),
+        Some(1)
+    );
+    assert_eq!(
+        g.lookup_rel_index("KNOWS", "k", &Value::String("x".into()))
+            .map(|hits| hits.len()),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_withdrawn_relationship_index_replays_as_a_withdrawal() {
+    let mut g = DirGraph::new();
+    let op = |present| MutationOp::SetPropertyIndex {
+        node_type: "KNOWS".into(),
+        properties: vec!["k".into()],
+        kind: PropertyIndexKind::Relationship,
+        present,
+    };
+    let frames = vec![
+        frame(
+            1,
+            vec![
+                upsert_node(1, "A", vec![]),
+                upsert_node(2, "B", vec![]),
+                edge_with("KNOWS", 1, 2, "x"),
+                op(true),
+            ],
+        ),
+        frame(2, vec![op(false)]),
+    ];
+    apply_frames(&mut g, &frames, 0).unwrap();
+    assert!(!g.has_rel_property_indices());
+}

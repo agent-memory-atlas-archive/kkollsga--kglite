@@ -571,9 +571,12 @@ fn v12_logs_carry_sub_second_durations_and_v11_logs_still_read() {
             properties: vec![("fine".into(), fine), ("whole".into(), whole)],
         }],
     }];
-    assert_eq!(WAL_FORMAT_VERSION, 12, "this test pins the v12 header");
+    const { assert!(WAL_FORMAT_VERSION >= 12, "sub-second durations need v12+") };
     let v12 = write_wal(&frames);
-    assert_eq!(v12[4], 12, "a new log advertises v12");
+    assert_eq!(
+        v12[4], WAL_FORMAT_VERSION,
+        "a new log advertises the current header"
+    );
     assert_eq!(read_frames_all(v12).unwrap(), frames);
 
     // A v11 header over whole-second durations is exactly what 0.19.7 wrote.
@@ -1358,4 +1361,32 @@ fn frame_is_emitted_in_a_single_write() {
     write_header(&mut bytes).unwrap();
     bytes.extend_from_slice(&w.inner);
     assert_eq!(read_frames_all(bytes).unwrap(), vec![frame(1)]);
+}
+
+/// v13 adds no op tag: it appends the relationship kind of
+/// `SetPropertyIndex`. A new log advertises it and round-trips the kind; a v12
+/// log, which cannot contain it, reads unchanged.
+#[test]
+fn v13_logs_carry_the_relationship_index_kind_and_v12_logs_still_read() {
+    let declare = |kind| {
+        vec![WalFrame {
+            lsn: 1,
+            ops: vec![MutationOp::SetPropertyIndex {
+                node_type: "KNOWS".into(),
+                properties: vec!["k".into()],
+                kind,
+                present: true,
+            }],
+        }]
+    };
+    const { assert!(WAL_FORMAT_VERSION >= 13, "the relationship kind needs v13+") };
+    let relationship = declare(PropertyIndexKind::Relationship);
+    let log = write_wal(&relationship);
+    assert_eq!(log[4], WAL_FORMAT_VERSION);
+    assert_eq!(read_frames_all(log).unwrap(), relationship);
+
+    let equality = declare(PropertyIndexKind::Equality);
+    let v12 = write_wal_version(&equality, 12);
+    assert_eq!(v12[4], 12);
+    assert_eq!(read_frames_all(v12).unwrap(), equality);
 }

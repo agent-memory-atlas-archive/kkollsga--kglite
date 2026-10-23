@@ -72,7 +72,7 @@ def test_recovering_an_old_log_then_writing_advertises_the_current_wal_format(na
     graph = kglite.open(str(path), durable=SCENARIOS[name]["level"])
     try:
         graph.cypher("CREATE (:FormatProbe {id: 1, d: duration({seconds: 1, nanoseconds: 5})})")
-        assert (path.parent / "app.kgl-wal").read_bytes()[:5] == b"KWAL\x0c"
+        assert (path.parent / "app.kgl-wal").read_bytes()[:5] == b"KWAL\x0d"
     finally:
         del graph
 

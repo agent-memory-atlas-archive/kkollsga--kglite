@@ -420,7 +420,8 @@ NEO4J_SCHEMA_SCRIPT: list[tuple[str, str | None]] = [
         "build_vector_index",
     ),
     ("CREATE LOOKUP INDEX node_labels IF NOT EXISTS FOR (n) ON EACH labels(n)", "LOOKUP INDEX"),
-    ("CREATE INDEX knows_since IF NOT EXISTS FOR ()-[r:KNOWS]-() ON (r.since)", "KNOWS"),
+    # A relationship property index is served: one equality index per property.
+    ("CREATE INDEX knows_since IF NOT EXISTS FOR ()-[r:KNOWS]-() ON (r.since)", None),
     # Constraint DDL is served: uniqueness, presence, and node
     # keys all route to real enforcement. `person_id` is unique across the
     # fixture and `name` is present on every row, so each declaration holds.

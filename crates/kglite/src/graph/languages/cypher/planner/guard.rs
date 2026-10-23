@@ -79,6 +79,10 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "the anchor is a pre-binding, which the matcher's candidate guard re-tests",
     ),
     (
+        "anchor_rel_property_index",
+        "an inline edge matcher; index seeds pass the candidate guard and every hop is tested",
+    ),
+    (
         "push_limit_into_aggregate",
         "a group cap over rows the matcher already admitted",
     ),

@@ -1152,6 +1152,7 @@ fn create_pattern_edges(
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
             graph.note_required_edge(&edge_pat.connection_type, edge_index);
+            graph.file_created_edge(edge_index);
             graph.note_ontology_edge_touch(edge_index);
             graph.note_tx_edge_added(edge_index);
 
@@ -1965,6 +1966,7 @@ fn stamp_edge_provenance(
     let mut stamped_types: std::collections::HashSet<InternedKey> =
         std::collections::HashSet::new();
     for edge_index in edges_to_stamp {
+        let rel_index_pre = graph.rel_index_capture(*edge_index);
         if let Some(EdgeData {
             connection_type,
             properties: edge_props,
@@ -1980,6 +1982,7 @@ fn stamp_edge_provenance(
                 }
             }
         }
+        graph.refresh_rel_indexes(rel_index_pre);
         for (name, _) in &provenance {
             crate::graph::index_freshness::write_hooks::note_edge_property_written(
                 graph,

@@ -273,9 +273,11 @@ fn apply_edges(
                     .map(|(name, value)| (graph.interner.get_or_intern(name), value.clone()))
                     .collect();
                 if let Some(idx) = existing {
+                    let rel_index_pre = graph.rel_index_capture(idx);
                     if let Some(edge) = graph.graph.edge_weight_mut(idx) {
                         edge.properties = properties.into();
                     }
+                    graph.refresh_rel_indexes(rel_index_pre);
                     crate::graph::index_freshness::write_hooks::note_edge_property_written(
                         graph, idx, None,
                     );
@@ -286,6 +288,7 @@ fn apply_edges(
                         EdgeData::new_interned(connection_type, properties),
                     );
                     crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
+                    graph.file_created_edge(idx);
                     created.edges.insert(idx);
                 }
                 let metadata = props
@@ -406,6 +409,7 @@ fn replace_group(
             .graph
             .add_edge(source, target, EdgeData::new_interned(kind, properties));
         crate::graph::index_freshness::write_hooks::note_edge_created(graph, idx);
+        graph.file_created_edge(idx);
         created.edges.insert(idx);
     }
     graph.graph.flush_pending_writes();

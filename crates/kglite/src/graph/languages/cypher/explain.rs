@@ -16,6 +16,7 @@ use super::ast::*;
 use super::{executor, result};
 use crate::datatypes::values::Value;
 use crate::graph::core::graph_filter::GuardTemplate;
+use crate::graph::core::pattern_matching::matcher::edge_anchor::edge_anchor;
 use crate::graph::core::pattern_matching::{
     closure_probe, EdgeDirection, EdgePattern, NodePattern, Pattern, PatternElement,
     PropertyMatcher,
@@ -183,6 +184,20 @@ fn closure_probe_ops(patterns: &[Pattern], graph: &DirGraph) -> Vec<String> {
     ops
 }
 
+/// One `RelIndexSeek` operator row per pattern whose first hop the matcher
+/// seeds from a relationship property index, as `RelIndexSeek :T(p)`.
+///
+/// Eligibility is [`edge_anchor`], the predicate the matcher itself answers
+/// to, so a plan row never claims a seek the runtime declines. A first node
+/// that a prior clause pre-binds declines at run time and is not visible here.
+fn rel_index_seek_ops(patterns: &[Pattern], graph: &DirGraph) -> Vec<String> {
+    patterns
+        .iter()
+        .filter_map(|pattern| edge_anchor(graph, pattern, false))
+        .map(|anchor| format!("RelIndexSeek :{}({})", anchor.rel_type, anchor.property))
+        .collect()
+}
+
 /// Generate a structured query plan as a CypherResult with columns
 /// [step, operation, estimated_rows].
 pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result::CypherResult {
@@ -271,6 +286,7 @@ pub fn generate_explain_result(query: &CypherQuery, graph: &DirGraph) -> result:
         if let Clause::Match(m) | Clause::OptionalMatch(m) = clause {
             for op in closure_probe_ops(&m.patterns, graph)
                 .into_iter()
+                .chain(rel_index_seek_ops(&m.patterns, graph))
                 .chain(var_length_expand_ops(&m.patterns))
             {
                 rows.push(vec![

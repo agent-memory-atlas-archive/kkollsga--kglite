@@ -4680,13 +4680,51 @@ time.
 - The prefix keeps a node label and a relationship type apart. A `Doc.text` node
   index and a `relationship:Doc.text` relationship index are therefore addressed,
   and dropped, independently.
-- There is no descriptor form for a relationship index.
-  `DROP INDEX FOR ()-[r:T]-() ON (r.p)` is rejected with the rest of relationship
-  index DDL.
+- A relationship property index has a descriptor form:
+  `DROP INDEX FOR ()-[r:T]-() ON (r.p)`. It removes every relationship structure
+  on that property, like the name form.
 
 `IF EXISTS` is a no-op only when **nothing carries the name**. A name `SHOW
 INDEXES` printed always drops something, or the statement errors. It never
 reports success over an index that is still installed.
+
+#### Relationship property indexes
+
+`CREATE [RANGE] INDEX FOR ()-[r:T]-() ON (r.p)` builds an equality index over one
+property of one relationship type. A pattern whose first hop constrains that
+property starts from the index hits' endpoints instead of enumerating every node:
+
+```cypher
+CREATE INDEX FOR ()-[r:ACTED_IN]-() ON (r.rid);
+MATCH ()-[r:ACTED_IN {rid: $k}]->() RETURN r;           -- served from the index
+MATCH ()-[r:ACTED_IN]->() WHERE r.rid = $k RETURN r;    -- the same plan
+MATCH ()-[r:ACTED_IN]->() WHERE r.rid IN $ks RETURN r;  -- one probe per value
+```
+
+- **Where it applies.** A single fixed-length first hop of exactly one
+  relationship type, with an equality or `IN` on an indexed property, and a first
+  node that carries no property filter of its own (a node anchor is at least as
+  selective then). A value read from an earlier clause works too
+  (`WHERE c.rid = r.rid` inside `CALL (r) { ... }`). A disjunction, an untyped or
+  multi-type relationship and a variable-length hop scan instead.
+- **Equality is the node index's equality.** `1` and `1.0` find each other, a
+  numeric string does not find a number, and a value the structural index cannot
+  prove complete (a very large integer, a non-finite float) falls back to a scan.
+- **A `RANGE` index is the equality index.** The ordered half a node `RANGE`
+  index adds is not built for relationships, so `<` / `>` on `r.p` scan.
+- **Name and listing.** `relationship:T.p`, `entityType: RELATIONSHIP`, type
+  `PROPERTY`. `EXPLAIN` shows `RelIndexSeek :T(p)` for a pattern the matcher will
+  seed from the index.
+- **Storage modes.** Memory and mapped graphs. A `storage='disk'` graph refuses
+  the declaration.
+- **Cost.** A write to an edge of an indexed type files or moves one bucket
+  entry. A graph with no relationship index pays one emptiness check per edge
+  write. The index forks in O(1) with the graph and a rolled-back statement
+  restores it.
+- **Persistence.** The `.kgl` file lists the declaration (the index itself is
+  rebuilt at load). A binary that predates the index ignores the key and opens
+  the file without the index. A write-ahead log that carries the declaration is
+  WAL format 13.
 
 #### `SHOW INDEXES`
 
@@ -4762,7 +4800,8 @@ success.
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
 | `CREATE VECTOR INDEX` | Vector indexes exist, but need an existing embedding store and HNSW build parameters, so they are created through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
-| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` | No DDL form creates a relationship index. Relationship *vector* and *BM25 text* indexes do exist: built with `CALL db.relationship_embeddings.build_index(...)` / `CALL db.relationship_text_index.build(...)`, listed by `SHOW INDEXES` with `entityType: RELATIONSHIP`, and removed with `DROP INDEX relationship:T.p`. Every other relationship property is queryable, just scanned |
+| `CREATE INDEX FOR ()-[r:T]-() ON (r.a, r.b)` | A relationship index covers exactly one property. Create one index per property |
+| `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` on a `storage='disk'` graph | A disk graph's relationship ids are a frozen CSR plus a process-local overlay, so an index keyed by them cannot be kept or persisted. The statement is refused with that reason; the property stays queryable, scanned |
 | `... OPTIONS { ... }` | No index providers or per-index configuration to apply |
 | `CREATE RANGE INDEX ... ON (n.a, n.b)` | The B-tree is single-property. Use a composite equality index, or one `CREATE RANGE INDEX` per property |
 

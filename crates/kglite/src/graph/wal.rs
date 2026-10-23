@@ -171,7 +171,14 @@ const WAL_HEADER_LEN: u64 = (WAL_MAGIC.len() + 1) as u64;
 /// bytes, so every older WAL stays a strict subset read exactly). The header
 /// moves because a v11 reader meeting that tag cannot decode the frame and
 /// would treat it as a torn tail, silently dropping committed work.
-pub const WAL_FORMAT_VERSION: u8 = 12;
+///
+/// **v12 → v13** adds no [`MutationOp`] tag. It appends
+/// [`PropertyIndexKind::Relationship`], the relationship property index
+/// declaration, as the fourth kind of [`MutationOp::SetPropertyIndex`]. Tags
+/// are unchanged; the header moves because a v12 reader meeting the new kind
+/// cannot decode the frame and would treat it as a torn tail, silently
+/// dropping a committed declaration.
+pub const WAL_FORMAT_VERSION: u8 = 13;
 
 /// Oldest WAL format this build can replay. Frames from any version in
 /// `MIN_READABLE_WAL_FORMAT_VERSION..=WAL_FORMAT_VERSION` decode with the
@@ -543,6 +550,10 @@ pub enum PropertyIndexKind {
     Range,
     /// `create_composite_index` — one index over a property tuple.
     Composite,
+    /// `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` — hash equality on one
+    /// relationship property. `SetPropertyIndex::node_type` names the
+    /// relationship type.
+    Relationship,
 }
 
 /// One committed mutation operation: the ops it produced, tagged with a

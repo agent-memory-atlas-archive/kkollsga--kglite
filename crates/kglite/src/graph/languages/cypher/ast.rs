@@ -1262,9 +1262,7 @@ pub enum DdlTarget {
         variable: Option<String>,
         label: String,
     },
-    /// `FOR ()-[r:TYPE]-()` — relationship indexes/constraints. Parsed so the
-    /// executor can reject them by name; KGLite has no relationship-property
-    /// index.
+    /// `FOR ()-[r:TYPE]-()` — relationship indexes and constraints.
     Relationship {
         variable: Option<String>,
         rel_type: String,

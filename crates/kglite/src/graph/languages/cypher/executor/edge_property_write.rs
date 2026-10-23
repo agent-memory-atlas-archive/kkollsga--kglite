@@ -86,6 +86,7 @@ pub(super) fn set_edge_property(
 
     let observed_type = (!matches!(value, Value::Null)).then(|| value.type_name());
     let key = graph.interner.get_or_intern(property);
+    let rel_index_pre = graph.rel_index_capture(edge_index);
     let mut written = false;
     if let Some(EdgeData {
         properties: edge_props,
@@ -109,6 +110,7 @@ pub(super) fn set_edge_property(
         }
         stats.properties_set += 1;
     }
+    graph.refresh_rel_indexes(rel_index_pre);
     crate::graph::index_freshness::write_hooks::note_edge_property_written(
         graph,
         edge_index,
@@ -173,6 +175,7 @@ pub(super) fn remove_edge_property(
     }
 
     let key = graph.interner.get_or_intern(property);
+    let rel_index_pre = graph.rel_index_capture(edge_index);
     if let Some(EdgeData {
         properties: edge_props,
         ..
@@ -184,6 +187,7 @@ pub(super) fn remove_edge_property(
             stats.properties_removed += 1;
         }
     }
+    graph.refresh_rel_indexes(rel_index_pre);
     crate::graph::index_freshness::write_hooks::note_edge_property_written(
         graph,
         edge_index,

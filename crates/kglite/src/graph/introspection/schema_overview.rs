@@ -627,6 +627,21 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             owning_constraint,
         });
     }
+    for (rel_type, property, state) in graph.list_rel_property_indexes_with_state() {
+        out.push(IndexInfo {
+            name: format!("relationship:{rel_type}.{property}"),
+            kind: IndexKind::Equality,
+            entity_type: "RELATIONSHIP",
+            labels_or_types: vec![rel_type],
+            properties: vec![property],
+            state: state.as_str(),
+            stale: None,
+            delta: None,
+            unembedded: None,
+            vector_config: None,
+            owning_constraint: None,
+        });
+    }
     for (node_type, property, state) in graph.list_range_indexes_with_state() {
         out.push(IndexInfo {
             name: format!("{node_type}.{property}"),

@@ -695,6 +695,12 @@ fn install_index(
         (PropertyIndexKind::Composite, false) => {
             graph.drop_composite_index(node_type, properties)?;
         }
+        (PropertyIndexKind::Relationship, true) => {
+            graph.build_rel_property_index(node_type, first);
+        }
+        (PropertyIndexKind::Relationship, false) => {
+            graph.drop_rel_property_index(node_type, first);
+        }
     }
     Ok(())
 }

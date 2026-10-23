@@ -23,6 +23,34 @@ use crate::graph::core::pattern_matching::PatternElement;
 use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 
+/// **Pass:** `anchor_element_id` — Record the slot named by
+/// `WHERE elementId(v) = <literal|$param|row expression>` on the MATCH clause,
+/// so the executor seeds it as a pre-binding instead of scanning for it.
+///
+/// **Precondition:** a `Clause::Match`/`Clause::OptionalMatch` with a WHERE —
+/// its own (the scoped `OPTIONAL MATCH` form) or the adjacent standalone one.
+///
+/// **Pattern matched:** an `Equals` comparison, either operand order, between
+/// `elementId(v)` — where `v` is a node variable of *this* clause's patterns —
+/// and a non-negative slot value, or a deterministic expression over
+/// earlier-bound names (`row.id`, `toString(x)`) kept as `NodeAnchor::Row` and
+/// resolved per driving row. Only the predicate's `And` spine is descended.
+///
+/// **Rewrite:** pushes `(v, NodeAnchor)` onto `MatchClause::node_anchors`. The
+/// predicate is left standing, so this narrows the candidate set without
+/// owning the answer: an out-of-range or stale slot resolves to no node, which
+/// is what the retained predicate would have concluded.
+///
+/// **Why-bail:** `Or`/`Not`/`Xor` are not descended (a disjunct constrains
+/// nothing, and a negation inverts the reasoning); a non-numeric, negative or
+/// unbound value does not name a slot; a variable this clause does not bind
+/// belongs to another clause's search space. Conflicting anchors on one
+/// variable keep the first — two of them cannot both hold, and the predicate
+/// rejects the loser.
+pub(super) fn pass_anchor_element_id(query: &mut CypherQuery, ctx: &super::PassCtx) {
+    anchor_element_id(query, ctx.params)
+}
+
 /// Record `elementId(v) = <slot>` anchors on every MATCH / OPTIONAL MATCH.
 ///
 /// Two predicate homes are read, matching the two the WHERE can live in:

@@ -938,6 +938,7 @@ impl ConnectionBatchProcessor {
                 edge_data,
             );
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+            graph.file_created_edge(new_id);
             graph.note_tx_edge_added(new_id);
             bucket.push(Candidate::Read(image));
             stats.connections_created += 1;
@@ -1019,6 +1020,7 @@ impl ConnectionBatchProcessor {
                     edge_data,
                 );
                 crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+                graph.file_created_edge(new_id);
                 graph.note_tx_edge_added(new_id);
                 // Within-chunk dedup: later iterations with the same key
                 // resolve to this edge via Update/Preserve/Sum. Skipped for
@@ -1177,10 +1179,12 @@ fn merge_into_edge(
             edge_data,
         );
         crate::graph::index_freshness::write_hooks::note_edge_created(graph, new_id);
+        graph.file_created_edge(new_id);
         graph.note_tx_edge_added(new_id);
         return (true, Some(new_id));
     }
     let mut updated = false;
+    let rel_index_pre = graph.rel_index_capture(edge_idx);
     if let Some(EdgeData {
         properties: edge_props,
         ..
@@ -1199,6 +1203,7 @@ fn merge_into_edge(
         }
         updated = true;
     }
+    graph.refresh_rel_indexes(rel_index_pre);
     crate::graph::index_freshness::write_hooks::note_edge_property_written(graph, edge_idx, None);
     (updated, None)
 }

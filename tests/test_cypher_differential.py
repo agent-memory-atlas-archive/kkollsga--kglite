@@ -82,6 +82,34 @@ def _predicate_index_graph(kind):
 
 
 @pytest.fixture
+def rel_indexed_graph():
+    """Relationships with mixed-family values and an index on `ACTED.rid`.
+
+    The index is declared *after* the data so the build path is exercised, and
+    a second wave of edges is written after it so incremental maintenance is
+    too. Both numeric spellings and a numeric string sit in the same property:
+    the probe must find exactly what the unindexed scan finds.
+    """
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (:Person {pid: 1}), (:Person {pid: 2}), (:Person {pid: 3}), (:Movie {pid: 10}), (:Movie {pid: 11})"
+    ).to_list()
+    for person, movie, rid in [(1, 10, "a"), (2, 10, "b"), (3, 11, "c"), (1, 11, 1), (2, 11, 1.0), (3, 10, "1")]:
+        graph.cypher(
+            "MATCH (p:Person {pid: $p}), (m:Movie {pid: $m}) CREATE (p)-[:ACTED {rid: $rid, w: $p}]->(m)",
+            params={"p": person, "m": movie, "rid": rid},
+        ).to_list()
+    graph.cypher("CREATE INDEX FOR ()-[r:ACTED]-() ON (r.rid)").to_list()
+    graph.cypher(
+        "MATCH (p:Person {pid: 3}), (m:Movie {pid: 11}) "
+        "CREATE (p)-[:ACTED {rid: 'a', w: 30}]->(m), (p)-[:ACTED {w: 31}]->(m)"
+    ).to_list()
+    graph.cypher("MATCH (p:Person {pid: 1})-[r:ACTED {rid: 'a'}]->() SET r.rid = 'a2'").to_list()
+    graph.cypher("MATCH ()-[r:ACTED {rid: 'b'}]->() DELETE r").to_list()
+    return graph
+
+
+@pytest.fixture
 def predicate_point_index_graph():
     return _predicate_index_graph("point")
 
@@ -857,6 +885,141 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *CHAIN_COUNT_QUERIES,
+    # ── relationship property index (`anchor_rel_property_index`) ──
+    #
+    # The index chooses start nodes and the first hop re-checks the edge, so an
+    # anchored plan must answer exactly what the scan answers: every probe
+    # family, both directions, the correlated `CALL` shape GraphBridge sends,
+    # a scoped OPTIONAL MATCH, and the shapes where the pass must decline.
+    (
+        "rel_index_where_literal",
+        "rel_indexed_graph",
+        "MATCH (p)-[r:ACTED]->(m) WHERE r.rid = 'c' RETURN p.pid AS p, m.pid AS m ORDER BY p, m",
+        None,
+    ),
+    (
+        "rel_index_where_param",
+        "rel_indexed_graph",
+        "MATCH (p)-[r:ACTED]->(m) WHERE r.rid = $k RETURN p.pid AS p, m.pid AS m, r.w AS w ORDER BY p, m, w",
+        {"k": "a2"},
+    ),
+    (
+        "rel_index_where_reversed_operands",
+        "rel_indexed_graph",
+        "MATCH (p)-[r:ACTED]->(m) WHERE $k = r.rid RETURN count(r) AS c",
+        {"k": "a"},
+    ),
+    (
+        "rel_index_numeric_families",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid = 1 RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_float_probe",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED {rid: 1.0}]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_string_digit_probe",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid = '1' RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_in_list",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid IN ['a', 'a2', 'c', 'nope'] RETURN r.rid AS k ORDER BY k",
+        None,
+    ),
+    (
+        "rel_index_in_param",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid IN $ks RETURN r.rid AS k ORDER BY k",
+        {"ks": ["a", "c", 1]},
+    ),
+    (
+        "rel_index_miss",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid = 'absent' RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_null_probe",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid = $k RETURN count(r) AS c",
+        {"k": None},
+    ),
+    (
+        "rel_index_incoming",
+        "rel_indexed_graph",
+        "MATCH (m:Movie)<-[r:ACTED]-(p:Person) WHERE r.rid = 'c' RETURN m.pid AS m, p.pid AS p",
+        None,
+    ),
+    (
+        "rel_index_undirected",
+        "rel_indexed_graph",
+        "MATCH (a)-[r:ACTED]-(b) WHERE r.rid = 'c' RETURN a.pid AS a, b.pid AS b ORDER BY a, b",
+        None,
+    ),
+    (
+        "rel_index_typed_endpoints",
+        "rel_indexed_graph",
+        "MATCH (p:Person)-[r:ACTED {rid: 'c'}]->(m:Movie) RETURN p.pid AS p, m.pid AS m",
+        None,
+    ),
+    (
+        "rel_index_endpoint_filter_rejects",
+        "rel_indexed_graph",
+        "MATCH (p:Person {pid: 1})-[r:ACTED {rid: 'c'}]->(m:Movie) RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_extra_inline_property",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED {rid: 'a', w: 30}]->() RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_correlated_call",
+        "rel_indexed_graph",
+        "MATCH (:Person)-[r:ACTED]->(:Movie) WITH r CALL (r) { MATCH ()-[candidate:ACTED]->() "
+        "WHERE candidate.rid = r.rid WITH candidate LIMIT 2 RETURN count(*) AS n } "
+        "RETURN r.rid AS k, n ORDER BY k, n",
+        None,
+    ),
+    (
+        "rel_index_correlated_unwind",
+        "rel_indexed_graph",
+        "UNWIND ['a2', 'c', 'zzz'] AS k MATCH ()-[r:ACTED]->() WHERE r.rid = k RETURN k, count(r) AS c ORDER BY k",
+        None,
+    ),
+    (
+        "rel_index_optional_match_scoped_where",
+        "rel_indexed_graph",
+        "MATCH (p:Person) OPTIONAL MATCH (p)-[r:ACTED]->() WHERE r.rid = 'c' "
+        "RETURN p.pid AS p, count(r) AS c ORDER BY p",
+        None,
+    ),
+    (
+        "rel_index_declines_under_or",
+        "rel_indexed_graph",
+        "MATCH ()-[r:ACTED]->() WHERE r.rid = 'c' OR r.w = 31 RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_declines_untyped_edge",
+        "rel_indexed_graph",
+        "MATCH ()-[r]->() WHERE r.rid = 'c' RETURN count(r) AS c",
+        None,
+    ),
+    (
+        "rel_index_declines_var_length",
+        "rel_indexed_graph",
+        "MATCH (p:Person {pid: 3})-[r:ACTED*1..2]->(m) WHERE all(x IN r WHERE x.rid = 'c') RETURN count(m) AS c",
+        None,
+    ),
     # `x IS :: TYPE` rides the planner as a hidden function call: pushdown,
     # constant folding and the scope check walk it like any other call.
     (
@@ -8630,6 +8793,7 @@ PASS_TRIGGER_CASES: dict[str, tuple[str, str]] = {
     "hoist_with_where": ("differential", "with_where_hoist"),
     "push_where_into_match.1": ("differential", "where_eq"),
     "anchor_element_id": ("differential", "element_id_anchor_param"),
+    "anchor_rel_property_index": ("differential", "rel_index_where_literal"),
     "fold_or_to_in": ("differential", "or_chain_to_in"),
     "push_where_into_match.2": ("differential", "or_chain_to_in"),
     "extract_pushable_rel_predicates": ("differential", "rel_property_filter"),

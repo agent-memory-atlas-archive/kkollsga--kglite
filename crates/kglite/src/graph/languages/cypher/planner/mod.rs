@@ -19,6 +19,7 @@ pub mod index_selection;
 pub mod join_order;
 mod nested;
 mod node_anchor;
+mod rel_index_anchor;
 pub mod rel_predicate_pushdown;
 pub mod schema_check;
 pub mod simplification;
@@ -43,7 +44,8 @@ use join_order::{
     reorder_match_patterns,
 };
 pub(crate) use nested::import_pattern_anchors_in_arm;
-use node_anchor::anchor_element_id;
+use node_anchor::pass_anchor_element_id;
+use rel_index_anchor::pass_anchor_rel_property_index;
 use rel_predicate_pushdown::extract_pushable_rel_predicates_with_params;
 pub(crate) use simplification::collect_expression_refs;
 use var_length_lowering::lower_fixed_var_length_hops;
@@ -144,6 +146,10 @@ pub const PASSES: &[(&str, PassFn)] = &[
     // passes: they read `node_anchors` to score an anchored variable as
     // fully selective.
     ("anchor_element_id", pass_anchor_element_id),
+    // `WHERE r.p = <value>` into the edge pattern when a relationship index
+    // covers `(T, p)`, so the matcher can seed from the index. Before
+    // `extract_pushable_rel_predicates`, which may consume the same conjunct.
+    ("anchor_rel_property_index", pass_anchor_rel_property_index),
     (
         "extract_pushable_rel_predicates",
         pass_extract_pushable_rel_predicates,
@@ -410,34 +416,6 @@ fn pass_lower_fixed_var_length_hops(query: &mut CypherQuery, _ctx: &PassCtx) {
 /// on.
 fn pass_push_where_into_match(query: &mut CypherQuery, ctx: &PassCtx) {
     push_where_into_match(query, ctx.params)
-}
-
-/// **Pass:** `anchor_element_id` — Record the slot named by
-/// `WHERE elementId(v) = <literal|$param|row expression>` on the MATCH clause,
-/// so the executor seeds it as a pre-binding instead of scanning for it.
-///
-/// **Precondition:** a `Clause::Match`/`Clause::OptionalMatch` with a WHERE —
-/// its own (the scoped `OPTIONAL MATCH` form) or the adjacent standalone one.
-///
-/// **Pattern matched:** an `Equals` comparison, either operand order, between
-/// `elementId(v)` — where `v` is a node variable of *this* clause's patterns —
-/// and a non-negative slot value, or a deterministic expression over
-/// earlier-bound names (`row.id`, `toString(x)`) kept as `NodeAnchor::Row` and
-/// resolved per driving row. Only the predicate's `And` spine is descended.
-///
-/// **Rewrite:** pushes `(v, NodeAnchor)` onto `MatchClause::node_anchors`. The
-/// predicate is left standing, so this narrows the candidate set without
-/// owning the answer: an out-of-range or stale slot resolves to no node, which
-/// is what the retained predicate would have concluded.
-///
-/// **Why-bail:** `Or`/`Not`/`Xor` are not descended (a disjunct constrains
-/// nothing, and a negation inverts the reasoning); a non-numeric, negative or
-/// unbound value does not name a slot; a variable this clause does not bind
-/// belongs to another clause's search space. Conflicting anchors on one
-/// variable keep the first — two of them cannot both hold, and the predicate
-/// rejects the loser.
-fn pass_anchor_element_id(query: &mut CypherQuery, ctx: &PassCtx) {
-    anchor_element_id(query, ctx.params)
 }
 
 /// **Pass:** `fold_or_to_in` — Rewrite `(a.x = v1 OR a.x = v2 OR ...)`

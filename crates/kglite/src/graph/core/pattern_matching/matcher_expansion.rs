@@ -217,6 +217,14 @@ impl<'a> PatternExecutor<'a> {
             .map(|v| self.pre_bindings.get(v).is_some())
             .unwrap_or(false);
 
+        // A relationship property index on the first hop names the start
+        // nodes directly (`matcher_edge_anchor.rs`).
+        if has_edges {
+            if let Some(seeds) = self.edge_anchor_seeds(pattern, first_node, first_is_prebound) {
+                return Ok(seeds);
+            }
+        }
+
         // Untyped source with typed edges: the connection-type inverted index
         // names the nodes with such outgoing edges, instead of scanning all 124M.
         let mut initial_nodes = if !first_is_prebound

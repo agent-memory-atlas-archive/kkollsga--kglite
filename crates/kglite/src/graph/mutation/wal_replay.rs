@@ -417,6 +417,7 @@ fn reinstall_edge_embedding_group(
             .graph
             .add_edge(source, target, EdgeData::new_interned(kind, properties));
         crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge);
+        graph.file_created_edge(edge);
         for (text_column, cells) in &group.stores {
             let Some(vector) = &cells[member] else {
                 continue;

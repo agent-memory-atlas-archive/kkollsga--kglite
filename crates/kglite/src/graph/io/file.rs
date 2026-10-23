@@ -205,6 +205,11 @@ pub(crate) struct FileMetadata {
     composite_index_keys: Vec<CompositeIndexKey>,
     #[serde(default)]
     range_index_keys: Vec<IndexKey>,
+    /// Relationship property index keys rebuilt after load. Additive: absent
+    /// when empty, so a graph with none writes the bytes it always wrote, and an
+    /// older binary ignores the key (it then has no relationship index).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rel_property_index_keys: Vec<IndexKey>,
     /// Declared UNIQUE constraints to reinstall after load.
     ///
     /// Canonical statement of the additive-and-skipped-when-empty posture every
@@ -541,6 +546,7 @@ impl FileMetadata {
             property_index_keys: graph.property_index_keys.clone(),
             composite_index_keys: graph.composite_index_keys.clone(),
             range_index_keys: graph.range_index_keys.clone(),
+            rel_property_index_keys: graph.rel_property_index_keys.clone(),
             unique_constraint_keys: graph.unique_constraint_keys.clone(),
             constraint_names: graph.constraint_names.clone(),
             index_names: graph.index_names.clone(),
@@ -638,6 +644,7 @@ impl FileMetadata {
         graph.property_index_keys = self.property_index_keys;
         graph.composite_index_keys = self.composite_index_keys;
         graph.range_index_keys = self.range_index_keys;
+        graph.rel_property_index_keys = self.rel_property_index_keys;
         graph.unique_constraint_keys = self.unique_constraint_keys;
         graph.constraint_names = self.constraint_names;
         graph.index_names = self.index_names;

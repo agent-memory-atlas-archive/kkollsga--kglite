@@ -212,21 +212,32 @@ fn unsupported_index_types_name_themselves_and_the_alternative() {
 }
 
 #[test]
-fn relationship_index_is_rejected_by_name() {
+fn relationship_index_ddl_builds_lists_and_rejects_what_it_cannot_serve() {
     let mut graph = person_graph();
-    let err = run_err(&mut graph, "CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.since)");
-    assert!(err.contains("KNOWS"), "got: {err}");
-    assert!(err.contains("node properties only"), "got: {err}");
+    let stats = run(&mut graph, "CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.since)").unwrap();
+    assert_eq!(stats.indexes_added, 1);
+    assert!(graph.has_rel_property_index("KNOWS", "since"));
 
-    // The descriptor form is refused for DROP too, and the refusal names
-    // the route that does reach a relationship vector index — the claim
-    // "KGLite indexes node properties only" stopped being true when
-    // relationship vector indexes shipped.
-    let err = run_err(&mut graph, "DROP INDEX FOR ()-[r:KNOWS]-() ON (r.since)");
-    assert!(
-        err.contains("DROP INDEX relationship:KNOWS.<property>"),
-        "got: {err}"
+    let err = run_err(&mut graph, "CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.since)");
+    assert!(err.contains("already exists"), "got: {err}");
+    let err = run_err(
+        &mut graph,
+        "CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.since, r.weight)",
     );
+    assert!(err.contains("exactly one property"), "got: {err}");
+    let err = run_err(
+        &mut graph,
+        "CREATE INDEX FOR ()-[r:KNOWS]-() ON (r.weight) OPTIONS {indexProvider: 'x'}",
+    );
+    assert!(err.contains("OPTIONS"), "got: {err}");
+    assert!(!graph.has_rel_property_index("KNOWS", "weight"));
+
+    // The descriptor form drops it, and a second drop names what is missing.
+    let stats = run(&mut graph, "DROP INDEX FOR ()-[r:KNOWS]-() ON (r.since)").unwrap();
+    assert_eq!(stats.indexes_removed, 1);
+    assert!(!graph.has_rel_property_index("KNOWS", "since"));
+    let err = run_err(&mut graph, "DROP INDEX FOR ()-[r:KNOWS]-() ON (r.since)");
+    assert!(err.contains("no index"), "got: {err}");
 }
 
 #[test]

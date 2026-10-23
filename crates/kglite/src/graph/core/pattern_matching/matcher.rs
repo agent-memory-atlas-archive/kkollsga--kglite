@@ -2250,6 +2250,9 @@ impl<'a> PatternExecutor<'a> {
 #[path = "matcher_expansion.rs"]
 mod expansion;
 
+#[path = "matcher_edge_anchor.rs"]
+pub(crate) mod edge_anchor;
+
 #[path = "matcher_guard.rs"]
 mod guard;
 

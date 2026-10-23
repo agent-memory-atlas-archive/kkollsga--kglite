@@ -127,12 +127,15 @@ impl DirGraph {
         if !present {
             // A name must not outlive the structure it named, or an index
             // rebuilt on the same property would inherit it.
-            let class = match kind {
-                PropertyIndexKind::Equality => IndexClass::Equality,
-                PropertyIndexKind::Range => IndexClass::Range,
-                PropertyIndexKind::Composite => IndexClass::Composite,
+            let (entity, class) = match kind {
+                PropertyIndexKind::Equality => (EntityKind::Node, IndexClass::Equality),
+                PropertyIndexKind::Range => (EntityKind::Node, IndexClass::Range),
+                PropertyIndexKind::Composite => (EntityKind::Node, IndexClass::Composite),
+                PropertyIndexKind::Relationship => {
+                    (EntityKind::Relationship, IndexClass::Equality)
+                }
             };
-            self.forget_index_names_for(EntityKind::Node, node_type, &properties, &[class]);
+            self.forget_index_names_for(entity, node_type, &properties, &[class]);
         }
         self.note_declaration(MutationOp::SetPropertyIndex {
             node_type: node_type.to_string(),
