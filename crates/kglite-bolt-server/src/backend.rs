@@ -2454,13 +2454,13 @@ mod tests {
         let err = backend
             .execute(
                 &session,
-                "CREATE FULLTEXT INDEX ft FOR (n:Person) ON EACH [n.name]",
+                "CREATE POINT INDEX pt FOR (n:Person) ON (n.name)",
                 &HashMap::new(),
                 &BoltDict::new(),
                 None,
             )
             .await
-            .expect_err("full-text indexes are not supported");
+            .expect_err("point indexes are not supported");
         assert!(!format!("{err:?}").is_empty());
         assert_eq!(backend.session.version(), version);
     }

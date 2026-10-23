@@ -1470,9 +1470,9 @@ WHERE name = $index
 |---|---|---|
 | `state` | `ONLINE` | `ONLINE` |
 | `indexProvider` | `fulltext-1.0` | `vector-2.0` |
-| `options.indexConfig` | `fulltext.analyzer` = `standard-no-stop-words` (KGLite's tokenizer lowercases and splits on non-alphanumerics, with no stop list or stemming), `fulltext.eventually_consistent` = `true` (a query folds in recent writes up to `auto_refresh_limit`, and otherwise serves the index as it stands) | `vector.dimensions`, `vector.similarity_function` (`COSINE`, `EUCLIDEAN`, `DOT_PRODUCT`, `POINCARE`: the store's metric) |
+| `options.indexConfig` | `fulltext.analyzer` = `standard-no-stop-words` (KGLite's tokenizer lowercases and splits on non-alphanumerics, with no stop list or stemming), `fulltext.eventually_consistent` = `false` (a query folds in recent writes up to `auto_refresh_limit`, and otherwise serves the index as it stands) | `vector.dimensions`, `vector.similarity_function` (`COSINE`, `EUCLIDEAN`, `DOT_PRODUCT`, `POINCARE`: the store's metric) |
 
-`CREATE FULLTEXT INDEX` and `CREATE VECTOR INDEX` stay refused: Neo4j's full-text index spans several labels and properties, and a vector index here builds over an embedding store that must already exist, so neither is a thin alias over the builders above.
+`CREATE FULLTEXT INDEX` builds the single-label, single-property index and registers its name (see [Cypher index DDL](#cypher-index-ddl)). `CREATE VECTOR INDEX` stays refused: a vector index here builds over an embedding store that must already exist, so it is not a thin alias over the builders above.
 
 **Positional `CALL` arguments.** `CALL proc(a, b, c)` binds by position to the procedure's declared parameters, and trailing optional ones may be left off. Only procedures with a declared signature take it: the four above, and `SHOW PROCEDURES` lists their signatures. Every other procedure takes one config map (`CALL proc({key: value})`), and positional arguments to it are an error that says so. A wrong argument count names the signature.
 
@@ -3424,9 +3424,8 @@ query. Index advisors and tooling that branch on `type` get the information they
 need without parsing the `name` string.
 
 - A BM25 text index reports Neo4j's `"FULLTEXT"`, which is what it is for a
-  client reading the column. KGLite's is single-label and single-property, so
-  `CREATE FULLTEXT INDEX` still refuses. Build one with
-  `build_text_index(node_type, property)`.
+  client reading the column. KGLite's is single-label and single-property.
+  Build one with `CREATE FULLTEXT INDEX` or `build_text_index(node_type, property)`.
 - A built HNSW index reports `"VECTOR"` and is named for the *source column* it
   was built over, not the `_emb` store key. A type carrying both a text and a
   vector index over `body` therefore lists two rows under the same name and
@@ -4634,6 +4633,8 @@ CREATE [RANGE] INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON (n.prop [, n.prop2 
 DROP INDEX <name> [IF EXISTS]
 DROP INDEX FOR (n:Label) ON (n.prop [, ...])        -- KGLite extension
 SHOW [ALL] INDEX[ES]
+CREATE FULLTEXT INDEX [name] [IF NOT EXISTS] FOR (n:Label) ON EACH [n.prop]
+    [OPTIONS {indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words'}}]
 ```
 
 #### What each statement builds
@@ -4813,7 +4814,7 @@ rows and columns as `CALL db.indexes()`:
 | `delta` | how many documents (or vectors) the index would re-read to catch up — an upper bound. `null` alongside a `null` `stale` |
 | `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
 | `populationPercent` | `100.0` for an `ONLINE` index, `null` for a `DEFERRED` one |
-| `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; on a `FULLTEXT` row `{indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words', `fulltext.eventually_consistent`: true}}`; `null` elsewhere |
+| `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; on a `FULLTEXT` row `{indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words', `fulltext.eventually_consistent`: false}}`; `null` elsewhere |
 | `owningConstraint` | the constraint that owns the index, on the hash-equality or composite row a UNIQUE or NODE KEY constraint backs. That row's `type` is `RANGE`, as in Neo4j. `null` on every index nothing owns |
 | `indexProvider` | `'fulltext-1.0'` on a `FULLTEXT` row, `'vector-2.0'` on a `VECTOR` row, `null` elsewhere |
 | `id`, `lastRead`, `readCount` | always `null` |
@@ -4857,6 +4858,19 @@ A bare `SHOW INDEXES` returns the first nine columns. The last seven are Neo4j 5
 like `CALL db.indexes() YIELD …`; `BRIEF` and `VERBOSE` are refused rather than
 ignored.
 
+#### Full-text indexes
+
+`CREATE FULLTEXT INDEX FOR (n:Label) ON EACH [n.prop]` builds the BM25 index over one label's one property.
+It is the statement `build_text_index(label, prop)` runs, plus a name.
+
+- The name is optional. An unnamed index answers to `Label.prop`.
+- Index and constraint names share one namespace. A taken name is refused and builds nothing.
+- `IF NOT EXISTS` turns a taken name or an existing index on the property into a no-op. Without it, a second index on the same property is an error.
+- `db.index.fulltext.queryNodes(name, query)` queries it, and `DROP INDEX name` removes it.
+- `SHOW INDEXES` lists it as `FULLTEXT` with `fulltext.eventually_consistent` `false`.
+- A `storage='disk'` graph refuses the statement, as it refuses `build_text_index`.
+- The index is saved with the graph and recovered from the write-ahead log.
+
 #### Forms that are rejected
 
 Each of these forms fails with a `CypherExecutionError` naming the construct and
@@ -4866,9 +4880,12 @@ success.
 | Statement | Why, and what to use |
 |---|---|
 | `CREATE TEXT INDEX` | Neo4j's TEXT index accelerates `CONTAINS` / `STARTS WITH` / `ENDS WITH`, which KGLite serves unindexed (a string index already gives prefix pushdown — see above). For *ranked* retrieval, build a BM25 index: `build_text_index(node_type, property)`, then `text_bm25()` |
-| `CREATE FULLTEXT INDEX` | BM25 indexes exist, but Neo4j's FULLTEXT is multi-label, multi-property and name-addressed while KGLite's is one node type's one property, so they are created through `build_text_index(node_type, property)` and queried with `text_bm25()`. A built one *is* listed by `SHOW INDEXES` as type `FULLTEXT`, and `DROP INDEX Label.property` removes it |
+| `CREATE FULLTEXT INDEX FOR (n:A\|B) …` | A KGLite full-text index covers one node label. Create one index per label |
+| `CREATE FULLTEXT INDEX … ON EACH [n.a, n.b]` | A KGLite full-text index covers one property. Create one index per property |
+| `CREATE FULLTEXT INDEX FOR ()-[r:T]-() …` | Not available through DDL. Use `CALL db.relationship_text_index.build(...)` |
+| `CREATE FULLTEXT INDEX … OPTIONS` with another analyzer, an unknown `indexConfig` key or `indexProvider` | KGLite has one tokenizer, `standard-no-stop-words`. `fulltext.eventually_consistent` is accepted as `true` or `false` and does not change behaviour |
 | `CREATE POINT INDEX` | No point index. Spatial predicates and the spatial-join optimiser work on geometry properties without one |
-| `CREATE VECTOR INDEX` | Vector indexes exist, but need an existing embedding store and HNSW build parameters, so they are created through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
+| `CREATE VECTOR INDEX` | The statement parses in full, but a vector index here builds over an existing embedding store and HNSW build parameters, so create it through `build_vector_index(...)`. A built one *is* listed by `SHOW INDEXES` as type `VECTOR`, and `DROP INDEX Label.column` removes it |
 | `CREATE LOOKUP INDEX` | Label and relationship-type lookup is always indexed automatically (`type_indices`) |
 | `CREATE INDEX FOR ()-[r:T]-() ON (r.a, r.b)` | A relationship index covers exactly one property. Create one index per property |
 | `CREATE INDEX FOR ()-[r:T]-() ON (r.p)` on a `storage='disk'` graph | A disk graph's relationship ids are a frozen CSR plus a process-local overlay, so an index keyed by them cannot be kept or persisted. The statement is refused with that reason; the property stays queryable, scanned |

@@ -405,7 +405,8 @@ pub(crate) enum IndexKind {
     /// `build_text_index`. Reported as Neo4j's `FULLTEXT` because that is what
     /// it is for a client reading the column — but KGLite's is single-label,
     /// single-property and canonically named, where Neo4j's is multi-label and
-    /// user-named, so `CREATE FULLTEXT INDEX` still refuses.
+    /// user-named, so `CREATE FULLTEXT INDEX` refuses the multi-label and
+    /// multi-property forms.
     Text,
     /// HNSW approximate-nearest-neighbour index over one embedding store, built
     /// by `build_vector_index`. Reported as Neo4j's `VECTOR`. A store *without*

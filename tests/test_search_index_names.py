@@ -75,7 +75,7 @@ def test_a_named_fulltext_index_answers_the_preflight_row_and_queries(mode, tmp_
     assert row["labelsOrTypes"] == ["Doc"] and row["properties"] == ["text"]
     assert row["indexProvider"] == "fulltext-1.0"
     config = row["options"]["indexConfig"]
-    assert config["fulltext.analyzer"] and config["fulltext.eventually_consistent"] is True
+    assert config["fulltext.analyzer"] and config["fulltext.eventually_consistent"] is False
     hits = graph.cypher(
         "CALL db.index.fulltext.queryNodes($index, $q, {limit: $limit}) YIELD node AS entity, score "
         "RETURN entity.id AS id, score ORDER BY score DESC LIMIT $limit",

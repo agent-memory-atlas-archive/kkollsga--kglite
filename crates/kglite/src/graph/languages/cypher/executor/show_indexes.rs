@@ -96,7 +96,7 @@ pub(crate) fn index_cell(info: &IndexInfo, column: &str) -> Option<Value> {
                     "fulltext.analyzer",
                     Value::String(FULLTEXT_ANALYZER.to_string()),
                 ),
-                ("fulltext.eventually_consistent", Value::Boolean(true)),
+                ("fulltext.eventually_consistent", Value::Boolean(false)),
             ]),
             _ => info
                 .vector_config

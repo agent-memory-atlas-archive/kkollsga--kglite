@@ -411,7 +411,7 @@ NEO4J_SCHEMA_SCRIPT: list[tuple[str, str | None]] = [
     ),
     (
         "CREATE FULLTEXT INDEX p_ft IF NOT EXISTS FOR (p:Person) ON EACH [p.name, p.city]",
-        "build_text_index",
+        "exactly one property",
     ),
     ("CREATE POINT INDEX p_loc IF NOT EXISTS FOR (p:Person) ON (p.location)", "POINT INDEX"),
     (

@@ -52,7 +52,7 @@ def test_a_refused_schema_statement_leaves_the_graph_unchanged(bolt_server):
         with driver.session() as session:
             before = _index_names(session)
             with pytest.raises(neo4j.exceptions.ClientError):
-                session.run("CREATE FULLTEXT INDEX ft FOR (n:Person) ON EACH [n.title]").consume()
+                session.run("CREATE POINT INDEX pt FOR (n:Person) ON (n.title)").consume()
             assert _index_names(session) == before
 
 
