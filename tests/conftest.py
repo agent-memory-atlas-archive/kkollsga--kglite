@@ -11,7 +11,14 @@ import time
 import pandas as pd
 import pytest
 
-from kglite import KnowledgeGraph
+# The engine answers stores under ~262k floats by exact scan even when an HNSW
+# index exists. Most fixtures here are that small and exist to exercise the
+# index path, so the suite lowers the size to 0; tests/test_exact_scan_dispatch.py
+# runs the real dispatch in a child process with the variable removed. Must be
+# set before kglite is imported (the engine reads it once).
+os.environ.setdefault("KGLITE_EXACT_SCAN_FLOATS", "0")
+
+from kglite import KnowledgeGraph  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Workspace-binary resolution (shared by the CLI / MCP / bolt binary-backed

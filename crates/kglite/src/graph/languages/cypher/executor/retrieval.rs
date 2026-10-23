@@ -35,6 +35,54 @@ struct HnswRowCoverage {
     ordered_whole_store: bool,
 }
 
+/// HNSW candidates for `query`, kept where `coverage` maps them to a row,
+/// re-scored on the scalar score scale and ordered best-first (ties keep row
+/// order) with at most `limit` kept.
+fn hnsw_rescored_winners(
+    index: &crate::graph::embedding_store::HnswRead<'_>,
+    store: &EmbeddingStore,
+    coverage: Option<&HnswRowCoverage>,
+    scorer: &crate::graph::algorithms::vector::Scorer,
+    query: &[f32],
+    query_norm: f32,
+    limit: usize,
+) -> Vec<(usize, f64)> {
+    let k_fetch = limit.saturating_mul(4).max(limit).min(store.len());
+    let ef = k_fetch.max(index.params().ef_search);
+    let raw = index.search(
+        query,
+        query_norm,
+        k_fetch,
+        Some(ef),
+        &store.data,
+        &store.norms,
+    );
+
+    let mut scored: Vec<(usize, f64)> = Vec::with_capacity(limit.min(raw.len()));
+    for (slot, _dist) in raw {
+        let node_raw = store.slot_to_node[slot as usize];
+        let row_index = match coverage {
+            Some(coverage) => coverage.node_to_row.get(&node_raw).copied(),
+            None => Some(slot as usize),
+        };
+        if let Some(ri) = row_index {
+            let start = slot as usize * store.dimension;
+            let emb = &store.data[start..start + store.dimension];
+            let norm = store.norms[slot as usize];
+            scored.push((ri, scorer.score(query, emb, norm) as f64));
+        }
+    }
+    // Stable sort: ties keep row order (matches the exact path's behaviour
+    // closely enough; ANN is approximate by contract anyway).
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    scored.truncate(limit);
+    scored
+}
+
 pub(super) enum RetrievalPopulation<'r> {
     Rows(&'r ResultSet),
     WholeType {
@@ -829,6 +877,11 @@ impl<'a> CypherExecutor<'a> {
         };
         info.store = Some(format!("{node_type}.{}", args.property));
 
+        // A scan this small is no slower than the index walk and is exact.
+        if store.has_index() && vs::exact_scan_preferred(store.len(), store.dimension) {
+            return Ok(HnswOutcome::Exact(info.fallback("small_store")));
+        }
+
         let index = match store.index_for_query(self.graph.read_only) {
             Some(i) => i,
             None => {
@@ -888,39 +941,15 @@ impl<'a> CypherExecutor<'a> {
                         coverage.node_to_row.contains_key(&node)
                     }))
         });
-        let k_fetch = limit.saturating_mul(4).max(limit).min(store.len());
-        let ef = k_fetch.max(index.params().ef_search);
-        let raw = index.search(
+        let scored = hnsw_rescored_winners(
+            &index,
+            store,
+            coverage.as_ref(),
+            &scorer,
             &args.query,
             query_norm,
-            k_fetch,
-            Some(ef),
-            &store.data,
-            &store.norms,
+            limit,
         );
-
-        let mut scored: Vec<(usize, f64)> = Vec::with_capacity(limit.min(raw.len()));
-        for (slot, _dist) in raw {
-            let node_raw = store.slot_to_node[slot as usize];
-            let row_index = match &coverage {
-                Some(coverage) => coverage.node_to_row.get(&node_raw).copied(),
-                None => Some(slot as usize),
-            };
-            if let Some(ri) = row_index {
-                let start = slot as usize * store.dimension;
-                let emb = &store.data[start..start + store.dimension];
-                let norm = store.norms[slot as usize];
-                scored.push((ri, scorer.score(&args.query, emb, norm) as f64));
-            }
-        }
-        // Stable sort: ties keep row order (matches the exact path's behaviour
-        // closely enough; ANN is approximate by contract anyway).
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        scored.truncate(limit);
 
         // Filtered + underfilled (a tight WHERE ate the over-fetch) → exact scan.
         if !whole_store && scored.len() < limit {

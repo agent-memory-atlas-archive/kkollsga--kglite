@@ -374,7 +374,9 @@ fn retrieval_index_state(
     if vector {
         let store = graph.embedding_store(node_type, property)?;
         let forced_exact = requested_vector_policy(score_call) == "exact";
-        Some(if store.has_index() && !forced_exact {
+        let small =
+            crate::graph::algorithms::vector::exact_scan_preferred(store.len(), store.dimension);
+        Some(if store.has_index() && !forced_exact && !small {
             "hnsw"
         } else {
             "exact"

@@ -5918,7 +5918,8 @@ executed vector ranking routes. Each record has:
   against the `f32` vectors, so their scores are exact; `hnsw_mask` and `quantized_mask`
   are the valid-time forms.
 - `fallback_reason`: reasons include `forced_exact`, `no_index`, `stale_index`, `metric_mismatch`,
-  `filtered_underfill`, `row_coverage`, `row_dependent_selectors` and
+  `filtered_underfill`, `row_coverage`, `row_dependent_selectors`,
+  `small_store` (an index exists but the store is below the exact-scan size) and
   `ordering_requires_exact`.
 - An optional `store`: `Type.embedding_property`, or
   `relationship:TYPE.embedding_property` for a relationship store. A missing store

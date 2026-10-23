@@ -93,6 +93,10 @@ before upgrading.
 
 ### Changed
 
+- **A small indexed vector store is searched exactly.**
+  - Below 262,144 floats (vectors x dimension) a scan is no slower than an HNSW walk, so `vector_search`, `vector_score` and the fused top-k answer by exact scan even when an index exists. Results can change for such stores: recall is 1.0 instead of approximate.
+  - `EXPLAIN` labels the fused top-k `[exact]` for these stores, and `PROFILE` reports `actual_mode: "exact"` with `fallback_reason: "small_store"`. Stores at or above the size, and `ef_search`, are unchanged.
+
 - **A second thread's call on a live graph waits for a running write.**
   - A Cypher mutation on a `KnowledgeGraph` now releases the GIL while it runs, as does the fsync of a durable commit. Before, the whole call held it, so a pure-Python thread beside a write ran at about a third of its speed and reader threads of a `freeze()` snapshot stalled behind the writer.
   - A second thread that calls any `KnowledgeGraph` method on the same graph now waits for the write to finish: `cypher()`, `begin()`, `begin_read()`, `backup()`, fluent chains, `add_nodes()`, `save()`, `describe()`, properties, `len()` and the rest. Before, it raised `RuntimeError: Already borrowed` (`RuntimeError: KnowledgeGraph accessed concurrently` from `cypher()`). The wait releases the GIL, `Ctrl-C` ends it, and the thread never sees a half-applied write.

@@ -353,6 +353,7 @@ fn fused_scans_propagate_vector_argument_errors() {
 
 #[test]
 fn whole_type_hnsw_entry_returns_winners_and_rejects_reordered_coverage() {
+    let _index_path = crate::graph::algorithms::vector::ExactScanSizeGuard::set(0);
     let vectors: Vec<_> = (0..128).map(|i| ("doc", [i as f32, 1.0])).collect();
     let mut graph = docs(&vectors);
     crate::graph::embeddings::build_vector_index(
@@ -527,6 +528,7 @@ fn whole_type_exact_entry_sorts_by_second_call_and_caches_distinct_keys() {
 /// every such query fell back to the exact scan permanently.
 #[test]
 fn an_index_built_with_an_explicit_metric_serves_metric_less_queries() {
+    let _index_path = crate::graph::algorithms::vector::ExactScanSizeGuard::set(0);
     let vectors: Vec<_> = (0..128).map(|i| ("doc", [i as f32, 1.0])).collect();
     let mut graph = docs(&vectors);
     crate::graph::embeddings::build_vector_index(

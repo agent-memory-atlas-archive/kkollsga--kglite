@@ -127,6 +127,70 @@ const PARALLEL_THRESHOLD: usize = 10_000;
 /// the index wins by 2.7-9.8x at every size and dimension swept up to 50k.
 const HNSW_AUTO_MIN: usize = 400;
 
+/// Largest scan, in `vectors * dimension` floats, that is answered by the exact
+/// path even when an HNSW index exists: below it the scan is no slower than an
+/// `ef_search = 128` walk, and it is exact where the walk is approximate.
+///
+/// Release build, clustered vectors (intrinsic dimension 16 in 384-d), p50 of
+/// 100 queries, top 10. At dimension 384 the scan beats the walk at 400 vectors
+/// (153,600 floats: 0.032 vs 0.043 ms) and loses at 800 (307,200 floats: 0.054
+/// vs 0.043 ms). On unstructured Gaussian vectors at dimension 128 it still
+/// wins at 3,000 (384,000 floats: 0.080 vs 0.090 ms). 262,144 floats sits
+/// between those cells. [`HNSW_AUTO_MIN`] still applies on top, so a very wide
+/// store is gated by its vector count.
+pub(crate) const EXACT_SCAN_MAX_FLOATS: usize = 262_144;
+
+/// Whether scoring `vectors` vectors of `dimension` floats exactly is the
+/// better route than an index walk.
+pub(crate) fn exact_scan_preferred(vectors: usize, dimension: usize) -> bool {
+    vectors.saturating_mul(dimension) < exact_scan_floats()
+}
+
+/// The size in force. `KGLITE_EXACT_SCAN_FLOATS` replaces it for the whole
+/// process, read once. It is a test hook: the Python suite sets it to 0 so its
+/// few-thousand-vector fixtures keep reaching the index path, and runs the
+/// dispatch tests in a child process that leaves it unset.
+#[cfg(not(test))]
+fn exact_scan_floats() -> usize {
+    static FLOATS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *FLOATS.get_or_init(|| {
+        std::env::var("KGLITE_EXACT_SCAN_FLOATS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(EXACT_SCAN_MAX_FLOATS)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXACT_SCAN_FLOATS: std::cell::Cell<usize> = const { std::cell::Cell::new(EXACT_SCAN_MAX_FLOATS) };
+}
+
+#[cfg(test)]
+fn exact_scan_floats() -> usize {
+    EXACT_SCAN_FLOATS.with(|floats| floats.get())
+}
+
+/// Unit-test lever: lowers the exact-scan size on the current thread so a
+/// store of a few hundred 2-d vectors can still reach the index path. Restores
+/// the real size when dropped.
+#[cfg(test)]
+pub(crate) struct ExactScanSizeGuard(usize);
+
+#[cfg(test)]
+impl ExactScanSizeGuard {
+    pub(crate) fn set(floats: usize) -> Self {
+        Self(EXACT_SCAN_FLOATS.with(|cell| cell.replace(floats)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ExactScanSizeGuard {
+    fn drop(&mut self) {
+        EXACT_SCAN_FLOATS.with(|cell| cell.set(self.0));
+    }
+}
+
 /// Over-fetch factor for HNSW: fetch `top_k * this` candidates so that, after
 /// dropping any that fall outside the (possibly filtered) selection, `top_k`
 /// survive. If too few survive, the caller falls back to an exact scan.
@@ -342,7 +406,10 @@ fn hnsw_covered_slots(
     candidates: &[NodeIndex],
     coverage_proven: bool,
 ) -> Option<usize> {
-    if candidates.len() < HNSW_AUTO_MIN || candidates.len().saturating_mul(2) < store.len() {
+    if candidates.len() < HNSW_AUTO_MIN
+        || candidates.len().saturating_mul(2) < store.len()
+        || exact_scan_preferred(candidates.len(), store.dimension)
+    {
         return None;
     }
     let covered = if coverage_proven {
@@ -353,7 +420,10 @@ fn hnsw_covered_slots(
             .filter(|node| store.node_to_slot.contains_key(&node.index()))
             .count()
     };
-    (covered >= HNSW_AUTO_MIN && covered.saturating_mul(2) >= store.len()).then_some(covered)
+    (covered >= HNSW_AUTO_MIN
+        && covered.saturating_mul(2) >= store.len()
+        && !exact_scan_preferred(covered, store.dimension))
+    .then_some(covered)
 }
 
 /// Top-k similarity over the candidates of `selection` (see
@@ -1596,11 +1666,42 @@ mod tests {
         (graph, doc_nodes)
     }
 
+    /// An index serves only scans at or above `EXACT_SCAN_MAX_FLOATS`: the
+    /// same 600 vectors are answered exactly at dimension 2 and by the index
+    /// at dimension 512 (307,200 floats).
+    #[test]
+    fn a_store_below_the_exact_scan_size_never_reaches_the_index() {
+        for (dimension, served_by_index) in [(2usize, false), (512, true)] {
+            let mut graph = DirGraph::new();
+            let mut store = EmbeddingStore::with_metric(dimension, "euclidean");
+            let nodes = push_nodes(&mut graph, "Doc", 600, None);
+            for (slot, node) in nodes.iter().enumerate() {
+                let vector: Vec<f32> = (0..dimension)
+                    .map(|d| ((slot * 31 + d * 7) % 97) as f32)
+                    .collect();
+                store.set_embedding(node.index(), &vector);
+            }
+            store
+                .build_index(DistanceMetric::Euclidean, HnswParams::default(), 7)
+                .expect("build HNSW index");
+            assert_eq!(
+                exact_scan_preferred(store.len(), dimension),
+                !served_by_index
+            );
+            assert_eq!(
+                hnsw_covered_slots(&store, &nodes, true).is_some(),
+                served_by_index,
+                "dimension {dimension}"
+            );
+        }
+    }
+
     /// The routing bug: whole-graph search on a multi-type graph never reached
     /// the index, because eligibility was proven by *type homogeneity* — which
     /// the first `Note` node kills — instead of by store uniqueness.
     #[test]
     fn one_store_routes_a_mixed_candidate_set_to_that_store() {
+        let _index_path = ExactScanSizeGuard::set(0);
         let (graph, docs) = one_embedded_type_graph(600, 600);
         let whole_graph: Vec<NodeIndex> = GraphRead::node_indices(&graph.graph).collect();
         assert!(whole_graph.len() > docs.len(), "the graph is mixed");
@@ -1661,6 +1762,7 @@ mod tests {
     /// mixed candidates makes the raw candidate count an overstatement.
     #[test]
     fn the_auto_use_gate_counts_covered_slots_not_candidates() {
+        let _index_path = ExactScanSizeGuard::set(0);
         let (graph, docs) = one_embedded_type_graph(600, 4_000);
         let store = graph
             .embeddings
