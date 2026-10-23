@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (31_382_432, "0.21.0"),  # host release build
-    "linux": (37_618_616, "0.20.1"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (31_845_520, "0.21.1"),  # host release build
+    "linux": (38_848_824, "0.21.0"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.20.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "bec70192f09808a9d7d6d19fe557d1360fcd922b867b07ffc4154adce96b15d5"
+LINUX_SIZE_WHEEL = "kglite-0.21.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "55b5e0749b462f28bfb9e4ecdb748fca3c4e06a24f6952cc7dfa17557464facd"
 
 
 @pytest.mark.binary_size
@@ -660,6 +660,12 @@ def test_binary_size_regression():
         and id-index sections), the frozen mapped topology backend and its
         shared paged write overlay, rebase on save, the unsaved-write
         budget, embedding quantization, and the MCP stale-build reload.
+
+      - 0.21.1:       31,845,520 bytes (≈30.4 MB, +463 KB). Owned
+        constraint indexes, relationship property indexes and UNIQUE,
+        FULLTEXT/VECTOR index DDL with property-sourced vector indexes,
+        the SEARCH clause, three planner passes (null-safe seek, CALL
+        hoist, WITH-boundary top-K), and the waiting borrow helpers.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

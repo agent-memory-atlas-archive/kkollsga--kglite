@@ -9,6 +9,20 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-24
+
+### Breaking changes and migration
+
+- **A write-ahead log is WAL format 13.** A durable graph this release appended to cannot be opened by 0.21.0 or older until a checkpoint truncates the log. **Do:** call `save()` before handing the directory to an older kglite.
+- **A second thread's call on a live graph waits for a running write.** Every method used to run under the Python lock; a write now releases it, and any other method waits instead of being serialized behind it. A callback that re-enters its own graph raises `RuntimeError` ("accessed concurrently"). **Do:** nothing, unless your code expected the old concurrent-access error.
+- **A small indexed vector store is searched exactly.** A store under 262,144 floats (vectors × dimension) ignores its HNSW index, so a `vector_score` top-K there can return different (exact) neighbours.
+- **A `WITH … ORDER BY vector_score(…) DESC LIMIT k` top-K answers from the HNSW index.** It used to score every row exactly. **Do:** pass `{exact: true}` as the last `vector_score` argument to keep exact results.
+- **The index a UNIQUE or NODE KEY constraint owns is listed as `RANGE`**, not `PROPERTY`, in `SHOW INDEXES` and `db.indexes()`. **Do:** match on `RANGE`.
+- **`SHOW INDEXES` lists the name a `CREATE INDEX <name>` gave**, not the canonical name. **Do:** read the name you gave.
+- **`CREATE INDEX` on a property a constraint already indexes is refused** as a duplicate. **Do:** add `IF NOT EXISTS`.
+- **A per-row `CALL { }` no longer runs for rows a later filter removes**, so a subquery that would raise on such a row no longer raises. **Do:** `disabled_passes=['hoist_where_over_call_subquery']` restores the old evaluation order.
+- **Bolt reports `WriteBudgetExceeded` as `Neo.ClientError.General.ReadOnly`**, not a transient error, so drivers stop retrying it. **Do:** handle it as a client error.
+
 ### Added
 
 - **`CREATE VECTOR INDEX`.**
