@@ -546,19 +546,19 @@
         },
         "build_node_vector_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None)"
+          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, name=None)"
         },
         "build_relationship_vector_index": {
           "kind": "method",
-          "signature": "(self, /, relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None)"
+          "signature": "(self, /, relationship_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, name=None)"
         },
         "build_text_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, property, auto_refresh_limit=None)"
+          "signature": "(self, /, node_type, property, auto_refresh_limit=None, *, name=None)"
         },
         "build_vector_index": {
           "kind": "method",
-          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, entity='node')"
+          "signature": "(self, /, node_type, text_column, m=None, ef_construction=None, ef_search=None, metric=None, auto_refresh_limit=None, *, entity='node', name=None)"
         },
         "calculate": {
           "kind": "method",
@@ -670,7 +670,7 @@
         },
         "cypher": {
           "kind": "method",
-          "signature": "(self, /, query, *, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=True, parallel=False, disable_optimizer=False, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None)"
+          "signature": "(self, /, query, *, to_df=False, params=None, timeout_ms=None, max_work_units=None, row_limit=None, streaming=True, parallel=False, disable_optimizer=False, disabled_passes=None, write_scope=None, git_sha=None, modified_by=None, valid_at=None, hide_structural_keys=False)"
         },
         "date": {
           "kind": "method",

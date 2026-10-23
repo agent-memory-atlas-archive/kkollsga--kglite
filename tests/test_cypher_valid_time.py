@@ -250,6 +250,7 @@ GUARD_SAFE_PASSES = {
     "reorder_predicates_by_cost",
     "mark_disjoint_fixed_trails",
     "anchor_element_id",
+    "anchor_rel_property_index",
     "push_limit_into_aggregate",
     "fuse_count_short_circuits",
     "fuse_node_scan_aggregate",
