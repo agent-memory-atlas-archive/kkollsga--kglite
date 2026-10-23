@@ -138,8 +138,10 @@ impl DirGraph {
         if self.suppress_ontology_stamp {
             return Ok(());
         }
-        crate::graph::languages::cypher::executor::write::reject_abstract_create(self, node_type)
-            .map_err(|e| format!("add_nodes: {e}"))
+        crate::graph::languages::cypher::executor::write::create_support::reject_abstract_create(
+            self, node_type,
+        )
+        .map_err(|e| format!("add_nodes: {e}"))
     }
 
     /// Stamp every declared ancestor onto its descendants' live nodes, via

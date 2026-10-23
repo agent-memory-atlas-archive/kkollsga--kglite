@@ -482,9 +482,22 @@ pub(crate) struct IndexInfo {
     /// composite rows a UNIQUE / NODE KEY constraint backs, `None` for every
     /// index nothing owns. Feeds the `owningConstraint` column.
     pub owning_constraint: Option<String>,
+    /// The `type` column says `RANGE` although this is a hash row: set on an
+    /// owned index no `RANGE` index of its own sits beside, so the constraint's
+    /// backing index is the one RANGE row for its properties, as in Neo4j.
+    pub reports_range: bool,
 }
 
 impl IndexInfo {
+    /// The `type` column.
+    pub(crate) fn type_label(&self) -> &'static str {
+        if self.reports_range {
+            "RANGE"
+        } else {
+            self.kind.neo4j_type()
+        }
+    }
+
     /// The entity the index covers, as the registry and the constraint
     /// vocabulary spell it.
     pub(crate) fn entity_kind(&self) -> EntityKind {
@@ -609,6 +622,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             unembedded: None,
             vector_config: None,
             owning_constraint,
+            reports_range: false,
         });
     }
     for (node_type, properties, state) in graph.list_composite_indexes_with_state() {
@@ -625,6 +639,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             unembedded: None,
             vector_config: None,
             owning_constraint,
+            reports_range: false,
         });
     }
     for (rel_type, property, state) in graph.list_rel_property_indexes_with_state() {
@@ -635,6 +650,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             owning_constraint: graph
                 .has_rel_unique_constraint(&rel_type, &property)
                 .then(|| graph.rel_unique_display_name(&rel_type, &property)),
+            reports_range: false,
             labels_or_types: vec![rel_type],
             properties: vec![property],
             state: state.as_str(),
@@ -657,6 +673,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             unembedded: None,
             vector_config: None,
             owning_constraint: None,
+            reports_range: false,
         });
     }
     for (node_type, property, store) in crate::graph::text_indexes::list_text_indexes(graph) {
@@ -672,6 +689,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             unembedded: None,
             vector_config: None,
             owning_constraint: None,
+            reports_range: false,
         });
     }
     for (rel_type, property, store) in
@@ -689,6 +707,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
             unembedded: None,
             vector_config: None,
             owning_constraint: None,
+            reports_range: false,
         });
     }
     // Only stores that actually carry an HNSW index get a row. A store without
@@ -722,6 +741,7 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
                     )
                 }),
             owning_constraint: None,
+            reports_range: false,
         });
     }
     for status in crate::graph::edge_embeddings::vector_index::list_edge_vector_indexes(graph)
@@ -754,11 +774,39 @@ pub(crate) fn collect_indexes_unnamed(graph: &DirGraph) -> Vec<IndexInfo> {
                     )
                 }),
             owning_constraint: None,
+            reports_range: false,
         });
     }
 
+    mark_owned_ranges(&mut out);
     sort_indexes(&mut out);
     out
+}
+
+/// Report a constraint's owned hash index as `RANGE`, the type Neo4j gives the
+/// index behind a constraint, unless a `RANGE` index of the user's own already
+/// covers the same properties (it would list the type twice under one name).
+fn mark_owned_ranges(out: &mut [IndexInfo]) {
+    let ranges: Vec<(EntityKind, String, Vec<String>)> = out
+        .iter()
+        .filter(|info| info.kind == IndexKind::Range)
+        .map(|info| {
+            (
+                info.entity_kind(),
+                info.labels_or_types.first().cloned().unwrap_or_default(),
+                info.properties.clone(),
+            )
+        })
+        .collect();
+    for info in out.iter_mut().filter(|info| {
+        info.owning_constraint.is_some()
+            && matches!(info.kind, IndexKind::Equality | IndexKind::Composite)
+    }) {
+        let target = info.labels_or_types.first().cloned().unwrap_or_default();
+        info.reports_range = !ranges.iter().any(|(entity, label, properties)| {
+            *entity == info.entity_kind() && *label == target && *properties == info.properties
+        });
+    }
 }
 
 /// The name a listed row answers to when it is not the canonical one: the name

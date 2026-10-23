@@ -104,6 +104,19 @@ impl DirGraph {
             .any(|(nt, _)| nt == node_type)
     }
 
+    /// The declared single-property UNIQUE constraint over `node_type`'s
+    /// identity (`id`, or the type's own spelling of it), if any.
+    ///
+    /// Its enforcement is the per-type id index, not the owned property index:
+    /// the id index treats an integer id as one value however it was written,
+    /// which the owned index's exact-`Value` keys do not.
+    pub(crate) fn identity_unique_key(&self, node_type: &str) -> Option<&UniqueConstraintKey> {
+        self.declared_unique_keys().iter().find(|(nt, props)| {
+            nt == node_type
+                && matches!(props.as_slice(), [property] if self.resolve_alias(nt, property) == "id")
+        })
+    }
+
     /// Whether `(node_type, properties)` is declared UNIQUE. Property order is
     /// irrelevant — `(a, b)` and `(b, a)` are the same constraint.
     pub fn has_unique_constraint(&self, node_type: &str, properties: &[String]) -> bool {
@@ -698,7 +711,7 @@ impl DirGraph {
     /// `NODE_PROPERTY_EXISTENCE` — and, with uniqueness alongside it, as
     /// `NODE_KEY` — while admitting exactly those writes: a constraint that
     /// reported success and enforced nothing, the one outcome this module
-    /// refuses everywhere else (see `reject_structural_uniqueness`).
+    /// refuses everywhere else.
     ///
     /// # Provisional stubs are deferred, not exempt
     ///

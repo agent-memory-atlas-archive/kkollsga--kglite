@@ -426,13 +426,8 @@ NEO4J_SCHEMA_SCRIPT: list[tuple[str, str | None]] = [
     # keys all route to real enforcement. `person_id` is unique across the
     # fixture and `name` is present on every row, so each declaration holds.
     # `person_id` is this fixture's unique_id_field, so it resolves to the
-    # structural `id`. Uniqueness DDL over `id` is refused and points at the
-    # primary-key route, rather than declaring a constraint that would admit
-    # duplicates while reporting success.
-    (
-        "CREATE CONSTRAINT person_id_u IF NOT EXISTS FOR (p:Person) REQUIRE p.person_id IS UNIQUE",
-        "primary_key",
-    ),
+    # structural `id`; uniqueness over it declares the identity key.
+    ("CREATE CONSTRAINT person_id_u IF NOT EXISTS FOR (p:Person) REQUIRE p.person_id IS UNIQUE", None),
     (
         "CREATE CONSTRAINT person_city_u IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS UNIQUE",
         None,

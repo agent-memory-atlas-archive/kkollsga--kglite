@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::columnar_write::{set_via_column_master, ColumnMasterWrite};
+use super::id_assignment::set_existing_id;
 use super::identity_fields::IdentityAliases;
 use super::write::{flush_disk_item_writes, set_node_property_direct};
 use super::write_scope::enforce_write_scope;
@@ -219,22 +220,17 @@ pub(super) fn apply_node_property_set<'a>(
     // ordinary property instead, which `n.term_name` could never return: the
     // write was invisible on the route that asked for it.
     //
-    // The id half is refused rather than rewritten, for the reason the literal
-    // `SET n.id` already is: the identity is immutable, and `add_nodes` treats
-    // its `unique_id_field` column as the row's key rather than a value it
-    // updates.
+    // The id half is never rewritten, for the reason the literal `SET n.id`
+    // is not: the identity is immutable, and `add_nodes` treats its
+    // `unique_id_field` column as the row's key rather than a value it updates.
+    // Writing the id it already has is accepted as a no-op.
     //
     // Only the *storage* write is redirected. Constraints, index maintenance
     // and the type catalogue keep the name the statement (and the declaration)
     // used — `update_property_indices_for_set` resolves the alias itself, and a
     // constraint is declared and reported under the spelling its author wrote.
     let write_field = match facts.aliases.canonical(property) {
-        "id" => {
-            return Err(format!(
-                "Cannot SET node id — it is immutable ('{property}' is the id field of \
-                 node type '{node_type_str}', so it names the identity)"
-            ))
-        }
+        "id" => return set_existing_id(graph, node_idx, property, &value),
         "title" => "title",
         _ => property,
     };

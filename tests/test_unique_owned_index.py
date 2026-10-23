@@ -63,8 +63,8 @@ def test_the_constraint_and_its_index_name_each_other(mode, tmp_path):
     # An owned index is named after its constraint, as Neo4j names it.
     assert _index_rows(kg) == [
         ("T.plain", "PROPERTY", None),
-        ("composite", "PROPERTY", "composite"),
-        ("single", "PROPERTY", "single"),
+        ("composite", "RANGE", "composite"),
+        ("single", "RANGE", "single"),
     ]
     owned = {r["name"]: r["ownedIndex"] for r in kg.cypher("SHOW CONSTRAINTS YIELD name, ownedIndex").to_dicts()}
     assert owned == {"single": "single", "composite": "composite"}
@@ -118,7 +118,7 @@ def test_create_index_equivalent_to_an_owned_index_is_a_duplicate(mode, tmp_path
     with pytest.raises(Exception, match="already exists"):
         kg.cypher("CREATE INDEX FOR (n:T) ON (n.k)")
     kg.cypher("CREATE INDEX IF NOT EXISTS FOR (n:T) ON (n.k)")
-    assert _index_rows(kg) == [("single", "PROPERTY", "single")]
+    assert _index_rows(kg) == [("single", "RANGE", "single")]
     # A no-op adopts nothing: the index still goes with its constraint.
     kg.cypher("DROP CONSTRAINT single")
     assert _index_rows(kg) == []
@@ -304,7 +304,7 @@ def test_a_deferred_load_lists_the_owned_index_and_enforces_on_the_first_write(m
     path = str(tmp_path / "d.kgl")
     kg.save(path)
     reloaded = kglite.load(path, defer_index_rebuild=True)
-    assert _index_rows(reloaded) == [("single", "PROPERTY", "single")]
+    assert _index_rows(reloaded) == [("single", "RANGE", "single")]
     with pytest.raises(Exception, match=UNIQUE_ERROR):
         reloaded.cypher("CREATE (:T {id: 2, k: 'a'})")
     assert _count(reloaded, "MATCH (n:T {k: 'a'}) RETURN count(n) AS c") == 1
@@ -315,7 +315,7 @@ def test_a_deferred_load_lists_the_owned_index_and_enforces_on_the_first_write(m
 # ---------------------------------------------------------------------------
 
 TRANSCRIPT = [
-    ("rows", [("ck", "PROPERTY", "ck"), ("uk", "PROPERTY", "uk")]),
+    ("rows", [("ck", "RANGE", "ck"), ("uk", "RANGE", "uk")]),
     ("dup_create", "refused"),
     ("dup_set", "refused"),
     ("dup_composite", "refused"),
@@ -323,7 +323,7 @@ TRANSCRIPT = [
     ("lookup_after_move", [0, 1]),
     ("after_delete_reinsert", "admitted"),
     ("drop_index", "refused"),
-    ("final_rows", [("ck", "PROPERTY", "ck")]),
+    ("final_rows", [("ck", "RANGE", "ck")]),
 ]
 
 

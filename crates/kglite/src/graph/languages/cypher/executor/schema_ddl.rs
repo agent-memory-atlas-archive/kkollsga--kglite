@@ -1025,12 +1025,6 @@ fn execute_create_constraint(
         },
     };
 
-    // Uniqueness over a structural field is not served by the secondary index,
-    // and must not be accepted. See `reject_structural_uniqueness`.
-    if matches!(plan, ConstraintPlan::Unique | ConstraintPlan::NodeKey) {
-        reject_structural_uniqueness(graph, &label, &create.properties)?;
-    }
-
     // A declared type on a structural field is likewise decided structurally —
     // before the existing-data scan, which cannot answer it. See
     // `reject_unsatisfiable_structural_type`.
@@ -1242,55 +1236,6 @@ pub(super) fn reject_name_collision(
     ))
 }
 
-/// Refuse a uniqueness constraint over the `id` field (or a column aliased to
-/// it) — measured to be the one shape where declaring one reports success and
-/// enforces nothing.
-///
-/// `id` is a `NodeData` field, not an entry in the property map. The unique
-/// secondary index is built by reading it through `property_reader` (which
-/// resolves aliases), but the write-path claim is derived from the *pending
-/// property map*, where `id` never appears — the CREATE path routes it to the
-/// node's identity instead. So no claim is produced and no check runs: a
-/// duplicate `id` is admitted by a constraint that reported success.
-///
-/// Verified empirically before adding this guard, because the neighbouring cases
-/// look identical and are not: `title`, a column aliased to `title`, and ordinary
-/// properties all enforce correctly, so **only** `id` is refused. Over-refusing
-/// here would cost the very common `REQUIRE p.name IS UNIQUE`.
-///
-/// Identity uniqueness has a route that does work, on every write path and both
-/// spellings — the declared primary key, which probes the per-type id index — so
-/// this points there rather than pretending. Enforcing `id` through the secondary
-/// index is a gap in the enforcement layer, not something constraint DDL can
-/// paper over.
-///
-/// `IS NOT NULL` on `id` is unaffected, and for the opposite reason: it is
-/// genuinely enforced. Every write path resolves an id before the check, so an
-/// omitted one satisfies the requirement, but an explicit
-/// `CREATE (:T {id: null})` does not — see
-/// `DirGraph::check_required_fields`.
-fn reject_structural_uniqueness(
-    graph: &DirGraph,
-    label: &str,
-    properties: &[String],
-) -> Result<(), String> {
-    for property in properties {
-        if graph.resolve_alias(label, property) != "id" {
-            continue;
-        }
-        return Err(format!(
-            "CREATE CONSTRAINT ... IS UNIQUE on '{property}' is not supported: it resolves to \
-             the structural 'id' field rather than a stored property, so the unique secondary \
-             index would never see the write and the constraint would admit duplicates while \
-             reporting success. Identity uniqueness is enforced by declaring the node type's \
-             primary key — `define_schema({{'nodes': {{'{label}': {{'primary_key': 'id'}}}}}})` \
-             — which probes the per-type id index on every write path. `MERGE` is the \
-             idempotent alternative to CREATE."
-        ));
-    }
-    Ok(())
-}
-
 /// `IS :: <TYPE>` on a structural field, decided by the data model rather than
 /// by the rows that happen to exist.
 ///
@@ -1308,10 +1253,9 @@ fn reject_structural_uniqueness(
 ///   an empty label and then rejected every subsequent write, because the id a
 ///   write supplies is an integer and always will be — bricking the node type.
 ///
-/// Same reasoning as [`reject_structural_uniqueness`], applied to types instead
-/// of uniqueness: refuse at declaration, where the answer is knowable, rather
-/// than discover it per-write. An accepted declaration here is one the field
-/// satisfies by construction, so it is true rather than merely installed.
+/// Refuse at declaration, where the answer is knowable, rather than discover it
+/// per-write. An accepted declaration here is one the field satisfies by
+/// construction, so it is true rather than merely installed.
 fn reject_unsatisfiable_structural_type(
     graph: &DirGraph,
     label: &str,
@@ -1502,7 +1446,7 @@ fn execute_drop_constraint(
 /// Refusing beats repairing the drop: the key is one declaration owned by the
 /// binding call that installed it, and Cypher DDL withdrawing part of a schema
 /// it does not own is the silent-enforcement-loss failure this module refuses
-/// everywhere else (cf. [`reject_structural_uniqueness`]).
+/// everywhere else.
 ///
 /// `IF EXISTS` does not silence it: that clause tolerates an *absent*
 /// constraint, and this one is present — listed and enforced — so reporting

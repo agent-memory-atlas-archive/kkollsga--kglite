@@ -82,9 +82,11 @@ scan (linear in node count). Keep these semantics in mind:
     lookup.
   - A bulk loader has no statement to carry the warning, so its duplicates are
     reported on stderr.
-  - To reject duplicates, declare the node type's primary key
-    (`define_schema({'nodes': {'T': {'primary_key': 'id'}}})`). The second
-    `CREATE` is then rejected.
+  - To reject duplicates, declare the identity unique:
+    `CREATE CONSTRAINT FOR (n:T) REQUIRE n.id IS UNIQUE` (see
+    [`id` as a key](#id-as-a-key)). The node type's primary key
+    (`define_schema({'nodes': {'T': {'primary_key': 'id'}}})`) does the same.
+    The second `CREATE` is then rejected.
   - Alternatively use **`MERGE` on the id alone, not `CREATE`**. `MERGE (:T {id: $k})`
     is idempotent either way.
   - A `MERGE` that also names a second label (`MERGE (:T:U {id: $k})`) or another
@@ -94,12 +96,10 @@ scan (linear in node count). Keep these semantics in mind:
     node with id 'k'; the existing node lacks label :U — match on the id and add
     the label (`MERGE (n:T {id: 'k'}) SET n:U`), or use ON MATCH SET".
   - A `MERGE` naming no id, or an id the type does not hold, creates as before.
-  - Constraint DDL is deliberately *not* the route here. `REQUIRE t.id IS UNIQUE`
-    is refused, because `id` is a structural field rather than a stored property
-    and the unique index would never see the write. See
-    [Cypher constraint DDL](#cypher-constraint-ddl).
 - **Matching is type-exact.** `'42'` ≠ `42`. Keep id types consistent across
   writes and reads.
+- **`id` behaves like a key** for drivers that treat it as an ordinary property.
+  See [`id` as a key](#id-as-a-key).
 - **Property typos are caught where the type's shape is known.** A `CREATE` or
   `MERGE` node pattern naming a property no write to the type has named is
   rejected with a `Valid properties: …` / "did you mean?" hint. This is a
@@ -127,6 +127,36 @@ scan (linear in node count). Keep these semantics in mind:
     [Diagnostics](#diagnostics).
   - The bulk loaders (`add_nodes`/`add_connections`) deliberately bypass the
     lock. It gates the Cypher write path.
+
+#### `id` as a key
+
+`id` is the node's identity, not a stored property, but three statements that
+drivers write for an ordinary key property work on it.
+
+- **Declare it unique.** `CREATE CONSTRAINT [name] FOR (n:T) REQUIRE n.id IS
+  UNIQUE` (also `REQUIRE (n.id) IS UNIQUE`, `IF NOT EXISTS`, and `IS NODE KEY`)
+  is enforced on `CREATE` through the per-type id index. The second
+  `CREATE (:T {id: 'k'})` raises `ConstraintViolationError` (Bolt:
+  `Neo.ClientError.Schema.ConstraintValidationFailed`). An integer id collides
+  however it was written, so a loaded `1` and a Cypher `1` are one id. The
+  declaration is refused while two nodes of the type already share an id.
+  - `SHOW CONSTRAINTS` lists it as `UNIQUENESS` on `['id']`.
+  - `SHOW INDEXES` lists its backing index as `RANGE`, `ONLINE`, with the
+    constraint's name in `owningConstraint`. `DROP INDEX` on it is refused.
+  - `DROP CONSTRAINT <name>` removes the enforcement and the index.
+  - A type with no such constraint is unchanged: duplicate ids are still made.
+- **Set it to what it already is.** `SET n.id = n.id`, `SET n += {id: v}` and
+  `SET n = {id: v, …}` are no-ops when `v` is the node's current id. Any other
+  value is refused with "Cannot SET node id — it is immutable". `REMOVE n.id` is
+  refused.
+- **Name it in the SET after a CREATE.** `CREATE (n:T) SET n = $props` creates
+  the node with the id in `$props`, as if the pattern had carried it. The same
+  holds for `SET n += $props` and `SET n.id = <expr>`, and for each row of
+  `UNWIND … CREATE (n:T) SET n = row`. The unique constraint is checked against
+  that id. The SET must directly follow the CREATE, and the id must not depend
+  on a function that changes between evaluations (`randomUUID()`) or on the new
+  node; otherwise the node keeps the id it was given and the SET is refused. A
+  node from an earlier statement is never re-keyed.
 
 ---
 
@@ -4744,7 +4774,7 @@ rows and columns as `CALL db.indexes()`:
 | `unembedded` | `VECTOR` rows only: nodes (or relationships) of the type carrying no vector at all. `null` on every other row |
 | `populationPercent` | `100.0` for an `ONLINE` index, `null` for a `DEFERRED` one |
 | `options` | on a `VECTOR` row `{indexConfig: {`vector.dimensions`: N, `vector.similarity_function`: 'COSINE'}}`; on a `FULLTEXT` row `{indexConfig: {`fulltext.analyzer`: 'standard-no-stop-words', `fulltext.eventually_consistent`: true}}`; `null` elsewhere |
-| `owningConstraint` | the constraint that owns the index, on the hash-equality or composite row a UNIQUE or NODE KEY constraint backs. `null` on every index nothing owns |
+| `owningConstraint` | the constraint that owns the index, on the hash-equality or composite row a UNIQUE or NODE KEY constraint backs. That row's `type` is `RANGE`, as in Neo4j. `null` on every index nothing owns |
 | `indexProvider` | `'fulltext-1.0'` on a `FULLTEXT` row, `'vector-2.0'` on a `VECTOR` row, `null` elsewhere |
 | `id`, `lastRead`, `readCount` | always `null` |
 
@@ -4909,8 +4939,8 @@ no separate uniqueness structure, so the constraint costs what the index costs a
 a lookup on the constrained property is an index probe, not a scan.
 
 - **Lookups.** `MATCH (n:T {p: $v})` reads the owned index like any other.
-- **Listing.** `SHOW INDEXES` lists it, with the constraint's name in
-  `owningConstraint`. `SHOW CONSTRAINTS` names it in `ownedIndex`.
+- **Listing.** `SHOW INDEXES` lists it with `type` `RANGE` and the constraint's
+  name in `owningConstraint`. `SHOW CONSTRAINTS` names it in `ownedIndex`.
 - **Dropping.** `DROP INDEX` on an owned index is refused and names the
   constraint. `DROP CONSTRAINT` removes the constraint with an index it created.
 - **Creating.** `CREATE INDEX` on the same property errors as a duplicate, or is a
@@ -5140,7 +5170,7 @@ enforces nothing**.
 | Statement | Why, and what to use |
 |---|---|
 | `REQUIRE n.p IS :: LIST<STRING>` | Only the type names with an exact KGLite value counterpart are accepted (see [Property-type constraints](#property-type-constraints-is--t)). Lists, unions and decorated forms are refused by name rather than approximated; the error lists the names that work. `validate_schema()` audits existing data against `define_schema`'s per-type `types` map, and `lock_schema()` rejects a write whose value disagrees with the recorded property type |
-| `REQUIRE n.id IS UNIQUE` / `IS NODE KEY` | Uniqueness over the identity field — under **any** spelling that resolves to it, `id` itself or the node type's own id column (`person_id`) — is refused. `id` is a `NodeData` field, not an entry in the property map, so the write-path claim is never produced and the constraint would admit duplicates while reporting success. Declare the node type's primary key instead: `define_schema({'nodes': {'Person': {'primary_key': 'id'}}})` probes the per-type id index on every write path, and `MERGE` is the idempotent alternative to `CREATE`. Only `id` is affected — `title`, a column aliased to `title`, and ordinary properties all enforce correctly. `IS NOT NULL` on `id` **is** accepted, and genuinely enforced: every write path resolves an id before the check, so an *omitted* one satisfies the requirement, but an explicit `CREATE (:Person {id: null})` violates it — and the declaration itself is refused when existing rows already carry a null `id` |
+| `REQUIRE n.id IS UNIQUE` / `IS NODE KEY` | Accepted, under **any** spelling that resolves to the identity: `id` itself or the node type's own id column (`person_id`). `CREATE` is checked against the per-type id index; see [`id` as a key](#id-as-a-key). The declaration is refused while two nodes of the type already share an id. `IS NOT NULL` on `id` is accepted too, and enforced: an *omitted* id satisfies it, but an explicit `CREATE (:Person {id: null})` violates it — and the declaration itself is refused when existing rows already carry a null `id` |
 | `FOR ()-[r:T]-() REQUIRE r.p IS RELATIONSHIP KEY` | Declare the two halves instead: `IS UNIQUE` and `IS NOT NULL` (see [Relationship constraints](#relationship-constraints)) |
 | `FOR ()-[r:T]-() REQUIRE (r.a, r.b) IS UNIQUE` | Relationship uniqueness covers exactly one property. Declare one constraint per property |
 | `FOR ()-[r:T]-() REQUIRE r.p IS UNIQUE` on a `storage='disk'` graph, or on a type with a declared validity interval | A disk graph's relationship ids cannot be indexed or persisted. A type with an interval holds several versions of one relationship that legitimately share a value. Both are refused with that reason |
@@ -5660,8 +5690,8 @@ just on reads.
   cannot disagree.
 - `MERGE` matches and creates through the same resolution.
 - `SET` / `REMOVE` on the title spelling write the title. On the id spelling they
-  are refused, because the identity is immutable under every spelling, exactly as
-  `SET n.id` is.
+  are refused unless `SET` writes the id the node already has, because the
+  identity is immutable under every spelling, exactly as `SET n.id` is.
 - Giving one `CREATE` both `id` and the type's own id column with *different*
   values is refused rather than resolved one way.
 

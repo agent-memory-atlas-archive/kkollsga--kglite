@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use super::CypherExecutor;
 use crate::datatypes::values::{raw_string, Value};
+use crate::graph::constraints::ConstraintViolation;
 use crate::graph::core::filtering::values_equal;
 use crate::graph::languages::cypher::ast::CreateNodePattern;
 use crate::graph::languages::cypher::result::ResultRow;
@@ -308,7 +309,10 @@ fn declared_title(
 /// 1. **PRIMARY KEY** (opt-in, every storage mode). When this node type declares
 ///    a primary key via `define_schema`, a CREATE that would duplicate it is
 ///    rejected — MERGE is the explicit upsert path.
-/// 2. **Durable capture** (a `Recording` backend a write-ahead log owns —
+/// 2. **Identity UNIQUE** (`CREATE CONSTRAINT … REQUIRE n.id IS UNIQUE`, or a
+///    NODE KEY on `id`). The same probe, reported as the constraint violation
+///    every other UNIQUE write raises.
+/// 3. **Durable capture** (a `Recording` backend a write-ahead log owns —
 ///    change data capture installs the same wrapper and deliberately does not
 ///    trigger this). The write-ahead log names
 ///    every entity by its logical `(node_type, id)`, so a second node under a
@@ -334,8 +338,17 @@ pub(super) fn check_identity_uniqueness(
 ) -> Result<(), String> {
     let primary_key_on_id = graph.primary_key_for(label) == Some("id");
     let durable = graph.graph.is_wal_owner();
-    if !(primary_key_on_id || durable) || graph.lookup_by_id_readonly(label, id).is_none() {
+    let identity_key = graph.identity_unique_key(label).cloned();
+    if !(primary_key_on_id || durable || identity_key.is_some())
+        || graph.lookup_by_id_readonly(label, id).is_none()
+    {
         return Ok(());
+    }
+    if let (false, Some((node_type, properties))) = (primary_key_on_id, identity_key) {
+        let kind = graph.unique_kind_for(&node_type, &properties);
+        let violation =
+            ConstraintViolation::duplicate(kind, node_type, properties, vec![id.clone()]);
+        return Err(graph.record_constraint_violation(violation));
     }
     Err(if primary_key_on_id {
         format!(

@@ -1093,6 +1093,7 @@ pub(crate) mod group_count;
 #[path = "group_count_tests.rs"]
 mod group_count_tests;
 pub mod helpers;
+mod id_assignment;
 mod identity_fields;
 mod index_search_procedures;
 mod interrupt;

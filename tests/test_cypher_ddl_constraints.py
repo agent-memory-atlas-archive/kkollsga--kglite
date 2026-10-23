@@ -144,22 +144,20 @@ def test_an_unmappable_property_type_is_rejected_not_silently_accepted(graph) ->
 
 
 @pytest.mark.parametrize("property_name", ["person_id", "id"])
-def test_uniqueness_on_the_id_field_is_rejected_not_silently_unenforced(
+def test_uniqueness_on_the_id_field_is_declared_and_enforced(
     property_name: str,
 ) -> None:
-    """`id` is a NodeData field, not a stored property, so the write path never
-    produces a claim for it — the constraint admitted duplicates while reporting
-    success. It is now refused and points at the route that does enforce.
+    """`id` is the identity, not a stored property; a UNIQUE declaration on it
+    (or on the type's own id spelling) is enforced on CREATE through the owned
+    index. The write-up lives in `tests/test_user_id_key.py`.
 
     (`person_id` is the fixture's unique_id_field, so it aliases `id`.)
     """
     g = _graph()
-    with pytest.raises(kglite.CypherExecutionError) as exc:
-        g.cypher(f"CREATE CONSTRAINT c FOR (p:Person) REQUIRE p.{property_name} IS UNIQUE")
-    message = str(exc.value)
-    assert "is not supported" in message, message
-    assert "primary_key" in message, message
-    assert _constraint_rows(g) == []
+    g.cypher(f"CREATE CONSTRAINT c FOR (p:Person) REQUIRE p.{property_name} IS UNIQUE")
+    assert _constraint_rows(g) != []
+    with pytest.raises(Exception, match=UNIQUE_ERROR):
+        g.cypher("CREATE (p:Person {id: 1})")
 
 
 @pytest.mark.parametrize("property_name", ["name", "title", "age"])
@@ -176,11 +174,12 @@ def test_uniqueness_on_title_and_ordinary_properties_stays_allowed(property_name
         g.cypher(f"CREATE (p:Person {{{property_name}: $v}})".replace("$v", repr(existing)))
 
 
-def test_node_key_on_the_id_field_is_rejected_too(graph) -> None:
-    """A node key carries a uniqueness half, so it inherits the restriction."""
-    with pytest.raises(kglite.CypherExecutionError, match="is not supported"):
-        graph.cypher("CREATE CONSTRAINT c FOR (p:Person) REQUIRE p.person_id IS NODE KEY")
-    assert _constraint_rows(graph) == []
+def test_node_key_on_the_id_field_is_accepted(graph) -> None:
+    """A node key is uniqueness plus presence; the identity is always present."""
+    graph.cypher("CREATE CONSTRAINT c FOR (p:Person) REQUIRE p.person_id IS NODE KEY")
+    assert graph.last_mutation_stats["constraints_added"] == 1
+    with pytest.raises(Exception, match=UNIQUE_ERROR):
+        graph.cypher("CREATE (p:Person {id: 1})")
 
 
 def test_not_null_on_the_id_field_is_still_accepted(graph) -> None:
@@ -457,12 +456,8 @@ def test_a_dropped_name_does_not_come_back_after_a_reload(tmp_path) -> None:
 # statement must succeed; a string is a substring the unsupported-feature message
 # must contain. Nothing in this list may raise a syntax error.
 NEO4J_CONSTRAINT_SCRIPT: list[tuple[str, str | None]] = [
-    # `person_id` is the fixture's id field, so uniqueness on it is refused with
-    # the primary-key route rather than silently not enforced.
-    (
-        "CREATE CONSTRAINT person_id_u IF NOT EXISTS FOR (p:Person) REQUIRE p.person_id IS UNIQUE",
-        "primary_key",
-    ),
+    # `person_id` is the fixture's id field: uniqueness on it declares the identity key.
+    ("CREATE CONSTRAINT person_id_u IF NOT EXISTS FOR (p:Person) REQUIRE p.person_id IS UNIQUE", None),
     ("CREATE CONSTRAINT person_age_u IF NOT EXISTS FOR (p:Person) REQUIRE p.age IS UNIQUE", None),
     ("CREATE CONSTRAINT person_name_e IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS NOT NULL", None),
     ("CREATE CONSTRAINT person_nk IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS NODE KEY", None),

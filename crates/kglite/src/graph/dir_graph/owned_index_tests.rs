@@ -477,12 +477,12 @@ fn show_lists_the_owned_index_and_names_both_ends() {
             ("T.plain".to_string(), "PROPERTY".to_string(), None),
             (
                 "composite".to_string(),
-                "PROPERTY".to_string(),
+                "RANGE".to_string(),
                 Some("composite".to_string())
             ),
             (
                 "single".to_string(),
-                "PROPERTY".to_string(),
+                "RANGE".to_string(),
                 Some("single".to_string())
             ),
         ]

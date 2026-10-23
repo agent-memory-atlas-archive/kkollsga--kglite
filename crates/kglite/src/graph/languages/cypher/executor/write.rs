@@ -10,6 +10,7 @@ use super::columnar_write::{
     set_via_column_master, write_column_master, ColumnMasterWrite, MasterCell, PriorCell,
 };
 use super::edge_property_write::{remove_edge_property, set_edge_property};
+use super::id_assignment::{set_after_create, set_existing_id, supply_id_from_set};
 use super::identity_fields::{
     check_identity_uniqueness, create_identity, remove_write_field, CreatedIdentity,
     IdentityAliases, TitlesAreIds,
@@ -22,6 +23,8 @@ use super::projected_targets::{
 use super::set_row::{apply_node_property_set, NodePropertySet, SetMemos};
 use super::write_scope::{enforce_edge_write_scope, enforce_node_write_scope, enforce_write_scope};
 use super::{clause_display_name, delete_clause, merge_pattern, schema_ddl, CypherExecutor};
+pub(crate) mod create_support;
+use create_support::{note_created_id, reject_abstract_create};
 // The relationship-identity tests address DELETE's slot retirement through the
 // mutation module rather than the clause file that owns it.
 use crate::datatypes::values::Value;
@@ -473,12 +476,13 @@ fn run_clause_pipeline(
     // unbound node. `leading` is non-empty only for the `LOAD CSV` driver, whose
     // batch rows are an already-established stream.
     let mut stream_established = !ctx.leading.is_empty();
-    let write_ctx = WriteClauseCtx {
+    let mut write_ctx = WriteClauseCtx {
         params,
         interrupt,
         budget,
         relationship_identities: ctx.relationship_identities,
         empty_intervals: ctx.empty_intervals,
+        next_set: None,
     };
 
     for (i, clause) in clauses.iter().enumerate() {
@@ -521,6 +525,7 @@ fn run_clause_pipeline(
             continue;
         }
 
+        write_ctx.next_set = set_after_create(clause, clauses.get(i + 1));
         let mut wrote = true;
         match clause {
             Clause::Create(create) => {
@@ -807,6 +812,9 @@ pub(super) struct WriteClauseCtx<'a> {
         std::sync::Mutex<super::relationship_identity::StatementRelationshipIdentities>,
     >,
     pub(super) empty_intervals: &'a std::sync::Mutex<EmptyIntervals>,
+    /// The SET clause directly after the CREATE being run, which may name the
+    /// ids of the nodes it creates ([`supply_id_from_set`]).
+    pub(super) next_set: Option<&'a SetClause>,
 }
 
 impl WriteClauseCtx<'_> {
@@ -1172,36 +1180,6 @@ fn create_pattern_edges(
     Ok(())
 }
 
-/// Refuse creating a node whose primary type is a declared **abstract**
-/// class, naming the concrete declared subtypes (built only on the cold
-/// path).
-pub(crate) fn reject_abstract_create(graph: &DirGraph, label: &str) -> Result<(), String> {
-    let Some(decl) = graph.ontology.classes.get(label) else {
-        return Ok(());
-    };
-    if !decl.is_abstract {
-        return Ok(());
-    }
-    let mut concrete: Vec<&str> = graph
-        .ontology
-        .classes
-        .iter()
-        .filter(|(name, d)| {
-            !d.is_abstract && graph.ontology.ancestors(name).iter().any(|a| a == label)
-        })
-        .map(|(name, _)| name.as_str())
-        .collect();
-    concrete.sort_unstable();
-    Err(if concrete.is_empty() {
-        format!("'{label}' is an abstract ontology class and cannot hold nodes")
-    } else {
-        format!(
-            "'{label}' is an abstract ontology class — create one of: {}",
-            concrete.join(", ")
-        )
-    })
-}
-
 /// Evaluate a CREATE pattern's property expressions against `row`. The
 /// evaluator borrows `graph` immutably and is dropped before the caller writes.
 fn evaluate_properties(
@@ -1236,6 +1214,7 @@ fn create_node(
     // Identity fields, under whichever spelling this node type declares — see
     // [`IdentityAliases`] and [`create_identity`].
     let aliases = IdentityAliases::for_type(graph, &label);
+    supply_id_from_set(graph, ctx, (node_pat, row), &aliases, &mut properties);
     crate::graph::session::snapshot_property_values(
         &graph.graph,
         properties
@@ -1400,36 +1379,6 @@ fn create_node(
     stats.nodes_created += 1;
 
     Ok(node_idx)
-}
-
-/// Keep `label`'s id index consistent with the node `create_node` just made.
-/// Whenever the index is already cached — and therefore complete — insert into
-/// it, so a sequential CREATE (e.g. UNWIND … CREATE) stays O(1)/node instead of
-/// paying an O(n) rebuild-per-node. When it isn't cached, invalidate for lazy rebuild: the
-/// `contains_key` guard is what stops us building a *partial* entry that
-/// `build_id_index` would later short-circuit on and trust as complete.
-///
-/// Deliberately independent of whether a primary key is declared — the
-/// declaration governs *uniqueness enforcement*, not index freshness, and
-/// gating maintenance on it dropped an undeclared type's whole cached id
-/// index on every single CREATE. Nothing about duplicate ids is protected by
-/// invalidating: a rebuild and an incremental insert collapse a duplicate
-/// identically — and both warn, so the write that forks an id says so then,
-/// not at the next rebuild (a reload).
-fn note_created_id(graph: &mut DirGraph, label: &str, pk_id: Option<Value>, node_idx: NodeIndex) {
-    match pk_id {
-        Some(idv) if graph.id_indices.contains_key(label) => {
-            let entry = graph.id_indices.entry_or_default(label.to_string());
-            let duplicate = entry.get(&idv).is_some();
-            entry.insert(idv, node_idx);
-            if duplicate {
-                crate::graph::dir_graph::warn_on_duplicate_ids(label, 1, 0);
-            }
-        }
-        _ => {
-            graph.id_indices.remove(label);
-        }
-    }
 }
 
 /// Give the created type an entry in `node_type_metadata`, so a type whose every
@@ -1678,9 +1627,6 @@ fn execute_property_set_item<'a>(
         return Ok(PropSetFlow::Applied);
     }
 
-    if property == "id" {
-        return Err("Cannot SET node id — it is immutable".to_string());
-    }
     // `type` / `node_type` / `label` are soft aliases: SET writes a stored
     // property that wins on read (KG-1); the primary label never changes.
 
@@ -1704,6 +1650,10 @@ fn execute_property_set_item<'a>(
         }
     };
 
+    if property == "id" {
+        set_existing_id(graph, node_idx, property, &value)?;
+        return Ok(PropSetFlow::Applied);
+    }
     apply_node_property_set(
         graph,
         NodePropertySet {

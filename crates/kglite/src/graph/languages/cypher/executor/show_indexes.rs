@@ -71,7 +71,7 @@ pub(crate) fn index_cell(info: &IndexInfo, column: &str) -> Option<Value> {
         |items: &[String]| Value::List(items.iter().cloned().map(Value::String).collect());
     Some(match column {
         "name" => Value::String(info.name.clone()),
-        "type" => Value::String(info.kind.neo4j_type().to_string()),
+        "type" => Value::String(info.type_label().to_string()),
         "entityType" => Value::String(info.entity_type.to_string()),
         "labelsOrTypes" => strings(&info.labels_or_types),
         "properties" => strings(&info.properties),

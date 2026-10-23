@@ -63,6 +63,13 @@ before upgrading.
   - No file-format change: a save records the constraint, not the owned index, and a load rebuilds it. A file written by an earlier release opens as before, and an earlier release opens a file written by this one.
 - **`CALL dbms.components() YIELD … RETURN … LIMIT $limit` works on the Bolt server.** The bare call and the YIELD-only form were answered directly; the same row now runs under any `WHERE`, `RETURN`, `ORDER BY` or `LIMIT` that follows the YIELD.
 
+- **`id` behaves like a key.**
+  - `CREATE CONSTRAINT [name] FOR (n:K) REQUIRE n.id IS UNIQUE` (also `REQUIRE (n.id)`, `IF NOT EXISTS`, `IS NODE KEY`, and the type's own id column such as `person_id`) is a real declaration on the identity. Before, it was refused. A second `CREATE (:K {id: 'x'})` raises `ConstraintViolationError`; a Bolt client sees `Neo.ClientError.Schema.ConstraintValidationFailed`. An integer id collides however it was written, so a loaded `1` and a Cypher `1` are one id. The declaration is refused while two nodes of the type already share an id. A type with no such constraint is unchanged: duplicate ids are still made.
+  - `SHOW CONSTRAINTS` lists it as `UNIQUENESS` on `['id']`. `SHOW INDEXES` lists its backing index as `RANGE`, `ONLINE`, with the constraint's name in `owningConstraint`, and `DROP INDEX` on it is refused.
+  - `SET n.id = n.id`, `SET n += {id: v}` and `SET n = {id: v, …}` are no-ops when `v` is the node's current id. Any other value on an existing node is still refused, and so is `REMOVE n.id`.
+  - `CREATE (n:L) SET n = $props` creates the node with the id in `$props`, as if the pattern had carried it; so do `SET n += $props`, `SET n.id = <expr>` and each row of `UNWIND … CREATE (n:L) SET n = row`. The unique constraint is checked against that id. The SET must directly follow the CREATE, and the id must not depend on `randomUUID()` or the new node; otherwise the SET is refused as before.
+  - No file-format change. The declaration is stored with the other unique constraints, so an earlier release opens the file and ignores the enforcement. The node is created with its id, so the write-ahead log is unchanged.
+
 ### Fixed
 
 - **`NOT NULL` and `NODE KEY` presence is judged when the statement ends.** `CREATE (n:L) SET n = $props` failed on any type that required a property, because the check ran inside `CREATE`, before the `SET`. Required properties of nodes and relationships created or changed by a Cypher statement are now checked on their final state, so `CREATE ... SET` and `REMOVE p SET p = v` pass and a statement that ends with one missing fails and rolls back whole. A lone `CREATE (n:L)` on a type with a required property now keeps its rollback checkpoint. Uniqueness and `IS :: TYPE` are unchanged, and the bulk loaders still judge each complete row.
@@ -84,6 +91,7 @@ before upgrading.
 
 ### Changed
 
+- **The index a UNIQUE or NODE KEY constraint owns is listed as `RANGE`.** `SHOW INDEXES` and `db.indexes()` reported `PROPERTY` for it; Neo4j types a constraint's backing index `RANGE`, and clients that look for the index behind a constraint filter on that. `owningConstraint` is unchanged, and so is the index.
 - **`SHOW INDEXES` lists the name a `CREATE INDEX <name>` gave.** Before, every row carried the canonical name and the given name was discarded. A script that reads `SHOW INDEXES` names back as `Label.property` for an index it created under a name now sees the name it chose; the canonical name still drops it.
 
 - **`--neo4j-compat` reports a 2026.x kernel and a Cypher dialect row.** `dbms.components()` returns `Neo4j Kernel` / `2026.10.0` / `community` plus `Cypher` / `["5", "25"]` (it was one `Neo4j Kernel` / `5.26.0` row), and the handshake agent is `Neo4j/2026.10.0 (kglite-bolt-server/<version>)`. Clients that gate on the kernel version, GraphBridge's search preflight among them, now see a release that advertises Cypher 25. The default identity is unchanged.
