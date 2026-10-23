@@ -397,9 +397,9 @@ pub fn clause_display_name(clause: &Clause) -> String {
         Clause::Call(_) => "Call".into(),
         Clause::Schema(command) => match command {
             SchemaCommand::CreateIndex(_) => "CreateIndex".into(),
-            SchemaCommand::UnsupportedIndexType { index_type, .. } => {
-                format!("CreateIndex ({})", index_type.keyword())
-            }
+            command @ (SchemaCommand::UnsupportedIndexType { .. }
+            | SchemaCommand::CreateFulltextIndex(_)
+            | SchemaCommand::CreateVectorIndex(_)) => command.typed_create_index_name(),
             SchemaCommand::DropIndex(_) => "DropIndex".into(),
             SchemaCommand::ShowIndexes => "ShowIndexes".into(),
             SchemaCommand::ShowProcedures { .. } => "ShowProcedures".into(),

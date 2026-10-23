@@ -27,6 +27,7 @@ pub mod load_csv;
 pub mod match_pattern;
 pub mod predicate;
 pub mod schema_ddl;
+mod search_index_ddl;
 mod statement_context;
 
 /// Tokenizes and parses Cypher query strings into a `CypherQuery` AST by

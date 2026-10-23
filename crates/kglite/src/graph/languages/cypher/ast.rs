@@ -1194,12 +1194,20 @@ pub enum SchemaCommand {
     /// `SHOW ONTOLOGY` — the declared semantic layer as rows.
     ShowOntology,
     CreateIndex(CreateIndex),
+    /// `CREATE FULLTEXT INDEX … FOR (n:A|B) ON EACH [n.p, …] [OPTIONS {…}]`,
+    /// parsed in full; the executor installs the single-label, single-property
+    /// node form and refuses the rest by name.
+    CreateFulltextIndex(CreateFulltextIndex),
+    /// `CREATE VECTOR INDEX … FOR (n:L) ON (n.p) [OPTIONS {…}]`, parsed in
+    /// full. Execution is refused until the property-sourced vector store
+    /// exists.
+    CreateVectorIndex(CreateVectorIndex),
     /// `CREATE <TYPE> INDEX …` for an index type KGLite has no equivalent of
-    /// (`TEXT`, `POINT`, `FULLTEXT`, `VECTOR`, `LOOKUP`). The remainder of the
+    /// (`TEXT`, `POINT`, `LOOKUP`). The remainder of the
     /// statement is scanned to its end without structural validation — it is
     /// rejected wholesale at execution, and those forms carry grammar the
-    /// supported ones don't (`ON EACH [...]`, `ON EACH labels(n)`, provider
-    /// `OPTIONS`) that would buy nothing to model.
+    /// supported ones don't (`ON EACH labels(n)`, provider `OPTIONS`) that
+    /// would buy nothing to model.
     UnsupportedIndexType {
         index_type: DdlIndexType,
         name: Option<String>,
@@ -1227,6 +1235,20 @@ pub enum SchemaCommand {
     /// script gets a specific unsupported-feature error at *execution* rather
     /// than a syntax error.
     Constraint(ConstraintCommand),
+}
+
+impl SchemaCommand {
+    /// `CreateIndex (<KEYWORD>)` for the typed `CREATE <TYPE> INDEX` commands
+    /// that have no plain-index shape, for `EXPLAIN` clause names.
+    pub fn typed_create_index_name(&self) -> String {
+        let keyword = match self {
+            SchemaCommand::UnsupportedIndexType { index_type, .. } => index_type.keyword(),
+            SchemaCommand::CreateFulltextIndex(_) => DdlIndexType::Fulltext.keyword(),
+            SchemaCommand::CreateVectorIndex(_) => DdlIndexType::Vector.keyword(),
+            _ => "INDEX",
+        };
+        format!("CreateIndex ({keyword})")
+    }
 }
 
 /// Index-type word in `CREATE <TYPE> INDEX` (Neo4j 5).
@@ -1326,6 +1348,71 @@ pub struct CreateIndex {
     /// index providers or per-index configuration, so the executor rejects it
     /// rather than dropping it on the floor.
     pub has_options: bool,
+}
+
+/// A literal in an `OPTIONS { indexConfig: { … } }` map.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DdlOptionValue {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+}
+
+/// The `OPTIONS { … }` block of a full-text or vector index statement.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct IndexOptions {
+    /// Entries of the `indexConfig` map in source order, keys unquoted
+    /// (`vector.dimensions`).
+    pub index_config: Vec<(String, DdlOptionValue)>,
+    /// The `indexProvider` string, when given.
+    pub index_provider: Option<String>,
+}
+
+impl IndexOptions {
+    pub fn config(&self, key: &str) -> Option<&DdlOptionValue> {
+        self.index_config
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+}
+
+/// The pattern of a `CREATE FULLTEXT INDEX … FOR`: node labels (`A|B`) or
+/// relationship types (`T1|T2`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FulltextTarget {
+    Node {
+        variable: Option<String>,
+        labels: Vec<String>,
+    },
+    Relationship {
+        variable: Option<String>,
+        rel_types: Vec<String>,
+    },
+}
+
+/// `CREATE FULLTEXT INDEX [<name>] [IF NOT EXISTS] FOR <target> ON EACH
+/// [<props>] [OPTIONS { … }]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateFulltextIndex {
+    pub name: Option<String>,
+    pub if_not_exists: bool,
+    pub target: FulltextTarget,
+    /// Properties from `ON EACH [n.p1, n.p2, …]`, in declaration order.
+    pub properties: Vec<String>,
+    pub options: IndexOptions,
+}
+
+/// `CREATE VECTOR INDEX [<name>] [IF NOT EXISTS] FOR <target> ON (<prop>)
+/// [OPTIONS { … }]`
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateVectorIndex {
+    pub name: Option<String>,
+    pub if_not_exists: bool,
+    pub target: DdlTarget,
+    pub property: String,
+    pub options: IndexOptions,
 }
 
 /// `DROP INDEX <selector> [IF EXISTS]`

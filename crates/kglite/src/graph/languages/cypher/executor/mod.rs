@@ -1113,6 +1113,7 @@ pub mod scalar_functions;
 mod scan_eval;
 pub(crate) mod schema_ddl;
 mod schema_procedures;
+mod search_index_ddl;
 mod set_path;
 mod set_row;
 pub mod shortest_path;

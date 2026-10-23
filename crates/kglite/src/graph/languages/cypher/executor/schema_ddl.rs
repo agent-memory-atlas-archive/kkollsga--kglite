@@ -325,6 +325,12 @@ fn dispatch_schema_mutation(
 ) -> Result<MutationStats, String> {
     match command {
         SchemaCommand::CreateIndex(create) => execute_create_index(graph, create),
+        SchemaCommand::CreateFulltextIndex(create) => {
+            super::search_index_ddl::execute_create_fulltext_index(graph, create)
+        }
+        SchemaCommand::CreateVectorIndex(create) => {
+            super::search_index_ddl::execute_create_vector_index(graph, create)
+        }
         SchemaCommand::UnsupportedIndexType { index_type, .. } => {
             Err(unsupported_index_type_message(*index_type))
         }
@@ -553,7 +559,7 @@ fn create_composite_index(
 /// Which DDL statement a schema-lock rejection is talking about, so one guard
 /// serves both without either message describing the wrong operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DdlPurpose {
+pub(super) enum DdlPurpose {
     Index,
     Constrain,
 }
@@ -579,7 +585,7 @@ impl DdlPurpose {
 /// A schema-locked graph declares its properties up front; indexing or
 /// constraining an undeclared one would contradict the declaration. Mirrors the
 /// typo-guard the planner applies to CREATE properties.
-fn validate_ddl_properties_declared(
+pub(super) fn validate_ddl_properties_declared(
     graph: &DirGraph,
     label: &str,
     properties: &[String],
@@ -862,14 +868,14 @@ fn node_label(target: &DdlTarget, statement: &str) -> Result<String, String> {
     }
 }
 
-fn already_exists_message(name: &str) -> String {
+pub(super) fn already_exists_message(name: &str) -> String {
     format!(
         "an index named '{name}' already exists. Add IF NOT EXISTS to make this statement a \
          no-op, or DROP it first."
     )
 }
 
-fn indexes_added(count: usize) -> MutationStats {
+pub(super) fn indexes_added(count: usize) -> MutationStats {
     MutationStats {
         indexes_added: count,
         ..MutationStats::default()
@@ -898,33 +904,17 @@ fn unsupported_index_type_message(index_type: DdlIndexType) -> String {
             "KGLite has no point index. Spatial predicates and the spatial-join optimiser work \
              on WKT/geometry properties without one."
         }
-        DdlIndexType::Fulltext => {
-            "BM25 full-text indexes exist in KGLite but are not created through Cypher DDL, \
-             because Neo4j's FULLTEXT is multi-label, multi-property and name-addressed while \
-             KGLite's is one node type's one property. Use your binding's \
-             build_text_index(node_type, property) — every binding reaches it (Python, Rust, \
-             and the C ABI's kglite_session_build_text_index, which Java and the other C \
-             consumers wrap) — then rank with `text_bm25(n, 'property', 'query')`. A built one \
-             is listed by `SHOW INDEXES` as type FULLTEXT."
-        }
-        DdlIndexType::Vector => {
-            "Vector indexes exist in KGLite but are not created through Cypher DDL, because \
-             they need an existing embedding store and HNSW build parameters. Use your \
-             binding's build_vector_index(node_type, text_column, ...) — every binding \
-             reaches it (Python, Rust, and the C ABI's \
-             kglite_session_build_vector_index, which Java and the other C consumers \
-             wrap)."
-        }
         DdlIndexType::Lookup => {
             "KGLite has no token-lookup index to create: label and relationship-type lookup is \
              always indexed automatically (`type_indices`), so a LOOKUP index would be \
              redundant."
         }
-        // `Unspecified` and `Range` are the supported kinds and never reach
-        // here — `DdlIndexType::has_kglite_equivalent` gates the parser.
-        DdlIndexType::Unspecified | DdlIndexType::Range => {
-            "This index type is supported; reaching this message is a bug."
-        }
+        // `Unspecified` and `Range` are served by `execute_create_index`;
+        // `Fulltext` and `Vector` have their own commands.
+        DdlIndexType::Unspecified
+        | DdlIndexType::Range
+        | DdlIndexType::Fulltext
+        | DdlIndexType::Vector => "This index type is supported; reaching this message is a bug.",
     };
     format!(
         "CREATE {keyword} INDEX is not supported. {detail} Run `SHOW INDEXES` to see what is \

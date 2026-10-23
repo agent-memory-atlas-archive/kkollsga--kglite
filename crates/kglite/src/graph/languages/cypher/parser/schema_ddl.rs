@@ -11,11 +11,10 @@
 //! a position the parser already holds. There is no speculative re-parse.
 //!
 //! **What is deliberately not modelled.** Unsupported index *types* (`TEXT`,
-//! `POINT`, `FULLTEXT`, `VECTOR`, `LOOKUP`) parse to
-//! [`SchemaCommand::UnsupportedIndexType`] after their tail is scanned to the
-//! statement end. Those forms carry grammar the supported ones don't (`ON EACH
-//! [n.a, n.b]`, `ON EACH labels(n)`, provider `OPTIONS`), and the executor
-//! rejects them wholesale, so structural parsing would buy nothing.
+//! `POINT`, `LOOKUP`) parse to [`SchemaCommand::UnsupportedIndexType`] after
+//! their tail is scanned to the statement end: the executor rejects them
+//! wholesale, so structural parsing would buy nothing. `FULLTEXT` and `VECTOR`
+//! are read in full by `search_index_ddl`.
 //!
 //! **Syntax error vs unsupported feature.** A ported Neo4j schema script must
 //! never see `CypherSyntaxError` for a statement KGLite understood but cannot
@@ -149,6 +148,20 @@ impl CypherParser {
 
         let name = self.take_optional_ddl_name()?;
         let if_not_exists = self.parse_if_not_exists()?;
+
+        match index_type {
+            DdlIndexType::Fulltext => {
+                return self
+                    .parse_fulltext_index_body(name, if_not_exists)
+                    .map(Clause::Schema)
+            }
+            DdlIndexType::Vector => {
+                return self
+                    .parse_vector_index_body(name, if_not_exists)
+                    .map(Clause::Schema)
+            }
+            _ => {}
+        }
 
         // Unsupported index kinds: scan the tail away and let the executor
         // report the specific reason. See the module doc.
@@ -412,7 +425,7 @@ impl CypherParser {
     // ========================================================================
 
     /// `FOR (n:Label)` or `FOR ()-[r:TYPE]-()`, consuming the `FOR`.
-    fn parse_ddl_for_target(&mut self) -> Result<DdlTarget, String> {
+    pub(super) fn parse_ddl_for_target(&mut self) -> Result<DdlTarget, String> {
         self.expect_soft_word("FOR", "index or constraint pattern")?;
         self.expect(&CypherToken::LParen)?;
 
@@ -757,7 +770,10 @@ impl CypherParser {
 
     /// A pattern variable in a DDL `FOR` clause, absent when the pattern goes
     /// straight to `:` (`FOR (:Label)`).
-    fn take_ddl_pattern_variable(&mut self, context: &str) -> Result<Option<String>, String> {
+    pub(super) fn take_ddl_pattern_variable(
+        &mut self,
+        context: &str,
+    ) -> Result<Option<String>, String> {
         if self.check(&CypherToken::Colon) {
             Ok(None)
         } else {
@@ -767,7 +783,7 @@ impl CypherParser {
 
     /// Require the statement to end here: trailing tokens are an unsupported
     /// clause, not a pipeline continuation.
-    fn expect_statement_end(&mut self, statement: &str) -> Result<(), String> {
+    pub(super) fn expect_statement_end(&mut self, statement: &str) -> Result<(), String> {
         if self.check(&CypherToken::Semicolon) {
             self.advance();
         }
@@ -1025,14 +1041,9 @@ mod tests {
     fn unsupported_index_types_parse_rather_than_error() {
         for (input, expected) in [
             ("CREATE TEXT INDEX t FOR (n:P) ON (n.a)", DdlIndexType::Text),
-            ("CREATE POINT INDEX p FOR (n:P) ON (n.a)", DdlIndexType::Point),
             (
-                "CREATE FULLTEXT INDEX f FOR (n:P) ON EACH [n.a, n.b]",
-                DdlIndexType::Fulltext,
-            ),
-            (
-                "CREATE VECTOR INDEX v FOR (n:P) ON (n.e) OPTIONS {indexConfig: {`vector.dimensions`: 3}}",
-                DdlIndexType::Vector,
+                "CREATE POINT INDEX p FOR (n:P) ON (n.a)",
+                DdlIndexType::Point,
             ),
             (
                 "CREATE LOOKUP INDEX l FOR (n) ON EACH labels(n)",
