@@ -781,6 +781,8 @@ def test_ctrl_c_with_a_chaining_signal_handler_installed_over_kglites_does_not_c
     import subprocess
     import sys
 
+    # The chaining handler comes from polars itself, which CI does not install.
+    pytest.importorskip("polars")
     code = (
         "import os, signal, kglite\n"
         "g = kglite.KnowledgeGraph()\n"
