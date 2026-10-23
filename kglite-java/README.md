@@ -902,6 +902,16 @@ cargo build -p kglite-c --release      # -> target/release/libkglite_c.{dylib,so
 gradle -p kglite-java build            # compiles, javadoc, runs the tests
 ```
 
+CI builds with the JDK 26 toolchain. To build with another installed JDK, set
+`JAVA_HOME` to it and pass the version as a Gradle property:
+
+```bash
+export JAVA_HOME=/path/to/jdk-27
+gradle -p kglite-java build -PkgliteJdk=27
+```
+
+The bytecode stays `--release 22` whichever toolchain compiles it.
+
 The jar lands in `kglite-java/build/libs/kglite-<version>.jar` with the host's
 native bundled — put it on the classpath as the quickstart does, or install it
 locally so the coordinates above resolve:

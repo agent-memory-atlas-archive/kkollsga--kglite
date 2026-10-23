@@ -52,9 +52,12 @@ version = (findProperty("kgliteVersion") as String?) ?: readWorkspaceVersion()
 // ---------------------------------------------------------------------------
 val javaFloor = 22
 
+// Toolchain JDK: 26 in CI; `-PkgliteJdk=<n>` builds with another installed JDK.
+val kgliteJdk = ((findProperty("kgliteJdk") as String?) ?: "26").toInt()
+
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(26)
+        languageVersion = JavaLanguageVersion.of(kgliteJdk)
     }
     // No withSourcesJar()/withJavadocJar() here. Central requires both, and the
     // publishing plugin builds both (`sourcesJar`, `plainJavadocJar`) — but the
