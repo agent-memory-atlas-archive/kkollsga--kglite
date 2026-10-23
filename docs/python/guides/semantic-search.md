@@ -222,6 +222,7 @@ hits = graph.select('Article').vector_search('summary', query_vec, top_k=10, exa
 
 The index behaves like `create_index`: it is **opt-in**, and once built it is used automatically. Key points:
 
+- **Build the index.** `set_embeddings` and `embed_texts` alone leave queries on the exact scan, and nothing warns that it is running. A store below 400 vectors or 262,144 floats (vectors times dimension) is scanned by design, so it needs no index.
 - **Auto-use, with an escape hatch.** A query that covers most of a large indexed store (≥400 covered vectors) uses the index. `exact=True` always forces the exact scan. Returned scores are on the exact same scale as the brute-force path, because the index only narrows *which* nodes get scored.
 - **The selection doesn't have to be that one type.** While only one node type carries the column, the index is used whatever else the selection spans. That includes a whole-graph `graph.vector_search('summary', q)` on a graph full of other node types. Nodes of other types simply have no vector in the store and are skipped, exactly as the exact scan skips them.
 - **Two embedded types are ranked exactly.** Suppose both `Article.summary` and `Note.summary` are embedded. A selection spanning *both* falls back to an exact global ranking, because using one type's index would silently drop the other type's rows. Select a single type to get the index back.
@@ -384,6 +385,20 @@ The query argument's type decides how `text_score` reads it: a list is a vector,
 
 - `text_score()` / `vector_score()` are **Cypher functions**, used in `RETURN` / `WHERE`.
 - `search_text()` / `vector_search()` are **fluent methods** on a selection.
+
+#### Choosing a top-k spelling
+
+Four spellings return the top k nodes for a query vector. Pick by the row shape you need.
+
+| Spelling | Row shape | Uses HNSW | Filter |
+|---|---|---|---|
+| `ORDER BY vector_score(n, 'name_emb', $q) DESC LIMIT k` | The columns you `RETURN` | Yes, once an index is built. `EXPLAIN` shows `[hnsw]`, `[exact]` or `[scan]`. | A `WHERE` before the top-k restricts the candidates, and you still get `k` rows. |
+| `WITH n, vector_score(...) AS s ORDER BY s DESC LIMIT k` followed by more clauses | The columns of the later `RETURN` | Yes. The top-k fuses at the `WITH` boundary, so a following `OPTIONAL MATCH` does not cost a scan. | As above. |
+| `CALL db.node_embeddings.query({type, text_column, vector, top_k})`, or the `db.embeddings.query` router | `node`, `score` | Yes, once an index is built. `exact: true` forces the scan. | None inside the call. A `WHERE` after `YIELD` filters the `top_k` rows, so it can return fewer than `k`. |
+| `graph.select(...).vector_search(col, q, top_k=k)` | A dict per hit: `id`, `title`, `type`, `score` and the node properties (`returning=` trims them) | Yes, for a whole-corpus selection. | A selective `.where(...)` before the search scores the selection exactly and returns `k` hits. |
+
+- **Small stores scan.** An index serves only a store of at least 400 vectors and 262,144 floats (vectors times dimension). Below that, the exact scan is as fast and is always exact, so `EXPLAIN` shows `[exact]` even with an index built.
+- **Store name or text column.** The Cypher functions take the store name (`'name_emb'`). The procedures and the fluent methods take the text column (`'name'`). Passing the wrong one raises an error ending in `Did you mean ...?`.
 
 #### Filter out unembedded rows before a `DESC` top-k
 

@@ -56,6 +56,22 @@ version advance remains. A transaction that already created a mutable working
 copy therefore conflicts at commit; a transaction that never materialized a
 working copy remains a no-op commit. Treat the conflict as a retry boundary.
 
+### Writer threads and throughput
+
+Add no writer threads to raise write throughput. One writer thread with batched statements is the fastest shape.
+
+- Writers serialize on one lock, so a second writer thread adds waiting, not parallel work.
+- Measured on a 200k-node graph, `open_session(path, durable="normal")`, one event per transaction, two runs each:
+
+  | Writer threads | Transactions per second |
+  |---|---|
+  | 1 | 69,200 and 67,600 |
+  | 2 | 53,300 and 53,400 |
+
+  Two writers ran 23% below one. The cause of the drop is not isolated.
+- Batch instead: send many events in one statement, for example `UNWIND $events AS e ...`. One transaction then pays the commit cost once for the whole batch.
+- A producer that cannot batch can queue events on its own threads and let one writer thread drain the queue.
+
 ## Disk generations and processes
 
 Disk mode publishes immutable generations. Readers resolve `CURRENT` once and
