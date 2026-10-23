@@ -294,7 +294,7 @@ def test_graphbridge_fulltext_statement_runs_verbatim(bolt_search_server):
     assert all(r["score"] > 0 for r in rows)
 
 
-def test_vector_procedure_runs_over_the_wire_and_the_search_clause_is_named(bolt_search_server):
+def test_vector_procedure_and_the_search_clause_run_over_the_wire(bolt_search_server):
     with GraphDatabase.driver(bolt_search_server, auth=None) as driver:
         with driver.session() as session:
             rows = list(
@@ -307,11 +307,11 @@ def test_vector_procedure_runs_over_the_wire_and_the_search_clause_is_named(bolt
                 )
             )
             assert [r["id"] for r in rows] == [1, 3]
-            with pytest.raises(neo4j.exceptions.ClientError, match="SEARCH clause is not supported"):
-                list(
-                    session.run(
-                        "CYPHER 25 MATCH (entity) SEARCH entity IN (VECTOR INDEX `Doc.text` FOR $q LIMIT 2) "
-                        "SCORE AS score RETURN entity, score",
-                        q=[1.0, 0.1],
-                    )
+            searched = list(
+                session.run(
+                    "CYPHER 25 MATCH (entity) SEARCH entity IN (VECTOR INDEX `Doc.text` FOR $q LIMIT 2) "
+                    "SCORE AS score RETURN entity.id AS id, score ORDER BY score DESC",
+                    q=[1.0, 0.1],
                 )
+            )
+            assert [r["id"] for r in searched] == [1, 3]

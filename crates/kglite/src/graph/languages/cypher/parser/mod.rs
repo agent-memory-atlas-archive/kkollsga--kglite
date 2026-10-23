@@ -27,6 +27,7 @@ pub mod load_csv;
 pub mod match_pattern;
 pub mod predicate;
 pub mod schema_ddl;
+mod search_clause;
 mod search_index_ddl;
 mod statement_context;
 
@@ -674,9 +675,7 @@ impl CypherParser {
             }
 
             match self.peek() {
-                Some(CypherToken::Match) => {
-                    clauses.push(self.parse_match_clause(false)?);
-                }
+                Some(CypherToken::Match) => self.parse_match_with_search(&mut clauses)?,
                 Some(CypherToken::Optional) => {
                     if self.peek_at(1) == Some(&CypherToken::Match) {
                         self.advance(); // consume OPTIONAL
@@ -830,12 +829,6 @@ pub(super) fn describe_with_hint_opt(token: Option<&CypherToken>) -> String {
         None => describe_token_opt(None),
     }
 }
-
-/// The Cypher 25 `SEARCH <var> IN (VECTOR INDEX …)` clause is not implemented;
-/// the procedures are the supported spelling of the same search.
-pub(super) const SEARCH_CLAUSE_UNSUPPORTED: &str = "The Cypher 25 SEARCH clause is not supported. \
-     Search an index with CALL db.index.vector.queryNodes(indexName, k, vector) or \
-     CALL db.index.fulltext.queryNodes(indexName, query, {limit: k}) instead";
 
 const BLOCK_COMMENT_UNSUPPORTED: &str =
     "Block comments (/* ... */) are not supported; use a // line comment instead";

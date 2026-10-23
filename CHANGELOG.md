@@ -11,6 +11,7 @@ before upgrading.
 
 ### Added
 
+- **`SEARCH` over a vector index.** `MATCH (e) SEARCH e IN (VECTOR INDEX name FOR $vector LIMIT k) SCORE AS s` (and the relationship form `MATCH ()-[r]->() SEARCH r IN (...)`) runs as `db.index.vector.queryNodes` / `queryRelationships`, so rows and scores equal the procedure's. `LIMIT` is required; a `WHERE` inside the parentheses is refused by name, and a `WHERE` after the clause filters the top-k rows. Before, the clause was refused.
 - **Index names are stored.**
   - `CREATE INDEX <name> FOR …` (and `CREATE RANGE INDEX <name>`) registers the name. `SHOW INDEXES` lists it, `DROP INDEX <name>` drops by it, and the canonical name (`Label.property`) keeps working beside it. A `RANGE` name covers both of its structures. `DROP INDEX <name>` on an unknown name still errors, and `IF EXISTS` is a no-op.
   - Index names and constraint names share one namespace. A name another index, a constraint or another index's canonical name holds is refused on `CREATE INDEX` and `CREATE CONSTRAINT`; `CREATE INDEX <name> IF NOT EXISTS` on a taken name does nothing.

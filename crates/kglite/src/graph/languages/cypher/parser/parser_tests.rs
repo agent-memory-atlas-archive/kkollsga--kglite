@@ -1515,19 +1515,77 @@ mod positional_call_and_search {
         assert!(parse_cypher("RETURN {x: limit} AS m").is_err());
     }
 
-    #[test]
-    fn the_search_clause_is_refused_by_name() {
-        for query in [
-            "MATCH (e) SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) SCORE AS s RETURN e, s",
-            "MATCH (e) WHERE e.x = 1 SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e",
-        ] {
-            let error = parse_cypher(query).unwrap_err().to_string();
-            assert!(
-                error.contains("SEARCH clause is not supported"),
-                "{query}: {error}"
-            );
-            assert!(error.contains("db.index.vector.queryNodes"), "{error}");
+    fn search_call(query: &str) -> CallClause {
+        let parsed = parse_cypher(query).unwrap_or_else(|e| panic!("{query}: {e}"));
+        match &parsed.clauses[0] {
+            Clause::Call(call) => call.clone(),
+            other => panic!("expected CALL, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn search_desugars_to_the_vector_query_procedure() {
+        let call = search_call(
+            "MATCH (e) SEARCH e IN (VECTOR INDEX `v` FOR $q LIMIT $k) SCORE AS s RETURN e, s",
+        );
+        assert_eq!(call.procedure_name, "db.index.vector.queryNodes");
+        let keys: Vec<_> = call.parameters.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["indexName", "numberOfNearestNeighbours", "query"]);
+        let yields: Vec<_> = call
+            .yield_items
+            .iter()
+            .map(|y| (y.name.as_str(), y.alias.as_deref()))
+            .collect();
+        assert_eq!(yields, [("node", Some("e")), ("score", Some("s"))]);
+
+        // CYPHER 25 prefix, relationship form, SCORE AS optional, lower case
+        let call = search_call(
+            "CYPHER 25 MATCH ()-[r]->() search r in (vector index v for [0.1] limit 2) RETURN r",
+        );
+        assert_eq!(call.procedure_name, "db.index.vector.queryRelationships");
+        assert_eq!(call.yield_items.len(), 1);
+        assert_eq!(call.yield_items[0].name, "relationship");
+    }
+
+    #[test]
+    fn search_with_a_pattern_label_keeps_a_label_filter() {
+        let parsed =
+            parse_cypher("MATCH (e:Doc) SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e")
+                .unwrap();
+        assert!(matches!(parsed.clauses[0], Clause::Call(_)));
+        assert!(matches!(&parsed.clauses[1], Clause::Where(w)
+                if matches!(&w.predicate, Predicate::LabelCheck { label, .. } if label == "Doc")));
+    }
+
+    #[test]
+    fn search_refusals_name_the_rule() {
+        let message = |q: &str| parse_cypher(q).unwrap_err().to_string();
+        let no_limit = message("MATCH (e) SEARCH e IN (VECTOR INDEX v FOR [0.1]) RETURN e");
+        assert!(no_limit.contains("requires a LIMIT"), "{no_limit}");
+        let inner_where = message(
+            "MATCH (e) SEARCH e IN (VECTOR INDEX v FOR [0.1] WHERE e.x = 1 LIMIT 3) RETURN e",
+        );
+        assert!(
+            inner_where.contains("inside the index search"),
+            "{inner_where}"
+        );
+        let between = message(
+            "MATCH (e) WHERE e.x = 1 SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e",
+        );
+        assert!(between.contains("directly follow"), "{between}");
+        let lone = message("SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e");
+        assert!(lone.contains("directly follow"), "{lone}");
+        let wrong_var =
+            message("MATCH (a) SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e");
+        assert!(wrong_var.contains("not the variable"), "{wrong_var}");
+        let props =
+            message("MATCH (e {x: 1}) SEARCH e IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN e");
+        assert!(props.contains("plain node pattern"), "{props}");
+        let fulltext = message("MATCH (e) SEARCH e IN (FULLTEXT INDEX v FOR 'x' LIMIT 3) RETURN e");
+        assert!(fulltext.contains("VECTOR INDEX"), "{fulltext}");
+        let endpoints =
+            message("MATCH (a)-[r]->(b) SEARCH r IN (VECTOR INDEX v FOR [0.1] LIMIT 3) RETURN r");
+        assert!(endpoints.contains("bare form"), "{endpoints}");
         // a variable that happens to be called search still parses
         parse_cypher("MATCH (search) RETURN search").unwrap();
     }

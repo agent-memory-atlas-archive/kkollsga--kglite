@@ -1438,7 +1438,27 @@ RETURN node.id, score
 - **Full-text.** Only documents that share a term with the query are returned. The query is tokenized by the index, not parsed as Lucene syntax. Scores are KGLite's BM25, so they rank as Neo4j's do but have other values. Memory and mapped graphs only: a disk graph has no BM25 index.
 - **Vector.** `k` is a positive integer; `vector` is a list of numbers of the store's dimension. The score is the store's metric (cosine similarity for a cosine store), not Neo4j's `(1 + cos) / 2`. The search is the one `db.node_embeddings.query` runs: HNSW when the index is online.
 - **Under `FOR VALID_TIME AS OF`** both lanes return only elements valid at the instant.
-- **`SEARCH`.** The Cypher 25 `SEARCH e IN (VECTOR INDEX …)` clause is not supported and says so; use the vector procedures.
+- **`SEARCH`.** The Cypher 25 vector `SEARCH` clause runs as the vector procedure; see [`SEARCH` over a vector index](#search-over-a-vector-index).
+
+#### `SEARCH` over a vector index
+
+```cypher
+MATCH (e:Doc)
+SEARCH e IN (VECTOR INDEX `Doc.text` FOR $vector LIMIT 5) SCORE AS score
+RETURN e.id, score ORDER BY score DESC
+
+MATCH ()-[r]->()
+SEARCH r IN (VECTOR INDEX `relationship:CLAIMS.text` FOR $vector LIMIT 5)
+RETURN r
+```
+
+The clause is shorthand for `CALL db.index.vector.queryNodes(name, k, vector) YIELD node AS e, score AS score` (`queryRelationships` for the relationship form). Rows, scores and index resolution are the procedure's.
+
+- **Where it goes.** `SEARCH` directly follows one `MATCH` of one node pattern, or of the bare `()-[r]->()`, and names that pattern's variable. A `WHERE` or a second pattern between them is an error.
+- **`LIMIT` is required** inside the parentheses. `SCORE AS` is optional.
+- **The index picks the nodes.** `MATCH (e)` takes the index's label. `MATCH (e:L)` also keeps only `L` nodes, so a label the index does not cover returns no rows. Inline properties and relationship types are refused.
+- **A `WHERE` inside the parentheses is refused.** Neo4j applies it before the top-k cut and this engine cannot. A `WHERE` after the clause filters the top-k rows, so it can return fewer than `LIMIT` rows where Neo4j's in-index filter would not.
+- **Vector indexes only.** `FULLTEXT INDEX` in `SEARCH` is refused; use `db.index.fulltext.queryNodes`. A score is the store's metric, as for the procedure.
 
 #### Naming a search index
 

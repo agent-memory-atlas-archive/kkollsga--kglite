@@ -102,8 +102,9 @@ def test_the_fulltext_statements_run(url):
     assert len(claims) == 1 and claims[0]["entity"][1] == "CLAIMS"  # the driver renders a relationship as a tuple
 
 
-def test_the_vector_procedure_runs_and_the_search_clause_is_refused_by_name(url):
+def test_the_search_clause_returns_the_vector_procedure_rows(url):
     rows = _run(url, VECTOR, index="doc_vec", query=[0.0, 1.0, 0.0], limit=2)
     assert rows[0]["entity"]["id"] == 1
-    with pytest.raises(Exception, match="SEARCH"):
-        _run(url, SEARCH_CLAUSE, query=[0.0, 1.0, 0.0], limit=2)
+    searched = _run(url, SEARCH_CLAUSE, query=[0.0, 1.0, 0.0], limit=2)
+    assert [r["entity"]["id"] for r in searched] == [r["entity"]["id"] for r in rows]
+    assert [r["score"] for r in searched] == pytest.approx([r["score"] for r in rows])

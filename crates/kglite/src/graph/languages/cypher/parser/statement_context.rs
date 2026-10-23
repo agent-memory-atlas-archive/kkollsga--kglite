@@ -82,7 +82,7 @@ impl CypherParser {
                 describe_token(token)
             ),
             CypherToken::Identifier(word) if word.eq_ignore_ascii_case("SEARCH") => {
-                super::SEARCH_CLAUSE_UNSUPPORTED.to_string()
+                super::search_clause::SEARCH_PLACEMENT.to_string()
             }
             CypherToken::Identifier(word) if word.eq_ignore_ascii_case("FOR") => {
                 "FOR <axis> AS OF is a statement prefix; a UNION arm or a CALL { } body cannot \

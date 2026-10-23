@@ -229,6 +229,74 @@ def test_vector_positional_equals_node_embeddings_query(mode: str, tmp_path: Pat
     assert [r["score"] for r in rows] == pytest.approx([r["score"] for r in expected])
 
 
+# ── SEARCH clause ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_search_clause_equals_the_vector_procedure(mode: str, tmp_path: Path) -> None:
+    graph = _graph(mode, tmp_path)
+    for pattern in ("(e)", "(e:Doc)"):
+        rows = graph.cypher(
+            f"MATCH {pattern} SEARCH e IN (VECTOR INDEX `Doc.text` FOR $v LIMIT $k) SCORE AS s "
+            "RETURN e.id AS id, s ORDER BY s DESC",
+            params={"v": [1.0, 0.1], "k": 3},
+        ).to_list()
+        expected = graph.cypher(
+            "CALL db.index.vector.queryNodes('Doc.text', 3, $v) YIELD node, score "
+            "RETURN node.id AS id, score AS s ORDER BY s DESC",
+            params={"v": [1.0, 0.1]},
+        ).to_list()
+        assert [r["id"] for r in rows] == [r["id"] for r in expected] == [1, 4, 3]
+        assert [r["s"] for r in rows] == pytest.approx([r["s"] for r in expected])
+
+
+def test_search_clause_outer_where_filters_the_top_k(tmp_path: Path) -> None:
+    graph = _graph("memory", tmp_path)
+    rows = graph.cypher(
+        "MATCH (e) SEARCH e IN (VECTOR INDEX `Doc.text` FOR [1.0, 0.1] LIMIT 3) SCORE AS s "
+        "WHERE e.id <> 1 RETURN e.id AS id ORDER BY s DESC"
+    ).to_list()
+    # the top 3 are 1, 4, 3; the filter runs after the cut, so id 2 never appears
+    assert [r["id"] for r in rows] == [4, 3]
+
+
+def test_search_clause_with_another_label_returns_nothing(tmp_path: Path) -> None:
+    graph = _graph("memory", tmp_path)
+    graph.cypher("CREATE (:Other {id: 9})")
+    rows = graph.cypher(
+        "MATCH (e:Other) SEARCH e IN (VECTOR INDEX `Doc.text` FOR [1.0, 0.1] LIMIT 3) RETURN e.id AS id"
+    ).to_list()
+    assert rows == []
+
+
+def test_search_clause_relationship_form() -> None:
+    graph = _rel_graph("memory")
+    rows = graph.cypher(
+        "MATCH ()-[r]->() SEARCH r IN (VECTOR INDEX `relationship:CLAIMS.text` FOR [1.0, 0.1] LIMIT 2) SCORE AS s "
+        "RETURN r.k AS k ORDER BY s DESC"
+    ).to_list()
+    expected = graph.cypher(
+        "CALL db.index.vector.queryRelationships('relationship:CLAIMS.text', 2, [1.0, 0.1]) YIELD relationship, score "
+        "RETURN relationship.k AS k ORDER BY score DESC"
+    ).to_list()
+    assert [r["k"] for r in rows] == [r["k"] for r in expected] == [0, 2]
+
+
+def test_search_clause_errors(tmp_path: Path) -> None:
+    graph = _graph("memory", tmp_path)
+
+    def err(query: str) -> str:
+        with pytest.raises(Exception) as caught:
+            graph.cypher(query, params={"v": [1.0, 0.1]})
+        return str(caught.value)
+
+    assert "requires a LIMIT" in err("MATCH (e) SEARCH e IN (VECTOR INDEX `Doc.text` FOR $v) RETURN e")
+    assert "inside the index search" in err(
+        "MATCH (e) SEARCH e IN (VECTOR INDEX `Doc.text` FOR $v WHERE e.id > 1 LIMIT 2) RETURN e"
+    )
+    assert "no VECTOR index named 'nope'" in err("MATCH (e) SEARCH e IN (VECTOR INDEX nope FOR $v LIMIT 2) RETURN e")
+
+
 # ── relationships ─────────────────────────────────────────────────────────
 
 

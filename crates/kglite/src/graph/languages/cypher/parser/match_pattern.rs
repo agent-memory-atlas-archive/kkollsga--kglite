@@ -534,14 +534,9 @@ impl CypherParser {
 
             // `MATCH (e) SEARCH e IN (VECTOR INDEX …)`: the word is an
             // identifier, so without this the pattern would swallow the
-            // clause and fail on its `LIMIT`.
-            if paren_depth == 0
-                && bracket_depth == 0
-                && self.peek_soft_word("SEARCH")
-                && matches!(self.peek_at(1), Some(CypherToken::Identifier(_)))
-                && matches!(self.peek_at(2), Some(CypherToken::In))
-            {
-                return Err(super::SEARCH_CLAUSE_UNSUPPORTED.to_string());
+            // clause.
+            if paren_depth == 0 && bracket_depth == 0 && self.at_search_clause() {
+                break;
             }
 
             let token = self.advance().unwrap().clone();
