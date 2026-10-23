@@ -44,6 +44,20 @@ def test_hide_structural_keys_leaves_return_n_alone(graph):
     assert {"id", "title", "type", "v"} <= set(node["properties"])
 
 
+def test_hide_structural_keys_cleared_title_is_no_key(graph):
+    graph.cypher("CREATE (:C1), (:C2), (:C3)")
+    graph.cypher("MATCH (n:C1) SET n = {pid: 'a'}")
+    graph.cypher("MATCH (n:C2) SET n.pid = 'b' REMOVE n.title")
+    graph.cypher("MATCH (n:C3) SET n.pid = 'c', n.title = null")
+    for label in ("C1", "C2", "C3"):
+        assert scalar(graph, f"MATCH (n:{label}) RETURN keys(n)", hide_structural_keys=True) == ["id", "pid"]
+        props = scalar(graph, f"MATCH (n:{label}) RETURN properties(n)", hide_structural_keys=True)
+        assert sorted(props) == ["id", "pid"]
+        spread = scalar(graph, f"MATCH (n:{label}) RETURN n {{.*}}", hide_structural_keys=True)
+        assert sorted(spread) == ["id", "pid"]
+        assert "title" in scalar(graph, f"MATCH (n:{label}) RETURN keys(n)")
+
+
 def test_hide_structural_keys_on_a_mutation(graph):
     graph.cypher("CREATE (:J {id: 'database', v: 1})")
     keys = scalar(graph, "MATCH (n:J) SET n.v = 2 RETURN keys(n)", hide_structural_keys=True)

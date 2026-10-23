@@ -836,8 +836,8 @@ fn node_keys_from_view(
 /// virtual the engine mints (`<Label>_<id>`, or the id itself on a type titled
 /// by its ids). The engine does not record which it was, so this reads the
 /// value: a title equal to either minted form, or a node whose type names a
-/// `node_title_field` (whose value is already surfaced under that name), is
-/// virtual. A user title that happens to equal the minted form is
+/// `node_title_field` (whose value is already surfaced under that name), or a
+/// cleared (Null) title, is virtual. A user title that happens to equal the minted form is
 /// indistinguishable from it and is treated as virtual.
 fn title_is_user_data(
     node: crate::graph::storage::NodeView<'_>,
@@ -845,6 +845,11 @@ fn title_is_user_data(
     graph: &crate::graph::DirGraph,
 ) -> bool {
     if graph.title_field_aliases.contains_key(node_type) {
+        return false;
+    }
+    // A cleared title (`SET n = map`, `REMOVE n.title`) is stored as Null:
+    // no value, so nothing the user wrote.
+    if matches!(*node.title(), Value::Null) {
         return false;
     }
     let title = crate::datatypes::values::raw_string(&node.title());

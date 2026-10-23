@@ -89,3 +89,12 @@ def test_a_returned_node_is_unchanged(compat_url):
     _run(compat_url, JOURNAL)
     node = _run(compat_url, "MATCH (c:__GraphBridgeMigrationControl) RETURN c")[0]["c"]
     assert {"id", "title", "type", "formatVersion"} <= set(node.keys())
+
+
+def test_a_cleared_title_is_no_key_under_compat(compat_url):
+    _run(compat_url, "CREATE (:Gen), (:Gen2)")
+    _run(compat_url, "MATCH (n:Gen) SET n = {pid: 'a'}")
+    _run(compat_url, "MATCH (n:Gen2) SET n.pid = 'b' REMOVE n.title")
+    for label in ("Gen", "Gen2"):
+        assert _run(compat_url, f"MATCH (n:{label}) RETURN keys(n) AS k")[0]["k"] == ["id", "pid"]
+        assert sorted(_run(compat_url, f"MATCH (n:{label}) RETURN properties(n) AS p")[0]["p"]) == ["id", "pid"]

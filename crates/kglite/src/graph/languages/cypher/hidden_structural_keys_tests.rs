@@ -13,7 +13,7 @@ use std::collections::HashMap;
 fn run(graph: &mut DirGraph, query: &str, hide: bool) -> Vec<Vec<Value>> {
     let params = HashMap::new();
     let opts = ExecuteOptions::eager(&params).with_hidden_structural_keys(hide);
-    let outcome = if query.contains("CREATE") || query.contains("SET") {
+    let outcome = if query.contains("CREATE") || query.contains("SET") || query.contains("REMOVE") {
         execute_mut(graph, query, &opts)
     } else {
         execute_read(graph, query, &opts)
@@ -219,5 +219,49 @@ fn a_mutation_that_returns_the_map_hides_too() {
     assert_eq!(
         scalar(&mut g, "MATCH (n:J) SET n.v = 3 RETURN keys(n)", false),
         strings(&["id", "title", "type", "v"])
+    );
+}
+
+/// A title cleared to Null (`SET n = map`, `REMOVE n.title`,
+/// `SET n.title = null`) is no key under the opt-in; the default output keeps
+/// the always-present virtual `title`.
+#[test]
+fn a_cleared_title_is_hidden_under_the_opt_in_only() {
+    let mut g = DirGraph::new();
+    run(&mut g, "CREATE (:C1), (:C2), (:C3)", false);
+    run(&mut g, "MATCH (n:C1) SET n = {pid: 'a'}", false);
+    run(&mut g, "MATCH (n:C2) SET n.pid = 'b' REMOVE n.title", false);
+    run(
+        &mut g,
+        "MATCH (n:C3) SET n.pid = 'c', n.title = null",
+        false,
+    );
+    for label in ["C1", "C2", "C3"] {
+        let keys = format!("MATCH (n:{label}) RETURN keys(n)");
+        let props = format!("MATCH (n:{label}) RETURN properties(n)");
+        let spread = format!("MATCH (n:{label}) RETURN n {{.*}}");
+        assert_eq!(
+            keys_of(&mut g, &keys, true),
+            strings(&["id", "pid"]),
+            "{label}"
+        );
+        for q in [&props, &spread] {
+            let Value::Map(map) = scalar(&mut g, q, true) else {
+                panic!("{q}: a map");
+            };
+            let names: Vec<&str> = map.iter().map(|(k, _)| k).collect();
+            assert_eq!(names, vec!["id", "pid"], "{q}");
+        }
+        assert_eq!(
+            keys_of(&mut g, &keys, false),
+            strings(&["id", "pid", "title", "type"]),
+            "{label} default"
+        );
+    }
+    // A title written after the clear is user data again.
+    run(&mut g, "MATCH (n:C1) SET n.title = 'X'", false);
+    assert_eq!(
+        keys_of(&mut g, "MATCH (n:C1) RETURN keys(n)", true),
+        strings(&["id", "pid", "title"])
     );
 }
