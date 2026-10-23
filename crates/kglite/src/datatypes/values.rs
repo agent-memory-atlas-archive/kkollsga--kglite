@@ -1358,7 +1358,12 @@ impl DataFrame {
     /// materialising a [`Value`]; `false` (nothing hashed) when it is null or
     /// absent. Equal cells of one column hash equally, which is all a caller
     /// comparing rows of one frame needs.
-    pub fn hash_cell<H: Hasher>(&self, row_idx: usize, col_idx: usize, state: &mut H) -> bool {
+    pub(crate) fn hash_cell<H: Hasher>(
+        &self,
+        row_idx: usize,
+        col_idx: usize,
+        state: &mut H,
+    ) -> bool {
         let Some(column) = self.columns.get(col_idx) else {
             return false;
         };
