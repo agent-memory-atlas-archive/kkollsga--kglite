@@ -30,6 +30,7 @@ def _load(name: str):
 bump_version = _load("bump_version")
 check_release_hygiene = _load("check_release_hygiene")
 wait_for_release_ci = _load("wait_for_release_ci")
+semver_check = _load("semver_check")
 
 
 # ── the version bump reaches every manifest ────────────────────────────
@@ -394,3 +395,74 @@ def test_preflight_reports_an_unreachable_pypi_instead_of_passing(tmp_path, monk
     result = release_preflight.check_captured_constants("0.2.0")
     assert not result.ok
     assert "cannot tell which Linux wheel" in result.detail
+
+
+# ── `make semver-check` distinguishes "found something" from "did not run" ──
+
+FINDING_OUTPUT = """\
+     Checking kglite v0.21.0 -> v0.21.1 (assume minor change)
+--- failure constructible_struct_adds_field: pub struct field added ---
+     Summary semver requires new major version: 1 major and 0 minor checks failed
+"""
+
+
+def _run_main(monkeypatch, capsys, *, baseline="0.21.0", tool=(0, ""), lookup_error=None):
+    def fetch():
+        if lookup_error:
+            raise semver_check.SemverCheckError(lookup_error)
+        return baseline
+
+    monkeypatch.setattr(semver_check, "fetch_baseline", fetch)
+    monkeypatch.setattr(semver_check, "run_tool", lambda b: tool)
+    code = semver_check.main()
+    return code, capsys.readouterr()
+
+
+def test_semver_findings_pass_through_with_exit_zero(monkeypatch, capsys):
+    code, out = _run_main(monkeypatch, capsys, tool=(1, FINDING_OUTPUT))
+    assert code == 0
+    assert "constructible_struct_adds_field" in out.out
+    assert "DID NOT RUN" not in out.err
+
+
+def test_semver_clean_summary_exits_zero(monkeypatch, capsys):
+    code, _ = _run_main(monkeypatch, capsys, tool=(0, "     Summary no semver update required\n"))
+    assert code == 0
+
+
+def test_semver_tool_error_without_summary_did_not_run(monkeypatch, capsys):
+    code, out = _run_main(monkeypatch, capsys, tool=(101, "error: failed to build rustdoc\n"))
+    assert code != 0
+    assert "semver-check DID NOT RUN" in out.err
+
+
+def test_semver_exit_zero_without_summary_did_not_run(monkeypatch, capsys):
+    code, out = _run_main(monkeypatch, capsys, tool=(0, ""))
+    assert code != 0
+    assert "semver-check DID NOT RUN" in out.err
+
+
+def test_semver_baseline_lookup_failure_did_not_run(monkeypatch, capsys):
+    code, out = _run_main(monkeypatch, capsys, lookup_error="baseline version lookup failed (offline)")
+    assert code != 0
+    assert "semver-check DID NOT RUN" in out.err
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        "not json",
+        "{}",
+        '{"crate": {"max_stable_version": ""}}',
+        '{"crate": {"max_stable_version": null}}',
+        '{"crate": {"max_stable_version": "v1"}}',
+    ],
+)
+def test_semver_malformed_baseline_is_rejected(body):
+    with pytest.raises(semver_check.SemverCheckError):
+        semver_check.parse_baseline(body)
+
+
+def test_semver_good_baseline_parses():
+    assert semver_check.parse_baseline('{"crate": {"max_stable_version": "0.21.0"}}') == "0.21.0"

@@ -159,9 +159,10 @@ bench-anchor:
 ## Rust semver report for the kglite crate vs the last published release.
 ## INFORMATIONAL by convention: this project deliberately ships documented
 ## breaking changes in patch bumps (0.x), so the release skill surfaces this
-## report in the bump-size decision instead of hard-gating on it.
+## report in the bump-size decision instead of hard-gating on it. Findings
+## exit 0; the tool not running (no Summary, bad baseline) exits non-zero.
 semver-check:
-	cargo semver-checks check-release -p kglite --baseline-version $$(curl -s -H "User-Agent: kglite-semver-check" https://crates.io/api/v1/crates/kglite | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_stable_version'])") || true
+	python3 scripts/semver_check.py
 
 ## Refresh the three captured constants that drift across releases:
 ## the .kgl golden digest, the binary-size baselines (macOS host build +
