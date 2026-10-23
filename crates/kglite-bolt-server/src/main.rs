@@ -1482,7 +1482,10 @@ mod tests {
         }
         assert!(wal_len() > small + 10_000, "the log must now be oversized");
         let deadline = Instant::now() + Duration::from_secs(10);
-        while wal_len() > 5 && Instant::now() < deadline {
+        // Wait for exactly the header length: the reset truncates to zero before
+        // it rewrites the header, so a `> 5` condition exits on that transient
+        // empty file and asserts against a half-finished trim.
+        while wal_len() != 5 && Instant::now() < deadline {
             tokio::time::sleep(poll).await;
         }
         task.abort();
