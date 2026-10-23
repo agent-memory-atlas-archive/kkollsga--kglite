@@ -204,3 +204,71 @@ def test_date_bounds_with_a_date_parameter(mode, tmp_path):
     ]:
         rows = g.cypher(f"MATCH (d:D) WHERE {where} RETURN d.k AS k ORDER BY k", params=params).to_list()
         assert [r["k"] for r in rows] == [2, 3], where
+
+
+# ── Null-safe equality / IN: the seek is a candidate set, never the answer ───
+#
+# GraphBridge renders `x = $v` as `coalesce(x = $v, (x IS NULL AND $v IS NULL))`
+# and `x IN $v` with an extra NULL arm. A non-NULL value may seek; a NULL
+# value (or a NULL list element) must keep its NULL-matching meaning.
+
+NULL_SAFE_EQ = (
+    "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid"
+)
+NULL_SAFE_IN = (
+    "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR "
+    "(n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) RETURN n.pid AS pid ORDER BY pid"
+)
+
+
+@pytest.fixture(params=STORAGE_MODES, ids=STORAGE_MODES)
+def nullable_names(request, tmp_path):
+    g = _new_graph(request.param, tmp_path)
+    g.add_nodes(
+        pd.DataFrame({"pid": [1, 2, 3, 4, 5], "nick": ["a", "b", "b", None, "c"]}),
+        "Q",
+        "pid",
+        "pid",
+    )
+    g.cypher("CREATE INDEX FOR (n:Q) ON (n.nick)")
+    return g
+
+
+def _pids(g, query, v):
+    return [row["pid"] for row in g.cypher(query, params={"v": v}).to_list()]
+
+
+def test_null_safe_equality_values(nullable_names):
+    g = nullable_names
+    assert _pids(g, NULL_SAFE_EQ, "b") == [2, 3]
+    assert _pids(g, NULL_SAFE_EQ, "zz") == []
+    assert _pids(g, NULL_SAFE_EQ, None) == [4]
+
+
+def test_null_safe_in_values(nullable_names):
+    g = nullable_names
+    assert _pids(g, NULL_SAFE_IN, ["a", "c"]) == [1, 5]
+    assert _pids(g, NULL_SAFE_IN, []) == []
+    assert _pids(g, NULL_SAFE_IN, ["a", None]) == [1, 4]
+    assert _pids(g, NULL_SAFE_IN, None) == []
+
+
+@pytest.mark.parametrize("query", [NULL_SAFE_EQ, NULL_SAFE_IN], ids=["eq", "in"])
+def test_same_text_serves_each_param_value_through_the_plan_cache(nullable_names, query):
+    """The plan is built from the bound values; the cache key carries them
+    (NULL and list contents included), so alternating a seekable value with a
+    NULL-bearing one over the same text must never replay the seek plan for
+    the NULL case."""
+    g = nullable_names
+    if query is NULL_SAFE_EQ:
+        calls = [("b", [2, 3]), (None, [4])]
+    else:
+        calls = [(["a", "c"], [1, 5]), (["a", None], [1, 4])]
+    for _ in range(6):  # a parameterised plan is cached from its second sighting
+        for value, expected in calls:
+            assert _pids(g, query, value) == expected
+
+
+def test_explain_shows_the_null_safe_seek(nullable_names):
+    plan = nullable_names.cypher("EXPLAIN " + NULL_SAFE_EQ, params={"v": "b"}).to_list()
+    assert "push_where_into_match" in str(plan)

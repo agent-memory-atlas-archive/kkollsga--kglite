@@ -110,6 +110,19 @@ def rel_indexed_graph():
 
 
 @pytest.fixture
+def null_safe_graph():
+    """`:Q` nodes with an indexed `nick`, a NULL nick, a numeric-typed `age`
+    and a duplicated key, for the null-safe equality / IN seek shapes."""
+    graph = kglite.KnowledgeGraph()
+    graph.cypher(
+        "CREATE (:Q {pid: 1, nick: 'a', age: 1}), (:Q {pid: 2, nick: 'b', age: 2}), (:Q {pid: 3, nick: 'b', age: 2.5}),"
+        " (:Q {pid: 4, age: 4}), (:Q {pid: 5, nick: 'c'}), (:Q {pid: 6, nick: 'a', age: 1})"
+    ).to_list()
+    graph.cypher("CREATE INDEX FOR (n:Q) ON (n.nick)").to_list()
+    return graph
+
+
+@pytest.fixture
 def predicate_point_index_graph():
     return _predicate_index_graph("point")
 
@@ -885,6 +898,112 @@ CHAIN_COUNT_QUERIES: list[tuple[str, str, str, dict | None]] = [
 
 DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
     *CHAIN_COUNT_QUERIES,
+    # ── null-safe equality / IN seek candidates (`push_where_into_match`) ──
+    #
+    # The seek is only a candidate set; NULL params, NULL list elements and
+    # near-miss shapes must answer exactly what the scan answers.
+    (
+        "null_safe_eq_nick_hit",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": "a"},
+    ),
+    (
+        "null_safe_eq_nick_miss",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": "zz"},
+    ),
+    (
+        "null_safe_eq_nick_null",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": None},
+    ),
+    (
+        "null_safe_eq_nick_num_for_str",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": 1},
+    ),
+    (
+        "null_safe_eq_age_int",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.age = $v, (n.age IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": 2},
+    ),
+    (
+        "null_safe_eq_age_float",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.age = $v, (n.age IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": 2.0},
+    ),
+    (
+        "null_safe_eq_age_float_frac",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.age = $v, (n.age IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": 2.5},
+    ),
+    (
+        "null_safe_eq_age_null",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.age = $v, (n.age IS NULL AND $v IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": None},
+    ),
+    (
+        "null_safe_eq_swapped",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce($v = n.nick, ($v IS NULL AND n.nick IS NULL)) RETURN n.pid AS pid ORDER BY pid",
+        {"v": "b"},
+    ),
+    (
+        "null_safe_eq_with_residual",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE coalesce(n.nick = $v, (n.nick IS NULL AND $v IS NULL)) AND n.pid > 2 "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": "b"},
+    ),
+    (
+        "null_safe_in_nick_hit",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR (n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": ["a", "c"]},
+    ),
+    (
+        "null_safe_in_nick_empty",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR (n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": []},
+    ),
+    (
+        "null_safe_in_nick_with_null",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR (n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": ["a", None]},
+    ),
+    (
+        "null_safe_in_nick_null_list",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR (n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": None},
+    ),
+    (
+        "null_safe_in_nick_mixed_types",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE (coalesce(n.nick IN $v, false) OR (n.nick IS NULL AND any(x IN $v WHERE x IS NULL))) "
+        "RETURN n.pid AS pid ORDER BY pid",
+        {"v": ["a", 2]},
+    ),
+    (
+        "plain_in_nick_with_null",
+        "null_safe_graph",
+        "MATCH (n:Q) WHERE n.nick IN $v RETURN n.pid AS pid ORDER BY pid",
+        {"v": ["a", None]},
+    ),
     # ── relationship property index (`anchor_rel_property_index`) ──
     #
     # The index chooses start nodes and the first hop re-checks the edge, so an

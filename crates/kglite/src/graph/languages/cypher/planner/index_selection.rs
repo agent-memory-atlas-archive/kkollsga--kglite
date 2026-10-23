@@ -3,6 +3,7 @@
 //! the safety-net WHERE the pushdown leaves behind.
 
 use super::super::ast::*;
+use super::null_safe_pushdown::{null_safe_equality, null_safe_in};
 use crate::datatypes::values::Value;
 use crate::graph::core::pattern_matching::{PatternElement, PropertyMatcher};
 use std::collections::{HashMap, HashSet};
@@ -519,9 +520,13 @@ fn extract_from_predicate(
                 None => Some(pred.clone()),
             }
         }
+        Predicate::Comparison {
+            operator: ComparisonOp::NotEquals,
+            ..
+        } => seek_null_safe_equality(pred, scope, out, reservations),
         Predicate::Or(left, right) => match try_extract_null_or(left, right, match_vars, params) {
             Some((var, prop, matcher)) => push_null_or(out, reservations, var, prop, matcher, pred),
-            None => Some(pred.clone()),
+            None => seek_null_safe_in(pred, left, right, scope, out, reservations),
         },
         Predicate::In { expr, list } => {
             if let Expression::PropertyAccess { variable, property } = expr {
@@ -614,6 +619,40 @@ fn extract_from_predicate(
         // Other predicate types can't be pushed
         _ => Some(pred.clone()),
     }
+}
+
+/// Queue a seek candidate for the null-safe equality shape; the predicate
+/// always stays in WHERE.
+fn seek_null_safe_equality(
+    pred: &Predicate,
+    scope: &ExtractScope<'_>,
+    out: &mut Pushables,
+    reservations: &mut HashMap<(String, String), PropertyReservation>,
+) -> Option<Predicate> {
+    if let Some((var, prop, val)) = null_safe_equality(pred, scope.match_vars, scope.params) {
+        if reserve_exclusive(reservations, &var, &prop) {
+            out.equals.push((var, prop, val));
+        }
+    }
+    Some(pred.clone())
+}
+
+/// Queue a seek candidate for the null-safe IN shape (`left OR right`); the
+/// predicate always stays in WHERE.
+fn seek_null_safe_in(
+    pred: &Predicate,
+    left: &Predicate,
+    right: &Predicate,
+    scope: &ExtractScope<'_>,
+    out: &mut Pushables,
+    reservations: &mut HashMap<(String, String), PropertyReservation>,
+) -> Option<Predicate> {
+    if let Some((var, prop, values)) = null_safe_in(left, right, scope.match_vars, scope.params) {
+        if reserve_exclusive(reservations, &var, &prop) {
+            out.in_lists.push((var, prop, values));
+        }
+    }
+    Some(pred.clone())
 }
 
 /// One ordering comparison the extractor can push: a plain bound, or a
@@ -791,7 +830,10 @@ fn plan_time_value(expr: &Expression, params: &HashMap<String, Value>) -> Option
 /// that is not a list yields `None`, leaving the predicate to the executor,
 /// which raises its type error. (A bracket list `IN [a, b]` parses to
 /// `Predicate::In`, not `InExpression`, and is handled separately.)
-fn resolve_value_list(expr: &Expression, params: &HashMap<String, Value>) -> Option<Vec<Value>> {
+pub(super) fn resolve_value_list(
+    expr: &Expression,
+    params: &HashMap<String, Value>,
+) -> Option<Vec<Value>> {
     let val = match expr {
         Expression::Parameter(name) => params.get(name.as_str())?,
         Expression::Literal(v) => v,

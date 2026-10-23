@@ -19,6 +19,7 @@ pub mod index_selection;
 pub mod join_order;
 mod nested;
 mod node_anchor;
+mod null_safe_pushdown;
 mod rel_index_anchor;
 pub mod rel_predicate_pushdown;
 pub mod schema_check;
@@ -721,6 +722,8 @@ mod fusion_tests;
 mod nested_tests;
 #[cfg(test)]
 mod null_or_pushdown_tests;
+#[cfg(test)]
+mod null_safe_pushdown_tests;
 #[cfg(test)]
 mod start_anchor_tests;
 #[cfg(test)]
