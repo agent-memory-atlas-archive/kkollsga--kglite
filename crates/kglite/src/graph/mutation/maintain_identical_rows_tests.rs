@@ -121,3 +121,37 @@ fn collapse_is_exact_when_distinct_rows_share_a_hash() {
     assert!(!tracker.admit(1, &lead, true));
     FORCED_CELLS_HASH.with(|f| f.set(None));
 }
+
+fn keep_warning(pairs: impl Iterator<Item = u64>) -> Option<String> {
+    let mut tracker = IdenticalRowTracker::new(IdenticalRows::Keep);
+    for pair in pairs {
+        assert!(tracker.admit(pair, &[], false), "Keep never drops a row");
+    }
+    tracker.warning("T")
+}
+
+#[test]
+fn keep_does_not_warn_when_distinct_keys_share_a_filter_bit() {
+    // 20,000 distinct keys in the 4,096-bit unreserved filter: most are
+    // flagged as candidates, none repeats.
+    assert_eq!(keep_warning(0..20_000), None);
+}
+
+#[test]
+fn keep_counts_repeats_exactly_among_filter_collisions() {
+    // Sparse flagged keys (candidate path): 5,000 distinct, one tripled, one doubled.
+    let pairs = (0..5_000u64).chain([7, 7, 42]);
+    let w = keep_warning(pairs).expect("repeats must warn");
+    assert!(w.contains("5003 relationships"), "{w}");
+    assert!(w.contains("on 5000 distinct"), "{w}");
+    assert!(w.contains("up to 3 identical copies"), "{w}");
+}
+
+#[test]
+fn keep_counts_repeats_exactly_when_most_keys_repeat() {
+    // Every key twice (full-map path): 100 distinct, 200 rows.
+    let w = keep_warning((0..100u64).chain(0..100)).expect("repeats must warn");
+    assert!(w.contains("200 relationships"), "{w}");
+    assert!(w.contains("on 100 distinct"), "{w}");
+    assert!(w.contains("up to 2 identical copies"), "{w}");
+}

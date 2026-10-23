@@ -275,7 +275,7 @@ fn load_one_junction_edge(
 fn report_junction_findings(
     report: &mut BuildReport,
     (edge_type, node_type, targets): (&str, &str, &[String]),
-    (misparses, identical, unroutable, dropped): (
+    (misparses, mut identical, unroutable, dropped): (
         MisparseTally,
         IdenticalRowTracker,
         BTreeMap<String, usize>,

@@ -1354,6 +1354,35 @@ impl DataFrame {
             .and_then(|col| col.get_value(row_idx))
     }
 
+    /// Hashes the cell at (`row_idx`, `col_idx`) into `state` without
+    /// materialising a [`Value`]; `false` (nothing hashed) when it is null or
+    /// absent. Equal cells of one column hash equally, which is all a caller
+    /// comparing rows of one frame needs.
+    pub fn hash_cell<H: Hasher>(&self, row_idx: usize, col_idx: usize, state: &mut H) -> bool {
+        let Some(column) = self.columns.get(col_idx) else {
+            return false;
+        };
+        let hashed = match &column.data {
+            ColumnData::UniqueId(v) => v.get(row_idx).copied().flatten().map(|x| x.hash(state)),
+            ColumnData::Int64(v) => v.get(row_idx).copied().flatten().map(|x| x.hash(state)),
+            ColumnData::Float64(v) => v
+                .get(row_idx)
+                .copied()
+                .flatten()
+                .map(|x| canonical_f64_bits(x).hash(state)),
+            ColumnData::String(v) => v
+                .get(row_idx)
+                .and_then(|x| x.as_deref())
+                .map(|x| x.hash(state)),
+            ColumnData::Boolean(v) => v.get(row_idx).copied().flatten().map(|x| x.hash(state)),
+            _ => column.get_value(row_idx).map(|x| x.hash(state)),
+        };
+        if hashed.is_some() {
+            col_idx.hash(state);
+        }
+        hashed.is_some()
+    }
+
     pub fn get_column_index(&self, name: &str) -> Option<usize> {
         self.column_indices.get(name).copied()
     }
