@@ -191,7 +191,7 @@ fn hoistable(clauses: &[Clause], i: usize) -> bool {
 /// True when any expression inside `pred` is (or wraps) an aggregate call.
 /// Mirrors `collect_predicate_refs`' walk over the predicate tree, asking
 /// [`is_aggregate_expression`] instead of collecting names.
-fn predicate_has_aggregate(pred: &Predicate) -> bool {
+pub(super) fn predicate_has_aggregate(pred: &Predicate) -> bool {
     match pred {
         Predicate::Comparison { left, right, .. } => {
             is_aggregate_expression(left) || is_aggregate_expression(right)

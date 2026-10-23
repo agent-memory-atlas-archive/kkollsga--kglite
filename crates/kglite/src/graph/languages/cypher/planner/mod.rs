@@ -7,6 +7,7 @@ use crate::graph::schema::DirGraph;
 use std::collections::{HashMap, HashSet};
 
 mod annotations;
+mod call_hoist;
 mod guard;
 #[cfg(test)]
 pub(crate) use guard::is_safe as guard_is_safe;
@@ -31,6 +32,7 @@ use annotations::{
     pass_mark_disjoint_fixed_trails, pass_mark_fast_var_length_paths,
     pass_mark_skip_target_type_check,
 };
+use call_hoist::pass_hoist_where_over_call_subquery;
 use cost_model::reorder_predicates_by_cost;
 use fusion::{
     fuse_anchored_edge_count, fuse_chain_path_count, fuse_count_short_circuits,
@@ -90,16 +92,24 @@ type PassFn = fn(&mut CypherQuery, &PassCtx);
 ///
 /// ## `CALL { }` (CallSubquery) barrier audit
 ///
-/// `Clause::CallSubquery` is an OPAQUE barrier to every pass below. A
-/// subquery's per-row cardinality is unknown at plan time and a
-/// correlated body depends on its seeded input — so NO pass may move a
-/// clause across it, fuse a window through it, or push a LIMIT/predicate
-/// into or past it. Every pass is safe today; only two are not safe
-/// purely by shape:
+/// `Clause::CallSubquery` is an OPAQUE barrier to every pass below except
+/// `hoist_where_over_call_subquery`. A subquery's per-row cardinality is
+/// unknown at plan time and a correlated body depends on its seeded input —
+/// so NO other pass may move a clause across it, fuse a window through it, or
+/// push a LIMIT/predicate into or past it. The one exception reads through the
+/// barrier in one direction only: it moves a filter (and a trailing
+/// `ORDER BY … LIMIT`) over outer variables ahead
+/// of a read-only, deterministic body that ends in an aggregate-only `RETURN`
+/// (exactly one row per input row), where the filter and the CALL commute (see
+/// its doc comment and `call_hoist.rs`). Every pass is safe today; only three
+/// are not safe purely by shape:
 ///
 /// - `optimize_nested_queries` — **recurses by design.** Owns body
 ///   optimization; import-aware (disables seed-ignoring fusion for
 ///   anchored correlated bodies).
+/// - `hoist_where_over_call_subquery` — **looks through, guarded.** Qualifies
+///   the body and each conjunct, moves nothing else, and runs first so it
+///   reads the body as written, not as fused.
 /// - `fold_pass_through_with` — **guarded.** Its downstream-ref check
 ///   records a CallSubquery's import names + body refs (see
 ///   `collect_clause_variables`), so a `WITH` a correlated CALL depends
@@ -116,6 +126,13 @@ type PassFn = fn(&mut CypherQuery, &PassCtx);
 /// standing, so a hint written against a body it could not see changes
 /// no answer.
 pub const PASSES: &[(&str, PassFn)] = &[
+    // FIRST: it qualifies a CALL body as written, before
+    // `optimize_nested_queries` fuses it; `push_where_into_match.*` then seek
+    // from the filter it moved.
+    (
+        "hoist_where_over_call_subquery",
+        pass_hoist_where_over_call_subquery,
+    ),
     (
         "optimize_nested_queries",
         nested::pass_optimize_nested_queries,
@@ -718,6 +735,8 @@ mod tests;
 #[path = "planner_fusion_tests.rs"]
 mod fusion_tests;
 
+#[cfg(test)]
+mod call_hoist_tests;
 #[cfg(test)]
 mod nested_tests;
 #[cfg(test)]

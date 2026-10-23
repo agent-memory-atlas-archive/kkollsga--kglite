@@ -3297,6 +3297,227 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "MATCH (p:Person) WITH p MATCH (p)-[:KNOWS]->(q:Person) RETURN p.name AS p, q.name AS q",
         None,
     ),
+    # ── hoist_where_over_call_subquery ──
+    # A filter behind a row-preserving CALL moves ahead of it. One trigger per
+    # pattern arm (standalone WHERE, WITH-attached WHERE, the GraphBridge
+    # aliasing-WITH and relationship-import shapes, a mixed conjunction), then
+    # one entry per bail: a body that can return zero or many rows, a volatile
+    # body or conjunct, a conjunct over a CALL output, a rebound name and a
+    # LIMIT the filter must not cross.
+    (
+        "call_where_hoist_standalone",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WHERE p.age > 30 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_hoist_with",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } WITH p, c "
+            "WHERE p.age > 30 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_hoist_param_eq",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } WITH p, c "
+            "WHERE p.name = $v RETURN p.name AS n, c"
+        ),
+        {"v": "Person_20"},
+    ),
+    (
+        "call_where_hoist_aliasing_chain",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { OPTIONAL MATCH (a)-[:KNOWS]->(p) WITH a LIMIT 2 "
+            "RETURN collect(a) AS ps } "
+            "WITH p, size(ps) AS n, CASE WHEN size(ps) = 1 THEN ps[0] ELSE null END AS a "
+            "WITH p, n, a AS s WHERE p.age = 25 RETURN p.name AS name, n ORDER BY name"
+        ),
+        None,
+    ),
+    (
+        "call_where_hoist_rel_import",
+        "social_graph",
+        (
+            "MATCH (p:Person)-[r:KNOWS]->(q:Person) CALL (r) { MATCH ()-[x:KNOWS]->() "
+            "WHERE x.since = r.since WITH x LIMIT 2 RETURN count(*) AS c } WITH p, r, q, c "
+            "WHERE q.age > 38 RETURN p.name AS pn, q.name AS qn, c ORDER BY pn, qn"
+        ),
+        None,
+    ),
+    (
+        "call_where_hoist_mixed_conjuncts",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WHERE p.age > 30 AND c > 0 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_hoist_null_param",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } WITH p, c "
+            "WHERE coalesce(p.email = $v, (p.email IS NULL AND $v IS NULL)) RETURN p.name AS n, c "
+            "ORDER BY n"
+        ),
+        {"v": None},
+    ),
+    (
+        "call_where_hoist_zero_match_body",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:NOPE]->(q) RETURN count(q) AS c } WITH p, c "
+            "WHERE p.age < 23 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_body_can_drop_rows",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) WHERE q.age > 38 "
+            "RETURN q.age AS a } WITH p, a WHERE p.age > 30 RETURN p.name AS n, a ORDER BY n, a"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_body_multiplies_rows",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) "
+            "RETURN q.age AS a, count(*) AS c } WITH p, a, c WHERE p.age > 38 "
+            "RETURN p.name AS n, a, c ORDER BY n, a"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_conjunct_reads_call_output",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WHERE c > 2 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_volatile_body",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) WHERE rand() < 2.0 "
+            "RETURN count(q) AS c } WITH p, c WHERE p.age > 30 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_volatile_conjunct",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WHERE p.age > 30 AND rand() < 2.0 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_rebound_name",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WITH p.age AS p, c WHERE p > 30 RETURN p, c ORDER BY p"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_limit_between",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } WITH p, c "
+            "ORDER BY p.age LIMIT 5 WHERE p.age > 22 RETURN p.name AS n, c ORDER BY n"
+        ),
+        None,
+    ),
+    (
+        "call_where_nohoist_distinct_with",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WITH DISTINCT p.city AS city, c WHERE city = 'Oslo' RETURN city, c ORDER BY c"
+        ),
+        None,
+    ),
+    # The top-K arm: `ORDER BY <pre-CALL keys> LIMIT k` also moves ahead of the
+    # CALL. Unique sort keys (`name` is unique per person), so the cut has no ties.
+    (
+        "call_top_k_hoist",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "RETURN p.name AS n, c ORDER BY p.name DESC LIMIT 4"
+        ),
+        None,
+    ),
+    (
+        "call_top_k_hoist_with_filter",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } WITH p, c "
+            "WHERE p.age > 25 RETURN p.name AS n, c ORDER BY p.name LIMIT 5"
+        ),
+        None,
+    ),
+    (
+        "call_top_k_hoist_param_limit",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "RETURN p.name AS n, c ORDER BY p.age DESC, p.name LIMIT $k"
+        ),
+        {"k": 3},
+    ),
+    (
+        "call_top_k_nohoist_skip",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "RETURN p.name AS n, c ORDER BY p.name SKIP 2 LIMIT 3"
+        ),
+        None,
+    ),
+    (
+        "call_top_k_nohoist_key_reads_call_output",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "RETURN p.name AS n, c ORDER BY c DESC, p.name LIMIT 4"
+        ),
+        None,
+    ),
+    (
+        "call_top_k_nohoist_residual_filter",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "WHERE c > 2 RETURN p.name AS n, c ORDER BY p.name LIMIT 4"
+        ),
+        None,
+    ),
+    (
+        "call_top_k_nohoist_rebound_key",
+        "social_graph",
+        (
+            "MATCH (p:Person) CALL (p) { MATCH (p)-[:KNOWS]->(q) RETURN count(q) AS c } "
+            "RETURN p.age AS p, c ORDER BY p LIMIT 4"
+        ),
+        None,
+    ),
     # ── hoist_with_where ──
     # A `WITH … WHERE p` carries its predicate inside the WITH, where the
     # pushdown passes never looked; the hoist lifts it into the ordinary
@@ -8910,6 +9131,7 @@ PASS_TRIGGER_CASES: dict[str, tuple[str, str]] = {
     "lower_fixed_var_length_hops": ("differential", "lower_two_hop_unanchored_count"),
     "rewrite_count_bound_var_to_star": ("differential", "count_all_typed"),
     "hoist_with_where": ("differential", "with_where_hoist"),
+    "hoist_where_over_call_subquery": ("differential", "call_where_hoist_standalone"),
     "push_where_into_match.1": ("differential", "where_eq"),
     "anchor_element_id": ("differential", "element_id_anchor_param"),
     "anchor_rel_property_index": ("differential", "rel_index_where_literal"),

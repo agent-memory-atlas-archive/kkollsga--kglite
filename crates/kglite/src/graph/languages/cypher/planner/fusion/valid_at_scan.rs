@@ -24,7 +24,7 @@ const COUNT_VARIABLE: &str = "(valid_at_count)";
 
 /// Functions whose value changes between calls, which one evaluation per
 /// driving row would not reproduce.
-const VOLATILE_FUNCTIONS: &[&str] = &["rand", "random", "randomuuid", "timestamp"];
+pub(crate) const VOLATILE_FUNCTIONS: &[&str] = &["rand", "random", "randomuuid", "timestamp"];
 
 /// **Pass:** `fuse_unwind_valid_at` — **Precondition:** a top-level
 /// (non-imported) scope without write clauses and without a valid-time guard,

@@ -26,6 +26,11 @@ pub(super) const GUARD_SAFE_PASSES: &[(&str, &str)] = &[
         "moves a predicate; rows still come from the matcher",
     ),
     (
+        "hoist_where_over_call_subquery",
+        "moves a predicate ahead of a read-only CALL whose body keeps its own guard; \
+         rows still come from the matcher",
+    ),
+    (
         "push_where_into_match.1",
         "a predicate into the matcher; candidates are still accepted by it",
     ),

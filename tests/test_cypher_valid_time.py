@@ -233,6 +233,7 @@ GUARD_SAFE_PASSES = {
     "lower_fixed_var_length_hops",
     "rewrite_count_bound_var_to_star",
     "hoist_with_where",
+    "hoist_where_over_call_subquery",
     "push_where_into_match.1",
     "fold_or_to_in",
     "push_where_into_match.2",
