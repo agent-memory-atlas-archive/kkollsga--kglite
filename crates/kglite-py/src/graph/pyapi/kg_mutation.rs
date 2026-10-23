@@ -96,7 +96,7 @@ fn collect_bulk_connection_names(
             continue;
         }
         names.extend([source_type, target_type, connection_name]);
-        names.extend(data.getattr("columns")?.extract::<Vec<String>>()?);
+        names.extend(py_in::dataframe_columns(&data)?);
     }
     Ok(names)
 }
@@ -120,8 +120,7 @@ fn build_connection_df_from_pandas(
     column_types: Option<&Bound<'_, PyDict>>,
     on_invalid: OnInvalid,
 ) -> PyResult<(DataFrame, Option<kglite_core::api::TemporalConfig>)> {
-    let df_cols = data.getattr("columns")?;
-    let all_columns: Vec<String> = df_cols.extract()?;
+    let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
 
     let mut default_cols = vec![source_id_field, target_id_field];
     if let Some(src_title) = source_title_field {
@@ -641,8 +640,7 @@ fn parse_inline_config<'py>(
         }
     }
 
-    let df_cols = data.getattr("columns")?;
-    let all_columns: Vec<String> = df_cols.extract()?;
+    let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
 
     let mut default_cols = vec![unique_id_field];
     if let Some(title_field) = node_title_field {
@@ -1879,8 +1877,7 @@ impl KnowledgeGraph {
                     ))
                 })?;
 
-                let df_cols = data.getattr("columns")?;
-                let all_columns: Vec<String> = df_cols.extract()?;
+                let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
 
                 let df_result = py_in::pandas_to_dataframe(
                     &data,
@@ -2036,8 +2033,7 @@ impl KnowledgeGraph {
             let source_id_field = "source_id".to_string();
             let target_id_field = "target_id".to_string();
 
-            let df_cols = data.getattr("columns")?;
-            let all_columns: Vec<String> = df_cols.extract()?;
+            let all_columns: Vec<String> = py_in::dataframe_columns(&data)?;
 
             if !all_columns.contains(&source_id_field) {
                 return Err(crate::error_py::kg_to_pyerr(

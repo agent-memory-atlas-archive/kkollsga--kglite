@@ -430,6 +430,23 @@ fn query_ranks_one_or_several_stores_and_refuses_mixed_metrics() {
 }
 
 #[test]
+fn a_store_name_given_as_the_text_column_is_corrected() {
+    let mut mixed = graph();
+    mutate(&mut mixed, SET_DOCS).unwrap();
+    for query in [
+        "CALL db.node_embeddings.query({type: 'Doc', text_column: 'text_emb', \
+         vector: [1.0, 0.0]}) YIELD node RETURN node",
+        "CALL db.node_embeddings.query({text_column: 'text_emb', \
+         vector: [1.0, 0.0]}) YIELD node RETURN node",
+        "CALL db.embeddings.query({type: 'Doc', text_column: 'text_emb', \
+         vector: [1.0, 0.0]}) YIELD node RETURN node",
+    ] {
+        let error = read(&mixed, query).unwrap_err();
+        assert!(error.contains("Did you mean 'text'?"), "{query}: {error}");
+    }
+}
+
+#[test]
 fn node_text_index_lifecycle_and_rollback() {
     let mut graph = graph();
     let built = mutate(

@@ -17,7 +17,8 @@ use crate::graph::edge_embedding_generation::EmbeddingExecutionService;
 use crate::graph::edge_embeddings::vector_index::{
     rank_dense_stores, DenseStoreHit, EdgeVectorQueryOptions,
 };
-use crate::graph::embedding_hints::Surface;
+use crate::graph::embedding_hints::{missing_column_hint, missing_store_error, Surface};
+use crate::graph::embedding_inventory::EmbeddingEntity;
 use crate::graph::embeddings::selection::{
     drop_node_store, embed_selected_nodes, journal_node_store, remove_node_vectors,
     NodeEmbedReport, NodeEmbedRequest,
@@ -382,7 +383,13 @@ pub(super) fn query(
             if types.is_empty() {
                 return Err(format!(
                     "CALL {proc_name}: no node embedding store for text_column \
-                     '{text_property}'"
+                     '{text_property}'.{}",
+                    missing_column_hint(
+                        graph,
+                        EmbeddingEntity::Node,
+                        &text_property,
+                        Surface::Cypher
+                    )
                 ));
             }
             types.sort();
@@ -397,7 +404,15 @@ pub(super) fn query(
         let store = graph
             .embeddings
             .get(&store_key(node_type, &text_property))
-            .ok_or_else(|| format!("No node embedding store '{node_type}.{text_property}'"))?;
+            .ok_or_else(|| {
+                missing_store_error(
+                    graph,
+                    EmbeddingEntity::Node,
+                    node_type,
+                    &text_property,
+                    Surface::Cypher,
+                )
+            })?;
         stores.push((node_type.as_str(), store));
     }
     let hits = rank_dense_stores(

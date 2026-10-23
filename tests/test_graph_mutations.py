@@ -4,6 +4,7 @@ Covers add_nodes/add_connections conflict handling, bulk operations,
 error cases, type metadata maintenance, and index updates.
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -391,3 +392,17 @@ class TestDetachDeleteNullVar:
         g = self._study_graph()
         g.cypher("MATCH (s:Study {id:'s1'}) OPTIONAL MATCH (a:Assessment)-[:OF_STUDY]->(s) DETACH DELETE s, a")
         assert g.cypher("MATCH (n) RETURN count(n) AS c").to_list()[0]["c"] == 0
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"id": [1, 2]}, [[1, 2]], np.array([[1, 2]])],
+    ids=["dict", "list", "ndarray"],
+)
+def test_loaders_name_the_accepted_type_for_non_dataframe_data(bad):
+    """A dict, list or ndarray gets a TypeError naming DataFrame, not an AttributeError."""
+    g = KnowledgeGraph()
+    with pytest.raises(TypeError, match="pandas DataFrame"):
+        g.add_nodes(bad, "N", "id")
+    with pytest.raises(TypeError, match="pandas DataFrame"):
+        g.add_relationships(bad, "R", "N", "a", "N", "b")

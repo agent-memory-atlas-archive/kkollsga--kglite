@@ -676,6 +676,28 @@ fn py_cell_to_value_list(item: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
     Ok(vec![py_value_to_value(item)?])
 }
 
+/// Column names of a loader's `data` argument, or a `TypeError` naming the
+/// accepted type when `data` is not a DataFrame (a dict, ndarray or list has
+/// no `columns`).
+pub fn dataframe_columns(data: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    match data.getattr("columns") {
+        Ok(columns) => columns.extract(),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(data.py()) => {
+            let type_name = data
+                .get_type()
+                .qualname()
+                .map(|name| name.to_string())
+                .unwrap_or_else(|_| "object".to_string());
+            Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "loader data must be a pandas DataFrame (an object with a `columns` \
+                 attribute), got {type_name}. Wrap a dict, list or numpy array first, \
+                 e.g. pandas.DataFrame(data, columns=[...])."
+            )))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn pandas_to_dataframe(
     df: &Bound<'_, PyAny>,
     unique_id_fields: &[String],
@@ -755,8 +777,7 @@ fn pandas_to_dataframe_with_text_policy(
     kwargs.set_item("drop", true)?;
     let df = df.call_method("reset_index", (), Some(&kwargs))?;
 
-    let df_columns = df.getattr("columns")?;
-    let all_column_names: Vec<String> = df_columns.extract()?;
+    let all_column_names: Vec<String> = dataframe_columns(&df)?;
 
     let mut df_out = DataFrame::new(Vec::new());
 
