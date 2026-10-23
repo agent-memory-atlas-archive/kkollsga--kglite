@@ -85,15 +85,18 @@ fn test_create_rejects_duplicate_primary_key() {
 fn test_create_rejects_a_null_primary_key() {
     use crate::graph::schema::{NodeSchemaDefinition, SchemaDefinition, SchemaInstall};
 
+    // Through the session: presence is judged when the statement ends, so the
+    // refusal arrives after the insert and the statement checkpoint is what
+    // takes the node back out.
     fn run(g: &mut DirGraph, q: &str) -> Result<(), String> {
-        let query = parser::parse_cypher(q).unwrap();
-        execute_mutable(
+        let params = HashMap::new();
+        crate::graph::session::execute_mut(
             g,
-            &query,
-            HashMap::new(),
-            crate::graph::algorithms::Interrupt::default(),
+            q,
+            &crate::graph::session::ExecuteOptions::eager(&params),
         )
         .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
     for pk in ["id", "email"] {

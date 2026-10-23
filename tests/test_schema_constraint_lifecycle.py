@@ -139,13 +139,14 @@ def test_drop_constraint_still_withdraws_a_ddl_not_null():
 )
 def test_declaring_the_second_half_adds_to_the_first(first: str, second: str):
     """Declaring one half on a property that already carries the other must
-    *add* to it. Order must not matter, and the merged pair reports as NODE_KEY
-    — which is honest only because both halves are still enforced."""
+    *add* to it. Order must not matter, and the two named halves each report
+    under their own name — one name vanishing into a merged row left a client
+    diffing `SHOW CONSTRAINTS` by name unable to see a constraint it created."""
     g = KnowledgeGraph()
     g.cypher(first)
     g.cypher(second)
 
-    assert [kind for _, kind in constraints(g)] == ["NODE_KEY"]
+    assert sorted(constraints(g)) == [("nn", "NODE_PROPERTY_EXISTENCE"), ("u", "UNIQUENESS")]
     g.cypher("CREATE (:Task {name:'a'})")
     assert rejects(g, "CREATE (:Task {name:'a'})"), "uniqueness half"
     assert rejects(g, "CREATE (:Task {x:1})"), "presence half"
@@ -203,7 +204,7 @@ def test_a_merged_pair_survives_save_load_and_reports_the_same_name(tmp_path):
     reloaded = kglite.load(path)
 
     assert constraints(reloaded) == before
-    assert [kind for _, kind in before] == ["NODE_KEY"]
+    assert sorted(before) == [("nn", "NODE_PROPERTY_EXISTENCE"), ("u", "UNIQUENESS")]
     assert rejects(reloaded, "CREATE (:Task {name:'a'})"), "uniqueness half survived the reload"
     assert rejects(reloaded, "CREATE (:Task {x:1})"), "presence half survived the reload"
 
@@ -328,7 +329,7 @@ def test_clear_schema_leaves_ddl_constraints_alone():
 
     g.clear_schema()
 
-    assert [kind for _, kind in constraints(g)] == ["NODE_KEY"]
+    assert sorted(constraints(g)) == [("nn", "NODE_PROPERTY_EXISTENCE"), ("u", "UNIQUENESS")]
     assert rejects(g, "CREATE (:Task {name:'a'})")
     assert rejects(g, "CREATE (:Task {x:1})")
 

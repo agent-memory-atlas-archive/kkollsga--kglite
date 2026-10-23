@@ -500,7 +500,29 @@ impl DirGraph {
         property: &str,
         new_value: Option<&Value>,
     ) -> ConstraintResult<Vec<UniqueClaim>> {
-        let checked = self.check_property_write_uncaught(node_type, node_idx, property, new_value);
+        self.check_property_write_deferring(node_type, node_idx, property, new_value, false)
+    }
+
+    /// [`Self::check_property_write`] for the Cypher statement path: with
+    /// `defer_required` the NOT NULL / NODE KEY presence check is skipped and
+    /// left to the statement-end judge ([`Self::judge_required_touched`]), which
+    /// the caller arms with [`Self::note_required_node`]. Type and uniqueness
+    /// are still judged per write.
+    pub(crate) fn check_property_write_deferring(
+        &mut self,
+        node_type: &str,
+        node_idx: NodeIndex,
+        property: &str,
+        new_value: Option<&Value>,
+        defer_required: bool,
+    ) -> ConstraintResult<Vec<UniqueClaim>> {
+        let checked = self.check_property_write_uncaught(
+            node_type,
+            node_idx,
+            property,
+            new_value,
+            defer_required,
+        );
         if let Err(violation) = &checked {
             self.record_constraint_violation(violation.as_ref().clone());
         }
@@ -513,6 +535,7 @@ impl DirGraph {
         node_idx: NodeIndex,
         property: &str,
         new_value: Option<&Value>,
+        defer_required: bool,
     ) -> ConstraintResult<Vec<UniqueClaim>> {
         // A declared property type is a pure predicate on the incoming value:
         // no read-back, no claim bookkeeping, nothing to redeem afterwards. It
@@ -560,7 +583,9 @@ impl DirGraph {
         // NOT NULL is evaluated against the post-write state, so a SET-to-null or
         // a REMOVE of a required property is caught even though the property is
         // present beforehand.
-        self.check_required_fields(node_type, |name| after.get(name).cloned())?;
+        if !defer_required {
+            self.check_required_fields(node_type, |name| after.get(name).cloned())?;
+        }
 
         let claims = self.unique_claims(node_type, |name| after.get(name).cloned());
         self.check_unique_claims(&claims, Some(node_idx))?;
@@ -1161,30 +1186,35 @@ impl DirGraph {
     /// relationship constraint on `KNOWS` could answer for a node one. Property order is irrelevant, matching constraint
     /// identity. Lets `SHOW CONSTRAINTS` report the author's name.
     ///
-    /// Several names can point at one tuple — `CREATE CONSTRAINT u … IS UNIQUE`
-    /// and `CREATE CONSTRAINT nn … IS NOT NULL` on the same property are two
-    /// declarations that `SHOW CONSTRAINTS` reports as a single `NODE_KEY` row.
-    /// Picking the first match out of a `HashMap` made *which* name that row
-    /// carried depend on hash order, so the same graph reported different names
-    /// before and after a save/load round-trip. The lowest name in sort order
-    /// wins instead: arbitrary, but stable across runs, processes and reloads,
-    /// which is what a listing an operator reads during a migration needs.
+    /// Several names can point at one tuple — `u … IS UNIQUE`, `nn … IS NOT
+    /// NULL` and `t … IS :: INTEGER` on one property are three declarations —
+    /// so the lookup is by `kinds`: the row asking names its own kind, and the
+    /// first kind in the slice with a registered name answers. (A row folding
+    /// a UNIQUE and a NOT NULL into one `NODE_KEY` passes `[NodeKey]`; see
+    /// `collect_constraints_structured`.) Within one kind several names are
+    /// possible only for hand-edited registries, and the lowest in sort order
+    /// wins, so the answer is stable across runs, processes and reloads rather
+    /// than following `HashMap` order.
     pub(crate) fn name_for_constraint(
         &self,
         entity: EntityKind,
         node_type: &str,
         properties: &[String],
+        kinds: &[ConstraintKind],
     ) -> Option<&str> {
         let wanted = normalize_properties(properties);
-        self.constraint_names
-            .iter()
-            .filter(|(_, declared)| {
-                declared.entity == entity
-                    && declared.node_type == node_type
-                    && normalize_properties(&declared.properties) == wanted
-            })
-            .map(|(name, _)| name.as_str())
-            .min()
+        kinds.iter().find_map(|kind| {
+            self.constraint_names
+                .iter()
+                .filter(|(_, declared)| {
+                    declared.kind == *kind
+                        && declared.entity == entity
+                        && declared.node_type == node_type
+                        && normalize_properties(&declared.properties) == wanted
+                })
+                .map(|(name, _)| name.as_str())
+                .min()
+        })
     }
 
     /// Whether [`Self::prune_constraint_names`] would drop a name: its read-only test.
@@ -1599,7 +1629,12 @@ mod constraint_name_registry_tests {
         );
         assert_eq!(graph.constraint_by_name("nope"), None);
         assert_eq!(
-            graph.name_for_constraint(EntityKind::Node, "Person", &["email".to_string()]),
+            graph.name_for_constraint(
+                EntityKind::Node,
+                "Person",
+                &["email".to_string()],
+                &[ConstraintKind::Unique]
+            ),
             Some("person_email_unique")
         );
     }
@@ -1619,7 +1654,8 @@ mod constraint_name_registry_tests {
             graph.name_for_constraint(
                 EntityKind::Node,
                 "Person",
-                &["last".to_string(), "first".to_string()]
+                &["last".to_string(), "first".to_string()],
+                &[ConstraintKind::Unique]
             ),
             Some("full_name")
         );

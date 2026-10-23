@@ -764,7 +764,17 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     let mut covered: HashSet<(String, String)> = HashSet::new();
 
     for (node_type, properties) in graph.list_unique_constraints() {
-        let kind = graph.unique_kind_for(&node_type, &properties);
+        // Uniqueness plus presence fold into one NODE_KEY row when they are one
+        // declaration (a `NODE KEY`, a primary key) or only one half carries a
+        // name. A UNIQUE and a NOT NULL that were *both* declared under their
+        // own names are two constraints: each is listed, and droppable, by its
+        // own name, instead of one name vanishing into the merged row.
+        let mut kind = graph.unique_kind_for(&node_type, &properties);
+        if kind == ConstraintKind::NodeKey
+            && halves_named_separately(graph, &node_type, &properties)
+        {
+            kind = ConstraintKind::Unique;
+        }
         if kind == ConstraintKind::NodeKey {
             for property in &properties {
                 covered.insert((node_type.clone(), property.clone()));
@@ -772,7 +782,13 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
         }
         let owned_index = Some(owned_index_name(&node_type, &properties));
         out.push(ConstraintInfo {
-            name: constraint_name(graph, EntityKind::Node, &node_type, &properties),
+            name: constraint_name(
+                graph,
+                EntityKind::Node,
+                &node_type,
+                &properties,
+                row_kinds(kind),
+            ),
             kind,
             entity: EntityKind::Node,
             labels_or_types: vec![node_type.clone()],
@@ -798,7 +814,13 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
         };
         let properties = vec![property];
         out.push(ConstraintInfo {
-            name: constraint_name(graph, EntityKind::Node, &node_type, &properties),
+            name: constraint_name(
+                graph,
+                EntityKind::Node,
+                &node_type,
+                &properties,
+                row_kinds(kind),
+            ),
             kind,
             entity: EntityKind::Node,
             labels_or_types: vec![node_type.clone()],
@@ -816,7 +838,13 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     for (node_type, property, declared) in graph.list_property_type_constraints() {
         let properties = vec![property];
         out.push(ConstraintInfo {
-            name: constraint_name(graph, EntityKind::Node, &node_type, &properties),
+            name: constraint_name(
+                graph,
+                EntityKind::Node,
+                &node_type,
+                &properties,
+                &[ConstraintKind::PropertyType],
+            ),
             kind: ConstraintKind::PropertyType,
             entity: EntityKind::Node,
             labels_or_types: vec![node_type.clone()],
@@ -832,7 +860,13 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     for (rel_type, property) in graph.list_rel_not_null_constraints() {
         let properties = vec![property];
         out.push(ConstraintInfo {
-            name: constraint_name(graph, EntityKind::Relationship, &rel_type, &properties),
+            name: constraint_name(
+                graph,
+                EntityKind::Relationship,
+                &rel_type,
+                &properties,
+                &[ConstraintKind::NotNull],
+            ),
             kind: ConstraintKind::NotNull,
             entity: EntityKind::Relationship,
             labels_or_types: vec![rel_type],
@@ -845,7 +879,13 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     for (rel_type, property, declared) in graph.list_rel_property_type_constraints() {
         let properties = vec![property];
         out.push(ConstraintInfo {
-            name: constraint_name(graph, EntityKind::Relationship, &rel_type, &properties),
+            name: constraint_name(
+                graph,
+                EntityKind::Relationship,
+                &rel_type,
+                &properties,
+                &[ConstraintKind::PropertyType],
+            ),
             kind: ConstraintKind::PropertyType,
             entity: EntityKind::Relationship,
             labels_or_types: vec![rel_type],
@@ -863,6 +903,34 @@ pub(crate) fn collect_constraints_structured(graph: &DirGraph) -> Vec<Constraint
     out
 }
 
+/// Whether the UNIQUE on `(node_type, properties)` and its presence were each
+/// declared under a name of their own, with no `NODE KEY` name covering both.
+fn halves_named_separately(graph: &DirGraph, node_type: &str, properties: &[String]) -> bool {
+    let named = |kind| {
+        graph
+            .name_for_constraint(EntityKind::Node, node_type, properties, &[kind])
+            .is_some()
+    };
+    !named(ConstraintKind::NodeKey)
+        && named(ConstraintKind::Unique)
+        && named(ConstraintKind::NotNull)
+}
+
+/// The registered kinds a row of `kind` may take its name from: its own, and
+/// for a folded `NODE_KEY` row either half's name.
+fn row_kinds(kind: ConstraintKind) -> &'static [ConstraintKind] {
+    match kind {
+        ConstraintKind::NodeKey => &[
+            ConstraintKind::NodeKey,
+            ConstraintKind::Unique,
+            ConstraintKind::NotNull,
+        ],
+        ConstraintKind::Unique => &[ConstraintKind::Unique],
+        ConstraintKind::NotNull => &[ConstraintKind::NotNull],
+        ConstraintKind::PropertyType => &[ConstraintKind::PropertyType],
+    }
+}
+
 /// The author's name for a constraint when one was registered, else the
 /// canonical descriptor — the same fallback rule index names use.
 fn constraint_name(
@@ -870,9 +938,10 @@ fn constraint_name(
     entity: EntityKind,
     node_type: &str,
     properties: &[String],
+    kinds: &[ConstraintKind],
 ) -> String {
     graph
-        .name_for_constraint(entity, node_type, properties)
+        .name_for_constraint(entity, node_type, properties, kinds)
         .map(str::to_string)
         .unwrap_or_else(|| crate::graph::constraints::descriptor(node_type, properties))
 }

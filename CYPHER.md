@@ -4786,6 +4786,15 @@ either.
 | `REQUIRE r.p IS NOT NULL` (on `FOR ()-[r:T]-()`) | every relationship of the type has a non-null `p` | a declared per-connection-type presence rule |
 | `REQUIRE r.p IS :: TYPE` (on `FOR ()-[r:T]-()`) | every value written to `r.p` has the declared type | a declared per-connection-type property type |
 
+**When presence is judged.** `NOT NULL` and `NODE KEY` presence is checked when a
+statement ends, against the nodes and relationships it created or changed, so a
+later clause can repair an earlier one. `CREATE (n:L) SET n = $props` is valid on a
+type that requires a property `$props` supplies, and `MATCH (n:L) REMOVE n.p SET
+n.p = 1` passes. A statement that ends with a required property missing fails and
+rolls back whole. Uniqueness and `IS :: TYPE` are still judged on each write. The
+bulk loaders (`add_nodes`, `add_connections`) judge each complete row before it is
+written.
+
 A constraint declared over several properties constrains the **combination**, not
 each property. `REQUIRE (n.city, n.age) IS UNIQUE` permits many nodes in the same
 city as long as no `(city, age)` pair repeats.
@@ -4988,8 +4997,10 @@ by a write scope. It returns the same rows and columns as
 | `ownedIndex` | the canonical name of the index a `UNIQUENESS` or `NODE_KEY` constraint owns (the row `SHOW INDEXES` lists with this constraint as `owningConstraint`). `null` on the other kinds |
 | `id`, `options` | always `null` |
 
-A node key is **one** row (`NODE_KEY`), not a uniqueness row plus an existence
-row. A declared property type is its own row, never folded into another, so a
+A declared `NODE KEY` is **one** row (`NODE_KEY`), not a uniqueness row plus an
+existence row. A `UNIQUE` and a `NOT NULL` on the same property that were both
+declared under their own names are two constraints and list as two rows, each
+under its own name; one of them without a name still reads as a `NODE_KEY` row. A declared property type is its own row, never folded into another, so a
 property can be `UNIQUE` **and** typed.
 
 A bare `SHOW CONSTRAINTS` returns the first six columns; `YIELD` adds `id`, `ownedIndex` and `options`. KGLite keeps no state for `id` and `options`, so they are `null`, not

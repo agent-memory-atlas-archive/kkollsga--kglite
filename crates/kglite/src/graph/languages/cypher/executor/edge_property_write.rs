@@ -81,6 +81,7 @@ pub(super) fn set_edge_property(
     // would log a change the graph refused to make.
     if let Some(rel_type) = constrained_edge_type(graph, edge_index) {
         graph.check_rel_property_write(&rel_type, property, Some(&value))?;
+        graph.note_required_edge(&rel_type, edge_index);
     }
 
     let observed_type = (!matches!(value, Value::Null)).then(|| value.type_name());
@@ -168,6 +169,7 @@ pub(super) fn remove_edge_property(
     // branch.
     if let Some(rel_type) = constrained_edge_type(graph, edge_index) {
         graph.check_rel_property_write(&rel_type, property, None)?;
+        graph.note_required_edge(&rel_type, edge_index);
     }
 
     let key = graph.interner.get_or_intern(property);

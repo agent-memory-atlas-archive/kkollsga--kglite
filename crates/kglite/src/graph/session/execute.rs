@@ -536,8 +536,8 @@ fn writes_only_journaled_disk_cells(query: &CypherQuery) -> bool {
 /// Both shapes are safe only on the default in-memory backend (a `DELETE` also
 /// under the durable capture wrapper) and without an execution budget, which
 /// is checked after a write. A `CREATE` additionally needs no enforced node
-/// ontology: that rule is judged on the stored node after the insert, and a
-/// refusal then has to roll the insert back. Deadline/cancellation is safe: CREATE polls immediately before insertion, and DELETE immediately
+/// ontology and no required property on its label: both are judged on the
+/// stored node after the insert, and a refusal then has to roll the insert back. Deadline/cancellation is safe: CREATE polls immediately before insertion, and DELETE immediately
 /// before its non-interruptible removal phase, so a deadline error from either
 /// has applied nothing — which is also why the late-statement check in
 /// `mut_statement` runs only when a checkpoint is open. Every other mutation
@@ -552,15 +552,21 @@ fn can_skip_rollback_checkpoint(
     }
 
     match query.clauses.as_slice() {
-        // An enforced node rule is judged after the insert, and a refusal then
-        // needs the checkpoint to undo it.
+        // An enforced node rule, like a required property (judged at statement
+        // end), is judged after the insert, and a refusal then needs the
+        // checkpoint to undo it.
         [Clause::Create(create)] => {
             graph.graph.supports_checkpoint_free_mutation()
                 && !graph.ontology_node_gate
                 && !graph.ontology_tx_judges_here()
                 && matches!(
                     create.patterns.as_slice(),
-                    [pattern] if matches!(pattern.elements.as_slice(), [CreateElement::Node(_)])
+                    [pattern] if matches!(
+                        pattern.elements.as_slice(),
+                        [CreateElement::Node(node)]
+                            if node.label_params.is_empty()
+                                && !graph.has_required_fields(node.label.as_deref().unwrap_or("Node"))
+                    )
                 )
         }
         clauses => {

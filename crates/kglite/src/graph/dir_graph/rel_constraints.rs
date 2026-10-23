@@ -298,6 +298,18 @@ impl DirGraph {
     where
         F: Fn(&str) -> Option<Value>,
     {
+        self.rel_required_violation(rel_type, &read)?;
+        self.rel_type_violations(rel_type, &read)
+    }
+
+    /// The first required property of `rel_type` that `read` reports absent or
+    /// null. The existence half of [`Self::check_rel_row`], split out because
+    /// a Cypher statement judges it at its end ([`Self::judge_required_touched`])
+    /// while the type half stays per write.
+    pub(crate) fn rel_required_violation<F>(&self, rel_type: &str, read: &F) -> ConstraintResult<()>
+    where
+        F: Fn(&str) -> Option<Value>,
+    {
         for property in self.rel_required_properties(rel_type) {
             match read(property) {
                 Some(Value::Null) | None => {
@@ -309,6 +321,26 @@ impl DirGraph {
                 Some(_) => {}
             }
         }
+        Ok(())
+    }
+
+    /// [`Self::check_rel_row`] without the existence half: a `CREATE` whose
+    /// `SET` has not run yet owes its required properties at statement end,
+    /// but a wrongly typed value is wrong the moment it is written.
+    pub(crate) fn check_rel_row_types<F>(&mut self, rel_type: &str, read: F) -> Result<(), String>
+    where
+        F: Fn(&str) -> Option<Value>,
+    {
+        match self.rel_type_violations(rel_type, &read) {
+            Ok(()) => Ok(()),
+            Err(violation) => Err(self.record_constraint_violation(*violation)),
+        }
+    }
+
+    fn rel_type_violations<F>(&self, rel_type: &str, read: &F) -> ConstraintResult<()>
+    where
+        F: Fn(&str) -> Option<Value>,
+    {
         let Some(declared) = self.rel_declared_property_types(rel_type) else {
             return Ok(());
         };
@@ -328,19 +360,28 @@ impl DirGraph {
     ///
     /// `new_value` is what the write will leave behind: `None` is a REMOVE and
     /// `Some(Value::Null)` a SET-to-null, and a constraint treats the two
-    /// identically — so a required property refuses both, and a declared type
-    /// accepts both (the presence question belongs to NOT NULL). That is the
-    /// node rule, read off `plan_property_write`, and the two must not drift.
+    /// identically — a declared type accepts both (the presence question
+    /// belongs to NOT NULL). That is the node rule, read off
+    /// `check_property_write`, and the two must not drift.
     ///
     /// No read-back of the stored edge: relationship constraints are
     /// per-property, so the write's own value is the whole post-write state
     /// this has to judge.
+    ///
+    /// A write that leaves the property absent is admitted here and judged at
+    /// statement end instead (the caller notes the edge with
+    /// [`Self::note_required_edge`]), so `SET r.a = null SET r.a = 1` and
+    /// `CREATE ()-[r:T]->() SET r = $p` need not be right at every step; only
+    /// the declared type is judged per write.
     pub(crate) fn check_rel_property_write(
         &mut self,
         rel_type: &str,
         property: &str,
         new_value: Option<&Value>,
     ) -> Result<(), String> {
+        if matches!(new_value, Some(Value::Null) | None) {
+            return Ok(());
+        }
         match self.check_rel_property_write_uncaught(rel_type, property, new_value) {
             Ok(()) => Ok(()),
             Err(violation) => Err(self.record_constraint_violation(*violation)),
@@ -354,15 +395,7 @@ impl DirGraph {
         new_value: Option<&Value>,
     ) -> ConstraintResult<()> {
         match new_value {
-            Some(Value::Null) | None => {
-                if self.has_rel_not_null_constraint(rel_type, property) {
-                    return Err(Box::new(
-                        ConstraintViolation::missing(ConstraintKind::NotNull, rel_type, property)
-                            .on_entity(EntityKind::Relationship),
-                    ));
-                }
-                Ok(())
-            }
+            Some(Value::Null) | None => Ok(()),
             Some(value) => match self.rel_property_type_for(rel_type, property) {
                 Some(declared) => Self::rel_type_violation(declared, rel_type, property, value),
                 None => Ok(()),

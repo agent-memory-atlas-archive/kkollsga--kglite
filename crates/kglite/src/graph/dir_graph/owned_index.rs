@@ -46,7 +46,7 @@ use petgraph::graph::NodeIndex;
 use super::DirGraph;
 use crate::datatypes::values::Value;
 use crate::graph::constraints::{
-    descriptor, normalize_properties, EntityKind, UniqueConstraintKey,
+    descriptor, normalize_properties, ConstraintKind, EntityKind, UniqueConstraintKey,
 };
 use crate::graph::schema::{
     soft_alias_fallback, CompositeIndexKey, CompositeValue, IndexKey, SoftAliasFallback,
@@ -231,9 +231,14 @@ impl DirGraph {
     /// The name `SHOW CONSTRAINTS` gives the constraint `key`: the one its
     /// author registered, else the canonical descriptor.
     pub(crate) fn unique_constraint_display_name(&self, key: &UniqueConstraintKey) -> String {
-        self.name_for_constraint(EntityKind::Node, &key.0, &key.1)
-            .map(str::to_string)
-            .unwrap_or_else(|| descriptor(&key.0, &key.1))
+        self.name_for_constraint(
+            EntityKind::Node,
+            &key.0,
+            &key.1,
+            &[ConstraintKind::Unique, ConstraintKind::NodeKey],
+        )
+        .map(str::to_string)
+        .unwrap_or_else(|| descriptor(&key.0, &key.1))
     }
 
     /// Refuse to drop an index a constraint owns. The error names the

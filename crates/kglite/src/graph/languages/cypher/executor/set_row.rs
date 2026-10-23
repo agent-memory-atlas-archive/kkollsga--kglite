@@ -288,8 +288,9 @@ pub(super) fn apply_node_property_set<'a>(
     // returns without mutating storage; the owned indexes move with the value
     // through the index maintenance below.
     graph
-        .check_property_write(node_type_str, node_idx, property, Some(&value))
+        .check_property_write_deferring(node_type_str, node_idx, property, Some(&value), true)
         .map_err(|violation| violation.to_string())?;
+    graph.note_required_node(node_type_str, node_idx);
 
     // What this row still owes once the memos have answered everything
     // constant across the statement's rows.

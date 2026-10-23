@@ -315,6 +315,7 @@ pub(crate) fn execute_mutable_with_csv(
     // earlier CREATE. A stale buffer from a statement that failed midway is
     // dropped here.
     graph.ontology_touched.clear();
+    graph.clear_required_touched();
     graph.ontology_touched_edges.clear();
     if !graph.ontology_tx_deferred {
         // A statement outside a transaction is its own: drop what an earlier
@@ -358,7 +359,7 @@ pub(crate) fn execute_mutable_with_csv(
                 let mut batch_profile = Vec::new();
                 let out =
                     run_clause_pipeline(graph, suffix, seed, &ctx, &mut stats, &mut batch_profile)?;
-                graph.judge_touched_writes(&mut ontology_tally)?;
+                graph.judge_statement_writes(&mut ontology_tally)?;
                 merge_profile(&mut profile_stats, batch_profile);
                 Ok(out)
             },
@@ -385,7 +386,7 @@ pub(crate) fn execute_mutable_with_csv(
             &mut stats,
             &mut profile_stats,
         )?;
-        graph.judge_touched_writes(&mut ontology_tally)?;
+        graph.judge_statement_writes(&mut ontology_tally)?;
         out
     };
     // Outside a transaction the statement is the whole unit, so the "must
@@ -1110,7 +1111,7 @@ fn create_pattern_edges(
             // keeps the change log free of phantoms, since every capture on this
             // path happens downstream of here.
             if graph.has_rel_constraints() {
-                graph.check_rel_row(&edge_pat.connection_type, |property| {
+                graph.check_rel_row_types(&edge_pat.connection_type, |property| {
                     edge_props.get(property).cloned()
                 })?;
             }
@@ -1150,6 +1151,7 @@ fn create_pattern_edges(
             let edge_index =
                 GraphWrite::add_edge(&mut graph.graph, actual_source, actual_target, edge_data);
             crate::graph::index_freshness::write_hooks::note_edge_created(graph, edge_index);
+            graph.note_required_edge(&edge_pat.connection_type, edge_index);
             graph.note_ontology_edge_touch(edge_index);
             graph.note_tx_edge_added(edge_index);
 
@@ -1279,12 +1281,8 @@ fn create_node(
             },
         }
     };
-    // Bind before reporting: `record_constraint_violation` needs `&mut graph`,
-    // so the immutable borrow held by the check must end at the semicolon.
-    let required = graph.check_required_fields(&label, constraint_read);
-    if let Err(violation) = required {
-        return Err(graph.record_constraint_violation(*violation));
-    }
+    // Presence is judged at statement end, once a `SET n = $props` has run:
+    // the node is noted after the insert (`DirGraph::judge_required_touched`).
     // Declared property types. Checked here — before the schema-lock
     // validation further down — so a user who declared a type constraint gets
     // the constraint's own error rather than the generic observed-metadata one
@@ -1350,6 +1348,7 @@ fn create_node(
     // ColumnStore — see `DirGraph::insert_node_routed`.
     let node_idx = graph.insert_node_routed(id, title, &label, properties);
     graph.note_ontology_touch(node_idx);
+    graph.note_required_node(&label, node_idx);
 
     // Update type_indices. `bucket_was_new` feeds statement rollback: undoing
     // the append is not enough if this CREATE also *introduced* the type —
@@ -2152,8 +2151,15 @@ fn execute_remove(
                     // just vacates it. Planned before the write so a rejection
                     // leaves storage untouched.
                     graph
-                        .check_property_write(&node_type_str, node_idx, property, None)
+                        .check_property_write_deferring(
+                            &node_type_str,
+                            node_idx,
+                            property,
+                            None,
+                            true,
+                        )
                         .map_err(|violation| violation.to_string())?;
+                    graph.note_required_node(&node_type_str, node_idx);
 
                     let is_disk = graph.graph.is_disk();
 

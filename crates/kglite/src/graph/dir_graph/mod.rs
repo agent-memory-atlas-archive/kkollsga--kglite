@@ -60,6 +60,7 @@ pub(crate) mod caches;
 mod columnar_rebuild;
 pub mod constraints;
 mod declarations;
+mod deferred_required;
 mod disk_persistence;
 mod disk_rebase;
 #[cfg(test)]
@@ -427,6 +428,14 @@ pub struct DirGraph {
     /// (`DirGraph::judge_touched_edges`). Empty between statements.
     #[serde(skip)]
     pub(crate) ontology_touched_edges: Vec<petgraph::graph::EdgeIndex>,
+    /// Nodes and relationships the running Cypher statement created or changed
+    /// on a type that requires a property, drained by the statement-end
+    /// presence judge (`DirGraph::judge_required_touched`). Empty between
+    /// statements.
+    #[serde(skip)]
+    pub(crate) required_touched: Vec<petgraph::graph::NodeIndex>,
+    #[serde(skip)]
+    pub(crate) required_touched_edges: Vec<petgraph::graph::EdgeIndex>,
     /// Whether any "must exist" rule (required relationship, minimum degree,
     /// inverse, symmetric, transitive) is enforced — the twin of
     /// `ontology_rel_gate` for rules judged when a transaction ends. Derived
@@ -1007,6 +1016,8 @@ impl DirGraph {
             ontology_touched: Vec::new(),
             ontology_rel_gate: false,
             ontology_touched_edges: Vec::new(),
+            required_touched: Vec::new(),
+            required_touched_edges: Vec::new(),
             ontology_tx_gate: false,
             ontology_tx: Default::default(),
             ontology_tx_deferred: false,
