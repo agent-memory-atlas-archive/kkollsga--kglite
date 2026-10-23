@@ -136,6 +136,7 @@ before upgrading.
 
 - `kglite::api::index_names` adds `NamedIndex`, `IndexClass`, `check_index_name` and `register_index_name`: a binding checks a name before building an index and registers it once the build succeeds. `build_text_index` and `build_vector_index` keep their signatures.
 - `ExecuteOptions` gains a public `hide_structural_keys` field. Code that builds it with a struct literal needs the field; `ExecuteOptions::new(&params)` plus `with_hidden_structural_keys` is unaffected.
+- `kglite::api::index_names::NamedIndex` gains a public `vector_source` field, set on a `CREATE VECTOR INDEX` name, and a `NamedIndex::property_vector` constructor. Code that builds it with a struct literal needs the field; `NamedIndex::node` is unaffected.
 
 ## [0.21.0] - 2026-10-22
 

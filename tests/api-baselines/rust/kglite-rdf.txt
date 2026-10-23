@@ -2152,8 +2152,10 @@ pub kglite::api::index_names::NamedIndex::class: kglite::api::index_names::Index
 pub kglite::api::index_names::NamedIndex::entity: kglite::api::EntityKind
 pub kglite::api::index_names::NamedIndex::properties: alloc::vec::Vec<alloc::string::String>
 pub kglite::api::index_names::NamedIndex::target: alloc::string::String
+pub kglite::api::index_names::NamedIndex::vector_source: core::option::Option<kglite::graph::dir_graph::index_names::VectorSource>
 impl kglite::api::index_names::NamedIndex
 pub fn kglite::api::index_names::NamedIndex::node(kglite::api::index_names::IndexClass, &str, &[alloc::string::String]) -> Self
+pub fn kglite::api::index_names::NamedIndex::property_vector(&str, &str, kglite::graph::dir_graph::index_names::VectorSource) -> Self
 pub fn kglite::api::index_names::NamedIndex::relationship(kglite::api::index_names::IndexClass, &str, &str) -> Self
 impl core::clone::Clone for kglite::api::index_names::NamedIndex
 pub fn kglite::api::index_names::NamedIndex::clone(&self) -> kglite::api::index_names::NamedIndex
