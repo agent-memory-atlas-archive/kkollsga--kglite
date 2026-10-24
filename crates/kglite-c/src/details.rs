@@ -85,8 +85,8 @@ pub(crate) fn record(error: &KgError) {
 /// process. `KGLITE_STATUS_CODE_ONTOLOGY_VIOLATION` carries:
 /// `{"code":"OntologyViolation","rule","entity","entity_type","property",
 /// "report":[{rule,entity,entity_type,property,count}…]}`, where `rule` is
-/// `required_property` / `property_type` / `closed_labels` / `domain` /
-/// `range` / `cardinality` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`, `entity` is `node` / `relationship`, `property` may be null, and
+/// `required_property` / `property_type` / `property_value` / `closed_labels` / `domain` /
+/// `range` / `cardinality` / `distinct` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`, `entity` is `node` / `relationship`, `property` may be null, and
 /// `report` is empty for a refused write and the per-rule breakdown for a
 /// refused declaration. Read it right after the failing call: every
 /// status-returning export on the same thread clears it on entry.

@@ -901,11 +901,13 @@ def test_exempt_refuses_an_unknown_check_name(mixed_props_graph):
         )
 
 
-def test_exempt_refuses_an_undeclared_class(mixed_props_graph):
-    # A typo here would silently exempt nothing and leave the rule pinned —
-    # the exact failure the feature exists to fix.
-    with pytest.raises(Exception, match="not a declared class"):
-        mixed_props_graph.define_ontology(_since_decl(FLAT_CLASSES, {"required_properties": ["Audtor"]}))
+def test_exempt_warns_on_a_name_that_matches_nothing(mixed_props_graph):
+    # A name may be a secondary label, so it is not refused; a typo is
+    # surfaced as a warning because it would exempt nothing.
+    warnings = mixed_props_graph.define_ontology(_since_decl(FLAT_CLASSES, {"required_properties": ["Audtor"]}))
+    assert any("'Audtor'" in w and "exempts nothing" in w for w in warnings), warnings
+    clean = mixed_props_graph.define_ontology(_since_decl(FLAT_CLASSES, {"required_properties": ["Auditor"]}))
+    assert not any("exempts nothing" in w for w in clean), clean
 
 
 def test_exempt_persists_through_save_load(mixed_props_graph, tmp_path):
@@ -1311,6 +1313,8 @@ def test_show_ontology_renders_ancestry_the_way_it_renders_transitive(g):
         "range",
         "required_properties",
         "property_types",
+        "property_values",
+        "distinct",
         "enforcement",
         "exempt",
         "description",

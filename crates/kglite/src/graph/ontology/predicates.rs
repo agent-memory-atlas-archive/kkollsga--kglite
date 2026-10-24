@@ -28,6 +28,7 @@ use crate::graph::mutation::validation::value_matches_type;
 use crate::graph::ontology::{ClassDecl, OntologyStore, RelationshipDecl};
 use crate::graph::schema::{soft_alias_fallback, DirGraph, InternedKey, SoftAliasFallback};
 use crate::graph::storage::NodeView;
+use petgraph::graph::NodeIndex;
 
 /// `class_or_type` plus every declared class whose ancestor chain contains
 /// it — the accepted endpoint set a supertype declaration widens to.
@@ -77,10 +78,10 @@ pub fn unique_required_properties(properties: &[String]) -> Vec<String> {
 
 /// The properties a class declares for one of [`NODE_CHECK_NAMES`].
 pub fn declared_node_properties(decl: &ClassDecl, check: &str) -> Vec<String> {
-    if check == "required_properties" {
-        unique_required_properties(&decl.required_properties)
-    } else {
-        decl.property_types.keys().cloned().collect()
+    match check {
+        "required_properties" => unique_required_properties(&decl.required_properties),
+        "property_values" => decl.property_values.keys().cloned().collect(),
+        _ => decl.property_types.keys().cloned().collect(),
     }
 }
 
@@ -167,8 +168,9 @@ pub fn node_property_failures(
 }
 
 /// Whether one property's `value` (`None` = absent) fails `check` against
-/// `decl`: a required property is absent or null; a type violation needs a
-/// present, non-null value of the wrong type. The leaf both the stored-node
+/// `decl`: a required property is absent or null; a type or value violation
+/// needs a present, non-null value of the wrong type or outside its contract.
+/// The leaf both the stored-node
 /// predicate and the pre-write row gates evaluate, so they cannot disagree.
 pub fn property_fails(
     decl: &ClassDecl,
@@ -177,50 +179,69 @@ pub fn property_fails(
     value: Option<&Value>,
 ) -> bool {
     let present = value.filter(|v| !matches!(v, Value::Null));
-    if check == "required_properties" {
-        present.is_none()
-    } else {
-        present.is_some_and(|v| !value_matches_type(v, &decl.property_types[property]))
+    match check {
+        "required_properties" => present.is_none(),
+        "property_values" => present.is_some_and(|v| decl.property_values[property].violates(v)),
+        _ => present.is_some_and(|v| !value_matches_type(v, &decl.property_types[property])),
     }
 }
 
 /// The subset of the declaration's properties one relationship fails under
-/// `check` (`required_properties` or `property_types`). `get` reads a
-/// property off the relationship.
+/// `check` (`required_properties`, `property_types` or `property_values`).
+/// `get` reads a property off the relationship.
 pub fn edge_property_failures<'v>(
     decl: &RelationshipDecl,
     check: &str,
     get: impl Fn(&str) -> Option<&'v Value>,
 ) -> Vec<String> {
-    if check == "required_properties" {
-        unique_required_properties(&decl.required_properties)
+    match check {
+        "required_properties" => unique_required_properties(&decl.required_properties)
             .into_iter()
             .filter(|p| matches!(get(p), None | Some(Value::Null)))
-            .collect()
-    } else {
-        decl.property_types
+            .collect(),
+        "property_values" => decl
+            .property_values
+            .iter()
+            .filter(|(p, contract)| get(p).is_some_and(|v| contract.violates(v)))
+            .map(|(p, _)| p.clone())
+            .collect(),
+        _ => decl
+            .property_types
             .iter()
             .filter(|(p, ty)| {
                 get(p).is_some_and(|v| !matches!(v, Value::Null) && !value_matches_type(v, ty))
             })
             .map(|(p, _)| p.clone())
-            .collect()
+            .collect(),
     }
 }
 
-/// Whether the declaration's `exempt[check]` classes (and their declared
-/// descendants) cover an edge whose source has primary type `source_type`.
-/// An exempt violation is counted separately by the audit and excused by a
-/// write gate.
-pub fn edge_exempt(
+/// Whether `idx` carries `label` as a secondary label (primary types do not
+/// count). O(log bucket) and free on a graph with no secondary labels.
+pub fn has_secondary_label(graph: &DirGraph, idx: NodeIndex, label: &str) -> bool {
+    graph.has_secondary_labels
+        && graph
+            .secondary_label_index
+            .get(&InternedKey::from_str(label))
+            .is_some_and(|bucket| bucket.binary_search(&idx).is_ok())
+}
+
+/// Whether the declaration's `exempt[check]` entries cover a source node of
+/// primary type `source_type`. An entry covers the node when it names that
+/// type or a declared ancestor of it (the `domain` widening), or when the
+/// node carries it as a secondary label (`has_secondary` answers that, and is
+/// `|_| false` for a node that does not exist yet). An exempt violation is
+/// counted separately by the audit and excused by a write gate.
+pub fn source_exempt(
     store: &OntologyStore,
     decl: &RelationshipDecl,
     check: &str,
     source_type: &str,
+    has_secondary: impl Fn(&str) -> bool,
 ) -> bool {
     decl.exempt_classes(check)
         .iter()
-        .any(|class| endpoint_accepted(store, class, source_type))
+        .any(|entry| endpoint_accepted(store, entry, source_type) || has_secondary(entry))
 }
 
 /// `true` when the declaration names a domain and `source_type` is outside it.
@@ -346,8 +367,29 @@ mod tests {
     fn edge_exempt_covers_listed_class_and_descendants_for_its_check_only() {
         let s = store();
         let decl = &s.relationships["MANAGED_BY"];
-        assert!(edge_exempt(&s, decl, "required_properties", "Permit"));
-        assert!(!edge_exempt(&s, decl, "required_properties", "Contract"));
-        assert!(!edge_exempt(&s, decl, "property_types", "Permit"));
+        let none = |_: &str| false;
+        assert!(source_exempt(
+            &s,
+            decl,
+            "required_properties",
+            "Permit",
+            none
+        ));
+        assert!(!source_exempt(
+            &s,
+            decl,
+            "required_properties",
+            "Contract",
+            none
+        ));
+        assert!(!source_exempt(&s, decl, "property_types", "Permit", none));
+        // A secondary label named by the entry covers the node whatever its class.
+        assert!(source_exempt(
+            &s,
+            decl,
+            "required_properties",
+            "Contract",
+            |l| l == "Permit"
+        ));
     }
 }

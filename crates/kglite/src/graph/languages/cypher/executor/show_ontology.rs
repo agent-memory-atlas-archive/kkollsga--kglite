@@ -20,6 +20,8 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
         "range",
         "required_properties",
         "property_types",
+        "property_values",
+        "distinct",
         "enforcement",
         "exempt",
         "description",
@@ -28,7 +30,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
     .map(|c| c.to_string())
     .collect();
     let opt = |v: &Option<String>| v.clone().map(Value::String).unwrap_or(Value::Null);
-    let mut push = |cells: [(&str, Value); 11]| {
+    let mut push = |cells: [(&str, Value); 13]| {
         let mut row = ResultRow::new();
         for (name, value) in cells {
             row.projected.insert(name.to_string(), value);
@@ -50,6 +52,8 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
             ("exempt", Value::Null),
             ("required_properties", Value::List(Vec::new())),
             ("property_types", Value::Map(Default::default())),
+            ("property_values", Value::Map(Default::default())),
+            ("distinct", Value::Null),
             ("description", Value::Null),
         ]);
     }
@@ -82,6 +86,16 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
                         .collect(),
                 ),
             ),
+            (
+                "property_values",
+                Value::Map(
+                    decl.property_values
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Value::String(v.summary())))
+                        .collect(),
+                ),
+            ),
+            ("distinct", Value::Null),
             ("description", opt(&decl.description)),
         ]);
     }
@@ -113,6 +127,19 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
                         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
                         .collect(),
                 ),
+            ),
+            (
+                "property_values",
+                Value::Map(
+                    decl.property_values
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Value::String(v.summary())))
+                        .collect(),
+                ),
+            ),
+            (
+                "distinct",
+                opt(&decl.distinct.as_ref().map(|d| d.summary())),
             ),
             ("description", opt(&decl.description)),
         ]);

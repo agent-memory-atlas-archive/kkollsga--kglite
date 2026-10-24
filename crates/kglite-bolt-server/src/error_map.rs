@@ -56,8 +56,8 @@
 //! [kglite.OntologyViolation rule=<rule> entity=<node|relationship> type="<label or type>" property=<"name"|null>] <message>
 //! ```
 //!
-//! `rule` is `required_property`, `property_type`, `closed_labels`, `domain`,
-//! `range`, `cardinality`, `required_relationship`, `min_cardinality`, `inverse`, `symmetric`, `transitive` (or `declaration` for a refused declaration with no entries);
+//! `rule` is `required_property`, `property_type`, `property_value`, `closed_labels`, `domain`,
+//! `range`, `cardinality`, `distinct`, `required_relationship`, `min_cardinality`, `inverse`, `symmetric`, `transitive` (or `declaration` for a refused declaration with no entries);
 //! `type` and `property` are JSON-quoted strings. The prefix is present on
 //! every `OntologyViolation` FAILURE and on no other; a refused declaration's
 //! per-rule breakdown stays in the readable message after it.

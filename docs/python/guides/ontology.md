@@ -39,6 +39,8 @@ g.define_ontology({
             "required": True,
             "required_properties": ["since"],    # audited per edge
             "property_types": {"since": "integer"},
+            "property_values": {"grade": {"min": 1, "max": 6}},
+            "distinct": True,                    # one edge per student and class
             "enforcement": "warn",               # or per-check: {"required_properties": "error"}
             "description": "Active enrolment",
         },
@@ -68,6 +70,7 @@ KGLite checks the rules below when it installs a declaration.
 
 - `cardinality` / `required` describe **outgoing** edges of the domain type.
 - `symmetric: True` lowers to an inverse check of the relationship against itself.
+- `distinct` declares pair uniqueness. See [Pair uniqueness](#pair-uniqueness).
 - `inverse_name` is a **reading-direction alias**. No second edge exists or is implied, and it enrolls no check.
   - `inverse_enforced: True` opts into auditing physical pairing: each edge must have a stored inverse partner.
   - `symmetric: True` keeps its self-inverse check regardless, because symmetry *is* a physical claim.
@@ -75,7 +78,8 @@ KGLite checks the rules below when it installs a declaration.
 ### Property contracts
 
 - `property_types` accepts `list` (alias `array`, case-insensitive) for any native list, including empty, mixed and nested lists. This checks the outer container only; it does not declare an element type. Missing and null values are left to `required_properties`.
-- `required_properties` and `property_types` apply to nodes in class declarations and to edges in relationship declarations.
+- `property_values` declares value contracts. See [Value contracts](#value-contracts).
+- `required_properties`, `property_types` and `property_values` apply to nodes in class declarations and to edges in relationship declarations.
   - Required values must be present and non-null.
   - Type checks ignore absent and null values.
   - Repeated required names count once.
@@ -88,8 +92,8 @@ KGLite checks the rules below when it installs a declaration.
 - `enforcement` is `advisory` (the default), `warn` or `error`. `warn` and `error` bind every write; see [Write-time enforcement](#write-time-enforcement). `advisory` only feeds the audit and the rule procedures.
 - A top-level `closed_labels: True` adds the allowed-labels rule. A top-level `enforcement` sets its severity, and is the default for declarations that state none.
 - `enforcement` also accepts a per-check map, such as `{"required_properties": "error", "domain": "warn"}`. Unlisted checks keep the advisory base.
-- The map keys are the check names the audit's `rule` column uses: `domain`, `range`, `required`, `required_properties`, `property_types`, `cardinality`, `inverse`, `symmetric`, `transitive`.
-- `exempt` names, per check, source classes whose violations are counted separately instead of against severity. See [Exempting an upstream source](#exempting-an-upstream-source).
+- The map keys are the check names the audit's `rule` column uses: `domain`, `range`, `required`, `required_properties`, `property_types`, `property_values`, `cardinality`, `distinct`, `inverse`, `symmetric`, `transitive`.
+- `exempt` names, per check, source classes and labels whose violations are counted separately instead of against severity. See [Exempting an upstream source](#exempting-an-upstream-source).
 
 ### Reading and removing the store
 
@@ -110,7 +114,7 @@ Each declaring class governs nodes whose primary class is itself or a declared d
 
 - Parent and child contracts are independent and additive.
 - Unrelated secondary labels do not enroll a node.
-- Class enforcement accepts only `required_properties` and `property_types`.
+- Class enforcement accepts only `required_properties`, `property_types` and `property_values`.
 - Class enforcement defaults to advisory and has no edge-style exemptions.
 - Blueprint builds apply the same warn/error behavior to node contracts before publishing output.
 
@@ -136,6 +140,59 @@ RETURN class, check, node.id AS id, properties
 No ontology is an error. An ontology without node contracts returns no findings.
 
 `SHOW ONTOLOGY` exposes `required_properties`, `property_types` and enforcement for classes and relationships. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
+
+## Value contracts
+
+`property_values` declares what the values of a property may be. It applies to class properties and to relationship properties, and it sits beside `property_types`.
+
+```python
+g.define_ontology({
+    "classes": {
+        "Reviewer": {"property_values": {
+            "name": {"not_pattern": r"\band\b|, "},          # one person per name
+            "tier": {"enum": ["junior", "senior", "lead"]},
+        }},
+    },
+    "relationships": {
+        "REVIEWED_BY": {"domain": "Paper", "range": "Reviewer",
+                        "property_values": {"role": {"enum": ["primary", "secondary"]},
+                                            "year": {"min": 1900, "max": 2100}}},
+    },
+})
+```
+
+Each property takes one or more of these keys:
+
+| Key | Violation | Judged on |
+|---|---|---|
+| `enum` | The value equals no listed entry. | Every value type. Integers and floats compare numerically. |
+| `pattern` | The value does not match the regex. | Strings only. |
+| `not_pattern` | The value matches the regex. | Strings only. |
+| `min` / `max` | The value is below `min` or above `max`. Both bounds are inclusive. | Integers and floats only. |
+
+- Regexes are unanchored. Write `^…$` to anchor one.
+- A null or absent value is never a violation. Presence is `required_properties`' job.
+- A clause skips the value types it is not defined for. A number is never regex-judged and a string is never range-judged. Types are `property_types`' job.
+- A property declaring no key, an invalid regex, an empty `enum` or `min` above `max` is refused at declaration.
+- The audit rule is `<name>.property_values`. `{by: 'property'}` counts per declared property, and `edge_property_violation()` lists the flagged edges with `check = 'property_values'`.
+- At `warn` or `error` a write is judged on the rule `property_value`, which names the property and the contract it broke.
+
+## Pair uniqueness
+
+`distinct` on a relationship declares that no two edges of the type may repeat.
+
+```python
+g.define_ontology({"relationships": {
+    "HAS_HOLDER":  {"distinct": True},          # one edge per source and target
+    "ASSIGNED_TO": {"distinct": ["role"]},      # one per source, target and role
+}})
+```
+
+- `distinct: True` groups edges by source and target.
+- `distinct: ["role", …]` also groups by the listed property values. A null value equals an absent one.
+- The audit rule is `<TYPE>.distinct`. `violations` are the **surplus** edges: every edge beyond the first of its group, so three copies count two. `total` is every edge of the type.
+- Writes are judged like the `cardinality` maximum. A Cypher statement is judged on each touched edge's stored group. A bulk loader that writes one edge per row (a first `add_connections` load) judges its own repeated rows and the stored edges before writing anything. A merging load folds a repeated pair onto its edge, so it cannot create a copy.
+- `distinct: True` merges nothing. It refuses or flags the copy and leaves the choice of which edge to keep to you. Check that the copies are true duplicates first: a group that differs in a column you did not load is better declared with that property listed.
 
 ## Reading it back
 
@@ -285,10 +342,12 @@ g.cypher("CREATE (:Person {id: 2})")                # OntologyViolationError
 |---|---|---|
 | `required_property` | class or relationship `required_properties` | An absent or null value. |
 | `property_type` | class or relationship `property_types` | A present, non-null value of another type. |
+| `property_value` | class or relationship `property_values` | A present, non-null value outside its `enum`, `pattern`, `not_pattern` or `min`/`max`. |
 | `closed_labels` | top-level `closed_labels: True` | A node whose primary label is not a declared class. |
 | `domain` | relationship `domain` | An edge whose source primary type is not the domain. |
 | `range` | relationship `range` | An edge whose target primary type is not the range. |
 | `cardinality` | relationship `cardinality.max` with a `domain` | A source of the domain holding more outgoing edges of the type than `max`. |
+| `distinct` | relationship `distinct` | An edge whose source, target and listed property values another edge of the type already holds. |
 
 - A node is judged on its **primary** label only. It answers to its own class and to every declared ancestor, each at that class's severity. Secondary labels never enroll a node and `closed_labels` never reads them. Materialized (managed) labels are engine-written and are not judged.
 - `cardinality.max` counts a source's **outgoing** edges of the type, parallel edges individually, exactly as `cardinality_violation` does. It needs a `domain` and judges sources of the domain or a declared descendant.
@@ -429,7 +488,7 @@ An abstract `domain` lets one declaration cover a union edge, such as `MANAGED_B
 
 Suppose one upstream source never carried the date the others do. Then `required_properties: ["validFrom"]` can never be promoted past `advisory`. The rule you want to enforce for the sources you control is permanently red because of a source you do not control.
 
-`exempt` is the seam. It is a **per-check map** of source classes whose violations are counted separately instead of against severity:
+`exempt` is the seam. It is a **per-check map** of source classes and labels whose violations are counted separately instead of against severity:
 
 ```python
 from kglite import KnowledgeGraph
@@ -472,9 +531,11 @@ Both edges lack `validFrom`, but only the `Contract` one counts as a violation. 
 What the form guarantees:
 
 - **Per-check, never flat.** `exempt: ["LegacyContract"]` is refused. An exemption spread silently across every check is not something you can reason about later. Name the check it applies to.
-- **`required_properties` and `property_types` only.** These are the two checks where "the class to exempt" unambiguously means the edge's *source* type. Any other check name under `exempt` is refused at declaration time with the reason, not just an accept-list.
-- **Ancestor-widening.** A class matches when it is the edge source's primary type *or* one of its declared ancestors, the same widening `domain`/`range` get. Exempting `Agreement` exempts the whole subtree.
-- **The class must be declared.** An undeclared name is refused. Matching widens over the `is_a` forest, so a typo would silently exempt nothing, which is the exact failure the feature exists to remove.
+- **Five checks only.** `required_properties`, `property_types`, `property_values` and `distinct` flag one edge, whose *source* node is the exempted party. `required` flags a domain node, which is itself the exempted party. Any other check name under `exempt` is refused at declaration time with the reason, not just an accept-list.
+- **Ancestor-widening.** An entry matches when it is the node's primary type *or* one of its declared ancestors, the same widening `domain`/`range` get. Exempting `Agreement` exempts the whole subtree.
+- **Secondary labels.** An entry also matches a node that carries the name as a secondary label. `"exempt": {"required": ["Historical"]}` excuses `:Contract:Historical` stubs from `required` without touching the `Contract` nodes you control. The match is by label, never by a predicate over properties, so it costs one lookup per flagged row.
+- **Names need not be classes.** A label is not a declared class. Declaring an entry that is neither a declared class nor a label any node carries yet returns a warning, because it exempts nothing. Read that warning as the typo check.
+- **Labels are read when judged.** The audit reads current labels. A write is judged when it lands, so removing a label later does not re-judge stored rows. Run the audit to see them.
 
 ### Drilling down to the flagged edges
 

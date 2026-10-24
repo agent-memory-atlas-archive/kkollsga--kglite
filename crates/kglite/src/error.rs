@@ -490,8 +490,8 @@ pub enum KgError {
     /// A write was refused by the declared ontology, or a declaration was
     /// refused because stored data already violates it. The graph is unchanged.
     ///
-    /// `rule` is `required_property` / `property_type` / `closed_labels` /
-    /// `domain` / `range` / `cardinality` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`; `entity` is `node` / `relationship`; `entity_type`
+    /// `rule` is `required_property` / `property_type` / `property_value` / `closed_labels` /
+    /// `domain` / `range` / `cardinality` / `distinct` / `required_relationship` / `min_cardinality` / `inverse` / `symmetric` / `transitive`; `entity` is `node` / `relationship`; `entity_type`
     /// the label or relationship type; `property` the offending property when
     /// the rule is a property rule. `report` is empty for a refused write and
     /// holds the per-rule breakdown for a refused declaration.

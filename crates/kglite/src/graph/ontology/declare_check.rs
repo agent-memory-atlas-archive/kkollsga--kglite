@@ -30,6 +30,8 @@ fn write_rule(check: &str) -> Option<OntologyRule> {
     match check {
         "required_properties" => Some(OntologyRule::RequiredProperty),
         "property_types" => Some(OntologyRule::PropertyType),
+        "property_values" => Some(OntologyRule::PropertyValue),
+        "distinct" => Some(OntologyRule::Distinct),
         "domain" => Some(OntologyRule::Domain),
         "range" => Some(OntologyRule::Range),
         "cardinality" => Some(OntologyRule::Cardinality),

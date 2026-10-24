@@ -80,12 +80,18 @@
 //!   declaration carries its effective severity.
 
 pub(crate) mod cardinality_gate;
+pub(crate) mod contracts;
 pub(crate) mod declare_check;
+pub(crate) mod distinct_gate;
 pub(crate) mod edge_gate;
 pub(crate) mod must_exist;
 pub(crate) mod node_gate;
 #[cfg(test)]
 mod ontology_cardinality_tests;
+#[cfg(test)]
+mod ontology_distinct_tests;
+#[cfg(test)]
+mod ontology_exempt_label_tests;
 #[cfg(test)]
 mod ontology_gate_tests;
 #[cfg(test)]
@@ -94,8 +100,12 @@ mod ontology_must_exist_tests;
 mod ontology_procedure_tests;
 #[cfg(test)]
 mod ontology_rel_gate_tests;
+#[cfg(test)]
+mod ontology_value_contract_tests;
 pub mod predicates;
 pub mod violation;
+
+pub use contracts::{DistinctDecl, ValueContract};
 
 use std::collections::BTreeMap;
 
@@ -149,6 +159,10 @@ pub struct ClassDecl {
     pub required_properties: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub property_types: BTreeMap<String, String>,
+    /// Per-property value contracts (`enum`, `pattern`, `not_pattern`,
+    /// `min`, `max`); see [`ValueContract`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub property_values: BTreeMap<String, ValueContract>,
     #[serde(default, skip_serializing_if = "Enforcement::is_default")]
     pub enforcement: Enforcement,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -168,6 +182,13 @@ pub struct RelationshipDecl {
     pub required_properties: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub property_types: BTreeMap<String, String>,
+    /// Per-property value contracts on the relationship's edges.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub property_values: BTreeMap<String, ValueContract>,
+    /// Pair uniqueness: at most one edge of the type per source, target and
+    /// listed property values. See [`DistinctDecl`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinct: Option<DistinctDecl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse_name: Option<String>,
     /// Opt-in: audit `inverse_name` as a physical-pairing contract. Without
@@ -201,9 +222,10 @@ pub struct RelationshipDecl {
     /// fall back to `enforcement`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub enforcement_overrides: BTreeMap<String, Enforcement>,
-    /// Per-check source-class exemptions (keys from [`EXEMPTABLE_CHECKS`]).
-    /// A violation whose edge source is one of the listed classes — or a
-    /// declared descendant of one — is reported as `exempted` rather than
+    /// Per-check source exemptions (keys from [`EXEMPTABLE_CHECKS`]). A
+    /// violation whose edge source (the node itself, for `required`) is one of
+    /// the listed classes, a declared descendant of one, or carries a listed
+    /// name as a secondary label is reported as `exempted` rather than
     /// counted against the check's severity.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub exempt: BTreeMap<String, Vec<String>>,
@@ -431,18 +453,6 @@ impl OntologyStore {
                      taxonomy walked with `*1..` and enrolls no check. Declare one."
                 ));
             }
-            for (check, classes) in &decl.exempt {
-                for class in classes {
-                    if !self.classes.contains_key(class) {
-                        return Err(format!(
-                            "relationship '{name}': exempt['{check}'] names '{class}', which is \
-                             not a declared class. An exemption widens over the declared is_a \
-                             forest, so a name outside it would silently exempt nothing — \
-                             declare the class (abstract or concrete) first."
-                        ));
-                    }
-                }
-            }
             if let Some(card) = &decl.cardinality {
                 if let (Some(min), Some(max)) = (card.min, card.max) {
                     if min > max {
@@ -603,22 +613,32 @@ pub const CHECK_NAMES: &[&str] = &[
     "required",
     "required_properties",
     "property_types",
+    "property_values",
     "cardinality",
+    "distinct",
     "inverse",
     "symmetric",
     "transitive",
 ];
 
-/// The checks a source-class exemption is well-defined for. Both flag one
-/// edge, and the edge's source node carries exactly one domain-side class.
-/// Every other check either **is** a domain-side class test (`domain`,
-/// `range`, and the node-scoped `required` / `cardinality` — exempting a
-/// class there disables the check for it outright) or flags a tuple of two
-/// or three nodes with no single domain-side class (`inverse`, `symmetric`,
+/// The checks a source exemption is well-defined for: the three edge property
+/// checks and `distinct` (each flags one edge, whose source node is the
+/// exempted party) and `required` (flags a domain node, which is itself the
+/// exempted party — an exempt entry names a secondary label such as
+/// `Historical`, or a class). The rest either **are** a domain-side class
+/// test (`domain`, `range`, `cardinality`) or flag a tuple of two or three
+/// nodes with no single party to exempt (`inverse`, `symmetric`,
 /// `transitive`).
-pub const EXEMPTABLE_CHECKS: &[&str] = &["required_properties", "property_types"];
+pub const EXEMPTABLE_CHECKS: &[&str] = &[
+    "required_properties",
+    "property_types",
+    "property_values",
+    "required",
+    "distinct",
+];
 
-pub(crate) const NODE_CHECK_NAMES: &[&str] = &["required_properties", "property_types"];
+pub(crate) const NODE_CHECK_NAMES: &[&str] =
+    &["required_properties", "property_types", "property_values"];
 const CLASS_KEYS: &[&str] = &[
     "is_a",
     "abstract",
@@ -626,6 +646,7 @@ const CLASS_KEYS: &[&str] = &[
     "by",
     "required_properties",
     "property_types",
+    "property_values",
     "enforcement",
     "enforcement_overrides",
 ];
@@ -634,6 +655,8 @@ const REL_KEYS: &[&str] = &[
     "range",
     "required_properties",
     "property_types",
+    "property_values",
+    "distinct",
     "inverse_name",
     "inverse_enforced",
     "cardinality",
@@ -790,11 +813,13 @@ fn class_from_value(name: &str, value: &Value, default: Enforcement) -> Result<C
     let context = format!("class '{name}'");
     reject_unknown(map, CLASS_KEYS, &context)?;
     let (required_properties, property_types) = parse_property_contract(map, &context)?;
+    let property_values = contracts::property_values_from_value(map, &context)?;
     let (enforcement, enforcement_overrides) =
         parse_enforcement(map, &context, NODE_CHECK_NAMES, default)?;
     Ok(ClassDecl {
         required_properties,
         property_types,
+        property_values,
         enforcement,
         enforcement_overrides,
         is_a: opt_string(map, "is_a", name)?,
@@ -831,6 +856,8 @@ fn relationship_from_value(
         }
     };
     let (required_properties, property_types) = parse_property_contract(map, &context)?;
+    let property_values = contracts::property_values_from_value(map, &context)?;
+    let distinct = contracts::distinct_from_value(name, map.get("distinct"))?;
     let inverse_name = opt_string(map, "inverse_name", name)?;
     let inverse_enforced = opt_bool(map, "inverse_enforced", name)?;
     if inverse_enforced && inverse_name.is_none() {
@@ -844,6 +871,8 @@ fn relationship_from_value(
         range: opt_string(map, "range", name)?,
         required_properties,
         property_types,
+        property_values,
+        distinct,
         inverse_name,
         inverse_enforced,
         cardinality,
@@ -886,7 +915,7 @@ fn exempt_from_value(
         }
         let Value::List(items) = classes else {
             return Err(format!(
-                "relationship '{name}': exempt['{check}'] must be a list of class names"
+                "relationship '{name}': exempt['{check}'] must be a list of class or secondary-label names"
             ));
         };
         let mut names = Vec::with_capacity(items.len());
@@ -895,7 +924,7 @@ fn exempt_from_value(
                 Value::String(s) if !s.is_empty() => names.push(s.clone()),
                 Value::String(_) => {
                     return Err(format!(
-                        "relationship '{name}': exempt['{check}'] has an empty class name"
+                        "relationship '{name}': exempt['{check}'] has an empty name"
                     ))
                 }
                 _ => {
@@ -915,7 +944,7 @@ fn exempt_from_value(
 /// who wants `domain` exempted.
 fn exempt_check_refusal(name: &str, check: &str) -> String {
     let why = match check {
-        "domain" | "range" | "required" | "cardinality" => {
+        "domain" | "range" | "cardinality" => {
             "that check already tests the domain-side class, so exempting a class would \
              disable it for that class outright"
         }
@@ -934,12 +963,12 @@ fn exempt_check_refusal(name: &str, check: &str) -> String {
     };
     format!(
         "relationship '{name}': 'exempt' does not accept check '{check}' — {why}. Exemption is \
-         accepted for {EXEMPTABLE_CHECKS:?} only, where the exempted class is the edge's source \
-         type."
+         accepted for {EXEMPTABLE_CHECKS:?} only, where the exempted party is the edge's source \
+         node (the node itself for 'required')."
     )
 }
 
-fn as_map(value: &Value) -> Option<&crate::datatypes::PropMap> {
+pub(super) fn as_map(value: &Value) -> Option<&crate::datatypes::PropMap> {
     match value {
         Value::Map(map) => Some(map),
         _ => None,
@@ -976,7 +1005,7 @@ fn opt_u64(map: &crate::datatypes::PropMap, key: &str, ctx: &str) -> Result<Opti
     }
 }
 
-fn reject_unknown(
+pub(super) fn reject_unknown(
     map: &crate::datatypes::PropMap,
     accepted: &[&str],
     ctx: &str,
@@ -1227,13 +1256,45 @@ mod tests {
     }
 
     #[test]
-    fn exempt_class_must_be_declared() {
-        let err = parse(
+    fn exempt_accepts_any_name_and_the_graph_check_warns_on_unknown_ones() {
+        // A name need not be a declared class: it may be a secondary label.
+        let store = parse(
             r#"{"classes": {"A": {}},
-                "relationships": {"R": {"exempt": {"property_types": ["Ghost"]}}}}"#,
+                "relationships": {"R": {"exempt": {"property_types": ["Ghost", "A"],
+                                                   "required": ["Historical"]}}}}"#,
         )
-        .unwrap_err();
-        assert!(err.contains("not a declared class"), "{err}");
+        .unwrap();
+        assert_eq!(
+            store.relationships["R"].exempt_classes("required"),
+            ["Historical"]
+        );
+        let mut graph = crate::graph::schema::DirGraph::new();
+        let warnings = graph.define_ontology(store).unwrap();
+        let ghosts: Vec<_> = warnings.iter().filter(|w| w.contains("exempt[")).collect();
+        assert_eq!(ghosts.len(), 2, "{warnings:?}");
+        assert!(ghosts.iter().any(|w| w.contains("'Ghost'")), "{warnings:?}");
+        assert!(
+            ghosts.iter().any(|w| w.contains("'Historical'")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_stored_document_without_the_contract_keys_reads_as_defaults() {
+        // The serde form a `.kgl` written before `property_values` /
+        // `distinct` carried: neither key, and it must still load.
+        let old = r#"{"version": 1,
+            "classes": {"Doc": {"required_properties": ["owner"],
+                                "property_types": {"owner": "string"}}},
+            "relationships": {"AUTHORED": {"domain": "Doc", "required": true,
+                                           "exempt": {"required_properties": ["Doc"]}}}}"#;
+        let store: OntologyStore = serde_json::from_str(old).unwrap();
+        assert!(store.classes["Doc"].property_values.is_empty());
+        assert!(store.relationships["AUTHORED"].property_values.is_empty());
+        assert!(store.relationships["AUTHORED"].distinct.is_none());
+        // And a store that declares neither writes neither key back.
+        let written = serde_json::to_string(&store).unwrap();
+        assert!(!written.contains("property_values") && !written.contains("distinct"));
     }
 
     #[test]

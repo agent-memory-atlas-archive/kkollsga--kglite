@@ -37,7 +37,10 @@ use super::rule_procedures::{
 use crate::datatypes::values::Value;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
-use crate::graph::ontology::predicates::{self, accepted_types, unique_required_properties};
+use crate::graph::ontology::distinct_gate;
+use crate::graph::ontology::predicates::{
+    self, accepted_types, has_secondary_label, unique_required_properties,
+};
 use crate::graph::ontology::RelationshipDecl;
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
@@ -96,8 +99,9 @@ struct PropertyFinding {
 ///
 /// [`DeclaredCheck::RequiredProperties`] — a listed property absent or null
 /// on the edge; [`DeclaredCheck::PropertyTypes`] — a *present* non-null
-/// property failing its declared type (absence is `required_properties`'
-/// concern, never a type violation).
+/// property failing its declared type; [`DeclaredCheck::PropertyValues`] — a
+/// *present* non-null property outside its value contract (absence is
+/// `required_properties`' concern, never a type or value violation).
 fn edge_property_findings(
     graph: &DirGraph,
     edge_type: &str,
@@ -106,7 +110,9 @@ fn edge_property_findings(
 ) -> Vec<PropertyFinding> {
     debug_assert!(matches!(
         check,
-        DeclaredCheck::RequiredProperties | DeclaredCheck::PropertyTypes
+        DeclaredCheck::RequiredProperties
+            | DeclaredCheck::PropertyTypes
+            | DeclaredCheck::PropertyValues
     ));
     let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
@@ -121,11 +127,12 @@ fn edge_property_findings(
         }
         let exempt = !decl.exempt_classes(check.name()).is_empty()
             && graph.graph.node_view(er.source()).is_some_and(|n| {
-                predicates::edge_exempt(
+                predicates::source_exempt(
                     &graph.ontology,
                     decl,
                     check.name(),
                     n.node_type_str(&graph.interner),
+                    |label| has_secondary_label(graph, er.source(), label),
                 )
             });
         out.push(PropertyFinding {
@@ -207,8 +214,14 @@ fn declared_checks(rel: &str, decl: &RelationshipDecl) -> Vec<DeclaredCheck> {
     if !decl.property_types.is_empty() {
         out.push(DeclaredCheck::PropertyTypes);
     }
+    if !decl.property_values.is_empty() {
+        out.push(DeclaredCheck::PropertyValues);
+    }
     if decl.cardinality.is_some() {
         out.push(DeclaredCheck::Cardinality);
+    }
+    if decl.distinct.is_some() {
+        out.push(DeclaredCheck::Distinct);
     }
     if decl.inverse_name.is_some() && decl.inverse_enforced {
         out.push(DeclaredCheck::Inverse);
@@ -230,7 +243,9 @@ enum DeclaredCheck {
     Required,
     RequiredProperties,
     PropertyTypes,
+    PropertyValues,
     Cardinality,
+    Distinct,
     Inverse,
     Symmetric,
     Transitive,
@@ -244,7 +259,9 @@ impl DeclaredCheck {
             DeclaredCheck::Required => "required",
             DeclaredCheck::RequiredProperties => "required_properties",
             DeclaredCheck::PropertyTypes => "property_types",
+            DeclaredCheck::PropertyValues => "property_values",
             DeclaredCheck::Cardinality => "cardinality",
+            DeclaredCheck::Distinct => "distinct",
             DeclaredCheck::Inverse => "inverse",
             DeclaredCheck::Symmetric => "symmetric",
             DeclaredCheck::Transitive => "transitive",
@@ -265,7 +282,7 @@ struct CheckOutcome {
     exempt: Vec<bool>,
     /// The declared properties each row fails, same order and length as
     /// `rows`. Empty on every row of a check that is not property-shaped —
-    /// only those two have properties to attribute a row to.
+    /// only those three have properties to attribute a row to.
     properties: Vec<Vec<String>>,
 }
 
@@ -338,9 +355,48 @@ fn check_rows(
                 let params = string_params(&[("type", &node_type), ("edge", rel)]);
                 rows.extend(execute_missing_required_edge(graph, &params, yield_items)?);
             }
-            Ok(CheckOutcome::plain(rows))
+            let node_var = require_node_yield(yield_items, "missing_required_edge", "node")?;
+            let exempt = rows
+                .iter()
+                .map(|row| {
+                    !decl.exempt_classes("required").is_empty()
+                        && row.node_bindings.get(&node_var).is_some_and(|idx| {
+                            graph.graph.node_view(*idx).is_some_and(|n| {
+                                predicates::source_exempt(
+                                    store,
+                                    decl,
+                                    "required",
+                                    n.node_type_str(&graph.interner),
+                                    |label| has_secondary_label(graph, *idx, label),
+                                )
+                            })
+                        })
+                })
+                .collect::<Vec<bool>>();
+            let properties = vec![Vec::new(); rows.len()];
+            Ok(CheckOutcome {
+                rows,
+                exempt,
+                properties,
+            })
         }
-        DeclaredCheck::RequiredProperties | DeclaredCheck::PropertyTypes => {
+        DeclaredCheck::Distinct => {
+            let src_var = require_node_yield(yield_items, "ontology_audit", "source")?;
+            let tgt_var = require_node_yield(yield_items, "ontology_audit", "target")?;
+            let surplus = distinct_gate::surplus_edges(graph, rel, decl);
+            let exempt = surplus.iter().map(|(_, _, e)| *e).collect();
+            let pairs: Vec<(NodeIndex, NodeIndex)> =
+                surplus.into_iter().map(|(s, t, _)| (s, t)).collect();
+            let properties = vec![Vec::new(); pairs.len()];
+            Ok(CheckOutcome {
+                rows: endpoint_rows(pairs, &src_var, &tgt_var),
+                exempt,
+                properties,
+            })
+        }
+        DeclaredCheck::RequiredProperties
+        | DeclaredCheck::PropertyTypes
+        | DeclaredCheck::PropertyValues => {
             let src_var = require_node_yield(yield_items, "ontology_audit", "source")?;
             let tgt_var = require_node_yield(yield_items, "ontology_audit", "target")?;
             let findings = edge_property_findings(graph, rel, decl, check);
@@ -580,7 +636,8 @@ pub(super) fn execute_edge_property_violation(
     if !params.is_empty() {
         return Err(
             "CALL edge_property_violation takes no parameters — it lists the flagged \
-                    edges of every declaration carrying required_properties or property_types."
+                    edges of every declaration carrying required_properties, property_types \
+                    or property_values."
                 .to_string(),
         );
     }
@@ -597,6 +654,7 @@ pub(super) fn execute_edge_property_violation(
         for check in [
             DeclaredCheck::RequiredProperties,
             DeclaredCheck::PropertyTypes,
+            DeclaredCheck::PropertyValues,
         ] {
             if !declared.contains(&check) {
                 continue;
@@ -800,6 +858,7 @@ fn declared_property_names(decl: &RelationshipDecl, check: DeclaredCheck) -> Vec
     match check {
         DeclaredCheck::RequiredProperties => unique_required_properties(&decl.required_properties),
         DeclaredCheck::PropertyTypes => decl.property_types.keys().cloned().collect(),
+        DeclaredCheck::PropertyValues => decl.property_values.keys().cloned().collect(),
         _ => Vec::new(),
     }
 }
@@ -830,7 +889,9 @@ fn counting_yield(check: DeclaredCheck) -> Vec<YieldItem> {
         DeclaredCheck::Domain
         | DeclaredCheck::Range
         | DeclaredCheck::RequiredProperties
-        | DeclaredCheck::PropertyTypes => &["source", "target"],
+        | DeclaredCheck::PropertyTypes
+        | DeclaredCheck::PropertyValues
+        | DeclaredCheck::Distinct => &["source", "target"],
         DeclaredCheck::Required => &["node"],
         DeclaredCheck::Cardinality => &["node", "count"],
         DeclaredCheck::Inverse | DeclaredCheck::Symmetric => &["a", "b"],
@@ -856,6 +917,8 @@ fn check_total(
         | DeclaredCheck::Range
         | DeclaredCheck::RequiredProperties
         | DeclaredCheck::PropertyTypes
+        | DeclaredCheck::PropertyValues
+        | DeclaredCheck::Distinct
         | DeclaredCheck::Inverse
         | DeclaredCheck::Symmetric
         | DeclaredCheck::Transitive => {
@@ -891,7 +954,9 @@ mod check_name_tests {
             DeclaredCheck::Required,
             DeclaredCheck::RequiredProperties,
             DeclaredCheck::PropertyTypes,
+            DeclaredCheck::PropertyValues,
             DeclaredCheck::Cardinality,
+            DeclaredCheck::Distinct,
             DeclaredCheck::Inverse,
             DeclaredCheck::Symmetric,
             DeclaredCheck::Transitive,

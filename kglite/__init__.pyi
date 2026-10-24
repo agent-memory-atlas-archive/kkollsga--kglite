@@ -231,12 +231,14 @@ class OntologyViolationError(ConstraintViolationError):
     Subclasses :class:`ConstraintViolationError`, so existing ``except`` clauses
     still catch it; ``.code`` is ``"OntologyViolation"``. The graph is
     unchanged. The message names the rule (``required_property``,
-    ``property_type``, ``closed_labels``, ``domain``, ``range``, ``cardinality``, ``required_relationship``,
+    ``property_type``, ``property_value``, ``closed_labels``, ``domain``, ``range``, ``cardinality``,
+    ``distinct``, ``required_relationship``,
     ``min_cardinality``, ``inverse``, ``symmetric`` or ``transitive``), the label or
     relationship type, and the property where one applies.
 
     ``rule`` is the rule that fired (``"required_property"``,
-    ``"property_type"``, ``"closed_labels"``, ``"domain"``, ``"range"``, ``"cardinality"``, ``"required_relationship"``,
+    ``"property_type"``, ``"property_value"``, ``"closed_labels"``, ``"domain"``, ``"range"``, ``"cardinality"``,
+    ``"distinct"``, ``"required_relationship"``,
     ``"min_cardinality"``, ``"inverse"``, ``"symmetric"`` or ``"transitive"``; for a
     refused declaration, the first report entry's rule). ``entity`` is ``"node"``
     or ``"relationship"``, ``entity_type`` the node primary label or relationship
@@ -6176,7 +6178,9 @@ class KnowledgeGraph:
                     "MANAGED_BY": {
                         "domain": "Licensable", "range": "Company",
                         "required_properties": ["validFrom"],
+                        "property_values": {"side": {"enum": ["a", "b"]}},
                         "cardinality": {"min": 0, "max": 1},
+                        "distinct": ["side"],
                         "required": True, "enforcement": "warn",
                         "exempt": {"required_properties": ["RegisterContract"]},
                         "ancestry": False,
@@ -6202,15 +6206,40 @@ class KnowledgeGraph:
         ``transitive`` closures) when the transaction ends: a node and its
         required edge may arrive in different statements of one transaction,
         while a lone statement or bulk call is its own transaction;
-        ``exempt`` is a per-check map of source classes whose violations are
-        counted in ``ontology_audit()``'s ``exempted`` column instead of
-        against severity (a class matches when it is the edge source's
-        primary type or one of its declared ancestors), so one legitimately
-        nonconforming source type cannot pin a whole rule at ``advisory`` —
-        accepted for ``required_properties`` and ``property_types`` only,
-        the two checks where "domain-side class" means the edge's source
-        type, and refused with an explanation for every other check name and
-        for the flat ``exempt: [...]`` form;
+        ``exempt`` is a per-check map of source classes and labels whose
+        violations are counted in ``ontology_audit()``'s ``exempted`` column
+        instead of against severity, so one legitimately nonconforming
+        source cannot pin a whole rule at ``advisory``. An entry matches an
+        edge's source node (the node itself for ``required``) when it is
+        the node's primary type, one of that type's declared ancestors, or a
+        **secondary label** the node carries
+        (``"exempt": {"required": ["Historical"]}`` excuses ``:Contract:Historical``
+        stubs). It is accepted for ``required_properties``,
+        ``property_types``, ``property_values``, ``required`` and
+        ``distinct``, and refused with an explanation for every other check
+        name and for the flat ``exempt: [...]`` form. An entry need not be a
+        declared class; declaring one that is neither a declared class nor a
+        label any node carries returns a warning, since it exempts nothing;
+        ``distinct`` declares pair uniqueness on a relationship type:
+        ``True`` allows one edge per source and target, and
+        ``["side", ...]`` one per source, target and those property values
+        (null equals absent). Audited as ``<TYPE>.distinct`` with
+        ``violations`` the surplus edges (every edge beyond the first of its
+        group) and ``total`` the type's edges, and enforced at write time
+        like ``cardinality.max``: the statement's end state, or the bulk
+        frame's own repeated rows, is judged;
+        ``property_values`` is a per-property value contract on class and
+        relationship properties: ``{"prop": {"enum": [...], "pattern":
+        "regex", "not_pattern": "regex", "min": n, "max": n}}`` (at least
+        one key per property). ``enum`` is judged on every value type
+        (integers and floats compare numerically); ``pattern`` /
+        ``not_pattern`` are unanchored regexes judged on string values only;
+        ``min`` / ``max`` are inclusive bounds judged on numeric values only.
+        A null or absent value is never a violation (that is
+        ``required_properties``) and a clause skips the value types it is
+        not defined for (that is ``property_types``). An invalid regex is
+        refused at declaration. Audited as ``<name>.property_values`` with
+        ``{by: 'property'}`` support, and enforced at write time;
         ``transitive`` and ``ancestry`` are mutually exclusive and mean
         different things — ``transitive: True`` enrolls
         ``transitivity_violation``, which audits a **stored** closure (every
@@ -6227,8 +6256,10 @@ class KnowledgeGraph:
         Class property contracts cover the primary class and its declared
         descendants, independently for each declaring ancestor. Secondary
         labels do not enroll a node. Properties use the actual node type's
-        id/title and loader aliases. Classes accept only the two property
-        checks in an enforcement map and do not accept edge exemptions.
+        id/title and loader aliases. Classes accept only the three property
+        checks (``required_properties``, ``property_types``,
+        ``property_values``) in an enforcement map and do not accept edge
+        exemptions.
 
         Two optional top-level keys add store-level settings.
         ``closed_labels: True`` adds the allowed-labels rule: a node's
@@ -6290,7 +6321,9 @@ class KnowledgeGraph:
             ValueError: Malformed document (unknown key, cycle, dangling
                 ``is_a`` target, class cap exceeded, both ``transitive``
                 and ``ancestry`` on one relationship, an ``exempt`` entry on
-                an unexemptable check or naming an undeclared class), or an
+                an unexemptable check, a ``property_values`` contract with
+                no clause, an invalid regex or ``min`` above ``max``, a
+                malformed ``distinct``), or an
                 abstract class shadowing a live node type.
             OntologyViolationError: An ``error``-level rule that stored data
                 already breaks.

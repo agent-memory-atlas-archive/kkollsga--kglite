@@ -43,7 +43,7 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::Direction;
 
 use super::node_gate::{is_provisional_stub, Tally};
-use super::predicates::endpoint_accepted;
+use super::predicates::{endpoint_accepted, has_secondary_label};
 use super::violation::{OntologyRule, OntologyViolation};
 use super::{Enforcement, OntologyStore, RelationshipDecl};
 use crate::graph::constraints::EntityKind;
@@ -79,6 +79,9 @@ impl TxLog {
 struct MustRule {
     domain: Option<String>,
     required: Option<Enforcement>,
+    /// `exempt['required']`: classes (widened over descendants) and
+    /// secondary-label names whose nodes owe no outgoing edge.
+    required_exempt: Vec<String>,
     min: Option<(u64, Enforcement)>,
     /// The inverse relationship's name.
     inverse: Option<(String, Enforcement)>,
@@ -96,6 +99,7 @@ impl MustRule {
         let rule = Self {
             domain: decl.domain.clone(),
             required: severity(decl.required && has_domain, "required"),
+            required_exempt: decl.exempt_classes("required").to_vec(),
             min: decl
                 .cardinality
                 .and_then(|c| c.min)
@@ -259,7 +263,11 @@ impl Judge<'_> {
             return;
         }
         let count = self.out_edges(node, rel).count() as u64;
-        if let Some(severity) = rule.required.filter(|_| count == 0) {
+        let exempt = rule.required_exempt.iter().any(|entry| {
+            endpoint_accepted(&self.graph.ontology, entry, &source_type)
+                || has_secondary_label(self.graph, node, entry)
+        });
+        if let Some(severity) = rule.required.filter(|_| count == 0 && !exempt) {
             let v = self.violation(
                 OntologyRule::RequiredRelationship,
                 name,

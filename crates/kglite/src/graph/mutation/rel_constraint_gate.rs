@@ -61,6 +61,7 @@ use crate::graph::features::temporal::{EmptyIntervals, StartKey};
 use crate::graph::ontology::cardinality_gate::{self, FrameEdges};
 use crate::graph::ontology::edge_gate::RelRules;
 use crate::graph::ontology::node_gate::Tally;
+use crate::graph::ontology::predicates::has_secondary_label;
 use crate::graph::storage::interner::InternedKey;
 use crate::graph::storage::GraphRead;
 use petgraph::graph::NodeIndex;
@@ -211,12 +212,12 @@ pub(crate) struct ConnectionBatchGate<'a> {
 
 /// What one frame is judged against: the declared relationship constraints
 /// and the enforced ontology relationship rules.
-struct FramePlan {
+pub(super) struct FramePlan {
     /// Every property either set reads, sorted.
     names: Vec<String>,
     constrained: bool,
-    rules: Option<RelRules>,
-    tally: Tally,
+    pub(super) rules: Option<RelRules>,
+    pub(super) tally: Tally,
 }
 
 /// How a frame's rows become relationships — the distinction the gate's
@@ -321,6 +322,7 @@ impl ConnectionBatchGate<'_> {
         }
         self.judge_unique(graph, claims)?;
         self.judge_cardinality(graph, &mut plan);
+        self.judge_distinct(graph, &mut plan);
         graph.settle_ontology_tally(plan.tally)
     }
 
@@ -601,6 +603,7 @@ impl ConnectionBatchGate<'_> {
             &graph.ontology,
             self.connection_type,
             &source_type,
+            |label| source.is_some_and(|idx| has_secondary_label(graph, idx, label)),
             |property| {
                 plan.names
                     .iter()

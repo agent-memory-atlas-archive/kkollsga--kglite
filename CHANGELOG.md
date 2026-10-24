@@ -9,6 +9,13 @@ before upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **Ontology pair uniqueness: `distinct`.** A relationship declares `"distinct": true` (one edge per source and target) or `"distinct": ["side"]` (one per source, target and those property values). `ontology_audit()` reports `<TYPE>.distinct` with the surplus edges as `violations` and the type's edges as `total`. At `warn` or `error` a write that leaves a group with a second edge is flagged or refused as `distinct`, as `cardinality.max` is. A declaration over existing copies is refused at `error`. It composes with `enforcement`, `exempt` and the blueprint gate.
+- **Ontology value contracts: `property_values`.** A class or relationship declares `{"prop": {"enum": [...], "pattern": "regex", "not_pattern": "regex", "min": n, "max": n}}`. `enum` judges every value type, regexes judge strings, bounds judge numbers, and null or absent is never a violation. `ontology_audit()` reports `<name>.property_values` with `{by: 'property'}`, and writes are judged as `property_value`. An invalid regex is refused at declaration.
+- **Ontology `exempt` matches secondary labels and covers more checks.** An entry matches a source node that carries the name as a secondary label, so `"exempt": {"required": ["Historical"]}` excuses `:Contract:Historical` stubs. `exempt` now accepts `required`, `property_values` and `distinct` beside the two property checks. An entry need not be a declared class: one that is neither a class nor a live label returns a warning from `define_ontology` instead of an error.
+- **`SHOW ONTOLOGY` gains `property_values` and `distinct` columns.**
+
 ### Fixed
 
 - **A build's largest finding is listed first and named.** A group's warning listed findings in emission order, so one relationship type with 32,712 rows on 8,947 pairs hid behind 48 small ones. Findings now rank by size within their group (identical-rows by surplus relationships), `graph_info()['build']['diagnostics']` follows the same order, and the count line reads `from_blueprint [data_quality] 49 warning(s); largest: Company OWNS 32712→8947 pairs`. `Diagnostic` gains `magnitude` and `headline` fields.

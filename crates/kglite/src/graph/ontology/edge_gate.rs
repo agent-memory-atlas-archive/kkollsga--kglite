@@ -23,8 +23,11 @@ use std::collections::{HashMap, HashSet};
 use petgraph::graph::EdgeIndex;
 
 use super::cardinality_gate::{self, CardinalityRule};
+use super::distinct_gate::{self, DistinctRule};
 use super::node_gate::Tally;
-use super::predicates::{domain_violated, edge_exempt, edge_property_failures, range_violated};
+use super::predicates::{
+    domain_violated, edge_property_failures, has_secondary_label, range_violated, source_exempt,
+};
 use super::violation::{OntologyRule, OntologyViolation};
 use super::{Enforcement, OntologyStore, RelationshipDecl, NODE_CHECK_NAMES};
 use crate::datatypes::values::Value;
@@ -40,10 +43,10 @@ fn enforced(severity: Enforcement) -> bool {
 const PROPERTY_CHECKS: &[&str] = NODE_CHECK_NAMES;
 
 fn declared_properties(decl: &RelationshipDecl, check: &str) -> bool {
-    if check == "required_properties" {
-        !decl.required_properties.is_empty()
-    } else {
-        !decl.property_types.is_empty()
+    match check {
+        "required_properties" => !decl.required_properties.is_empty(),
+        "property_values" => !decl.property_values.is_empty(),
+        _ => !decl.property_types.is_empty(),
     }
 }
 
@@ -65,6 +68,7 @@ fn rel_rule_where(store: &OntologyStore, severity_matches: impl Fn(Enforcement) 
             || (decl.range.is_some() && severity_matches(decl.enforcement_for("range")))
             || (cardinality_gate::max_bound(decl).is_some()
                 && severity_matches(decl.enforcement_for("cardinality")))
+            || (decl.distinct.is_some() && severity_matches(decl.enforcement_for("distinct")))
             || PROPERTY_CHECKS.iter().any(|&check| {
                 severity_matches(decl.enforcement_for(check)) && declared_properties(decl, check)
             })
@@ -78,6 +82,7 @@ pub(crate) struct RelRules {
     range: Option<Enforcement>,
     checks: Vec<(&'static str, Enforcement)>,
     cardinality: Option<CardinalityRule>,
+    distinct: Option<DistinctRule>,
 }
 
 impl RelRules {
@@ -97,15 +102,40 @@ impl RelRules {
             })
             .collect();
         let cardinality = CardinalityRule::build(decl);
-        (domain.is_some() || range.is_some() || !checks.is_empty() || cardinality.is_some()).then(
-            || Self {
-                decl: decl.clone(),
-                domain,
-                range,
-                checks,
-                cardinality,
-            },
-        )
+        let distinct = DistinctRule::build(decl);
+        (domain.is_some()
+            || range.is_some()
+            || !checks.is_empty()
+            || cardinality.is_some()
+            || distinct.is_some())
+        .then(|| Self {
+            decl: decl.clone(),
+            domain,
+            range,
+            checks,
+            cardinality,
+            distinct,
+        })
+    }
+
+    pub(crate) fn decl(&self) -> &RelationshipDecl {
+        &self.decl
+    }
+
+    /// The enforced pair-uniqueness rule, when one binds this type.
+    pub(crate) fn distinct(&self) -> Option<&DistinctRule> {
+        self.distinct.as_ref()
+    }
+
+    /// Whether the declaration's `distinct` exemption covers a source of
+    /// `source_type` (see [`source_exempt`]).
+    pub(crate) fn distinct_exempt(
+        &self,
+        store: &OntologyStore,
+        source_type: &str,
+        has_secondary: impl Fn(&str) -> bool,
+    ) -> bool {
+        source_exempt(store, &self.decl, "distinct", source_type, has_secondary)
     }
 
     /// Whether an endpoint rule (domain or range) binds this type.
@@ -137,12 +167,15 @@ impl RelRules {
     pub(crate) fn property_names(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         for (check, _) in &self.checks {
-            if *check == "required_properties" {
-                names.extend(self.decl.required_properties.iter().cloned());
-            } else {
-                names.extend(self.decl.property_types.keys().cloned());
+            match *check {
+                "required_properties" => {
+                    names.extend(self.decl.required_properties.iter().cloned())
+                }
+                "property_values" => names.extend(self.decl.property_values.keys().cloned()),
+                _ => names.extend(self.decl.property_types.keys().cloned()),
             }
         }
+
         names.sort();
         names.dedup();
         names
@@ -226,35 +259,42 @@ impl RelRules {
         )
     }
 
-    /// Required properties and property types against what `get` reads off
-    /// the relationship. A source class the declaration exempts for a check
-    /// is excused from it.
+    /// Required properties, property types and value contracts against what
+    /// `get` reads off the relationship. A source the declaration exempts for
+    /// a check (by class or secondary label) is excused from it.
     pub(crate) fn judge_properties<'v>(
         &self,
         store: &OntologyStore,
         rel_type: &str,
         source_type: &str,
+        has_secondary: impl Fn(&str) -> bool + Copy,
         get: impl Fn(&str) -> Option<&'v Value> + Copy,
         tally: &mut Tally,
     ) {
         for &(check, severity) in &self.checks {
-            if edge_exempt(store, &self.decl, check, source_type) {
+            if source_exempt(store, &self.decl, check, source_type, has_secondary) {
                 continue;
             }
             for property in edge_property_failures(&self.decl, check, get) {
-                let (rule, what) = if check == "required_properties" {
-                    (
+                let (rule, what) = match check {
+                    "required_properties" => (
                         OntologyRule::RequiredProperty,
                         format!("requires property '{property}'"),
-                    )
-                } else {
-                    (
+                    ),
+                    "property_values" => (
+                        OntologyRule::PropertyValue,
+                        format!(
+                            "property '{property}' must satisfy {}",
+                            self.decl.property_values[&property].summary()
+                        ),
+                    ),
+                    _ => (
                         OntologyRule::PropertyType,
                         format!(
                             "property '{property}' must be of type '{}'",
                             self.decl.property_types[&property]
                         ),
-                    )
+                    ),
                 };
                 tally.flag(
                     severity,
@@ -317,6 +357,7 @@ impl DirGraph {
                 EndpointVerdicts,
             > = HashMap::new();
             let mut sources: HashSet<(InternedKey, petgraph::graph::NodeIndex)> = HashSet::new();
+            let mut distinct_edges: Vec<EdgeIndex> = Vec::new();
             for edge in touched {
                 let (Some(weight), Some((source, target))) = (
                     graph.graph.edge_weight(edge),
@@ -333,6 +374,9 @@ impl DirGraph {
                 };
                 if rules.has_cardinality() {
                     sources.insert((rel_key, source));
+                }
+                if rules.distinct().is_some() {
+                    distinct_edges.push(edge);
                 }
                 let rel_type = graph.interner.resolve(rel_key);
                 let (Some(source_key), Some(target_key)) = (
@@ -360,6 +404,7 @@ impl DirGraph {
                     &graph.ontology,
                     rel_type,
                     source_type,
+                    |label| has_secondary_label(graph, source, label),
                     |property| {
                         let key = InternedKey::from_str(property);
                         weight
@@ -376,6 +421,9 @@ impl DirGraph {
             }
             if !tally.is_refused() {
                 cardinality_gate::judge_sources(graph, &sources, &rules_by_type, tally);
+            }
+            if !tally.is_refused() {
+                distinct_gate::judge_edges(graph, &distinct_edges, &rules_by_type, tally);
             }
         }
         match tally.take_refusal() {

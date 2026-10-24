@@ -367,7 +367,10 @@ impl DirGraph {
     /// - an **abstract** class whose name is a live or schema-declared
     ///   primary type is an error (`MATCH (n:X)` must keep one meaning);
     /// - a **concrete** class naming no live primary type is a warning
-    ///   (returned, not printed — callers own the channel).
+    ///   (returned, not printed — callers own the channel);
+    /// - an `exempt` entry that is neither a declared class, a live primary
+    ///   type nor a live secondary label is a warning (an unknown name
+    ///   exempts nothing, which is what a typo looks like).
     fn check_ontology_declaration(
         &self,
         store: &crate::graph::ontology::OntologyStore,
@@ -392,6 +395,22 @@ impl DirGraph {
                     "ontology class '{name}' is concrete but no node type of that name \
                      exists (declare it abstract, or load its nodes)"
                 ));
+            }
+        }
+        for (rel, decl) in &store.relationships {
+            for (check, entries) in &decl.exempt {
+                for entry in entries {
+                    let known = store.classes.contains_key(entry)
+                        || self.type_indices.contains_key(entry)
+                        || crate::graph::core::graph_filter::carried_as_secondary(self, entry);
+                    if !known {
+                        warnings.push(format!(
+                            "relationship '{rel}': exempt['{check}'] names '{entry}', which is \
+                             neither a declared class nor a label any node carries yet; it \
+                             exempts nothing until a node does (check the spelling)"
+                        ));
+                    }
+                }
             }
         }
         if store.closed_labels {

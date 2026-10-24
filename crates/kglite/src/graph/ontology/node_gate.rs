@@ -154,19 +154,25 @@ impl TypeRules {
 
 impl PropertyRule {
     fn violation(&self, primary_type: &str, property: &str) -> OntologyViolation {
-        let (rule, what) = if self.check == "required_properties" {
-            (
+        let (rule, what) = match self.check {
+            "required_properties" => (
                 OntologyRule::RequiredProperty,
                 format!("requires property '{property}'"),
-            )
-        } else {
-            (
+            ),
+            "property_values" => (
+                OntologyRule::PropertyValue,
+                format!(
+                    "property '{property}' must satisfy {}",
+                    self.decl.property_values[property].summary()
+                ),
+            ),
+            _ => (
                 OntologyRule::PropertyType,
                 format!(
                     "property '{property}' must be of type '{}'",
                     self.decl.property_types[property]
                 ),
-            )
+            ),
         };
         OntologyViolation::new(
             rule,

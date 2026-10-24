@@ -585,7 +585,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "ontology_audit",
         aliases: &[],
-        description: "Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). `exempted` counts rows an `exempt` declaration excuses; violations + exempted = everything flagged. {by: 'domain_class'} PARTITIONS each rule into one row per violating domain-side class (they sum back to the rule's violations). {by: 'property'} is a CENSUS of the required_properties/property_types rules: one row per declared property, including those nothing fails, and an entity missing several counts under each — so these rows sum to at least the aggregate, never back to it. One axis at a time; the unasked-for column is Null, as both are without the parameter",
+        description: "Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). `exempted` counts rows an `exempt` declaration excuses; violations + exempted = everything flagged. {by: 'domain_class'} PARTITIONS each rule into one row per violating domain-side class (they sum back to the rule's violations). {by: 'property'} is a CENSUS of the required_properties/property_types/property_values rules: one row per declared property, including those nothing fails, and an entity missing several counts under each — so these rows sum to at least the aggregate, never back to it. One axis at a time; the unasked-for column is Null, as both are without the parameter",
         columns: &[
             "entity_kind",
             "rule",
@@ -607,7 +607,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "edge_property_violation",
         aliases: &[],
-        description: "Rule: edges flagged by a declaration's required_properties (property absent/null) or property_types (present value of the wrong type) — the row listing behind those two ontology_audit counts. No-arg only; one row per flagged edge, `properties` listing every declared property it fails and `property` the first of them, `exempt` marking rows an `exempt` declaration excuses",
+        description: "Rule: edges flagged by a declaration's required_properties (property absent/null), property_types (present value of the wrong type) or property_values (present value outside its enum/pattern/min/max contract) — the row listing behind those three ontology_audit counts. No-arg only; one row per flagged edge, `properties` listing every declared property it fails and `property` the first of them, `exempt` marking rows an `exempt` declaration excuses",
         columns: &[
             "relationship",
             "check",
