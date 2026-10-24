@@ -1104,10 +1104,9 @@ pub struct EmbedHooks<'a> {
     /// Texts per `model.embed()` call.
     pub batch_size: usize,
     /// Load the model even when nothing needs embedding, so the outcome can
-    /// report its `dimension`. The wheel's `embed_texts` reports a dimension
-    /// in every return dict and therefore asks for it; a server rebuilding a
-    /// vault leaves it off, so a rebuild that changed no note never touches
-    /// the model at all.
+    /// report its `dimension`. Off for every in-tree binding: a pass that
+    /// changed nothing never touches the model, and the binding reports the
+    /// store's dimension (or the registered model's declared one) itself.
     pub load_when_idle: bool,
     /// Runs one batch through the model. `None` calls `model.embed` directly;
     /// a binding that must release a runtime lock around the call — the

@@ -203,8 +203,21 @@ pub(crate) fn generate_selected(
         .map_err(EmbedError::Output)?;
 
     let metric = resolve_generation_metric(existing, &request).map_err(EmbedError::Output)?;
-    let requested_model =
-        crate::graph::embedder::model_id_before_load(service.model).map_err(EmbedError::Model)?;
+    // The to-embed set first: a pass with nothing pending never asks the model
+    // to load, so an unchanged re-run costs a scan, not a model build.
+    let mut plan = plan_selection(existing, &request.selected, request.mode);
+    let idle = plan.pending.is_empty();
+    let requested_model = if idle {
+        // Pure removal: the model's own answer if it has one without loading,
+        // else the prior stamp so the removal does not clear it.
+        service.model.model_id().or_else(|| {
+            existing
+                .and_then(|store| store.model_id())
+                .map(str::to_string)
+        })
+    } else {
+        crate::graph::embedder::model_id_before_load(service.model).map_err(EmbedError::Model)?
+    };
     if request.mode != EmbedMode::All {
         if let Some(prior_model) = existing.and_then(|store| store.model_id()) {
             if requested_model.as_deref() != Some(prior_model) {
@@ -219,6 +232,20 @@ pub(crate) fn generate_selected(
         }
     }
 
+    if idle && plan.remove_selected.is_empty() {
+        return Ok(EdgeGenerationReport {
+            embedded: 0,
+            skipped: plan.skipped,
+            skipped_existing: plan.skipped_existing,
+            reembedded_changed: plan.reembedded_changed,
+            removed_missing: plan.removed_missing,
+            stored: existing.map_or(0, |store| store.len()),
+            dimension: existing.map_or(0, |store| store.dimension()),
+            model_id: existing
+                .and_then(|store| store.model_id())
+                .map(str::to_string),
+        });
+    }
     let selected_slots: HashSet<_> = request
         .selected
         .iter()
@@ -229,8 +256,11 @@ pub(crate) fn generate_selected(
             .edges()
             .any(|edge| !selected_slots.contains(&edge.index()))
     });
-    let dimension =
-        crate::graph::embedder::dimension_before_load(service.model).map_err(EmbedError::Model)?;
+    let dimension = if idle {
+        existing.map_or_else(|| service.model.dimension(), |store| store.dimension())
+    } else {
+        crate::graph::embedder::dimension_before_load(service.model).map_err(EmbedError::Model)?
+    };
     if dimension == 0 {
         return Err(EmbedError::Output("embedder declared dimension 0".into()));
     }
@@ -243,7 +273,6 @@ pub(crate) fn generate_selected(
         }
     }
 
-    let mut plan = plan_selection(existing, &request.selected, request.mode);
     let generated = service.generate(graph, &plan.pending, request.batch_size, hooks)?;
     let final_model_id = final_model_id(
         existing.and_then(|store| store.model_id()),

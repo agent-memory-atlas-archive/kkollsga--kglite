@@ -329,7 +329,9 @@ class EmbeddingModel(Protocol):
 
     **Optional** — ``load()`` and ``unload()`` are called automatically if present:
 
-    - ``load()`` is called before each ``embed_texts()`` / ``search_text()`` call.
+    - ``load()`` is called before each ``embed_texts()`` / ``search_text()`` call
+      that has text to embed; an ``embed_texts()`` pass that finds every text
+      already embedded and current never calls it.
     - ``unload()`` is called after each call completes (even on error).
 
     **Optional — ``model_id`` / ``model_name``** (a ``str`` attribute): if present,

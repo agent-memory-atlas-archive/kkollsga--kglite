@@ -746,7 +746,7 @@ impl KnowledgeGraph {
         this.check_durable_owner()?;
         let precision = super::quantization::parse_precision(precision)?;
         super::quantization::refuse_poincare(precision, metric)?;
-        let (model, registered) = this.embedder_or_idle(
+        let (model, _) = this.embedder_or_idle(
             kglite_core::api::embeddings::EmbeddingEntity::Node,
             node_type,
             text_column,
@@ -796,10 +796,9 @@ impl KnowledgeGraph {
         let embed_batch = |texts: &[String]| py.detach(|| model.embed(texts));
         let hooks = EmbedHooks {
             batch_size: batch_size.unwrap_or(256),
-            // `embed_texts` reports a dimension in every return dict, even for
-            // a pass with nothing to do, so a registered model is loaded for
-            // it; without one, the store's own dimension is reported.
-            load_when_idle: registered,
+            // A pass with nothing to embed leaves the model unloaded; the
+            // reported dimension comes from the store or the registered model.
+            load_when_idle: false,
             embed_batch: Some(&embed_batch),
             on_start: Some(&open_bar),
             on_batch: Some(&tick),
@@ -830,7 +829,12 @@ impl KnowledgeGraph {
         result.set_item("skipped", outcome.skipped)?;
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
-        result.set_item("dimension", outcome.dimension)?;
+        let dimension = if outcome.dimension == 0 {
+            model.dimension()
+        } else {
+            outcome.dimension
+        };
+        result.set_item("dimension", dimension)?;
         if precision.is_some() {
             result.set_item(
                 "quantization",

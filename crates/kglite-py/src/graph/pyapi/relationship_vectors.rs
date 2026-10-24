@@ -183,7 +183,12 @@ impl KnowledgeGraph {
         result.set_item("skipped", outcome.skipped)?;
         result.set_item("skipped_existing", outcome.skipped_existing)?;
         result.set_item("reembedded_changed", outcome.reembedded_changed)?;
-        result.set_item("dimension", outcome.dimension)?;
+        let dimension = if outcome.dimension == 0 {
+            model.dimension()
+        } else {
+            outcome.dimension
+        };
+        result.set_item("dimension", dimension)?;
         if precision.is_some() {
             result.set_item(
                 "quantization",
