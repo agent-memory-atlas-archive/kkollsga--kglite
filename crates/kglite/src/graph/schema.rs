@@ -984,10 +984,12 @@ pub const KGL_FORMAT_VERSION: u32 = crate::graph::io::magic::CURRENT_CONTAINER_V
 /// container magic (`io/magic.rs`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SaveMetadata {
-    /// [`KGL_FORMAT_VERSION`] on a fresh save *and* on a load, so a graph
-    /// reports the same layout version either side of a round-trip; `0` for a
-    /// file written before this field existed (via serde default). Not itself
-    /// persisted — the load path re-stamps the constant (`io/file.rs`).
+    /// The `.kgl` container version of the file this graph was last saved to
+    /// or loaded from (the header byte: 8 for a compact save, 9 when the save
+    /// wrote a data region). A graph never saved or loaded, and a disk
+    /// directory, report [`KGL_FORMAT_VERSION`]; `0` for a file written before
+    /// this field existed (via serde default). Not itself persisted — load and
+    /// save stamp it from the header (`io/file.rs`).
     pub format_version: u32,
     /// Library version at save time, e.g. "0.4.7".
     pub library_version: String,

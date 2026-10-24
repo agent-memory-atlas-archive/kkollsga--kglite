@@ -62,9 +62,10 @@ pub(crate) const V8_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x08];
 /// section; every other save still writes v8 bytes.
 pub(crate) const V9_MAGIC: [u8; 4] = [0x52, 0x47, 0x46, 0x09];
 
-/// The container version byte a save writes by default — the number
-/// [`crate::graph::schema::KGL_FORMAT_VERSION`] reports to `graph_info()` and
-/// to the C ABI. v9 is written only conditionally, so this stays at v8.
+/// The container version byte a compact save writes — the number
+/// [`crate::graph::schema::KGL_FORMAT_VERSION`] reports to the C ABI and for a
+/// graph not yet tied to a file. v9 is written only conditionally, so this
+/// stays at v8; `graph_info()['format_version']` reports the real header byte.
 pub(crate) const CURRENT_CONTAINER_VERSION: u8 = V8_MAGIC[3];
 
 /// The highest container version this build can read.

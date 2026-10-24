@@ -29,7 +29,7 @@ The tables below are generated from the source, so they list every key the insta
 | `type_count` | int | always | Number of distinct node types. |
 | `property_index_count` | int | always | Number of single-property indexes. |
 | `composite_index_count` | int | always | Number of composite indexes. |
-| `format_version` | int | always | `.kgl` on-disk layout version (engine-owned). |
+| `format_version` | int | always | `.kgl` container version of the file the graph was last saved to or loaded from (`8` or `9`); this build's compact version for a graph with no file yet. |
 | `library_version` | str | always | Kglite version that last saved the graph. |
 | `user_schema_version` | int | always | Your data-model revision (see `schema_version`); `0` when unversioned. |
 | `storage_mode` | str | always | `"memory"`, `"mapped"` or `"disk"` — the backend the graph is actually running on. |

@@ -11,6 +11,7 @@ before upgrading.
 
 ### Fixed
 
+- **`graph_info()['format_version']` names the container on disk.** A v9 `.kgl` reported 8 after a load, and a save never updated it. It now reports the header version of the file last loaded or saved (`layout="compact"` writes 8).
 - **`MATCH (n) RETURN …, row_number() OVER (…) ORDER BY … LIMIT k` runs.** A window function over a single-node scan with `ORDER BY` and `LIMIT` raised "Window function must appear in RETURN/WITH clause". The window now ranks every row before the sort and the cut.
 - **`--selftest` fails when a skill was skipped at load.** A project, pack, manifest or graph-carried skill that the server drops (a file over the 16384-byte hard limit, bad frontmatter, a `KgliteSkill` record with an empty description) used to leave a passing `✓ skills` line while the server served a lower-layer skill of the same name. The selftest now prints `✗ skills skipped` naming each file and the reason, and exits non-zero. The passing line names each served skill's winning layer, such as `cypher_query[project]` or `fetch_images[bundled]`.
 - **`--selftest` counts every stored node.** On a graph that declares valid time the `graph hydrates` probe ran under the valid-today default and under-reported the graph. It now runs `FOR VALID_TIME ALL MATCH (n) RETURN count(n)`.

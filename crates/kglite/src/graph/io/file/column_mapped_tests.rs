@@ -47,6 +47,15 @@ fn save_to(graph: DirGraph, path: &std::path::Path, layout: SaveLayout) -> Arc<D
     arc
 }
 
+fn save_to_arc(
+    mut arc: Arc<DirGraph>,
+    path: &std::path::Path,
+    layout: SaveLayout,
+) -> Arc<DirGraph> {
+    save_graph_with_layout(&mut arc, path.to_str().unwrap(), true, layout).unwrap();
+    arc
+}
+
 fn load_columns(path: &std::path::Path, policy: MapPolicy) -> Arc<DirGraph> {
     load_file_with(
         path.to_str().unwrap(),
@@ -561,4 +570,25 @@ fn a_column_write_does_not_promote_a_corrupt_mapped_buffer() {
         save_graph_with_layout(&mut graph, copy.to_str().unwrap(), true, SaveLayout::Auto).is_err()
     );
     assert!(!copy.exists());
+}
+
+/// `graph_info()['format_version']` must name the container on disk. The
+/// load side used to re-stamp this build's constant (v8), so a v9 file read 8.
+#[test]
+fn format_version_names_the_container_the_save_wrote_and_the_load_parsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (layout, name, version) in [
+        (SaveLayout::Auto, "auto.kgl", 9u32),
+        (SaveLayout::Compact, "compact.kgl", 8u32),
+    ] {
+        let path = tmp.path().join(name);
+        let saved = save_to(big_graph(), &path, layout);
+        assert_eq!(u32::from(magic(&path)[3]), version);
+        assert_eq!(saved.save_metadata.format_version, version, "after save");
+        let loaded = load_columns(&path, MapPolicy::Auto);
+        assert_eq!(loaded.save_metadata.format_version, version, "after load");
+        let again = tmp.path().join(format!("again-{name}"));
+        let resaved = save_to_arc(loaded, &again, layout);
+        assert_eq!(resaved.save_metadata.format_version, version, "resaved");
+    }
 }

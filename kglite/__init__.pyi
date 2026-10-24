@@ -4209,7 +4209,9 @@ class KnowledgeGraph:
                   from a path this is the mode its checkpoint recorded, so it is
                   how you confirm a reopen (or a ``storage=`` conversion) landed
                   where you expected
-                - ``format_version``: ``.kgl`` on-disk layout version (engine-owned)
+                - ``format_version``: ``.kgl`` container version of the file the graph
+                  was last saved to or loaded from (``8`` or ``9``); this
+                  build's compact version for a graph with no file yet
                 - ``library_version``: kglite version that last saved the graph
                 - ``user_schema_version``: your data-model revision (see
                   :attr:`schema_version`); ``0`` when unversioned

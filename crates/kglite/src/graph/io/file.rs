@@ -706,9 +706,9 @@ impl FileMetadata {
             self.temporal_declarations,
             (self.temporal_node_configs, self.temporal_edge_configs),
         );
-        // `format_version` is not persisted, so the load side has to re-derive
-        // it: the constant this build writes, not a literal pinned to whatever
-        // container was current when this line was written.
+        // `format_version` is not persisted. A portable load overwrites this
+        // with the container byte it parsed (`load_portable_columnar`); a disk
+        // directory has no container, so it keeps this build's constant.
         graph.save_metadata = SaveMetadata {
             format_version: crate::graph::schema::KGL_FORMAT_VERSION,
             oldest_writer: self
@@ -1180,7 +1180,25 @@ pub fn save_inmemory_with_layout(
 ) -> io::Result<()> {
     prepare_kgl_write(graph);
     embedding_sections::release_mappings_of_destination(graph, path, cfg!(windows));
-    write_kgl_with_stamp_layout(graph, path, fsync, None, layout).map(|_| ())
+    write_kgl_with_stamp_layout(graph, path, fsync, None, layout)?;
+    stamp_written_container(graph, path)
+}
+
+/// Record the container version the file at `path` actually carries: the
+/// writer picks v8 or v9 from the layout and the section sizes, so only the
+/// written header knows.
+fn stamp_written_container(graph: &mut Arc<DirGraph>, path: &str) -> io::Result<()> {
+    let mut magic = [0u8; 4];
+    File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic))
+        .map_err(|e| io_context("reading the header of", Path::new(path), e))?;
+    let version = u32::from(magic[3]);
+    if graph.save_metadata.format_version != version {
+        crate::graph::handle::make_dir_graph_mut_preserving_lineage(graph)
+            .save_metadata
+            .format_version = version;
+    }
+    Ok(())
 }
 
 /// Mode-aware durable save: dispatches to `DirGraph::save_disk` for
@@ -2256,6 +2274,9 @@ fn load_portable_columnar(
         .flatten();
     let (mut dir_graph, plan) =
         decode_portable_topology(codec, &mut sections, metadata, indexes.as_mut(), frozen)?;
+    // The container version is the file's own header byte, not a constant of
+    // this build: since v9 a save writes v8 or v9 depending on its layout.
+    dir_graph.save_metadata.format_version = u32::from(buf[3]);
     column_sections::load_portable_columns(
         codec,
         &mut dir_graph,
