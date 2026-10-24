@@ -5346,7 +5346,7 @@ relationship, and zero rows when nothing is declared.
   `required_properties`, `property_types`, `property_values`, `enforcement`.
 - A relationship row has `kind`, `name`, `domain`, `range`,
   `required_properties`, `property_types`, `property_values`, `distinct`,
-  `enforcement`, `exempt`, `description`.
+  `by_source`, `enforcement`, `exempt`, `description`.
 
 `ontology_audit()` is the scorecard: one row per declared check with its
 violation count, denominator, percentage, and declared severity.

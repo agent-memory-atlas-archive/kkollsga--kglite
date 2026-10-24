@@ -198,7 +198,7 @@ kglite-mcp-server --selftest  (mode: single-graph)
   ✓ server initializes: serverInfo.name = KGLite (single-graph)
   ✓ graph tools registered: cypher_query + graph_overview present
   – github tools: none registered (needs `builtins.github: true` in the manifest, then a reachable GITHUB_TOKEN)
-  ✓ graph hydrates: MATCH (n) RETURN count(n) → 1 row(s):
+  ✓ graph hydrates: FOR VALID_TIME ALL MATCH (n) RETURN count(n) → 1 row(s):
 Selftest PASSED — the server is configured correctly.
 ```
 
@@ -213,6 +213,14 @@ The marks mean:
 For example, a manifest `source_root:` that no longer exists prints `– manifest source roots: source tools unavailable — …`, and the run still passes. The graph tools it exists to serve are intact.
 
 When the child never answers, the failing check quotes the child's last stderr lines as the cause, so a CI log is readable without scrolling.
+
+The skills check covers what the server actually serves:
+
+- The passing line names each skill's winning layer, such as `cypher_query[project]` or `fetch_images[bundled]`.
+- A skill the server skipped at load fails the run with `✗ skills skipped`, naming the file or graph record and the reason. Causes include a file over the 16384-byte hard limit, bad frontmatter, or a `KgliteSkill` record with an empty description.
+- A skipped skill is never shortened to fit. The server would otherwise serve a lower-layer skill of the same name without saying so.
+
+The hydration probe counts every stored node (`FOR VALID_TIME ALL`), so a graph that declares valid time reports its full size.
 
 ### 4. (Optional) Add a manifest for more tools
 
@@ -894,7 +902,7 @@ The server tells the agent when the code it runs was replaced on disk, and can l
 
 - The watched file is the extension module the server loaded from (wheel) or the executable (cargo binary).
 - The installed version comes from `<package>-*.dist-info` or from `--version`.
-- A binary that embeds the server names its own package when its `main` calls `ServerExtensions::with_identity(name, version)` ({doc}`/rust/building-on-kglite`).
+- A binary that embeds the server names its own package when its `main` calls `ServerExtensions::with_identity(name, version)` ({doc}`/rust/building-on-kglite`). Its `--version` then prints that name and version.
 
 **The reload.** `ping(reload=true)` re-executes the server in place: same process id, same stdio, no second `initialize`. A request already queued behind the reload is answered by the new build. Unix only.
 

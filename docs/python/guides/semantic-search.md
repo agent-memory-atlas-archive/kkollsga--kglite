@@ -63,7 +63,9 @@ results = graph.select("Article").search_text("summary", "machine learning", top
   - An unknown/mixed store can be incrementally refreshed, but stays `model=None`.
   - Only a full rebuild restores named aggregate provenance.
 - **Progress bar:** a tqdm progress bar shows by default. Disable it with `show_progress=False`.
-- **Load/unload lifecycle:** if the model has optional `load()` / `unload()` methods, they are called automatically before and after each embedding operation.
+- **Load/unload lifecycle:** if the model has optional `load()` / `unload()` methods, they are called automatically before and after each embedding operation that has text to embed.
+  - A pass where every text is already embedded never calls them, so an unchanged re-run costs a scan, not a model load.
+  - A model of a different `dimension` than the store is still refused on that pass; the check uses the registered dimension and needs no load.
 - **Registration metadata:** `set_embedder()` snapshots `dimension` and the optional `model_id` / `model_name`.
   - Set their final values before registration. Register again to adopt changed metadata.
   - The model object itself is **not** saved with `save()`. Call `set_embedder()` again after deserializing.

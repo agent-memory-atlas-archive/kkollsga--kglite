@@ -34,10 +34,10 @@ Defined at `crates/kglite/src/datatypes/values.rs`. Sixteen variants today:
 | **`List(Vec<Value>)`** | ordered heterogeneous list | LIST (sized) |
 | **`Map(BTreeMap<String, Value>)`** | string-keyed map (deterministic order) | MAP (sized) |
 
-Persistence uses the explicitly versioned RGF v8/Postcard container. The
-current reader accepts v8, v7, v6 and v5. A v8 file carries a checksum over
-its header and metadata, and a file written by this build cannot be opened by
-0.19.x or older. It rejects v4/bincode and older containers
+Persistence uses the versioned RGF container with a Postcard codec.
+A large graph saves as v9. A small one saves as v8. So does
+`layout="compact"`. The reader accepts v5 to v9. v8 and v9 carry a
+header checksum. 0.20.x cannot open v9. 0.19.x cannot open v8. It rejects v4/bincode and older containers
 with a clear migration/rebuild error.
 
 ### Timestamps and dates
@@ -314,7 +314,7 @@ returning data.
 
 ## In `.kgl` files
 
-The current `.kgl` format is an RGF v8 binary container:
+A compact `.kgl` (v8) is laid out as below. A v9 file adds mappable sections.
 
 ```
 [0..4]    Magic: b"RGF\x08"

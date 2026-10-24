@@ -113,8 +113,8 @@ it should be justified by measurements rather than assumed to be free.
 
 ## Two persistence products, two lifecycles
 
-Memory and mapped graphs save portable `.kgl` snapshots. The RGF v8 container
-selects Postcard explicitly and uses JSON metadata plus compressed sections so topology,
+Memory and mapped graphs save portable `.kgl` snapshots. The RGF container (v9
+with mappable sections by default, v8 when compact) selects Postcard explicitly and uses JSON metadata plus compressed sections so topology,
 columns, embeddings, and timeseries data can evolve with explicit version
 checks.
 

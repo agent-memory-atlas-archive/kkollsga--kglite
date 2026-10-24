@@ -233,8 +233,9 @@ other:
   → Python loads via `kglite.load("graph.kgl")`
 - Future Go binding writes → TypeScript binding reads, etc.
 
-The current writer emits RGF v8 with an explicit Postcard codec tag. The
-reader accepts v7, v6 and v5/Postcard and rejects v4/bincode and older containers with a
+The current writer emits RGF v9 (mappable sections) by default above the size
+floors and RGF v8 otherwise or with the compact layout, both with an explicit
+Postcard codec tag. The reader accepts v9, v8, v7, v6 and v5/Postcard and rejects v4/bincode and older containers with a
 migration/rebuild message. Format drift is tracked via
 `tests/test_phase4_parity.py::GOLDEN_V3_DIGEST` etc. (see CLAUDE.md →
 "Captured-constant refresh at release time").
