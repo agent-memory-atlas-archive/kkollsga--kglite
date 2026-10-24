@@ -33,6 +33,8 @@
 //!       "domain": "Licensable", "range": "Company",
 //!       "required_properties": ["validFrom"],
 //!       "property_types": {"validFrom": "date"},
+//!       "property_values": {"validFrom": {"min": 1900}},
+//!       "distinct": ["validFrom"],
 //!       "inverse_name": "OPERATOR_OF",
 //!       "cardinality": {"min": 0, "max": 1},
 //!       "required": true, "transitive": false, "symmetric": false,
@@ -60,17 +62,23 @@
 //!   `*1..`, which is what a parent-pointer taxonomy (`STRAT_PARENT`,
 //!   `wdt:P279`) actually is — declaring *that* `transitive` would report
 //!   100% violations.
-//! - `enforcement` at `warn` or `error` is enforced at write time for the
-//!   node rules (class `required_properties` / `property_types` and
-//!   `closed_labels`): a violating Cypher statement or bulk load is refused
-//!   (`error`) or reported (`warn`), judged on the node's primary label
-//!   alone. Relationship rules are data for the blueprint gate and
-//!   `ontology_audit()`, not engine write guarantees.
+//! - `enforcement` at `warn` or `error` is enforced at write time: a
+//!   violating Cypher statement or bulk load is refused (`error`) or
+//!   reported (`warn`). Node rules (class `required_properties` /
+//!   `property_types` / `property_values` and `closed_labels`) are judged on
+//!   the node's primary label alone. Relationship rules (`domain`, `range`,
+//!   `cardinality`, `distinct`, and the relationship property rules) are
+//!   judged per edge or per statement end; the rules that demand something be
+//!   present are judged when the transaction ends.
 //! - `exempt` names, per check, source classes whose violations are counted
 //!   *separately* (`ontology_audit`'s `exempted`) instead of against
 //!   severity, so one legitimately-nonconforming source type cannot pin a
 //!   whole rule at `advisory`. Accepted for [`EXEMPTABLE_CHECKS`] only.
 //! - `by` names a discriminator property and is documentation only.
+//! - `property_values` is a per-property value contract (`enum`, `pattern`,
+//!   `not_pattern`, `min`, `max`); null or absent values never violate it.
+//! - `distinct: true | [props]` on a relationship allows one edge per source,
+//!   target and listed property values; violations are the surplus edges.
 //! - `closed_labels: true` adds the allowed-labels rule: a node's primary
 //!   label must be a declared class (needs at least one class).
 //! - A top-level `enforcement` severity string governs that label rule and

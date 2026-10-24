@@ -5326,7 +5326,8 @@ Enforcement is identical either way.
 
 The ontology is declared with the Python `define_ontology()` (classes with an
 `is_a` forest, abstract supertypes, and relationship semantics), persisted with
-the graph, and read-only from Cypher:
+the graph. `SHOW ONTOLOGY` and the audit procedures read it;
+`db.ontology.declare` and `db.ontology.clear` write it:
 
 ```cypher
 SHOW ONTOLOGY
@@ -5342,10 +5343,10 @@ CALL node_property_violation() YIELD class, check, node, property, properties
 relationship, and zero rows when nothing is declared.
 
 - A class row has `kind`, `name`, `is_a`, `abstract`, `description`,
-  `required_properties`, `property_types`, `enforcement`.
+  `required_properties`, `property_types`, `property_values`, `enforcement`.
 - A relationship row has `kind`, `name`, `domain`, `range`,
-  `required_properties`, `property_types`, `enforcement`, `exempt`,
-  `description`.
+  `required_properties`, `property_types`, `property_values`, `distinct`,
+  `enforcement`, `exempt`, `description`.
 
 `ontology_audit()` is the scorecard: one row per declared check with its
 violation count, denominator, percentage, and declared severity.
@@ -5381,7 +5382,7 @@ The domain-side class is:
 Class property contracts partition by the violating node's primary type.
 
 `{by: 'property'}` answers the other follow-up, *which fields* are missing. It
-fans the `required_properties` and `property_types` rules into one row per
+fans the `required_properties`, `property_types` and `property_values` rules into one row per
 **declared** property: `violations` counts the nodes or edges failing that
 property, `total` the rule's covered nodes or relationship edges, and `pct` the
 share failing it. Every other rule keeps its aggregate row with a Null
@@ -5400,7 +5401,7 @@ double-counts.
 - Only one axis applies at a time. The column you did not ask for is Null.
 
 `edge_property_violation()` lists the individual edges behind the
-`required_properties` and `property_types` counts (the two declared checks with
+`required_properties`, `property_types` and `property_values` counts (the declared checks with
 no rule procedure of their own). It takes no arguments.
 
 - It returns one row per flagged edge.

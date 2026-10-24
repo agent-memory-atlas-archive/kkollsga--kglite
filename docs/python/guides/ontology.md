@@ -139,7 +139,7 @@ RETURN class, check, node.id AS id, properties
 
 No ontology is an error. An ontology without node contracts returns no findings.
 
-`SHOW ONTOLOGY` exposes `required_properties`, `property_types` and enforcement for classes and relationships. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
+`SHOW ONTOLOGY` exposes `required_properties`, `property_types`, `property_values`, `enforcement` and (relationships) `distinct` and `exempt`. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
 
 ## Value contracts
 
@@ -261,6 +261,7 @@ Run it after every rebuild and you have data-quality-over-time for free. An agen
 - A rule with nothing to break down keeps its single aggregate row.
 - Without the parameter, `domain_class` is `None` on every row.
 - A bare `CALL ontology_audit()` and the `{by: …}` forms all return the nine columns, including `entity_kind` to distinguish node and edge rules.
+- The audit judges every stored row, whatever its valid time. `FOR VALID_TIME` does not scope it, so superseded versions of an edge count like current ones.
 
 ```python
 for row in g.cypher(
@@ -280,7 +281,7 @@ The domain-side class is:
 
 ### Which fields are missing
 
-`{by: 'property'}` fans the `required_properties` and `property_types` rules into one row per **declared** property.
+`{by: 'property'}` fans the `required_properties`, `property_types` and `property_values` rules into one row per **declared** property.
 
 - `violations` counts the nodes or edges failing that property.
 - `total` is the rule's covered nodes or relationship edges.
@@ -539,7 +540,7 @@ What the form guarantees:
 
 ### Drilling down to the flagged edges
 
-`exempted` never hides rows. `violations + exempted` is everything the check flagged. `edge_property_violation()` lists those individual edges: the row-level drill-down behind the `required_properties` / `property_types` counts. Its `exempt` column marks which side of the line each row fell on:
+`exempted` never hides rows. `violations + exempted` is everything the check flagged. `edge_property_violation()` lists those individual edges: the row-level drill-down behind the `required_properties` / `property_types` / `property_values` counts. Its `exempt` column marks which side of the line each row fell on:
 
 ```python
 for row in g.cypher("""

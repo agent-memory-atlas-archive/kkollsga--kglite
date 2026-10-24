@@ -6276,13 +6276,18 @@ class KnowledgeGraph:
         ``CALL ontology_audit()`` adds ``entity_kind`` (``node``/``edge``);
         use it with ``rule`` to distinguish a class and relationship with the
         same name. Node totals count covered live nodes and exemptions are
-        zero. The property census includes zero-violation fields; a node
+        zero. ``ontology_audit()`` judges every stored row regardless of
+        valid time (``FOR VALID_TIME`` does not scope it). ``{by: 'property'}``
+        fans ``required_properties``, ``property_types`` and
+        ``property_values`` per declared property. The property census
+        includes zero-violation fields; a node
         missing several fields counts once in the aggregate and once under
         each missing field. ``CALL node_property_violation() YIELD class,
         check, node, property, properties`` lists those nodes, one row per
         declaring class/check, with all failed properties and their first
         name. It takes no parameters. ``SHOW ONTOLOGY`` exposes
-        ``required_properties``, ``property_types`` and class enforcement.
+        ``required_properties``, ``property_types``, ``property_values``,
+        ``enforcement`` and, on relationships, ``distinct`` and ``exempt``.
 
         Write-time enforcement: a rule declared at ``warn`` or ``error``
         judges every write that could break it (Cypher, the bulk loaders,
