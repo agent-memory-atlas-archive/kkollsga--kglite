@@ -368,7 +368,7 @@ impl DirGraph {
     ///   primary type is an error (`MATCH (n:X)` must keep one meaning);
     /// - a **concrete** class naming no live primary type is a warning
     ///   (returned, not printed — callers own the channel);
-    /// - an `exempt` entry that is neither a declared class, a live primary
+    /// - a `by_source` key or an `exempt` entry that is neither a declared class, a live primary
     ///   type nor a live secondary label is a warning (an unknown name
     ///   exempts nothing, which is what a typo looks like);
     /// - a property named by a contract or `distinct` that no stored row of
@@ -400,6 +400,18 @@ impl DirGraph {
             }
         }
         for (rel, decl) in &store.relationships {
+            for key in decl.by_source.keys() {
+                let known = store.classes.contains_key(key)
+                    || self.type_indices.contains_key(key)
+                    || crate::graph::core::graph_filter::carried_as_secondary(self, key);
+                if !known {
+                    warnings.push(format!(
+                        "relationship '{rel}': by_source['{key}'] names '{key}', which is \
+                         neither a declared class nor a label any node carries yet; it \
+                         binds no edge until a node does (check the spelling)"
+                    ));
+                }
+            }
             for (check, entries) in &decl.exempt {
                 for entry in entries {
                     let known = store.classes.contains_key(entry)

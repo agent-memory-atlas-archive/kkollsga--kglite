@@ -26,7 +26,8 @@ use super::cardinality_gate::{self, CardinalityRule};
 use super::distinct_gate::{self, DistinctRule};
 use super::node_gate::Tally;
 use super::predicates::{
-    domain_violated, edge_property_failures, has_secondary_label, range_violated, source_exempt,
+    domain_violated, edge_property_verdict, has_secondary_label, range_violated, source_exempt,
+    PropertyFailure,
 };
 use super::violation::{OntologyRule, OntologyViolation};
 use super::{Enforcement, OntologyStore, RelationshipDecl, NODE_CHECK_NAMES};
@@ -43,11 +44,7 @@ fn enforced(severity: Enforcement) -> bool {
 const PROPERTY_CHECKS: &[&str] = NODE_CHECK_NAMES;
 
 fn declared_properties(decl: &RelationshipDecl, check: &str) -> bool {
-    match check {
-        "required_properties" => !decl.required_properties.is_empty(),
-        "property_values" => !decl.property_values.is_empty(),
-        _ => !decl.property_types.is_empty(),
-    }
+    decl.declares_property_check(check)
 }
 
 /// Whether any relationship rule of `store` is declared at `warn` or `error`
@@ -167,13 +164,7 @@ impl RelRules {
     pub(crate) fn property_names(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         for (check, _) in &self.checks {
-            match *check {
-                "required_properties" => {
-                    names.extend(self.decl.required_properties.iter().cloned())
-                }
-                "property_values" => names.extend(self.decl.property_values.keys().cloned()),
-                _ => names.extend(self.decl.property_types.keys().cloned()),
-            }
+            names.extend(self.decl.declared_property_names(check));
         }
 
         names.sort();
@@ -275,7 +266,13 @@ impl RelRules {
             if source_exempt(store, &self.decl, check, source_type, has_secondary) {
                 continue;
             }
-            for property in edge_property_failures(&self.decl, check, get) {
+            let verdict =
+                edge_property_verdict(store, &self.decl, check, source_type, has_secondary, get);
+            for PropertyFailure {
+                property,
+                requirement,
+            } in verdict.failures
+            {
                 let (rule, what) = match check {
                     "required_properties" => (
                         OntologyRule::RequiredProperty,
@@ -283,17 +280,11 @@ impl RelRules {
                     ),
                     "property_values" => (
                         OntologyRule::PropertyValue,
-                        format!(
-                            "property '{property}' must satisfy {}",
-                            self.decl.property_values[&property].summary()
-                        ),
+                        format!("property '{property}' must satisfy {requirement}"),
                     ),
                     _ => (
                         OntologyRule::PropertyType,
-                        format!(
-                            "property '{property}' must be of type '{}'",
-                            self.decl.property_types[&property]
-                        ),
+                        format!("property '{property}' must be of type '{requirement}'"),
                     ),
                 };
                 tally.flag(

@@ -22,6 +22,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
         "property_types",
         "property_values",
         "distinct",
+        "by_source",
         "enforcement",
         "exempt",
         "description",
@@ -30,7 +31,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
     .map(|c| c.to_string())
     .collect();
     let opt = |v: &Option<String>| v.clone().map(Value::String).unwrap_or(Value::Null);
-    let mut push = |cells: [(&str, Value); 13]| {
+    let mut push = |cells: [(&str, Value); 14]| {
         let mut row = ResultRow::new();
         for (name, value) in cells {
             row.projected.insert(name.to_string(), value);
@@ -54,6 +55,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
             ("property_types", Value::Map(Default::default())),
             ("property_values", Value::Map(Default::default())),
             ("distinct", Value::Null),
+            ("by_source", Value::Null),
             ("description", Value::Null),
         ]);
     }
@@ -96,6 +98,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
                 ),
             ),
             ("distinct", Value::Null),
+            ("by_source", Value::Null),
             ("description", opt(&decl.description)),
         ]);
     }
@@ -141,6 +144,7 @@ pub(crate) fn show_ontology_result_set(graph: &DirGraph) -> ResultSet {
                 "distinct",
                 opt(&decl.distinct.as_ref().map(|d| d.summary())),
             ),
+            ("by_source", opt(&decl.by_source_summary())),
             ("description", opt(&decl.description)),
         ]);
     }

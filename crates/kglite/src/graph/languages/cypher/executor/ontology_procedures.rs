@@ -40,9 +40,7 @@ use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::ontology::distinct_gate;
-use crate::graph::ontology::predicates::{
-    self, accepted_types, has_secondary_label, unique_required_properties,
-};
+use crate::graph::ontology::predicates::{self, accepted_types, has_secondary_label};
 use crate::graph::ontology::RelationshipDecl;
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
@@ -153,25 +151,33 @@ fn edge_property_findings(
     ));
     let mut out = Vec::new();
     for er in edges {
-        let failed =
-            predicates::edge_property_failures(decl, check.name(), |p| er.weight().get_property(p));
-        if failed.is_empty() {
+        let Some(node) = graph.graph.node_view(er.source()) else {
+            continue;
+        };
+        let source_type = node.node_type_str(&graph.interner);
+        let has_secondary = |label: &str| has_secondary_label(graph, er.source(), label);
+        let verdict = predicates::edge_property_verdict(
+            &graph.ontology,
+            decl,
+            check.name(),
+            source_type,
+            has_secondary,
+            |p| er.weight().get_property(p),
+        );
+        if verdict.failures.is_empty() {
             continue;
         }
-        let exempt = !decl.exempt_classes(check.name()).is_empty()
-            && graph.graph.node_view(er.source()).is_some_and(|n| {
-                predicates::source_exempt(
-                    &graph.ontology,
-                    decl,
-                    check.name(),
-                    n.node_type_str(&graph.interner),
-                    |label| has_secondary_label(graph, er.source(), label),
-                )
-            });
+        let exempt = predicates::source_exempt(
+            &graph.ontology,
+            decl,
+            check.name(),
+            source_type,
+            has_secondary,
+        );
         out.push(PropertyFinding {
             source: er.source(),
             target: er.target(),
-            properties: failed,
+            properties: verdict.failures.into_iter().map(|f| f.property).collect(),
             exempt,
         });
     }
@@ -195,6 +201,34 @@ fn distinct_findings(graph: &DirGraph, rel: &str, decl: &RelationshipDecl) -> Ve
             exempt,
         })
         .collect()
+}
+
+/// The edges `check` judges: every edge when the relationship-level contract
+/// declares it, otherwise the edges whose source a `by_source` key covers.
+/// The audit's denominator for the three property checks.
+fn edges_judged_by(
+    graph: &DirGraph,
+    edges: &[GraphEdgeRef<'_>],
+    decl: &RelationshipDecl,
+    check: DeclaredCheck,
+) -> usize {
+    if decl.flat_declares(check.name()) {
+        return edges.len();
+    }
+    edges
+        .iter()
+        .filter(|er| {
+            graph.graph.node_view(er.source()).is_some_and(|node| {
+                let source_type = node.node_type_str(&graph.interner);
+                decl.by_source.iter().any(|(key, entry)| {
+                    entry.declares(check.name())
+                        && predicates::source_key_matches(&graph.ontology, key, source_type, |l| {
+                            has_secondary_label(graph, er.source(), l)
+                        })
+                })
+            })
+        })
+        .count()
 }
 
 fn endpoint_rows(
@@ -252,13 +286,13 @@ fn declared_checks(rel: &str, decl: &RelationshipDecl) -> Vec<DeclaredCheck> {
     if decl.required {
         out.push(DeclaredCheck::Required);
     }
-    if !decl.required_properties.is_empty() {
+    if decl.declares_property_check("required_properties") {
         out.push(DeclaredCheck::RequiredProperties);
     }
-    if !decl.property_types.is_empty() {
+    if decl.declares_property_check("property_types") {
         out.push(DeclaredCheck::PropertyTypes);
     }
-    if !decl.property_values.is_empty() {
+    if decl.declares_property_check("property_values") {
         out.push(DeclaredCheck::PropertyValues);
     }
     if decl.cardinality.is_some() {
@@ -925,9 +959,9 @@ fn violations_by_domain_class(
 /// Empty for every check that declares none.
 fn declared_property_names(decl: &RelationshipDecl, check: DeclaredCheck) -> Vec<String> {
     match check {
-        DeclaredCheck::RequiredProperties => unique_required_properties(&decl.required_properties),
-        DeclaredCheck::PropertyTypes => decl.property_types.keys().cloned().collect(),
-        DeclaredCheck::PropertyValues => decl.property_values.keys().cloned().collect(),
+        DeclaredCheck::RequiredProperties
+        | DeclaredCheck::PropertyTypes
+        | DeclaredCheck::PropertyValues => decl.declared_property_names(check.name()),
         _ => Vec::new(),
     }
 }
@@ -984,13 +1018,13 @@ fn check_total(
     match check {
         DeclaredCheck::Domain
         | DeclaredCheck::Range
-        | DeclaredCheck::RequiredProperties
-        | DeclaredCheck::PropertyTypes
-        | DeclaredCheck::PropertyValues
         | DeclaredCheck::Distinct
         | DeclaredCheck::Inverse
         | DeclaredCheck::Symmetric
         | DeclaredCheck::Transitive => edges.len(),
+        DeclaredCheck::RequiredProperties
+        | DeclaredCheck::PropertyTypes
+        | DeclaredCheck::PropertyValues => edges_judged_by(graph, edges, decl, check),
         DeclaredCheck::Required | DeclaredCheck::Cardinality => {
             let Some(domain) = decl.domain.as_deref() else {
                 return 0;

@@ -6179,6 +6179,7 @@ class KnowledgeGraph:
                         "domain": "Licensable", "range": "Company",
                         "required_properties": ["validFrom"],
                         "property_values": {"side": {"enum": ["a", "b"]}},
+                        "by_source": {"Contract": {"required_properties": ["signedAt"]}},
                         "cardinality": {"min": 0, "max": 1},
                         "distinct": ["side"],
                         "required": True, "enforcement": "warn",
@@ -6251,6 +6252,16 @@ class KnowledgeGraph:
         not defined for (that is ``property_types``). An invalid regex is
         refused at declaration. Audited as ``<name>.property_values`` with
         ``{by: 'property'}`` support, and enforced at write time;
+        ``by_source`` (relationships only) is ``{"SourceClass":
+        {"required_properties": [...], "property_types": {...},
+        "property_values": {...}}}``: the property contract of the edges
+        leaving that source class, for a relationship whose sources carry
+        differently named properties. A key matches the edge's source by
+        primary class, declared ancestor or secondary label (as ``exempt``
+        does); an edge whose source matches no key is not judged by it, and
+        the relationship-level contract, when also declared, still binds
+        every edge. Rule names are unchanged and ``total`` counts judged
+        edges. A key naming no class or live label returns a warning;
         ``transitive`` and ``ancestry`` are mutually exclusive and mean
         different things — ``transitive: True`` enrolls
         ``transitivity_violation``, which audits a **stored** closure (every

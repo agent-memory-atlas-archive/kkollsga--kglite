@@ -87,6 +87,7 @@
 //!   always wins. Resolution happens at parse time, so a persisted
 //!   declaration carries its effective severity.
 
+pub(crate) mod by_source;
 pub(crate) mod cardinality_gate;
 pub(crate) mod contracts;
 pub(crate) mod declare_check;
@@ -95,6 +96,8 @@ pub(crate) mod distinct_gate;
 pub(crate) mod edge_gate;
 pub(crate) mod must_exist;
 pub(crate) mod node_gate;
+#[cfg(test)]
+mod ontology_by_source_tests;
 #[cfg(test)]
 mod ontology_cardinality_tests;
 #[cfg(test)]
@@ -116,6 +119,7 @@ mod ontology_value_contract_tests;
 pub mod predicates;
 pub mod violation;
 
+pub use by_source::SourceContract;
 pub use contracts::{DistinctDecl, ValueContract};
 
 use std::collections::BTreeMap;
@@ -196,6 +200,12 @@ pub struct RelationshipDecl {
     /// Per-property value contracts on the relationship's edges.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub property_values: BTreeMap<String, ValueContract>,
+    /// Property contracts keyed by source class, for a relationship whose
+    /// source classes carry differently named properties; see
+    /// [`SourceContract`]. Binds in addition to the relationship-level
+    /// contract above, and only the edges whose source the key matches.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_source: BTreeMap<String, SourceContract>,
     /// Pair uniqueness: at most one edge of the type per source, target and
     /// listed property values. See [`DistinctDecl`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -667,6 +677,7 @@ const REL_KEYS: &[&str] = &[
     "required_properties",
     "property_types",
     "property_values",
+    "by_source",
     "distinct",
     "inverse_name",
     "inverse_enforced",
@@ -868,6 +879,7 @@ fn relationship_from_value(
     };
     let (required_properties, property_types) = parse_property_contract(map, &context)?;
     let property_values = contracts::property_values_from_value(map, &context)?;
+    let by_source = by_source::by_source_from_value(map, &context)?;
     let distinct = contracts::distinct_from_value(name, map.get("distinct"))?;
     let inverse_name = opt_string(map, "inverse_name", name)?;
     let inverse_enforced = opt_bool(map, "inverse_enforced", name)?;
@@ -883,6 +895,7 @@ fn relationship_from_value(
         required_properties,
         property_types,
         property_values,
+        by_source,
         distinct,
         inverse_name,
         inverse_enforced,

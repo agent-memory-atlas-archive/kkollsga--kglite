@@ -534,3 +534,49 @@ def test_edge_property_violation_lists_distinct_surplus_edges(storage, tmp_path)
     ]
     violations, exempted, _ = line(g, "HAS.distinct")
     assert (violations, exempted) == (2, 1)
+
+BY_SOURCE = {
+    "classes": {"Asset": {"abstract": True}, "Site": {"is_a": "Asset"}, "Contract": {"is_a": "Asset"}, "Company": {}},
+    "relationships": {
+        "MANAGED_BY": {
+            "range": "Company",
+            "by_source": {
+                "Site": {"required_properties": ["siteFrom"], "property_types": {"siteFrom": "integer"}},
+                "Contract": {
+                    "required_properties": ["contractFrom"],
+                    "property_values": {"role": {"enum": ["operator"]}},
+                },
+            },
+            "enforcement": "error",
+        }
+    },
+}
+
+
+@pytest.mark.parametrize("storage", ["memory", "mapped"])
+def test_by_source_judges_each_source_by_its_own_contract(storage, tmp_path):
+    g = make_graph(storage, tmp_path)
+    g.cypher("CREATE (:Site {id: 1}), (:Contract {id: 3}), (:Company {id: 10})")
+    g.define_ontology(BY_SOURCE)
+    g.cypher("MATCH (a {id: 1}), (c {id: 10}) CREATE (a)-[:MANAGED_BY {siteFrom: 5}]->(c)")
+    g.cypher("MATCH (a {id: 3}), (c {id: 10}) CREATE (a)-[:MANAGED_BY {contractFrom: 5}]->(c)")
+    # Another source's property does not satisfy this source's contract.
+    with pytest.raises(kglite.OntologyViolationError, match="siteFrom"):
+        g.cypher("MATCH (a {id: 1}), (c {id: 10}) CREATE (a)-[:MANAGED_BY {contractFrom: 5}]->(c)")
+    assert g.cypher("MATCH ()-[r:MANAGED_BY]->() RETURN count(r) AS n").to_list() == [{"n": 2}]
+    assert line(g, "MANAGED_BY.required_properties") == (0, 0, 2)
+
+    row = g.cypher("SHOW ONTOLOGY").to_list()
+    shown = [r for r in row if r["name"] == "MANAGED_BY"][0]["by_source"]
+    assert "Site: required_properties [siteFrom]" in shown
+
+    # Persistence and db.ontology.show round-trip the declared form.
+    path = str(tmp_path / "g.kgl")
+    g.save(path)
+    loaded = kglite.load(path)
+    assert loaded.ontology() == g.ontology()
+    assert loaded.ontology()["relationships"]["MANAGED_BY"]["by_source"]["Site"]["required_properties"] == ["siteFrom"]
+    shown_doc = list(g.cypher("CALL db.ontology.show() YIELD ontology"))[0]["ontology"]
+    g.clear_ontology()
+    g.cypher("CALL db.ontology.declare({ontology: $doc})", params={"doc": shown_doc})
+    assert g.ontology() == loaded.ontology()

@@ -5820,6 +5820,7 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::datatypes::values::RelVal
 pub fn kglite::datatypes::values::RelValue::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::RelationshipDecl
 pub kglite::api::RelationshipDecl::ancestry: bool
+pub kglite::api::RelationshipDecl::by_source: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::SourceContract>
 pub kglite::api::RelationshipDecl::cardinality: core::option::Option<kglite::api::CardinalityDecl>
 pub kglite::api::RelationshipDecl::description: core::option::Option<alloc::string::String>
 pub kglite::api::RelationshipDecl::distinct: core::option::Option<kglite::api::DistinctDecl>
@@ -5898,6 +5899,24 @@ impl core::clone::Clone for kglite::api::SelectionLevel
 pub fn kglite::api::SelectionLevel::clone(&self) -> kglite::api::SelectionLevel
 impl core::fmt::Debug for kglite::api::SelectionLevel
 pub fn kglite::api::SelectionLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct kglite::api::SourceContract
+pub kglite::api::SourceContract::property_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::api::SourceContract::property_values: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::ValueContract>
+pub kglite::api::SourceContract::required_properties: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::clone(&self) -> kglite::api::SourceContract
+impl core::cmp::Eq for kglite::api::SourceContract
+impl core::cmp::PartialEq for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::eq(&self, &kglite::api::SourceContract) -> bool
+impl core::default::Default for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::default() -> kglite::api::SourceContract
+impl core::fmt::Debug for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::SourceContract
+impl serde_core::ser::Serialize for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::SourceContract
+pub fn kglite::api::SourceContract::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::SpatialConfig
 pub kglite::api::SpatialConfig::geometry: core::option::Option<alloc::string::String>
 pub kglite::api::SpatialConfig::location: core::option::Option<(alloc::string::String, alloc::string::String)>

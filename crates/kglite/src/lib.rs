@@ -118,7 +118,7 @@ pub mod api {
     pub use crate::graph::ontology::{
         ontology_from_json, ontology_from_value, ontology_to_json, CardinalityDecl, ClassDecl,
         DistinctDecl, Enforcement, ManagedLabelState, OntologyStore, RelationshipDecl,
-        ValueContract, MAX_ONTOLOGY_CLASSES,
+        SourceContract, ValueContract, MAX_ONTOLOGY_CLASSES,
     };
     /// Node-type names the engine owns. Core hides them from every
     /// enumerating surface it renders (`node_types()`, `db.labels()`,

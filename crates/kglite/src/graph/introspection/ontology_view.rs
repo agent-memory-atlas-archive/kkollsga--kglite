@@ -108,6 +108,9 @@ pub(super) fn write_ontology(xml: &mut String, graph: &DirGraph, focus: Option<&
         }
         append_property_contract(&mut attrs, &decl.required_properties, &decl.property_types);
         append_value_contracts(&mut attrs, &decl.property_values);
+        if let Some(by_source) = decl.by_source_summary() {
+            attrs.push_str(&format!(" by_source=\"{}\"", xml_escape(&by_source)));
+        }
         if let Some(distinct) = &decl.distinct {
             attrs.push_str(&format!(
                 " distinct=\"{}\"",

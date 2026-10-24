@@ -87,6 +87,38 @@ KGLite checks the rules below when it installs a declaration.
   - Edge properties use stored names, including a blueprint's renamed output column.
   - Node properties use the actual primary type's loader aliases and id/title resolution.
 
+### Per-source contracts
+
+A relationship whose source classes carry differently named properties declares each class's contract under `by_source`. A relationship-level `required_properties` would flag every source but one.
+
+```python
+g.define_ontology({
+    "classes": {"Asset": {"abstract": True}, "Site": {"is_a": "Asset"},
+                "Contract": {"is_a": "Asset"}, "Company": {}},
+    "relationships": {
+        "MANAGED_BY": {
+            "range": "Company",
+            "by_source": {
+                "Site":   {"required_properties": ["siteManagedFrom"],
+                            "property_types": {"siteManagedFrom": "date"}},
+                "Contract": {"required_properties": ["contractValidFrom"],
+                            "property_values": {"role": {"enum": ["operator"]}}},
+            },
+            "enforcement": "error",
+        },
+    },
+})
+```
+
+- Each entry takes `required_properties`, `property_types` and `property_values`, in the forms above, and at least one of them.
+- A key matches an edge's source by primary class, by declared ancestor (`Asset` matches `Site` and `Contract`) or by secondary label. This is the matching `exempt` uses.
+- An edge whose source matches no key is not judged by `by_source`. A relationship-level contract, when also declared, still binds every edge, and an edge matching several keys is judged by each.
+- Rule names are unchanged: `MANAGED_BY.required_properties`, `{by: 'property'}`, `{by: 'domain_class'}` and `edge_property_violation()` work as before. `total` counts the edges the check judges: every edge when the relationship-level contract declares the check, otherwise the edges whose source a key matches.
+- `exempt` excuses a source from a check at either level.
+- Writes, bulk loaders, the blueprint gate and declaring over existing data judge the same way as the audit.
+- A key that is neither a declared class nor a label any node carries returns a warning from `define_ontology`, since it binds no edge.
+- `by_source` is a separate key rather than a second shape of `property_types` so that a class named like a property is never reinterpreted. `SHOW ONTOLOGY` renders it in the `by_source` column and `ontology()` returns it unchanged.
+
 ### Enforcement and exemptions
 
 - `enforcement` is `advisory` (the default), `warn` or `error`. `warn` and `error` bind every write; see [Write-time enforcement](#write-time-enforcement). `advisory` only feeds the audit and the rule procedures.

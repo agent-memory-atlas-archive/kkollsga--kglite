@@ -186,33 +186,115 @@ pub fn property_fails(
     }
 }
 
-/// The subset of the declaration's properties one relationship fails under
-/// `check` (`required_properties`, `property_types` or `property_values`).
-/// `get` reads a property off the relationship.
-pub fn edge_property_failures<'v>(
+/// One declared property an edge fails, with the requirement it broke:
+/// the type name for `property_types`, the contract summary for
+/// `property_values`, empty for `required_properties`.
+pub struct PropertyFailure {
+    pub property: String,
+    pub requirement: String,
+}
+
+/// The verdict on one relationship under one property check.
+pub struct EdgePropertyVerdict {
+    /// Some declared rule of the check binds this edge: the relationship-level
+    /// contract (every edge) or a `by_source` entry its source matches. The
+    /// audit's denominator counts judged edges only.
+    pub judged: bool,
+    pub failures: Vec<PropertyFailure>,
+}
+
+/// Whether a `by_source` or `exempt` key covers a source node of primary type
+/// `source_type`: the key names that type or a declared ancestor of it, or the
+/// node carries it as a secondary label (`has_secondary` answers that, and is
+/// `|_| false` for a node that does not exist yet).
+pub fn source_key_matches(
+    store: &OntologyStore,
+    key: &str,
+    source_type: &str,
+    has_secondary: impl Fn(&str) -> bool,
+) -> bool {
+    endpoint_accepted(store, key, source_type) || has_secondary(key)
+}
+
+/// Judge one relationship under `check` (`required_properties`,
+/// `property_types` or `property_values`): the relationship-level contract
+/// binds every edge, each `by_source` entry whose key matches the edge's
+/// source binds it too. A property failing under several layers is reported
+/// once, under the first. `get` reads a property off the relationship.
+pub fn edge_property_verdict<'v>(
+    store: &OntologyStore,
     decl: &RelationshipDecl,
     check: &str,
+    source_type: &str,
+    has_secondary: impl Fn(&str) -> bool,
     get: impl Fn(&str) -> Option<&'v Value>,
-) -> Vec<String> {
+) -> EdgePropertyVerdict {
+    let mut verdict = EdgePropertyVerdict {
+        judged: decl.flat_declares(check),
+        failures: Vec::new(),
+    };
+    judge_layer(
+        check,
+        &decl.required_properties,
+        &decl.property_types,
+        &decl.property_values,
+        &get,
+        &mut verdict.failures,
+    );
+    for (key, entry) in &decl.by_source {
+        if entry.declares(check) && source_key_matches(store, key, source_type, &has_secondary) {
+            verdict.judged = true;
+            judge_layer(
+                check,
+                &entry.required_properties,
+                &entry.property_types,
+                &entry.property_values,
+                &get,
+                &mut verdict.failures,
+            );
+        }
+    }
+    verdict
+}
+
+fn judge_layer<'v>(
+    check: &str,
+    required: &[String],
+    types: &std::collections::BTreeMap<String, String>,
+    values: &std::collections::BTreeMap<String, crate::graph::ontology::ValueContract>,
+    get: &impl Fn(&str) -> Option<&'v Value>,
+    out: &mut Vec<PropertyFailure>,
+) {
+    let mut push = |property: &str, requirement: String| {
+        if !out.iter().any(|f| f.property == property) {
+            out.push(PropertyFailure {
+                property: property.to_string(),
+                requirement,
+            });
+        }
+    };
     match check {
-        "required_properties" => unique_required_properties(&decl.required_properties)
-            .into_iter()
-            .filter(|p| matches!(get(p), None | Some(Value::Null)))
-            .collect(),
-        "property_values" => decl
-            .property_values
-            .iter()
-            .filter(|(p, contract)| get(p).is_some_and(|v| contract.violates(v)))
-            .map(|(p, _)| p.clone())
-            .collect(),
-        _ => decl
-            .property_types
-            .iter()
-            .filter(|(p, ty)| {
-                get(p).is_some_and(|v| !matches!(v, Value::Null) && !value_matches_type(v, ty))
-            })
-            .map(|(p, _)| p.clone())
-            .collect(),
+        "required_properties" => {
+            for p in unique_required_properties(required) {
+                if matches!(get(&p), None | Some(Value::Null)) {
+                    push(&p, String::new());
+                }
+            }
+        }
+        "property_values" => {
+            for (p, contract) in values {
+                if get(p).is_some_and(|v| contract.violates(v)) {
+                    push(p, contract.summary());
+                }
+            }
+        }
+        _ => {
+            for (p, ty) in types {
+                if get(p).is_some_and(|v| !matches!(v, Value::Null) && !value_matches_type(v, ty)) {
+                    push(p, ty.clone());
+                }
+            }
+        }
     }
 }
 
@@ -241,7 +323,7 @@ pub fn source_exempt(
 ) -> bool {
     decl.exempt_classes(check)
         .iter()
-        .any(|entry| endpoint_accepted(store, entry, source_type) || has_secondary(entry))
+        .any(|entry| source_key_matches(store, entry, source_type, &has_secondary))
 }
 
 /// `true` when the declaration names a domain and `source_type` is outside it.
@@ -336,31 +418,91 @@ mod tests {
         assert!(!range_violated(&s, &undeclared, "Anything"));
     }
 
+    fn failed(
+        s: &OntologyStore,
+        check: &str,
+        source: &str,
+        get: impl Fn(&str) -> Option<&'static Value>,
+    ) -> Vec<String> {
+        let decl = &s.relationships["MANAGED_BY"];
+        edge_property_verdict(s, decl, check, source, |_| false, get)
+            .failures
+            .into_iter()
+            .map(|f| f.property)
+            .collect()
+    }
+
     #[test]
     fn edge_property_failures_follow_audit_vocabulary() {
         let s = store();
-        let decl = &s.relationships["MANAGED_BY"];
-        let none = |_: &str| None;
+        static NULL: Value = Value::Null;
+        static INT: Value = Value::Int64(3);
+        let text: &'static Value = Box::leak(Box::new(Value::String("x".into())));
         assert_eq!(
-            edge_property_failures(decl, "required_properties", none),
+            failed(&s, "required_properties", "Contract", |_| None),
             ["validFrom"]
         );
-        let null = Value::Null;
-        let nulled = |_: &str| Some(&null);
         assert_eq!(
-            edge_property_failures(decl, "required_properties", nulled),
+            failed(&s, "required_properties", "Contract", |_| Some(&NULL)),
             ["validFrom"]
         );
         // A type violation needs a present non-null value.
-        assert!(edge_property_failures(decl, "property_types", none).is_empty());
-        assert!(edge_property_failures(decl, "property_types", nulled).is_empty());
-        let int = Value::Int64(3);
-        assert!(edge_property_failures(decl, "property_types", |_| Some(&int)).is_empty());
-        let text = Value::String("x".into());
+        assert!(failed(&s, "property_types", "Contract", |_| None).is_empty());
+        assert!(failed(&s, "property_types", "Contract", |_| Some(&NULL)).is_empty());
+        assert!(failed(&s, "property_types", "Contract", |_| Some(&INT)).is_empty());
         assert_eq!(
-            edge_property_failures(decl, "property_types", |_| Some(&text)),
+            failed(&s, "property_types", "Contract", |_| Some(text)),
             ["rank"]
         );
+    }
+
+    #[test]
+    fn by_source_binds_only_matching_sources_and_reports_the_requirement() {
+        let s = ontology_from_json(
+            r#"{"classes": {"Licensable": {"abstract": true},
+                            "Site": {"is_a": "Licensable"},
+                            "Contract": {"is_a": "Licensable"},
+                            "Other": {}},
+                "relationships": {"MANAGED_BY": {
+                    "by_source": {
+                        "Site": {"required_properties": ["siteFrom"],
+                                  "property_types": {"siteFrom": "date"}},
+                        "Historical": {"required_properties": ["histFrom"]}}}}}"#,
+        )
+        .unwrap();
+        let decl = &s.relationships["MANAGED_BY"];
+        let none = |_: &str| None;
+        let run = |check: &str, source: &str, secondary: bool| {
+            edge_property_verdict(
+                &s,
+                decl,
+                check,
+                source,
+                |l| secondary && l == "Historical",
+                none,
+            )
+        };
+        let field = run("required_properties", "Site", false);
+        assert!(field.judged);
+        assert_eq!(field.failures[0].property, "siteFrom");
+        // A source no key matches is not judged at all.
+        let other = run("required_properties", "Contract", false);
+        assert!(!other.judged && other.failures.is_empty());
+        // A secondary-label key judges a node of any class.
+        let hist = run("required_properties", "Other", true);
+        assert!(hist.judged);
+        assert_eq!(hist.failures[0].property, "histFrom");
+        // A check no matching entry declares is not judged for that source.
+        assert!(!run("property_values", "Site", false).judged);
+        let typed = edge_property_verdict(
+            &s,
+            decl,
+            "property_types",
+            "Site",
+            |_| false,
+            |_| Some(Box::leak(Box::new(Value::Int64(1))) as &Value),
+        );
+        assert_eq!(typed.failures[0].requirement, "date");
     }
 
     #[test]

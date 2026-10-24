@@ -1315,6 +1315,7 @@ def test_show_ontology_renders_ancestry_the_way_it_renders_transitive(g):
         "property_types",
         "property_values",
         "distinct",
+        "by_source",
         "enforcement",
         "exempt",
         "description",
