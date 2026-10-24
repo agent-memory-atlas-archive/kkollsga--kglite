@@ -1,14 +1,14 @@
 //! Per-source-class property contracts on a relationship.
 //!
 //! One relationship type can leave several source classes, each carrying its
-//! own property names (`HAS_OPERATOR` from `Field` carries `fldOperatorFrom`,
-//! from `Licence` `prlOperDateValidFrom`). A relationship-level
+//! own property names (`MANAGED_BY` from `Site` carries `siteManagedFrom`,
+//! from `Contract` `contractValidFrom`). A relationship-level
 //! `required_properties` flags every source but one, so the contract is
 //! declared per source under the relationship's `by_source` key:
 //!
 //! ```json
-//! "by_source": {"Field": {"required_properties": ["fldOperatorFrom"],
-//!                         "property_types": {"fldOperatorFrom": "date"}}}
+//! "by_source": {"Site": {"required_properties": ["siteManagedFrom"],
+//!                        "property_types": {"siteManagedFrom": "date"}}}
 //! ```
 //!
 //! A key matches an edge's source node exactly as an `exempt` entry does: by

@@ -33,6 +33,14 @@ fn relationship_names(decl: &RelationshipDecl) -> BTreeSet<&str> {
                 .iter()
                 .flat_map(|d| d.properties.iter().map(String::as_str)),
         )
+        .chain(decl.by_source.values().flat_map(|entry| {
+            entry
+                .required_properties
+                .iter()
+                .map(String::as_str)
+                .chain(entry.property_types.keys().map(String::as_str))
+                .chain(entry.property_values.keys().map(String::as_str))
+        }))
         .collect()
 }
 

@@ -535,6 +535,7 @@ def test_edge_property_violation_lists_distinct_surplus_edges(storage, tmp_path)
     violations, exempted, _ = line(g, "HAS.distinct")
     assert (violations, exempted) == (2, 1)
 
+
 BY_SOURCE = {
     "classes": {"Asset": {"abstract": True}, "Site": {"is_a": "Asset"}, "Contract": {"is_a": "Asset"}, "Company": {}},
     "relationships": {
@@ -580,3 +581,15 @@ def test_by_source_judges_each_source_by_its_own_contract(storage, tmp_path):
     g.clear_ontology()
     g.cypher("CALL db.ontology.declare({ontology: $doc})", params={"doc": shown_doc})
     assert g.ontology() == loaded.ontology()
+
+
+def test_by_source_names_are_checked_for_unseen_properties(tmp_path):
+    g = make_graph("memory", tmp_path)
+    g.cypher("CREATE (:Site {id: 1}), (:Company {id: 10})")
+    g.cypher("MATCH (a {id: 1}), (c {id: 10}) CREATE (a)-[:MANAGED_BY {siteFrom: 1}]->(c)")
+    decl = json.loads(json.dumps(BY_SOURCE))
+    decl["relationships"]["MANAGED_BY"]["enforcement"] = "advisory"
+    decl["relationships"]["MANAGED_BY"]["by_source"]["Site"]["required_properties"] = ["siteFrom", "siteFromm"]
+    warnings = g.define_ontology(decl)
+    assert any("siteFromm" in w and "MANAGED_BY" in w for w in warnings), warnings
+    assert not any("'siteFrom'" in w for w in warnings), warnings

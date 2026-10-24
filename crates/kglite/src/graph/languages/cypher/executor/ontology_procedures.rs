@@ -150,12 +150,24 @@ fn edge_property_findings(
             | DeclaredCheck::PropertyValues
     ));
     let mut out = Vec::new();
+    // The source node matters only to a `by_source` match and to an `exempt`
+    // verdict on an edge that already fails, so a declaration with neither
+    // never reads it for a passing edge.
+    let needs_source = !decl.by_source.is_empty();
     for er in edges {
-        let Some(node) = graph.graph.node_view(er.source()) else {
-            continue;
+        let source_of = |er: &GraphEdgeRef<'_>| {
+            graph
+                .graph
+                .node_view(er.source())
+                .map(|n| n.node_type_str(&graph.interner))
         };
-        let source_type = node.node_type_str(&graph.interner);
         let has_secondary = |label: &str| has_secondary_label(graph, er.source(), label);
+        let source_type = if needs_source {
+            let Some(t) = source_of(er) else { continue };
+            t
+        } else {
+            ""
+        };
         let verdict = predicates::edge_property_verdict(
             &graph.ontology,
             decl,
@@ -167,13 +179,10 @@ fn edge_property_findings(
         if verdict.failures.is_empty() {
             continue;
         }
-        let exempt = predicates::source_exempt(
-            &graph.ontology,
-            decl,
-            check.name(),
-            source_type,
-            has_secondary,
-        );
+        let exempt = !decl.exempt_classes(check.name()).is_empty()
+            && source_of(er).is_some_and(|t| {
+                predicates::source_exempt(&graph.ontology, decl, check.name(), t, has_secondary)
+            });
         out.push(PropertyFinding {
             source: er.source(),
             target: er.target(),

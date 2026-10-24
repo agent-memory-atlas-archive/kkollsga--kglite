@@ -171,7 +171,7 @@ RETURN class, check, node.id AS id, properties
 
 No ontology is an error. An ontology without node contracts returns no findings.
 
-`SHOW ONTOLOGY` exposes `required_properties`, `property_types`, `property_values`, `enforcement` and (relationships) `distinct` and `exempt`. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
+`SHOW ONTOLOGY` exposes `required_properties`, `property_types`, `property_values`, `enforcement` and (relationships) `distinct`, `by_source` and `exempt`. The contracts persist with the graph. Legacy class declarations without these fields retain empty/advisory defaults.
 
 ## Value contracts
 

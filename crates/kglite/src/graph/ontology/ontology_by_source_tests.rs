@@ -386,3 +386,41 @@ fn a_key_naming_nothing_declares_with_a_warning() {
         "{warnings:?}"
     );
 }
+
+#[test]
+fn the_drill_down_reconciles_with_the_audit_beside_distinct() {
+    in_every_mode(|mut graph| {
+        seed(&mut graph);
+        declare(
+            &mut graph,
+            &spec("advisory", PER_CLASS, r#", "distinct": true"#),
+        );
+        // A duplicate pair (surplus 1) whose Site edges lack siteFrom, and a
+        // complete Contract edge.
+        edge(&mut graph, 1, "{}").unwrap();
+        edge(&mut graph, 1, "{}").unwrap();
+        edge(&mut graph, 3, "{contractFrom: 1}").unwrap();
+        let rows = run_outcome(
+            &mut graph,
+            "CALL edge_property_violation() YIELD check, source RETURN check, count(*) AS n",
+        )
+        .unwrap()
+        .result
+        .rows;
+        let n = |check: &str| {
+            rows.iter()
+                .find(|r| r[0] == Value::String(check.into()))
+                .map(|r| r[1].clone())
+        };
+        assert_eq!(n("required_properties"), Some(Value::Int64(2)));
+        assert_eq!(n("distinct"), Some(Value::Int64(1)));
+        assert_eq!(
+            audit_line(&mut graph, "MANAGED_BY.required_properties", "", None),
+            (2, 0, 3)
+        );
+        assert_eq!(
+            audit_line(&mut graph, "MANAGED_BY.distinct", "", None),
+            (1, 0, 3)
+        );
+    });
+}
