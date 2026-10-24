@@ -9,6 +9,15 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-10-24
+
+### Breaking changes and migration
+
+- **`--selftest` fails when the server skipped a skill.** A deployment whose project, pack, manifest or graph-carried skill was dropped at load (over the 16384-byte hard limit, bad frontmatter, an invalid `KgliteSkill` record) used to pass. **Do:** fix or remove the skill the `✗ skills skipped` line names.
+- **`graph_info()['format_version']` reports the container of the file last loaded or saved.** A default save above the size floors reports 9; a `layout="compact"` save reports 8. It used to report 8 for every file. **Do:** compare against the container you wrote, not a constant.
+- **A bulk embedding pass with nothing to embed no longer calls the embedder's `load()` and `unload()`.** An idle `embed_relationship_texts` pass over a type with no store no longer creates an empty store. **Do:** nothing, unless a custom embedder relied on a load per pass.
+- **An ontology `exempt` name that is not a declared class is accepted with a warning.** It used to be refused, because a name can now be a secondary label. **Do:** read the warnings `define_ontology` returns.
+
 ### Added
 
 - **Ontology pair uniqueness: `distinct`.** A relationship declares `"distinct": true` (one edge per source and target) or `"distinct": ["side"]` (one per source, target and those property values). `ontology_audit()` reports `<TYPE>.distinct` with the surplus edges as `violations` and the type's edges as `total`. At `warn` or `error` a write that leaves a group with a second edge is flagged or refused as `distinct`, as `cardinality.max` is. A declaration over existing copies is refused at `error`. Numbers compare by value (`1` and `1.0` are one group), and a relationship type with a valid-time declaration also groups by its validity bounds, so successive versions of one pair are not duplicates. `define_ontology` returns a warning for a `distinct` or contract property that no stored row of a populated type carries. `edge_property_violation()` lists each surplus edge with `check = 'distinct'`. It composes with `enforcement`, `exempt` and the blueprint gate.
@@ -39,6 +48,12 @@ before upgrading.
 - **`--selftest` fails when a skill was skipped at load.** A project, pack, manifest or graph-carried skill that the server drops (a file over the 16384-byte hard limit, bad frontmatter, a `KgliteSkill` record with an empty description) used to leave a passing `✓ skills` line while the server served a lower-layer skill of the same name. The selftest now prints `✗ skills skipped` naming each file and the reason, and exits non-zero. The passing line names each served skill's winning layer, such as `cypher_query[project]` or `fetch_images[bundled]`.
 - **`--selftest` counts every stored node.** On a graph that declares valid time the `graph hydrates` probe ran under the valid-today default and under-reported the graph. It now runs `FOR VALID_TIME ALL MATCH (n) RETURN count(n)`.
 - **`with_identity` now sets what `--version` prints.** A binary built on `ServerExtensions::with_identity(name, version)` answers `--version` and `-V` with `<name> <version>`. It used to print kglite's own version, so the stale-build check compared the wrong numbers and reported a false stale notice.
+
+### Rust API
+
+- `Diagnostic` gains public `magnitude` and `headline` fields, plus `with_magnitude()`, `under()` and `ranked()`. Code that builds it with a struct literal needs the fields.
+- `ClassDecl` gains `property_values`; `RelationshipDecl` gains `property_values`, `distinct` and `by_source`. `kglite::api` exports the new `ValueContract`, `DistinctDecl` and `SourceContract`. Code that builds these structs with a literal needs the fields.
+- `OntologyRule` gains `PropertyValue` and `Distinct`. An exhaustive `match` needs the two arms, and the implicit discriminants of the later variants shift; no binding exposes the enum as an integer.
 
 ## [0.21.1] - 2026-10-24
 

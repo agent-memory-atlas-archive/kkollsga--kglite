@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (31_845_520, "0.21.1"),  # host release build
-    "linux": (38_848_824, "0.21.0"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (32_043_968, "0.21.2"),  # host release build
+    "linux": (39_392_952, "0.21.1"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.21.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "55b5e0749b462f28bfb9e4ecdb748fca3c4e06a24f6952cc7dfa17557464facd"
+LINUX_SIZE_WHEEL = "kglite-0.21.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "b3df2b94939e5dd339209c63e4e9ec426a9e0f1de1cd64dc6a3a6852d7dd7307"
 
 
 @pytest.mark.binary_size
@@ -666,6 +666,12 @@ def test_binary_size_regression():
         FULLTEXT/VECTOR index DDL with property-sourced vector indexes,
         the SEARCH clause, three planner passes (null-safe seek, CALL
         hoist, WITH-boundary top-K), and the waiting borrow helpers.
+
+      - 0.21.2:       32,043,968 bytes (≈30.6 MB, +198 KB). Ontology
+        contracts (`distinct`, `property_values` with compiled regexes,
+        `by_source`, label exemptions, the `distinct` drill-down and
+        declare-time warnings), ranked build diagnostics, and the
+        single-pass audit edge grouping.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

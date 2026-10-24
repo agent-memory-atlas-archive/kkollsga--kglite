@@ -228,10 +228,16 @@
       "sha256": "9a0470cb6ba0fc57918c63d959bc016f2f4c32bb8d8945ca299874603f881d6b",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "Release capture 2026-10-24 01:36-01:42 local on Mac16,10 (M4, 16 GiB), load average 10.1 at start falling to 2.8 (hot start). vs accepted 0_21_0.json, min: no cell above +3.5% over 43 cells (grouped_count_top_k_target_property, timestamp_order_by_limit); controls var_length_1_8 +1.2%, cypher_match +0.8%, khop3_unwind -0.4%, khop3_in_list -0.6%, shortest_path +0.8%. Best delete_after_create -4.7%.",
+    "0_21_2.json": {
+      "evidence": "0.21.2 release capture 2026-10-24 14:40-14:46, load 3.8-5.6 (not idle); vs 0_21_1 min: median +2.5%, worst +9.0% scan_under_held_overlay_after_deletes, no cell >+20%; uniform shift with no engine change on those paths (release touched planner window bail, embeddings idle path, ontology, diagnostics)",
       "platform": "Darwin/arm64",
-      "sha256": "9a0470cb6ba0fc57918c63d959bc016f2f4c32bb8d8945ca299874603f881d6b",
+      "sha256": "4c0be6c640a9f8c54afcd9ed7c799db1616686b33a959d9acf34ca614e9371a5",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "0.21.2 release capture 2026-10-24 14:40-14:46, load 3.8-5.6 (not idle); vs 0_21_1 min: median +2.5%, worst +9.0% scan_under_held_overlay_after_deletes, no cell >+20%; uniform shift with no engine change on those paths (release touched planner window bail, embeddings idle path, ontology, diagnostics)",
+      "platform": "Darwin/arm64",
+      "sha256": "4c0be6c640a9f8c54afcd9ed7c799db1616686b33a959d9acf34ca614e9371a5",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -308,7 +314,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_21_1.json",
+    "Darwin/arm64": "0_21_2.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1
