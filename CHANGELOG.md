@@ -15,7 +15,7 @@ before upgrading.
 - **Ontology value contracts: `property_values`.** A class or relationship declares `{"prop": {"enum": [...], "pattern": "regex", "not_pattern": "regex", "min": n, "max": n}}`. `enum` judges every value type, regexes judge strings, bounds judge numbers, and null or absent is never a violation. `ontology_audit()` reports `<name>.property_values` with `{by: 'property'}`, and writes are judged as `property_value`. An invalid regex is refused at declaration.
 - **Ontology per-source property contracts: `by_source`.** A relationship declares `"by_source": {"Field": {"required_properties": [...], "property_types": {...}, "property_values": {...}}}` for sources that carry differently named properties. A key matches the edge's source by class, declared ancestor or secondary label, as `exempt` does; an edge matching no key is not judged by it. Rule names are unchanged, `total` counts the edges judged, and `exempt` still applies. The audit, write gates, bulk loaders, blueprint gate and declaration over existing data judge it alike. `SHOW ONTOLOGY` gains a `by_source` column.
 - **Ontology `exempt` matches secondary labels and covers more checks.** An entry matches a source node that carries the name as a secondary label, so `"exempt": {"required": ["Historical"]}` excuses `:Contract:Historical` stubs. `exempt` now accepts `required`, `property_values` and `distinct` beside the two property checks. An entry need not be a declared class: one that is neither a class nor a live label returns a warning from `define_ontology` instead of an error.
-- **`SHOW ONTOLOGY` gains `property_values` and `distinct` columns.**
+- **`SHOW ONTOLOGY` gains `property_values`, `distinct` and `by_source` columns.**
 
 ### Changed
 
