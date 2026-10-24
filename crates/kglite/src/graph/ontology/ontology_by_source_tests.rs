@@ -72,8 +72,8 @@ fn audit_line(graph: &mut DirGraph, rule: &str, by: &str, key: Option<&str>) -> 
     (n(3), n(4), n(5))
 }
 
-fn assert_violation(error: Box<KgError>, rule: OntologyRule, property: &str) {
-    match *error {
+fn assert_violation(error: KgError, rule: OntologyRule, property: &str) {
+    match error {
         KgError::OntologyViolation {
             rule: got,
             property: got_property,
@@ -273,13 +273,13 @@ fn error_refuses_a_write_only_from_the_source_whose_contract_it_breaks() {
         edge(&mut graph, 3, "{contractFrom: 5}").unwrap();
         // Another source's property does not satisfy this source's contract.
         let error = edge(&mut graph, 1, "{contractFrom: 5}").unwrap_err();
-        assert_violation(error, OntologyRule::RequiredProperty, "siteFrom");
+        assert_violation(*error, OntologyRule::RequiredProperty, "siteFrom");
         let error = edge(&mut graph, 3, "{siteFrom: 5}").unwrap_err();
-        assert_violation(error, OntologyRule::RequiredProperty, "contractFrom");
+        assert_violation(*error, OntologyRule::RequiredProperty, "contractFrom");
         let error = edge(&mut graph, 1, "{siteFrom: 'x'}").unwrap_err();
-        assert_violation(error, OntologyRule::PropertyType, "siteFrom");
+        assert_violation(*error, OntologyRule::PropertyType, "siteFrom");
         let error = edge(&mut graph, 3, "{contractFrom: 1, role: 'owner'}").unwrap_err();
-        assert_violation(error, OntologyRule::PropertyValue, "role");
+        assert_violation(*error, OntologyRule::PropertyValue, "role");
         // A source no key matches is free.
         edge(&mut graph, 5, "{}").unwrap();
         assert_eq!(
@@ -323,16 +323,12 @@ fn add_connections_judges_each_frame_by_its_source_type() {
         };
         let message = load(&mut graph, "Site", 1, Some("contractFrom")).unwrap_err();
         let typed = graph.take_constraint_error(&message).expect("typed");
-        assert_violation(Box::new(typed), OntologyRule::RequiredProperty, "siteFrom");
+        assert_violation(typed, OntologyRule::RequiredProperty, "siteFrom");
         load(&mut graph, "Site", 1, Some("siteFrom")).unwrap();
         load(&mut graph, "Contract", 3, Some("contractFrom")).unwrap();
         let message = load(&mut graph, "Contract", 4, None).unwrap_err();
         let typed = graph.take_constraint_error(&message).expect("typed");
-        assert_violation(
-            Box::new(typed),
-            OntologyRule::RequiredProperty,
-            "contractFrom",
-        );
+        assert_violation(typed, OntologyRule::RequiredProperty, "contractFrom");
     });
 }
 
