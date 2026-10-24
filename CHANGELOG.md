@@ -9,6 +9,10 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`MATCH (n) RETURN …, row_number() OVER (…) ORDER BY … LIMIT k` runs.** A window function over a single-node scan with `ORDER BY` and `LIMIT` raised "Window function must appear in RETURN/WITH clause". The window now ranks every row before the sort and the cut.
+
 ## [0.21.1] - 2026-10-24
 
 ### Breaking changes and migration

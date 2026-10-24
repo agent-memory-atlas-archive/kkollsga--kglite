@@ -75,3 +75,29 @@ def test_order_by_inside_an_aggregate_window_is_refused(graph):
 def test_an_unsupported_aggregate_names_the_supported_ones(graph):
     with pytest.raises(Exception, match=r"count, sum, avg, min and max, not 'collect'"):
         graph.cypher("MATCH (d:Doc) RETURN collect(d.name) OVER () AS names")
+
+
+@pytest.fixture
+def ranked() -> kglite.KnowledgeGraph:
+    g = kglite.KnowledgeGraph()
+    g.cypher("UNWIND range(1,5) AS i CREATE (:N {id:i, title:'n'+toString(i), v: 6-i, g: i % 2})")
+    return g
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_ranking_window_with_order_by_and_limit(ranked, disabled):
+    q = "MATCH (n:N) RETURN n.v AS v, row_number() OVER (ORDER BY n.v) AS rn ORDER BY "
+    asc = ranked.cypher(q + "n.v LIMIT 2", disable_optimizer=disabled).to_list()
+    assert [(r["v"], r["rn"]) for r in asc] == [(1, 1), (2, 2)]
+    desc = ranked.cypher(q + "rn DESC LIMIT 2", disable_optimizer=disabled).to_list()
+    assert [(r["v"], r["rn"]) for r in desc] == [(5, 5), (4, 4)]
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_partitioned_ranking_window_with_order_by_and_limit(ranked, disabled):
+    # g=1: ids 1,3,5 (v 5,3,1); g=0: ids 2,4 (v 4,2). Rank within g by v ascending.
+    rows = ranked.cypher(
+        "MATCH (n:N) RETURN n.id AS id, row_number() OVER (PARTITION BY n.g ORDER BY n.v) AS rn ORDER BY n.id LIMIT 3",
+        disable_optimizer=disabled,
+    ).to_list()
+    assert [(r["id"], r["rn"]) for r in rows] == [(1, 3), (2, 2), (3, 2)]

@@ -74,7 +74,7 @@ pub(crate) fn resolve_fused_sort_keys(
 /// **Why-bail** (each leaves the clauses in place for the ordinary pipeline):
 /// the MATCH is not the first clause, or is not exactly one single-node
 /// edge-free pattern without path assignments; RETURN uses DISTINCT, an
-/// aggregate, or a function call (those need an evaluation context this scan
+/// aggregate, a window function, or a function call (those need an evaluation context this scan
 /// does not build); a sort key reads a RETURN alias it is not equal to (see
 /// [`resolve_fused_sort_keys`]); LIMIT is not a positive integer literal; a
 /// retrieval score ranks with no WHERE, or with a WHERE ending in that
@@ -144,6 +144,13 @@ pub(crate) fn fuse_node_scan_top_k(
                     .items
                     .iter()
                     .any(|item| matches!(item.expression, Expression::FunctionCall { .. }))
+                // Window functions rank the whole MATCH result before ORDER BY /
+                // LIMIT; the per-node heap would cut rows first and the
+                // projection would then lose its window context.
+                && !r
+                    .items
+                    .iter()
+                    .any(|item| matches!(item.expression, Expression::WindowFunction { .. }))
                 && !super::projection_has_wildcard(&r.items)
         } else {
             false

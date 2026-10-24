@@ -1188,6 +1188,27 @@ DIFFERENTIAL_QUERIES: list[tuple[str, str, str, dict | None]] = [
         "RETURN p.name AS name, sum(p.age + $bump + (1 + 2)) OVER (PARTITION BY p.city) AS s ORDER BY name",
         {"floor": 20, "bump": 10},
     ),
+    # Ranking window + ORDER BY + LIMIT on a single-node scan: the node-scan
+    # top-k fusion must leave the window to see every row before the cut.
+    (
+        "window_rank_order_by_limit_scan",
+        "small_graph",
+        "MATCH (p:Person) RETURN p.name AS name, row_number() OVER (ORDER BY p.age) AS rn ORDER BY p.age LIMIT 2",
+        None,
+    ),
+    (
+        "window_rank_order_by_alias_desc_limit_scan",
+        "small_graph",
+        "MATCH (p:Person) RETURN p.name AS name, row_number() OVER (ORDER BY p.age) AS rn ORDER BY rn DESC LIMIT 2",
+        None,
+    ),
+    (
+        "window_rank_partitioned_order_by_limit_scan",
+        "small_graph",
+        "MATCH (p:Person) RETURN p.name AS name, p.city AS city, "
+        "row_number() OVER (PARTITION BY p.city ORDER BY p.age) AS rn ORDER BY name LIMIT 3",
+        None,
+    ),
     # Relationship-type and null-variable label predicates, and string
     # predicates over non-string operands, through WHERE pushdown and RETURN.
     (
