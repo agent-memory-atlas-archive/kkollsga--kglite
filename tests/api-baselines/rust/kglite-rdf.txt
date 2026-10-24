@@ -4768,10 +4768,12 @@ pub fn kglite::api::ManagedLabelState::deserialize<__D>(__D) -> core::result::Re
 pub enum kglite::api::OntologyRule
 pub kglite::api::OntologyRule::Cardinality
 pub kglite::api::OntologyRule::ClosedLabels
+pub kglite::api::OntologyRule::Distinct
 pub kglite::api::OntologyRule::Domain
 pub kglite::api::OntologyRule::Inverse
 pub kglite::api::OntologyRule::MinCardinality
 pub kglite::api::OntologyRule::PropertyType
+pub kglite::api::OntologyRule::PropertyValue
 pub kglite::api::OntologyRule::Range
 pub kglite::api::OntologyRule::RequiredProperty
 pub kglite::api::OntologyRule::RequiredRelationship
@@ -5028,6 +5030,7 @@ pub kglite::api::ClassDecl::enforcement_overrides: alloc::collections::btree::ma
 pub kglite::api::ClassDecl::is_a: core::option::Option<alloc::string::String>
 pub kglite::api::ClassDecl::is_abstract: bool
 pub kglite::api::ClassDecl::property_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::api::ClassDecl::property_values: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::ValueContract>
 pub kglite::api::ClassDecl::required_properties: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for kglite::api::ClassDecl
 pub fn kglite::api::ClassDecl::clone(&self) -> kglite::api::ClassDecl
@@ -5370,6 +5373,22 @@ pub fn kglite::api::DirGraph::deserialize<__D>(__D) -> core::result::Result<Self
 pub struct kglite::api::DiskQueryGuard
 impl core::ops::drop::Drop for kglite::api::DiskQueryGuard
 pub fn kglite::api::DiskQueryGuard::drop(&mut self)
+pub struct kglite::api::DistinctDecl
+pub kglite::api::DistinctDecl::properties: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::clone(&self) -> kglite::api::DistinctDecl
+impl core::cmp::Eq for kglite::api::DistinctDecl
+impl core::cmp::PartialEq for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::eq(&self, &kglite::api::DistinctDecl) -> bool
+impl core::default::Default for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::default() -> kglite::api::DistinctDecl
+impl core::fmt::Debug for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::DistinctDecl
+impl serde_core::ser::Serialize for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::DistinctDecl
+pub fn kglite::api::DistinctDecl::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct kglite::api::EdgeData
 pub kglite::api::EdgeData::connection_type: kglite::api::InternedKey
 pub kglite::api::EdgeData::properties: thin_vec::ThinVec<(kglite::api::InternedKey, kglite::datatypes::values::Value)>
@@ -5851,6 +5870,7 @@ pub struct kglite::api::RelationshipDecl
 pub kglite::api::RelationshipDecl::ancestry: bool
 pub kglite::api::RelationshipDecl::cardinality: core::option::Option<kglite::api::CardinalityDecl>
 pub kglite::api::RelationshipDecl::description: core::option::Option<alloc::string::String>
+pub kglite::api::RelationshipDecl::distinct: core::option::Option<kglite::api::DistinctDecl>
 pub kglite::api::RelationshipDecl::domain: core::option::Option<alloc::string::String>
 pub kglite::api::RelationshipDecl::enforcement: kglite::api::Enforcement
 pub kglite::api::RelationshipDecl::enforcement_overrides: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::Enforcement>
@@ -5858,6 +5878,7 @@ pub kglite::api::RelationshipDecl::exempt: alloc::collections::btree::map::BTree
 pub kglite::api::RelationshipDecl::inverse_enforced: bool
 pub kglite::api::RelationshipDecl::inverse_name: core::option::Option<alloc::string::String>
 pub kglite::api::RelationshipDecl::property_types: alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>
+pub kglite::api::RelationshipDecl::property_values: alloc::collections::btree::map::BTreeMap<alloc::string::String, kglite::api::ValueContract>
 pub kglite::api::RelationshipDecl::range: core::option::Option<alloc::string::String>
 pub kglite::api::RelationshipDecl::required: bool
 pub kglite::api::RelationshipDecl::required_properties: alloc::vec::Vec<alloc::string::String>
@@ -5996,6 +6017,29 @@ impl serde_core::ser::Serialize for kglite::api::TemporalConfig
 pub fn kglite::api::TemporalConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for kglite::api::TemporalConfig
 pub fn kglite::api::TemporalConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct kglite::api::ValueContract
+pub kglite::api::ValueContract::allowed: alloc::vec::Vec<serde_json::value::Value>
+pub kglite::api::ValueContract::max: core::option::Option<serde_json::number::Number>
+pub kglite::api::ValueContract::min: core::option::Option<serde_json::number::Number>
+pub kglite::api::ValueContract::not_pattern: core::option::Option<alloc::string::String>
+pub kglite::api::ValueContract::pattern: core::option::Option<alloc::string::String>
+impl kglite::api::ValueContract
+pub fn kglite::api::ValueContract::summary(&self) -> alloc::string::String
+pub fn kglite::api::ValueContract::violates(&self, &kglite::datatypes::values::Value) -> bool
+impl core::clone::Clone for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::clone(&self) -> kglite::api::ValueContract
+impl core::cmp::Eq for kglite::api::ValueContract
+impl core::cmp::PartialEq for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::eq(&self, &kglite::api::ValueContract) -> bool
+impl core::default::Default for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::default() -> kglite::api::ValueContract
+impl core::fmt::Debug for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for kglite::api::ValueContract
+impl serde_core::ser::Serialize for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for kglite::api::ValueContract
+pub fn kglite::api::ValueContract::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const kglite::api::CANONICAL_NODE_COLUMNS: [&str; 3]
 pub const kglite::api::MAX_ONTOLOGY_CLASSES: usize
 pub const kglite::api::SYSTEM_LABELS: &[&str]
