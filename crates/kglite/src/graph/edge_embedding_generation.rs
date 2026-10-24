@@ -233,6 +233,18 @@ pub(crate) fn generate_selected(
     }
 
     if idle && plan.remove_selected.is_empty() {
+        // A swapped-in model of another width is refused here too; its
+        // declared width needs no load (0 = undeclared, unknown until loaded).
+        let declared = service.model.dimension();
+        if let Some(store) = existing.filter(|store| declared != 0 && store.dimension() != declared)
+        {
+            if request.mode != EmbedMode::All {
+                return Err(EmbedError::Dimension {
+                    store: store.dimension(),
+                    model: declared,
+                });
+            }
+        }
         return Ok(EdgeGenerationReport {
             embedded: 0,
             skipped: plan.skipped,
@@ -257,7 +269,13 @@ pub(crate) fn generate_selected(
             .any(|edge| !selected_slots.contains(&edge.index()))
     });
     let dimension = if idle {
-        existing.map_or_else(|| service.model.dimension(), |store| store.dimension())
+        // The declared width needs no load and still exposes a swapped-in
+        // model of another width; only an undeclared one (0) falls back to
+        // the store's.
+        match service.model.dimension() {
+            0 => existing.map_or(0, |store| store.dimension()),
+            declared => declared,
+        }
     } else {
         crate::graph::embedder::dimension_before_load(service.model).map_err(EmbedError::Model)?
     };

@@ -1243,6 +1243,17 @@ pub fn embed_property(
     };
 
     if found.texts.is_empty() && !hooks.load_when_idle {
+        // A swapped-in model of another width must still be refused, or the
+        // store's vectors stop matching what query-time embedding produces.
+        // The declared width needs no load; an undeclared one (0) is unknown
+        // until a pass actually embeds.
+        let declared = model.dimension();
+        if let Some(store) = store_dimension.filter(|d| declared != 0 && *d != declared) {
+            return Err(EmbedError::Dimension {
+                store,
+                model: declared,
+            });
+        }
         return Ok(found.outcome(0, store_dimension.unwrap_or(0)));
     }
     // The write copies the existing store; refuse a corrupt mapped one first.

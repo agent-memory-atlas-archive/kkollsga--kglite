@@ -90,3 +90,22 @@ def test_query_time_embedding_still_loads() -> None:
     before = model.loads
     graph.select("Doc").search_text("note", "one", top_k=1)
     assert model.loads == before + 1
+
+
+class _Wider(_Counting):
+    dimension = 3
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.embedded += len(texts)
+        return [[float(len(text)), 1.0, 0.0] for text in texts]
+
+
+@pytest.mark.parametrize("route", [_node, _rel], ids=["node", "relationship"])
+def test_idle_pass_still_refuses_a_model_of_another_width(route) -> None:
+    graph = _graph(_Counting())
+    route(graph)
+    wider = _Wider()
+    graph.set_embedder(wider)
+    with pytest.raises(ValueError, match="mode='all'"):
+        route(graph)
+    assert wider.loads == 0
