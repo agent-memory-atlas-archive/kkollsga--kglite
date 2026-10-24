@@ -27,7 +27,13 @@ pub(crate) fn layer_label(provenance: &SkillProvenance) -> String {
     }
 }
 
-pub(crate) fn render_report(active: &[ActiveSkill], warnings: &[ParseWarning]) -> Value {
+/// `graph_skipped` is the graph layer's own `name: reason` records, dropped
+/// before the registry sees them, so they carry no path.
+pub(crate) fn render_report(
+    active: &[ActiveSkill],
+    warnings: &[ParseWarning],
+    graph_skipped: &[String],
+) -> Value {
     json!({
         "served": active
             .iter()
@@ -36,16 +42,17 @@ pub(crate) fn render_report(active: &[ActiveSkill], warnings: &[ParseWarning]) -
         "skipped": warnings
             .iter()
             .map(|w| json!({"path": w.path.display().to_string(), "error": w.error}))
+            .chain(graph_skipped.iter().map(|record| json!({"record": record})))
             .collect::<Vec<_>>(),
     })
 }
 
 /// Write the report when a selftest parent asked for one; otherwise a no-op.
-pub(crate) fn publish(active: &[ActiveSkill], warnings: &[ParseWarning]) {
+pub(crate) fn publish(active: &[ActiveSkill], warnings: &[ParseWarning], graph_skipped: &[String]) {
     let Some(path) = std::env::var_os(REPORT_ENV).map(PathBuf::from) else {
         return;
     };
-    let body = render_report(active, warnings).to_string();
+    let body = render_report(active, warnings, graph_skipped).to_string();
     if let Err(error) = std::fs::write(&path, body) {
         tracing::warn!(%error, path = %path.display(), "could not write the skills report");
     }

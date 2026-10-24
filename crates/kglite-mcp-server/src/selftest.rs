@@ -744,6 +744,9 @@ fn skills_checks(
             entries
                 .iter()
                 .map(|e| {
+                    if let Some(record) = e.get("record").and_then(Value::as_str) {
+                        return format!("graph record {}", truncate(record, 160));
+                    }
                     let path = e.get("path").and_then(Value::as_str).unwrap_or("?");
                     let file = std::path::Path::new(path)
                         .file_name()

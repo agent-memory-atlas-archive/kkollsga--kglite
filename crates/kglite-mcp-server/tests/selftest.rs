@@ -101,3 +101,38 @@ fn hydration_counts_nodes_that_are_not_valid_today() {
         .unwrap_or_else(|| panic!("no hydration line:\n{report}"));
     assert!(line.contains("→ 3 node(s)"), "{line}");
 }
+
+#[test]
+fn an_invalid_graph_carried_skill_fails_the_selftest_and_names_the_record() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("g.kgl");
+    let mut dir = new_dir_graph_in_mode(StorageMode::Memory, None).expect("graph");
+    let params = HashMap::new();
+    let opts = ExecuteOptions::eager(&params);
+    for statement in [
+        "CREATE (:KgliteSkill {name:'good_skill', description:'Fine.', body:'Body.'})",
+        "CREATE (:KgliteSkill {name:'bad_skill', description:'', body:'Body.'})",
+    ] {
+        execute_mut(&mut dir, statement, &opts).expect(statement);
+    }
+    let mut graph = Arc::new(dir);
+    kglite::api::io::save_graph(&mut graph, path.to_str().expect("utf-8")).expect("save");
+    let manifest = tmp.path().join("mcp.yaml");
+    std::fs::write(&manifest, "name: Graph skills\nskills: true\n").expect("manifest");
+
+    let output = selftest(&[
+        "--graph",
+        path.to_str().expect("utf-8"),
+        "--mcp-config",
+        manifest.to_str().expect("utf-8"),
+    ]);
+    let report = text(&output);
+    assert!(!output.status.success(), "selftest must fail:\n{report}");
+    let line = report
+        .lines()
+        .find(|l| l.contains("✗ skills skipped"))
+        .unwrap_or_else(|| panic!("no failing skills line:\n{report}"));
+    assert!(line.contains("bad_skill"), "{line}");
+    assert!(line.contains("description"), "{line}");
+    assert!(report.contains("good_skill[graph]"), "{report}");
+}
