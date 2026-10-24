@@ -11,6 +11,7 @@ before upgrading.
 
 ### Fixed
 
+- **A build's largest finding is listed first and named.** A group's warning listed findings in emission order, so one relationship type with 32,712 rows on 8,947 pairs hid behind 48 small ones. Findings now rank by size within their group (identical-rows by surplus relationships), `graph_info()['build']['diagnostics']` follows the same order, and the count line reads `from_blueprint [data_quality] 49 warning(s); largest: Company OWNS 32712→8947 pairs`. `Diagnostic` gains `magnitude` and `headline` fields.
 - **`embed_texts` and `embed_relationship_texts` skip the model when nothing needs embedding.** A pass whose texts were all already embedded (or empty) still called the embedder's `load()`, so a no-op re-run could take as long as a model build. Both now compute the missing and changed texts first and call `load()` only when that set is non-empty. The reported counts are unchanged, and `dimension` comes from the store or the registered model.
 - **`graph_info()['format_version']` names the container on disk.** A v9 `.kgl` reported 8 after a load, and a save never updated it. It now reports the header version of the file last loaded or saved (`layout="compact"` writes 8).
 - **`MATCH (n) RETURN …, row_number() OVER (…) ORDER BY … LIMIT k` runs.** A window function over a single-node scan with `ORDER BY` and `LIMIT` raised "Window function must appear in RETURN/WITH clause". The window now ranks every row before the sort and the cut.
@@ -27550,7 +27551,7 @@ engine; dependency bumps + clippy 1.95 compatibility only.
 
 - **`traverse()` API improvements:**
   - `target_type` parameter — filter targets to specific node type(s): `traverse('OF_FIELD', direction='incoming', target_type='ProductionProfile')` or `target_type=['ProductionProfile', 'FieldReserves']`
-  - `where` parameter — alias for `filter_target`, consistent with the fluent API: `traverse('HAS_LICENSEE', where={'title': 'Equinor'})`
+  - `where` parameter — alias for `filter_target`, consistent with the fluent API: `traverse('OWNS', where={'title': 'Equinor'})`
   - `where_connection` parameter — alias for `filter_connection`: `traverse('RATED', where_connection={'score': {'>': 4}})`
   - `help(g.traverse)` now shows a comprehensive docstring with args, examples, and usage patterns
 - **Temporal awareness** — first-class support for time-dependent nodes and connections:

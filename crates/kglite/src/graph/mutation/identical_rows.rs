@@ -287,10 +287,21 @@ impl IdenticalRowTracker {
         *copies == 1
     }
 
-    /// [`warning`](Self::warning), classified.
+    /// [`warning`](Self::warning), classified and ranked by the number of
+    /// surplus relationships (`rows - distinct`) it names.
     pub(crate) fn diagnostic(&mut self, edge_type: &str) -> Option<Diagnostic> {
-        self.warning(edge_type)
-            .map(|m| Diagnostic::new(DiagnosticGroup::DataQuality, "identical_rows", m))
+        let message = self.warning(edge_type)?;
+        let unit = if self.with_properties {
+            "combinations"
+        } else {
+            "pairs"
+        };
+        let headline = format!("{edge_type} {}→{} {unit}", self.rows, self.distinct);
+        let surplus = self.rows.saturating_sub(self.distinct) as u64;
+        Some(
+            Diagnostic::new(DiagnosticGroup::DataQuality, "identical_rows", message)
+                .with_magnitude(surplus, headline),
+        )
     }
 
     /// The one warning for this load of `edge_type`, when `Keep` mode saw

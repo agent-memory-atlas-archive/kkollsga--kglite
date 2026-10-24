@@ -1249,6 +1249,7 @@ pub fn add_connections_with_identical_rows(
 ) -> Result<ConnectionOperationReport, String> {
     let mut tracker = IdenticalRowTracker::new(identical_rows);
     let edge_type = connection_type.clone();
+    let scope = source_type.clone();
     let mut report = add_connections_tracked(
         graph,
         df_data,
@@ -1263,7 +1264,7 @@ pub fn add_connections_with_identical_rows(
         InitialLoad::Detect,
         &mut tracker,
     )?;
-    report.warn_all(tracker.diagnostic(&edge_type));
+    report.warn_all(tracker.diagnostic(&edge_type).map(|d| d.under(&scope)));
     Ok(report)
 }
 

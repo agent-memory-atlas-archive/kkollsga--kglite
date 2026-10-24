@@ -159,6 +159,14 @@ pub struct Diagnostic {
     /// the kind is what a script matches on.
     pub kind: &'static str,
     pub message: String,
+    /// How much data the finding concerns, for ranking within a group (larger
+    /// first). `0` for a finding with no natural size; those keep emission
+    /// order after every sized one.
+    pub magnitude: u64,
+    /// A short label for the finding's subject and size, shown in a group's
+    /// summary line when this is its largest finding. Set with
+    /// [`with_magnitude`](Self::with_magnitude).
+    pub headline: Option<String>,
 }
 
 impl Diagnostic {
@@ -167,8 +175,37 @@ impl Diagnostic {
             group,
             kind,
             message: message.into(),
+            magnitude: 0,
+            headline: None,
         }
     }
+
+    /// The same advisory ranked by `magnitude` and labelled `headline`.
+    pub fn with_magnitude(self, magnitude: u64, headline: impl Into<String>) -> Self {
+        Self {
+            magnitude,
+            headline: Some(headline.into()),
+            ..self
+        }
+    }
+
+    /// The same advisory with `scope` in front of its headline, for a caller
+    /// that knows which node type the finding belongs to.
+    pub fn under(self, scope: &str) -> Self {
+        Self {
+            headline: self.headline.map(|h| format!("{scope} {h}")),
+            ..self
+        }
+    }
+}
+
+/// `diagnostics` with each group's findings ranked by magnitude, largest
+/// first; groups keep their severity order and equal magnitudes keep
+/// emission order.
+pub fn ranked(diagnostics: &[Diagnostic]) -> Vec<&Diagnostic> {
+    let mut ordered: Vec<&Diagnostic> = diagnostics.iter().collect();
+    ordered.sort_by_key(|d| (d.group, std::cmp::Reverse(d.magnitude)));
+    ordered
 }
 
 impl Diagnostic {
@@ -216,11 +253,9 @@ impl BuildInfo {
     /// an empty one, which is how a graph built without advisories differs
     /// from one that was not blueprint-built at all.
     pub fn record(diagnostics: &[Diagnostic]) -> Self {
-        let mut ordered: Vec<&Diagnostic> = diagnostics.iter().collect();
-        ordered.sort_by_key(|d| d.group);
         Self {
             summary: summarize(diagnostics),
-            diagnostics: ordered
+            diagnostics: ranked(diagnostics)
                 .into_iter()
                 .take(MAX_RECORDED)
                 .map(|d| RecordedDiagnostic {
@@ -252,6 +287,22 @@ mod tests {
         ];
         shuffled.sort();
         assert_eq!(shuffled, DiagnosticGroup::ALL);
+    }
+
+    #[test]
+    fn ranked_orders_by_group_then_magnitude_and_keeps_emission_order_for_ties() {
+        let sized = |kind, n: u64| d(DiagnosticGroup::DataQuality, kind).with_magnitude(n, kind);
+        let all = [
+            d(DiagnosticGroup::DataQuality, "unsized"),
+            sized("small", 2),
+            d(DiagnosticGroup::Stubs, "stub"),
+            sized("big", 29),
+            sized("small_too", 2),
+        ];
+        let kinds: Vec<&str> = ranked(&all).iter().map(|d| d.kind).collect();
+        assert_eq!(kinds, ["stub", "big", "small", "small_too", "unsized"]);
+        let scoped = sized("x", 1).under("Node");
+        assert_eq!(scoped.headline.as_deref(), Some("Node x"));
     }
 
     #[test]

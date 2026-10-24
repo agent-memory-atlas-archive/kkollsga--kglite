@@ -1139,6 +1139,16 @@ from_blueprint [declarations] 1 warning(s):
   - node 'Department': columns typed validFrom/validTo only type the column as a date; ...
 ```
 
+Within a group the largest findings come first. When the first finding has a
+size (an identical-rows finding is sized by its surplus relationships), the
+count line names it instead of ending in a colon, and the same order holds in
+`graph_info()['build']['diagnostics']`:
+
+```text
+from_blueprint [data_quality] 49 warning(s); largest: Company OWNS 32712→8947 pairs
+  - junction (node 'Company'): relationship type 'OWNS': 32712 relationships were created on 8947 distinct (source, target) pairs, ...
+```
+
 Because they are ordinary `UserWarning` objects, `warnings.simplefilter`,
 `warnings.catch_warnings` and `logging.captureWarnings` route them. A filter on
 the `from_blueprint [data_quality]` prefix silences one group.

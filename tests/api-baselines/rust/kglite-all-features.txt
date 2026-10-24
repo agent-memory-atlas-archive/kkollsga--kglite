@@ -428,10 +428,14 @@ impl<'de> serde_core::de::Deserialize<'de> for kglite::api::blueprint::Connectio
 pub fn kglite::api::blueprint::Connections::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct kglite::api::blueprint::Diagnostic
 pub kglite::api::blueprint::Diagnostic::group: kglite::api::blueprint::DiagnosticGroup
+pub kglite::api::blueprint::Diagnostic::headline: core::option::Option<alloc::string::String>
 pub kglite::api::blueprint::Diagnostic::kind: &'static str
+pub kglite::api::blueprint::Diagnostic::magnitude: u64
 pub kglite::api::blueprint::Diagnostic::message: alloc::string::String
 impl kglite::api::blueprint::Diagnostic
 pub fn kglite::api::blueprint::Diagnostic::new(kglite::api::blueprint::DiagnosticGroup, &'static str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn kglite::api::blueprint::Diagnostic::under(self, &str) -> Self
+pub fn kglite::api::blueprint::Diagnostic::with_magnitude(self, u64, impl core::convert::Into<alloc::string::String>) -> Self
 impl kglite::api::blueprint::Diagnostic
 pub fn kglite::api::blueprint::Diagnostic::prefixed(self, &str) -> Self
 impl core::clone::Clone for kglite::api::blueprint::Diagnostic
@@ -605,6 +609,7 @@ pub fn kglite::api::blueprint::declared_column_types(&kglite::api::blueprint::Bl
 pub fn kglite::api::blueprint::from_blueprint(&mut kglite::api::DirGraph, kglite::api::blueprint::Blueprint, &std::path::Path, kglite::api::blueprint::BuildInputs) -> core::result::Result<(kglite::api::blueprint::BuildReport, core::option::Option<std::path::PathBuf>), alloc::string::String>
 pub fn kglite::api::blueprint::from_records(&mut kglite::api::DirGraph, &serde_json::value::Value) -> core::result::Result<kglite::api::blueprint::RecordsReport, alloc::string::String>
 pub fn kglite::api::blueprint::load_blueprint_file(&std::path::Path) -> core::result::Result<kglite::api::blueprint::Blueprint, alloc::string::String>
+pub fn kglite::api::blueprint::ranked(&[kglite::api::blueprint::Diagnostic]) -> alloc::vec::Vec<&kglite::api::blueprint::Diagnostic>
 pub mod kglite::api::cdc
 pub enum kglite::api::cdc::CdcChange
 pub kglite::api::cdc::CdcChange::Edge

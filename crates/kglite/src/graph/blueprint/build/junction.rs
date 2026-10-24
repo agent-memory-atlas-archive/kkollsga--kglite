@@ -286,11 +286,10 @@ fn report_junction_findings(
     report.add_all(
         misparses.into_diagnostics(&format!("junction '{edge_type}' (node '{node_type}')")),
     );
-    report.add_all(
-        identical
-            .diagnostic(edge_type)
-            .map(|d| d.prefixed(&format!("junction (node '{node_type}'): "))),
-    );
+    report.add_all(identical.diagnostic(edge_type).map(|d| {
+        d.prefixed(&format!("junction (node '{node_type}'): "))
+            .under(node_type)
+    }));
     for (value, count) in unroutable {
         report.add(Diagnostic::new(
             DiagnosticGroup::DataQuality,

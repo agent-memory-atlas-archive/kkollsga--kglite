@@ -173,3 +173,52 @@ def test_from_records_groups_its_warnings_too():
     messages = [str(w.message) for w in caught]
     assert len(messages) == 1, messages
     assert messages[0].startswith("from_records [data_quality] 1 warning(s):")
+
+
+def _junction_nodes(edge_types):
+    junctions = {
+        edge: {"csv": f"{edge.lower()}.csv", "source_fk": "a", "target": "B", "target_fk": "b", "properties": []}
+        for edge in edge_types
+    }
+    return {
+        "A": {
+            "csv": "a.csv",
+            "pk": "a",
+            "title": "name",
+            "properties": {},
+            "connections": {"junction_edges": junctions},
+        },
+        "B": {"csv": "b.csv", "pk": "b", "title": "name", "properties": {}},
+    }
+
+
+def test_identical_rows_are_ranked_by_surplus_and_the_largest_is_named(tmp_path):
+    small = [f"SMALL{i:02d}" for i in range(11)]
+    # Eleven small findings come first in emission order; BIG is the twelfth
+    # and would fall outside the ten a group lists.
+    csvs = {"a.csv": "a,name\n1,x\n2,y\n", "b.csv": "b,name\n1,p\n2,q\n"}
+    for edge in small:
+        csvs[f"{edge.lower()}.csv"] = "a,b\n1,1\n1,1\n2,2\n2,2\n"
+    csvs["big.csv"] = "a,b\n" + "1,1\n" * 30 + "2,2\n"
+    graph, messages = _build(_write(tmp_path, _junction_nodes([*small, "BIG"]), csvs))
+
+    quality = [m for m in messages if "[data_quality]" in m]
+    assert len(quality) == 1, messages
+    assert quality[0].startswith("from_blueprint [data_quality] 12 warning(s); largest: A BIG 31→2 pairs\n")
+    first_item = quality[0].split("\n")[1]
+    assert "relationship type 'BIG'" in first_item, quality[0]
+    assert quality[0].count("\n  - ") == 10
+
+    recorded = [d for d in graph.graph_info()["build"]["diagnostics"] if d["kind"] == "identical_rows"]
+    assert len(recorded) == 12
+    assert "relationship type 'BIG'" in recorded[0]["message"]
+    assert set(recorded[0]) == {"group", "kind", "message"}
+
+
+def test_an_untyped_junction_column_pair_is_reported_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("KGLITE_BLUEPRINT_JUNCTION_CHUNK_SIZE", "1")
+    csvs = {"a.csv": "a,name\n1,x\n2,y\n3,z\n", "b.csv": "b,name\n1,p\n2,q\n3,r\n", "links.csv": "a,b\n1,1\n2,2\n3,3\n"}
+    _, messages = _build(_write(tmp_path, _junction_nodes(["LINKS"]), csvs))
+    extra = [m for m in messages if "have no declared type" in m]
+    assert len(extra) == 1, messages
+    assert extra[0].count("junction 'LINKS' (node 'A')") == 1

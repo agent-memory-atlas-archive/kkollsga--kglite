@@ -258,11 +258,22 @@ const WARNING_ITEMS_SHOWN: usize = 10;
 /// `from_records` wrapper), and the warning belongs to whoever called that.
 fn warn_by_group(py: Python<'_>, caller: &str, diagnostics: &[Diagnostic]) -> PyResult<()> {
     for group in DiagnosticGroup::ALL {
-        let items: Vec<&Diagnostic> = diagnostics.iter().filter(|d| d.group == group).collect();
+        let items: Vec<&Diagnostic> = kglite_core::api::blueprint::ranked(diagnostics)
+            .into_iter()
+            .filter(|d| d.group == group)
+            .collect();
         if items.is_empty() {
             continue;
         }
-        let mut text = format!("{caller} [{}] {} warning(s):", group.as_str(), items.len());
+        let mut text = format!("{caller} [{}] {} warning(s)", group.as_str(), items.len());
+        match items[0]
+            .headline
+            .as_deref()
+            .filter(|_| items[0].magnitude > 0)
+        {
+            Some(largest) => text.push_str(&format!("; largest: {largest}")),
+            None => text.push(':'),
+        }
         for d in items.iter().take(WARNING_ITEMS_SHOWN) {
             text.push_str("\n  - ");
             text.push_str(&d.message);
