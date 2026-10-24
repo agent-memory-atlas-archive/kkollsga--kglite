@@ -3551,7 +3551,7 @@ Parameters and examples are in the sections above and in
 | `db.relationship_text_index.list` | `entity`, `type`, `text_column`, `documents`, `terms`, `skipped`, `index_state`, `delta`, `auto_refresh_limit` | List relationship text indexes and their freshness |
 | `ontology_audit` | `entity_kind`, `rule`, `severity`, `violations`, `exempted`, `total`, `pct`, `domain_class`, `property` | Scorecard: one row per declared node/edge ontology check, identified by entity_kind plus rule (violations, exempted, total, pct, declared severity). |
 | `node_property_violation` | `class`, `check`, `node`, `property`, `properties` | Class property violations, including declared descendants by primary type. |
-| `edge_property_violation` | `relationship`, `check`, `source`, `target`, `property`, `properties`, `exempt` | Rule: edges flagged by a declaration's required_properties (property absent/null), property_types (present value of the wrong type) or property_values (present value outside its enum/pattern/min/max contract) — the row listing behind those three ontology_audit counts. |
+| `edge_property_violation` | `relationship`, `check`, `source`, `target`, `property`, `properties`, `exempt` | Rule: edges flagged by a declaration's required_properties (property absent/null), property_types (present value of the wrong type) or property_values (present value outside its enum/pattern/min/max contract) — the row listing behind those three ontology_audit counts; check='distinct' lists each surplus edge of a `distinct` declaration (properties names its group key). |
 | `parallel_edges` | `a`, `b`, `count` | Rule: (a, b) pairs connected by more than one edge of {edge} |
 | `kg_knn` | `node`, `distance_m` | Spatial: k nearest nodes of {target_type} to ({lat}, {lon}) |
 | `affected_tests` | `test_file`, `depth` | Code graphs: test files reachable from changed files via inbound IMPORTS edges. |
@@ -5401,7 +5401,7 @@ double-counts.
 - Only one axis applies at a time. The column you did not ask for is Null.
 
 `edge_property_violation()` lists the individual edges behind the
-`required_properties`, `property_types` and `property_values` counts (the declared checks with
+`required_properties`, `property_types`, `property_values` and `distinct` counts (the declared checks with
 no rule procedure of their own). It takes no arguments.
 
 - It returns one row per flagged edge.

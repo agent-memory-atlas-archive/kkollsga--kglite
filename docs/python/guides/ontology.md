@@ -193,7 +193,7 @@ g.define_ontology({"relationships": {
 - Numbers compare by value, as in `enum` and Cypher `=`: `1` and `1.0` are one group. A list compares element-wise, and a string never equals a number.
 - A relationship type with a valid-time declaration also groups by its declared validity bounds. Successive versions of one pair are not duplicates, and two edges with identical bounds still are. This holds in the audit, at statement end, in bulk loaders and when the ontology is declared over stored data.
 - A property that `distinct` or a contract names, and that no stored row of a populated type carries, returns a warning from `define_ontology`. The declaration is still accepted.
-- The audit rule is `<TYPE>.distinct`. `violations` are the **surplus** edges: every edge beyond the first of its group, so three copies count two. `total` is every edge of the type.
+- The audit rule is `<TYPE>.distinct`, and `edge_property_violation()` lists its surplus edges with `check = 'distinct'`. `violations` are the **surplus** edges: every edge beyond the first of its group, so three copies count two. `total` is every edge of the type.
 - Writes are judged like the `cardinality` maximum. A Cypher statement is judged on each touched edge's stored group. A bulk loader that writes one edge per row (a first `add_connections` load) judges its own repeated rows and the stored edges before writing anything. A merging load folds a repeated pair onto its edge, so it cannot create a copy.
 - `distinct: True` merges nothing. It refuses or flags the copy and leaves the choice of which edge to keep to you. Check that the copies are true duplicates first: a group that differs in a column you did not load is better declared with that property listed.
 
@@ -543,7 +543,7 @@ What the form guarantees:
 
 ### Drilling down to the flagged edges
 
-`exempted` never hides rows. `violations + exempted` is everything the check flagged. `edge_property_violation()` lists those individual edges: the row-level drill-down behind the `required_properties` / `property_types` / `property_values` counts. Its `exempt` column marks which side of the line each row fell on:
+`exempted` never hides rows. `violations + exempted` is everything the check flagged. `edge_property_violation()` lists those individual edges: the row-level drill-down behind the `required_properties` / `property_types` / `property_values` / `distinct` counts. Its `exempt` column marks which side of the line each row fell on:
 
 ```python
 for row in g.cypher("""
@@ -558,6 +558,8 @@ for row in g.cypher("""
 ```
 
 `properties` lists every declared property the edge fails, and `property` is the first of them. An edge missing three is still one row, so the listing keeps reconciling with the scorecard. Use `UNWIND properties AS p` for the per-field tally the row listing does not give you, or ask `ontology_audit({by: 'property'})` for it directly.
+
+For `check = 'distinct'` a row is one **surplus** edge: every edge beyond the first of its group, so the non-exempt rows equal the rule's `violations` and the exempt rows its `exempted`. The edges of a group differ in nothing the rule looks at, so `properties` names the group key (the declared properties, then any validity bounds) and `source` and `target` identify the group. Successive versions of a valid-time pair are not listed.
 
 At the blueprint gate the exempted count is reported, never dropped. Every summary line carries a `(+N exempted)` tail. A rule declared `error` whose violations are *all* exempted is reported as a **warning** rather than passing silently. An exemption that quietly absorbed every flagged row would make a passing gate indistinguishable from a clean graph.
 

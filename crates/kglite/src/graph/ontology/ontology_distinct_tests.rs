@@ -512,3 +512,98 @@ fn declaring_error_over_stored_temporal_versions_is_accepted() {
         declare(&mut graph, &spec("true", "error", ""));
     });
 }
+
+/// `(source id, target id, check, properties, exempt)` of every
+/// `edge_property_violation()` row of `rel`.
+fn violation_rows(graph: &mut DirGraph, check: &str) -> Vec<(i64, i64, Vec<String>, bool)> {
+    let rows = run_outcome(
+        graph,
+        &format!(
+            "CALL edge_property_violation() YIELD relationship, check, source, target, \
+             properties, exempt WHERE check = '{check}' \
+             RETURN source.id AS s, target.id AS t, properties, exempt ORDER BY s, t"
+        ),
+    )
+    .unwrap()
+    .result
+    .rows;
+    rows.iter()
+        .map(|r| {
+            let id = |v: &Value| match v {
+                Value::Int64(n) => *n,
+                other => panic!("not an id: {other:?}"),
+            };
+            let Value::List(props) = &r[2] else {
+                panic!("properties is not a list: {:?}", r[2])
+            };
+            let names = props
+                .iter()
+                .map(|p| match p {
+                    Value::String(s) => s.clone(),
+                    other => panic!("not a name: {other:?}"),
+                })
+                .collect();
+            (
+                id(&r[0]),
+                id(&r[1]),
+                names,
+                matches!(r[3], Value::Boolean(true)),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn edge_property_violation_lists_the_surplus_edges_the_audit_counts() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        declare(
+            &mut graph,
+            &spec(
+                r#"["side"]"#,
+                "advisory",
+                r#", "exempt": {"distinct": ["Historical"]}"#,
+            ),
+        );
+        for _ in 0..3 {
+            link(&mut graph, 1, 10, "{side: 'a'}").unwrap();
+        }
+        link(&mut graph, 1, 10, "{side: 'b'}").unwrap();
+        link(&mut graph, 2, 11, "{side: 'a'}").unwrap();
+        link(&mut graph, 3, 10, "{side: 'a'}").unwrap();
+        link(&mut graph, 3, 10, "{side: 'a'}").unwrap();
+        let rows = violation_rows(&mut graph, "distinct");
+        let (violations, exempted, _) = distinct_line(&mut graph);
+        assert_eq!(
+            rows,
+            vec![
+                (1, 10, vec!["side".to_string()], false),
+                (1, 10, vec!["side".to_string()], false),
+                (3, 10, vec!["side".to_string()], true),
+            ]
+        );
+        assert_eq!(
+            rows.iter().filter(|r| !r.3).count() as i64,
+            violations,
+            "rows excluding exempt ones equal the audit's violations"
+        );
+        assert_eq!(rows.iter().filter(|r| r.3).count() as i64, exempted);
+    });
+}
+
+#[test]
+fn edge_property_violation_does_not_list_temporal_versions_as_distinct() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        version(&mut graph, "2010-01-01", "2015-01-01").unwrap();
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        make_temporal(&mut graph);
+        declare(&mut graph, &spec("true", "advisory", ""));
+        assert!(violation_rows(&mut graph, "distinct").is_empty());
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        let rows = violation_rows(&mut graph, "distinct");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[0].2, ["frm", "to"]);
+    });
+}

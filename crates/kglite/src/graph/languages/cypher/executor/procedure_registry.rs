@@ -607,7 +607,7 @@ pub(super) const PROCEDURES: &[ProcedureSpec] = &[
     ProcedureSpec {
         name: "edge_property_violation",
         aliases: &[],
-        description: "Rule: edges flagged by a declaration's required_properties (property absent/null), property_types (present value of the wrong type) or property_values (present value outside its enum/pattern/min/max contract) — the row listing behind those three ontology_audit counts. No-arg only; one row per flagged edge, `properties` listing every declared property it fails and `property` the first of them, `exempt` marking rows an `exempt` declaration excuses",
+        description: "Rule: edges flagged by a declaration's required_properties (property absent/null), property_types (present value of the wrong type) or property_values (present value outside its enum/pattern/min/max contract) — the row listing behind those three ontology_audit counts; check='distinct' lists each surplus edge of a `distinct` declaration (properties names its group key). No-arg only; one row per flagged edge, `properties` listing every declared property it fails and `property` the first of them, `exempt` marking rows an `exempt` declaration excuses",
         columns: &[
             "relationship",
             "check",

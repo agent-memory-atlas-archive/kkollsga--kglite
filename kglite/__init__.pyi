@@ -6231,7 +6231,11 @@ class KnowledgeGraph:
         ``violations`` the surplus edges (every edge beyond the first of its
         group) and ``total`` the type's edges, and enforced at write time
         like ``cardinality.max``: the statement's end state, or the bulk
-        frame's own repeated rows, is judged. A property named by
+        frame's own repeated rows, is judged. ``CALL
+        edge_property_violation() YIELD relationship, check, source, target,
+        property, properties, exempt`` lists the flagged edges, and its
+        ``check = 'distinct'`` rows are the surplus edges (``properties``
+        names the group key; ``exempt`` marks excused ones). A property named by
         ``distinct`` or a contract that no stored row of a populated class
         or relationship type carries returns a warning (a typo looks like
         this); the declaration is still accepted;

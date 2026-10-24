@@ -511,3 +511,26 @@ def test_define_ontology_warns_for_a_property_no_stored_row_carries(tmp_path):
     warnings = g.define_ontology(distinct_decl(["sidee"], "advisory"))
     assert any("'sidee'" in w and "no stored" in w for w in warnings), warnings
     assert not any("no stored" in w for w in g.define_ontology(distinct_decl(["side"], "advisory")))
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_edge_property_violation_lists_distinct_surplus_edges(storage, tmp_path):
+    g = make_graph(storage, tmp_path)
+    seeded_laws(g)
+    g.define_ontology(distinct_decl(["side"], "advisory", {"distinct": ["Historical"]}))
+    for _ in range(3):
+        link(g, 1, 10, "{side: 'a'}")
+    link(g, 1, 10, "{side: 'b'}")
+    link(g, 3, 10, "{side: 'a'}")
+    link(g, 3, 10, "{side: 'a'}")
+    rows = g.cypher(
+        "CALL edge_property_violation() YIELD check, source, target, properties, exempt "
+        "WHERE check = 'distinct' RETURN source.id AS s, target.id AS t, properties, exempt ORDER BY s"
+    ).to_list()
+    assert [(r["s"], r["t"], r["properties"], r["exempt"]) for r in rows] == [
+        (1, 10, ["side"], False),
+        (1, 10, ["side"], False),
+        (3, 10, ["side"], True),
+    ]
+    violations, exempted, _ = line(g, "HAS.distinct")
+    assert (violations, exempted) == (2, 1)

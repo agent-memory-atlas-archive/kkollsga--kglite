@@ -178,6 +178,25 @@ fn edge_property_findings(
     out
 }
 
+/// One finding per surplus edge of a `distinct` type; `properties` names what
+/// the edge's group is keyed on (the declared properties, then any validity
+/// bounds), since the edges of a group differ in nothing else.
+fn distinct_findings(graph: &DirGraph, rel: &str, decl: &RelationshipDecl) -> Vec<PropertyFinding> {
+    let Some(distinct) = decl.distinct.as_ref() else {
+        return Vec::new();
+    };
+    let key = distinct_gate::group_properties(graph, rel, &distinct.properties);
+    distinct_gate::surplus_edges(graph, rel, decl)
+        .into_iter()
+        .map(|(source, target, exempt)| PropertyFinding {
+            source,
+            target,
+            properties: key.clone(),
+            exempt,
+        })
+        .collect()
+}
+
 fn endpoint_rows(
     pairs: Vec<(NodeIndex, NodeIndex)>,
     src_var: &str,
@@ -650,14 +669,16 @@ pub(super) fn execute_ontology_audit(
 
 /// `CALL edge_property_violation() YIELD relationship, check, source,
 /// target, property, properties, exempt` — the row listing behind
-/// `ontology_audit()`'s `required_properties` and `property_types` counts,
-/// which are the two declared checks with no rule procedure of their own.
+/// `ontology_audit()`'s `required_properties`, `property_types`,
+/// `property_values` and `distinct` counts, the declared checks with no rule
+/// procedure of their own.
 ///
 /// One row per flagged edge, exempted ones included and marked (`exempt`),
 /// so a relationship's row count for a `check` equals that rule's
 /// `violations + exempted` in the scorecard. `properties` lists every
 /// declared property the edge fails and `property` is its head, so an edge
-/// failing three is still one row. Takes no parameters — the declarations
+/// failing three is still one row. For `check = 'distinct'` a row is one
+/// surplus edge and `properties` names its group key. Takes no parameters — the declarations
 /// are the argument.
 pub(super) fn execute_edge_property_violation(
     graph: &DirGraph,
@@ -667,8 +688,8 @@ pub(super) fn execute_edge_property_violation(
     if !params.is_empty() {
         return Err(
             "CALL edge_property_violation takes no parameters — it lists the flagged \
-                    edges of every declaration carrying required_properties, property_types \
-                    or property_values."
+                    edges of every declaration carrying required_properties, property_types, \
+                    property_values or distinct."
                 .to_string(),
         );
     }
@@ -686,11 +707,17 @@ pub(super) fn execute_edge_property_violation(
             DeclaredCheck::RequiredProperties,
             DeclaredCheck::PropertyTypes,
             DeclaredCheck::PropertyValues,
+            DeclaredCheck::Distinct,
         ] {
             if !declared.contains(&check) {
                 continue;
             }
-            for finding in edge_property_findings(graph, &edges_of_type(graph, rel), decl, check) {
+            let findings = if check == DeclaredCheck::Distinct {
+                distinct_findings(graph, rel, decl)
+            } else {
+                edge_property_findings(graph, &edges_of_type(graph, rel), decl, check)
+            };
+            for finding in findings {
                 let mut row = ResultRow::new();
                 if let Some(a) = alias("source") {
                     row.node_bindings.insert(a, finding.source);
