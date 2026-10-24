@@ -55,6 +55,7 @@ mod self_update;
 mod selftest;
 mod server_run;
 mod skills;
+mod skills_report;
 mod tools;
 mod tools_allow;
 mod value_codecs;

@@ -302,6 +302,7 @@ pub(crate) fn install_skills(
             log_parse_warnings(&registry);
             warn_if_over_session_budget(&registry);
             let active = serve_prompts(&registry, server);
+            crate::skills_report::publish(&active, registry.parse_warnings());
             stats.graph.attribute(&active);
             stats.producer.attribute(&active);
             *write_lock(skills_index) = render_skills_index(&active);
@@ -874,6 +875,7 @@ impl SkillRefresher {
                 return;
             }
         };
+        crate::skills_report::publish(&active, registry.parse_warnings());
         *write_lock(&inner.skills_index) = render_skills_index(&active);
         tracing::info!(
             skills = active.len(),

@@ -58,6 +58,8 @@ struct Rpc {
     next_id: i64,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     stderr_reader: Option<thread::JoinHandle<()>>,
+    /// Where the child writes its skill report (see `skills_report`).
+    skills_report: std::path::PathBuf,
 }
 
 /// Resolve the command that launches a fresh server instance for the child
@@ -100,9 +102,15 @@ impl Rpc {
         // and in place, and we additionally keep the tail so a failed
         // handshake can quote the *cause* rather than only reporting that no
         // response arrived.
+        let skills_report = std::env::temp_dir().join(format!(
+            "kglite-selftest-skills-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&skills_report);
         let mut child = Command::new(&program)
             .args(&lead_args)
             .args(child_args)
+            .env(crate::skills_report::REPORT_ENV, &skills_report)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -155,6 +163,7 @@ impl Rpc {
             next_id: 0,
             stderr_tail,
             stderr_reader: Some(stderr_reader),
+            skills_report,
         })
     }
 
@@ -298,6 +307,12 @@ fn activation_succeeded(text: &str) -> bool {
 
 /// Parse the exact one-row scalar projection emitted by
 /// `MATCH (n) RETURN count(n) AS n`.
+/// Counts every stored node. A graph that declares valid time answers an
+/// unprefixed statement as of today, which leaves out nodes not valid today
+/// and reports a smaller graph than the file holds; `ALL` reads every version
+/// and is a no-op on a graph with no declaration.
+const HYDRATION_QUERY: &str = "FOR VALID_TIME ALL MATCH (n) RETURN count(n) AS n";
+
 fn hydration_count(text: &str) -> Option<u64> {
     let mut lines = text.lines().filter_map(|line| {
         let line = line.trim();
@@ -666,13 +681,14 @@ fn check_declared_source_roots(
 /// Only manifests that opt in produce a line; `skills:` absent or `false` is a
 /// configuration choice and has no `prompts/list` to ask.
 ///
-/// The count includes graph-carried skills but cannot **attribute** them, and
-/// reports no byte total: this harness speaks MCP to a child process, and
-/// `prompts/list` carries names and descriptions only. Provenance and delivery
-/// tier exist on the server side (mcp-methods 0.4.11 `ActiveSkill`) but not on
-/// the wire, so the graph layer's count, byte total, `owned:graph` attribution
-/// and skipped records reach the operator on the child's boot-summary line,
-/// which this harness mirrors to stderr.
+/// `prompts/list` carries names only, so the winning layer of each skill and
+/// the per-file load failures come from the child's own report file (see
+/// `skills_report`): the child is the one process that resolved the registry
+/// against its real graph and producer layer, so re-resolving here could
+/// disagree with what it serves. Without a report (a child that wrote none)
+/// the line degrades to bare names. A skipped skill is a failing line. The
+/// graph layer's count and byte total still reach the operator on the child's
+/// boot-summary line, which this harness mirrors to stderr.
 fn check_skills(
     rpc: &mut Rpc,
     manifest: Option<&Manifest>,
@@ -703,6 +719,51 @@ fn check_skills(
             return;
         }
     };
+    let report = std::fs::read_to_string(&rpc.skills_report)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let _ = std::fs::remove_file(&rpc.skills_report);
+    skills_checks(&names, report.as_ref(), checks);
+}
+
+/// The skills lines for what the child serves (`names`, from `prompts/list`)
+/// and what it reported resolving (`report`, from `skills_report`).
+///
+/// A skipped skill is a failure, not a count: the server logs it, serves a
+/// lower-layer skill of the same name or none, and every tool call still
+/// succeeds, so nothing else in the session says the file was dropped.
+fn skills_checks(
+    names: &[String],
+    report: Option<&Value>,
+    checks: &mut Vec<(&'static str, Check)>,
+) {
+    let skipped: Vec<String> = report
+        .and_then(|r| r.get("skipped"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|e| {
+                    let path = e.get("path").and_then(Value::as_str).unwrap_or("?");
+                    let file = std::path::Path::new(path)
+                        .file_name()
+                        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+                    let error = e.get("error").and_then(Value::as_str).unwrap_or("");
+                    format!("{file}: {}", truncate(error, 160))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !skipped.is_empty() {
+        checks.push((
+            "skills skipped",
+            Check::Fail(format!(
+                "{} skill(s) failed to load and are NOT served — {}",
+                skipped.len(),
+                skipped.join("; ")
+            )),
+        ));
+    }
     if names.is_empty() {
         checks.push((
             "skills",
@@ -714,9 +775,28 @@ fn check_skills(
         ));
         return;
     }
+    let layer_of = |name: &str| {
+        report
+            .and_then(|r| r.get("served"))
+            .and_then(Value::as_array)
+            .and_then(|served| {
+                served
+                    .iter()
+                    .find(|s| s.get("name").and_then(Value::as_str) == Some(name))
+            })
+            .and_then(|s| s.get("layer").and_then(Value::as_str))
+    };
+    let listed = names
+        .iter()
+        .map(|name| match layer_of(name) {
+            Some(layer) => format!("{name}[{layer}]"),
+            None => name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     checks.push((
         "skills",
-        Check::Pass(format!("{} served: {}", names.len(), names.join(", "))),
+        Check::Pass(format!("{} served: {listed}", names.len())),
     ));
 }
 
@@ -828,13 +908,11 @@ fn check_hydration(rpc: &mut Rpc, mode: &Mode, local_activated: bool) -> Result<
         _ => {
             let r = rpc.request(
                 "tools/call",
-                json!({"name": "cypher_query", "arguments": {"query": "MATCH (n) RETURN count(n) AS n"}}),
+                json!({"name": "cypher_query", "arguments": {"query": HYDRATION_QUERY}}),
             )?;
             match successful_call_text(&r) {
                 Ok(text) => match hydration_count(&text) {
-                    Some(count) => {
-                        Check::Pass(format!("MATCH (n) RETURN count(n) → {count} node(s)"))
-                    }
+                    Some(count) => Check::Pass(format!("{HYDRATION_QUERY} → {count} node(s)")),
                     None => Check::Fail(snippet(&text)),
                 },
                 Err(detail) => Check::Fail(detail),
