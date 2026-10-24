@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use kglite::api::storage::StorageMode;
 use kglite::okf::CachePolicy;
 use mcp_methods::server::manifest::{
@@ -25,6 +25,40 @@ pub(crate) fn manifest_relative_path(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(raw)
+}
+
+impl Cli {
+    /// Parse `argv` so `--version`/`-V` print `<identity.name> <identity.version>`.
+    /// The stale-build check reads that line from the installed binary, so it
+    /// has to carry the number the identity compares against, not this
+    /// crate's own version.
+    pub(crate) fn try_parse_with_identity<I, T>(
+        argv: I,
+        identity: &crate::self_update::Identity,
+    ) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        // clap's builder holds `'static` strings (its `string` feature is off);
+        // one small leak per parse, and a process parses once.
+        let name: &'static str = Box::leak(identity.name.clone().into_boxed_str());
+        let version: &'static str = Box::leak(identity.version.clone().into_boxed_str());
+        let command = Self::command().name(name).bin_name(name).version(version);
+        let mut matches = command.try_get_matches_from(argv)?;
+        Self::from_arg_matches_mut(&mut matches)
+    }
+
+    pub(crate) fn parse_with_identity<I, T>(
+        argv: I,
+        identity: &crate::self_update::Identity,
+    ) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::try_parse_with_identity(argv, identity).unwrap_or_else(|e| e.exit())
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -448,6 +482,24 @@ mod cli_contract_tests {
             .expect_err("--version exits through clap");
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
         assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn embedder_identity_is_what_version_prints() {
+        let identity = crate::self_update::Identity {
+            name: "sonagram".into(),
+            version: "0.2.30".into(),
+        };
+        let error = Cli::try_parse_with_identity(["sonagram-mcp-server", "-V"], &identity)
+            .expect_err("-V exits through clap");
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+        let line = error.to_string();
+        assert_eq!(line.trim(), "sonagram 0.2.30");
+        // The unchanged installed binary reads as the running version.
+        assert_eq!(
+            crate::self_update::parse_version_line(&line).as_deref(),
+            Some(identity.version.as_str())
+        );
     }
 
     #[test]

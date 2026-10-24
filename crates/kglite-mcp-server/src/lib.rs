@@ -32,6 +32,7 @@
 //! - bare — framework + manifest tools only.
 
 use anyhow::{Context, Result};
+#[cfg(test)]
 use clap::Parser;
 
 mod activation;
@@ -146,7 +147,7 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let argv: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
-    let cli = Cli::parse_from(argv.iter().cloned());
+    let cli = Cli::parse_with_identity(argv.iter().cloned(), &extensions.identity);
     // `--selftest` is a diagnostic mode, not a serve mode: it re-spawns this
     // binary with the operator's other flags and drives a real handshake. It
     // runs before the tokio runtime is built (the child owns the async serve

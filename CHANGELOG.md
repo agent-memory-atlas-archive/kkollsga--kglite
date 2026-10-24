@@ -12,6 +12,7 @@ before upgrading.
 ### Fixed
 
 - **`MATCH (n) RETURN …, row_number() OVER (…) ORDER BY … LIMIT k` runs.** A window function over a single-node scan with `ORDER BY` and `LIMIT` raised "Window function must appear in RETURN/WITH clause". The window now ranks every row before the sort and the cut.
+- **`with_identity` now sets what `--version` prints.** A binary built on `ServerExtensions::with_identity(name, version)` answers `--version` and `-V` with `<name> <version>`. It used to print kglite's own version, so the stale-build check compared the wrong numbers and reported a false stale notice.
 
 ## [0.21.1] - 2026-10-24
 

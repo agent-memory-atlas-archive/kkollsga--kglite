@@ -310,7 +310,9 @@ impl ServerExtensions {
     /// from the library underneath. The installed version is read from the
     /// package that holds the loaded code (`<package>-*.dist-info` for a wheel,
     /// `--version` of a binary), so `version` must be what that package
-    /// reports.
+    /// reports. The server's own `--version`/`-V` prints
+    /// `<name> <version>` from this identity, so a binary that runs through
+    /// [`run_with_extensions`] answers the stale check consistently.
     pub fn with_identity(mut self, name: impl Into<String>, version: impl Into<String>) -> Self {
         self.identity = crate::self_update::Identity {
             name: name.into(),
