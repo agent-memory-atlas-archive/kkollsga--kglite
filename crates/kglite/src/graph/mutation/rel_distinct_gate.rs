@@ -16,7 +16,9 @@ use petgraph::graph::NodeIndex;
 use super::rel_constraint_gate::{ConnectionBatchGate, FramePlan, RowFolding};
 use crate::datatypes::values::Value;
 use crate::graph::dir_graph::DirGraph;
-use crate::graph::ontology::distinct_gate::{flag_group, interned_keys, GroupKey};
+use crate::graph::ontology::distinct_gate::{
+    flag_group, group_properties, group_value, interned_keys, weight_key, GroupKey,
+};
 use crate::graph::ontology::predicates::source_exempt;
 use crate::graph::storage::GraphRead;
 
@@ -31,7 +33,7 @@ impl ConnectionBatchGate<'_> {
                     .iter()
                     .find(|(column, _, _)| column == name)
                     .and_then(|(_, _, index)| self.rows.cell(row, *index))
-                    .filter(|v| !matches!(v, Value::Null))
+                    .and_then(|v| group_value(Some(&v)))
             })
             .collect()
     }
@@ -47,7 +49,7 @@ impl ConnectionBatchGate<'_> {
         if self.folding != RowFolding::Independent && self.start_key.is_none() {
             return;
         }
-        let properties = rule.properties().to_vec();
+        let properties = group_properties(graph, self.connection_type, rule.properties());
         let conn_key = crate::graph::schema::InternedKey::from_str(self.connection_type);
         let keys = interned_keys(&properties);
         let _arena_guard = graph.graph.begin_query();
@@ -68,18 +70,7 @@ impl ConnectionBatchGate<'_> {
                     .edges_directed(source, petgraph::Direction::Outgoing)
                     .filter(|e| e.weight().connection_type == conn_key)
                 {
-                    let weight = edge.weight();
-                    let group: GroupKey = keys
-                        .iter()
-                        .map(|(interned, _)| {
-                            weight
-                                .properties
-                                .iter()
-                                .find(|(stored, _)| stored == interned)
-                                .map(|(_, v)| v.clone())
-                                .filter(|v| !matches!(v, Value::Null))
-                        })
-                        .collect();
+                    let group = weight_key(edge.weight(), &keys);
                     *held.entry((edge.target(), group)).or_default() += 1;
                 }
                 held

@@ -396,3 +396,119 @@ fn declaring_error_over_existing_duplicates_is_refused_with_the_surplus_count() 
     declared_over("warn").unwrap();
     declared_over("advisory").unwrap();
 }
+
+#[test]
+fn numeric_group_values_compare_by_value_not_by_type() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        declare(&mut graph, &spec(r#"["w"]"#, "advisory", ""));
+        link(&mut graph, 1, 10, "{w: 1}").unwrap();
+        link(&mut graph, 1, 10, "{w: 1.0}").unwrap();
+        assert_eq!(
+            distinct_line(&mut graph),
+            (1, 0, 2),
+            "1 and 1.0 are one group"
+        );
+        link(&mut graph, 1, 10, "{w: 1.5}").unwrap();
+        link(&mut graph, 1, 10, "{w: '1'}").unwrap();
+        assert_eq!(
+            distinct_line(&mut graph),
+            (1, 0, 4),
+            "1.5 and the string '1' are groups of their own"
+        );
+        link(&mut graph, 2, 10, "{w: [1, 2]}").unwrap();
+        link(&mut graph, 2, 10, "{w: [1.0, 2.0]}").unwrap();
+        link(&mut graph, 2, 10, "{w: [1.0, 3]}").unwrap();
+        assert_eq!(
+            distinct_line(&mut graph),
+            (2, 0, 7),
+            "lists compare element-wise"
+        );
+    });
+}
+
+#[test]
+fn the_write_gate_treats_one_and_one_point_zero_as_a_duplicate() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        declare(&mut graph, &spec(r#"["w"]"#, "error", ""));
+        link(&mut graph, 1, 10, "{w: 1}").unwrap();
+        assert_distinct(*link(&mut graph, 1, 10, "{w: 1.0}").unwrap_err());
+        link(&mut graph, 1, 10, "{w: '1'}").unwrap();
+        assert_eq!(has_count(&mut graph), 2);
+    });
+}
+
+fn make_temporal(graph: &mut DirGraph) {
+    use crate::graph::features::temporal::declarations::{declare, TemporalTarget};
+    use crate::graph::features::temporal::IntervalConvention;
+    declare(
+        graph,
+        &TemporalTarget::Relationship {
+            rel_type: "HAS".into(),
+            source_type: None,
+        },
+        "frm",
+        "to",
+        IntervalConvention::Closed,
+    )
+    .unwrap();
+}
+
+fn version(graph: &mut DirGraph, from: &str, to: &str) -> Result<(), Box<KgError>> {
+    link(
+        graph,
+        1,
+        10,
+        &format!("{{frm: date('{from}'), to: date('{to}')}}"),
+    )
+}
+
+#[test]
+fn successive_versions_of_a_temporal_pair_are_not_duplicates() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        version(&mut graph, "2010-01-01", "2015-01-01").unwrap();
+        make_temporal(&mut graph);
+        declare(&mut graph, &spec("true", "advisory", ""));
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        version(&mut graph, "2021-01-01", "2022-01-01").unwrap();
+        assert_eq!(distinct_line(&mut graph), (0, 0, 3));
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        assert_eq!(
+            distinct_line(&mut graph),
+            (1, 0, 4),
+            "two edges with identical bounds are still duplicates"
+        );
+    });
+}
+
+#[test]
+fn the_write_gate_accepts_new_versions_and_refuses_identical_bounds() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        version(&mut graph, "2010-01-01", "2015-01-01").unwrap();
+        make_temporal(&mut graph);
+        declare(&mut graph, &spec("true", "error", ""));
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        assert_distinct(*version(&mut graph, "2016-01-01", "2020-01-01").unwrap_err());
+        assert_eq!(
+            super::ontology_gate_tests::count(
+                &mut graph,
+                "FOR VALID_TIME ALL MATCH ()-[r:HAS]->() RETURN count(r)"
+            ),
+            2
+        );
+    });
+}
+
+#[test]
+fn declaring_error_over_stored_temporal_versions_is_accepted() {
+    in_every_mode(|mut graph| {
+        seeded(&mut graph);
+        version(&mut graph, "2010-01-01", "2015-01-01").unwrap();
+        version(&mut graph, "2016-01-01", "2020-01-01").unwrap();
+        make_temporal(&mut graph);
+        declare(&mut graph, &spec("true", "error", ""));
+    });
+}

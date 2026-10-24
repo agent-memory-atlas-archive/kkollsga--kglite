@@ -440,3 +440,74 @@ def test_exempt_name_matching_nothing_warns_and_cardinality_stays_refused(tmp_pa
     assert any("'Histroical'" in w and "exempts nothing" in w for w in warnings), warnings
     with pytest.raises(ValueError, match="does not accept check 'cardinality'"):
         g.define_ontology(required_decl(exempt={"cardinality": ["Historical"]}))
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_distinct_numbers_compare_by_value(storage, tmp_path):
+    g = make_graph(storage, tmp_path)
+    seeded_laws(g)
+    g.define_ontology(distinct_decl(["w"], "error"))
+    link(g, 1, 10, "{w: 1}")
+    with pytest.raises(kglite.OntologyViolationError):
+        link(g, 1, 10, "{w: 1.0}")
+    link(g, 1, 10, "{w: '1'}")
+    assert has_count(g) == 2
+
+
+def temporal_versions(storage, tmp_path):
+    g = make_graph(storage, tmp_path)
+    g.add_nodes(pd.DataFrame({"id": [1], "t": ["f"]}), "F", "id", "t")
+    g.add_nodes(pd.DataFrame({"id": [2], "t": ["c"]}), "C", "id", "t")
+    g.add_relationships(
+        pd.DataFrame({"s": [1], "t": [2], "frm": ["2010-01-01"], "to": ["2015-01-01"]}),
+        "OP",
+        "F",
+        "s",
+        "C",
+        "t",
+        columns=["frm", "to"],
+    )
+    g.set_temporal("OP", "frm", "to")
+    return g
+
+
+def version_frame(*spans):
+    return pd.DataFrame(
+        {"s": [1] * len(spans), "t": [2] * len(spans), "frm": [a for a, _ in spans], "to": [b for _, b in spans]}
+    )
+
+
+def load_versions(g, *spans):
+    g.add_relationships(version_frame(*spans), "OP", "F", "s", "C", "t", columns=["frm", "to"])
+
+
+@pytest.mark.parametrize("storage", STORAGES)
+def test_distinct_on_a_temporal_type_keeps_versions_and_refuses_identical_bounds(storage, tmp_path):
+    g = temporal_versions(storage, tmp_path)
+    g.define_ontology(
+        {"relationships": {"OP": {"domain": "F", "range": "C", "distinct": True, "enforcement": "error"}}}
+    )
+    load_versions(g, ("2016-01-01", "2020-01-01"), ("2021-01-01", "2022-01-01"))
+
+    def count():
+        return g.cypher("FOR VALID_TIME ALL MATCH ()-[r:OP]->() RETURN count(r) AS c").to_list()[0]["c"]
+
+    assert count() == 3
+    with pytest.raises(kglite.OntologyViolationError):
+        load_versions(g, ("2030-01-01", "2031-01-01"), ("2030-01-01", "2031-01-01"))
+    with pytest.raises(kglite.OntologyViolationError):
+        g.cypher("MATCH (f:F),(c:C) CREATE (f)-[:OP {frm: date('2016-01-01'), to: date('2020-01-01')}]->(c)")
+    assert count() == 3
+    rows = g.cypher(
+        "CALL ontology_audit() YIELD rule, violations, total WHERE rule = 'OP.distinct' RETURN violations, total"
+    )
+    assert rows.to_list() == [{"violations": 0, "total": 3}]
+
+
+def test_define_ontology_warns_for_a_property_no_stored_row_carries(tmp_path):
+    g = make_graph("memory", tmp_path)
+    seeded_laws(g)
+    link(g, 1, 10, "{side: 'a'}")
+    warnings = g.define_ontology(distinct_decl(["sidee"], "advisory"))
+    assert any("'sidee'" in w and "no stored" in w for w in warnings), warnings
+    assert not any("no stored" in w for w in g.define_ontology(distinct_decl(["side"], "advisory")))

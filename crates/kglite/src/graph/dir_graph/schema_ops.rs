@@ -370,7 +370,9 @@ impl DirGraph {
     ///   (returned, not printed — callers own the channel);
     /// - an `exempt` entry that is neither a declared class, a live primary
     ///   type nor a live secondary label is a warning (an unknown name
-    ///   exempts nothing, which is what a typo looks like).
+    ///   exempts nothing, which is what a typo looks like);
+    /// - a property named by a contract or `distinct` that no stored row of
+    ///   its populated type carries is a warning (see `declare_warnings`).
     fn check_ontology_declaration(
         &self,
         store: &crate::graph::ontology::OntologyStore,
@@ -413,6 +415,9 @@ impl DirGraph {
                 }
             }
         }
+        warnings.extend(
+            crate::graph::ontology::declare_warnings::unseen_property_warnings(self, store),
+        );
         if store.closed_labels {
             let mut undeclared: Vec<&str> = self
                 .type_indices

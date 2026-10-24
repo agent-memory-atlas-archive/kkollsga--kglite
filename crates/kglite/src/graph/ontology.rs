@@ -90,6 +90,7 @@
 pub(crate) mod cardinality_gate;
 pub(crate) mod contracts;
 pub(crate) mod declare_check;
+pub(crate) mod declare_warnings;
 pub(crate) mod distinct_gate;
 pub(crate) mod edge_gate;
 pub(crate) mod must_exist;
@@ -108,6 +109,8 @@ mod ontology_must_exist_tests;
 mod ontology_procedure_tests;
 #[cfg(test)]
 mod ontology_rel_gate_tests;
+#[cfg(test)]
+mod ontology_unseen_property_tests;
 #[cfg(test)]
 mod ontology_value_contract_tests;
 pub mod predicates;

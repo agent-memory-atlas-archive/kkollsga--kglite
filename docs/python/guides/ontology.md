@@ -190,6 +190,9 @@ g.define_ontology({"relationships": {
 
 - `distinct: True` groups edges by source and target.
 - `distinct: ["role", …]` also groups by the listed property values. A null value equals an absent one.
+- Numbers compare by value, as in `enum` and Cypher `=`: `1` and `1.0` are one group. A list compares element-wise, and a string never equals a number.
+- A relationship type with a valid-time declaration also groups by its declared validity bounds. Successive versions of one pair are not duplicates, and two edges with identical bounds still are. This holds in the audit, at statement end, in bulk loaders and when the ontology is declared over stored data.
+- A property that `distinct` or a contract names, and that no stored row of a populated type carries, returns a warning from `define_ontology`. The declaration is still accepted.
 - The audit rule is `<TYPE>.distinct`. `violations` are the **surplus** edges: every edge beyond the first of its group, so three copies count two. `total` is every edge of the type.
 - Writes are judged like the `cardinality` maximum. A Cypher statement is judged on each touched edge's stored group. A bulk loader that writes one edge per row (a first `add_connections` load) judges its own repeated rows and the stored edges before writing anything. A merging load folds a repeated pair onto its edge, so it cannot create a copy.
 - `distinct: True` merges nothing. It refuses or flags the copy and leaves the choice of which edge to keep to you. Check that the copies are true duplicates first: a group that differs in a column you did not load is better declared with that property listed.

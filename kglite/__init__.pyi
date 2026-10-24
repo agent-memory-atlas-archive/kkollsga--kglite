@@ -6223,11 +6223,18 @@ class KnowledgeGraph:
         ``distinct`` declares pair uniqueness on a relationship type:
         ``True`` allows one edge per source and target, and
         ``["side", ...]`` one per source, target and those property values
-        (null equals absent). Audited as ``<TYPE>.distinct`` with
+        (null equals absent; numbers compare by value, so ``1`` and ``1.0``
+        are one group, and a list compares element-wise). A type with a
+        valid-time declaration also groups by its declared validity bounds,
+        so successive versions of one pair are not duplicates while two
+        edges with identical bounds are. Audited as ``<TYPE>.distinct`` with
         ``violations`` the surplus edges (every edge beyond the first of its
         group) and ``total`` the type's edges, and enforced at write time
         like ``cardinality.max``: the statement's end state, or the bulk
-        frame's own repeated rows, is judged;
+        frame's own repeated rows, is judged. A property named by
+        ``distinct`` or a contract that no stored row of a populated class
+        or relationship type carries returns a warning (a typo looks like
+        this); the declaration is still accepted;
         ``property_values`` is a per-property value contract on class and
         relationship properties: ``{"prop": {"enum": [...], "pattern":
         "regex", "not_pattern": "regex", "min": n, "max": n}}`` (at least
