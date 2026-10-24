@@ -1294,11 +1294,10 @@ class TestEmbedderLifecycle:
         assert model.load_count == 1
         assert model.unload_count == 1
 
-    def test_embed_texts_calls_unload_on_empty(self):
-        """unload() is called even when there are no texts to embed. The column
-        has to be a real one: an unknown source column is now rejected before
-        the model is ever loaded (it used to embed nothing and say so only in
-        `skipped`)."""
+    def test_embed_texts_leaves_the_model_unloaded_on_empty(self):
+        """A pass with no text to embed never loads the model, so it never
+        unloads it either. The column has to be a real one: an unknown source
+        column is rejected before any model work."""
         graph = kglite.KnowledgeGraph()
         df = pd.DataFrame({"id": [1], "title": ["A"], "text": [""]})
         graph.add_nodes(df, "Node", "id", "title")
@@ -1310,8 +1309,8 @@ class TestEmbedderLifecycle:
 
         assert result["embedded"] == 0
         assert result["skipped"] == 1
-        assert model.load_count == 1
-        assert model.unload_count == 1
+        assert model.load_count == 0
+        assert model.unload_count == 0
 
     def test_embed_texts_rejects_an_unknown_column_before_loading_the_model(self):
         """The silent `{'embedded': 0}` for a column that exists nowhere is an
