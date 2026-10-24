@@ -26,6 +26,7 @@
 //! listing for the two property checks, which have no rule procedure of
 //! their own.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, HashMap};
 
 use petgraph::graph::NodeIndex;
@@ -35,6 +36,7 @@ use super::rule_procedures::{
     execute_transitivity_violation, require_node_yield, type_indices,
 };
 use crate::datatypes::values::Value;
+use crate::graph::core::iterators::GraphEdgeRef;
 use crate::graph::languages::cypher::ast::YieldItem;
 use crate::graph::languages::cypher::result::ResultRow;
 use crate::graph::ontology::distinct_gate;
@@ -45,22 +47,57 @@ use crate::graph::ontology::RelationshipDecl;
 use crate::graph::schema::{DirGraph, InternedKey};
 use crate::graph::storage::GraphRead;
 
-/// Edges of `edge_type` whose source (or target, per `check_source`) node's
+/// Every edge of `edge_type`, in edge-iteration order: one pass over the
+/// graph's edges, for the callers that check a single relationship.
+pub(super) fn edges_of_type<'g>(graph: &'g DirGraph, edge_type: &str) -> Vec<GraphEdgeRef<'g>> {
+    let key = InternedKey::from_str(edge_type);
+    graph
+        .graph
+        .edge_references()
+        .filter(|er| er.connection_type() == key)
+        .collect()
+}
+
+/// The edges of every named relationship, grouped in ONE pass over the
+/// graph's edges. `ontology_audit` runs several checks per relationship and
+/// each would otherwise pay its own full-graph pass (plus one more for its
+/// `total`); the grouping makes the audit's edge-iteration cost independent
+/// of the rule count.
+fn group_edges_by_type<'g>(
+    graph: &'g DirGraph,
+    wanted: &FxHashSet<InternedKey>,
+) -> FxHashMap<InternedKey, Vec<GraphEdgeRef<'g>>> {
+    let mut by_type: FxHashMap<InternedKey, Vec<GraphEdgeRef<'g>>> = FxHashMap::default();
+    if wanted.is_empty() {
+        return by_type;
+    }
+    for er in graph.graph.edge_references() {
+        let key = er.connection_type();
+        if wanted.contains(&key) {
+            by_type.entry(key).or_default().push(er);
+        }
+    }
+    by_type
+}
+
+/// Whether judging `check` walks the relationship's edges (and so needs
+/// them handed to [`check_rows`]); the node-driven checks do not.
+fn scans_edges(check: DeclaredCheck) -> bool {
+    !matches!(check, DeclaredCheck::Required | DeclaredCheck::Cardinality)
+}
+
+/// Edges among `edges` whose source (or target, per `check_source`) node's
 /// primary type `is_accepted` rejects. The single implementation behind both
 /// the explicit `type_domain_violation`/`type_range_violation` calls
 /// (exact name) and the declaration-driven class-widened form.
 pub(super) fn scan_endpoint_mismatch(
     graph: &DirGraph,
-    edge_type: &str,
+    edges: &[GraphEdgeRef<'_>],
     is_accepted: impl Fn(&str) -> bool,
     check_source: bool,
 ) -> Vec<(NodeIndex, NodeIndex)> {
-    let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
-    for er in graph.graph.edge_references() {
-        if er.connection_type() != key {
-            continue;
-        }
+    for er in edges {
         let subject = if check_source {
             er.source()
         } else {
@@ -104,7 +141,7 @@ struct PropertyFinding {
 /// `required_properties`' concern, never a type or value violation).
 fn edge_property_findings(
     graph: &DirGraph,
-    edge_type: &str,
+    edges: &[GraphEdgeRef<'_>],
     decl: &RelationshipDecl,
     check: DeclaredCheck,
 ) -> Vec<PropertyFinding> {
@@ -114,12 +151,8 @@ fn edge_property_findings(
             | DeclaredCheck::PropertyTypes
             | DeclaredCheck::PropertyValues
     ));
-    let key = InternedKey::from_str(edge_type);
     let mut out = Vec::new();
-    for er in graph.graph.edge_references() {
-        if er.connection_type() != key {
-            continue;
-        }
+    for er in edges {
         let failed =
             predicates::edge_property_failures(decl, check.name(), |p| er.weight().get_property(p));
         if failed.is_empty() {
@@ -177,14 +210,6 @@ pub(super) fn stamp_rule(rows: &mut [ResultRow], yield_items: &[YieldItem], rule
 
 fn live(graph: &DirGraph, node_type: &str) -> bool {
     graph.type_indices.contains_key(node_type)
-}
-
-fn edge_type_exists(graph: &DirGraph, edge_type: &str) -> bool {
-    let key = InternedKey::from_str(edge_type);
-    graph
-        .graph
-        .edge_references()
-        .any(|er| er.connection_type() == key)
 }
 
 fn string_params(pairs: &[(&str, &str)]) -> HashMap<String, Value> {
@@ -312,6 +337,7 @@ impl CheckOutcome {
 fn check_rows(
     graph: &DirGraph,
     rel: &str,
+    edges: &[GraphEdgeRef<'_>],
     decl: &RelationshipDecl,
     check: DeclaredCheck,
     yield_items: &[YieldItem],
@@ -329,7 +355,7 @@ fn check_rows(
             let tgt_var = require_node_yield(yield_items, proc, "target")?;
             let pairs = scan_endpoint_mismatch(
                 graph,
-                rel,
+                edges,
                 |actual| {
                     if check_source {
                         !predicates::domain_violated(store, decl, actual)
@@ -399,7 +425,7 @@ fn check_rows(
         | DeclaredCheck::PropertyValues => {
             let src_var = require_node_yield(yield_items, "ontology_audit", "source")?;
             let tgt_var = require_node_yield(yield_items, "ontology_audit", "target")?;
-            let findings = edge_property_findings(graph, rel, decl, check);
+            let findings = edge_property_findings(graph, edges, decl, check);
             let exempt = findings.iter().map(|f| f.exempt).collect();
             let properties = findings.iter().map(|f| f.properties.clone()).collect();
             let pairs = findings.into_iter().map(|f| (f.source, f.target)).collect();
@@ -436,14 +462,14 @@ fn check_rows(
             } else {
                 decl.inverse_name.as_deref().expect("gated on presence")
             };
-            if !edge_type_exists(graph, rel) {
+            if edges.is_empty() {
                 return Ok(CheckOutcome::plain(Vec::new()));
             }
             let params = string_params(&[("rel_a", rel), ("rel_b", other)]);
             execute_inverse_violation(graph, &params, yield_items).map(CheckOutcome::plain)
         }
         DeclaredCheck::Transitive => {
-            if !edge_type_exists(graph, rel) {
+            if edges.is_empty() {
                 return Ok(CheckOutcome::plain(Vec::new()));
             }
             let params = string_params(&[("rel", rel)]);
@@ -483,7 +509,12 @@ pub(super) fn no_arg_declaration_rows(
             if !declared_checks(rel, decl).contains(check) {
                 continue;
             }
-            match check_rows(graph, rel, decl, *check, yield_items) {
+            let edges = if scans_edges(*check) {
+                edges_of_type(graph, rel)
+            } else {
+                Vec::new()
+            };
+            match check_rows(graph, rel, &edges, decl, *check, yield_items) {
                 Ok(outcome) => {
                     let mut rows = outcome.rows;
                     stamp_rule(&mut rows, yield_items, &format!("{rel}.{}", check.name()));
@@ -659,7 +690,7 @@ pub(super) fn execute_edge_property_violation(
             if !declared.contains(&check) {
                 continue;
             }
-            for finding in edge_property_findings(graph, rel, decl, check) {
+            for finding in edge_property_findings(graph, &edges_of_type(graph, rel), decl, check) {
                 let mut row = ResultRow::new();
                 if let Some(a) = alias("source") {
                     row.node_bindings.insert(a, finding.source);
@@ -773,11 +804,22 @@ fn audit_lines(graph: &DirGraph, breakdown: AuditBreakdown) -> Result<Vec<AuditL
         );
     }
     let mut out = Vec::new();
+    let scanned: FxHashSet<InternedKey> = graph
+        .ontology
+        .relationships
+        .iter()
+        .filter(|(rel, decl)| declared_checks(rel, decl).into_iter().any(scans_edges))
+        .map(|(rel, _)| InternedKey::from_str(rel))
+        .collect();
+    let by_type = group_edges_by_type(graph, &scanned);
     for (rel, decl) in &graph.ontology.relationships {
+        let edges = by_type
+            .get(&InternedKey::from_str(rel))
+            .map_or(&[][..], Vec::as_slice);
         for check in declared_checks(rel, decl) {
             let count_yield: Vec<YieldItem> = counting_yield(check);
-            let outcome = check_rows(graph, rel, decl, check, &count_yield)?;
-            let total = check_total(graph, rel, decl, check);
+            let outcome = check_rows(graph, rel, edges, decl, check, &count_yield)?;
+            let total = check_total(graph, edges, decl, check);
             let line = |domain_class: Option<String>,
                         property: Option<String>,
                         violations: usize| AuditLine {
@@ -908,7 +950,7 @@ fn counting_yield(check: DeclaredCheck) -> Vec<YieldItem> {
 
 fn check_total(
     graph: &DirGraph,
-    rel: &str,
+    edges: &[GraphEdgeRef<'_>],
     decl: &RelationshipDecl,
     check: DeclaredCheck,
 ) -> usize {
@@ -921,14 +963,7 @@ fn check_total(
         | DeclaredCheck::Distinct
         | DeclaredCheck::Inverse
         | DeclaredCheck::Symmetric
-        | DeclaredCheck::Transitive => {
-            let key = InternedKey::from_str(rel);
-            graph
-                .graph
-                .edge_references()
-                .filter(|er| er.connection_type() == key)
-                .count()
-        }
+        | DeclaredCheck::Transitive => edges.len(),
         DeclaredCheck::Required | DeclaredCheck::Cardinality => {
             let Some(domain) = decl.domain.as_deref() else {
                 return 0;

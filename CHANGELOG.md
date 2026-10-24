@@ -16,6 +16,19 @@ before upgrading.
 - **Ontology `exempt` matches secondary labels and covers more checks.** An entry matches a source node that carries the name as a secondary label, so `"exempt": {"required": ["Historical"]}` excuses `:Contract:Historical` stubs. `exempt` now accepts `required`, `property_values` and `distinct` beside the two property checks. An entry need not be a declared class: one that is neither a class nor a live label returns a warning from `define_ontology` instead of an error.
 - **`SHOW ONTOLOGY` gains `property_values` and `distinct` columns.**
 
+### Changed
+
+- **`CALL ontology_audit()` reads each relationship's edges once.** The audit made a full pass over every edge for each edge-scanning rule, plus a second pass for each rule's total, and on `storage="mapped"` every pass paid for mapped reads again. It now groups the declared relationships' edges in one pass and runs every rule over that group. Warm min-of-6, release build, fresh process per cell, on two production graphs:
+
+  | Audit | 0.20.1 | 0.21.1 | Now |
+  |---|---|---|---|
+  | 23 rules, 560k nodes, in-memory | 30.7 ms | 53.6 ms | 10.0 ms |
+  | 23 rules, 560k nodes, mapped | 31.1 ms | 116.6 ms | 12.7 ms |
+  | 28 rules, 310 MB graph, in-memory | 67.0 ms | 90.0 ms | 46.4 ms |
+  | 28 rules, 310 MB graph, mapped | 67.8 ms | 163.0 ms | 54.7 ms |
+
+  0.20.1 cannot read the v9 container, so its column was measured on a compact (v8) copy of the same graph.
+
 ### Fixed
 
 - **A build's largest finding is listed first and named.** A group's warning listed findings in emission order, so one relationship type with 32,712 rows on 8,947 pairs hid behind 48 small ones. Findings now rank by size within their group (identical-rows by surplus relationships), `graph_info()['build']['diagnostics']` follows the same order, and the count line reads `from_blueprint [data_quality] 49 warning(s); largest: Company OWNS 32712→8947 pairs`. `Diagnostic` gains `magnitude` and `headline` fields.

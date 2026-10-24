@@ -560,7 +560,7 @@ pub(super) fn execute_type_domain_violation(
     let tgt_var = require_node_yield(yield_items, "type_domain_violation", "target")?;
     let pairs = super::ontology_procedures::scan_endpoint_mismatch(
         graph,
-        &edge_type,
+        &super::ontology_procedures::edges_of_type(graph, &edge_type),
         |actual| actual == expected,
         true,
     );
@@ -591,7 +591,7 @@ pub(super) fn execute_type_range_violation(
     let tgt_var = require_node_yield(yield_items, "type_range_violation", "target")?;
     let pairs = super::ontology_procedures::scan_endpoint_mismatch(
         graph,
-        &edge_type,
+        &super::ontology_procedures::edges_of_type(graph, &edge_type),
         |actual| actual == expected,
         false,
     );
