@@ -39,7 +39,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
@@ -628,7 +627,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
@@ -1477,7 +1475,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
@@ -2254,7 +2251,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
@@ -2943,7 +2939,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
@@ -3492,7 +3487,6 @@
           },
           "timeout_ms": {
             "description": "Deadline for this query, in milliseconds. Omit for the server default\nof 180000 (three minutes); pass `0` to run without a deadline. The\ndefault exists because a tool call has no cancel channel and one\nrunaway read blocks every later call on this server, so a query that\nneeds longer must say so explicitly.",
-            "format": "uint64",
             "minimum": 0,
             "type": [
               "integer",
