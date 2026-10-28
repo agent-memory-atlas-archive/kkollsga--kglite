@@ -1,7 +1,7 @@
 //! Disk-to-disk streaming subgraph filter.
 //!
 //! Gated to disk-backed sources: in-memory and mapped graphs route through
-//! the non-streaming `save_subset` path per CLAUDE.md ("in-memory wins every
+//! the non-streaming `save_subset` path per AGENTS.md ("in-memory wins every
 //! time"). All I/O here is sequential — no per-node random edge lookups.
 
 use crate::datatypes::values::BorrowedValue;

@@ -857,7 +857,7 @@ pub mod api {
 
     /// Storage backend configuration — the in-memory / mmap / disk backends
     /// (`GraphBackend` + `DiskGraph` / `MappedGraph` constructors), the
-    /// per-type lookup, and the embedding store. CLAUDE.md designates
+    /// per-type lookup, and the embedding store. AGENTS.md designates
     /// storage-backend configuration a direct-api concern.
     pub mod storage {
         pub use crate::graph::schema::EmbeddingStore;

@@ -2,7 +2,7 @@
 #
 # check_api_chokepoint.sh — enforce the kglite::api single-chokepoint boundary.
 #
-# Two-tier binding architecture (CLAUDE.md → "Two-tier standardization
+# Two-tier binding architecture (AGENTS.md → "Two-tier standardization
 # architecture"): every downstream wrapper reaches the engine through the
 # curated, semver-stable `kglite::api::*` surface — never the raw
 # `kglite_core::graph::*` (or `kglite::graph::*`) module tree.
@@ -106,7 +106,7 @@ if [ "$wheel" -gt "$WHEEL_BASELINE" ]; then
 	echo "FAIL: crates/kglite-py below-api reaches grew to $wheel (baseline $WHEEL_BASELINE)."
 	echo "      A new kglite_core::graph:: reach crept in. Route it through"
 	echo "      kglite::api instead, or lift the needed item into api first"
-	echo "      (see docs/history/roadmap-2026H1.md / CLAUDE.md boundary principle)."
+	echo "      (see docs/history/roadmap-2026H1.md / AGENTS.md boundary principle)."
 	fail=1
 elif [ "$wheel" -lt "$WHEEL_BASELINE" ]; then
 	echo "FAIL: crates/kglite-py below-api reaches dropped to $wheel (baseline $WHEEL_BASELINE)."

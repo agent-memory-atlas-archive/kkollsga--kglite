@@ -8,13 +8,14 @@
 /.venv*/
 /.claude/
 # Keep the skills path explicit: doctrine adoption checks this contract even
-# though the parent directory is also workstation-local.
+# though the parent directory is also workstation-local. `.claude/skills` is a
+# symlink to `../.agents/skills`, the one real skills folder.
 /.claude/skills/
-# Codex conventions and skills are workstation-local adapters. CLAUDE.md is
-# the tracked repository authority; do not auto-generate or stage these files.
+/.claude/skills
+# Skills live here, workstation-local; AGENTS.md (tracked) is the instructions
+# file, so this folder is never staged.
 /.agents/
 /.agents/skills/
-/AGENTS.md
 /.pytest_cache/
 /data/
 # Local dev working folder — see dev-docs/README.md for the canonical layout.
@@ -38,7 +39,7 @@
 /dev-docs/bench/scripts/**/node_modules/
 # Inbox of feedback/coordination notes (`unread/` = needs action, `read/` =
 # archive). Kept at the repo root by preference; local working state, never
-# committed — see the "Inbox hygiene" section in CLAUDE.md.
+# committed — see the "Inbox hygiene" section in AGENTS.md.
 /inbox/
 # Competitive-library benchmarks. The public, OSS-only `graphsuite` (it powers
 # the linkable BENCHMARKS.md table) and `largescale` (BENCHMARKS.md's "Scaling"

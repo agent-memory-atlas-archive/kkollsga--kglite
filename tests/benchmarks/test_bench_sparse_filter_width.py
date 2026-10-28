@@ -26,7 +26,7 @@ Correctness (valid in any profile, runs in the default suite; no timing)::
 
     pytest tests/benchmarks/test_bench_sparse_filter_width.py -k oracle -v
 
-Timing. **Release profile only** (CLAUDE.md Performance protocol), on an
+Timing. **Release profile only** (AGENTS.md Performance protocol), on an
 otherwise-idle machine, with a thermal settle between the two runs::
 
     uv run --no-sync maturin develop --release
@@ -135,7 +135,7 @@ MATERIALIZE_QUERY = (
 )
 QUERIES = {"count": COUNT_QUERY, "materialize": MATERIALIZE_QUERY}
 
-# CLAUDE.md performance protocol: min-of-rounds, >= 100 rounds, 20 warmup.
+# AGENTS.md performance protocol: min-of-rounds, >= 100 rounds, 20 warmup.
 # Pinned via `pedantic` so a cell is protocol-compliant regardless of the
 # `--benchmark-*` flags the invocation happens to carry.
 ROUNDS = 100

@@ -75,7 +75,7 @@ timing). 1k and 100k run by default; the 1M arm holds ~1 GB and is opt-in::
     KGLITE_VACUUM_LIFECYCLE_1M=1 .venv/bin/python -m pytest \\
         tests/benchmarks/test_bench_delete_scaling.py -k oracle -v
 
-Timing. **Release profile only** (CLAUDE.md Performance protocol), on an
+Timing. **Release profile only** (AGENTS.md Performance protocol), on an
 otherwise-idle machine, with a thermal settle between the two runs::
 
     uv run --no-sync maturin develop --release

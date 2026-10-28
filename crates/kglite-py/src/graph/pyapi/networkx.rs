@@ -1,6 +1,6 @@
 // NetworkX interop — wrapper-side only (#[pymethods] on KnowledgeGraph).
 //
-// Boundary principle (CLAUDE.md): networkx is a Python library, so all
+// Boundary principle (AGENTS.md): networkx is a Python library, so all
 // the marshalling lives here in kglite-py, NOT in the kglite core crate.
 // A Go/JVM binding wouldn't touch any of this.
 //

@@ -167,7 +167,7 @@ semver-check:
 ## Refresh the three captured constants that drift across releases:
 ## the .kgl golden digest, the binary-size baselines (macOS host build +
 ## the published Linux wheel member), and the perf
-## baseline. Run as part of every release commit — see CLAUDE.md
+## baseline. Run as part of every release commit — see AGENTS.md
 ## under "Captured-constant refresh at release time".
 refresh-release-constants:
 	$(ACTIVATE) && maturin develop --release --quiet
@@ -335,7 +335,7 @@ notify-downstream:
 ## Fast local checkpoint. Pair this with the smallest package/test filter
 ## covering the change. Policy audits, workspace clippy, stubtest, packaged-
 ## consumer verification, and the broad test matrix run in CI.
-gate: lint check-docs-facts check-release-hygiene check-skill-mirrors check-dev-docs check-doc-density check-vocabulary
+gate: lint check-docs-facts check-release-hygiene check-skill-layout check-dev-docs check-doc-density check-vocabulary
 
 ## Fast formatting/static lint. Intentionally performs no Rust compilation,
 ## metadata walk, or runtime import.
@@ -485,9 +485,9 @@ prune-target:
 		echo "volume has $${free_gb:-unknown} GB free and the dir meters under $(PRUNE_TARGET_GB) GB — no prune"; \
 	fi
 
-.PHONY: check-skill-mirrors
-check-skill-mirrors:
-	python3 scripts/check_skill_mirrors.py
+.PHONY: check-skill-layout
+check-skill-layout:
+	python3 scripts/check_skill_layout.py
 
 ## Mechanical bound on the gitignored dev-docs/ working folder — the one
 ## accumulation with no reviewer, no CI and no remote watching it grow. Unlike

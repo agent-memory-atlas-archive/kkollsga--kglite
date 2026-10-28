@@ -180,7 +180,7 @@ val stageNatives = tasks.register<Sync>("stageNatives") {
     // Without this the coverage check below is decorative: the task goes
     // UP-TO-DATE from the previous run and its `doLast` never executes, so
     // `-PrequireAllNatives=true` silently passes on an incomplete staging
-    // directory — the exact "green that cannot go red" shape CLAUDE.md names.
+    // directory — the exact "green that cannot go red" shape AGENTS.md names.
     inputs.property("requireAllNatives", providers.gradleProperty("requireAllNatives").orElse("false"))
     doLast {
         val staged = destinationDir.resolve("natives")

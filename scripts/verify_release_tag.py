@@ -69,7 +69,7 @@ def workspace_version(root: Path) -> str:
         raise TagProblem(f"{manifest} [workspace.package] declares no version")
     version = match.group(1)
     # An empty or malformed version read out of a manifest is how a green run
-    # publishes nothing (CLAUDE.md, "verify the artifact SET"). Refuse it here
+    # publishes nothing (AGENTS.md, "verify the artifact SET"). Refuse it here
     # rather than build a tag name out of it.
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise TagProblem(f"workspace version is not a plain x.y.z release: {version!r}")

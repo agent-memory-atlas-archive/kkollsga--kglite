@@ -56,7 +56,7 @@ FINDING CATEGORIES
 
 AFFECTED-ONLY (the notifier's core rule)
 ----------------------------------------
-CLAUDE.md: *"Route to the party who can act. A note only belongs in another
+AGENTS.md: *"Route to the party who can act. A note only belongs in another
 project's inbox if it carries an actionable task for them."* and *"unread/ must
 reflect only what still needs doing, so a stale 'you still have unread mail'
 never hides a genuinely open item among resolved ones."*

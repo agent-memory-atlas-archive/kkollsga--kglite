@@ -32,7 +32,7 @@
 //! cargo test -p kglite --release fork_apportionment -- --ignored --nocapture
 //! ```
 //!
-//! **Release profile is mandatory** per `CLAUDE.md`'s performance protocol —
+//! **Release profile is mandatory** per `AGENTS.md`'s performance protocol —
 //! a debug-profile clone time is not a number, and this file will refuse to
 //! print one.
 //!
@@ -70,7 +70,7 @@ const NODES: usize = 1_000_000;
 const EMBED_DIM: usize = 64;
 
 /// Clone repetitions per field. Enough to reject a one-off page-fault storm;
-/// `min` is the statistic, per `CLAUDE.md`.
+/// `min` is the statistic, per `AGENTS.md`.
 const REPS: usize = 3;
 
 fn run(graph: &mut DirGraph, query: &str) {
@@ -226,7 +226,7 @@ fn build_plain(nodes: usize) -> DirGraph {
             cargo test -p kglite --release fork_apportionment -- --ignored --nocapture"]
 fn apportion_the_fork_across_the_data_scale_fields() {
     if cfg!(debug_assertions) {
-        panic!("run this in release; a debug-profile clone time is not a measurement (CLAUDE.md)");
+        panic!("run this in release; a debug-profile clone time is not a measurement (AGENTS.md)");
     }
 
     let base = build_plain(NODES);

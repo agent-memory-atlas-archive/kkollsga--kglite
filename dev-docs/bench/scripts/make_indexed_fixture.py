@@ -20,7 +20,7 @@ WHAT IT BUILDS (both variants, same nodes/edges/properties):
     dev-docs/bench/out/noindex_500k.kgl    the same data, zero indexes/constraints
 
 Run it with the RELEASE wheel installed (`uv run --no-sync maturin develop
---release`) — this is a measurement fixture, and CLAUDE.md's debug-profile rule
+--release`) — this is a measurement fixture, and AGENTS.md's debug-profile rule
 is a *correctness*-testing rule, not a build rule for perf artifacts.
 
 Re-runnable: it overwrites both outputs and writes nothing outside

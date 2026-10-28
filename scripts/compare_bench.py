@@ -14,7 +14,7 @@ Usage:
         [--quiet] \\
         [--record-history PATH]
 
-By default, `min` is the gating metric (per CLAUDE.md performance protocol:
+By default, `min` is the gating metric (per AGENTS.md performance protocol:
 "Trust `min` over `median` for sub-millisecond benches"). Threshold defaults
 to 20% — anything tighter than that flakes too readily against the macOS /
 GitHub-runner variance the tracked benchmarks see in practice.

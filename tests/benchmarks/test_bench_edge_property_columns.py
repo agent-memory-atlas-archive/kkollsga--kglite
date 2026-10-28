@@ -30,13 +30,13 @@ Three cells, deliberately:
 ``control``   the *node* bulk-insert path over the same corpus. `add_nodes`
               already resolves its property columns once per call, so this cell
               is untouched by any change to the connection path — it is the
-              machine-drift meter CLAUDE.md's Performance protocol item 8
+              machine-drift meter AGENTS.md's Performance protocol item 8
               requires. A control that moves means the instrument moved.
 
 Runbook
 -------
 
-Release profile only (CLAUDE.md Performance protocol — a debug number is
+Release profile only (AGENTS.md Performance protocol — a debug number is
 invalid evidence, not a weak one)::
 
     uv run --no-sync maturin develop --release

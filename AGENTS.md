@@ -1,15 +1,15 @@
-# KGLite — Claude Code Conventions
+# KGLite — agent conventions
 
-**Authority:** `CLAUDE.md` is the authority this repo's agent instructions are
-regenerated from; `AGENTS.md` and `.agents/` are generated adapters (and
-`.claude/skills/` is the authority for `.agents/skills/`). Edit the authority
-and regenerate in the same action — never edit an adapter.
+**Authority:** `AGENTS.md` is this repo's agent instructions; there is no
+`CLAUDE.md` (Claude Code loads `AGENTS.md` in its place). `.agents/skills/`
+holds the skills, and `.claude/skills` is a symlink to it so Claude Code finds
+them. Both directories are workstation-local and gitignored.
 
 ## Doctrine adoption
 
 Follow `../doctrine/learn-from-us.md` → Doctrine sync procedure at planning or
 release entry. Versioned corrections apply to KGLite even when made in doctrine
-first. Merge into the declared authority and regenerate adapters; preserve local
+first. Merge into `AGENTS.md`; preserve local
 improvements. A missing marker requires an adoption audit. Planned/deferred work
 does not advance `dev-docs/.doctrine-synced`. Snapshotting never performs sync.
 
@@ -170,7 +170,7 @@ parent folder.** An agent that needs an isolated tree creates it as
 `git worktree add ../KGLite-worktrees/<name> <branch>`: a sibling *directory*
 of the repo, holding all of them, not a scattered `../KGLite-<name>` beside
 the real projects in `Rust/`. Release cleanup reclaims inactive trees through
-`.claude/skills/dev-docs-cleanup/SKILL.md` §6. Preserve and verify commits,
+`.agents/skills/dev-docs-cleanup/SKILL.md` §6. Preserve and verify commits,
 staged/unstaged changes, untracked contents and valuable ignored files before
 removal; a bare `git diff` is incomplete. A detached HEAD needs a recovery ref
 or bundle. Keep active, dirty or ambiguous trees and remove the parent directory

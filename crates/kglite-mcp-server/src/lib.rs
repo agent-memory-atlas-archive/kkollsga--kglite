@@ -99,7 +99,7 @@ pub use kglite::api::skills::{Delivery, SkillRecord};
 /// expects). The binary passes `std::env::args()`; the PyO3 wrapper
 /// passes a synthesised `["kglite-mcp-server", ...sys.argv[1:]]`.
 ///
-/// Synchronous by design (see CLAUDE.md "core is sync, bindings own
+/// Synchronous by design (see AGENTS.md "core is sync, bindings own
 /// async"): this builds its own multi-thread tokio runtime and blocks
 /// on the stdio serve loop. The PyO3 wrapper calls it inside
 /// `py.detach(...)`, so the GIL is released for the server's entire

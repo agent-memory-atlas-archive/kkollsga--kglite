@@ -20,7 +20,7 @@ After the fix the same shape is 5.3 / 6.4 / 8.7 MB.
 Peak RSS is measured in a **fresh subprocess per size**. Measuring both sizes
 in one process would let the allocator's retained arenas from the first run
 absorb the second, understating the delta -- i.e. failing in the *reassuring*
-direction, which is exactly the class of instrument bug CLAUDE.md warns about.
+direction, which is exactly the class of instrument bug AGENTS.md warns about.
 A fresh process has nothing to hide behind.
 
 The sizes are 500 and 2 000: 4x the rows, comfortably clear of the SIGKILL

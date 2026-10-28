@@ -135,7 +135,7 @@
 # leaves a `<graph>-wal` and `<graph>.lock-owner` beside the fixture.
 #
 # Release profile only — a debug-built binary's numbers are invalid here
-# (CLAUDE.md, "Performance protocol").
+# (AGENTS.md, "Performance protocol").
 
 set -euo pipefail
 

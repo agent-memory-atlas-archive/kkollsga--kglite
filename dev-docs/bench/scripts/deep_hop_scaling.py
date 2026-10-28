@@ -6,7 +6,7 @@ count**, per spelling x consumer class, on two fixture densities.
 
     RELEASE BUILD ONLY.  `uv run --no-sync maturin develop --release` first;
     a debug-profile number from this harness is invalid and must be discarded
-    (CLAUDE.md "Performance protocol" item 2).
+    (AGENTS.md "Performance protocol" item 2).
 
 Fixtures
 --------

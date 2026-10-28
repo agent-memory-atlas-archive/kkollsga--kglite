@@ -44,7 +44,7 @@ Captured 2026-08-14 on branch `refactor/shape-convergence` at HEAD a97256e7,
 release profile (`--no-default-features --features abi3,python-extension`),
 macOS arm64 (Darwin 25.3.0). **Machine state: not idle** — 5 user sessions,
 1-minute load average 1.7-2.3 throughout, an editor and a browser resident.
-Recorded per the longitudinal-capture doctrine (CLAUDE.md, Performance protocol
+Recorded per the longitudinal-capture doctrine (AGENTS.md, Performance protocol
 item 7/9): these are cross-session comparison inputs, so the state they were
 taken under is part of the number.
 

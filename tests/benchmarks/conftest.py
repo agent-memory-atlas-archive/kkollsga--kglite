@@ -16,7 +16,7 @@ def _warm_native_extension():
     XProtect first-run assessment the first time it is loaded, which can burn
     most of a core in `syspolicyd` for tens of seconds (it is also what makes
     a warm `cargo test` appear to stall at ~0% CPU on first execution — see
-    CLAUDE.md). Alongside it sit the ordinary one-off costs: lazy symbol
+    AGENTS.md). Alongside it sit the ordinary one-off costs: lazy symbol
     binding, and the first fault-in of the extension's pages.
 
     `pytest-benchmark`'s own warmup is per-benchmark and runs *inside* the

@@ -202,7 +202,7 @@ def _reset(path: str) -> None:
     Called before every rebuild so that at most one graph's files exist at a
     time. Without this, a cell at the top row count would leave ~150 MB per
     round behind, and the file as a whole would leave gigabytes in the pytest
-    temp directory — the kind of ungated accumulation CLAUDE.md requires an
+    temp directory — the kind of ungated accumulation AGENTS.md requires an
     owner for.
     """
     for suffix in ("", "-wal", ".lock"):

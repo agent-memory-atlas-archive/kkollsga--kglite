@@ -35,7 +35,7 @@ because an adjacency edit flattens the overlay it would otherwise build
 (structural-sharing.md, "Limits"); that flatten is the cost being measured, so
 `False` there confirms the expensive path rather than voiding the cell.
 
-METHOD (CLAUDE.md "Performance protocol").
+METHOD (AGENTS.md "Performance protocol").
 
   * **Release mode only.** Build with `uv run --no-sync maturin develop
     --release` first; rebuild debug afterwards.

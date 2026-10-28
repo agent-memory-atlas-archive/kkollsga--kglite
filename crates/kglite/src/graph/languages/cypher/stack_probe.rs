@@ -403,7 +403,7 @@ fn on_probe_thread<R: Send + 'static>(body: impl FnOnce() -> R + Send + 'static)
 
 /// Release-profile timing of the per-row expression path — the cost centre
 /// any `stacker::maybe_grow` inside `evaluate_expression` would tax. Reports
-/// the minimum over rounds (CLAUDE.md: trust min over median for
+/// the minimum over rounds (AGENTS.md: trust min over median for
 /// sub-millisecond work).
 fn run_bench() {
     let rounds: usize = std::env::var("KGL_PROBE_ROUNDS")

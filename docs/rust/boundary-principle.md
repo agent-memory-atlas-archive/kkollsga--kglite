@@ -1,7 +1,7 @@
 # The boundary principle (wrappers vs core)
 
 > This document is the full reference for KGLite's wrapper/core boundary
-> doctrine and the Phase H C-ABI history. `CLAUDE.md` carries a short
+> doctrine and the Phase H C-ABI history. `AGENTS.md` carries a short
 > summary and links here. Read this when working on the `kglite::api::*`
 > surface, the C ABI, or a new binding. For building a *library that
 > produces* kglite graphs (rather than a language binding), see

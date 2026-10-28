@@ -15,7 +15,7 @@ argued.  For each ``size x dim`` cell the sweep reports the exact-scan latency,
 the auto-selected latency (same call, ``exact=False``), recall@10 of auto
 against exact, and the index build time.
 
-Methodology (CLAUDE.md "Performance protocol"):
+Methodology (AGENTS.md "Performance protocol"):
 
 * Sub-millisecond cells, so ``min`` over many rounds is the reported statistic;
   the median is printed alongside so a heavy tail (min < ~0.7x median) is

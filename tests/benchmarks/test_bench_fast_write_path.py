@@ -466,7 +466,7 @@ def test_bench_update_after_veto_trigger(benchmark, veto_graphs, size, variant):
 # ⚠⚠ THIS SECTION DELIBERATELY DEPARTS FROM THIS PROJECT'S `min` CONVENTION.
 # DO NOT "FIX" IT BACK. READ THIS FIRST.
 #
-# CLAUDE.md's performance protocol says to trust `min` over `median` for
+# AGENTS.md's performance protocol says to trust `min` over `median` for
 # sub-millisecond benchmarks, because median pulls upward with system load.
 # That guidance is correct in general and WRONG HERE.
 #
