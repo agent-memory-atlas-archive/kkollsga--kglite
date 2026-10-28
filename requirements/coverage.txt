@@ -1,4 +1,6 @@
 # Keep Python coverage reports comparable across local and CI runs.
 # pytest-cov 7.1.0 requires coverage[toml]>=7.10.6.
-coverage[toml]==7.17.0
+# 7.17.0 requires Python 3.11; the 3.10 test leg keeps the newest release it can install.
+coverage[toml]==7.17.0; python_version >= "3.11"
+coverage[toml]==7.16.2; python_version < "3.11"
 pytest-cov==7.1.0
