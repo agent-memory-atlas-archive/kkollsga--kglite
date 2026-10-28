@@ -9,6 +9,10 @@ before upgrading.
 
 ## [Unreleased]
 
+### Security
+
+- **`kglite` requires `zstd` 0.14.3 and `pulldown-cmark` 0.13.5.** The `zstd` floor excludes the memory-safety advisories RUSTSEC-2026-0391 to -0406 and -0410 (`zstd` 0.14.0 with `zstd-safe` 8.0.0 and `zstd-sys` 2.1.0). The `pulldown-cmark` floor excludes RUSTSEC-2026-0414, exponential growth with `ENABLE_WIKILINKS`. KGLite's OKF parser does not enable that option, so it was not exposed. **Do:** rebuild with the updated lockfile.
+
 ### Fixed
 
 - **An embedder's `--help` usage names its executable.** Binaries built on `with_identity` printed `Usage: <identity> [OPTIONS]` (for example `codingest`) instead of the executable name; only `--version` carries the identity now.
