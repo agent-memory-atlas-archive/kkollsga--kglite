@@ -9,6 +9,6 @@
     "conformance": "node conformance.mjs"
   },
   "dependencies": {
-    "neo4j-driver": "^5.28.0"
+    "neo4j-driver": "^6.2.0"
   }
 }
