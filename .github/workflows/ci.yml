@@ -262,6 +262,16 @@ jobs:
           shared-key: msrv-${{ matrix.toolchain }}
           workspaces: ". -> target"
 
+      # The committed Cargo.lock tracks the newest releases, and a transitive
+      # crate can raise its own MSRV past this floor (uuid 1.29 needs 1.89)
+      # while the floor we declare still holds. Re-resolve to the newest
+      # versions whose `rust-version` this toolchain satisfies, as a consumer
+      # on this Rust would.
+      - name: Resolve dependency versions this toolchain can build
+        run: cargo generate-lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+
       - name: Build on the declared MSRV
         run: cargo check ${{ matrix.packages }}
 
