@@ -117,6 +117,7 @@ Important options (run `--help` on the installed version for the authority):
 | `--checkpoint-wal-mib MIB` | checkpoint when the log passes this size, default `16` while a log is kept, `0` disables |
 | `--auth none\|basic`, `--auth-user`, `--auth-pass` | Bolt LOGON policy |
 | `--idle-timeout`, `--max-sessions`, `--max-message-size` | resource bounds |
+| `--handshake-timeout SECS` | seconds a connection has from accept to LOGON (default `30`, `0` waits forever; see *Unauthenticated connections*) |
 | `--query-timeout MS`, `--max-work-units N`, `--max-rows N` | per-statement limits (see *Query limits and transaction timeouts*) |
 | `--advertise-addr HOST:PORT` | address returned to `neo4j://` routing clients |
 | `--tls-cert`, `--tls-key` | PEM TLS pair for `bolt+s://` / `neo4j+s://` |
@@ -788,6 +789,14 @@ result summary. A client sees these `boltr` behaviours:
   message) closes the connection. RESET does not recover it.
 - A message larger than 64 KiB before LOGON is answered with FAILURE and the
   connection closes.
+
+## Unauthenticated connections
+
+- A connection that has not sent LOGON within `--handshake-timeout` of being accepted is closed.
+- The deadline covers the TLS handshake, the Bolt handshake and HELLO, and applies with or without `--auth`.
+- After a LOGOFF the connection has the same time to send the next LOGON.
+- A connection that has logged on is not affected. Only `--idle-timeout` closes an idle session.
+- A client that holds connections open without authenticating can otherwise use up `--max-sessions`.
 
 ## Operations and security
 

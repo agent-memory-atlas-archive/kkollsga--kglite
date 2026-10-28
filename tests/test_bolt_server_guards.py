@@ -20,6 +20,7 @@ from tests.bolt_raw import (
     SIG_COMMIT,
     SIG_FAILURE,
     SIG_HELLO,
+    SIG_LOGOFF,
     SIG_PULL,
     SIG_RECORD,
     SIG_RESET,
@@ -260,5 +261,78 @@ def test_paging_with_pull_keeps_the_session_alive(tmp_path, bolt_binary_path):
                 conn.send(SIG_PULL, {"n": 1})
                 assert conn.recv()[0] == SIG_RECORD
                 assert conn.recv()[0] == SIG_SUCCESS
+    finally:
+        _teardown_bolt_server(proc)
+
+
+# --- time allowed before LOGON ----------------------------------------------------
+
+
+@pytest.fixture
+def short_deadline_server(tmp_path, bolt_binary_path):
+    """Server whose connections get one second to reach LOGON."""
+    if not bolt_binary_path.exists():
+        pytest.skip("bolt-server binary not built")
+    from tests.conftest import _build_bolt_fixture_graph, _spawn_bolt_server, _teardown_bolt_server
+
+    graph = tmp_path / "deadline.kgl"
+    _build_bolt_fixture_graph(graph)
+    proc, url = _spawn_bolt_server(graph, extra_args=["--handshake-timeout", "1"])
+    yield _hostport(url)
+    _teardown_bolt_server(proc)
+
+
+def test_a_connection_that_never_sends_the_handshake_is_closed(short_deadline_server):
+    sock = socket.create_connection(short_deadline_server, timeout=5.0)
+    try:
+        assert sock.recv(1) == b"", "the server closes a socket that stays silent"
+    finally:
+        sock.close()
+
+
+def test_a_connection_that_handshakes_but_never_logs_on_is_closed(short_deadline_server):
+    with RawBolt(*short_deadline_server) as conn:
+        assert conn.hello() == SIG_SUCCESS
+        assert conn.is_closed(wait=4.0)
+    assert _still_serving(short_deadline_server)
+
+
+def test_a_logged_on_idle_connection_is_not_closed_by_the_deadline(short_deadline_server):
+    with RawBolt(*short_deadline_server) as conn:
+        assert conn.hello() == SIG_SUCCESS
+        assert conn.logon("u", "p") == SIG_SUCCESS
+        time.sleep(2.5)
+        assert conn.request(SIG_RUN, "RETURN 1 AS one", {}, {}) == SIG_SUCCESS
+
+
+def test_a_connection_that_logs_off_must_log_on_again_in_time(short_deadline_server):
+    with RawBolt(*short_deadline_server) as conn:
+        assert conn.hello() == SIG_SUCCESS
+        assert conn.logon("u", "p") == SIG_SUCCESS
+        assert conn.request(SIG_LOGOFF) == SIG_SUCCESS
+        assert conn.is_closed(wait=4.0)
+
+
+def test_a_tls_connection_that_never_completes_the_tls_handshake_is_closed(tmp_path, bolt_binary_path):
+    if not bolt_binary_path.exists():
+        pytest.skip("bolt-server binary not built")
+    from tests.conftest import _build_bolt_fixture_graph, _spawn_bolt_server, _teardown_bolt_server
+    from tests.test_bolt_server_streaming import _self_signed
+
+    graph = tmp_path / "tls-deadline.kgl"
+    _build_bolt_fixture_graph(graph)
+    cert, key = _self_signed(tmp_path)
+    proc, url = _spawn_bolt_server(
+        graph, extra_args=["--tls-cert", str(cert), "--tls-key", str(key), "--handshake-timeout", "1"]
+    )
+    try:
+        # The first bytes of a TLS record, then silence: the TLS handshake never finishes.
+        sock = socket.create_connection(_hostport(url), timeout=5.0)
+        try:
+            sock.sendall(b"\x16\x03\x01")
+            sock.settimeout(4.0)
+            assert sock.recv(1) == b"", "the server closes a connection stuck in the TLS handshake"
+        finally:
+            sock.close()
     finally:
         _teardown_bolt_server(proc)

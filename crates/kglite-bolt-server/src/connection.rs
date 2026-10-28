@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::inflight::InflightCancel;
-use crate::pump::PumpedReader;
+use crate::pump::{AuthWindow, PumpedReader};
 use boltr::error::BoltError;
 use boltr::server::connection::Connection;
 use boltr::server::{
@@ -131,6 +131,9 @@ pub struct ConnectionContext<B> {
     pub sessions: Arc<SessionManager>,
     pub auth: Option<Arc<dyn AuthValidator>>,
     pub max_message_size: usize,
+    /// How long a connection may take from accept to LOGON (and after a
+    /// LOGOFF); `None` waits forever.
+    pub handshake_timeout: Option<std::time::Duration>,
 }
 
 /// Run one handshaken connection.
@@ -141,6 +144,7 @@ pub async fn serve_connection<R, W, B>(
     mut writer: W,
     ctx: &ConnectionContext<B>,
     peer_addr: std::net::SocketAddr,
+    accepted_at: tokio::time::Instant,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -151,6 +155,7 @@ pub async fn serve_connection<R, W, B>(
         sessions,
         auth,
         max_message_size,
+        handshake_timeout,
     } = ctx;
     let tracking = Arc::new(SessionTracking {
         inner: backend.clone(),
@@ -167,7 +172,14 @@ pub async fn serve_connection<R, W, B>(
             }
         }
     };
-    let mut reader = PumpedReader::spawn(reader, interrupt);
+    let mut reader = PumpedReader::spawn(
+        reader,
+        interrupt,
+        handshake_timeout.map(|repeat| AuthWindow {
+            first: accepted_at + repeat,
+            repeat,
+        }),
+    );
     let mut conn = Connection::new(
         &mut reader,
         &mut writer,

@@ -355,6 +355,12 @@ struct Cli {
     #[arg(long, value_name = "SECS")]
     idle_timeout: Option<u64>,
 
+    /// Seconds a connection may take from accept (TLS and Bolt handshakes
+    /// included) to LOGON, and after a LOGOFF to the next LOGON, before the
+    /// server closes it. 0 waits forever.
+    #[arg(long, value_name = "SECS", default_value_t = 30.0, value_parser = parse_timeout_secs)]
+    handshake_timeout: f64,
+
     /// Maximum concurrent Bolt sessions.
     #[arg(long, default_value_t = 256)]
     max_sessions: usize,
@@ -1247,6 +1253,7 @@ fn configure_listener(
         auth,
         tls,
         idle_timeout: cli.idle_timeout.map(Duration::from_secs),
+        handshake_timeout: timeout_from_secs(cli.handshake_timeout),
         max_sessions: cli.max_sessions,
         max_message_size: cli.max_message_size,
         // One-shot, and there is no second chance: tokio installs its signal

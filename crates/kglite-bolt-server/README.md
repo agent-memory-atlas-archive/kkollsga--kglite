@@ -119,6 +119,7 @@ Options:
   --auth-user <USER>           Username required with --auth basic
   --auth-pass <PASS>           Password required with --auth basic
   --idle-timeout <SECS>        Per-session idle timeout
+  --handshake-timeout <SECS>   Time from accept to LOGON before the connection is closed (default 30, 0 = never)
   --max-sessions <N>           Max concurrent sessions
   --advertise-addr <HOST:PORT> Address advertised in routing table (for neo4j:// URIs)
   --tls-cert <PATH>            PEM-encoded TLS certificate chain

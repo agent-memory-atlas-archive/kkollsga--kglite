@@ -23,13 +23,17 @@
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
+use tokio::time::Instant;
 
 const SIG_RESET: u8 = 0x0F;
 const SIG_GOODBYE: u8 = 0x02;
+const SIG_LOGON: u8 = 0x6A;
+const SIG_LOGOFF: u8 = 0x6B;
 /// Bytes per read, and the channel depth: at most `READ_SIZE * DEPTH` input
 /// bytes are buffered ahead of `boltr`.
 const READ_SIZE: usize = 8192;
@@ -39,6 +43,18 @@ const DEPTH: usize = 32;
 pub(crate) enum Signal {
     Reset,
     Goodbye,
+    /// A LOGON message (it has an auth map, so more than the two lead bytes).
+    Logon,
+    Logoff,
+}
+
+/// How long a connection may stay unauthenticated.
+#[derive(Clone, Copy)]
+pub struct AuthWindow {
+    /// When the first LOGON must have arrived.
+    pub first: Instant,
+    /// How long after a LOGOFF the next LOGON may take.
+    pub repeat: Duration,
 }
 
 /// Follows chunk framing and reports the control messages that matter here.
@@ -82,13 +98,16 @@ impl FrameWatch {
     }
 
     fn end_message(&mut self, out: &mut Vec<Signal>) {
-        // RESET and GOODBYE are fieldless structures: `B0 <signature>`.
+        // RESET, GOODBYE and LOGOFF are fieldless structures: `B0 <signature>`.
         if self.message_len == 2 && self.lead[0] == 0xB0 {
             match self.lead[1] {
                 SIG_RESET => out.push(Signal::Reset),
                 SIG_GOODBYE => out.push(Signal::Goodbye),
+                SIG_LOGOFF => out.push(Signal::Logoff),
                 _ => {}
             }
+        } else if self.message_len > 2 && self.lead[0] == 0xB1 && self.lead[1] == SIG_LOGON {
+            out.push(Signal::Logon);
         }
         self.message_len = 0;
     }
@@ -105,7 +124,16 @@ pub struct PumpedReader {
 impl PumpedReader {
     /// Spawn the pump over `inner`. `on_interrupt` runs on the pump task for
     /// every RESET and for a non-orderly end of input; it must not block.
-    pub fn spawn<R>(mut inner: R, on_interrupt: impl Fn() + Send + 'static) -> Self
+    ///
+    /// With an [`AuthWindow`], input ends if no LOGON has arrived by its first
+    /// deadline, and again if none follows within `repeat` after a LOGOFF.
+    /// `boltr` then sees the end of input and closes the connection through its
+    /// normal cleanup.
+    pub fn spawn<R>(
+        mut inner: R,
+        on_interrupt: impl Fn() + Send + 'static,
+        auth_window: Option<AuthWindow>,
+    ) -> Self
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
@@ -115,8 +143,16 @@ impl PumpedReader {
             let mut signals = Vec::new();
             let mut said_goodbye = false;
             let mut chunk = vec![0u8; READ_SIZE];
+            let mut deadline = auth_window.map(|window| window.first);
             loop {
-                match inner.read(&mut chunk).await {
+                let read = match deadline {
+                    Some(at) => match tokio::time::timeout_at(at, inner.read(&mut chunk)).await {
+                        Ok(read) => read,
+                        Err(_) => break,
+                    },
+                    None => inner.read(&mut chunk).await,
+                };
+                match read {
                     Ok(0) => {
                         if !said_goodbye {
                             on_interrupt();
@@ -130,6 +166,11 @@ impl PumpedReader {
                             match signal {
                                 Signal::Reset => on_interrupt(),
                                 Signal::Goodbye => said_goodbye = true,
+                                Signal::Logon => deadline = None,
+                                Signal::Logoff => {
+                                    deadline =
+                                        auth_window.map(|window| Instant::now() + window.repeat);
+                                }
                             }
                         }
                         if tx.send(Ok(chunk[..n].to_vec())).await.is_err() {
@@ -226,9 +267,13 @@ mod tests {
         let h = hits.clone();
         let mut wire = vec![0x00, 0x03, 0xB1, 0x10, 0xA0, 0x00, 0x00];
         wire.extend(RESET);
-        let mut reader = PumpedReader::spawn(io::Cursor::new(wire.clone()), move || {
-            h.fetch_add(1, Ordering::SeqCst);
-        });
+        let mut reader = PumpedReader::spawn(
+            io::Cursor::new(wire.clone()),
+            move || {
+                h.fetch_add(1, Ordering::SeqCst);
+            },
+            None,
+        );
         let mut out = Vec::new();
         reader.read_to_end(&mut out).await.unwrap();
         assert_eq!(out, wire);
@@ -240,11 +285,62 @@ mod tests {
     async fn eof_after_goodbye_is_orderly() {
         let hits = Arc::new(AtomicUsize::new(0));
         let h = hits.clone();
-        let mut reader = PumpedReader::spawn(io::Cursor::new(GOODBYE.to_vec()), move || {
-            h.fetch_add(1, Ordering::SeqCst);
-        });
+        let mut reader = PumpedReader::spawn(
+            io::Cursor::new(GOODBYE.to_vec()),
+            move || {
+                h.fetch_add(1, Ordering::SeqCst);
+            },
+            None,
+        );
         let mut out = Vec::new();
         reader.read_to_end(&mut out).await.unwrap();
         assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    fn logon() -> Vec<u8> {
+        vec![0x00, 0x03, 0xB1, 0x6A, 0xA0, 0x00, 0x00]
+    }
+
+    #[test]
+    fn logon_and_logoff_are_found_and_a_lookalike_field_is_not() {
+        let mut wire = vec![0x00, 0x04, 0xB1, 0x10, 0xB1, 0x6A, 0x00, 0x00];
+        wire.extend(logon());
+        wire.extend([0x00, 0x02, 0xB0, 0x6B, 0x00, 0x00]);
+        assert_eq!(signals(&wire, 5), vec![Signal::Logon, Signal::Logoff]);
+    }
+
+    fn window(first_ms: u64) -> Option<AuthWindow> {
+        Some(AuthWindow {
+            first: Instant::now() + Duration::from_millis(first_ms),
+            repeat: Duration::from_millis(first_ms),
+        })
+    }
+
+    #[tokio::test]
+    async fn input_ends_when_no_logon_arrives_by_the_deadline() {
+        let (client, server) = tokio::io::duplex(64);
+        let mut reader = PumpedReader::spawn(server, || {}, window(50));
+        let mut out = Vec::new();
+        let ended =
+            tokio::time::timeout(Duration::from_secs(5), reader.read_to_end(&mut out)).await;
+        assert!(ended.expect("the deadline ends input").is_ok());
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn a_logon_lifts_the_deadline() {
+        let (mut client, server) = tokio::io::duplex(64);
+        let mut reader = PumpedReader::spawn(server, || {}, window(50));
+        tokio::io::AsyncWriteExt::write_all(&mut client, &logon())
+            .await
+            .unwrap();
+        let mut out = vec![0u8; logon().len()];
+        reader.read_exact(&mut out).await.unwrap();
+        let more = tokio::time::timeout(
+            Duration::from_millis(300),
+            reader.read_to_end(&mut Vec::new()),
+        )
+        .await;
+        assert!(more.is_err(), "still open after the first deadline passed");
     }
 }

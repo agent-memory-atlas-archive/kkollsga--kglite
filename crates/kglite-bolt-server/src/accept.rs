@@ -37,6 +37,8 @@ pub struct BoltListener<B: BoltBackend> {
     pub auth: Option<Arc<dyn AuthValidator>>,
     pub tls: Option<TlsAcceptor>,
     pub idle_timeout: Option<Duration>,
+    /// Accept to LOGON, and LOGOFF to LOGON; `None` waits forever.
+    pub handshake_timeout: Option<Duration>,
     pub max_sessions: usize,
     pub max_message_size: usize,
     pub shutdown: Pin<Box<dyn Future<Output = ()> + Send>>,
@@ -84,6 +86,7 @@ impl<B: BoltBackend + InflightCancel + 'static> BoltListener<B> {
             sessions: sessions.clone(),
             auth: self.auth.clone(),
             max_message_size: self.max_message_size,
+            handshake_timeout: self.handshake_timeout,
         });
 
         let reaper = self.idle_timeout.map(|timeout| {
@@ -135,28 +138,60 @@ async fn run_connection<B: BoltBackend + InflightCancel + 'static>(
     ctx: Arc<ConnectionContext<B>>,
     tls: Option<Arc<TlsAcceptor>>,
 ) {
+    let accepted_at = tokio::time::Instant::now();
     match tls {
-        Some(acceptor) => match acceptor.accept(stream).await {
-            Ok(stream) => handshake_and_run(stream, peer_addr, &ctx).await,
-            Err(e) => tracing::debug!(%peer_addr, error = %e, "TLS handshake failed"),
-        },
-        None => handshake_and_run(stream, peer_addr, &ctx).await,
+        Some(acceptor) => {
+            let accepted =
+                within(ctx.handshake_timeout, accepted_at, acceptor.accept(stream)).await;
+            match accepted {
+                Some(Ok(stream)) => handshake_and_run(stream, peer_addr, &ctx, accepted_at).await,
+                Some(Err(e)) => tracing::debug!(%peer_addr, error = %e, "TLS handshake failed"),
+                None => tracing::debug!(%peer_addr, "TLS handshake timed out"),
+            }
+        }
+        None => handshake_and_run(stream, peer_addr, &ctx, accepted_at).await,
     }
 }
 
-async fn handshake_and_run<S, B>(mut stream: S, peer_addr: SocketAddr, ctx: &ConnectionContext<B>)
-where
+/// `future`'s output, or `None` when `timeout` after `started` passes first.
+/// `None` for the timeout waits as long as the future takes.
+async fn within<T>(
+    timeout: Option<Duration>,
+    started: tokio::time::Instant,
+    future: impl Future<Output = T>,
+) -> Option<T> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout_at(started + timeout, future)
+            .await
+            .ok(),
+        None => Some(future.await),
+    }
+}
+
+async fn handshake_and_run<S, B>(
+    mut stream: S,
+    peer_addr: SocketAddr,
+    ctx: &ConnectionContext<B>,
+    accepted_at: tokio::time::Instant,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     B: BoltBackend + InflightCancel + 'static,
 {
-    match server_handshake(&mut stream).await {
-        Ok(version) => {
+    match within(
+        ctx.handshake_timeout,
+        accepted_at,
+        server_handshake(&mut stream),
+    )
+    .await
+    {
+        Some(Ok(version)) => {
             tracing::debug!(%peer_addr, ?version, "Bolt handshake complete");
             let (reader, writer) = tokio::io::split(stream);
             let writer = CoalescingWriter::new(writer);
-            serve_connection(reader, writer, ctx, peer_addr).await;
+            serve_connection(reader, writer, ctx, peer_addr, accepted_at).await;
         }
-        Err(e) => tracing::debug!(%peer_addr, error = %e, "Bolt handshake failed"),
+        Some(Err(e)) => tracing::debug!(%peer_addr, error = %e, "Bolt handshake failed"),
+        None => tracing::debug!(%peer_addr, "Bolt handshake timed out"),
     }
 }
 
