@@ -82,9 +82,9 @@ async-trait = "0.1.89"
 # declare the same floor even though only kglite-mcp-server pulls rmcp.
 tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread", "net", "signal", "io-util", "sync", "time"] }
 
-clap = { version = "4.3", features = ["derive"] }
-tracing = "0.1.35"
-tracing-subscriber = { version = "0.3.8", features = ["env-filter"] }
+clap = { version = "4.6", features = ["derive"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # 1.0.47 is a BEHAVIOURAL floor, not just a compiling one. Below it,
 # `anyhow!("... {e}")` does not capture `e` -- the macro routed a lone
 # literal straight to `Error::msg`, so the message printed the literal

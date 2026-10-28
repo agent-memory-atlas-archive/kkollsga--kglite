@@ -38,7 +38,7 @@ rustyline = "18"
 ctrlc = "3"
 
 # `.mode json` output via kglite::api::param::kglite_value_to_json.
-serde_json = "1.0.150"
+serde_json = "1.0.154"
 
 # The hand-written `Serialize` for a JSON result row. serde_json's *serializer*
 # writes `serialize_map` entries in iteration order, while its `Value::Object`
@@ -51,7 +51,7 @@ serde = "1.0.229"
 # `$rows` param (values parameterized, not interpolated). Already a `kglite` dep.
 csv = "1.4"
 
-clap = { version = "4.3", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 # 1.0.47 is a BEHAVIOURAL floor, not just a compiling one. Below it,
 # `anyhow!("... {e}")` does not capture `e` -- the macro routed a lone
 # literal straight to `Error::msg`, so the message printed the literal
@@ -73,4 +73,4 @@ mcp-methods = { version = "0.6.0", default-features = false }
 getrandom = "0.4"
 
 [dev-dependencies]
-tempfile = "3.10.0"
+tempfile = "3.27.0"

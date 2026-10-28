@@ -111,7 +111,7 @@ kglite-mcp-server = { path = "../kglite-mcp-server", default-features = false, o
 # through its default-on, in-process `kglite-mcp-server` dependency above;
 # diagnostic builds can omit that server with `--no-default-features`.
 
-serde_json = "1.0.150"
+serde_json = "1.0.154"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
@@ -137,4 +137,4 @@ mimalloc = { version = "0.1.49", default-features = false, features = ["v2"] }
 libc = "0.2.182"
 
 [dev-dependencies]
-tempfile = "3.10.0"
+tempfile = "3.27.0"

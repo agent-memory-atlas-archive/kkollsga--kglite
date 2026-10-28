@@ -104,7 +104,7 @@ fastembed = { version = "7.1", optional = true, default-features = false, featur
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 # `float_roundtrip`: list/map cells of the lossless exports hold floats as JSON
 # text; the default parser can land one ulp off.
-serde_json = { version = "1.0.150", features = ["float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 # Optional (feature `iana-zones`); 0.10 is the range pyo3 0.29 accepts.
@@ -156,11 +156,11 @@ bzip2 = "0.6"
 # not pull its scanner/pipeline dependencies.
 parallel-bz2-redux = { version = "1.1.1", optional = true }
 walkdir = "2.5.0"
-tempfile = "3.10.0"
+tempfile = "3.27.0"
 fs2 = "0.4"
 sha2 = "0.11"
 memchr = "2.8"
-rustc-hash = "2.1.1"
+rustc-hash = "2.1.3"
 thin-vec = "0.2.21"
 # On-demand stack growth for the recursive-descent Cypher parser: keeps
 # MAX_EXPRESSION_DEPTH-deep queries from overflowing default thread stacks
@@ -220,7 +220,7 @@ calamine = { version = "0.37.0", default-features = false, features = ["dates"],
 same-file = "1.0.4"
 
 [dev-dependencies]
-tempfile = "3.10.0"
+tempfile = "3.27.0"
 
 # loom — exhaustive interleaving model-checker for the Session commit/snapshot
 # lock pattern. Only pulled in under `--cfg loom` (the loom test is

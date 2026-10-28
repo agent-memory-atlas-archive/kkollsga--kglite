@@ -103,7 +103,7 @@ rmcp = { version = "3.5.0", features = ["server", "macros", "transport-io", "sch
 # declare the same floor even though only kglite-mcp-server pulls rmcp.
 tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread", "io-std", "fs", "sync", "time", "net"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.150"
+serde_json = "1.0.154"
 # 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
 # `std` feature tracing-subscriber needs only exists from 1.3.0. Cargo
 # unifies the version workspace-wide, so a bare "1" let
@@ -130,21 +130,21 @@ anyhow = "1.0.72"
 # `fetch_images` returns image content blocks, which the MCP wire format
 # carries base64-encoded.
 base64 = "0.23.1"
-clap = { version = "4.3", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Logging
-tracing = "0.1.35"
+tracing = "0.1.44"
 
 # CSV-over-HTTP server (extensions.csv_http_server). hyper 1.x with
 # its server adapter from hyper-util — both are already in the
 # resolved dep graph (rmcp uses hyper transitively), so this just
 # surfaces them as direct deps for the csv_http module.
-hyper = { version = "1.1.0", features = ["server", "http1"] }
-hyper-util = { version = "0.1.3", features = ["server", "tokio", "http1"] }
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["server", "tokio", "http1"] }
 http-body-util = "0.1"
 bytes = "1"
 futures = "0.3"
-tokio-util = { version = "0.7.9", features = ["codec"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
 
 # `dladdr` names the shared object this code was loaded from (the wheel's
 # extension module), which is the file whose replacement makes the server
@@ -153,7 +153,7 @@ tokio-util = { version = "0.7.9", features = ["codec"] }
 libc = "0.2.182"
 
 [dev-dependencies]
-tempfile = "3.10.0"
+tempfile = "3.27.0"
 # Exercise hidden-tool rejection through a real in-memory MCP handshake. The
 # production dependency enables only the server half; client code is test-only.
 rmcp = { version = "3.5.0", features = ["client"] }
