@@ -102,6 +102,7 @@ jobs:
           distribution: temurin
           java-version: '22'
       - name: Set up JDK 26
+        id: jdk26
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
@@ -116,7 +117,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          java --enable-native-access=ALL-UNNAMED "-Dkglite.native.path=target/release/${{ matrix.library }}" -cp kglite-java/build/classes/java/main kglite-java/smoke/NativeSmoke.java
+          # Call JDK 26 by path: with setup-java 6.1 a bare `java` resolved to an
+          # older runner JVM that rejects --enable-native-access (2026-10-28).
+          "${{ steps.jdk26.outputs.path }}/bin/java" --enable-native-access=ALL-UNNAMED "-Dkglite.native.path=target/release/${{ matrix.library }}" -cp kglite-java/build/classes/java/main kglite-java/smoke/NativeSmoke.java
       - name: Smoke-test the built native on the JDK 22 floor
         if: matrix.platform == 'linux-x86_64'
         shell: bash

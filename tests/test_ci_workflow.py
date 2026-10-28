@@ -2055,7 +2055,9 @@ def test_java_every_native_is_loaded_on_its_own_runner_before_upload() -> None:
     steps = _steps(build)
     platforms = {leg["platform"] for leg in build["strategy"]["matrix"]["include"]}
 
-    smoke = _step_running(build, f"java {JAVA_SMOKE_ARGS}")
+    # By path, not a bare `java`: on setup-java 6.1 the bare name resolved to an
+    # older runner JVM that rejects --enable-native-access.
+    smoke = _step_running(build, f'"${{{{ steps.jdk26.outputs.path }}}}/bin/java" {JAVA_SMOKE_ARGS}')
     assert "if" not in smoke, f"the smoke is skipped on some legs: {smoke.get('if')!r}"
     assert "continue-on-error" not in smoke
 
