@@ -39,7 +39,10 @@ rustyline = "18"
 # SIGINT → cancel the in-flight query (sets the flag execute_mut polls).
 # rustyline keeps the prompt in raw mode, so Ctrl-C only raises SIGINT while
 # a query is actually running.
-ctrlc = "3"
+# 3.2, not "3": ctrlc 3.0.0 calls libc::sem_init, which libc 0.2.191 no longer
+# exposes on macOS, so a minimal-versions resolve fails to compile there. 3.2 is
+# the version checked; 3.0 and 3.1 were not tried.
+ctrlc = "3.2"
 
 # `.mode json` output via kglite::api::param::kglite_value_to_json.
 serde_json = "1.0.154"
@@ -55,7 +58,7 @@ serde = "1.0.229"
 # `$rows` param (values parameterized, not interpolated). Already a `kglite` dep.
 csv = "1.4"
 
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 # 1.0.47 is a BEHAVIOURAL floor, not just a compiling one. Below it,
 # `anyhow!("... {e}")` does not capture `e` -- the macro routed a lone
 # literal straight to `Error::msg`, so the message printed the literal
@@ -64,14 +67,14 @@ clap = { version = "4.6", features = ["derive"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
-# The declared floor is 1.0.72 because getrandom 0.4 -> wasip3 ->
-# wit-bindgen-rust-macro requires anyhow ^1.0.72, and a minimal-versions
-# resolve cannot select a lower anyhow beside it.
-anyhow = "1.0.72"
+# The declared floor is 1.0.104 because mcp-methods 0.6.1 requires it (before
+# that, getrandom 0.4 -> wasip3 -> wit-bindgen-rust-macro required ^1.0.72), and
+# a minimal-versions resolve cannot select a lower anyhow beside it.
+anyhow = "1.0.104"
 
 # Agent result envelopes use mcp-methods' renderer only. Keep server features
 # disabled so the standalone CLI does not acquire an async/MCP runtime.
-mcp-methods = { version = "0.6.0", default-features = false }
+mcp-methods = { version = "0.6.1", default-features = false }
 
 # Opaque retained-result handles come directly from the operating system RNG.
 getrandom = "0.4"

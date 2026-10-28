@@ -118,11 +118,11 @@ chrono-tz = { version = "0.10", default-features = false, optional = true }
 geo = { version = "0.33", default-features = false, features = ["multithreading"] }
 rstar = "0.13"
 wkt = "0.14"
-# 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
-# `std` feature tracing-subscriber needs only exists from 1.3.0. Cargo
-# unifies the version workspace-wide, so a bare "1" let
-# direct-minimal-versions select regex 1.0.0 for the whole tree.
-regex = "1.10"
+# 1.13.1 is a real minimum: mcp-methods 0.6.1 requires regex ^1.13.1 (tokenizers
+# 0.22 ^1.10, tracing-subscriber needs `std`, from 1.3.0). Cargo unifies the
+# version workspace-wide, so a bare "1" let direct-minimal-versions select
+# regex 1.0.0 for the whole tree.
+regex = "1.13.1"
 rayon = "1.12"
 # 1.5 is a real floor, not a rounding-up: this drives the CRC32 over every
 # `.kgl` section's compressed bytes on load (`graph::wal::crc32`), and 1.5.0
@@ -143,13 +143,13 @@ flate2 = "1.1"
 # zstd-safe 8.2.0 and zstd-sys 2.1.2.
 zstd = "0.14.3"
 memmap2 = "0.9"
-# 0.2.182 is the tight floor for the workspace-unified tree, not a
-# guess: rustyline 18 (via kglite-cli) requires ^0.2.182 and nix 0.31
-# requires ^0.2.181, and cargo unifies libc across all members. It is
+# 0.2.191 is the tight floor for the workspace-unified tree, not a
+# guess: mcp-methods 0.6.1 (via kglite-cli) requires ^0.2.191, rustyline 18
+# ^0.2.182 and nix 0.31 ^0.2.181, and cargo unifies libc across all members. It is
 # higher than the `kglite` engine alone needs -- overstating is the
 # benign direction (a clear resolution error, not a mystery compile
 # failure), but note it if you ever split the workspace.
-libc = "0.2.182"
+libc = "0.2.191"
 bzip2 = "0.6"
 # Published, bounded-memory block-parallel decoder for both ordinary
 # single-stream and concatenated `.bz2` data. Optional so graph-only users do
@@ -218,10 +218,10 @@ oxrdf = { version = "0.3", optional = true, features = ["rdf-12"] }
 calamine = { version = "0.37.0", default-features = false, features = ["dates"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# 1.0.4, not "1": ignore 0.4.15 (via mcp-methods) requires same-file
-# ^1.0.4, and cargo unifies it workspace-wide. 1.0.1 was itself a floor
+# 1.0.6, not "1": ignore 0.4.34 (via mcp-methods 0.6.1) requires same-file
+# ^1.0.6, and cargo unifies it workspace-wide. 1.0.1 was itself a floor
 # correction; this is the same class one dependency deeper.
-same-file = "1.0.4"
+same-file = "1.0.6"
 
 [dev-dependencies]
 tempfile = "3.27.0"

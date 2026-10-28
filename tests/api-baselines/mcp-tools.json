@@ -260,7 +260,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -273,7 +272,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -319,7 +317,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -411,7 +408,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -431,7 +427,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -440,7 +435,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -449,7 +443,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -465,7 +458,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -916,7 +908,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -929,7 +920,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -975,7 +965,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -1185,7 +1174,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1205,7 +1193,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1214,7 +1201,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1223,7 +1209,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1239,7 +1224,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1764,7 +1748,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -1777,7 +1760,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -1823,7 +1805,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -2033,7 +2014,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2053,7 +2033,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2062,7 +2041,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2071,7 +2049,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2087,7 +2064,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2530,7 +2506,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -2543,7 +2518,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2589,7 +2563,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -2762,7 +2735,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2782,7 +2754,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2791,7 +2762,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2800,7 +2770,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2816,7 +2785,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -2839,7 +2807,6 @@
             "anyOf": [
               {
                 "description": "Last `n` **stable** release tags of the repo's dominant tag family,\nordered oldest\u2192newest with `HEAD` appended. Tags are classified\ninto `(prefix, version, is_prerelease)` and grouped by prefix; the\nfamily with the most stable tags wins, so on a repo with several\ntag families (e.g. `apache-arrow-*`, `go/v*`, `r-*`) the release\nline is chosen, not an unrelated package family. Prereleases (rc,\nalpha, beta, dev, pre, preview) and non-version tags (e.g.\n`r-universe-release`) are excluded. See `Workspace::resolve_revs`\nfor the full selection + fallback semantics.",
-                "format": "uint",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -3160,7 +3127,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -3173,7 +3139,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3219,7 +3184,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -3343,7 +3307,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3363,7 +3326,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3372,7 +3334,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3381,7 +3342,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3397,7 +3357,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3708,7 +3667,6 @@
           "context": {
             "default": 0,
             "description": "Lines of context around each match (default 0).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -3721,7 +3679,6 @@
           },
           "max_results": {
             "description": "Cap the number of matches (default 50; pass null/None for unlimited).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3804,7 +3761,6 @@
           "depth": {
             "default": 1,
             "description": "Recursion depth (1 = flat ls; 2+ = tree).",
-            "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
@@ -3935,7 +3891,6 @@
           },
           "end_line": {
             "description": "End line (1-indexed, inclusive). Defaults to end-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3955,7 +3910,6 @@
           },
           "grep_context": {
             "description": "Lines of context around each grep match (default 2).",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3964,7 +3918,6 @@
           },
           "max_chars": {
             "description": "Cap output size in characters.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3973,7 +3926,6 @@
           },
           "max_matches": {
             "description": "Cap the number of matches returned.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",
@@ -3989,7 +3941,6 @@
           },
           "start_line": {
             "description": "Start line (1-indexed). Defaults to start-of-file.",
-            "format": "uint",
             "minimum": 0,
             "type": [
               "integer",

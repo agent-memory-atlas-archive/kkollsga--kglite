@@ -52,20 +52,20 @@ kglite = { version = "0.21.2", path = "../kglite", default-features = false, fea
 boltr = { version = "0.3", features = ["tls"] }
 
 # The accept loop (src/accept.rs) builds its own TLS acceptor, because boltr's
-# `TlsConfig` keeps its acceptor private. 1.11 is the floor ureq 3.1 (via
-# kglite's fastembed) requires; a lower floor fails the minimal-versions resolve.
+# `TlsConfig` keeps its acceptor private. 1.12 is the floor rustls 0.23.46 requires;
+# a lower floor fails the minimal-versions resolve.
 tokio-rustls = "0.26"
-rustls-pki-types = "1.11"
+rustls-pki-types = "1.12"
 
 # Phase F #6: rustls crypto provider for boltr's TLS support.
 # boltr enables tokio-rustls but doesn't pick a crypto provider —
 # we install `ring` at startup (see main.rs). `ring` is the more
 # battle-tested option; `aws-lc-rs` is the alternative.
-# 0.23.22 is the tight floor for the workspace-unified tree, not this
-# server's own need: ureq 3 (reached via kglite's `fastembed` feature ->
-# fastembed 7 -> hf-hub 0.5) requires rustls ^0.23.22, and cargo unifies
-# rustls across all members.
-rustls = { version = "0.23.22", default-features = false, features = ["ring", "std"] }
+# 0.23.46 is the tight floor for the workspace-unified tree, not this
+# server's own need: ureq 3.5 (reached via mcp-methods 0.6.1 and kglite's
+# `fastembed` feature) requires rustls ^0.23.46, and cargo unifies rustls
+# across all members.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 
 # Async trait sugar used by boltr's BoltBackend trait declaration.
 # 0.1.89 is the real workspace floor, not this crate's alone: kglite-mcp-server
@@ -75,13 +75,13 @@ rustls = { version = "0.23.22", default-features = false, features = ["ring", "s
 # caught by the minimal-versions CI job added in 0.15.1.
 async-trait = "0.1.92"
 
-# 1.44.2, not "1": boltr 0.3.0 requires it (RUSTSEC-2025-0023). rmcp 3.1.1
-# alone needs 1.37.0 (Receiver::is_closed, added there, and JoinSet, added in
-# 1.21.0; both bisected against the individual releases) and hyper 1.x >=1.13.
-# Cargo unifies tokio workspace-wide, so both servers declare the same floor.
-tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "net", "signal", "io-util", "sync", "time"] }
+# 1.54.1, not "1": mcp-methods 0.6.1 requires it (boltr 0.3.0 needs 1.44.2,
+# RUSTSEC-2025-0023; rmcp 3.1.1 alone needs 1.37.0: Receiver::is_closed and
+# JoinSet, bisected against the individual releases; hyper 1.x >=1.13). Cargo
+# unifies tokio workspace-wide, so both servers declare the same floor.
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "io-util", "sync", "time"] }
 
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # 1.0.47 is a BEHAVIOURAL floor, not just a compiling one. Below it,
@@ -92,10 +92,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
-# The declared floor is 1.0.72 because getrandom 0.4 -> wasip3 ->
-# wit-bindgen-rust-macro requires anyhow ^1.0.72, and a minimal-versions
-# resolve cannot select a lower anyhow beside it.
-anyhow = "1.0.72"
+# The declared floor is 1.0.104 because mcp-methods 0.6.1 requires it (before
+# that, getrandom 0.4 -> wasip3 -> wit-bindgen-rust-macro required ^1.0.72), and
+# a minimal-versions resolve cannot select a lower anyhow beside it.
+anyhow = "1.0.104"
 sha2 = "0.11"
 # 2.5.0, not "2": rustls 0.23 (above) requires subtle ^2.5.0, and cargo
 # unifies the version across the workspace, so "2" let

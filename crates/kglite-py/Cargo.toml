@@ -114,11 +114,11 @@ kglite-mcp-server = { path = "../kglite-mcp-server", default-features = false, o
 serde_json = "1.0.154"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 chrono = { version = "0.4.45", features = ["serde"] }
-# 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
-# `std` feature tracing-subscriber needs only exists from 1.3.0. Cargo
-# unifies the version workspace-wide, so a bare "1" let
-# direct-minimal-versions select regex 1.0.0 for the whole tree.
-regex = "1.10"
+# 1.13.1 is a real minimum: mcp-methods 0.6.1 requires regex ^1.13.1 (tokenizers
+# 0.22 ^1.10, tracing-subscriber needs `std`, from 1.3.0). Cargo unifies the
+# version workspace-wide, so a bare "1" let direct-minimal-versions select
+# regex 1.0.0 for the whole tree.
+regex = "1.13.1"
 # 0.1.49 is a real MINIMUM, not a floor-by-habit: the `v2` feature that
 # pins us to the mimalloc v2 line was added in 0.1.49. Declaring plain
 # "0.1" let a consumer resolve 0.1.9 and fail with "mimalloc does not
@@ -128,13 +128,13 @@ mimalloc = { version = "0.1.49", default-features = false, features = ["v2"] }
 # from a REPL/notebook (src/util.rs::EnterKg). Unix-only; the handler just
 # flips an AtomicBool the engine polls.
 [target.'cfg(unix)'.dependencies]
-# 0.2.182 is the tight floor for the workspace-unified tree, not a
-# guess: rustyline 18 (via kglite-cli) requires ^0.2.182 and nix 0.31
-# requires ^0.2.181, and cargo unifies libc across all members. It is
+# 0.2.191 is the tight floor for the workspace-unified tree, not a
+# guess: mcp-methods 0.6.1 (via kglite-cli) requires ^0.2.191, rustyline 18
+# ^0.2.182 and nix 0.31 ^0.2.181, and cargo unifies libc across all members. It is
 # higher than the `kglite` engine alone needs -- overstating is the
 # benign direction (a clear resolution error, not a mystery compile
 # failure), but note it if you ever split the workspace.
-libc = "0.2.182"
+libc = "0.2.191"
 
 [dev-dependencies]
 tempfile = "3.27.0"

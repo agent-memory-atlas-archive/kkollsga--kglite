@@ -67,10 +67,13 @@ path = "src/main.rs"
 # 0.4.10 filters filesystem access events before the watcher debounce, so a
 # source *read* (the tools' own `read_source`, an editor open) no longer
 # replaces a built graph on Linux; only real mutations rebuild.
-# 0.6.0 is a behavioural floor: below it a client on protocol 2026-07-28 (no
-# `initialize`) fails every `tools/call`, and `announce_list_changed` (the only
-# way to reach such a client's `subscriptions/listen` stream) does not exist.
-mcp-methods = { version = "0.6.0", default-features = false, features = ["server"] }
+# 0.6.0 is the behavioural floor for 2026-07-28 clients: below it such a client
+# (no `initialize`) fails every `tools/call`, and `announce_list_changed` (the
+# only way to reach its `subscriptions/listen` stream) does not exist. 0.6.1
+# fixes a listen race and emits only standard JSON Schema formats from the
+# framework tools (`grep`, `read_source`, `list_source`), which
+# tests/tool_schema_formats.rs now requires.
+mcp-methods = { version = "0.6.1", default-features = false, features = ["server"] }
 
 # kglite (pure-Rust core) — no pyo3 in the resulting binary, no
 # libpython link. The 0.10.1 lift moved KnowledgeGraph +
@@ -93,23 +96,23 @@ kglite = { version = "0.21.2", path = "../kglite", default-features = false, fea
 # No default features: see the same dependency in crates/kglite/Cargo.toml.
 yaml-rust2 = { version = "0.13", default-features = false }
 
-# rmcp re-export for the dynamic tool registration path. 3.5.0 is the floor
-# mcp-methods 0.6.0 itself requires.
-rmcp = { version = "3.5.0", features = ["server", "macros", "transport-io", "schemars"] }
+# rmcp re-export for the dynamic tool registration path. 3.8.0 is the floor
+# mcp-methods 0.6.1 itself requires.
+rmcp = { version = "3.8.0", features = ["server", "macros", "transport-io", "schemars"] }
 
-# 1.44.2, not "1": boltr 0.3.0 requires it (RUSTSEC-2025-0023). rmcp 3.1.1
-# alone needs 1.37.0 (Receiver::is_closed, added there, and JoinSet, added in
-# 1.21.0; both bisected against the individual releases) and hyper 1.x >=1.13.
-# Cargo unifies tokio workspace-wide, so both servers declare the same floor.
-tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "io-std", "fs", "sync", "time", "net"] }
+# 1.54.1, not "1": mcp-methods 0.6.1 requires it (boltr 0.3.0 needs 1.44.2,
+# RUSTSEC-2025-0023; rmcp 3.1.1 alone needs 1.37.0: Receiver::is_closed and
+# JoinSet, bisected against the individual releases; hyper 1.x >=1.13). Cargo
+# unifies tokio workspace-wide, so both servers declare the same floor.
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "io-std", "fs", "sync", "time", "net"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
-# `std` feature tracing-subscriber needs only exists from 1.3.0. Cargo
-# unifies the version workspace-wide, so a bare "1" let
-# direct-minimal-versions select regex 1.0.0 for the whole tree.
-regex = "1.10"
-schemars = "1"
+# 1.13.1 is a real minimum: mcp-methods 0.6.1 requires regex ^1.13.1 (tokenizers
+# 0.22 ^1.10, tracing-subscriber needs `std`, from 1.3.0). Cargo unifies the
+# version workspace-wide, so a bare "1" let direct-minimal-versions select
+# regex 1.0.0 for the whole tree.
+regex = "1.13.1"
+schemars = "1.2.3"
 # ISO-8601 formatting of the active-graph build timestamp surfaced in
 # graph_overview / cypher_query / set_root_dir output. Already in the
 # resolved dep graph via kglite core — direct dep, zero extra build cost.
@@ -123,14 +126,14 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # prints "failed: {e}", 1.0.47 prints "failed: BOOM" (1.0.46 is yanked).
 # 1.0.20 also matters (anyhow::Error::msg, used by mcp-methods) and
 # 1.0.5 (Context for Option, used by kglite-cli); 1.0.47 covers all.
-# The declared floor is 1.0.72 because getrandom 0.4 -> wasip3 ->
-# wit-bindgen-rust-macro requires anyhow ^1.0.72, and a minimal-versions
-# resolve cannot select a lower anyhow beside it.
-anyhow = "1.0.72"
+# The declared floor is 1.0.104 because mcp-methods 0.6.1 requires it (before
+# that, getrandom 0.4 -> wasip3 -> wit-bindgen-rust-macro required ^1.0.72), and
+# a minimal-versions resolve cannot select a lower anyhow beside it.
+anyhow = "1.0.104"
 # `fetch_images` returns image content blocks, which the MCP wire format
 # carries base64-encoded.
 base64 = "0.23.1"
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 
 # Logging
 tracing = "0.1.44"
@@ -144,20 +147,20 @@ hyper-util = { version = "0.1.21", features = ["server", "tokio", "http1"] }
 http-body-util = "0.1"
 # 1.11.1: the workspace floor boltr 0.3.0 sets (see kglite-bolt-server).
 bytes = "1.11.1"
-futures = "0.3"
-tokio-util = { version = "0.7.9", features = ["codec"] }
+futures = "0.3.34"
+tokio-util = { version = "0.7.20", features = ["codec"] }
 
 # `dladdr` names the shared object this code was loaded from (the wheel's
 # extension module), which is the file whose replacement makes the server
 # stale. Same floor as the engine crate; see the comment there.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.182"
+libc = "0.2.191"
 
 [dev-dependencies]
 tempfile = "3.27.0"
 # Exercise hidden-tool rejection through a real in-memory MCP handshake. The
 # production dependency enables only the server half; client code is test-only.
-rmcp = { version = "3.5.0", features = ["client"] }
+rmcp = { version = "3.8.0", features = ["client"] }
 
 [features]
 # `fastembed` is an OPTIONAL feature, default OFF. Enabling it

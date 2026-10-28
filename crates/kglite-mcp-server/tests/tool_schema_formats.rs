@@ -30,10 +30,6 @@ const STANDARD_FORMATS: &[&str] = &[
     "regex",
 ];
 
-/// Tools whose schemas the mcp-methods framework generates. Remove an entry
-/// once the framework emits portable formats.
-const FRAMEWORK_OWNED: &[&str] = &["grep", "list_source", "read_source"];
-
 fn collect_formats(value: &Value, path: &str, out: &mut Vec<(String, String)>) {
     match value {
         Value::Object(map) => {
@@ -104,9 +100,6 @@ fn assert_portable(args: &[&str]) {
     let mut offenders = Vec::new();
     for tool in &tools {
         let name = tool["name"].as_str().expect("name");
-        if FRAMEWORK_OWNED.contains(&name) {
-            continue;
-        }
         let mut found = Vec::new();
         collect_formats(&tool["inputSchema"], "inputSchema", &mut found);
         collect_formats(&tool["outputSchema"], "outputSchema", &mut found);

@@ -39,9 +39,10 @@ const STANDARD_FORMATS: &[&str] = &[
 
 /// Remove every non-standard `format` from a tool schema, in place.
 ///
-/// The one place KGLite's tool schemas are made portable. The integer types
-/// keep `"type": "integer"` and the `minimum: 0` schemars already writes for
-/// unsigned ones, so nothing is lost but the label.
+/// The one place KGLite's tool schemas are made portable; switches to
+/// `mcp_methods::server::schema::standardize` once mcp-methods >= 0.6.2 is required.
+/// The integer types keep `"type": "integer"` and the `minimum: 0` schemars
+/// already writes for unsigned ones, so nothing is lost but the label.
 pub(crate) fn strip_nonstandard_formats(schema: &mut Map<String, Value>) {
     if schema
         .get("format")
