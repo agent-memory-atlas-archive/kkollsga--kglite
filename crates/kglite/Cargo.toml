@@ -183,7 +183,11 @@ indexmap = { version = "2.7.0", features = ["serde"] }
 # `yaml-rust2` is a pure-Rust, actively-maintained YAML 1.2 parser (no
 # `unsafe`/libyaml, no unmaintained advisory); only pulled when `okf` is
 # enabled (the wheel enables it; bare builds don't).
-yaml-rust2 = { version = "0.12", optional = true }
+# `default-features = false`: 0.13.0 pins its default `encoding` feature to
+# `encoding_rs < 0.8.40`, which beside the tree's 0.8.42 makes cargo add
+# encoding_rs 0.7.2 and cfg-if 0.1.10. Only `YamlLoader::load_from_str` is used,
+# so the byte-stream decoder that feature serves is not needed.
+yaml-rust2 = { version = "0.13", optional = true, default-features = false }
 # OKF loader block tree (`okf::structure`) — gated behind the same `okf`
 # feature. CommonMark + GFM tables with byte-offset source ranges
 # (`into_offset_iter`), so a section's text is a verbatim slice of the note

@@ -90,7 +90,8 @@ kglite = { version = "0.21.2", path = "../kglite", default-features = false, fea
 # Reads the manifest back to tell "`skills:` declared" from "absent" (see
 # `skills::manifest_declares_skills`). The parser `okf` already pulls in, at the
 # same version, so no new package; not serde_yaml, which is deprecated.
-yaml-rust2 = "0.12"
+# No default features: see the same dependency in crates/kglite/Cargo.toml.
+yaml-rust2 = { version = "0.13", default-features = false }
 
 # rmcp re-export for the dynamic tool registration path. 3.5.0 is the floor
 # mcp-methods 0.6.0 itself requires.
