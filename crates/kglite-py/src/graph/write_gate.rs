@@ -43,7 +43,7 @@ pub(crate) fn lifecycle_graph_mut(inner: &mut Arc<DirGraph>) -> &mut DirGraph {
 /// All read methods take `&self`; mutations use `Arc::make_mut` for copy-on-write.
 /// Supports Cypher queries, property filtering, traversals, graph algorithms,
 /// and code entity exploration methods (`find`, `source`, `context`, `toc`).
-#[pyclass(module = "kglite", skip_from_py_object)]
+#[pyclass(module = "kglite")]
 pub struct KnowledgeGraph {
     /// The published graph. Private to this module: reads go through
     /// [`graph`](Self::graph), writes through the choke points below, and the
