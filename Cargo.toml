@@ -37,7 +37,7 @@ version = "0.21.2"
 #     but calls `File::lock_shared`, stabilized in 1.89. Nothing in the
 #     metadata says so; only compiling on 1.88 does (it fails with E0658
 #     `use of unstable library feature 'file_lock'`).
-#   - kglite-bolt-server → 1.91.0. `boltr 0.2.0` declares `rust-version =
+#   - kglite-bolt-server → 1.91.0. `boltr 0.3.0` declares `rust-version =
 #     "1.91.0"`.
 # kglite-py depends on kglite-cli, so it inherits the 1.89.0 floor.
 #

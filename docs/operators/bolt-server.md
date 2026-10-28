@@ -766,19 +766,23 @@ the server log instead of a client stack trace.
 
 ## Known limitations
 
-The server speaks Bolt through the `boltr` library (0.2.0). These defects of
-that version are visible to drivers.
-A `boltr` release that fixes them will remove the limits.
+The server speaks Bolt through the `boltr` library (0.3.0). This defect of
+that version is visible to drivers.
+A `boltr` release that streams results will remove the limit.
 
 | Behaviour | What a driver sees | Workaround |
 |---|---|---|
-| One open result per explicit transaction. A second RUN while the first result has unread rows is not tracked by query id. | A `ValueError` about keys and values of different length (neo4j Python driver), once a result is longer than the driver's `fetch_size`. | Read each result to the end before the next `tx.run`, or raise `fetch_size`. |
-| A very large single result (about 1M rows) peaks at several GB of server memory. | The server's resident memory grows with the result until the `boltr` 0.2.1 bump. | Paginate, or use `LIMIT`. |
-| A message that is invalid in the current state is answered IGNORED, not FAILURE. | None from the official drivers, which do not send such messages. | None needed. |
+| A very large single result (about 1M rows) peaks at several GB of server memory. | The server's resident memory grows with the result. | Paginate, or use `LIMIT`. |
 
-The server guards the other `boltr` 0.2.0 defects itself: authentication
-before any query, nesting depth, message size before LOGON, session cleanup on
-disconnect, idle reaping of paging clients and the result summary of DISCARD.
+`boltr` 0.3.0 tracks several open results per explicit transaction by query
+id, so reading past `fetch_size` after a second `tx.run` works. It answers a
+message that is invalid in the current state with FAILURE, as the Bolt
+specification requires.
+
+The server still guards the `boltr` defects that 0.3.0 also fixes upstream:
+authentication before any query, nesting depth, message size before LOGON,
+session cleanup on disconnect, idle reaping of paging clients and the result
+summary of DISCARD.
 
 ## Operations and security
 

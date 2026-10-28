@@ -104,6 +104,19 @@ def test_discarding_a_partly_read_stream_leaves_the_connection_usable(stream_url
         assert s.run("RETURN 7 AS y").single()["y"] == 7
 
 
+def test_two_results_in_one_transaction_can_be_read_past_the_fetch_size(stream_url):
+    # boltr 0.3 tracks open results by `qid`; before it, reading the first
+    # result after a second RUN raised a keys/values length mismatch.
+    with _driver(stream_url, fetch_size=100) as driver, driver.session() as s:
+        with s.begin_transaction() as tx:
+            first = tx.run("UNWIND range(1, 250) AS x RETURN x")
+            second = tx.run("UNWIND range(1000, 1249) AS y RETURN y")
+            ys = [r["y"] for r in second]
+            xs = [r["x"] for r in first]
+    assert xs == list(range(1, 251))
+    assert ys == list(range(1000, 1250))
+
+
 def test_a_failing_query_reports_failure_and_the_session_recovers(stream_url):
     with _driver(stream_url) as driver, driver.session() as s:
         with pytest.raises(neo4j.exceptions.Neo4jError):
