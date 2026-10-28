@@ -110,7 +110,8 @@ def mcp_contract(tmp_path_factory):
 def test_mcp_tools_list_matches_reviewed_mode_schemas(mcp_contract):
     expected = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert mcp_contract == expected, (
-        "MCP tool names/descriptions/input schemas drifted; review and refresh mcp-tools.json"
+        "MCP tool names/descriptions/input schemas drifted; rebuild the server (cargo build -p kglite-mcp-server), "
+        "run `make refresh-mcp-tools`, and review the diff of tests/api-baselines/mcp-tools.json"
     )
 
 
@@ -190,3 +191,19 @@ def test_a_recipe_whose_every_parameter_has_a_default_needs_no_required(tmp_path
         assert "hello" in _text_content(client.call_tool("echo_word", {}))
     finally:
         client.shutdown()
+
+
+def refresh_baseline() -> None:
+    """Rewrite the reviewed baseline from the freshly built server (`make refresh-mcp-tools`)."""
+    import tempfile
+
+    if _SKIP_REASON is not None:
+        raise SystemExit(_SKIP_REASON)
+    with tempfile.TemporaryDirectory() as scratch:
+        captured = capture_mcp_contract(Path(scratch))
+    BASELINE.write_text(json.dumps(captured, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {BASELINE.relative_to(ROOT)}; review the diff before committing")
+
+
+if __name__ == "__main__":
+    refresh_baseline()

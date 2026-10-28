@@ -45,7 +45,7 @@ check-free-space:
 		echo "free space: WARNING — $${free_gb} GB on the build volume (< $(FREE_WARN_GB) GB). Run 'make prune-target' soon."; \
 	fi
 
-.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface docs-facts check-docs-facts check-vocabulary neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest node-build test-node
+.PHONY: check-free-space dev dev-with-bin bundle-bin build-bolt-server test test-full test-rust test-core test-mcp test-cli test-py test-parity bench bench-save bench-compare bench-check bump-version check-release-hygiene release-preflight refresh-release-constants refresh-api-baseline refresh-cli-interface refresh-mcp-tools docs-facts check-docs-facts check-vocabulary neo4j-up neo4j-down neo4j-conformance bolt-conformance check clean fmt fmt-py clippy gate lint lint-policy lint-full lint-py source-quality rustsec-policy cov stubtest node-build test-node
 
 ## Build and install the package into the local .venv
 dev: | check-free-space
@@ -180,6 +180,13 @@ refresh-release-constants:
 refresh-cli-interface: | check-free-space
 	cargo build -p kglite-cli
 	$(ACTIVATE) && python scripts/interface_contracts.py --write-cli-interface
+
+## Refresh the reviewed MCP tool-schema baseline from the built server. Builds
+## first, and the capture is the function `tests/test_mcp_interface_contract.py`
+## compares with. Review the diff of tests/api-baselines/mcp-tools.json.
+refresh-mcp-tools: | check-free-space
+	cargo build -p kglite-mcp-server
+	$(ACTIVATE) && python -m tests.test_mcp_interface_contract
 
 ## Refresh every feature-profiled Rust public-API baseline. Toolchain, tool
 ## version, feature classifications, and output paths are single-sourced in

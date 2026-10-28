@@ -21,8 +21,10 @@ from tests.conftest import (
     _FORMAT_SOURCES,
     _REPO_ROOT,
     binary_skip_reason,
+    binary_version,
     newest_binary_source,
     newest_format_source,
+    workspace_version,
 )
 
 
@@ -99,7 +101,10 @@ def test_a_touched_mcp_source_turns_a_fresh_mcp_binary_stale(tmp_path, monkeypat
     for path in (root_manifest, lockfile, crate_manifest, boot, parameter_presence):
         path.write_text("x", encoding="utf-8")
         os.utime(path, (1_000, 1_000))
-    monkeypatch.setattr("tests.conftest._FORMAT_SOURCES", (root_manifest,))
+    format_source = tmp_path / "format.rs"
+    format_source.write_text("x", encoding="utf-8")
+    os.utime(format_source, (1_000, 1_000))
+    monkeypatch.setattr("tests.conftest._FORMAT_SOURCES", (format_source,))
     monkeypatch.setattr("tests.conftest._BINARY_CRATES", {"kglite-mcp-server": "kglite-mcp-server"})
     monkeypatch.setattr("tests.conftest._REPO_ROOT", tmp_path)
 
@@ -116,10 +121,30 @@ def test_a_touched_mcp_source_turns_a_fresh_mcp_binary_stale(tmp_path, monkeypat
     reason = binary_skip_reason("kglite-mcp-server", binary, "make test-mcp")
     assert reason is not None and "parameter_presence.rs" in reason
 
+    # A manifest touch is not an input: `cargo build` would not rebuild for it,
+    # so a skip on it could never be cleared.
     os.utime(parameter_presence, (1_000, 1_000))
-    os.utime(lockfile, (5_000, 5_000))
+    for untracked in (crate_manifest, root_manifest):
+        os.utime(untracked, (5_000, 5_000))
+    assert binary_skip_reason("kglite-mcp-server", binary, "make test-mcp") is None
+
+    # The lockfile is: the crate's build.rs makes cargo rebuild for it.
+    os.utime(lockfile, (6_000, 6_000))
     reason = binary_skip_reason("kglite-mcp-server", binary, "make test-mcp")
     assert reason is not None and "Cargo.lock" in reason
+
+
+def test_every_binary_crate_rebuilds_when_the_lockfile_changes():
+    """The staleness check treats `Cargo.lock` as an input only because these
+    crates' build scripts declare it; without the declaration a lock-only
+    change would skip the suite and the advised rebuild would do nothing."""
+    from tests.conftest import _BINARY_CRATES
+
+    for crate in sorted(set(_BINARY_CRATES.values())):
+        build_rs = _REPO_ROOT / "crates" / crate / "build.rs"
+        assert build_rs.is_file(), f"{crate} needs a build.rs declaring ../../Cargo.lock"
+        text = build_rs.read_text(encoding="utf-8")
+        assert "cargo:rerun-if-changed" in text and "Cargo.lock" in text, crate
 
 
 def test_an_unbuilt_binary_is_reported_as_unbuilt(tmp_path):
@@ -132,3 +157,47 @@ def test_a_format_source_list_that_names_nothing_real_refuses(tmp_path, monkeypa
     monkeypatch.setattr("tests.conftest._FORMAT_SOURCES", (tmp_path / "gone.rs",))
     with pytest.raises(RuntimeError, match="no format-defining source"):
         newest_format_source()
+
+
+def _versioned_binary(tmp_path: Path, version: str, mtime: float) -> Path:
+    binary = tmp_path / "kglite-fake-versioned"
+    binary.write_text(f"#!/bin/sh\necho 'kglite-fake {version}'\n", encoding="utf-8")
+    binary.chmod(0o755)
+    os.utime(binary, (mtime, mtime))
+    return binary
+
+
+def test_a_comment_only_manifest_edit_does_not_make_a_binary_stale(tmp_path, monkeypatch):
+    """`cargo build` ignores such an edit and reports "Finished", so a skip on
+    it would repeat forever after the advised rebuild."""
+    manifest = tmp_path / "Cargo.toml"
+    manifest.write_text('[workspace.package]\nversion = "1.2.3"\n', encoding="utf-8")
+    os.utime(manifest, (1_000, 1_000))
+    monkeypatch.setattr("tests.conftest._REPO_ROOT", tmp_path)
+    format_source = tmp_path / "format.rs"
+    format_source.write_text("x", encoding="utf-8")
+    os.utime(format_source, (1_000, 1_000))
+    monkeypatch.setattr("tests.conftest._FORMAT_SOURCES", (format_source,))
+    binary = _versioned_binary(tmp_path, "1.2.3", 2_000)
+    assert binary_skip_reason("kglite-fake", binary, "make dev") is None
+
+    manifest.write_text('# a new comment\n[workspace.package]\nversion = "1.2.3"\n', encoding="utf-8")
+    os.utime(manifest, (3_000, 3_000))
+    assert binary_skip_reason("kglite-fake", binary, "make dev") is None
+
+
+def test_a_binary_reporting_another_version_is_skipped(tmp_path, monkeypatch):
+    manifest = tmp_path / "Cargo.toml"
+    manifest.write_text('[workspace.package]\nversion = "1.2.4"\n', encoding="utf-8")
+    os.utime(manifest, (1_000, 1_000))
+    monkeypatch.setattr("tests.conftest._REPO_ROOT", tmp_path)
+    format_source = tmp_path / "format.rs"
+    format_source.write_text("x", encoding="utf-8")
+    os.utime(format_source, (1_000, 1_000))
+    monkeypatch.setattr("tests.conftest._FORMAT_SOURCES", (format_source,))
+    binary = _versioned_binary(tmp_path, "1.2.3", 2_000)
+    assert binary_version(binary) == "1.2.3"
+    assert workspace_version(tmp_path) == "1.2.4"
+    reason = binary_skip_reason("kglite-fake", binary, "make dev")
+    assert reason is not None
+    assert "reports version 1.2.3" in reason and "rebuild with: make dev" in reason

@@ -92,8 +92,9 @@ that crosses package boundaries; otherwise let GitHub CI parallelize them.
   before the next test run.
 - **Any harness that loads a built artifact resolves newest-of-profile.** The
   Python suites do it through `tests/conftest.py::workspace_binary` — newest of
-  release/debug, and a skip-with-rebuild-command when the binary predates the
-  root `Cargo.toml`; the Java harness does it in `Abi.resolveLibrary` (added
+  release/debug, and a skip-with-rebuild-command when the binary reports another
+  version than the workspace or predates a source cargo tracks for it (a
+  manifest touch is not an input: cargo does not rebuild for it); the Java harness does it in `Abi.resolveLibrary` (added
   2026-08). Never hard-code *or prefer* a profile path; a stale release
   artifact shadowing fresh code produces contract failures that reveal nothing,
   and "release if present" is the same bug wearing a default.

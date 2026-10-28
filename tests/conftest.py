@@ -3,6 +3,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -33,18 +34,22 @@ from kglite import KnowledgeGraph  # noqa: E402
 # - a binary predating the current workspace version bump — it reports the
 #   previous version and fails contract tests with pure noise. Skip with the
 #   rebuild command instead.
+#
+# Staleness must be something the advised rebuild clears. cargo rebuilds when a
+# tracked *source* changes, not when a manifest is merely touched or edited in
+# a comment, so a manifest mtime is not an input here: the version is compared
+# by value instead (`binary_version` against `workspace_version`). The lockfile
+# is an input because each of these crates' `build.rs` declares it, so any
+# lock change makes `cargo build -p <crate>` rebuild the binary.
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: Files whose mtime a prebuilt server binary must not predate. The root
-#: manifest catches every version bump and checkout; the rest are the
-#: *format-defining* sources — a change to one of them can make a stale binary
-#: refuse or misread what a freshly built peer wrote, without touching the
-#: version at all. A WAL revision bump did exactly that: the manifest was
-#: untouched, so the guard saw nothing, and the servers refused every log the
-#: current build produced.
+#: Sources whose mtime a prebuilt server binary must not predate: the
+#: *format-defining* ones. A change to one of them can make a stale binary
+#: refuse or misread what a freshly built peer wrote, without moving the
+#: version. A WAL revision bump did exactly that, and the guard saw nothing
+#: because it then watched only the manifest.
 _FORMAT_SOURCES = (
-    _REPO_ROOT / "Cargo.toml",
     _REPO_ROOT / "crates" / "kglite" / "src" / "graph" / "wal.rs",
     _REPO_ROOT / "crates" / "kglite" / "src" / "graph" / "io" / "file.rs",
     _REPO_ROOT / "crates" / "kglite" / "src" / "serde_codec" / "mod.rs",
@@ -142,7 +147,7 @@ def newest_binary_source(name: str) -> Path:
     candidates = list(_FORMAT_SOURCES)
     crate = _BINARY_CRATES.get(name)
     if crate is not None:
-        candidates.extend((_REPO_ROOT / "Cargo.lock", _REPO_ROOT / "crates" / crate / "Cargo.toml"))
+        candidates.append(_REPO_ROOT / "Cargo.lock")
         candidates.extend((_REPO_ROOT / "crates" / crate / "src").rglob("*.rs"))
         candidates.extend((_REPO_ROOT / "crates" / "kglite" / "src").rglob("*.rs"))
     present = [path for path in candidates if path.exists()]
@@ -151,14 +156,35 @@ def newest_binary_source(name: str) -> Path:
     return max(present, key=lambda path: path.stat().st_mtime)
 
 
+def workspace_version(root: Path | None = None) -> str:
+    """`[workspace.package] version` from the root manifest."""
+    text = ((root or _REPO_ROOT) / "Cargo.toml").read_text(encoding="utf-8")
+    section = text.split("[workspace.package]", 1)[1]
+    match = re.search(r'^version\s*=\s*"([^"]+)"', section, re.M)
+    if match is None:
+        raise RuntimeError("no [workspace.package] version in the root Cargo.toml")
+    return match.group(1)
+
+
+def binary_version(binary: Path) -> str | None:
+    """The `X.Y.Z` a built binary reports for `--version`, or None when it does not say."""
+    try:
+        done = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b", done.stdout + done.stderr)
+    return match.group(1) if match else None
+
+
 def binary_skip_reason(name: str, binary: Path, build_hint: str) -> str | None:
     """Skip reason for a binary-backed suite, or None when it should run.
 
-    Staleness is classified by mtime against `_FORMAT_SOURCES`: the root
-    manifest (every version bump and every checkout moves it) plus the sources
-    that define an on-disk format the binary and the extension must agree on.
-    An older binary cannot be trusted to read what the current build writes.
-    CI is unaffected — it builds immediately before testing.
+    Stale means the binary was built from different code: it reports another
+    version than the workspace's, or it predates a source `cargo` tracks for
+    it (`_FORMAT_SOURCES`, the crate's own sources and `Cargo.lock`). Both are cleared by
+    the rebuild command in the message. A binary that does not report a
+    version is judged by the mtime check alone. CI is unaffected — it builds
+    immediately before testing.
     """
     if not binary.exists():
         return f"{name} not built (expected at {binary}). Build with: {build_hint}"
@@ -166,6 +192,12 @@ def binary_skip_reason(name: str, binary: Path, build_hint: str) -> str | None:
     if binary.stat().st_mtime < newest.stat().st_mtime:
         return (
             f"{name} at {binary} predates {newest.relative_to(_REPO_ROOT)} (stale build) — rebuild with: {build_hint}"
+        )
+    reported = binary_version(binary)
+    if reported is not None and reported != workspace_version():
+        return (
+            f"{name} at {binary} reports version {reported}, the workspace is {workspace_version()} "
+            f"(stale build) — rebuild with: {build_hint}"
         )
     return None
 
