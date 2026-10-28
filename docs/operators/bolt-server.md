@@ -779,10 +779,15 @@ id, so reading past `fetch_size` after a second `tx.run` works. It answers a
 message that is invalid in the current state with FAILURE, as the Bolt
 specification requires.
 
-The server still guards the `boltr` defects that 0.3.0 also fixes upstream:
-authentication before any query, nesting depth, message size before LOGON,
-session cleanup on disconnect, idle reaping of paging clients and the result
-summary of DISCARD.
+`boltr` 0.3.0 also checks authentication before any query, limits PackStream
+nesting and the message size before LOGON, closes a connection's sessions on
+disconnect, refreshes the idle timer on every message and gives DISCARD its
+result summary. A client sees these `boltr` behaviours:
+
+- A failure before authentication (a failed HELLO or LOGON, or an undecodable
+  message) closes the connection. RESET does not recover it.
+- A message larger than 64 KiB before LOGON is answered with FAILURE and the
+  connection closes.
 
 ## Operations and security
 

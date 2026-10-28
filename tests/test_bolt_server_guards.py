@@ -1,10 +1,12 @@
-"""Protocol-level guards of kglite-bolt-server, exercised with a raw Bolt client.
+"""Protocol-level behaviour of `boltr` that kglite-bolt-server relies on, exercised
+with a raw Bolt client.
 
-`boltr` 0.2.0 lets a client that failed to authenticate reach `Ready` through
-RESET, accepts messages of any size and nesting before authentication, and
-leaks a session when a client vanishes mid-response. The accept loop and the
-backend wrapper in `crates/kglite-bolt-server/src/guard.rs` close those gaps;
-these tests drive them with hand-built messages no official driver would send.
+`boltr` 0.2.0 let a client that failed to authenticate reach `Ready` through
+RESET, accepted messages of any size and nesting before authentication, and
+leaked a session when a client vanished mid-response. Those are fixed in
+`boltr` 0.3.0, and the server carries no workaround of its own: these tests
+drive the library with hand-built messages no official driver would send, so a
+regression in it (or a downgrade) fails here.
 """
 
 import socket
@@ -239,7 +241,8 @@ def test_disconnect_mid_response_releases_the_session(open_server):
 
 def test_paging_with_pull_keeps_the_session_alive(tmp_path, bolt_binary_path):
     """Only RUN refreshed the idle timer in `boltr` 0.2.0, so a client paging
-    through a result was reaped while it was actively pulling."""
+    through a result was reaped while it was actively pulling; 0.3.0 counts
+    every message."""
     if not bolt_binary_path.exists():
         pytest.skip("bolt-server binary not built")
     from tests.conftest import _build_bolt_fixture_graph, _spawn_bolt_server, _teardown_bolt_server

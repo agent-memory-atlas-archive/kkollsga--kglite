@@ -2,10 +2,10 @@
 
 `boltr` 0.2.0 answers DISCARD with an empty SUCCESS, ignores `n`, and drops
 the summary the driver reads counters, bookmarks and timings from, so
-`result.consume().counters.nodes_created` read 0 after a CREATE. The
-connection adapters in `crates/kglite-bolt-server/src` turn an incoming
-DISCARD into a PULL and drop the RECORDs that answer it; these tests pin that
-with the official driver and with a raw client that sees every byte.
+`result.consume().counters.nodes_created` read 0 after a CREATE. `boltr` 0.3.0
+honours `n` and sends the summary, and the server adds no adapter of its own;
+these tests pin that with the official driver and with a raw client that sees
+every byte.
 """
 
 import pytest

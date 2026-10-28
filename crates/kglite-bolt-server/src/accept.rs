@@ -1,7 +1,7 @@
 //! The Bolt accept loop, owned here instead of delegated to `boltr`'s
 //! `BoltServer::serve`.
 //!
-//! `boltr` 0.2 binds its own listener and never sets `TCP_NODELAY` on the
+//! `boltr` 0.3 binds its own listener and never sets `TCP_NODELAY` on the
 //! streams it accepts, and exposes no hook to do so. Bolt is request/response
 //! with several small messages per transaction, so on Linux every small reply
 //! waits in Nagle's buffer for the client's delayed ACK (~44 ms per exchange,
@@ -10,8 +10,8 @@
 //! Everything a connection needs after `accept` is public in `boltr`, so this
 //! module re-creates only the listener side: bind, session reaper, accept loop,
 //! shutdown, optional TLS. Per-connection work is `boltr`'s own
-//! `server_handshake` + `Connection::run`, run under the guards in
-//! `guard.rs`.
+//! `server_handshake` + `Connection::run`, run behind the pump in
+//! `connection.rs`.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::coalesce::CoalescingWriter;
-use crate::discard::DiscardTracker;
-use crate::guard::{serve_connection, ConnectionContext};
+use crate::connection::{serve_connection, ConnectionContext};
 use crate::inflight::InflightCancel;
 use boltr::error::BoltError;
 use boltr::server::handshake::server_handshake;
@@ -85,7 +84,6 @@ impl<B: BoltBackend + InflightCancel + 'static> BoltListener<B> {
             sessions: sessions.clone(),
             auth: self.auth.clone(),
             max_message_size: self.max_message_size,
-            idle_timeout: self.idle_timeout.is_some(),
         });
 
         let reaper = self.idle_timeout.map(|timeout| {
@@ -155,9 +153,8 @@ where
         Ok(version) => {
             tracing::debug!(%peer_addr, ?version, "Bolt handshake complete");
             let (reader, writer) = tokio::io::split(stream);
-            let discards = DiscardTracker::new();
-            let writer = CoalescingWriter::with_discards(writer, discards.clone());
-            serve_connection(reader, writer, discards, ctx, peer_addr).await;
+            let writer = CoalescingWriter::new(writer);
+            serve_connection(reader, writer, ctx, peer_addr).await;
         }
         Err(e) => tracing::debug!(%peer_addr, error = %e, "Bolt handshake failed"),
     }

@@ -11,7 +11,7 @@ before upgrading.
 
 ### Security
 
-- **`kglite-bolt-server` uses `boltr` 0.3.0.** It fixes an authentication bypass (a failed LOGON followed by RESET let a client run queries), a process abort on deeply nested PackStream values, and unbounded memory before LOGON (messages before authentication are limited to 64 KiB). The server's own guards for these stay in place in this release. Also new upstream: several open results per transaction by query id, a 30 s handshake timeout, and FAILURE instead of IGNORED for a message invalid in the current state.
+- **`kglite-bolt-server` uses `boltr` 0.3.0.** It fixes an authentication bypass (a failed LOGON followed by RESET let a client run queries), a process abort on deeply nested PackStream values, and unbounded memory before LOGON (messages before authentication are limited to 64 KiB). The server's own workarounds for these are removed. Also new upstream: several open results per transaction by query id, and FAILURE instead of IGNORED for a message invalid in the current state.
 - **`kglite` requires `zstd` 0.14.3 and `pulldown-cmark` 0.13.5.** The `zstd` floor excludes the memory-safety advisories RUSTSEC-2026-0391 to -0406 and -0410 (`zstd` 0.14.0 with `zstd-safe` 8.0.0 and `zstd-sys` 2.1.0). The `pulldown-cmark` floor excludes RUSTSEC-2026-0414, exponential growth with `ENABLE_WIKILINKS`. KGLite's OKF parser does not enable that option, so it was not exposed. **Do:** rebuild with the updated lockfile.
 
 ### Fixed
