@@ -29,9 +29,9 @@
     <maven.compiler.release>17</maven.compiler.release>
     <!-- Overridden on the command line by the pytest wrapper. -->
     <kglite.bolt.uri>bolt://127.0.0.1:7687</kglite.bolt.uri>
-    <neo4j.driver.version>5.28.5</neo4j.driver.version>
-    <junit.version>5.11.4</junit.version>
-    <surefire.version>3.5.2</surefire.version>
+    <neo4j.driver.version>6.3.0</neo4j.driver.version>
+    <junit.version>6.1.3</junit.version>
+    <surefire.version>3.6.1</surefire.version>
   </properties>
 
   <dependencies>

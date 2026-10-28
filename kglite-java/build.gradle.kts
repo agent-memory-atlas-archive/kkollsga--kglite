@@ -7,7 +7,7 @@ plugins {
     // `org.sonatype.central` plugin covers the upload but leaves signing and
     // the POM to be wired by hand — two more places for a release to fail after
     // the artifacts are already built.
-    id("com.vanniktech.maven.publish") version "0.34.0"
+    id("com.vanniktech.maven.publish") version "0.37.0"
 }
 
 group = "io.github.kkollsga"
@@ -82,8 +82,8 @@ dependencies {
     // No runtime dependencies. The wrapper wraps the C ABI chokepoint and
     // parses the JSON the ABI emits with a ~200-line internal reader, so the
     // published artifact has an empty transitive surface.
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.4")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 // ---------------------------------------------------------------------------
