@@ -1,5 +1,7 @@
 # Keep the Linux released-wheel and candidate benchmark environments identical.
 pandas==3.0.3
+# Held at 9.1.1: pytest 9.2 removed `Node._nodeid`, which pytest-benchmark 5.3.0
+# still reads (see tests/benchmarks/conftest.py).
 pytest==9.1.1
 pytest-benchmark==5.3.0
 py-cpuinfo==9.0.0
