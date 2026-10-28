@@ -245,8 +245,8 @@ jobs:
   # Windows + macOS build natively (one abi3 wheel per target). macOS
   # builds both arm64 (native on the arm runner) and x86_64 (cross —
   # Apple ships both SDKs, so `--target x86_64-apple-darwin` just works).
-  # The abi3-py310 extension and its bundled MCP entry point serve all
-  # Python 3.10+ versions — one wheel per target, no per-Python matrix.
+  # The abi3-py312 extension and its bundled MCP entry point serve all
+  # Python 3.12+ versions — one wheel per target, no per-Python matrix.
   # See docs/python/guides/mcp-servers.md.
   wheels-native:
     name: Build wheel - ${{ matrix.os }} - ${{ matrix.target }}
@@ -276,10 +276,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Python 3.10 (abi3 floor)
+      - name: Set up Python 3.12 (abi3 floor)
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.10'
+          python-version: '3.12'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
@@ -359,7 +359,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: pyarrow-coexistence canary (macOS arm64)
-        # Install the wheel we just built (abi3-py310 → runs on 3.14) into a
+        # Install the wheel we just built (abi3-py312 → runs on 3.14) into a
         # fresh venv alongside UNPINNED pyarrow. Unpinned BY DESIGN, mirroring
         # ci.yml's Linux leg: we WANT the newest pyarrow/CPython allocator
         # behaviour so a future change that reintroduces the clash trips here
@@ -520,7 +520,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.10'
+          python-version: '3.12'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:

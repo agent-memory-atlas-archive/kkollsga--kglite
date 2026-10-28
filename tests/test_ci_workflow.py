@@ -369,7 +369,9 @@ def test_free_threading_uses_the_pyo3_supported_python() -> None:
     versions = [
         step.get("with", {}).get("python-version") for step in _steps_using(free_threading, "actions/setup-python@")
     ]
-    assert versions == ["3.14t"], f"free-threading sets up {versions}, expected only the PyO3-supported 3.14t"
+    assert versions == ["${{ matrix.python-version }}"], versions
+    matrix = free_threading["strategy"]["matrix"]["python-version"]
+    assert matrix == ["3.14t", "3.15t"], f"free-threading covers {matrix}, expected the PyO3-supported 3.14t and 3.15t"
 
 
 def test_linux_perf_gate_uses_isolated_released_wheel_reference() -> None:
