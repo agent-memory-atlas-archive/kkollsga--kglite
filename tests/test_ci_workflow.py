@@ -2727,3 +2727,17 @@ def test_windows_clippy_runs_in_the_native_lifecycle_job() -> None:
     toolchains = [s for s in _steps(job) if "rust-toolchain" in str(s.get("uses", ""))]
     assert toolchains, "the job installs no Rust toolchain"
     assert "clippy" in str(toolchains[0].get("with", {}).get("components", "")), toolchains[0]
+
+
+def test_every_copied_benchmark_harness_gets_the_nodeid_hook():
+    """pytest-benchmark 5.3.0 reads `Node._nodeid`, which pytest 9.2 removed.
+    The hook lives in a conftest, and a harness copied out of the checkout
+    brings no conftest of its own, so each copy step must add one."""
+    for path in ("ci.yml", "perf_ab.yml"):
+        text = (WORKFLOWS / path).read_text(encoding="utf-8")
+        harness_copies = re.findall(
+            r"cp tests/benchmarks/(test_bench_\w+\.py) \"?(\$[A-Z_]+/[\w-]+|\$HARNESS_DIR)", text
+        )
+        hooks = text.count("cp tests/benchmarks/harness_conftest.py")
+        assert harness_copies, path
+        assert hooks == len(harness_copies), f"{path}: {len(harness_copies)} harness copies, {hooks} hook copies"

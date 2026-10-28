@@ -763,10 +763,13 @@ jobs:
         run: |
           mkdir -p "$HARNESS_DIR"
           cp tests/benchmarks/test_bench_core.py "$HARNESS_DIR/test_bench_core.py"
+          cp tests/benchmarks/harness_conftest.py "$HARNESS_DIR/conftest.py"
           mkdir -p "$RUNNER_TEMP/kglite-edge-harness"
           cp tests/benchmarks/test_bench_edge_embeddings.py "$RUNNER_TEMP/kglite-edge-harness/test_bench_edge_embeddings.py"
+          cp tests/benchmarks/harness_conftest.py "$RUNNER_TEMP/kglite-edge-harness/conftest.py"
           mkdir -p "$RUNNER_TEMP/kglite-write-harness"
           cp tests/benchmarks/test_bench_write_path_guards.py "$RUNNER_TEMP/kglite-write-harness/test_bench_write_path_guards.py"
+          cp tests/benchmarks/harness_conftest.py "$RUNNER_TEMP/kglite-write-harness/conftest.py"
 
       - name: Benchmark published 0.13.2 wheel
         working-directory: ${{ runner.temp }}/kglite-core-harness
@@ -916,6 +919,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/kglite-bolt-harness"
           cp tests/benchmarks/test_bench_bolt_gate.py "$RUNNER_TEMP/kglite-bolt-harness/"
+          cp tests/benchmarks/harness_conftest.py "$RUNNER_TEMP/kglite-bolt-harness/conftest.py"
           cp tests/benchmarks/bolt_rawclient.rs "$RUNNER_TEMP/kglite-bolt-harness/"
           cp tests/bolt_raw.py "$RUNNER_TEMP/kglite-bolt-harness/"
 

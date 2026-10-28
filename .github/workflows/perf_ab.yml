@@ -164,6 +164,7 @@ jobs:
           install manylinux-alt "$(find src/dist-manylinux-alt -name '*.whl' -print -quit)" ""
           mkdir -p "$RUNNER_TEMP/ab-harness" ab-results
           cp tests/benchmarks/test_bench_core.py "$RUNNER_TEMP/ab-harness/"
+          cp tests/benchmarks/harness_conftest.py "$RUNNER_TEMP/ab-harness/conftest.py"
           lscpu | grep -m1 'Model name' | tee ab-results/cpu.txt
 
       - name: Benchmark the variants, interleaved over two rounds
@@ -278,6 +279,7 @@ jobs:
           printf '%s\n' "$REFERENCE_VERSION" "${versions[@]}" > bisect-results/variants.txt
           mkdir -p "$RUNNER_TEMP/bisect-harness"
           cp tests/benchmarks/test_bench_core.py "$RUNNER_TEMP/bisect-harness/"
+          cp tests/benchmarks/harness_conftest.py "$RUNNER_TEMP/bisect-harness/conftest.py"
           lscpu | grep -m1 'Model name' | tee bisect-results/cpu.txt
 
       - name: Benchmark the versions, forward then reversed

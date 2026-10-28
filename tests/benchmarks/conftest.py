@@ -6,19 +6,8 @@ import pytest
 import kglite
 from kglite import KnowledgeGraph
 
-
-def pytest_itemcollected(item):
-    """Give pytest-benchmark the `_nodeid` it reads.
-
-    pytest 9.2 removed the private `Node._nodeid` attribute; pytest-benchmark
-    5.3.0 (the latest release) still reads `node._nodeid` when it builds a
-    fixture, so every benchmark errors at setup. The CI benchmark environment
-    pins pytest 9.1.1 (`requirements/benchmark.txt`), which has the attribute;
-    this keeps a local run on a newer pytest working. Delete it once
-    pytest-benchmark reads `nodeid`.
-    """
-    if not hasattr(item, "_nodeid"):
-        item._nodeid = item.nodeid
+# pytest-benchmark vs pytest 9.2; see the module for why and when to delete it.
+from tests.benchmarks.harness_conftest import pytest_itemcollected  # noqa: F401
 
 
 @pytest.fixture(scope="session", autouse=True)
