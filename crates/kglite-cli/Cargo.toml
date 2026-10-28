@@ -30,6 +30,10 @@ kglite = { version = "0.21.2", path = "../kglite", default-features = false, fea
 
 # Line editor: prompt, history, Emacs/Vi keybindings, Ctrl-C/Ctrl-D handling.
 # The standard Rust REPL choice; not otherwise a workspace dep.
+# Held at 18: rustyline 19.0.0 uses `cfg_select!`, which fails E0658 on Rust
+# 1.89 through 1.92 and compiles on 1.98 (the first compiling release between
+# 1.93 and 1.98 was not bisected). Taking it means raising this crate, and
+# kglite-py through it, past the 1.89.0 floor.
 rustyline = "18"
 
 # SIGINT → cancel the in-flight query (sets the flag execute_mut polls).
