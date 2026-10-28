@@ -293,7 +293,8 @@ class TestWeightedHonoursFilters:
     """weight_property silently discarded every filter it appeared to accept."""
 
     @pytest.fixture(scope="class")
-    def weighted_graph(self) -> KnowledgeGraph:
+    @classmethod
+    def weighted_graph(cls) -> KnowledgeGraph:
         g = KnowledgeGraph()
         people = pd.DataFrame({"id": [1, 2, 3], "name": ["A", "B", "C"]})
         g.add_nodes(people, "Person", "id", "name")
