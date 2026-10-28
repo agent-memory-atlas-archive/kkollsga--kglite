@@ -317,12 +317,13 @@ fn parallel_scan_aggregate_honours_a_pre_tripped_flag() {
 /// The scan loop's own interrupt poll.
 ///
 /// Cancellation has to arrive *during* the scan: candidate discovery polls the
-/// same flag, so a pre-tripped one never reaches the loop. Rather than sleep
-/// for a guessed fraction of the run — which is a flake waiting for a busy
-/// machine — the flipper spins on the `PARALLEL_SCANS` meter, which the
-/// executor bumps immediately before it fans out and therefore strictly
-/// *after* candidate discovery has returned. The flag is set with the whole
-/// scan still ahead, and every partition polls at its first row.
+/// same flag, so a pre-tripped one never reaches the loop. The flag is set by
+/// the fan-out point itself (`cancel_at_fan_out`), immediately after the
+/// region is counted and strictly *after* candidate discovery has returned, so
+/// it is set with the whole scan still ahead and every partition polls at its
+/// first row. An earlier version had a second thread spin on the
+/// `PARALLEL_SCANS` meter; on a fast machine the scan finished before that
+/// thread was scheduled and the test saw `Ok` — a race, not a regression.
 ///
 /// Red-first: with `ParallelInterrupt::check` removed from `scan_partition`
 /// this returns rows instead of `Err`.
@@ -339,18 +340,11 @@ fn parallel_scan_aggregate_is_interruptible_mid_scan() {
     crate::graph::languages::cypher::planner::optimize(&mut parsed, &graph, &params);
 
     let before = parallel_scans();
-    let flipper = std::thread::spawn(move || {
-        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while parallel_scans() == before && std::time::Instant::now() < give_up {
-            std::hint::spin_loop();
-        }
-        MID_SCAN.store(true, std::sync::atomic::Ordering::Relaxed);
-    });
+    let _trip = cancel_at_fan_out(&MID_SCAN);
     let outcome = CypherExecutor::with_params(&graph, &params, None)
         .with_parallel(true)
         .with_cancel(Some(&MID_SCAN))
         .execute(&parsed);
-    flipper.join().expect("flipper thread");
 
     assert!(
         parallel_scans() > before,
@@ -380,7 +374,7 @@ fn parallel_is_off_in_the_default_execute_options() {
 
 // ── Parallel candidate scan + filter (Q3) ───────────────────────────────────
 
-use crate::graph::parallel::parallel_candidate_scans;
+use crate::graph::parallel::{cancel_at_fan_out, parallel_candidate_scans};
 
 /// The same `Item` shape as [`scan_graph`], but bulk-loaded so the properties
 /// land in a `ColumnStore` — which is what lets `ColumnFilter::compile` accept
@@ -584,8 +578,8 @@ fn compiled_filter_meter_sees_rows_answered_on_workers() {
 /// measuring a later checkpoint. Calling the scan directly leaves its own poll
 /// as the only thing that can return this error.
 ///
-/// The flipper spins on the candidate-scan meter, bumped immediately before
-/// the fan-out, so the flag is set with the whole scan still ahead.
+/// The fan-out point sets the flag itself (`cancel_at_fan_out`), so it is set
+/// with the whole scan still ahead rather than raced by a second thread.
 ///
 /// Red-first: with `ParallelInterrupt::check` removed from
 /// `filter_candidate_partition` this returns nodes instead of `Err`.
@@ -611,18 +605,11 @@ fn parallel_candidate_scan_is_interruptible_mid_scan() {
     };
 
     let before = parallel_candidate_scans();
-    let flipper = std::thread::spawn(move || {
-        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while parallel_candidate_scans() == before && std::time::Instant::now() < give_up {
-            std::hint::spin_loop();
-        }
-        MID_SCAN.store(true, std::sync::atomic::Ordering::Relaxed);
-    });
+    let _trip = cancel_at_fan_out(&MID_SCAN);
     let outcome = PatternExecutor::new(&graph, None)
         .set_parallel(true)
         .set_cancel(Some(&MID_SCAN))
         .find_matching_nodes_pub(&pattern);
-    flipper.join().expect("flipper thread");
 
     assert!(
         parallel_candidate_scans() > before,

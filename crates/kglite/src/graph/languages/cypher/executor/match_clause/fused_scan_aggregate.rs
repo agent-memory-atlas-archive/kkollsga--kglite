@@ -224,8 +224,11 @@ impl<'g> CypherExecutor<'g> {
         'g: 'r,
     {
         #[cfg(test)]
-        crate::graph::parallel::PARALLEL_SCANS
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            crate::graph::parallel::PARALLEL_SCANS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::graph::parallel::trip_fan_out_cancel();
+        }
 
         // Pre-warm (D4): the only structure a scan region touches that is
         // built on first use rather than at load. One call on the calling

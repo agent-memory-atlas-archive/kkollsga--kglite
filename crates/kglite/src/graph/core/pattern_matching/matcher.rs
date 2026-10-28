@@ -957,7 +957,10 @@ impl<'a> PatternExecutor<'a> {
         extra_keys: &[InternedKey],
     ) -> Result<Vec<NodeIndex>, String> {
         #[cfg(test)]
-        parallel::PARALLEL_CANDIDATE_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            parallel::PARALLEL_CANDIDATE_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            parallel::trip_fan_out_cancel();
+        }
 
         let interrupt = ParallelInterrupt::new(|| self.check_scan_deadline().err());
         let partitions = (rayon::current_num_threads() * CANDIDATE_PARTITIONS_PER_WORKER).max(1);

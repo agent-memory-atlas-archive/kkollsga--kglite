@@ -205,6 +205,41 @@ pub(crate) fn parallel_candidate_scans() -> usize {
     PARALLEL_CANDIDATE_SCANS.load(Ordering::Relaxed)
 }
 
+/// A cancel flag the next parallel fan-out sets itself, right after counting
+/// the region and before any partition runs. A test registers it through
+/// [`cancel_at_fan_out`] so "the flag is set with the whole scan still ahead"
+/// is a guarantee, not a race against a second thread watching a meter.
+#[cfg(test)]
+static FAN_OUT_CANCEL: std::sync::Mutex<Option<&'static std::sync::atomic::AtomicBool>> =
+    std::sync::Mutex::new(None);
+
+/// Set the registered flag, if any. Called at each region's fan-out point.
+#[cfg(test)]
+pub(crate) fn trip_fan_out_cancel() {
+    let flag = *FAN_OUT_CANCEL.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(flag) = flag {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Register `flag` to be set at the next fan-out; the registration ends when
+/// the returned guard drops.
+#[cfg(test)]
+pub(crate) fn cancel_at_fan_out(flag: &'static std::sync::atomic::AtomicBool) -> FanOutCancelGuard {
+    *FAN_OUT_CANCEL.lock().unwrap_or_else(|p| p.into_inner()) = Some(flag);
+    FanOutCancelGuard
+}
+
+#[cfg(test)]
+pub(crate) struct FanOutCancelGuard;
+
+#[cfg(test)]
+impl Drop for FanOutCancelGuard {
+    fn drop(&mut self) {
+        *FAN_OUT_CANCEL.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
 /// Parallel grouping passes entered (materialized aggregation). Atomic for the
 /// same reason as [`PARALLEL_SCANS`].
 #[cfg(test)]
