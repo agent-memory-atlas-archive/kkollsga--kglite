@@ -97,12 +97,11 @@ yaml-rust2 = { version = "0.13", default-features = false }
 # mcp-methods 0.6.0 itself requires.
 rmcp = { version = "3.5.0", features = ["server", "macros", "transport-io", "schemars"] }
 
-# 1.37.0, not "1": rmcp 3.1.1 calls tokio::sync::mpsc::Receiver::is_closed,
-# added in 1.37.0, and uses tokio::task::JoinSet, added in 1.21.0 (both
-# bisected against the individual releases). hyper 1.x independently
-# needs >=1.13. Cargo unifies tokio workspace-wide, so both servers
-# declare the same floor even though only kglite-mcp-server pulls rmcp.
-tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread", "io-std", "fs", "sync", "time", "net"] }
+# 1.44.2, not "1": boltr 0.3.0 requires it (RUSTSEC-2025-0023). rmcp 3.1.1
+# alone needs 1.37.0 (Receiver::is_closed, added there, and JoinSet, added in
+# 1.21.0; both bisected against the individual releases) and hyper 1.x >=1.13.
+# Cargo unifies tokio workspace-wide, so both servers declare the same floor.
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "io-std", "fs", "sync", "time", "net"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # 1.10 is a real minimum: tokenizers 0.22 requires regex ^1.10, and the
@@ -143,9 +142,10 @@ tracing = "0.1.44"
 hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["server", "tokio", "http1"] }
 http-body-util = "0.1"
-bytes = "1"
+# 1.11.1: the workspace floor boltr 0.3.0 sets (see kglite-bolt-server).
+bytes = "1.11.1"
 futures = "0.3"
-tokio-util = { version = "0.7.20", features = ["codec"] }
+tokio-util = { version = "0.7.9", features = ["codec"] }
 
 # `dladdr` names the shared object this code was loaded from (the wheel's
 # extension module), which is the file whose replacement makes the server

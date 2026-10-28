@@ -73,14 +73,13 @@ rustls = { version = "0.23.22", default-features = false, features = ["ring", "s
 # and cargo unifies the version across the workspace. Declaring "0.1" let
 # direct-minimal-versions lower it to 0.1.0 and fail resolution outright --
 # caught by the minimal-versions CI job added in 0.15.1.
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 
-# 1.37.0, not "1": rmcp 3.1.1 calls tokio::sync::mpsc::Receiver::is_closed,
-# added in 1.37.0, and uses tokio::task::JoinSet, added in 1.21.0 (both
-# bisected against the individual releases). hyper 1.x independently
-# needs >=1.13. Cargo unifies tokio workspace-wide, so both servers
-# declare the same floor even though only kglite-mcp-server pulls rmcp.
-tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread", "net", "signal", "io-util", "sync", "time"] }
+# 1.44.2, not "1": boltr 0.3.0 requires it (RUSTSEC-2025-0023). rmcp 3.1.1
+# alone needs 1.37.0 (Receiver::is_closed, added there, and JoinSet, added in
+# 1.21.0; both bisected against the individual releases) and hyper 1.x >=1.13.
+# Cargo unifies tokio workspace-wide, so both servers declare the same floor.
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "net", "signal", "io-util", "sync", "time"] }
 
 clap = { version = "4.6", features = ["derive"] }
 tracing = "0.1.44"
@@ -107,10 +106,11 @@ subtle = "2.5.0"
 # same version range so a workspace-level chrono bump touches us too.
 chrono = { version = "0.4.45", default-features = false }
 # `BytesMut` is the buffer type of boltr's public message encoder, which the
-# connection guards use to frame their refusal FAILURE. "1", like
-# kglite-mcp-server's: cargo unifies the version across the workspace, so a
-# higher floor here conflicts with the 1.0.0 that member's floor selects.
-bytes = "1"
+# connection guards use to frame their refusal FAILURE. 1.11.1 is the floor
+# boltr 0.3.0 requires (RUSTSEC-2026-0007); kglite-mcp-server declares the same
+# because cargo unifies the version across the workspace and its hyper-util
+# needs >= 1.7.1.
+bytes = "1.11.1"
 
 [dev-dependencies]
 # `test-seam` exposes the log's barrier count, so a test can show that
