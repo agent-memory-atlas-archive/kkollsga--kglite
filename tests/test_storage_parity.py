@@ -173,7 +173,9 @@ ORACLE_QUERIES = [
 ]
 
 
-@pytest.mark.parametrize("name,query", ORACLE_QUERIES)
+# Explicit IDs: the ownership registry keys cases by collected node ID, and
+# pytest 9.2 stopped using long string parameters verbatim (`...-query6`).
+@pytest.mark.parametrize("name,query", ORACLE_QUERIES, ids=[f"{name}-{query}" for name, query in ORACLE_QUERIES])
 def test_cypher_parity(graphs, name, query):
     """Each query must return identical rows across memory, mapped, disk."""
     results = {mode: _rows(graphs[mode].cypher(query)) for mode in STORAGE_MODES}

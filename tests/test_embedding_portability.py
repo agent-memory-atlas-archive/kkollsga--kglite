@@ -45,6 +45,17 @@ class TinyEmbedder:
         return out
 
 
+def _assert_scores_match(actual: dict[str, list[float]], expected: dict[str, list[float]]) -> None:
+    """Same uids, and each uid's scores equal within `pytest.approx` tolerance.
+
+    Compared per uid because pytest 9.2 refuses `approx` on a dict whose
+    values are lists.
+    """
+    assert actual.keys() == expected.keys()
+    for uid, scores in expected.items():
+        assert actual[uid] == pytest.approx(scores), uid
+
+
 def _topology(graph: KnowledgeGraph, *, swapped: bool = False, uids: tuple[str, str] = ("p1", "p2")) -> KnowledgeGraph:
     """Docs 1..3; singleton CLAIMS 1->2 and a parallel pair 1->3. `swapped`
     creates the pair in the other order, so slot order disagrees with the
@@ -115,7 +126,7 @@ def test_export_import_round_trip_lands_each_vector_on_its_twin(mode: str, tmp_p
     assert imported["relationship_stores"] == 1
     assert imported["relationship_imported"] == 3
     assert imported["relationship_skipped"] == 0
-    assert _scores(target) == pytest.approx(_scores(source))
+    _assert_scores_match(_scores(target), _scores(source))
     assert _listed(target) == [{"count": 3, "dimension": 4, "model": "test/tiny"}]
 
     # Source-text hashes travelled too: nothing changed, so nothing re-embeds.
@@ -136,7 +147,7 @@ def test_copy_carries_relationship_stores_with_a_key() -> None:
     assert report["relationship_stores_copied"] == 1
     assert report["relationship_vectors_copied"] == 3
     assert report["relationship_vectors_skipped"] == 0
-    assert _scores(target) == pytest.approx(_scores(source))
+    _assert_scores_match(_scores(target), _scores(source))
 
 
 def test_a_parallel_group_without_a_key_is_refused_by_name(tmp_path: Path) -> None:
@@ -237,7 +248,7 @@ def test_a_durable_import_survives_a_killed_process(tmp_path: Path) -> None:
     assert done.returncode == 0, done.stderr
 
     reopened = kglite.open(str(path), durable="normal")
-    assert _scores(reopened) == pytest.approx(expected)
+    _assert_scores_match(_scores(reopened), expected)
     assert _listed(reopened) == [{"count": 3, "dimension": 4, "model": "test/tiny"}]
 
 
