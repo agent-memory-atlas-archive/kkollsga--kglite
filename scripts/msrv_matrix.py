@@ -22,10 +22,6 @@ import argparse
 import json
 import pathlib
 import sys
-
-# `tomllib` is stdlib from 3.11, but ruff's `target-version = "py310"`
-# classifies it as third-party, hence the separate import section. The CI
-# job that runs this script pins Python 3.12.
 import tomllib
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent

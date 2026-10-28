@@ -18,12 +18,12 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
 
 ## Python distribution
 
-- Declared Python floor: `>=3.10`
+- Declared Python floor: `>=3.12`
 - CI runtime matrix: `3.12`, `3.13`, `3.14`, `3.15`
 - Optional extras:
   - `neo4j`: `neo4j>=6.2.0`
-  - `networkx`: `networkx>=3.6.1; python_version >= '3.11'`, `networkx>=3.4.2,<3.5; python_version < '3.11'`, `pandas>=3.0.3; python_version >= '3.11'`, `pandas>=2.3.3,<3; python_version < '3.11'`
-  - `pandas`: `pandas>=3.0.3; python_version >= '3.11'`, `pandas>=2.3.3,<3; python_version < '3.11'`
+  - `networkx`: `networkx>=3.6.1`, `pandas>=3.0.3`
+  - `pandas`: `pandas>=3.0.3`
 - Published classifiers:
   - `Development Status :: 4 - Beta`
   - `Intended Audience :: Developers`
@@ -32,11 +32,10 @@ Regenerate with `python scripts/render_docs_facts.py`. CI checks this file for d
   - `Operating System :: Microsoft :: Windows`
   - `Operating System :: POSIX :: Linux`
   - `Programming Language :: Python :: 3`
-  - `Programming Language :: Python :: 3.10`
-  - `Programming Language :: Python :: 3.11`
   - `Programming Language :: Python :: 3.12`
   - `Programming Language :: Python :: 3.13`
   - `Programming Language :: Python :: 3.14`
+  - `Programming Language :: Python :: 3.15`
   - `Programming Language :: Rust`
   - `Programming Language :: Python :: Implementation :: CPython`
   - `Topic :: Database`

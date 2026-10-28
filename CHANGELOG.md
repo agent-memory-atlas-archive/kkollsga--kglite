@@ -9,6 +9,15 @@ before upgrading.
 
 ## [Unreleased]
 
+### Breaking changes and migration
+
+- **Python 3.10 and 3.11 are no longer supported; 3.12 is the minimum.** `requires-python` is `>=3.12`, the wheel is `cp312-abi3`, and the supported interpreters are 3.12, 3.13, 3.14 and 3.15. `pip install kglite` on 3.10 or 3.11 finds no matching release. **Do:** upgrade to Python 3.12 or newer, or stay on `kglite` 0.21.2 (the last release that installs on 3.10 and 3.11). The `kglite-cli` wheel carries the same floor.
+- **The `pandas` and `networkx` extras no longer carry a Python 3.10 branch.** They require `pandas>=3.0.3` and `networkx>=3.6.1`.
+
+### Added
+
+- **Python 3.15 is supported.** The `cp312-abi3` wheel runs on it, and CI runs the test suite on 3.15 and the free-threaded build checks on 3.14t and 3.15t. No free-threaded wheel is published.
+
 ### Security
 
 - **`kglite-bolt-server` uses `boltr` 0.3.0.** It fixes an authentication bypass (a failed LOGON followed by RESET let a client run queries), a process abort on deeply nested PackStream values, and unbounded memory before LOGON (messages before authentication are limited to 64 KiB). The server's own workarounds for these are removed. Also new upstream: several open results per transaction by query id, and FAILURE instead of IGNORED for a message invalid in the current state.

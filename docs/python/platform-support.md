@@ -11,8 +11,8 @@ are the machine-readable authority.
 
 ## CPython and wheel policy
 
-Published extension wheels use CPython's stable ABI with a Python 3.10 floor
-(`cp310-abi3`). One platform wheel therefore serves CPython 3.10 and newer on
+Published extension wheels use CPython's stable ABI with a Python 3.12 floor
+(`cp312-abi3`). One platform wheel therefore serves CPython 3.12 and newer on
 the same OS/architecture/libc target. Normal installation is:
 
 ```bash
@@ -30,9 +30,9 @@ their own dependencies:
 
 ### Runtime-tested paths
 
-- Linux x86_64 source builds on CPython 3.10, 3.12, 3.13, and 3.14 run the
+- Linux x86_64 source builds on CPython 3.12, 3.13, 3.14, and 3.15 run the
   Python suite.
-- Linux x86_64 CPython 3.14t builds without abi3 and runs the dedicated
+- Linux x86_64 CPython 3.14t and 3.15t build without abi3 and runs the dedicated
   free-threading concurrency suite. This proves a source-build configuration.
   A free-threaded wheel is not currently published.
 - A Linux x86_64 CPython 3.12 job builds a wheel, installs its `networkx` extra
@@ -78,8 +78,8 @@ desired release actually contains it.
 ## PyPy
 
 PyPy is not a supported published-artifact target. The released macOS wheel,
-for example, is tagged `cp310-abi3-macosx_11_0_arm64`. A probe with PyPy 3.10
-rejects it, because PyPy requires a `pp310`-compatible artifact. The project
+for example, is tagged `cp312-abi3-macosx_11_0_arm64`. A probe with PyPy 3.12
+rejects it, because PyPy requires a `pp312`-compatible artifact. The project
 therefore does not publish the PyPy classifier. A future PyPy claim requires a
 dedicated build and runtime test, not only a source-level PyO3 capability.
 

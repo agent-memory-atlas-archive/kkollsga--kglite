@@ -657,7 +657,7 @@ Quick reference to the feature set; each row links into the appropriate guide.
 
 ## Requirements
 
-CPython 3.10+ | macOS (arm64/x86_64), Linux (glibc/musl; x86_64 and best-effort
+CPython 3.12+ | macOS (arm64/x86_64), Linux (glibc/musl; x86_64 and best-effort
 aarch64), Windows (x86_64). The base wheel has no Python runtime dependencies;
 integrations install their named extras. See the
 [artifact support policy](https://kglite.readthedocs.io/en/latest/python/platform-support.html)
