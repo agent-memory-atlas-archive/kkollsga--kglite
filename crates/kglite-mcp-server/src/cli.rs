@@ -44,7 +44,9 @@ impl Cli {
         // one small leak per parse, and a process parses once.
         let name: &'static str = Box::leak(identity.name.clone().into_boxed_str());
         let version: &'static str = Box::leak(identity.version.clone().into_boxed_str());
-        let command = Self::command().name(name).bin_name(name).version(version);
+        // `bin_name` stays unset so `--help` usage names the executable (clap
+        // derives it from argv[0]); only `--version` carries the identity.
+        let command = Self::command().name(name).version(version);
         let mut matches = command.try_get_matches_from(argv)?;
         Self::from_arg_matches_mut(&mut matches)
     }
@@ -502,6 +504,26 @@ mod cli_contract_tests {
             crate::self_update::parse_version_line(&line).as_deref(),
             Some(identity.version.as_str())
         );
+    }
+
+    #[test]
+    fn identity_help_usage_names_the_executable_and_version_names_the_identity() {
+        let identity = crate::self_update::Identity {
+            name: "sonagram".into(),
+            version: "0.2.30".into(),
+        };
+        let help = Cli::try_parse_with_identity(["sonagram-mcp-server", "--help"], &identity)
+            .expect_err("--help exits through clap")
+            .to_string();
+        let usage = help
+            .lines()
+            .find(|line| line.starts_with("Usage:"))
+            .unwrap_or_else(|| panic!("no usage line:\n{help}"));
+        assert!(usage.starts_with("Usage: sonagram-mcp-server "), "{usage}");
+        let version = Cli::try_parse_with_identity(["sonagram-mcp-server", "-V"], &identity)
+            .expect_err("-V exits through clap")
+            .to_string();
+        assert_eq!(version.trim(), "sonagram 0.2.30");
     }
 
     #[test]

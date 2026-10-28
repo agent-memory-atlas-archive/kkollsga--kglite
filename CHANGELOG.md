@@ -11,6 +11,7 @@ before upgrading.
 
 ### Fixed
 
+- **An embedder's `--help` usage names its executable.** Binaries built on `with_identity` printed `Usage: <identity> [OPTIONS]` (for example `codingest`) instead of the executable name; only `--version` carries the identity now.
 - **MCP clients on protocol 2026-07-28 (such as Claude Code 2.1.312) can call tools.** These clients never send `initialize`; every `tools/call` failed with `-32600 "initialize is required"`, and list-changed notifications never reached them. The server now serves them, and announces a rebuilt tool or skill list on their open `subscriptions/listen` stream. Handshake clients still receive it directly. Requires `mcp-methods` 0.6.0 (`rmcp` 3.5.0).
 
 ### Changed
