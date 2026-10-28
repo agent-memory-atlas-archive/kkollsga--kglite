@@ -30,9 +30,9 @@ def _optional_dependency_blocks() -> dict[str, str]:
 
 
 def _requirement_names(block: str) -> set[str]:
-    # Each requirement is one double-quoted string; environment markers may
-    # contain single-quoted versions ("pandas>=3.0.3; python_version >= '3.11'"),
-    # so only the leading distribution name of each string counts.
+    # Each requirement is one double-quoted string; an environment marker may
+    # contain single-quoted versions, so only the leading distribution name of
+    # each string counts.
     return {match.group(1).lower().replace("_", "-") for match in re.finditer(r"\"([A-Za-z0-9_-]+)[^\"]*\"", block)}
 
 
@@ -98,12 +98,12 @@ def test_wheel_policy_and_support_page_match_workflow() -> None:
     assert "tested source fallback" in support
 
 
-def test_cp310_abi3_policy_does_not_claim_pypy_compatibility() -> None:
+def test_cp312_abi3_policy_does_not_claim_pypy_compatibility() -> None:
     cargo = (REPO_ROOT / "crates" / "kglite-py" / "Cargo.toml").read_text(encoding="utf-8")
     support = (REPO_ROOT / "docs" / "python" / "platform-support.md").read_text(encoding="utf-8")
-    assert 'abi3 = ["pyo3/abi3-py310"]' in cargo
+    assert 'abi3 = ["pyo3/abi3-py312"]' in cargo
     assert "PyPy is not a supported published-artifact target" in support
-    assert "requires a `pp310`-compatible artifact" in support
+    assert "requires a `pp312`-compatible artifact" in support
 
 
 def test_bundled_mcp_entry_point_stays_declared() -> None:
