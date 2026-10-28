@@ -84,34 +84,34 @@ jobs:
       CELLS: ${{ inputs.cells || 'two_edge_relationship_text_filter or two_edge_distinct_filtered_path' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check out the source under test
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
           path: src
 
       - name: Install Rust (runner-host build)
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.RUST_STABLE }}
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
       - name: Build on the runner host
         working-directory: src
         run: |
-          python -m pip install maturin==1.14.1
+          python -m pip install maturin==1.15.0
           rustc --version
           gcc --version | head -1
           maturin build --release --out dist-runner --target-dir target-runner
 
       - name: Build in manylinux2014 with RUST_STABLE
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64-unknown-linux-gnu
           manylinux: '2014'
@@ -120,7 +120,7 @@ jobs:
           args: --release --out dist-manylinux-pin --target-dir target-manylinux-pin
 
       - name: Build in manylinux2014 with the alternative toolchain
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: x86_64-unknown-linux-gnu
           manylinux: '2014'
@@ -217,7 +217,7 @@ jobs:
 
       - name: Upload the A/B captures
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-perf-ab-${{ github.run_id }}
           path: ab-results/
@@ -236,10 +236,10 @@ jobs:
       CELLS: ${{ inputs.cells || 'two_edge_relationship_text_filter or two_edge_distinct_filtered_path' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -344,7 +344,7 @@ jobs:
 
       - name: Upload the bisect captures
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-perf-bisect-${{ github.run_id }}
           path: bisect-results/
