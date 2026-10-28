@@ -234,10 +234,16 @@
       "sha256": "4c0be6c640a9f8c54afcd9ed7c799db1616686b33a959d9acf34ca614e9371a5",
       "status": "accepted"
     },
-    "current.json": {
-      "evidence": "0.21.2 release capture 2026-10-24 14:40-14:46, load 3.8-5.6 (not idle); vs 0_21_1 min: median +2.5%, worst +9.0% scan_under_held_overlay_after_deletes, no cell >+20%; uniform shift with no engine change on those paths (release touched planner window bail, embeddings idle path, ontology, diagnostics)",
+    "0_21_3.json": {
+      "evidence": "Release 0.21.3, 2026-10-28: capture under load avg 7.4/5.6/4.0 (other agent sessions active, no concurrent native build). Not inflated: bench-anchor vs ~3 releases back worst +9.6% with most cells -1%..-2%, and two independent release-mode bench-check runs on the same code both passed the 20% gate (worst cell +11.5% then +4.4%).",
       "platform": "Darwin/arm64",
-      "sha256": "4c0be6c640a9f8c54afcd9ed7c799db1616686b33a959d9acf34ca614e9371a5",
+      "sha256": "3728a1a0e6a224a2bd3f3e1aa521de9da3884902a864633911e91328053415e1",
+      "status": "accepted"
+    },
+    "current.json": {
+      "evidence": "Release 0.21.3, 2026-10-28: capture under load avg 7.4/5.6/4.0 (other agent sessions active, no concurrent native build). Not inflated: bench-anchor vs ~3 releases back worst +9.6% with most cells -1%..-2%, and two independent release-mode bench-check runs on the same code both passed the 20% gate (worst cell +11.5% then +4.4%).",
+      "platform": "Darwin/arm64",
+      "sha256": "3728a1a0e6a224a2bd3f3e1aa521de9da3884902a864633911e91328053415e1",
       "status": "accepted"
     },
     "current.linux.json": {
@@ -314,7 +320,7 @@
     }
   },
   "references": {
-    "Darwin/arm64": "0_21_2.json",
+    "Darwin/arm64": "0_21_3.json",
     "Linux/x86_64": "reference_0_19_6_measured_7763.linux.json"
   },
   "schema_version": 1

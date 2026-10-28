@@ -97,11 +97,11 @@ def test_graph_copy_cow_correctness_mapped():
 #: Linux from the `kglite/kglite.abi3.so` member of the newest manylinux2014
 #: x86_64 wheel already on PyPI, whose file name and SHA-256 follow the table.
 BINARY_SIZE_BASELINES = {
-    "darwin": (32_043_968, "0.21.2"),  # host release build
-    "linux": (39_392_952, "0.21.1"),  # published manylinux2014 x86_64 wheel member
+    "darwin": (32_160_448, "0.21.3"),  # host release build
+    "linux": (39_647_160, "0.21.2"),  # published manylinux2014 x86_64 wheel member
 }
-LINUX_SIZE_WHEEL = "kglite-0.21.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-LINUX_SIZE_WHEEL_SHA256 = "b3df2b94939e5dd339209c63e4e9ec426a9e0f1de1cd64dc6a3a6852d7dd7307"
+LINUX_SIZE_WHEEL = "kglite-0.21.2-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+LINUX_SIZE_WHEEL_SHA256 = "f163f17f7ef91f732a52e06b47cfdc19d75f6b431edd7c3f46b7600cc2059154"
 
 
 @pytest.mark.binary_size
@@ -672,6 +672,13 @@ def test_binary_size_regression():
         `by_source`, label exemptions, the `distinct` drill-down and
         declare-time warnings), ranked build diagnostics, and the
         single-pass audit edge grouping.
+
+
+      - 0.21.3:       32,160,448 bytes (≈30.7 MB), +116,480 (+0.36%)
+        over 0.21.2. mcp-methods 0.6.1 (subscriptions/listen, schema
+        standardization) with rmcp 3.8, pyo3 0.30, the full lockfile
+        refresh and the Bolt handshake deadline; the deleted boltr 0.2
+        guards offset part of it.
 
     Raising the baseline is a deliberate act — every bump should
     be accompanied by an updated growth note above. For a precise

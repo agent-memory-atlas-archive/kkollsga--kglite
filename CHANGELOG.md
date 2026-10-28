@@ -9,6 +9,8 @@ before upgrading.
 
 ## [Unreleased]
 
+## [0.21.3] - 2026-10-28
+
 ### Breaking changes and migration
 
 - **Python 3.10 and 3.11 are no longer supported; 3.12 is the minimum.** `requires-python` is `>=3.12`, the wheel is `cp312-abi3`, and the supported interpreters are 3.12, 3.13, 3.14 and 3.15. `pip install kglite` on 3.10 or 3.11 finds no matching release. **Do:** upgrade to Python 3.12 or newer, or stay on `kglite` 0.21.2 (the last release that installs on 3.10 and 3.11). The `kglite-cli` wheel carries the same floor.
