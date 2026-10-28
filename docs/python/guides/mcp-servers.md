@@ -191,7 +191,7 @@ kglite-mcp-server --selftest --graph /abs/path/to/my_graph.kgl
 kglite-mcp-server --selftest --mcp-config /abs/path/to/manifest.yaml
 ```
 
-The self-test re-spawns the server with the *same* flags, drives a real MCP handshake (`initialize` → `tools/list` → activate → `cypher_query`), and prints one line per capability:
+The self-test re-spawns the server with the *same* flags, drives two real MCP sessions, and prints one line per capability. The first is a handshake client (`initialize` → `tools/list` → activate → `cypher_query`). The second is a stateless protocol 2026-07-28 client that never sends `initialize` (`server/discover` → `tools/list` → `tools/call` → `subscriptions/listen`):
 
 ```
 kglite-mcp-server --selftest  (mode: single-graph)
@@ -199,6 +199,10 @@ kglite-mcp-server --selftest  (mode: single-graph)
   ✓ graph tools registered: cypher_query + graph_overview present
   – github tools: none registered (needs `builtins.github: true` in the manifest, then a reachable GITHUB_TOKEN)
   ✓ graph hydrates: FOR VALID_TIME ALL MATCH (n) RETURN count(n) → 1 row(s):
+  ✓ stateless discover: server/discover → KGLite (single-graph) speaks 2026-07-28
+  ✓ stateless tools/list: 14 tools, no initialize
+  ✓ stateless tools/call: ping → pong
+  ✓ stateless list-changed stream: subscriptions/listen acknowledged; list-changed notifications reach this client
 Selftest PASSED — the server is configured correctly.
 ```
 
@@ -813,7 +817,7 @@ When agents need full result sets (not just 15 rows), they append `FORMAT CSV` t
 
 Whichever CLI mode the server is in (`--graph` / `--workspace` / `--watch` / `--source-root` / bare / local-workspace via manifest), the server prepends a per-mode **banner** to two surfaces:
 
-- the `instructions` block returned during MCP `initialize` (read once at handshake);
+- the `instructions` block returned at session start, by `initialize` or by `server/discover` for a protocol 2026-07-28 client (read once);
 - the bare `graph_overview()` response preamble (re-read on every call, so it survives context aging on long sessions).
 
 The banner names every conditional tool, both the registered ones and the unregistered ones. The agent can see at a glance whether `repo_management`, `set_root_dir`, or `save_graph` are available, without trial-calling each one. Example for workspace mode:

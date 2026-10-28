@@ -7,7 +7,10 @@
 //! ambiguity: it re-spawns *this* binary with the operator's own flags
 //! (minus the selftest-only flags), speaks a real MCP handshake over the
 //! child's stdio (`initialize` → `tools/list` → activate → `cypher_query`),
-//! and prints green/red per capability. Self-spawn (not an in-process
+//! and prints green/red per capability. A second child is then driven the way
+//! a protocol 2026-07-28 client drives one — no `initialize` — see
+//! [`stateless`]; a server that passes only the handshake pass still fails
+//! every call from such a client. Self-spawn (not an in-process
 //! GraphState poke) is deliberate — only a real `tools/list` reflects the
 //! mcp-methods-owned tool registry, which is exactly what "are my tools
 //! present?" asks.
@@ -33,6 +36,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use mcp_methods::server::{Manifest, SkillsSource};
+
+mod stateless;
 
 use super::{load_manifest, pick_mode, promote_local_workspace, Cli, Mode};
 
@@ -60,6 +65,9 @@ struct Rpc {
     stderr_reader: Option<thread::JoinHandle<()>>,
     /// Where the child writes its skill report (see `skills_report`).
     skills_report: std::path::PathBuf,
+    /// Set for a stateless (2026-07-28) client: every request repeats this
+    /// identity in its `_meta`, as such a client does in place of `initialize`.
+    meta: Option<Value>,
 }
 
 /// Resolve the command that launches a fresh server instance for the child
@@ -164,6 +172,7 @@ impl Rpc {
             stderr_tail,
             stderr_reader: Some(stderr_reader),
             skills_report,
+            meta: None,
         })
     }
 
@@ -200,25 +209,40 @@ impl Rpc {
         Ok(())
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Result<Value> {
+    /// Send a request and return its id, without waiting for the answer.
+    fn send_request(&mut self, method: &str, mut params: Value) -> Result<i64> {
         self.next_id += 1;
         let id = self.next_id;
+        if let Some(meta) = &self.meta {
+            params["_meta"] = meta.clone();
+        }
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        Ok(id)
+    }
+
+    /// The next frame from the child; a hung or exited child becomes an error
+    /// naming `awaiting` and quoting the child's last stderr.
+    fn recv_frame(&mut self, awaiting: &str) -> Result<Value> {
+        match self.rx.recv_timeout(RPC_TIMEOUT) {
+            Ok(msg) => Ok(msg),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let cause = self.stderr_cause(true);
+                bail!("no `{awaiting}` response — child server exited{cause}");
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let cause = self.stderr_cause(false);
+                bail!(
+                    "no `{awaiting}` response — child server unresponsive after {}s{cause}",
+                    RPC_TIMEOUT.as_secs()
+                );
+            }
+        }
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Result<Value> {
+        let id = self.send_request(method, params)?;
         loop {
-            let msg = match self.rx.recv_timeout(RPC_TIMEOUT) {
-                Ok(msg) => msg,
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let cause = self.stderr_cause(true);
-                    bail!("no `{method}` response — child server exited{cause}");
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let cause = self.stderr_cause(false);
-                    bail!(
-                        "no `{method}` response — child server unresponsive after {}s{cause}",
-                        RPC_TIMEOUT.as_secs()
-                    );
-                }
-            };
+            let msg = self.recv_frame(method)?;
             if msg.get("id").and_then(Value::as_i64) == Some(id) {
                 if let Some(err) = msg.get("error") {
                     bail!("`{method}` returned an error: {err}");
@@ -970,6 +994,12 @@ pub fn run_selftest(cli: &Cli, argv: &[OsString]) -> Result<()> {
     let local_activated = check_local_activation(&mut rpc, cli, &mode, &names, &mut checks)?;
     let hydrate = check_hydration(&mut rpc, &mode, local_activated)?;
     checks.push(("graph hydrates", hydrate));
+
+    // One child at a time: both would otherwise share a graph, a vault cache
+    // and a skills-report path.
+    drop(rpc);
+    println!("  spawning child server for a stateless (2026-07-28) client …\n");
+    stateless::run(&child_args, &mode, &mut checks)?;
 
     report(checks)
 }

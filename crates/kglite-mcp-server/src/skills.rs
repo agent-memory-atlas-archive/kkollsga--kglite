@@ -8,10 +8,9 @@ use anyhow::{bail, Result};
 use kglite::api::skills::{self as graph_skills, SkillRecord};
 use mcp_methods::server::skills::SESSION_TOTAL_LIMIT_BYTES;
 use mcp_methods::server::{
-    notify_skills_changed, serve_prompts, ActiveSkill, BundledSkill, Manifest, McpServer,
-    OwnedSkill, PredicateClause, ResolvedRegistry, ServerOptions, SkillError,
-    SkillPredicateEvaluator, SkillProvenance, SkillRegistry, SkillReloader, SkillSource,
-    SkillsSource,
+    serve_prompts, ActiveSkill, BundledSkill, ListChange, Manifest, McpServer, OwnedSkill,
+    PredicateClause, ResolvedRegistry, ServerOptions, SkillError, SkillPredicateEvaluator,
+    SkillProvenance, SkillRegistry, SkillReloader, SkillSource, SkillsSource,
 };
 
 use crate::tools::{read_lock, write_lock, GraphState, PeerSlot, SkillsIndexSlot};
@@ -32,7 +31,8 @@ pub(crate) const PRODUCER_LAYER_LABEL: &str = "producer";
 
 /// Client-side tool-discovery steer, folded into workspace-mode
 /// `instructions` so every `--workspace` / `workspace.kind: local`
-/// deployment emits it on `initialize` without copy-pasting it into each
+/// deployment emits it in the server instructions (`initialize` or
+/// `server/discover`) without copy-pasting it into each
 /// manifest. It complements the 0.12.6 in-band steering (graph-over-grep
 /// vocabulary in tool descriptions, the activation mini-map, the result
 /// footer) by making the *"search the registry"* instruction explicit for
@@ -886,26 +886,32 @@ impl SkillRefresher {
     }
 }
 
-/// Send `tools/list_changed` + `prompts/list_changed` for a rebuilt layer.
+/// Announce a rebuilt skill layer: `tools/list_changed` + `prompts/list_changed`.
 ///
-/// The peer is the one thing `reinject_skills` cannot do for us: it stores no
-/// peers, and a dynamically registered tool handler is a plain
+/// The announcer is the one thing `reinject_skills` cannot do for us: it stores
+/// no peers, and a dynamically registered tool handler is a plain
 /// `Fn(Args) -> Result<String, String>` with no `RequestContext` in reach. So
-/// the peer is captured from the `RunningService` `serve` returns and
-/// published into [`PeerSlot`], which this reads. The notification itself is
+/// the server and peer are captured from the `RunningService` `serve` returns
+/// and published into [`PeerSlot`], which this reads. `announce_list_changed`
+/// sends directly to a client that completed `initialize` and, for a
+/// 2026-07-28 client, on its open `subscriptions/listen` streams. It is
 /// `async`, and the handler is not, so it goes onto the ambient runtime — the
 /// handler is dispatched from one. A client that never sees the notification
 /// keeps serving its cached `tools/list` until it re-lists, which is why this
 /// logs rather than failing quietly.
 fn notify_peer(peer: &PeerSlot) {
-    let Some(peer) = read_lock(peer).clone() else {
+    let Some(announcer) = read_lock(peer).clone() else {
         tracing::warn!("skills rebuilt before the client connected; tools/list_changed not sent");
         return;
     };
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             handle.spawn(async move {
-                if let Err(error) = notify_skills_changed(&peer).await {
+                if let Err(error) = announcer
+                    .server
+                    .announce_list_changed(&announcer.peer, ListChange::BOTH)
+                    .await
+                {
                     tracing::warn!(%error, "tools/list_changed notification failed");
                 }
             });

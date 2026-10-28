@@ -57,7 +57,7 @@ Three manifest mechanisms put text in front of an agent. They have different lif
 
 | Channel | Manifest key | When the agent sees it | Use for |
 |---|---|---|---|
-| **Init instructions** | `instructions:` | Once, in the MCP `initialize` handshake. Ages out of a long session's context. | One-time orientation that doesn't need to re-surface. Keep it short. |
+| **Init instructions** | `instructions:` | Once, at session start: in the `initialize` handshake, or in the `server/discover` reply to a protocol 2026-07-28 client. Ages out of a long session's context. | One-time orientation that doesn't need to re-surface. Keep it short. |
 | **Overview preamble** | `overview_prefix:` | Prepended to every **bare** `graph_overview()` call — re-surfaces each time. | A sticky reminder tied to schema discovery. |
 | **Skills** | `skills:` + skill files or `KgliteSkill` nodes | The **routing** (`description`) rides the **tool description** of every tool the skill applies to, re-read whenever the agent inspects tools (`tools/list`). The **body** is handed over when the agent calls `skill(name)`. Gated per-graph by `applies_when`. | Per-tool and cross-tool methodology + routing. **This is where most guidance belongs.** |
 
@@ -215,7 +215,7 @@ Import ignores frontmatter keys the graph has no property for (`applies_when`, `
 - **Named on the boot summary.** A graph that contributed anything adds a line like `graph skills: 3 served (9412 B), 2 active as owned:graph, 1 skipped: projects: description must not be empty` to stderr.
   - `--selftest` mirrors that stderr. It separately reports how many skills the session serves in total.
   - `--selftest` speaks MCP to a child process, and `prompts/list` carries names and descriptions only. Attribution and byte totals therefore reach you on the boot line, not from the check.
-- **Re-resolved on a graph swap.** `reload_graph`, `load_graph` and `create_graph` rebuild the whole skill layer against the graph they just swapped in and send `tools/list_changed`. A `.kgl` rebuilt by another process serves its new methodology on the next reload rather than at the next restart. This is where skills differ from graph-carried recipes, whose catalogue is fixed for the session.
+- **Re-resolved on a graph swap.** `reload_graph`, `load_graph` and `create_graph` rebuild the whole skill layer against the graph they just swapped in and send `tools/list_changed`. A client that completed `initialize` receives it directly. A protocol 2026-07-28 client receives it on its open `subscriptions/listen` stream. A `.kgl` rebuilt by another process serves its new methodology on the next reload rather than at the next restart. This is where skills differ from graph-carried recipes, whose catalogue is fixed for the session.
 
 For a vault-backed deployment, `rebuild_graph` performs the same skill refresh after rebuilding the notes. Recipe queries, parameter schemas and descriptions remain fixed at boot. Adding, removing or renaming a recipe `tool:` also changes the boot-time router. The canonical per-mode update table is in
 [VAULT.md §8](https://kglite.readthedocs.io/en/latest/reference/vault-format.html#skills-and-recipes-carried-in-the-vault).

@@ -198,7 +198,8 @@ pub(crate) fn apply_result_decorations(
     declare_unresolved_source_roots(options, source_roots)
 }
 
-/// Declare unresolved `source_root:` entries in `initialize`'s `instructions`,
+/// Declare unresolved `source_root:` entries in the server `instructions`
+/// (delivered by `initialize`, or by `server/discover` to a 2026-07-28 client),
 /// so a client sees them at session start rather than inferring them from a
 /// call that quietly searched fewer directories than the operator declared.
 ///

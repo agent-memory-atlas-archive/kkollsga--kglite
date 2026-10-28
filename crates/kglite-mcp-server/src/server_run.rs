@@ -1434,6 +1434,7 @@ pub(crate) async fn run_async(
         recipe_catalog_hint.is_some(),
         &named_recipe_tools,
     );
+    let announce_server = server.clone();
     let service = server
         .serve_with_handover(
             mcp_methods::server::stdio::StdioTransport::stdio().with_recover(move |raw| {
@@ -1444,8 +1445,13 @@ pub(crate) async fn run_async(
         .context("failed to start MCP service over stdio")?;
     // The one handle on the connected client anything downstream can reach:
     // dynamically registered tool handlers get no `RequestContext`, so a
-    // post-swap `tools/list_changed` has to be announced through this.
-    *tools::write_lock(&peer_slot) = Some(service.peer().clone());
+    // post-swap `tools/list_changed` has to be announced through this. The
+    // server clone shares the `subscriptions/listen` registry the stateless
+    // (2026-07-28) clients are announced to.
+    *tools::write_lock(&peer_slot) = Some(tools::ListAnnouncer {
+        server: announce_server,
+        peer: service.peer().clone(),
+    });
     service.waiting().await?;
     Ok(())
 }

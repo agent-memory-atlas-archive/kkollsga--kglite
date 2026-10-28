@@ -9,6 +9,14 @@ before upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP clients on protocol 2026-07-28 (such as Claude Code 2.1.312) can call tools.** These clients never send `initialize`; every `tools/call` failed with `-32600 "initialize is required"`, and list-changed notifications never reached them. The server now serves them, and announces a rebuilt tool or skill list on their open `subscriptions/listen` stream. Handshake clients still receive it directly. Requires `mcp-methods` 0.6.0 (`rmcp` 3.5.0).
+
+### Changed
+
+- **`--selftest` also drives a stateless 2026-07-28 client.** After the handshake pass it spawns a second child and reports `stateless discover`, `stateless tools/list`, `stateless tools/call`, `stateless graph query` and `stateless list-changed stream`. A server that fails every call from such a client now fails the selftest.
+
 ## [0.21.2] - 2026-10-24
 
 ### Breaking changes and migration

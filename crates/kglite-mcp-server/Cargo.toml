@@ -67,7 +67,10 @@ path = "src/main.rs"
 # 0.4.10 filters filesystem access events before the watcher debounce, so a
 # source *read* (the tools' own `read_source`, an editor open) no longer
 # replaces a built graph on Linux; only real mutations rebuild.
-mcp-methods = { version = "0.5.1", default-features = false, features = ["server"] }
+# 0.6.0 is a behavioural floor: below it a client on protocol 2026-07-28 (no
+# `initialize`) fails every `tools/call`, and `announce_list_changed` (the only
+# way to reach such a client's `subscriptions/listen` stream) does not exist.
+mcp-methods = { version = "0.6.0", default-features = false, features = ["server"] }
 
 # kglite (pure-Rust core) — no pyo3 in the resulting binary, no
 # libpython link. The 0.10.1 lift moved KnowledgeGraph +
@@ -89,8 +92,9 @@ kglite = { version = "0.21.2", path = "../kglite", default-features = false, fea
 # same version, so no new package; not serde_yaml, which is deprecated.
 yaml-rust2 = "0.12"
 
-# rmcp re-export for the dynamic tool registration path.
-rmcp = { version = "3.1.1", features = ["server", "macros", "transport-io", "schemars"] }
+# rmcp re-export for the dynamic tool registration path. 3.5.0 is the floor
+# mcp-methods 0.6.0 itself requires.
+rmcp = { version = "3.5.0", features = ["server", "macros", "transport-io", "schemars"] }
 
 # 1.37.0, not "1": rmcp 3.1.1 calls tokio::sync::mpsc::Receiver::is_closed,
 # added in 1.37.0, and uses tokio::task::JoinSet, added in 1.21.0 (both
@@ -152,7 +156,7 @@ libc = "0.2.182"
 tempfile = "3.10.0"
 # Exercise hidden-tool rejection through a real in-memory MCP handshake. The
 # production dependency enables only the server half; client code is test-only.
-rmcp = { version = "3.1.1", features = ["client"] }
+rmcp = { version = "3.5.0", features = ["client"] }
 
 [features]
 # `fastembed` is an OPTIONAL feature, default OFF. Enabling it

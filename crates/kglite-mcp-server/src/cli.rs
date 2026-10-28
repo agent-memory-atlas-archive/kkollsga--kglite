@@ -219,10 +219,12 @@ pub(crate) struct Cli {
     pub(crate) reload_preflight: bool,
 
     /// Run a configuration self-test instead of serving: re-spawn this binary
-    /// with the same flags, drive a live MCP handshake (initialize →
-    /// tools/list → activate → cypher_query), and print green/red per
-    /// capability (tools present, graph hydrates, github tools when the
-    /// manifest opts in and a token is set). Exits non-zero if any check
+    /// with the same flags, drive two live MCP sessions — a handshake client
+    /// (initialize → tools/list → activate → cypher_query) and a stateless
+    /// 2026-07-28 client (server/discover → tools/list → tools/call →
+    /// subscriptions/listen) — and print green/red per capability (tools
+    /// present, graph hydrates, github tools when the manifest opts in and a
+    /// token is set). Exits non-zero if any check
     /// fails, so it doubles as a deployment smoke gate.
     #[arg(long)]
     pub(crate) selftest: bool,

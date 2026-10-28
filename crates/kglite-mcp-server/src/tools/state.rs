@@ -822,7 +822,7 @@ impl GraphState {
     /// `cypher`/`graph_overview` rather than conclude the graph is unavailable
     /// (petekSuite report, 2026-07-08). The `instructions`-block `DISCOVERY_STEER`
     /// says the same thing, but a tool-call *result* is read more reliably than
-    /// the handshake `instructions`. `None` when no graph is active.
+    /// the server `instructions`. `None` when no graph is active.
     #[cfg(test)]
     pub fn activation_summary(&self) -> Option<String> {
         let guard = read_lock(&self.inner);

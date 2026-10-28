@@ -127,13 +127,23 @@ const SAVE_GRAPH_DESCRIPTION_READ_ONLY: &str =
 /// final tool surface the closed router describes.
 pub(crate) type SkillsIndexSlot = Arc<RwLock<Option<String>>>;
 
-/// The connected client's peer handle, published once `serve` has returned it.
+/// What a tool handler needs to announce a rebuilt tool list: the server
+/// (whose clones share the `subscriptions/listen` registry, the only way to
+/// reach a 2026-07-28 client) and the connection's peer (the direct route to a
+/// client that completed `initialize`).
+#[derive(Clone)]
+pub(crate) struct ListAnnouncer {
+    pub(crate) server: mcp_methods::server::McpServer,
+    pub(crate) peer: rmcp::service::Peer<rmcp::RoleServer>,
+}
+
+/// The announcer, published once `serve` has returned the peer.
 ///
 /// A slot for the same reason [`SkillsIndexSlot`] is one, inverted in time: a
 /// tool handler needs the peer to announce a rebuilt tool list, and the peer
 /// only exists *after* every handler has been registered. Empty until then,
 /// and empty forever on a transport that never connects.
-pub(crate) type PeerSlot = Arc<RwLock<Option<rmcp::service::Peer<rmcp::RoleServer>>>>;
+pub(crate) type PeerSlot = Arc<RwLock<Option<ListAnnouncer>>>;
 
 /// MCP-layer additions to the bare `graph_overview` response.
 ///

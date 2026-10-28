@@ -133,7 +133,7 @@ impl SourceRootStatus {
 /// tools never read it, so aborting boot over one is disproportionate: the
 /// operator report that prompted this (0.16.17) was a deployment directory
 /// copied without its `source/` subdir, where the process exited before
-/// `initialize` and the client could not distinguish a misconfigured server
+/// the first client request and the client could not distinguish a misconfigured server
 /// from a crashed binary.
 ///
 /// **Per-root since mcp-methods 0.4.7.** `resolve_source_roots_lenient` never

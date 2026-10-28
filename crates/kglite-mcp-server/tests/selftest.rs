@@ -72,6 +72,19 @@ fn a_clean_project_skill_layer_passes_and_names_each_layer() {
     assert!(output.status.success(), "{report}");
     assert!(!report.contains("skills skipped"), "{report}");
     assert!(report.contains("house_rules[project]"), "{report}");
+    // The stateless (2026-07-28) pass reports each step on its own line.
+    for label in [
+        "stateless discover",
+        "stateless tools/list",
+        "stateless tools/call",
+        "stateless list-changed stream",
+    ] {
+        let line = report
+            .lines()
+            .find(|l| l.contains(label))
+            .unwrap_or_else(|| panic!("no `{label}` line:\n{report}"));
+        assert!(line.contains('✓'), "{line}");
+    }
 }
 
 #[test]
